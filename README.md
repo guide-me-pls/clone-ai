@@ -1,426 +1,487 @@
 # clone-ai
 
-> **A local-first continuity runtime for your personal AI clone.**
+> **A local-first runtime for a personal digital twin.**
 >
-> **Agents change. Your work continues.**
+> **One person. Persistent context. Safe execution. Outcomes that can be proved.**
 
 **English** · [简体中文](README.zh-CN.md)
 
-> Status: pre-implementation architecture. **clone-ai is a working name** pending
-> final trademark, domain, and package-registry clearance.
+`Status: architecture & design` · `License: MIT` · `Core: TypeScript + Node.js + Python`
 
-## What it is
+---
 
-clone-ai is a runtime that preserves a person's work across agents, sessions,
-interruptions, and model upgrades.
+## Why clone-ai?
 
-It observes work on the user's computer, records material events in an append-only
-journal, turns those events into resumable work state, dispatches replaceable AI
-agents, verifies their outputs, and promotes only governed facts into durable memory.
+Today's AI is capable, but it is mostly forgetful. Every new chat starts from a prompt;
+the person becomes the system that carries context, remembers commitments, compares
+options, coordinates tools, checks results, and decides what can safely happen next.
 
-The near-term product is a **personal work runtime for developers**. The long-term
-direction is a **digital self runtime**: a user-owned continuity layer that can work
-through Claude Code, Codex, Pi, and future independent agent runtimes without making
-any one of them the owner of the user's identity or memory.
+clone-ai is an attempt to move that durable work into a system the person owns. It is not
+an avatar and not an assistant that only mimics a voice. It is a personal digital twin
+that maintains continuity across projects, planning, communication, learning, personal
+administration, and the digital parts of daily life.
 
-clone-ai is not another multi-agent launcher. Its core promise is:
+> **A personal AI becomes useful when it carries a person's state forward—not when it
+> merely imitates that person's tone.**
 
-> An agent session may disappear. The work, evidence, permissions, and memory do not.
+| A disposable AI session | A personal digital twin |
+| --- | --- |
+| Starts from a prompt | Starts from an owned, evolving personal state |
+| Optimizes one response | Maintains goals, commitments, and consequences over time |
+| May claim success | Produces evidence and requires verification |
+| Has provider-owned memory | Has user-governed memory with provenance and deletion |
+| Waits for commands | Finds opportunities, prepares options, and acts only within explicit authority |
 
-clone-ai sits above independent agent runtimes. It does not fork, embed, or treat any
-one runtime as a subordinate agent: clone-ai owns continuity and governance, while a
-connected runtime supplies only a bounded execution capability.
+## What it does
 
-Local-first means that authority and canonical state live on the user's computer. It
-does not imply that every worker is offline: an adapter may call a hosted model, but
-the context sent off-device is explicit, scoped, and governed by policy.
+| Capability | What it means |
+| --- | --- |
+| **Personal continuity** | Keeps goals, commitments, preferences, current situations, and reviewed memory coherent across sessions and providers. |
+| **Query to outcome** | Turns a request into options, a durable task graph, bounded execution, verification, and a readable work receipt. |
+| **Opportunity detection** | Notices deadlines, conflicts, neglected goals, and useful time windows; proposes the next best action without silently taking it. |
+| **Policy-governed autonomy** | Separates observation, inference, preparation, approval, execution, and verification. A prediction is never permission. |
+| **Evidence-backed delivery** | Treats an artifact, external effect, test, receipt, or approval as evidence—not an agent's self-reported confidence. |
+| **Replaceable execution** | Uses independent agent runtimes, connectors, and local automations without letting any one of them own the user's state or authority. |
 
-## Why this exists
+## Where it sits
 
-Today's agents are capable but temporary:
+clone-ai sits above independent agent runtimes, applications, and tools. It does not
+fork, embed, or treat any one runtime as a subordinate agent. clone-ai owns personal
+continuity, policy, memory, planning, and verification; connected runtimes contribute
+bounded execution capability only.
 
-- Every new session reconstructs context from chat history and scattered files.
-- Switching agents means manually carrying decisions, constraints, and unfinished work.
-- An agent can claim success without proving that the requested outcome exists.
-- Long conversations mix transient work state with durable personal memory.
-- Tool output, external content, and model assertions are often treated as equally trusted.
-- A crashed process can lose the only usable representation of what should happen next.
+```text
+You
+  -> clone-ai: state, planning, policy, verification
+       -> Claude Code / Codex / Pi / future runtimes
+       -> calendar / files / mail / browser / apps / APIs
+       -> local automation and specialized Python workers
+```
 
-The missing layer is not a smarter model. It is a durable runtime outside the model
-that owns continuity, authority, evidence, and memory.
+## Planned execution providers
+
+These are execution integrations, not sources of identity, memory, or authority. Every
+provider is reached through the same `RuntimeAdapter` contract and receives only the
+context and capability grant necessary for an assignment.
+
+| Provider | Intended responsibility | Integration status |
+| --- | --- | --- |
+| **Claude Code** | Long-running implementation, local tools, and artifact creation. | Adapter designed |
+| **Codex** | Coding, review, repository operations, and structured execution events. | Adapter designed |
+| **Pi** | Additional interactive or specialist execution capability. | Adapter designed |
+| **Custom runtimes** | User- or organization-specific agents, scripts, and local tools. | Extension contract planned |
+| **Python workers** | Extraction, ranking, forecasting, evaluation, and local ML proposals. | Worker protocol planned |
+
+## Start here
+
+clone-ai is currently an architecture-first open-source project; an installable runtime
+has not shipped yet. Clone the repository to follow or contribute to the design:
+
+```bash
+git clone https://github.com/guide-me-pls/clone-ai.git
+cd clone-ai
+```
+
+Then read [Architecture](#architecture), [Roadmap](#roadmap), and the planned
+[command-line experience](#command-line-experience-planned). The first implementation
+will be a local, inspectable trust loop—not a broad autonomous assistant.
+
+## Safety commitments
+
+These commitments shape the implementation before any model or connector is added:
+
+1. **The person remains the principal.** The twin is a bounded delegate, never an
+   independent owner of identity, money, relationships, or decisions.
+2. **Prediction is not permission.** Signals and past behavior may justify a suggestion
+   or a draft; they never create authority for a consequential action.
+3. **The runtime owns the continuity.** Models, CLIs, and adapters can be replaced;
+   user-governed state, policy, memory, and evidence cannot be delegated to them.
+4. **Evidence beats assertion.** A worker can propose completion, but only observed
+   results that satisfy acceptance criteria can close work.
+5. **The user can inspect and revoke.** Important actions expose their rationale,
+   policy basis, evidence, uncertainty, and available correction or rollback path.
 
 ## Design principles
 
-1. **Continuity belongs to the runtime.** Agents are replaceable workers, not the
-   source of truth.
-2. **The computer is the observation boundary.** Files, diffs, command results, tests,
-   local tool state, and explicit approvals can be captured as observed facts.
-3. **The journal is authoritative.** Material intents, decisions, actions, permissions,
-   artifacts, and verification results are append-only events.
-4. **Work state is not memory.** Open tasks and retries are rebuildable projections;
-   durable memory is a separate, governed store.
-5. **Claims are not evidence.** A worker may report completion, but only the runtime
-   can accept it after verification.
-6. **Context is compiled, not dumped.** Each worker receives the smallest authorized
-   packet needed for its assignment.
-7. **Authority stays outside agents.** Scheduling, budgets, permissions, verification,
-   and memory commits remain runtime decisions.
+1. **Observe broadly; infer cautiously; act only with authority.** Signals are not
+   instructions, and a prediction is never permission.
+2. **State outlives sessions and agents.** The runtime, not a model or adapter, is the
+   source of continuity.
+3. **Work, life state, and memory are different.** Current commitments are not stable
+   beliefs; stable beliefs are not raw history.
+4. **The smallest useful context wins.** Workers receive a scoped context packet rather
+   than an unrestricted copy of a person's history.
+5. **Every important action is explainable.** The user can see why an action was
+   suggested, which policy permitted it, what changed, and how to correct it.
+6. **Local-first means authority is local.** Hosted models may be used, but off-device
+   context is explicit, minimized, and governed by policy.
 
-## Overall architecture
+## Architecture
+
+### System overview
 
 ```text
-Human
-  | intent, correction, approval
-  v
-+--------------------------------------------------------------------------+
-| clone-ai Runtime                                                         |
-|                                                                          |
-|  Control Plane                                                           |
-|  Scheduler | Policy & Budget | Permission Gate | Verifier | Memory Authority |
-|       |                                      |                           |
-|       | assignment + bounded context         | decisions                 |
-|       v                                      v                           |
-|  Context Compiler ---------------------> Agent Adapters                   |
-|       ^                                  Claude Code | Codex | Pi         |
-|       |                                      |                           |
-|  Durable Memory                              | claims and actions         |
-|       ^                                      v                           |
-|  Memory Governance <--- Append-only Event Journal                        |
-|                            |                     ^                       |
-|                            v                     |                       |
-|                    Work State Projections       |                       |
-|                                                  |                       |
-|  Observation Boundary: files, Git, shell, tests, artifacts, local tools |
-+--------------------------------------------------------------------------+
+                              User
+                  goals · corrections · approvals
+                                |
+                                v
+ +---------------------------------------------------------------------+
+ |                         clone-ai Runtime                            |
+ |                                                                     |
+ |  Personal State Plane                                               |
+ |  Self Model · Life/Work Graph · Commitments · Policies · Memory    |
+ |                                |                                    |
+ |  Cognitive & Planning Plane                                        |
+ |  Signal Interpreter · Opportunity Engine · Scenario Planner        |
+ |  Context Compiler · Task Graph Builder                             |
+ |                                |                                    |
+ |  Governance Plane                                                   |
+ |  Authority Gate · Budget · Privacy · Risk · Approval · Verification|
+ |                                |                                    |
+ |  Execution Plane                                                    |
+ |  Skills · Connectors · Agent Runtime Adapters · Local Automations  |
+ |                                |                                    |
+ |  Observation Boundary                                               |
+ |  Files · Calendar · Tasks · Mail · Browser · Apps · APIs · Devices |
+ |                                |                                    |
+ |  Append-only Personal Journal -> State Projections -> Evidence     |
+ +---------------------------------------------------------------------+
 ```
 
-All material activity enters the journal with provenance. Work state is derived from
-that journal. Durable memory is promoted through a separate policy-controlled path.
-Agents see only a scoped `ContextPacket`; they never receive implicit ownership of the
-whole journal or memory store.
+### The four planes
 
-### Architectural layers
-
-| Layer | Responsibility |
+| Plane | What it owns |
 | --- | --- |
-| **Observation Boundary** | Captures what happened on the computer: file changes, Git state, command output, tests, artifacts, tool results, and user approvals. |
-| **Event Journal** | Stores immutable, ordered events for intent, observation, decision, action, permission, artifact, verification, and memory activity. |
-| **Work State** | Builds resumable projections for sessions, work items, dependencies, retries, blockers, budgets, and ownership history. |
-| **Durable Memory** | Stores reviewed preferences, project facts, and reusable procedures with provenance, scope, confidence, and retention policy. |
-| **Control Plane** | Selects workers, compiles context, applies policy and budgets, requests approval, verifies results, and authorizes memory changes. |
-| **Agent Adapters** | Normalize Claude Code, Codex, Pi, and future workers behind one replaceable lifecycle contract. |
+| **Personal State** | The user-controlled model of preferences, goals, commitments, relationships, resources, current situations, and durable memory. |
+| **Cognitive & Planning** | Interprets signals, finds opportunities, models constraints, compares options, builds task graphs, and compiles bounded context. |
+| **Governance** | Authority, privacy, data residency, approval rules, budgets, risk classification, verification, audit, and revocation. |
+| **Execution & Evidence** | Skills, agent runtimes, app connectors, local automation, artifacts, observed effects, and work receipts. |
 
-## Core model
+Governance is not an afterthought around the execution plane. It constrains every read,
+inference, proposal, and write.
+
+## Personal state: the twin's durable center
+
+The personal state plane must distinguish facts, preferences, plans, and uncertainty.
 
 | Concept | Meaning |
 | --- | --- |
-| **Goal** | A longer-lived direction that may produce many sessions and work items. |
-| **Session** | One bounded episode beginning with user intent and ending in completion, pause, or abandonment. |
-| **WorkItem** | The durable unit of continuity. It may span sessions and contains a goal, acceptance criteria, dependencies, status, and ownership history. |
-| **AgentSession** | One disposable invocation of a concrete worker for a work item. |
-| **JournalEvent** | An immutable event with actor, type, scope, payload, causality, sequence, and timestamp. |
-| **Artifact** | A concrete output addressable by path, hash, or URI. |
-| **Evidence** | An observed fact supporting or contradicting a claim, such as a diff, test result, command output, citation, or approval. |
-| **VerificationRecord** | The runtime's pass, fail, or inconclusive decision against explicit acceptance criteria. |
-| **MemoryCandidate** | A proposed durable fact that is not yet trusted or available for general recall. |
-| **MemoryItem** | A governed memory entry with provenance, scope, confidence, sensitivity, retention, and review metadata. |
-| **ContextPacket** | A minimal, authorized view compiled for one worker assignment. |
-| **WorkReceipt** | The final inspectable record of what changed, what was verified, what remains open, and why. |
+| **SelfModel** | User-authored preferences, values, working style, standing rules, and explicit boundaries. |
+| **Goal** | A desired long-horizon outcome, such as launching a product, improving health, or protecting time for learning. |
+| **Commitment** | A promise, deadline, appointment, recurring responsibility, or dependency that creates an obligation. |
+| **Situation** | A time-bounded view of the present: location in a project, available time, active constraints, blockers, and relevant signals. |
+| **WorkItem** | A durable unit of work that can span sessions, agents, and days. |
+| **PlanOption** | A proposed path with expected value, effort, risk, assumptions, confidence, and trade-offs. |
+| **Policy** | A rule defining what the twin may read, infer, prepare, execute, disclose, retain, or forget. |
+| **MemoryItem** | A reviewed fact, preference, procedure, or decision with provenance, scope, confidence, sensitivity, and retention metadata. |
+| **Artifact** | A concrete output: patch, document, message draft, booking, spreadsheet, plan, report, or external record. |
+| **Evidence** | An observed fact supporting or contradicting a claim: a diff, test result, receipt, response, approval, or citation. |
 
-The important separation is:
+This gives the runtime a usable definition of the future: not a prediction of a single
+destiny, but a set of commitments, choices, deadlines, opportunities, and constraints
+that can be reasoned about explicitly.
 
-```text
-Session      = what is happening now
-WorkItem     = what must survive until it is resolved
-Journal      = what actually happened
-Memory       = what is worth carrying into future work
-AgentSession = who is temporarily helping
-```
+## From query to outcome
 
-## Execution lifecycle
+A user can initiate work with a direct request:
 
 ```text
-CAPTURED
-  -> READY
-  -> RUNNING
-  -> VERIFYING
-       |-> PASSED ---------> COMPLETED
-       |-> RETRYABLE ------> READY
-       |-> NEEDS_CHANGE ---> REPLANNING
-       |-> NEEDS_HUMAN ----> WAITING_APPROVAL
-       `-> UNRECOVERABLE --> FAILED
+"Prepare the best launch plan for next week and complete the work I have already approved."
 ```
 
-For each request:
-
-1. The runtime opens a `Session` and creates one or more `WorkItem`s with acceptance
-   criteria.
-2. The control plane selects a worker using capability, policy, budget, permission,
-   and isolation requirements.
-3. The context compiler builds a bounded `ContextPacket` from current work state,
-   authorized memory, and relevant evidence.
-4. The adapter streams worker activity and claims while the runtime captures observable
-   effects at the computer boundary.
-5. The verifier checks artifacts and evidence against acceptance criteria.
-6. The runtime completes, retries, replans, reassigns, or pauses the work item for human
-   approval.
-7. The session may end, but unresolved work items remain durable and resumable.
-
-`worker.completed` means only that a worker stopped and reported success. It does not
-mean the work item is complete.
-
-## Event journal and projections
-
-The event journal is the recovery backbone:
-
-```ts
-interface JournalEvent<T = unknown> {
-  id: string;
-  sequence: number;
-  type: string;
-  actor: ActorRef;
-  scope: ScopeRef;
-  payload: T;
-  causationId?: string;
-  correlationId: string;
-  observedAt: string;
-}
-```
-
-Representative event families include:
+The runtime handles it as a controlled loop:
 
 ```text
-intent.*        work.*          agent.*
-observation.*   artifact.*      verification.*
-permission.*    budget.*        memory.*
+Query
+  -> intent and constraint extraction
+  -> retrieve current situation, goals, commitments, and authorized memory
+  -> generate one or more PlanOptions
+  -> choose or ask the user to choose a plan
+  -> build a task graph with acceptance criteria and authority requirements
+  -> dispatch skills, applications, and agent runtimes
+  -> observe artifacts and external effects
+  -> verify, deliver a WorkReceipt, and update state
 ```
 
-Current state is a projection, never the source of truth. After a restart, clone-ai
-replays the journal to rebuild sessions, work items, queues, budgets, retries, and
-approval waits. Snapshots may accelerate replay but cannot replace the journal.
+The output is not only prose. It can be a repository change, a calendar plan, a drafted
+message, a research report, a booking request, a filled form, a completed workflow, or a
+clear explanation of why the action should not be taken yet.
 
-Append-only does not mean retaining every sensitive byte forever. Large or sensitive
-content lives in an encrypted, policy-controlled content store; journal events keep
-references, hashes, and lifecycle metadata. Deletion appends a tombstone and removes or
-cryptographically erases the referenced content while preserving a non-sensitive audit
-record.
+## Proactivity: predict opportunities, not permission
 
-## Governed memory
+The twin should notice useful next steps. For example, it may see an approaching
+deadline, an unprepared meeting, a recurring bill, a neglected goal, or free time that
+fits a high-value task.
 
-clone-ai deliberately separates remembering from merely storing a transcript.
-
-### Write path
+It must turn this into an **OpportunityCard**, not a hidden action:
 
 ```text
-Worker or runtime proposes MemoryCandidate
-  -> quarantine
-  -> verify supporting journal evidence
-  -> apply scope, sensitivity, and retention policy
-  -> deduplicate and detect conflicts
-  -> promote, merge, reject, or request human review
-  -> commit MemoryItem with provenance
+OpportunityCard
+  why now          upcoming customer call in 36 hours
+  observed basis   calendar event + open proposal + prior meeting notes
+  proposed result  prepare a briefing, agenda, and follow-up draft
+  expected value   high
+  confidence       medium
+  risk             low
+  required authority  prepare automatically; send only after approval
 ```
 
-Workers cannot directly mutate durable memory. Every committed memory item must point
-back to the events or artifacts that justify it.
+The planning engine weighs goals, commitments, preferences, time, cost, risk, and
+uncertainty. It should present the best *current* options and their trade-offs, not claim
+to know the user's objectively best life.
 
-### Read path
+## Autonomy ladder
 
-```text
-Session intent
-  + relevant WorkItems
-  + authorized MemoryItems
-  + recent Evidence
-  -> Context Compiler
-  -> bounded ContextPacket
-  -> selected AgentSession
-```
+Autonomy is a policy choice per domain, action, and context.
 
-The first release keeps memory intentionally narrow:
-
-- user preferences,
-- stable project facts,
-- recurring procedures.
-
-Memory inspection, correction, expiration, and deletion are product capabilities, not
-database maintenance tasks. Corrections supersede earlier items without rewriting
-history; forgetting erases the memory body according to policy while leaving only the
-minimal audit tombstone described above.
-
-## Trust and authority
-
-| Actor or boundary | Trusted for | Not trusted for |
+| Level | Twin behavior | Examples |
 | --- | --- | --- |
-| **Human** | Goals, corrections, approvals, and policy choices | Perfect recall or continuous supervision |
-| **Runtime** | Scheduling, policy enforcement, journaling, verification decisions, and memory authority | Automatically knowing whether external content is true |
-| **Worker agent** | Producing proposals, actions, artifacts, and structured claims | Declaring final completion, granting itself permissions, or committing memory |
-| **Observation boundary** | Proving that a local effect or output was observed | Proving that the content itself is semantically correct |
-| **External content** | Supplying data with provenance | Issuing instructions or changing runtime policy |
+| **0 — Observe** | Capture and organize only. | Index files, reconcile tasks, detect a deadline. |
+| **1 — Suggest** | Explain an opportunity and recommend options. | Propose a weekly plan or flag a conflict. |
+| **2 — Prepare** | Create reversible drafts and previews. | Draft an email, create a branch, prepare a booking request. |
+| **3 — Execute by standing authority** | Perform explicitly pre-authorized, bounded, reversible actions. | File documents, create approved tasks, run tests, update a private note. |
+| **4 — Confirm before commitment** | Stop for approval before a consequential external change. | Send a message, make a purchase, submit a form, publish, delete, or change access. |
 
-An approval event proves that the user authorized one scoped action; it does not prove
-that the action is safe or correct. Policy enforcement and outcome verification still
-apply.
+Predicted intent may move work from Observe to Suggest or Prepare. It must never move
+work into Execute without a matching policy and current authority check.
 
-Destructive actions, privilege changes, sensitive memory commits, and policy expansion
-require explicit human approval. Permission, budget, and escalation decisions are
-journaled.
+## Journal, state, and memory
 
-## Agent adapter boundary
+The personal journal records what the runtime observed and decided. It is the durable
+recovery backbone, not a raw surveillance archive.
 
-Provider integrations remain thin:
+```text
+JournalEvent
+  intent | observation | inference | plan | policy | approval
+  action | artifact | verification | memory-candidate | memory-commit
+
+Append-only Personal Journal
+  -> Current State Projections
+  -> Evidence Index
+  -> Memory Candidates
+  -> governed promotion to Durable Memory
+```
+
+| Store | Purpose | Mutability |
+| --- | --- | --- |
+| **Journal** | Ordered provenance and lifecycle events. | Append-only. |
+| **State projections** | Rebuildable current view of goals, commitments, tasks, and permissions. | Derived. |
+| **Durable memory** | Curated information worth carrying into future decisions. | Governed, correctable, expirable, deletable. |
+| **Content store** | Encrypted bodies for sensitive or large payloads. | Policy-controlled retention and cryptographic erasure. |
+
+A memory candidate can be proposed by an agent, but only the runtime may promote it after
+evidence, policy, scope, conflict, and retention checks. Corrections supersede old items;
+forgetting removes or cryptographically erases the sensitive body while retaining a
+minimal non-sensitive audit tombstone.
+
+## Trust, privacy, and safety
+
+Personal life data raises the quality bar. clone-ai must make these boundaries explicit:
+
+- Imported mail, webpages, documents, and messages are **data**, never instructions.
+- A calendar entry or past habit is not permission to spend money, contact someone, or
+  disclose information.
+- High-impact domains—money, health, legal matters, relationships, access control,
+  deletion, publishing, and external commitments—default to confirmation.
+- Every connector has a scoped capability grant, a visible data boundary, and a
+  revocation path.
+- Users can inspect, correct, export, and delete their data and durable memory.
+- A WorkReceipt records the plan, authority, actions, evidence, verification result,
+  remaining uncertainty, and rollback path where applicable.
+
+## Runtime adapters and skills
+
+Agent runtimes are execution providers, not the product's brain or source of truth.
 
 ```ts
-interface AgentAdapter {
+interface RuntimeAdapter {
   readonly id: string;
 
-  capabilities(): Promise<AgentCapabilities>;
+  capabilities(): Promise<RuntimeCapabilities>;
 
-  start(input: AgentSessionInput): AsyncIterable<AgentEvent>;
+  start(input: ExecutionAssignment): AsyncIterable<RuntimeEvent>;
 
   resume(
-    agentSessionId: string,
-    input: AgentResumeInput,
-  ): AsyncIterable<AgentEvent>;
+    runtimeSessionId: string,
+    input: ResumeAssignment,
+  ): AsyncIterable<RuntimeEvent>;
 
-  cancel(agentSessionId: string): Promise<void>;
+  cancel(runtimeSessionId: string): Promise<void>;
 }
 ```
 
-Adapters translate SDK streams, JSONL, subprocesses, and CLI sessions. They do not own
-work state, durable memory, permissions, or completion policy.
+The runtime can connect Claude Code, Codex, Pi, and future independent runtimes through
+this boundary. A **Skill** is a versioned, policy-scoped capability such as research,
+write code, plan travel, summarize a conversation, prepare a purchase, or reconcile a
+task list. Skills describe their inputs, outputs, required authority, risk class, and
+verification method.
 
-## A representative run
+## Implementation architecture
 
-```text
-$ clone-ai session start "Add API rate limiting and prove it works"
+### TypeScript, Node.js, and Python are enough
 
-Session ssn_01... opened
-  WorkItem 1: inspect API boundaries             -> Codex
-  WorkItem 2: compare compatible strategies      -> Claude Code
+Yes. The first several product stages should use only these three:
 
-Observed:
-  repository snapshot, worktree diffs, command output, test results
+| Technology | Role | Boundary |
+| --- | --- | --- |
+| **TypeScript (strict)** | Canonical domain contracts, policies, schemas, CLI, connectors, adapters, state projections, and tests. | The language of truth for runtime-owned state and decisions. |
+| **Node.js LTS** | Local daemon, process supervision, streaming I/O, CLI, scheduling, connector execution, and agent-runtime adapters. | The always-on local control plane. |
+| **Python** | Optional intelligent workers: local ML, multimodal extraction, OCR, forecasting, ranking, evaluation, and experimental retrieval. | It returns versioned proposals and evidence; it does not directly own personal state or permissions. |
 
-Runtime:
-  creates WorkItem 3 from accepted findings
-  dispatches implementation in an isolated worktree
-  verifies the diff and required tests
-  records one project-fact memory candidate
+Use a current Node.js LTS release for the daemon. At the time of writing, Node.js 24 is
+the current LTS line. Use Python 3.13+ with a separate pinned virtual environment for
+each worker; adopt Python 3.14 where the required libraries are compatible.
 
-Session ssn_01... completed
-  3 work items | 2 agent types | 4 artifacts | 5 verification records
-  WorkReceipt: receipts/ssn_01.json
-```
+Keep Python behind a small, versioned local protocol—initially NDJSON over standard I/O
+is enough. The Node control plane sends a bounded request, receives a `WorkerProposal`,
+validates it, journals it, and decides whether to use it. This prevents Python
+experiments from becoming an ungoverned second control plane.
 
-If a worker exits halfway through, the partial artifacts and failure remain visible.
-The runtime can resume the same agent session, assign a new worker, replan, request
-approval, or stop with an inspectable reason.
+Do not add Go, Rust, a distributed queue, or Kubernetes in the first version. Introduce
+another systems language only when measurement shows a concrete need for stronger
+isolation, native device integration, or a performance-critical component.
 
-## v0.1
-
-### Included
-
-- Single user, single computer, local-first operation.
-- SQLite WAL event journal and rebuildable projections.
-- `Session`, `WorkItem`, `AgentSession`, `Artifact`, `Evidence`, and `WorkReceipt`.
-- Claude Code, Codex, and Pi adapters.
-- Git worktree isolation for coding tasks.
-- Verification hooks for file changes, commands, tests, and citations.
-- Narrow governed memory for preferences, project facts, and procedures.
-- Timeouts, cancellation, retry, approval waits, and crash recovery.
-- CLI views for work, traces, evidence, memory, and resumability.
-
-### Deferred
-
-- Vector-first or autonomous memory ingestion.
-- Multi-device synchronization.
-- Distributed queues or multi-node execution.
-- Open-ended swarms and agent social systems.
-- A marketplace of preset agents.
-- A full web control plane.
-- An autonomous digital clone acting without scoped authority.
-
-The v0.1 proof is simple:
-
-> Start non-trivial work, interrupt it, replace an agent, resume later, inspect the
-> evidence, and still reach a verified result without reconstructing the task by hand.
-
-## Proposed TypeScript layout
+### Proposed repository layout
 
 ```text
+apps/
+|-- cli/                         query, inspect, approve, trace, resume
+|-- daemon/                      local lifecycle and scheduling process
+`-- desktop/                     later: visual timeline and control center
+
 packages/
-|-- contracts/              shared domain types and schemas
-|-- journal/                append-only events, snapshots, replay
-|-- content-store/          encrypted blobs, retention, erasure
-|-- work-state/             session and work-item projections
-|-- memory/                 candidates, governance, recall, audit
-|-- context/                scoped ContextPacket compiler
-|-- runtime/                scheduler and lifecycle coordination
-|-- policy/                 permissions, budgets, escalation rules
-|-- verifier/               artifact and evidence verification
+|-- contracts/                   versioned domain types and schemas
+|-- journal/                     append-only events, replay, snapshots
+|-- content-store/               encrypted blobs, retention, erasure
+|-- twin-state/                  self, goals, commitments, situations
+|-- memory/                      candidates, recall, review, audit
+|-- planning/                    opportunities, options, task graphs
+|-- context/                     scoped context packet compiler
+|-- policy/                      authority, privacy, risk, approval, budget
+|-- execution/                   scheduling, retries, work receipts
+|-- verification/                evidence and acceptance checks
+|-- connectors/                  calendar, mail, files, browser, APIs
 |-- adapters/
 |   |-- claude-code/
 |   |-- codex/
 |   `-- pi/
-|-- cli/                    local command-line interface
-`-- testkit/                fake agents, fixtures, failure injection
+|-- observability/               traces, audit, metrics
+`-- testkit/                     fake connectors, runtimes, failures
+
+workers/python/
+|-- extraction/                  structured and multimodal extraction
+|-- ranking/                     opportunity and option scoring
+|-- forecasting/                 time and workload predictions
+`-- evaluation/                  replay and decision-quality evaluation
 ```
 
-Suggested foundations:
+### Local storage and process model
 
-- **TypeScript strict + Node.js 22+** for contracts, subprocesses, and streaming.
-- **pnpm workspaces** for clear package boundaries.
-- **SQLite WAL + Drizzle** for local, inspectable durability.
-- **Zod** for validation at every adapter and storage boundary.
-- **Pino + OpenTelemetry** for correlated logs and traces.
-- **Vitest** for event replay, fake-agent, crash, and policy tests.
-- **Git worktrees**, with optional containers later, for isolated coding work.
+- **SQLite in WAL mode** holds the journal, projections, policy metadata, and queue.
+- **Encrypted local content storage** holds sensitive payloads and large artifacts.
+- **OS keychain integration** protects local encryption keys and connector credentials.
+- **Node child processes** supervise CLI agents and Python workers with explicit timeout,
+  cancellation, and structured streams.
+- **Zod** validates all untrusted adapter, connector, and worker input at runtime.
+- **Drizzle** provides typed persistence; **Pino** and **OpenTelemetry** provide traceable
+  operations; **Vitest** provides deterministic replay and policy tests.
 
-## CLI direction
+## Roadmap
+
+| Horizon | Focus | Status |
+| --- | --- | --- |
+| **Now** | Trusted local state and query-to-verified-delivery | Architecture & design |
+| **Next** | Personal planning and proactive preparation | Planned |
+| **Later** | Bounded delegated autonomy and cross-domain life support | Research |
+
+### Phase 0 — Trusted personal state
+
+Build the local journal, `SelfModel`, goals, commitments, WorkItems, policies, evidence,
+memory review, and an inspectable timeline. No autonomous external writes.
+
+**Proof:** restart the daemon, switch agent runtimes, and recover exactly what was
+planned, attempted, verified, blocked, or awaiting approval.
+
+### Phase 1 — Query to verified delivery
+
+Start with a developer and knowledge-work wedge. A query can produce research, code,
+documents, plans, task updates, and evidence-backed results. The twin connects to local
+files, Git, calendar, and a narrow task source.
+
+**Proof:** a user can ask for a non-trivial outcome, interrupt the process, replace an
+agent, and return to a verified work receipt without reconstructing context manually.
+
+### Phase 2 — Personal planning and proactive preparation
+
+Add calendar, tasks, mail, recurring obligations, and user-selected life signals.
+Generate OpportunityCards, scenario plans, daily briefings, and reversible preparation.
+
+**Proof:** users accept proactive preparation because its timing, rationale, and scope are
+useful and understandable.
+
+### Phase 3 — Bounded delegated autonomy
+
+Enable standing authority for narrow, reversible actions. Add policy templates, per-skill
+limits, rollback, and continuous evaluation of false positives, stale memory, and failed
+verification.
+
+**Proof:** repetitive actions happen safely without reducing the user's awareness or
+ability to stop and correct the twin.
+
+### Phase 4 — Cross-domain personal digital twin
+
+Expand from work and planning into carefully chosen life domains. The system evaluates
+future options against the user's evolving goals and constraints, while keeping sensitive
+actions approval-gated.
+
+**Proof:** the twin improves a person's available options and execution capacity without
+quietly narrowing that person's agency.
+
+## First release
+
+The first release should not attempt to automate an entire life. It should establish trust
+with a narrow but meaningful loop:
+
+1. Capture a user query plus selected local project and calendar context.
+2. Create a durable plan and explicit WorkItems.
+3. Use agent runtimes to research, build, test, and produce artifacts.
+4. Verify results and show an evidence-backed WorkReceipt.
+5. Preserve only reviewed preferences, project facts, and procedures for the next task.
+
+Defer voice cloning, avatars, social simulation, financial execution, health decisions,
+relationship automation, broad inbox access, and unconstrained proactive behavior.
+
+## Command-line experience (planned)
 
 ```bash
 clone-ai init
-clone-ai agent add codex
-clone-ai agent add claude-code
-clone-ai session start "research and implement this requirement"
-clone-ai work list
-clone-ai trace <session-id>
-clone-ai resume <work-item-id>
+clone-ai connect calendar
+clone-ai ask "prepare my best plan for next week"
+clone-ai today
+clone-ai opportunity list
+clone-ai plan show <plan-id>
+clone-ai approve <approval-id>
+clone-ai trace <session-or-work-id>
 clone-ai memory inspect
-clone-ai memory audit
 clone-ai memory forget <memory-id>
 ```
 
-A trace must answer: what was requested, what the runtime decided, which worker acted,
-what changed on the computer, what evidence was captured, what was verified, what
-requires approval, and why the work is in its current state.
+The most important command is not `run`. It is the ability to inspect why the twin thinks
+something matters, what it is allowed to do, and what evidence proves the outcome.
 
-## Non-negotiable invariants
+## Invariants
 
-1. The journal is append-only.
-2. Work state is derived and rebuildable.
-3. Work state and durable memory remain separate.
-4. Every durable memory item has provenance.
-5. Workers cannot mark work complete.
-6. Completion requires acceptance criteria and verification evidence.
-7. Permissions, budgets, policy decisions, and escalations are journaled.
-8. External content is data, never runtime authority.
-9. Adapters are replaceable; runtime authority is not.
-10. The user can inspect, correct, export, and delete durable memory.
-
-## Naming note
-
-`Knotwork` described the earlier idea of weaving multiple agents together, but it placed
-the metaphor on the adapters rather than the enduring product value. It also collides
-with existing software and AI-facing uses.
-
-`clone-ai` is the adopted repository and project name. It makes the long-term direction
-explicit: a user-owned personal AI clone, rather than a collection of disposable chats.
-The phrase **Clone AI** is descriptive and already used by active products, so treat
-`clone-ai` as a project name and working brand, not as a cleared commercial trademark.
-Before a paid public launch, complete a formal trademark, domain, and package-registry
-check and introduce a more distinctive product brand if needed.
+1. The person is the authority; the twin is a bounded delegate.
+2. Observation, inference, permission, action, and verification are separate event types.
+3. A prediction is never permission.
+4. Personal state, current work, durable memory, and raw history remain distinct.
+5. No agent runtime can directly mark work complete or commit memory.
+6. Every consequential action has a policy decision, evidence trail, and revocation path.
+7. External content is data, never runtime authority.
+8. The user can inspect, correct, export, and delete personal state and memory.
+9. Connected runtimes are replaceable; clone-ai's personal state and governance are not.
 
 ---
 
-> **clone-ai lets a personal AI clone carry work forward with evidence, permission, and memory.**
+> **clone-ai is not an AI that imitates a person. It is a personal digital twin that
+> helps a person see, decide, and safely accomplish more over time.**
