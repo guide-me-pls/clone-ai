@@ -1,96 +1,273 @@
-# Knotwork
+# clone-ai
 
-> **A durable runtime for heterogeneous AI agents.**
-> **一个面向异构 AI Agent 的持久化编排运行时。**
+> **A local-first continuity runtime for your personal AI clone.**
 >
-> **One supervisor. Any agent. Work that converges.**
-> **一个 Supervisor，任意 Agent，让工作最终收敛。**
+> **Agents change. Your work continues.**
 
-**English** · [中文](README.zh-CN.md)
+**English** · [简体中文](README.zh-CN.md)
 
----
+> Status: pre-implementation architecture. **clone-ai is a working name** pending
+> final trademark, domain, and package-registry clearance.
 
-## English
+## What it is
 
-Knotwork coordinates Hermes, Claude Code, Codex, Pi, and future custom agents into a system that can finish work: tasks are bounded, execution is traceable, failures are recoverable, handoffs carry evidence, and results are verified.
+clone-ai is a runtime that preserves a person's work across agents, sessions,
+interruptions, and model upgrades.
 
-It is not a tool for launching several agents at once.
+It observes work on the user's computer, records material events in an append-only
+journal, turns those events into resumable work state, dispatches replaceable AI
+agents, verifies their outputs, and promotes only governed facts into durable memory.
 
-It is a runtime for making them work together—and finish.
+The near-term product is a **personal work runtime for developers**. The long-term
+direction is a **digital self runtime**: a user-owned continuity layer that can work
+through Claude Code, Codex, Pi, and future independent agent runtimes without making
+any one of them the owner of the user's identity or memory.
+
+clone-ai is not another multi-agent launcher. Its core promise is:
+
+> An agent session may disappear. The work, evidence, permissions, and memory do not.
+
+clone-ai sits above independent agent runtimes. It does not fork, embed, or treat any
+one runtime as a subordinate agent: clone-ai owns continuity and governance, while a
+connected runtime supplies only a bounded execution capability.
+
+Local-first means that authority and canonical state live on the user's computer. It
+does not imply that every worker is offline: an adapter may call a hosted model, but
+the context sent off-device is explicit, scoped, and governed by policy.
+
+## Why this exists
+
+Today's agents are capable but temporary:
+
+- Every new session reconstructs context from chat history and scattered files.
+- Switching agents means manually carrying decisions, constraints, and unfinished work.
+- An agent can claim success without proving that the requested outcome exists.
+- Long conversations mix transient work state with durable personal memory.
+- Tool output, external content, and model assertions are often treated as equally trusted.
+- A crashed process can lose the only usable representation of what should happen next.
+
+The missing layer is not a smarter model. It is a durable runtime outside the model
+that owns continuity, authority, evidence, and memory.
+
+## Design principles
+
+1. **Continuity belongs to the runtime.** Agents are replaceable workers, not the
+   source of truth.
+2. **The computer is the observation boundary.** Files, diffs, command results, tests,
+   local tool state, and explicit approvals can be captured as observed facts.
+3. **The journal is authoritative.** Material intents, decisions, actions, permissions,
+   artifacts, and verification results are append-only events.
+4. **Work state is not memory.** Open tasks and retries are rebuildable projections;
+   durable memory is a separate, governed store.
+5. **Claims are not evidence.** A worker may report completion, but only the runtime
+   can accept it after verification.
+6. **Context is compiled, not dumped.** Each worker receives the smallest authorized
+   packet needed for its assignment.
+7. **Authority stays outside agents.** Scheduling, budgets, permissions, verification,
+   and memory commits remain runtime decisions.
+
+## Overall architecture
 
 ```text
-Knotwork Runtime
-├── Supervisor           decides, delegates, and converges
-├── Workers              execute through pluggable agent adapters
-├── Work Orders          define bounded, accountable units of work
-├── Threads              preserve session continuity across turns
-├── Artifact Contracts   define what a deliverable must contain
-├── Evidence             records why a result can be trusted
-└── Convergence Engine   verifies, retries, escalates, or completes
+Human
+  | intent, correction, approval
+  v
++--------------------------------------------------------------------------+
+| clone-ai Runtime                                                         |
+|                                                                          |
+|  Control Plane                                                           |
+|  Scheduler | Policy & Budget | Permission Gate | Verifier | Memory Authority |
+|       |                                      |                           |
+|       | assignment + bounded context         | decisions                 |
+|       v                                      v                           |
+|  Context Compiler ---------------------> Agent Adapters                   |
+|       ^                                  Claude Code | Codex | Pi         |
+|       |                                      |                           |
+|  Durable Memory                              | claims and actions         |
+|       ^                                      v                           |
+|  Memory Governance <--- Append-only Event Journal                        |
+|                            |                     ^                       |
+|                            v                     |                       |
+|                    Work State Projections       |                       |
+|                                                  |                       |
+|  Observation Boundary: files, Git, shell, tests, artifacts, local tools |
++--------------------------------------------------------------------------+
 ```
 
-### The problem
+All material activity enters the journal with provenance. Work state is derived from
+that journal. Durable memory is promoted through a separate policy-controlled path.
+Agents see only a scoped `ContextPacket`; they never receive implicit ownership of the
+whole journal or memory store.
 
-Current coding agents can research, plan, edit, test, and use tools. Multi-agent work still fails in familiar ways:
+### Architectural layers
 
-- One agent produces prose while the next needs a concrete artifact.
-- A process exits, a session is lost, and the supervisor cannot reliably resume it.
-- Work is “done” because an agent says so, rather than because its result was verified.
-- Logs exist, but the decisions, failures, and handoffs behind a result cannot be reconstructed.
-- Each CLI has a different lifecycle, event stream, capability model, and cancellation behavior.
+| Layer | Responsibility |
+| --- | --- |
+| **Observation Boundary** | Captures what happened on the computer: file changes, Git state, command output, tests, artifacts, tool results, and user approvals. |
+| **Event Journal** | Stores immutable, ordered events for intent, observation, decision, action, permission, artifact, verification, and memory activity. |
+| **Work State** | Builds resumable projections for sessions, work items, dependencies, retries, blockers, budgets, and ownership history. |
+| **Durable Memory** | Stores reviewed preferences, project facts, and reusable procedures with provenance, scope, confidence, and retention policy. |
+| **Control Plane** | Selects workers, compiles context, applies policy and budgets, requests approval, verifies results, and authorizes memory changes. |
+| **Agent Adapters** | Normalize Claude Code, Codex, Pi, and future workers behind one replaceable lifecycle contract. |
 
-Launching multiple agents is easy. Making heterogeneous work survive interruption and converge on an inspectable outcome is the hard part.
-
-### The Knotwork model
-
-Knotwork introduces a small, explicit control plane between a supervisor and any number of workers.
-
-```text
-User intent
-    │
-    ▼
-Supervisor ── creates ──► Work Orders
-    │                          │
-    │ delegates                ▼
-    ├────────────────────► Agent Adapters ──► Hermes / Claude Code / Codex / Pi
-    │                                                │
-    │                                         events + artifacts
-    ▼                                                │
-Convergence Engine ◄──── evidence + verification ────┘
-    │
-    ├── passed          → complete
-    ├── retryable       → replan or retry
-    ├── needs approval  → wait for a human
-    └── unrecoverable   → fail with a durable trace
-```
-
-The runtime owns the work lifecycle. An agent owns only the work assigned to it.
-
-### Principles
-
-1. **Agent-neutral by design.** Integrations are adapters behind one lifecycle contract, rather than forks of a provider runtime.
-2. **Artifacts over assertions.** A worker returns structured results, artifacts, evidence, and verification outcomes—not only a paragraph claiming success.
-3. **Events are the source of truth.** Meaningful state transitions are append-only events, so a run can be replayed after a crash.
-4. **Failure is first-class.** Timeout, cancellation, partial work, blocked dependencies, and failed verification all have explicit recovery or escalation paths.
-5. **Convergence is the product.** Parallel work is valuable only when it reaches a verifiable result.
-
-### Vocabulary
+## Core model
 
 | Concept | Meaning |
 | --- | --- |
-| **Run** | One durable execution of a user objective. |
-| **Work Order** | A bounded unit of work with inputs, acceptance criteria, and an owner. |
-| **Supervisor** | The policy layer that plans, dispatches, reviews, and decides what happens next. |
-| **Worker** | A concrete agent session executing a work order. |
-| **Thread** | A resumable continuity record between Knotwork and an agent session. |
-| **Artifact** | A tangible output: patch, document, dataset, report, command result, or URL. |
-| **Evidence** | Facts supporting a result: test output, diff, trace, citation, or approval. |
-| **Contract** | The schema and acceptance rules that make an artifact usable by the next worker. |
-| **Convergence** | The decision that work has passed verification, needs another attempt, needs a human, or cannot continue. |
+| **Goal** | A longer-lived direction that may produce many sessions and work items. |
+| **Session** | One bounded episode beginning with user intent and ending in completion, pause, or abandonment. |
+| **WorkItem** | The durable unit of continuity. It may span sessions and contains a goal, acceptance criteria, dependencies, status, and ownership history. |
+| **AgentSession** | One disposable invocation of a concrete worker for a work item. |
+| **JournalEvent** | An immutable event with actor, type, scope, payload, causality, sequence, and timestamp. |
+| **Artifact** | A concrete output addressable by path, hash, or URI. |
+| **Evidence** | An observed fact supporting or contradicting a claim, such as a diff, test result, command output, citation, or approval. |
+| **VerificationRecord** | The runtime's pass, fail, or inconclusive decision against explicit acceptance criteria. |
+| **MemoryCandidate** | A proposed durable fact that is not yet trusted or available for general recall. |
+| **MemoryItem** | A governed memory entry with provenance, scope, confidence, sensitivity, retention, and review metadata. |
+| **ContextPacket** | A minimal, authorized view compiled for one worker assignment. |
+| **WorkReceipt** | The final inspectable record of what changed, what was verified, what remains open, and why. |
 
-### Runtime contracts
+The important separation is:
 
-Every provider-specific implementation is normalized behind one adapter interface:
+```text
+Session      = what is happening now
+WorkItem     = what must survive until it is resolved
+Journal      = what actually happened
+Memory       = what is worth carrying into future work
+AgentSession = who is temporarily helping
+```
+
+## Execution lifecycle
+
+```text
+CAPTURED
+  -> READY
+  -> RUNNING
+  -> VERIFYING
+       |-> PASSED ---------> COMPLETED
+       |-> RETRYABLE ------> READY
+       |-> NEEDS_CHANGE ---> REPLANNING
+       |-> NEEDS_HUMAN ----> WAITING_APPROVAL
+       `-> UNRECOVERABLE --> FAILED
+```
+
+For each request:
+
+1. The runtime opens a `Session` and creates one or more `WorkItem`s with acceptance
+   criteria.
+2. The control plane selects a worker using capability, policy, budget, permission,
+   and isolation requirements.
+3. The context compiler builds a bounded `ContextPacket` from current work state,
+   authorized memory, and relevant evidence.
+4. The adapter streams worker activity and claims while the runtime captures observable
+   effects at the computer boundary.
+5. The verifier checks artifacts and evidence against acceptance criteria.
+6. The runtime completes, retries, replans, reassigns, or pauses the work item for human
+   approval.
+7. The session may end, but unresolved work items remain durable and resumable.
+
+`worker.completed` means only that a worker stopped and reported success. It does not
+mean the work item is complete.
+
+## Event journal and projections
+
+The event journal is the recovery backbone:
+
+```ts
+interface JournalEvent<T = unknown> {
+  id: string;
+  sequence: number;
+  type: string;
+  actor: ActorRef;
+  scope: ScopeRef;
+  payload: T;
+  causationId?: string;
+  correlationId: string;
+  observedAt: string;
+}
+```
+
+Representative event families include:
+
+```text
+intent.*        work.*          agent.*
+observation.*   artifact.*      verification.*
+permission.*    budget.*        memory.*
+```
+
+Current state is a projection, never the source of truth. After a restart, clone-ai
+replays the journal to rebuild sessions, work items, queues, budgets, retries, and
+approval waits. Snapshots may accelerate replay but cannot replace the journal.
+
+Append-only does not mean retaining every sensitive byte forever. Large or sensitive
+content lives in an encrypted, policy-controlled content store; journal events keep
+references, hashes, and lifecycle metadata. Deletion appends a tombstone and removes or
+cryptographically erases the referenced content while preserving a non-sensitive audit
+record.
+
+## Governed memory
+
+clone-ai deliberately separates remembering from merely storing a transcript.
+
+### Write path
+
+```text
+Worker or runtime proposes MemoryCandidate
+  -> quarantine
+  -> verify supporting journal evidence
+  -> apply scope, sensitivity, and retention policy
+  -> deduplicate and detect conflicts
+  -> promote, merge, reject, or request human review
+  -> commit MemoryItem with provenance
+```
+
+Workers cannot directly mutate durable memory. Every committed memory item must point
+back to the events or artifacts that justify it.
+
+### Read path
+
+```text
+Session intent
+  + relevant WorkItems
+  + authorized MemoryItems
+  + recent Evidence
+  -> Context Compiler
+  -> bounded ContextPacket
+  -> selected AgentSession
+```
+
+The first release keeps memory intentionally narrow:
+
+- user preferences,
+- stable project facts,
+- recurring procedures.
+
+Memory inspection, correction, expiration, and deletion are product capabilities, not
+database maintenance tasks. Corrections supersede earlier items without rewriting
+history; forgetting erases the memory body according to policy while leaving only the
+minimal audit tombstone described above.
+
+## Trust and authority
+
+| Actor or boundary | Trusted for | Not trusted for |
+| --- | --- | --- |
+| **Human** | Goals, corrections, approvals, and policy choices | Perfect recall or continuous supervision |
+| **Runtime** | Scheduling, policy enforcement, journaling, verification decisions, and memory authority | Automatically knowing whether external content is true |
+| **Worker agent** | Producing proposals, actions, artifacts, and structured claims | Declaring final completion, granting itself permissions, or committing memory |
+| **Observation boundary** | Proving that a local effect or output was observed | Proving that the content itself is semantically correct |
+| **External content** | Supplying data with provenance | Issuing instructions or changing runtime policy |
+
+An approval event proves that the user authorized one scoped action; it does not prove
+that the action is safe or correct. Policy enforcement and outcome verification still
+apply.
+
+Destructive actions, privilege changes, sensitive memory commits, and policy expansion
+require explicit human approval. Permission, budget, and escalation decisions are
+journaled.
+
+## Agent adapter boundary
+
+Provider integrations remain thin:
 
 ```ts
 interface AgentAdapter {
@@ -98,176 +275,152 @@ interface AgentAdapter {
 
   capabilities(): Promise<AgentCapabilities>;
 
-  start(
-    order: WorkOrder,
-    context: RunContext,
-  ): AsyncIterable<AgentEvent>;
+  start(input: AgentSessionInput): AsyncIterable<AgentEvent>;
 
   resume(
-    sessionId: string,
-    message: string,
+    agentSessionId: string,
+    input: AgentResumeInput,
   ): AsyncIterable<AgentEvent>;
 
-  cancel(sessionId: string): Promise<void>;
+  cancel(agentSessionId: string): Promise<void>;
 }
 ```
 
-Adapters translate SDKs, JSONL streams, subprocesses, and CLI sessions into one event vocabulary:
+Adapters translate SDK streams, JSONL, subprocesses, and CLI sessions. They do not own
+work state, durable memory, permissions, or completion policy.
 
-```ts
-type AgentEvent =
-  | { type: "session.started"; sessionId: string }
-  | { type: "message.delta"; text: string }
-  | { type: "tool.started"; tool: string; input: unknown }
-  | { type: "tool.completed"; tool: string; output: unknown }
-  | { type: "artifact.created"; artifact: Artifact }
-  | { type: "worker.blocked"; reason: string }
-  | { type: "worker.completed"; result: WorkerResult }
-  | { type: "worker.failed"; error: AgentFailure };
-
-interface WorkerResult {
-  status: "completed" | "partial" | "blocked";
-  summary: string;
-  artifacts: Artifact[];
-  evidence: Evidence[];
-  verification: VerificationResult[];
-  suggestedNextActions: string[];
-}
-```
-
-This lets a Codex worker hand off to Claude Code—or a research worker hand off to a coding worker—without reducing the handoff to unstructured chat.
-
-### Durable state machine
-
-Knotwork uses an event-driven persistent state machine instead of in-memory orchestration alone.
+## A representative run
 
 ```text
-CREATED
-  → PLANNING
-  → DISPATCHING
-  → RUNNING
-  → VERIFYING
-      ├─ PASSED          → COMPLETED
-      ├─ RETRYABLE       → REPLANNING
-      ├─ NEEDS_HUMAN     → WAITING_APPROVAL
-      └─ UNRECOVERABLE   → FAILED
+$ clone-ai session start "Add API rate limiting and prove it works"
+
+Session ssn_01... opened
+  WorkItem 1: inspect API boundaries             -> Codex
+  WorkItem 2: compare compatible strategies      -> Claude Code
+
+Observed:
+  repository snapshot, worktree diffs, command output, test results
+
+Runtime:
+  creates WorkItem 3 from accepted findings
+  dispatches implementation in an isolated worktree
+  verifies the diff and required tests
+  records one project-fact memory candidate
+
+Session ssn_01... completed
+  3 work items | 2 agent types | 4 artifacts | 5 verification records
+  WorkReceipt: receipts/ssn_01.json
 ```
 
-Every transition is stored as an immutable event:
+If a worker exits halfway through, the partial artifacts and failure remain visible.
+The runtime can resume the same agent session, assign a new worker, replan, request
+approval, or stop with an inspectable reason.
 
-```text
-run_events
-├── event_id
-├── run_id
-├── work_order_id
-├── agent_id
-├── event_type
-├── payload
-├── sequence
-└── created_at
-```
+## v0.1
 
-After restart, the runtime replays its event stream, reconnects resumable threads where possible, and surfaces any work requiring intervention. Pause, resume, cancellation, retry, and postmortem inspection become product capabilities instead of best-effort behavior.
+### Included
 
-### v0.1 scope
+- Single user, single computer, local-first operation.
+- SQLite WAL event journal and rebuildable projections.
+- `Session`, `WorkItem`, `AgentSession`, `Artifact`, `Evidence`, and `WorkReceipt`.
+- Claude Code, Codex, and Pi adapters.
+- Git worktree isolation for coding tasks.
+- Verification hooks for file changes, commands, tests, and citations.
+- Narrow governed memory for preferences, project facts, and procedures.
+- Timeouts, cancellation, retry, approval waits, and crash recovery.
+- CLI views for work, traces, evidence, memory, and resumability.
 
-**Included**
+### Deferred
 
-- Hermes supervisor adapter.
-- Claude Code and Codex worker adapters.
-- Work Order and Worker Result contracts.
-- SQLite-backed append-only event storage.
-- Supervisor-driven task decomposition with bounded parallel execution.
-- Timeouts, explicit cancellation, and policy-driven retry.
-- Artifact and evidence verification hooks.
-- CLI views for runs, work orders, and event traces.
-
-**Deferred**
-
-- Vector or long-term memory systems.
+- Vector-first or autonomous memory ingestion.
+- Multi-device synchronization.
+- Distributed queues or multi-node execution.
+- Open-ended swarms and agent social systems.
 - A marketplace of preset agents.
-- Unbounded swarm topologies.
-- Distributed queues, Redis, or multi-node coordination.
 - A full web control plane.
-- Agent personas or social simulation.
+- An autonomous digital clone acting without scoped authority.
 
-The first question is deliberately practical: can a user start a non-trivial task, interrupt it, resume it, inspect its evidence, and reach a verified outcome across multiple agent runtimes?
+The v0.1 proof is simple:
 
-### Proposed architecture
+> Start non-trivial work, interrupt it, replace an agent, resume later, inspect the
+> evidence, and still reach a verified result without reconstructing the task by hand.
 
-The first implementation is a TypeScript control plane. Node.js is a strong fit for supervising CLI subprocesses and streaming events; TypeScript gives cross-provider contracts one type-safe language.
+## Proposed TypeScript layout
 
 ```text
 packages/
-├── core/                run state, scheduler, contracts, convergence policies
-├── storage/             SQLite event store and projections
-├── adapters/
-│   ├── hermes/
-│   ├── claude-code/
-│   ├── codex/
-│   └── custom/
-├── cli/                 init, agent management, run, trace, resume, cancel
-└── testkit/             fake agents, event fixtures, failure injection
+|-- contracts/              shared domain types and schemas
+|-- journal/                append-only events, snapshots, replay
+|-- content-store/          encrypted blobs, retention, erasure
+|-- work-state/             session and work-item projections
+|-- memory/                 candidates, governance, recall, audit
+|-- context/                scoped ContextPacket compiler
+|-- runtime/                scheduler and lifecycle coordination
+|-- policy/                 permissions, budgets, escalation rules
+|-- verifier/               artifact and evidence verification
+|-- adapters/
+|   |-- claude-code/
+|   |-- codex/
+|   `-- pi/
+|-- cli/                    local command-line interface
+`-- testkit/                fake agents, fixtures, failure injection
 ```
 
 Suggested foundations:
 
-- **TypeScript (strict) + Node.js:** portable runtime and type-safe protocol.
-- **pnpm workspaces:** clear boundaries between core, adapters, CLI, and test tools.
-- **SQLite in WAL mode:** local-first and inspectable durability without operating dependencies.
-- **Drizzle + Zod:** typed persistence and runtime validation at adapter boundaries.
-- **Pino + OpenTelemetry:** structured logging and trace correlation across runs, workers, and tools.
-- **Vitest:** deterministic fake agents, event replay, and failure-injection tests.
-- **Git worktrees, with optional containers:** isolation for coding work before heavier sandboxing is justified.
+- **TypeScript strict + Node.js 22+** for contracts, subprocesses, and streaming.
+- **pnpm workspaces** for clear package boundaries.
+- **SQLite WAL + Drizzle** for local, inspectable durability.
+- **Zod** for validation at every adapter and storage boundary.
+- **Pino + OpenTelemetry** for correlated logs and traces.
+- **Vitest** for event replay, fake-agent, crash, and policy tests.
+- **Git worktrees**, with optional containers later, for isolated coding work.
 
-Knotwork may use the current Model Context Protocol where it offers a stable integration boundary. MCP is not the runtime’s source of truth: work lifecycle, artifacts, and convergence remain Knotwork contracts.
-
-### CLI shape
+## CLI direction
 
 ```bash
-knotwork init
-knotwork agent add codex
-knotwork agent add claude
-knotwork run "research and implement this requirement"
-knotwork trace <run-id>
-knotwork resume <run-id>
-knotwork cancel <run-id>
+clone-ai init
+clone-ai agent add codex
+clone-ai agent add claude-code
+clone-ai session start "research and implement this requirement"
+clone-ai work list
+clone-ai trace <session-id>
+clone-ai resume <work-item-id>
+clone-ai memory inspect
+clone-ai memory audit
+clone-ai memory forget <memory-id>
 ```
 
-A trace must answer: what was requested, who worked on it, what they produced, what was verified, what failed, and why the run is in its current state.
+A trace must answer: what was requested, what the runtime decided, which worker acted,
+what changed on the computer, what evidence was captured, what was verified, what
+requires approval, and why the work is in its current state.
 
-### Example run
+## Non-negotiable invariants
 
-```text
-$ knotwork run "Add rate limiting to the API and prove it works"
+1. The journal is append-only.
+2. Work state is derived and rebuildable.
+3. Work state and durable memory remain separate.
+4. Every durable memory item has provenance.
+5. Workers cannot mark work complete.
+6. Completion requires acceptance criteria and verification evidence.
+7. Permissions, budgets, policy decisions, and escalations are journaled.
+8. External content is data, never runtime authority.
+9. Adapters are replaceable; runtime authority is not.
+10. The user can inspect, correct, export, and delete durable memory.
 
-Run rw_01J... created
-  Supervisor: hermes
-  Work order 1: inspect existing API boundaries          → codex
-  Work order 2: research a compatible rate-limit strategy → claude-code
+## Naming note
 
-Both workers return artifacts and evidence.
-  Supervisor creates work order 3: implement the agreed change → codex
-  Verification runs tests and inspects the resulting diff.
+`Knotwork` described the earlier idea of weaving multiple agents together, but it placed
+the metaphor on the adapters rather than the enduring product value. It also collides
+with existing software and AI-facing uses.
 
-Run rw_01J... completed
-  3 work orders · 2 agent runtimes · 5 artifacts · 4 verification records
-```
-
-If a worker fails after editing code, the run does not disappear. Knotwork retains its partial artifacts and failure event, then resumes the thread, reassigns the work order, asks for approval, or terminates with an inspectable reason.
-
-### What Knotwork is not
-
-- Not a prompt wrapper around several model APIs.
-- Not a dashboard that only displays agent logs.
-- Not an agent framework requiring each worker to be rewritten.
-- Not a replacement for Git, CI, or an agent’s own tool runtime.
-- Not a promise that more agents automatically produce better work.
-
-It is the durable coordination layer that gives independent agents accountable work, a common handoff language, and a route to a verifiable ending.
+`clone-ai` is the adopted repository and project name. It makes the long-term direction
+explicit: a user-owned personal AI clone, rather than a collection of disposable chats.
+The phrase **Clone AI** is descriptive and already used by active products, so treat
+`clone-ai` as a project name and working brand, not as a cleared commercial trademark.
+Before a paid public launch, complete a formal trademark, domain, and package-registry
+check and introduce a more distinctive product brand if needed.
 
 ---
 
-> **Knotwork is the runtime that makes agents work together and finish.**
-
-*Status: pre-implementation design. The contracts in this document are intentional starting points, not yet a stable public API.*
+> **clone-ai lets a personal AI clone carry work forward with evidence, permission, and memory.**
