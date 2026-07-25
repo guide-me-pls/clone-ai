@@ -1,393 +1,441 @@
 # clone-ai
 
-> **面向个人 AI 分身的本地优先连续性运行时。**
+> **面向个人数字分身的本地优先运行时。**
 >
-> **Agent 会更换，你的工作会继续。**
+> **一个人，持续的上下文，安全的执行，可被证明的结果。**
 
 [English](README.md) · **简体中文**
 
-> 状态：实现前架构设计。**clone-ai 是暂定工作名**，最终名称仍需完成商标、
-> 域名和包注册表核查。
+`状态：架构与设计` · `许可证：MIT` · `核心：TypeScript + Node.js + Python`
 
-## 它是什么
+---
 
-clone-ai 是一个让个人工作能够跨 Agent、跨 Session、跨中断、跨模型升级持续存在的运行时。
+## 为什么是 clone-ai？
 
-它观察用户电脑上真实发生的工作，把重要活动写入追加式事件日志，将事件投影为可恢复的工作状态，
-调度可替换的 AI Agent，验证其产物，并且只把经过治理的事实提升为长期记忆。
+今天的 AI 已经很有能力，但大多缺乏连续性。每次新的对话都从 Prompt 开始；人不得不承担系统的
+工作：搬运上下文、记住承诺、比较选项、协调工具、检查结果，并判断接下来什么可以安全地发生。
 
-近期产品是面向开发者的 **Personal Work Runtime（个人工作运行时）**。长期方向是
-**Digital Self Runtime（数字自我运行时）**：由用户拥有的连续性基础设施。它可以借助
-Claude Code、Codex、Pi 以及未来独立的 Agent Runtime 工作，但不会让任何一个运行时成为用户身份或
-记忆的主人。
+clone-ai 希望把这些持续性的工作放进一个由用户拥有的系统。它不是 Avatar，也不只是模仿用户说话
+方式的助手；它是一个个人数字分身，在项目、规划、沟通、学习、个人事务及日常生活的数字化部分
+持续承接上下文。
 
-clone-ai 不是另一个多 Agent 启动器。它的核心承诺是：
+> **个人 AI 的价值来自持续承接人的状态，而不是模仿人的语气。**
 
-> AgentSession 可以消失，工作、证据、权限和记忆不能随之消失。
+| 一次性 AI Session | 个人数字分身 |
+| --- | --- |
+| 从一段 Prompt 开始 | 从用户拥有且持续演化的个人状态开始 |
+| 优化一次回答 | 长期维护目标、承诺与后果 |
+| 可以声称成功 | 需要产生证据并经过验证 |
+| 记忆归属于供应商 | 记忆由用户治理，带来源且可以删除 |
+| 等待用户命令 | 能发现机会、准备选项，并只在明确授权内行动 |
 
-clone-ai 位于各个独立 Agent Runtime 之上：它不 Fork、嵌入或把任何一个 Runtime 当成子 Agent。
-clone-ai 负责连续性和治理；被接入的 Runtime 只提供受边界约束的执行能力。
+## 它能做什么
 
-“本地优先”表示权威和规范状态保存在用户电脑上，并不表示每个 Worker 都必须离线运行。
-Adapter 可以调用云端模型，但发送到设备之外的上下文必须明确、受限，并由策略控制。
+| 能力 | 含义 |
+| --- | --- |
+| **个人连续性** | 让目标、承诺、偏好、当前情境和经过审核的记忆在不同 Session、模型与 Provider 间保持连贯。 |
+| **从 Query 到结果** | 把需求转为选项、持久任务图、受控执行、验证和可读的 WorkReceipt。 |
+| **机会发现** | 发现截止时间、冲突、被忽略的目标和有价值的时间窗口；提出下一步，而不在暗中执行。 |
+| **由策略治理的自主性** | 严格区分观察、推断、准备、审批、执行和验证。预测永远不是权限。 |
+| **以证据交付** | 把产物、外部效果、测试、回执或审批视为证据，而不是相信 Agent 自报的置信度。 |
+| **可替换的执行能力** | 使用独立 Agent Runtime、连接器和本地自动化，但不让其中任何一个拥有用户状态或授权。 |
 
-## 为什么需要它
+## 它位于哪里
 
-今天的 Agent 很强，但它们通常是临时的：
+clone-ai 位于独立 Agent Runtime、应用和工具之上。它不 Fork、嵌入或把任何一个 Runtime 当成子
+Agent。clone-ai 负责个人连续性、策略、记忆、规划和验证；被接入的 Runtime 只提供有边界的执行能力。
 
-- 每个新 Session 都要从聊天记录和散落文件中重新拼装上下文。
-- 更换 Agent 时，决策、约束和未完成工作需要人工搬运。
-- Agent 可以宣称成功，却没有证明用户要求的结果真的存在。
-- 长对话把临时工作状态和应该长期保留的个人记忆混在一起。
-- 工具输出、外部内容和模型断言经常被赋予相同的信任等级。
-- 进程崩溃后，系统可能连“下一步应该做什么”都无法可靠恢复。
+```text
+你
+  -> clone-ai：状态、规划、策略、验证
+       -> Claude Code / Codex / Pi / 未来 Runtime
+       -> 日历 / 文件 / 邮件 / 浏览器 / 应用 / API
+       -> 本地自动化和专用 Python Worker
+```
 
-缺少的不是一个更聪明的模型，而是模型之外的持久化运行时：由它掌握连续性、权限、证据和记忆。
+## 计划接入的执行提供方
+
+它们都是执行集成，而不是身份、记忆或授权的来源。每个提供方都经由同一个 `RuntimeAdapter` 合约接入，
+并且只会获得完成当前任务所需的上下文和能力授权。
+
+| 提供方 | 预期职责 | 集成状态 |
+| --- | --- | --- |
+| **Claude Code** | 长任务实现、本地工具调用与产物生成。 | Adapter 已完成设计 |
+| **Codex** | 编码、审查、仓库操作与结构化执行事件。 | Adapter 已完成设计 |
+| **Pi** | 额外的交互式或专长型执行能力。 | Adapter 已完成设计 |
+| **自定义 Runtime** | 用户或组织专属的 Agent、脚本与本地工具。 | 扩展合约计划中 |
+| **Python Worker** | 信息提取、排序、预测、评估和本地 ML 提案。 | Worker 协议计划中 |
+
+## 从这里开始
+
+clone-ai 当前是一个架构优先的开源项目，尚未发布可安装 Runtime。可以先克隆仓库，关注或参与设计：
+
+```bash
+git clone https://github.com/guide-me-pls/clone-ai.git
+cd clone-ai
+```
+
+接下来可阅读[架构](#架构)、[路线图](#路线图)和计划中的[命令行体验](#命令行体验计划)。第一版实现将是一个
+本地、可检查的信任闭环，而不是范围无限的自主助手。
+
+## 安全承诺
+
+这些承诺会在接入任何模型或连接器之前约束实现：
+
+1. **人始终是主体。** 分身是有边界的代理，不能成为用户身份、金钱、关系或决策的独立主人。
+2. **预测不是权限。** 信号和过去的行为可以支持建议或草稿，但永远不能直接获得执行重大动作的权限。
+3. **Runtime 承担连续性。** 模型、CLI 和 Adapter 可以替换；用户治理的状态、策略、记忆和证据不能委托给它们。
+4. **证据优先于断言。** Worker 可以提出完成声明，只有满足验收标准的可观察结果才能真正关闭工作。
+5. **用户可以检查和撤销。** 重要动作必须展示理由、策略依据、证据、不确定性，以及可纠正或回滚的路径。
 
 ## 设计原则
 
-1. **连续性属于运行时。** Agent 是可替换的 Worker，不是事实来源。
-2. **电脑是观察边界。** 文件、diff、命令结果、测试、本地工具状态和明确审批都可以被记录为观察事实。
-3. **事件日志具有权威性。** 重要意图、决策、动作、权限、产物和验证结果都以追加式事件保存。
-4. **工作状态不等于记忆。** 未完成事项和重试队列是可重建投影；长期记忆是独立且受治理的存储。
-5. **声明不等于证据。** Worker 可以报告完成，但只有运行时验证后才能正式验收。
-6. **上下文由编译产生，而不是整库倾倒。** 每个 Worker 只获得完成当前工作所需的最小授权信息。
-7. **权威留在 Agent 之外。** 调度、预算、权限、验证和记忆提交始终由运行时决定。
+1. **广泛观察，谨慎推断，只在获得授权后行动。** 信号不是指令，预测不是权限。
+2. **状态要比 Session 和 Agent 更长寿。** 连续性的事实来源是 Runtime，而不是模型或 Adapter。
+3. **工作、生活状态与记忆并不相同。** 当前承诺不是稳定信念，稳定信念也不是原始历史。
+4. **最小但足够的上下文。** Worker 只得到有作用域的 ContextPacket，而不是一个人完整历史的无限副本。
+5. **每个重要动作都可解释。** 用户应能看到为什么被建议、哪条策略允许、发生了什么，以及如何纠正。
+6. **本地优先代表本地权威。** 可以使用托管模型，但离开设备的上下文必须明确、最小化并受策略控制。
 
-## 整体架构
+## 架构
+
+### 系统全景
 
 ```text
-用户
-  | 意图、纠正、审批
-  v
-+--------------------------------------------------------------------------+
-| clone-ai Runtime                                                         |
-|                                                                          |
-|  控制平面                                                                 |
-|  调度器 | 策略与预算 | 权限闸门 | 验证器 | 记忆授权                           |
-|       |                                      |                           |
-|       | 工作分配 + 有界上下文                  | 决策                       |
-|       v                                      v                           |
-|  Context Compiler ---------------------> Agent Adapters                   |
-|       ^                                  Claude Code | Codex | Pi         |
-|       |                                      |                           |
-|  Durable Memory                              | 声明与动作                 |
-|       ^                                      v                           |
-|  Memory Governance <--- Append-only Event Journal                        |
-|                            |                     ^                       |
-|                            v                     |                       |
-|                    Work State Projections       |                       |
-|                                                  |                       |
-|  观察边界：文件、Git、Shell、测试、产物、本地工具                            |
-+--------------------------------------------------------------------------+
+                                  用户
+                    目标 · 纠正 · 审批 · 授权
+                                   |
+                                   v
+ +---------------------------------------------------------------------+
+ |                         clone-ai Runtime                            |
+ |                                                                     |
+ |  Personal State Plane                                               |
+ |  Self Model · Life/Work Graph · Commitments · Policies · Memory    |
+ |                                   |                                 |
+ |  Cognitive & Planning Plane                                         |
+ |  Signal Interpreter · Opportunity Engine · Scenario Planner        |
+ |  Context Compiler · Task Graph Builder                              |
+ |                                   |                                 |
+ |  Governance Plane                                                    |
+ |  Authority Gate · Budget · Privacy · Risk · Approval · Verification|
+ |                                   |                                 |
+ |  Execution Plane                                                    |
+ |  Skills · Connectors · Agent Runtime Adapters · Local Automations  |
+ |                                   |                                 |
+ |  Observation Boundary                                               |
+ |  Files · Calendar · Tasks · Mail · Browser · Apps · APIs · Devices |
+ |                                   |                                 |
+ |  Append-only Personal Journal -> State Projections -> Evidence     |
+ +---------------------------------------------------------------------+
 ```
 
-所有重要活动都会带着来源信息进入事件日志。工作状态由日志派生；长期记忆则通过另一条受策略控制的
-路径提升。Agent 只能看到当前任务对应的 `ContextPacket`，不会隐式获得整个日志或记忆库的控制权。
+### 四个平面
 
-### 架构分层
-
-| 层 | 职责 |
+| 平面 | 它拥有的职责 |
 | --- | --- |
-| **Observation Boundary（观察边界）** | 捕获电脑上发生的事实：文件变化、Git 状态、命令输出、测试、产物、工具结果和用户审批。 |
-| **Event Journal（事件日志）** | 按顺序保存不可变的意图、观察、决策、动作、权限、产物、验证和记忆事件。 |
-| **Work State（工作状态）** | 构建可恢复的 Session、WorkItem、依赖、重试、阻塞、预算和责任历史投影。 |
-| **Durable Memory（长期记忆）** | 保存经过审查的偏好、项目事实和可复用流程，并记录来源、作用域、置信度与保留策略。 |
-| **Control Plane（控制平面）** | 选择 Worker、编译上下文、执行策略与预算、请求审批、验证结果并授权记忆变更。 |
-| **Agent Adapters** | 把 Claude Code、Codex、Pi 和未来 Worker 统一到一个可替换的生命周期协议后面。 |
+| **Personal State（个人状态）** | 用户可控的偏好、目标、承诺、关系、资源、当前情境和长期记忆模型。 |
+| **Cognitive & Planning（认知与规划）** | 解释信号、发现机会、建模约束、比较选项、构建任务图，并编译有界上下文。 |
+| **Governance（治理）** | 权限、隐私、数据驻留、审批规则、预算、风险分类、验证、审计和撤销。 |
+| **Execution & Evidence（执行与证据）** | Skills、Agent Runtime、应用连接器、本地自动化、产物、观察效果与 WorkReceipt。 |
 
-## 核心模型
+治理不是套在执行平面外的一层壳；它约束每一次读取、推断、建议和写入。
+
+## 个人状态：分身的持久中心
+
+个人状态平面必须分清事实、偏好、计划和不确定性。
 
 | 概念 | 含义 |
 | --- | --- |
-| **Goal** | 可以持续较长时间，并产生多个 Session 和 WorkItem 的方向。 |
-| **Session** | 一段有边界的工作过程，从用户意图开始，以完成、暂停或放弃结束。 |
-| **WorkItem** | 真正的持久化连续性单元，可以跨 Session 存在，包含目标、验收标准、依赖、状态和责任历史。 |
-| **AgentSession** | 某个具体 Worker 针对一个 WorkItem 的一次临时执行。 |
-| **JournalEvent** | 带有 Actor、类型、作用域、载荷、因果关系、序号和时间戳的不可变事件。 |
-| **Artifact** | 可以通过路径、哈希或 URI 定位的具体产物。 |
-| **Evidence** | 支持或反驳某项声明的观察事实，例如 diff、测试结果、命令输出、引用或审批。 |
-| **VerificationRecord** | 运行时依据明确验收标准做出的通过、失败或无法判断记录。 |
-| **MemoryCandidate** | 尚未被信任、也不能被普通检索使用的候选长期事实。 |
-| **MemoryItem** | 带来源、作用域、置信度、敏感级别、保留和复查信息的受治理记忆。 |
-| **ContextPacket** | 为一次 Worker 分配编译出的最小授权上下文。 |
-| **WorkReceipt** | 最终可检查的工作回执：改了什么、验证了什么、还剩什么以及原因。 |
+| **SelfModel** | 用户编写或确认的偏好、价值观、工作习惯、长期规则和明确边界。 |
+| **Goal** | 一个长期想达成的结果，例如发布产品、改善健康，或保护学习时间。 |
+| **Commitment** | 承诺、截止日期、约会、周期责任或依赖关系，它们会形成义务。 |
+| **Situation** | 对当前的有时间边界的视图：项目位置、可用时间、活跃约束、阻塞和相关信号。 |
+| **WorkItem** | 可以跨 Session、Agent 和日期存在的持久工作单元。 |
+| **PlanOption** | 一条建议路径，包含预期价值、成本、风险、假设、置信度和取舍。 |
+| **Policy** | 规定分身可读取、推断、准备、执行、披露、保留或遗忘什么的规则。 |
+| **MemoryItem** | 带来源、作用域、置信度、敏感级别和保留元数据的已审查事实、偏好、流程或决策。 |
+| **Artifact** | 可检查的具体输出：补丁、文档、邮件草稿、预约、表格、计划、报告或外部记录。 |
+| **Evidence** | 支持或反驳某项声明的观察事实：diff、测试、回执、响应、审批或引用。 |
 
-最重要的边界是：
+这让 Runtime 对“未来”有了可用定义：不是预测唯一命运，而是把承诺、选择、截止时间、机会与约束
+显式建模并进行推演。
 
-```text
-Session      = 现在正在发生什么
-WorkItem     = 在解决之前必须持续存在什么
-Journal      = 实际发生过什么
-Memory       = 哪些信息值得带入未来工作
-AgentSession = 现在由谁临时协助
-```
+## 从 Query 到结果
 
-## 执行生命周期
+用户可以发起一个直接需求：
 
 ```text
-CAPTURED
-  -> READY
-  -> RUNNING
-  -> VERIFYING
-       |-> PASSED ---------> COMPLETED
-       |-> RETRYABLE ------> READY
-       |-> NEEDS_CHANGE ---> REPLANNING
-       |-> NEEDS_HUMAN ----> WAITING_APPROVAL
-       `-> UNRECOVERABLE --> FAILED
+“为下周准备最好的发布计划，并完成我已经批准的工作。”
 ```
 
-每次请求的流程如下：
-
-1. 运行时开启一个 `Session`，并创建一个或多个带验收标准的 `WorkItem`。
-2. 控制平面根据能力、策略、预算、权限和隔离要求选择 Worker。
-3. Context Compiler 从当前工作状态、已授权记忆和相关证据生成有界的 `ContextPacket`。
-4. Adapter 流式转发 Worker 活动和声明，同时运行时从电脑观察边界捕获实际效果。
-5. Verifier 根据验收标准检查产物和证据。
-6. 运行时决定完成、重试、重新规划、重新分配，或暂停并等待人工审批。
-7. Session 可以结束，但未解决的 WorkItem 会继续存在并可在未来恢复。
-
-`worker.completed` 只表示 Worker 已停止并报告成功，不表示 WorkItem 已经完成。
-
-## 事件日志与状态投影
-
-事件日志是崩溃恢复的骨架：
-
-```ts
-interface JournalEvent<T = unknown> {
-  id: string;
-  sequence: number;
-  type: string;
-  actor: ActorRef;
-  scope: ScopeRef;
-  payload: T;
-  causationId?: string;
-  correlationId: string;
-  observedAt: string;
-}
-```
-
-代表性的事件族包括：
+Runtime 会把它处理成受控闭环：
 
 ```text
-intent.*        work.*          agent.*
-observation.*   artifact.*      verification.*
-permission.*    budget.*        memory.*
+Query
+  -> 提取意图与约束
+  -> 读取当前情境、目标、承诺和已授权记忆
+  -> 生成一个或多个 PlanOption
+  -> 选择计划，或要求用户在计划中做选择
+  -> 构建带验收标准和权限要求的任务图
+  -> 分配 Skills、应用和 Agent Runtime
+  -> 观察产物与外部效果
+  -> 验证、交付 WorkReceipt，并更新状态
 ```
 
-当前状态只是投影，永远不是事实来源。clone-ai 重启后会重放日志，重建 Session、WorkItem、
-队列、预算、重试和等待审批状态。Snapshot 可以加速重放，但不能替代日志。
+最终交付不只是文字。它可以是代码修改、日程计划、消息草稿、调研报告、预约请求、填写完成的表单、
+已经执行的工作流，或“现在不应执行”的清晰解释。
 
-“只能追加”并不代表每个敏感字节都必须永久保留。体积较大或敏感的内容进入受策略控制的加密
-Content Store；日志只保存引用、哈希和生命周期元数据。删除操作会追加 Tombstone，并删除或
-通过销毁密钥抹除被引用内容，同时只保留不含敏感正文的审计记录。
+## 主动性：预测机会，不预测权限
 
-## 受治理的长期记忆
+分身应该能发现有价值的下一步，例如临近截止日期、准备不足的会议、周期账单、被忽略的长期目标，
+或适合高价值任务的一段空闲时间。
 
-clone-ai 明确区分“真正记住”与“保存了一份聊天记录”。
-
-### 写入路径
+但它必须把这些变成 **OpportunityCard（机会卡）**，而不是隐藏动作：
 
 ```text
-Worker 或运行时提出 MemoryCandidate
-  -> 隔离区
-  -> 验证其对应的日志证据
-  -> 应用作用域、敏感级别和保留策略
-  -> 去重并检测冲突
-  -> 提升、合并、拒绝或请求人工复查
-  -> 带来源提交为 MemoryItem
+OpportunityCard
+  why now             36 小时后有客户会议
+  observed basis      日历事件 + 未完成提案 + 历史会议记录
+  proposed result     准备 briefing、议程与跟进草稿
+  expected value      high
+  confidence          medium
+  risk                low
+  required authority  可自动准备；发送前仍需审批
 ```
 
-Worker 不能直接修改长期记忆。每一条正式记忆都必须能够回溯到支持它的事件或产物。
+规划引擎会权衡目标、承诺、偏好、时间、成本、风险和不确定性。它应展示当前最好的**选项**及其取舍，
+而不是声称知道用户客观上“最好的生活”。
 
-### 读取路径
+## 自主性阶梯
 
-```text
-Session 意图
-  + 相关 WorkItem
-  + 已授权 MemoryItem
-  + 最近 Evidence
-  -> Context Compiler
-  -> 有界 ContextPacket
-  -> 被选择的 AgentSession
-```
+自主性是按领域、动作和情境配置的策略选择。
 
-第一版故意只支持范围较窄的记忆：
-
-- 用户偏好，
-- 稳定的项目事实，
-- 重复使用的工作流程。
-
-检查、纠正、过期和删除记忆是产品能力，不是数据库维护操作。纠正会用新条目取代旧条目，
-而不是重写历史；遗忘会按策略擦除记忆正文，只留下上文所述的最小审计 Tombstone。
-
-## 信任与权威边界
-
-| Actor 或边界 | 可以信任它做什么 | 不能信任它做什么 |
+| 等级 | 分身行为 | 示例 |
 | --- | --- | --- |
-| **用户** | 给出目标、纠正、审批和策略选择 | 完美回忆全部细节或持续监督 |
-| **运行时** | 调度、策略执行、记账、验证决策和记忆授权 | 自动判断所有外部内容是否真实 |
-| **Worker Agent** | 产生建议、动作、产物和结构化声明 | 自行宣布最终完成、自行扩权或直接提交长期记忆 |
-| **观察边界** | 证明某个本地效果或输出曾被观察到 | 证明其内容在语义上一定正确 |
-| **外部内容** | 作为带来源的数据 | 发号施令或修改运行时策略 |
+| **0 — Observe** | 只捕获和整理。 | 索引文件、对齐任务、发现截止日期。 |
+| **1 — Suggest** | 解释机会并给出选项。 | 建议周计划、提示冲突。 |
+| **2 — Prepare** | 创建可逆草稿和预览。 | 起草邮件、创建分支、准备预约请求。 |
+| **3 — Execute by standing authority** | 执行用户明确预授权、有边界且可逆的动作。 | 归档文件、创建已批准任务、跑测试、更新私有笔记。 |
+| **4 — Confirm before commitment** | 对会带来重要外部变化的动作暂停并请求确认。 | 发消息、购买、提交表单、发布、删除或修改访问权限。 |
 
-审批事件只能证明用户授权过一个有明确范围的动作，不能证明动作本身安全或正确；运行时仍然必须
-执行策略约束并验证结果。
+预测的意图最多只能把工作从 Observe 推进到 Suggest 或 Prepare。没有匹配的 Policy 与当前权限检查，
+它绝不能进入 Execute。
 
-破坏性动作、权限变更、敏感记忆提交和策略扩张需要明确人工审批。所有权限、预算和升级决策
-都进入事件日志。
+## 日志、状态与记忆
 
-## Agent Adapter 边界
+Personal Journal 记录 Runtime 观察到和决定过什么。它是持久恢复的骨架，而不是原始监控档案。
 
-不同供应商的集成应保持轻薄：
+```text
+JournalEvent
+  intent | observation | inference | plan | policy | approval
+  action | artifact | verification | memory-candidate | memory-commit
+
+Append-only Personal Journal
+  -> Current State Projections
+  -> Evidence Index
+  -> Memory Candidates
+  -> 受治理地提升为 Durable Memory
+```
+
+| 存储 | 用途 | 可变性 |
+| --- | --- | --- |
+| **Journal** | 有序的来源与生命周期事件。 | 只能追加。 |
+| **State Projections** | 目标、承诺、任务和权限的可重建当前视图。 | 派生。 |
+| **Durable Memory** | 值得带入未来决策的精选信息。 | 受治理、可纠正、可过期、可删除。 |
+| **Content Store** | 敏感或大体积内容的加密正文。 | 受保留策略和密码擦除控制。 |
+
+Agent 可以提出 MemoryCandidate，但只有 Runtime 在完成证据、策略、作用域、冲突和保留检查之后才能
+提升它。纠正会以新条目覆盖旧判断；遗忘会移除或通过销毁密钥抹除敏感正文，同时留下最小且不含敏感
+正文的审计 Tombstone。
+
+## 信任、隐私与安全
+
+个人生活数据要求更高的系统边界。clone-ai 必须明确：
+
+- 导入的邮件、网页、文档和消息都是**数据**，不是指令。
+- 日历事件或过去习惯不能授权花钱、联系某人或披露信息。
+- 金钱、健康、法律、关系、权限控制、删除、发布和外部承诺等高影响领域，默认需要确认。
+- 每个 Connector 都有有作用域的能力授权、可见数据边界和撤销路径。
+- 用户可以检查、纠正、导出和删除自己的数据与长期记忆。
+- WorkReceipt 记录计划、授权、动作、证据、验证结果、剩余不确定性，以及适用时的回滚路径。
+
+## Runtime Adapter 与 Skills
+
+Agent Runtime 是执行提供者，不是产品大脑或事实来源。
 
 ```ts
-interface AgentAdapter {
+interface RuntimeAdapter {
   readonly id: string;
 
-  capabilities(): Promise<AgentCapabilities>;
+  capabilities(): Promise<RuntimeCapabilities>;
 
-  start(input: AgentSessionInput): AsyncIterable<AgentEvent>;
+  start(input: ExecutionAssignment): AsyncIterable<RuntimeEvent>;
 
   resume(
-    agentSessionId: string,
-    input: AgentResumeInput,
-  ): AsyncIterable<AgentEvent>;
+    runtimeSessionId: string,
+    input: ResumeAssignment,
+  ): AsyncIterable<RuntimeEvent>;
 
-  cancel(agentSessionId: string): Promise<void>;
+  cancel(runtimeSessionId: string): Promise<void>;
 }
 ```
 
-Adapter 负责翻译 SDK 流、JSONL、子进程和 CLI Session，但不拥有工作状态、长期记忆、权限或
-完成策略。
+Runtime 可通过这个边界接入 Claude Code、Codex、Pi 和未来独立的 Runtime。**Skill** 是版本化、受策略
+作用域约束的能力，例如调研、编写代码、规划旅行、总结对话、准备购买或对齐任务清单。Skill 需要声明
+自己的输入、输出、所需权限、风险级别和验证方法。
 
-## 一个代表性执行
+## 实现架构
 
-```text
-$ clone-ai session start "为 API 增加限流并证明它有效"
+### TypeScript、Node.js 和 Python 足够吗？
 
-Session ssn_01... 已开启
-  WorkItem 1：检查 API 边界                  -> Codex
-  WorkItem 2：比较兼容的实现策略              -> Claude Code
+足够。前几个产品阶段只需要这三种技术：
 
-已观察：
-  仓库快照、worktree diff、命令输出、测试结果
+| 技术 | 角色 | 边界 |
+| --- | --- | --- |
+| **TypeScript（strict）** | 统一领域协议、策略、Schema、CLI、Connector、Adapter、状态投影和测试。 | Runtime 拥有的状态与决策的事实语言。 |
+| **Node.js LTS** | 本地 Daemon、进程监管、流式 I/O、CLI、调度、Connector 执行和 Agent Runtime Adapter。 | 始终运行的本地控制平面。 |
+| **Python** | 可选的智能 Worker：本地 ML、多模态提取、OCR、预测、排序、评估和实验性检索。 | 返回版本化建议与证据，不能直接拥有个人状态或权限。 |
 
-运行时：
-  根据已接受的结论创建 WorkItem 3
-  在隔离 worktree 中分配实现
-  验证 diff 和要求的测试
-  记录一条项目事实 MemoryCandidate
+Daemon 使用当前 Node.js LTS。写本文档时 Node.js 24 是当前 LTS 线。Python 使用 3.13+，每一个
+Worker 拥有独立且锁定版本的虚拟环境；在依赖兼容时再使用 Python 3.14。
 
-Session ssn_01... 已完成
-  3 个 WorkItem | 2 种 Agent | 4 个 Artifact | 5 条 VerificationRecord
-  WorkReceipt：receipts/ssn_01.json
-```
+Python 应放在一个小而版本化的本地协议之后：第一版使用标准输入输出上的 NDJSON 就足够。Node 控制平面
+发送有界请求，接收 `WorkerProposal`，进行校验、写入日志，再决定是否采用。这样 Python 实验不会变成
+另一个不受治理的控制平面。
 
-如果 Worker 在中途退出，部分产物和失败事件仍然可见。运行时可以恢复同一个 AgentSession、
-更换 Worker、重新规划、请求审批，或带着可检查的原因停止。
+第一版不要引入 Go、Rust、分布式队列或 Kubernetes。只有在测量证明确实需要更强隔离、原生设备集成或
+性能关键组件时，再增加新的系统语言。
 
-## v0.1
-
-### 包含
-
-- 单用户、单电脑、本地优先运行。
-- SQLite WAL 事件日志与可重建状态投影。
-- `Session`、`WorkItem`、`AgentSession`、`Artifact`、`Evidence` 和 `WorkReceipt`。
-- Claude Code、Codex 和 Pi Adapter。
-- 面向编码任务的 Git worktree 隔离。
-- 文件变化、命令、测试和引用的验证钩子。
-- 面向偏好、项目事实和流程的窄范围受治理记忆。
-- 超时、取消、重试、等待审批和崩溃恢复。
-- 查看工作、Trace、证据、记忆和恢复状态的 CLI。
-
-### 暂不包含
-
-- 向量优先或完全自动的记忆摄取。
-- 多设备同步。
-- 分布式队列或多节点执行。
-- 无边界 Swarm 和 Agent 社交系统。
-- 预设 Agent 市场。
-- 完整 Web 控制台。
-- 在没有明确授权范围时自行行动的“数字克隆”。
-
-v0.1 只需要证明一件事：
-
-> 启动一项非平凡工作，中途打断，更换 Agent，稍后恢复，检查证据，并且无需人工重建任务，
-> 仍然得到经过验证的结果。
-
-## 建议的 TypeScript 工程结构
+### 建议的工程结构
 
 ```text
+apps/
+|-- cli/                         query、inspect、approve、trace、resume
+|-- daemon/                      本地生命周期与调度进程
+`-- desktop/                     后续：可视化时间线与控制中心
+
 packages/
-|-- contracts/              共享领域类型与 Schema
-|-- journal/                追加式事件、Snapshot、重放
-|-- content-store/          加密内容、保留策略、删除
-|-- work-state/             Session 与 WorkItem 投影
-|-- memory/                 候选记忆、治理、召回、审计
-|-- context/                有作用域的 ContextPacket 编译器
-|-- runtime/                调度器与生命周期协调
-|-- policy/                 权限、预算、升级规则
-|-- verifier/               产物与证据验证
+|-- contracts/                   版本化领域类型与 Schema
+|-- journal/                     追加事件、重放、Snapshot
+|-- content-store/               加密内容、保留与删除
+|-- twin-state/                  self、goals、commitments、situations
+|-- memory/                      候选、召回、复查、审计
+|-- planning/                    opportunities、options、task graphs
+|-- context/                     有作用域的 ContextPacket 编译器
+|-- policy/                      authority、privacy、risk、approval、budget
+|-- execution/                   调度、重试、WorkReceipt
+|-- verification/                证据与验收检查
+|-- connectors/                  calendar、mail、files、browser、APIs
 |-- adapters/
 |   |-- claude-code/
 |   |-- codex/
 |   `-- pi/
-|-- cli/                    本地命令行界面
-`-- testkit/                Fake Agent、Fixture、故障注入
+|-- observability/               Trace、审计、指标
+`-- testkit/                     Fake Connector、Runtime、故障
+
+workers/python/
+|-- extraction/                  结构化与多模态提取
+|-- ranking/                     机会与选项排序
+|-- forecasting/                 时间与工作量预测
+`-- evaluation/                  重放与决策质量评估
 ```
 
-建议的技术基础：
+### 本地存储与进程模型
 
-- **TypeScript strict + Node.js 22+**：统一协议、子进程和流式事件。
-- **pnpm workspace**：清晰划分各个包的边界。
-- **SQLite WAL + Drizzle**：本地、可检查、无需额外运维的持久化。
-- **Zod**：在 Adapter 和存储边界进行运行时校验。
-- **Pino + OpenTelemetry**：关联 Session、Worker 和工具的日志与 Trace。
-- **Vitest**：测试事件重放、Fake Agent、崩溃和策略。
-- **Git worktree**：隔离编码任务；真正需要时再增加容器。
+- **SQLite WAL** 保存 Journal、状态投影、策略元数据和队列。
+- **加密的本地 Content Store** 保存敏感内容与大型产物。
+- **OS Keychain 集成** 保护本地加密密钥和 Connector 凭证。
+- **Node 子进程** 监管 CLI Agent 与 Python Worker，提供明确的超时、取消和结构化事件流。
+- **Zod** 在所有不可信的 Adapter、Connector 和 Worker 输入边界做运行时校验。
+- **Drizzle** 提供类型化持久化；**Pino** 与 **OpenTelemetry** 提供可追踪运行；**Vitest** 提供确定性的
+  重放与策略测试。
 
-## CLI 方向
+## 路线图
+
+| 阶段 | 重点 | 状态 |
+| --- | --- | --- |
+| **现在** | 可信本地状态，以及从 Query 到可验证交付 | 架构与设计 |
+| **下一步** | 个人规划与主动准备 | 计划中 |
+| **以后** | 有边界的委托自主性，以及跨领域生活支持 | 研究中 |
+
+### Phase 0 — 可信的个人状态
+
+构建本地 Journal、`SelfModel`、目标、承诺、WorkItem、Policy、Evidence、记忆复查和可检查时间线。
+不自动执行外部写入。
+
+**证明：** 重启 Daemon、更换 Agent Runtime 后，仍能准确恢复哪些事情被计划、尝试、验证、阻塞或等待审批。
+
+### Phase 1 — Query 到已验证交付
+
+从开发者与知识工作切入。一个 Query 能产出调研、代码、文档、计划、任务更新和带证据结果。分身接入
+本地文件、Git、日历与一个范围很窄的任务来源。
+
+**证明：** 用户可以提出一个非平凡结果，中断过程，更换 Agent，再回到无需人工重建上下文的已验证
+WorkReceipt。
+
+### Phase 2 — 个人规划与主动准备
+
+接入日历、任务、邮件、周期责任和用户自行选择的生活信号。生成 OpportunityCard、情景计划、每日简报
+和可逆的预先准备。
+
+**证明：** 用户愿意接受主动准备，因为它的时机、理由和范围足够有用且可理解。
+
+### Phase 3 — 有边界的委托自主性
+
+对窄范围可逆动作启用常设授权。增加 Policy 模板、每个 Skill 的额度、回滚，并持续评估误报、过期记忆
+与验证失败。
+
+**证明：** 重复性动作可以安全发生，同时不降低用户对分身的知情、暂停和纠正能力。
+
+### Phase 4 — 跨领域个人数字分身
+
+从工作与规划扩展到经过谨慎选择的生活领域。系统会依据用户持续演化的目标和约束推演未来选项，但对敏感
+动作保持审批闸门。
+
+**证明：** 分身扩大用户可见的选择和执行能力，而不是悄悄缩小用户的自主性。
+
+## 第一版
+
+第一版不应该试图自动化一个人的全部生活，而应先建立一个窄但有意义的信任闭环：
+
+1. 捕获用户 Query，以及用户选择的本地项目和日历上下文。
+2. 创建持久计划与明确 WorkItem。
+3. 使用 Agent Runtime 调研、实现、测试和生成产物。
+4. 验证结果，并展示带证据的 WorkReceipt。
+5. 只为下一次任务保留经过复查的偏好、项目事实和流程。
+
+暂缓语音克隆、头像、社交模拟、金融执行、健康决策、关系自动化、宽泛邮件访问和无边界的主动行为。
+
+## 命令行体验（计划）
 
 ```bash
 clone-ai init
-clone-ai agent add codex
-clone-ai agent add claude-code
-clone-ai session start "调研并实现这个需求"
-clone-ai work list
-clone-ai trace <session-id>
-clone-ai resume <work-item-id>
+clone-ai connect calendar
+clone-ai ask "为下周准备最好的计划"
+clone-ai today
+clone-ai opportunity list
+clone-ai plan show <plan-id>
+clone-ai approve <approval-id>
+clone-ai trace <session-or-work-id>
 clone-ai memory inspect
-clone-ai memory audit
 clone-ai memory forget <memory-id>
 ```
 
-一个 Trace 必须能够回答：用户要求了什么、运行时做了什么决定、哪个 Worker 执行、电脑上发生了
-什么变化、捕获了哪些证据、验证了什么、什么需要审批，以及工作为什么处于当前状态。
+最重要的命令不是 `run`，而是能够检查：分身为什么认为某事重要、它被允许做什么，以及什么证据证明了
+结果。
 
-## 不可破坏的系统约束
+## 不可破坏的约束
 
-1. 事件日志只能追加。
-2. 工作状态可由日志重建。
-3. 工作状态与长期记忆保持分离。
-4. 每条长期记忆都有来源。
-5. Worker 不能自行把工作标记为完成。
-6. 完成必须同时具备验收标准和验证证据。
-7. 权限、预算、策略决策和升级必须写入日志。
-8. 外部内容只是数据，永远不是运行时权威。
-9. Adapter 可以替换，运行时权威不能下放。
-10. 用户可以检查、纠正、导出和删除长期记忆。
-
-## 关于名称
-
-`Knotwork` 描述了早期“把多个 Agent 编织在一起”的想法，但它把重点放在 Adapter 之间的连接，
-而不是产品真正持久的价值；同时，它也已经与现有软件和 AI 相关名称发生冲突。
-
-现在采用 `clone-ai` 作为仓库和项目名，它直接表达长期方向：用户拥有的个人 AI 分身，
-而不是一组随时失效的聊天记录。**Clone AI** 是描述性很强、且已有活跃产品在使用的短语，
-因此应把 `clone-ai` 视作项目名和工作品牌，而非已完成清权的商业商标。在付费公开发布前，
-仍应完成正式的商标、域名和包注册表核查；如有需要，再引入更具辨识度的商业产品品牌。
+1. 人是权威，分身是有边界的代理人。
+2. 观察、推断、权限、动作和验证必须是不同的事件类型。
+3. 预测永远不是权限。
+4. 个人状态、当前工作、长期记忆和原始历史必须保持分离。
+5. 没有任何 Agent Runtime 能直接标记工作完成或提交长期记忆。
+6. 每个重要动作都有策略决策、证据路径和撤销方式。
+7. 外部内容只是数据，永远不是 Runtime 的权威。
+8. 用户可以检查、纠正、导出和删除个人状态与记忆。
+9. 接入的 Runtime 可以替换；clone-ai 的个人状态与治理不能被替换掉。
 
 ---
 
-> **clone-ai 让个人 AI 分身带着证据、权限和记忆持续推进工作。**
+> **clone-ai 不是模仿人的 AI；它是帮助人长期看见、决策并安全完成更多事情的个人数字分身。**
