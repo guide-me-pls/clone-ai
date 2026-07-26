@@ -34,8 +34,8 @@ adapters.
 
 - Personal memory, subagents, schedules, connectors, and external side effects.
 - Domain-specific verification. The first verifier only rejects an empty final answer.
-- Resume/checkpoint at an individual model turn, cancellation, budgets, or approval
-  gates for real writes.
+- Resuming a real model-provider session after process restart, cancellation, budgets,
+  or approval gates for real writes.
 - Claude Code, Codex, and Pi adapters. They belong after this direct model/tool loop
   is understood and stable.
 
@@ -73,10 +73,48 @@ Get-Content .clone-ai/llm-loop.jsonl
 1. `src/loop/contracts.ts` — the model, tool, result, and event boundaries.
 2. `src/loop/tools.ts` — actual workspace-scoped reads and the mocked write boundary.
 3. `src/loop/agent-loop.ts` — the turn-by-turn state machine and durable event order.
-4. `src/loop/openai-responses-model.ts` — model function calls and local transcript
+4. `src/loop/run-state.ts` — Event Projector: events become a recoverable next action.
+5. `src/loop/checkpoint.ts` and `src/loop/recovery.ts` — atomic checkpoint writes and
+   replay of events newer than a checkpoint.
+6. `src/loop/openai-responses-model.ts` — model function calls and local transcript
    replay.
-5. `test/agent-loop.test.ts` — deterministic proof of the loop and the API adapter
+7. `test/agent-loop.test.ts` — deterministic proof of the loop, state machine, and API adapter
    payload, without an API key.
+
+## State machine and checkpoints
+
+The journal is an append-only source of truth. The checkpoint is a materialized view of
+the next safe action, with a `lastAppliedSequence` marker:
+
+```text
+Event Log                     Checkpoint
+---------                     ----------
+model.completed(tool call) -> status = waiting_tools
+                              pendingToolCalls = [read_file(...)]
+                              lastAppliedSequence = 4
+```
+
+The first checkpointable state machine is:
+
+```text
+created -> waiting_model -> running_model
+                            |                \
+                            | tool calls       \ final answer
+                            v                   v
+                       waiting_tools         verifying
+                            -> running_tool       -> completed / failed
+                            -> waiting_model
+```
+
+After each durable event, the loop projects its `LoopRunState` and atomically replaces
+`<run-id>.json`. On restart, `restoreLoopRun` loads that checkpoint and applies only
+events with a higher sequence. The included test intentionally stops after
+`model.completed`; recovery returns `waiting_tools` with the original pending call,
+without asking the model to plan again.
+
+This is recovery of the Runtime state machine, not full provider-session recovery yet.
+The OpenAI adapter's raw response history still lives in process memory. Persisting and
+restoring that provider transcript safely is a later, explicit step.
 
 ## 中文说明
 
@@ -90,8 +128,9 @@ Get-Content .clone-ai/llm-loop.jsonl
 `list_files`/`read_file`、Tool 回传、多轮循环、以及 `.clone-ai/llm-loop.jsonl` 的可回放轨迹。
 `write_file` 故意只是 Mock，不会写入任何文件。
 
-目前故意没有接入：Memory、SubAgent、Schedule、外部连接器、真实写操作、按轮恢复、取消、预算与
-领域级验证。先理解并跑稳一条最小闭环，再把它接入上层 Runtime。
+目前故意没有接入：Memory、SubAgent、Schedule、外部连接器、真实写操作、跨进程恢复模型 Provider
+Session、取消、预算与领域级验证。Runtime 的状态机已可从 Checkpoint 和 Event Replay 恢复；先把这条
+最小闭环跑稳，再把它接入上层 Runtime。
 
 在 PowerShell 中设置 `OPENAI_API_KEY` 后运行：
 

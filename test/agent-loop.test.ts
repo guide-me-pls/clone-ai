@@ -6,8 +6,10 @@ import test from "node:test";
 
 import { AgentLoop } from "../src/loop/agent-loop.ts";
 import type { LoopModel, ModelTurn } from "../src/loop/contracts.ts";
+import { JsonFileLoopCheckpointStore } from "../src/loop/checkpoint.ts";
 import { JsonlLoopJournal } from "../src/loop/journal.ts";
 import { OpenAIResponsesModel } from "../src/loop/openai-responses-model.ts";
+import { restoreLoopRun } from "../src/loop/recovery.ts";
 import { ToolRegistry, createWorkspaceTools } from "../src/loop/tools.ts";
 
 test("the minimal loop persists an LLM-selected read tool chain and final answer", async (t) => {
@@ -15,6 +17,7 @@ test("the minimal loop persists an LLM-selected read tool chain and final answer
   t.after(async () => rm(workspace, { recursive: true, force: true }));
 
   const journal = new JsonlLoopJournal(join(workspace, "journal.jsonl"));
+  const checkpoints = new JsonFileLoopCheckpointStore(join(workspace, "checkpoints"));
   const loop = new AgentLoop({
     model: new ScriptedModel([
       { kind: "tool_calls", calls: [{ id: "call-list", name: "list_files", arguments: { path: "." } }] },
@@ -23,6 +26,7 @@ test("the minimal loop persists an LLM-selected read tool chain and final answer
     ]),
     tools: new ToolRegistry(createWorkspaceTools(workspace)),
     journal,
+    checkpoints,
   });
 
   const events = [];
@@ -53,6 +57,35 @@ test("the minimal loop persists an LLM-selected read tool chain and final answer
   );
   assert.equal(events.at(-1)?.type, "run.completed");
   assert.equal((await journal.list()).length, events.length);
+  const finalState = await restoreLoopRun({ runId: events[0]!.runId, journal, checkpoints });
+  assert.equal(finalState.status, "completed");
+  assert.equal(finalState.budget.modelCalls, 3);
+  assert.equal(finalState.budget.toolCalls, 2);
+});
+
+test("a checkpoint restores pending tools without asking the model to plan again", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "clone-ai-checkpoint-"));
+  t.after(async () => rm(workspace, { recursive: true, force: true }));
+
+  const journal = new JsonlLoopJournal(join(workspace, "journal.jsonl"));
+  const checkpoints = new JsonFileLoopCheckpointStore(join(workspace, "checkpoints"));
+  const loop = new AgentLoop({
+    model: new ScriptedModel([{ kind: "tool_calls", calls: [{ id: "pending-read", name: "read_file", arguments: { path: "journal.jsonl" } }] }]),
+    tools: new ToolRegistry(createWorkspaceTools(workspace)),
+    journal,
+    checkpoints,
+  });
+
+  const iterator = loop.run("Inspect the journal.");
+  for (let index = 0; index < 4; index += 1) {
+    await iterator.next();
+  }
+  await iterator.return(undefined);
+
+  const state = await restoreLoopRun({ runId: (await journal.list())[0]!.runId, journal, checkpoints });
+  assert.equal(state.status, "waiting_tools");
+  assert.deepEqual(state.pendingToolCalls, [{ id: "pending-read", name: "read_file", arguments: { path: "journal.jsonl" } }]);
+  assert.deepEqual(state.messages, [{ role: "user", content: "Inspect the journal." }]);
 });
 
 test("write_file is deliberately a mock and cannot change the workspace", async (t) => {

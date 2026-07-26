@@ -68,6 +68,43 @@ export interface LoopJournal {
   list(runId?: string): Promise<LoopEvent[]>;
 }
 
+/** The next recoverable action for a durable single-agent run. */
+export type LoopRunStatus =
+  | "created"
+  | "waiting_model"
+  | "running_model"
+  | "waiting_tools"
+  | "running_tool"
+  | "verifying"
+  | "completed"
+  | "failed";
+
+export interface LoopRunState {
+  runId: string;
+  status: LoopRunStatus;
+  goal?: string;
+  instructions?: string;
+  turn: number;
+  messages: LoopMessage[];
+  pendingToolCalls: ToolCall[];
+  activeToolCallId?: string;
+  budget: {
+    modelCalls: number;
+    toolCalls: number;
+  };
+  verification?: { passed: boolean; summary: string };
+  finalAnswer?: string;
+  failureReason?: string;
+  lastAppliedSequence: number;
+  updatedAt?: string;
+}
+
+/** A materialized view used to start recovery without replaying an entire journal. */
+export interface LoopCheckpointStore {
+  save(state: LoopRunState): Promise<void>;
+  load(runId: string): Promise<LoopRunState | undefined>;
+}
+
 export interface ResponseVerifier {
   verify(input: { goal: string; answer: string }): Promise<{ passed: boolean; summary: string }>;
 }
