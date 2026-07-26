@@ -23,6 +23,10 @@ export class ToolRegistry {
     return [...this.#tools.values()].map((tool) => tool.schema);
   }
 
+  get(name: string): ToolDefinition | undefined {
+    return this.#tools.get(name);
+  }
+
   async execute(call: ToolCall): Promise<ToolResult> {
     const tool = this.#tools.get(call.name);
     if (tool === undefined) {
@@ -66,6 +70,7 @@ export function createWorkspaceTools(workspaceRoot: string): ToolDefinition[] {
         },
         strict: true,
       },
+      risk: "read_only",
       async execute(arguments_: JsonObject): Promise<ToolResult> {
         const inputPath = arguments_.path ?? ".";
         const recursive = arguments_.recursive ?? false;
@@ -119,6 +124,7 @@ export function createWorkspaceTools(workspaceRoot: string): ToolDefinition[] {
         },
         strict: true,
       },
+      risk: "read_only",
       async execute(arguments_: JsonObject): Promise<ToolResult> {
         const path = resolveWorkspacePath(arguments_.path);
         const bytes = await readFile(path);
@@ -147,6 +153,7 @@ export function createWorkspaceTools(workspaceRoot: string): ToolDefinition[] {
         },
         strict: true,
       },
+      risk: "reversible_write",
       async execute(arguments_: JsonObject): Promise<ToolResult> {
         const path = resolveWorkspacePath(arguments_.path);
         if (typeof arguments_.content !== "string") {

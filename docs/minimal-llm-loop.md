@@ -29,13 +29,21 @@ adapters.
   completion event.
 - A mocked `write_file` tool. It returns a proposed-write receipt but never mutates the
   filesystem.
+- Checkpoint + replay recovery. A restarted run executes pending safe reads and then
+  continues the model from its persisted Responses protocol history.
+- A Tool Runtime with stable operation IDs, cooperative timeout/cancellation, risk policy,
+  approval routing, receipt generation, and conservative reconciliation after interruption.
+- Verification outcomes that can pass, retry, request replanning, request approval, or fail.
+- Run budgets for model calls, tool calls, verification retries, and elapsed duration.
 
 ## What is deliberately not in this loop yet
 
 - Personal memory, subagents, schedules, connectors, and external side effects.
 - Domain-specific verification. The first verifier only rejects an empty final answer.
-- Resuming a real model-provider session after process restart, cancellation, budgets,
-  or approval gates for real writes.
+- A live email, calendar, payment, or browser connector. Such a Tool must implement its
+  own external receipt lookup in `reconcile` before it can be safely retried after a crash.
+- Provider-reported token/currency budgets. The current budget is deterministic: elapsed
+  time, model calls, tool calls, and verification retries.
 - Claude Code, Codex, and Pi adapters. They belong after this direct model/tool loop
   is understood and stable.
 
@@ -108,13 +116,40 @@ created -> waiting_model -> running_model
 
 After each durable event, the loop projects its `LoopRunState` and atomically replaces
 `<run-id>.json`. On restart, `restoreLoopRun` loads that checkpoint and applies only
-events with a higher sequence. The included test intentionally stops after
-`model.completed`; recovery returns `waiting_tools` with the original pending call,
-without asking the model to plan again.
+events with a higher sequence. The OpenAI adapter snapshots its API protocol history after
+each model response; a new adapter can use that continuation to finish the next model turn.
 
-This is recovery of the Runtime state machine, not full provider-session recovery yet.
-The OpenAI adapter's raw response history still lives in process memory. Persisting and
-restoring that provider transcript safely is a later, explicit step.
+The recovery runner follows the state rather than rerunning a task from the beginning:
+
+```text
+waiting_tools -> execute the pending Tool
+waiting_model -> recreate the model adapter from its continuation and call it
+running_tool -> reconcile the stable operation ID before any retry
+verifying    -> continue verification
+```
+
+Read-only tools reconcile as `not_started` and are safe to rerun. A side-effecting Tool
+without a reconciliation handler fails safely rather than being replayed blindly.
+
+## Tool control and convergence
+
+Every Tool call has an `operationId` that survives recovery. Before external execution,
+the local policy allows reads and reversible local writes, requests approval for external
+side effects, and denies irreversible operations until a more specific policy exists.
+
+Verification is a routing decision, not a boolean:
+
+```text
+passed         -> completed
+retryable      -> return verification feedback to the model
+needs_replan   -> return replanning feedback to the model
+needs_approval -> waiting_approval
+failed         -> failed
+```
+
+The loop also has deterministic safety budgets. A caller can cap model calls, tool calls,
+verification retries, and elapsed duration; the runtime records a terminal failure when a
+budget is exhausted rather than looping indefinitely.
 
 ## 中文说明
 
@@ -128,9 +163,9 @@ restoring that provider transcript safely is a later, explicit step.
 `list_files`/`read_file`、Tool 回传、多轮循环、以及 `.clone-ai/llm-loop.jsonl` 的可回放轨迹。
 `write_file` 故意只是 Mock，不会写入任何文件。
 
-目前故意没有接入：Memory、SubAgent、Schedule、外部连接器、真实写操作、跨进程恢复模型 Provider
-Session、取消、预算与领域级验证。Runtime 的状态机已可从 Checkpoint 和 Event Replay 恢复；先把这条
-最小闭环跑稳，再把它接入上层 Runtime。
+目前故意没有接入：Memory、SubAgent、Schedule、外部连接器、真实写操作的服务端回执查询、领域级验证、
+Provider 返回的 Token/成本预算。Runtime 已经能从 Checkpoint 和 Event Replay 恢复，跨进程继续 OpenAI
+Provider 协议历史，并安全恢复只读 Tool；先把这条最小闭环跑稳，再把它接入上层 Runtime。
 
 在 PowerShell 中设置 `OPENAI_API_KEY` 后运行：
 
