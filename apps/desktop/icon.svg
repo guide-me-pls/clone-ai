@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="clone-ai">
+  <defs>
+    <linearGradient id="surface" x1="70" y1="58" x2="438" y2="456" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#172538"/>
+      <stop offset="1" stop-color="#0A111B"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="142" y1="130" x2="366" y2="384" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#surface)"/>
+  <rect x="55" y="55" width="402" height="402" rx="82" fill="none" stroke="#2B415B" stroke-width="4"/>
+  <path d="M349 150C323 124 290 111 255 111C177 111 114 175 114 256C114 337 177 401 255 401C292 401 325 387 349 362" fill="none" stroke="url(#signal)" stroke-linecap="round" stroke-width="42"/>
+  <path d="M278 178L340 256L278 334" fill="none" stroke="#E8FBFF" stroke-linecap="round" stroke-linejoin="round" stroke-width="25"/>
+  <circle cx="156" cy="156" r="8" fill="#67E8F9"/>
+  <circle cx="156" cy="356" r="8" fill="#A78BFA"/>
+</svg>

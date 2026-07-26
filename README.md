@@ -6,7 +6,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-`Status: architecture & design` · `License: MIT` · `Core: TypeScript + Node.js + Python`
+`Status: initial runtime scaffold` · `License: MIT` · `Core: TypeScript + Node.js + Python`
 
 ---
 
@@ -74,17 +74,51 @@ context and capability grant necessary for an assignment.
 
 ## Start here
 
-clone-ai is currently an architecture-first open-source project; an installable runtime
-has not shipped yet. Clone the repository to follow or contribute to the design:
+clone-ai is an architecture-first open-source project with an initial developer runtime
+scaffold and an early Windows desktop client. It is not production-ready yet, but the
+client already starts the local daemon as a supervised child process and opens a native
+work surface. Clone the repository to follow or contribute to the design:
 
 ```bash
 git clone https://github.com/guide-me-pls/clone-ai.git
 cd clone-ai
 ```
 
-Then read [Architecture](#architecture), [Roadmap](#roadmap), and the planned
-[command-line experience](#command-line-experience-planned). The first implementation
-will be a local, inspectable trust loop—not a broad autonomous assistant.
+Then read [Architecture](#architecture), [Roadmap](#roadmap), the planned
+[command-line experience](#command-line-experience-planned), and the
+[initial runtime scaffold](docs/initial-runtime.md). To run the developer runtime:
+
+```bash
+npm install --ignore-scripts
+npm test
+npm run typecheck
+npm run demo
+```
+
+For the new, deliberately isolated model-and-tool learning vertical slice, read
+[Minimal LLM loop](docs/minimal-llm-loop.md). It runs a real model -> function tool
+-> tool result -> model cycle; its only filesystem write tool is intentionally mocked.
+
+The first implementation is a local, inspectable trust loop—not a broad autonomous
+assistant. It currently uses deterministic child-agent adapters, not live model
+providers. The demo dispatches bounded research and draft workers in parallel, waits
+for an evidence-review worker, pauses for an external-action approval, and resumes
+without repeating completed child work.
+
+### Run the desktop client (Windows)
+
+The native Tauri shell starts the daemon on an available loopback port, so it does not
+depend on port `4317` or on a browser tab. With the Windows C++ Build Tools and Windows
+SDK installed, build it with:
+
+```bash
+npm run desktop:build
+```
+
+Then double-click
+`apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/clone-ai-desktop.exe`.
+`npm run companion:debug` remains a developer-only browser preview for inspecting the
+daemon boundary. See the [desktop client](apps/desktop/README.md).
 
 ## Safety commitments
 
@@ -250,6 +284,16 @@ work into Execute without a matching policy and current authority check.
 The personal journal records what the runtime observed and decided. It is the durable
 recovery backbone, not a raw surveillance archive.
 
+### Current local desktop implementation
+
+The desktop companion already exposes a small, inspectable Memory Center. Evidence-backed
+candidates are synchronized into a local curated store; the owner can add a memory, edit it,
+archive it, disable recall, or choose the maximum number recalled for a new task. Active items
+are lexically matched against a task before planning, injected as bounded context, and recorded
+in that task's audit trace with the matched terms. This is deliberately not yet a vector index or
+a knowledge graph; those remain later upgrades rather than capabilities the current demo pretends
+to have.
+
 ```text
 JournalEvent
   intent | observation | inference | plan | policy | approval
@@ -347,7 +391,7 @@ isolation, native device integration, or a performance-critical component.
 apps/
 |-- cli/                         query, inspect, approve, trace, resume
 |-- daemon/                      local lifecycle and scheduling process
-`-- desktop/                     later: visual timeline and control center
+`-- desktop/                     installed local client, tray, approvals, activity trace
 
 packages/
 |-- contracts/                   versioned domain types and schemas
