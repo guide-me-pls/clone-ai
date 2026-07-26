@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  LoopCheckpointStore,
   LoopEvent,
   LoopJournal,
   LoopMessage,
   LoopModel,
   ResponseVerifier,
 } from "./contracts.ts";
+import { LoopRunProjector } from "./run-state.ts";
 import type { ToolRegistry } from "./tools.ts";
 
 export class NonEmptyResponseVerifier implements ResponseVerifier {
@@ -24,7 +26,8 @@ export class AgentLoop {
   readonly #journal: LoopJournal;
   readonly #verifier: ResponseVerifier;
   readonly #instructions: string;
-  readonly #maxTurns: number;
+  readonly #maxTurns?: number;
+  readonly #checkpoints?: LoopCheckpointStore;
 
   constructor(input: {
     model: LoopModel;
@@ -32,23 +35,34 @@ export class AgentLoop {
     journal: LoopJournal;
     verifier?: ResponseVerifier;
     instructions?: string;
+    /** Optional emergency guard; durable budgets replace a fixed default later. */
     maxTurns?: number;
+    checkpoints?: LoopCheckpointStore;
   }) {
     this.#model = input.model;
     this.#tools = input.tools;
     this.#journal = input.journal;
     this.#verifier = input.verifier ?? new NonEmptyResponseVerifier();
     this.#instructions = input.instructions ?? DEFAULT_INSTRUCTIONS;
-    this.#maxTurns = input.maxTurns ?? 8;
+    this.#maxTurns = input.maxTurns;
+    this.#checkpoints = input.checkpoints;
   }
 
   async *run(goal: string, runId = randomUUID()): AsyncGenerator<LoopEvent> {
     const messages: LoopMessage[] = [{ role: "user", content: goal }];
-    yield await this.record(runId, "run.started", { goal, maxTurns: this.#maxTurns });
+    const projector = new LoopRunProjector(runId);
+    const record = async (type: LoopEvent["type"], payload: unknown): Promise<LoopEvent> => {
+      const event = await this.#journal.append({ runId, type, payload });
+      const state = projector.apply(event);
+      await this.#checkpoints?.save(state);
+      return event;
+    };
 
-    for (let turn = 1; turn <= this.#maxTurns; turn += 1) {
-      yield await this.record(runId, "context.built", { turn, messageCount: messages.length, toolCount: this.#tools.schemas().length });
-      yield await this.record(runId, "model.started", { turn });
+    yield await record("run.started", { goal, instructions: this.#instructions, maxTurns: this.#maxTurns });
+
+    for (let turn = 1; this.#maxTurns === undefined || turn <= this.#maxTurns; turn += 1) {
+      yield await record("context.built", { turn, messageCount: messages.length, toolCount: this.#tools.schemas().length });
+      yield await record("model.started", { turn });
 
       let response;
       try {
@@ -58,43 +72,39 @@ export class AgentLoop {
           tools: this.#tools.schemas(),
         });
       } catch (error: unknown) {
-        yield await this.record(runId, "run.failed", { turn, reason: formatError(error) });
+        yield await record("run.failed", { turn, reason: formatError(error) });
         return;
       }
 
       if (response.kind === "final") {
-        yield await this.record(runId, "model.completed", { turn, kind: "final", answer: response.text });
+        yield await record("model.completed", { turn, kind: "final", answer: response.text });
         const verification = await this.#verifier.verify({ goal, answer: response.text });
-        yield await this.record(runId, "verification.completed", verification);
+        yield await record("verification.completed", verification);
         if (verification.passed) {
-          yield await this.record(runId, "run.completed", { turn, answer: response.text });
+          yield await record("run.completed", { turn, answer: response.text });
         } else {
-          yield await this.record(runId, "run.failed", { turn, reason: verification.summary });
+          yield await record("run.failed", { turn, reason: verification.summary });
         }
         return;
       }
 
-      yield await this.record(runId, "model.completed", {
+      yield await record("model.completed", {
         turn,
         kind: "tool_calls",
         calls: response.calls.map((call) => ({ id: call.id, name: call.name, arguments: call.arguments })),
       });
 
       for (const call of response.calls) {
-        yield await this.record(runId, "tool.requested", { turn, call });
+        yield await record("tool.requested", { turn, call });
         const result = await this.#tools.execute(call);
         messages.push({ role: "tool", callId: call.id, toolName: call.name, result });
-        yield await this.record(runId, "tool.completed", { turn, callId: call.id, toolName: call.name, result });
+        yield await record("tool.completed", { turn, callId: call.id, toolName: call.name, result });
       }
     }
 
-    yield await this.record(runId, "run.failed", {
-      reason: `The loop reached its ${this.#maxTurns}-turn limit without a final answer.`,
+    yield await record("run.failed", {
+      reason: `The loop reached its configured ${this.#maxTurns}-turn emergency limit without a final answer.`,
     });
-  }
-
-  private record(runId: string, type: LoopEvent["type"], payload: unknown): Promise<LoopEvent> {
-    return this.#journal.append({ runId, type, payload });
   }
 }
 
