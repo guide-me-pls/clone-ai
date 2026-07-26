@@ -1,0 +1,26 @@
+{
+  "name": "clone-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local-first runtime for a personal digital twin.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "companion:debug": "node --experimental-strip-types src/companion-server.ts",
+    "desktop:sidecar": "node scripts/build-sidecar.mjs",
+    "desktop:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-desktop.ps1",
+    "desktop:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1",
+    "demo": "node --experimental-strip-types src/cli.ts",
+    "loop": "node --experimental-strip-types src/loop/cli.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "22.15.3",
+    "@yao-pkg/pkg": "^6.21.0",
+    "typescript": "5.8.3"
+  }
+}
