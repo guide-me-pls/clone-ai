@@ -6,7 +6,7 @@
 
 [English](README.md) · **简体中文**
 
-`状态：架构与设计` · `许可证：MIT` · `核心：TypeScript + Node.js + Python`
+`状态：初始 Runtime 骨架` · `许可证：MIT` · `核心：TypeScript + Node.js + Python`
 
 ---
 
@@ -68,15 +68,30 @@ Agent。clone-ai 负责个人连续性、策略、记忆、规划和验证；被
 
 ## 从这里开始
 
-clone-ai 当前是一个架构优先的开源项目，尚未发布可安装 Runtime。可以先克隆仓库，关注或参与设计：
+clone-ai 是一个架构优先的开源项目，目前已包含初始开发者 Runtime 骨架；可安装的个人数字分身产品
+尚未发布。可以先克隆仓库，关注或参与设计：
 
 ```bash
 git clone https://github.com/guide-me-pls/clone-ai.git
 cd clone-ai
 ```
 
-接下来可阅读[架构](#架构)、[路线图](#路线图)和计划中的[命令行体验](#命令行体验计划)。第一版实现将是一个
-本地、可检查的信任闭环，而不是范围无限的自主助手。
+接下来可阅读[架构](#架构)、[路线图](#路线图)、计划中的[命令行体验](#命令行体验计划)，以及
+[初始 Runtime 骨架](docs/initial-runtime.zh-CN.md)。运行开发者预览：
+
+```bash
+npm install --ignore-scripts
+npm test
+npm run typecheck
+npm run demo
+```
+
+第一条独立的“真实模型与 Tool”学习闭环见[最小 LLM 闭环](docs/minimal-llm-loop.md)。它会跑通
+模型 → Function Tool → Tool 结果 → 模型的循环；唯一的文件写入 Tool 故意保持为 Mock。
+
+目前的演示使用确定性的子 Agent Adapter，而不是已接入的模型 Provider：调研和草稿工作单可并行执行，审查工作单会等待前置 Evidence；外部动作仍会在精确审批前暂停，恢复后不会重复已完成的子工作。
+
+产品客户端的方向是可安装的桌面数字分身，不是托管网页。`npm run companion:debug` 只会打开本地的桌面伴随预览，让开发者检查 daemon 边界；它既不是最终发布的桌面壳，也不是对外产品入口。详见[初始 Runtime](docs/initial-runtime.zh-CN.md#桌面端方向)。
 
 ## 安全承诺
 
@@ -223,6 +238,12 @@ OpportunityCard
 
 ## 日志、状态与记忆
 
+### 当前本地桌面端实现
+
+桌面客户端已经提供一个可检查的 Memory Center。带证据的候选会同步到本地治理层；所有者可以手动添加、编辑、归档记忆，关闭召回，或设置每个新任务最多可召回的条数。新任务在规划前会对使用中的记忆做本地词法检索，把命中项作为有边界的上下文交给计划和 Agent，并把命中的词与记忆写入该任务的审计轨迹。
+
+这不是向量索引或知识图谱；当前版本不会假装拥有这些能力。语义检索、冲突合并和关系图谱会作为后续升级，而不是未经验证的宣传。
+
 Personal Journal 记录 Runtime 观察到和决定过什么。它是持久恢复的骨架，而不是原始监控档案。
 
 ```text
@@ -312,7 +333,7 @@ Python 应放在一个小而版本化的本地协议之后：第一版使用标�
 apps/
 |-- cli/                         query、inspect、approve、trace、resume
 |-- daemon/                      本地生命周期与调度进程
-`-- desktop/                     后续：可视化时间线与控制中心
+`-- desktop/                     已安装本地客户端、托盘、审批与活动追踪
 
 packages/
 |-- contracts/                   版本化领域类型与 Schema
