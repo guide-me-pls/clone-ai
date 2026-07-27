@@ -1,4 +1,4 @@
-import type { LoopEvent, LoopRunState, ToolCall, ToolResult } from "./contracts.ts";
+import type { LoopEvent, LoopRunState, ModelContinuation, ToolCall, ToolResult, VerificationOutcome } from "./contracts.ts";
 
 /**
  * Converts append-only events into the next recoverable state. Events remain
@@ -30,6 +30,8 @@ export class LoopRunProjector {
         this.#state.goal = readString(payload.goal, "goal", event.type);
         this.#state.instructions = readString(payload.instructions, "instructions", event.type);
         this.#state.messages = [{ role: "user", content: this.#state.goal }];
+        this.#state.budget.startedAt = event.occurredAt;
+        this.#state.budget.limits = readBudget(payload.budget, event.type);
         this.#state.status = "waiting_model";
         break;
       }
@@ -71,6 +73,7 @@ export class LoopRunProjector {
           throw new Error(`Tool ${call.id} was not pending.`);
         }
         this.#state.activeToolCallId = call.id;
+        this.#state.activeToolOperationId = readOptionalString(payload.operationId, "operationId", event.type);
         this.#state.status = "running_tool";
         break;
       }
@@ -79,14 +82,20 @@ export class LoopRunProjector {
         const payload = readObject(event.payload, event.type);
         const callId = readString(payload.callId, "callId", event.type);
         const toolName = readString(payload.toolName, "toolName", event.type);
+        const operationId = readOptionalString(payload.operationId, "operationId", event.type);
         const result = readToolResult(payload.result, event.type);
         const pending = this.#state.pendingToolCalls.find((call) => call.id === callId);
         if (pending === undefined || pending.name !== toolName || this.#state.activeToolCallId !== callId) {
           throw new Error(`Tool completion ${callId} does not match the active tool.`);
         }
+        if (operationId !== undefined && this.#state.activeToolOperationId !== undefined && operationId !== this.#state.activeToolOperationId) {
+          throw new Error(`Tool completion ${callId} does not match the active operation.`);
+        }
         this.#state.messages.push({ role: "tool", callId, toolName, result });
         this.#state.pendingToolCalls = this.#state.pendingToolCalls.filter((call) => call.id !== callId);
         this.#state.activeToolCallId = undefined;
+        this.#state.activeToolOperationId = undefined;
+        this.#state.approvedToolCallIds = this.#state.approvedToolCallIds.filter((id) => id !== callId);
         this.#state.budget.toolCalls += 1;
         this.#state.status = this.#state.pendingToolCalls.length === 0 ? "waiting_model" : "waiting_tools";
         break;
@@ -94,15 +103,46 @@ export class LoopRunProjector {
       case "verification.completed": {
         requireStatus(this.#state, ["verifying"], event.type);
         const payload = readObject(event.payload, event.type);
-        this.#state.verification = {
-          passed: readBoolean(payload.passed, "passed", event.type),
-          summary: readString(payload.summary, "summary", event.type),
-        };
+        this.#state.verification = readVerification(payload, event.type);
         break;
       }
+      case "run.retrying": {
+        requireStatus(this.#state, ["verifying"], event.type);
+        const payload = readObject(event.payload, event.type);
+        const reason = readString(payload.reason, "reason", event.type);
+        if (this.#state.verification?.kind !== "retryable" && this.#state.verification?.kind !== "needs_replan") {
+          throw new Error("A run can retry only after retryable verification or a replan request.");
+        }
+        this.#state.messages.push({ role: "user", content: `Verification feedback: ${reason}\nContinue the task using this evidence.` });
+        this.#state.finalAnswer = undefined;
+        this.#state.budget.verificationRetries += 1;
+        this.#state.status = "waiting_model";
+        break;
+      }
+      case "approval.requested":
+        requireStatus(this.#state, ["verifying", "waiting_tools"], event.type);
+        if (this.#state.status === "waiting_tools") {
+          this.#state.pendingApprovalCallId = readToolCall(readObject(event.payload, event.type).call, event.type).id;
+        }
+        this.#state.status = "waiting_approval";
+        break;
+      case "approval.granted":
+        requireStatus(this.#state, ["waiting_approval"], event.type);
+        if (this.#state.pendingApprovalCallId !== undefined) {
+          this.#state.approvedToolCallIds.push(this.#state.pendingApprovalCallId);
+          this.#state.pendingApprovalCallId = undefined;
+        }
+        this.#state.messages.push({ role: "user", content: "Approval granted. Continue the task within the approved scope." });
+        this.#state.status = this.#state.pendingToolCalls.length > 0 ? "waiting_tools" : "waiting_model";
+        break;
+      case "run.cancelled":
+        requireNonTerminal(this.#state, event.type);
+        this.#state.failureReason = readString(readObject(event.payload, event.type).reason, "reason", event.type);
+        this.#state.status = "cancelled";
+        break;
       case "run.completed":
         requireStatus(this.#state, ["verifying"], event.type);
-        if (this.#state.verification?.passed !== true) {
+        if (this.#state.verification?.kind !== "passed") {
           throw new Error("A run cannot complete without passing verification.");
         }
         this.#state.finalAnswer = readString(readObject(event.payload, event.type).answer, "answer", event.type);
@@ -122,6 +162,11 @@ export class LoopRunProjector {
 
   snapshot(): LoopRunState {
     return cloneState(this.#state);
+  }
+
+  /** Save provider continuation immediately after a model response, before its next checkpoint. */
+  setModelContinuation(continuation: ModelContinuation | undefined): void {
+    this.#state.modelContinuation = continuation === undefined ? undefined : structuredClone(continuation);
   }
 }
 
@@ -144,13 +189,20 @@ function emptyState(runId: string): LoopRunState {
     turn: 0,
     messages: [],
     pendingToolCalls: [],
-    budget: { modelCalls: 0, toolCalls: 0 },
+    approvedToolCallIds: [],
+    budget: { modelCalls: 0, toolCalls: 0, verificationRetries: 0, startedAt: "", limits: {} },
     lastAppliedSequence: 0,
   };
 }
 
 function cloneState(state: LoopRunState): LoopRunState {
-  return structuredClone(state);
+  const clone = structuredClone(state);
+  // Older checkpoints may predate new bookkeeping fields. They remain
+  // recoverable because events are the source of truth.
+  clone.approvedToolCallIds ??= [];
+  clone.budget.verificationRetries ??= 0;
+  clone.budget.limits ??= {};
+  return clone;
 }
 
 function requireStatus(state: LoopRunState, allowed: LoopRunState["status"][], eventType: string): void {
@@ -160,7 +212,7 @@ function requireStatus(state: LoopRunState, allowed: LoopRunState["status"][], e
 }
 
 function requireNonTerminal(state: LoopRunState, eventType: string): void {
-  if (state.status === "completed" || state.status === "failed") {
+  if (state.status === "completed" || state.status === "failed" || state.status === "cancelled") {
     throw new Error(`${eventType} is invalid after the run reached ${state.status}.`);
   }
 }
@@ -191,6 +243,35 @@ function readBoolean(value: unknown, field: string, eventType: string): boolean 
     throw new Error(`${eventType}.${field} must be a boolean.`);
   }
   return value;
+}
+
+function readOptionalString(value: unknown, field: string, eventType: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return readString(value, field, eventType);
+}
+
+function readVerification(payload: Record<string, unknown>, eventType: string): VerificationOutcome {
+  const kind = readString(payload.kind, "kind", eventType);
+  const summary = readString(payload.summary, "summary", eventType);
+  if (kind === "passed" || kind === "retryable" || kind === "needs_replan" || kind === "needs_approval" || kind === "failed") {
+    return { kind, summary };
+  }
+  throw new Error(`${eventType}.kind is unsupported: ${kind}.`);
+}
+
+function readBudget(value: unknown, eventType: string): LoopRunState["budget"]["limits"] {
+  if (value === undefined) {
+    return {};
+  }
+  const budget = readObject(value, eventType);
+  return {
+    ...(budget.maxModelCalls === undefined ? {} : { maxModelCalls: readNumber(budget.maxModelCalls, "budget.maxModelCalls", eventType) }),
+    ...(budget.maxToolCalls === undefined ? {} : { maxToolCalls: readNumber(budget.maxToolCalls, "budget.maxToolCalls", eventType) }),
+    ...(budget.maxVerificationRetries === undefined ? {} : { maxVerificationRetries: readNumber(budget.maxVerificationRetries, "budget.maxVerificationRetries", eventType) }),
+    ...(budget.maxDurationMs === undefined ? {} : { maxDurationMs: readNumber(budget.maxDurationMs, "budget.maxDurationMs", eventType) }),
+  };
 }
 
 function readToolCalls(value: unknown, eventType: string): ToolCall[] {
