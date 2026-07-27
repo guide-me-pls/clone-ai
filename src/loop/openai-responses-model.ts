@@ -1,21 +1,22 @@
-import type { JsonObject, LoopMessage, LoopModel, ModelTurn, ToolSchema } from "./contracts.ts";
+import type { ContinuationCapableModel, JsonObject, LoopMessage, ModelContinuation, ModelTurn, ToolSchema } from "./contracts.ts";
 
 interface OpenAIResponsesModelOptions {
   apiKey: string;
   model: string;
   fetcher?: typeof fetch;
+  continuation?: ModelContinuation;
 }
 
 /**
  * A dependency-free Responses API adapter. The full transcript remains in this
  * process and each request uses `store: false`; no response ID is retained.
  */
-export class OpenAIResponsesModel implements LoopModel {
+export class OpenAIResponsesModel implements ContinuationCapableModel {
   readonly #apiKey: string;
   readonly #model: string;
   readonly #fetch: typeof fetch;
-  #history: unknown[] = [];
-  #syncedMessageCount = 0;
+  #history: unknown[];
+  #syncedMessageCount: number;
 
   constructor(options: OpenAIResponsesModelOptions) {
     if (options.apiKey.trim().length === 0) {
@@ -24,6 +25,19 @@ export class OpenAIResponsesModel implements LoopModel {
     this.#apiKey = options.apiKey;
     this.#model = options.model;
     this.#fetch = options.fetcher ?? fetch;
+    const state = readContinuation(options.continuation);
+    this.#history = state?.history ?? [];
+    this.#syncedMessageCount = state?.syncedMessageCount ?? 0;
+  }
+
+  snapshotContinuation(): ModelContinuation {
+    return {
+      provider: "openai-responses",
+      state: {
+        history: structuredClone(this.#history),
+        syncedMessageCount: this.#syncedMessageCount,
+      },
+    };
   }
 
   async respond(input: { instructions: string; messages: LoopMessage[]; tools: ToolSchema[] }): Promise<ModelTurn> {
@@ -84,6 +98,20 @@ export class OpenAIResponsesModel implements LoopModel {
     }
     this.#syncedMessageCount = messages.length;
   }
+}
+
+function readContinuation(continuation: ModelContinuation | undefined): { history: unknown[]; syncedMessageCount: number } | undefined {
+  if (continuation === undefined) {
+    return undefined;
+  }
+  if (continuation.provider !== "openai-responses" || typeof continuation.state !== "object" || continuation.state === null) {
+    throw new Error("The supplied model continuation is not an OpenAI Responses continuation.");
+  }
+  const state = continuation.state as Record<string, unknown>;
+  if (!Array.isArray(state.history) || typeof state.syncedMessageCount !== "number") {
+    throw new Error("The supplied OpenAI Responses continuation is malformed.");
+  }
+  return { history: structuredClone(state.history), syncedMessageCount: state.syncedMessageCount };
 }
 
 interface OpenAIResponse {

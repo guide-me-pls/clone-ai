@@ -20,6 +20,40 @@ export interface ToolResult {
   data?: unknown;
 }
 
+export type ToolRisk = "read_only" | "reversible_write" | "external_side_effect" | "irreversible";
+
+export interface ToolExecution {
+  runId: string;
+  call: ToolCall;
+  /** Stable across recovery; never generate a second ID for the same real-world action. */
+  operationId: string;
+}
+
+export interface ToolExecutionContext {
+  operationId: string;
+  signal: AbortSignal;
+}
+
+export interface ToolReceipt {
+  operationId: string;
+  status: "completed" | "failed";
+  evidence: Array<{
+    kind: "artifact" | "receipt" | "observation";
+    summary: string;
+    locator?: string;
+  }>;
+}
+
+export type ToolReconcileResult =
+  | { status: "completed"; result: ToolResult; receipt: ToolReceipt }
+  | { status: "not_started" }
+  | { status: "unknown"; reason: string };
+
+export type ToolAuthorization =
+  | { outcome: "allowed" }
+  | { outcome: "approval_required"; reason: string }
+  | { outcome: "denied"; reason: string };
+
 export type LoopMessage =
   | { role: "user"; content: string }
   | { role: "tool"; callId: string; toolName: string; result: ToolResult };
@@ -28,13 +62,36 @@ export type ModelTurn =
   | { kind: "tool_calls"; calls: ToolCall[] }
   | { kind: "final"; text: string };
 
+/**
+ * Provider-specific, JSON-serializable protocol state. This is distinct from
+ * LoopMessage: it lets an API continue a function-call conversation after a
+ * process restart without storing credentials or HTTP headers.
+ */
+export interface ModelContinuation {
+  provider: string;
+  state: unknown;
+}
+
 export interface LoopModel {
   respond(input: { instructions: string; messages: LoopMessage[]; tools: ToolSchema[] }): Promise<ModelTurn>;
 }
 
+export interface ContinuationCapableModel extends LoopModel {
+  snapshotContinuation(): ModelContinuation;
+}
+
+export type LoopModelFactory = (continuation?: ModelContinuation) => LoopModel;
+
 export interface ToolDefinition {
   schema: ToolSchema;
-  execute(arguments_: JsonObject): Promise<ToolResult>;
+  risk?: ToolRisk;
+  execute(arguments_: JsonObject, context?: ToolExecutionContext): Promise<ToolResult>;
+  /** Required for safe automatic recovery of a side-effecting tool. */
+  reconcile?(execution: ToolExecution): Promise<ToolReconcileResult>;
+}
+
+export interface ToolPolicy {
+  authorize(input: { execution: ToolExecution; definition: ToolDefinition }): ToolAuthorization;
 }
 
 export type LoopEventType =
@@ -45,6 +102,10 @@ export type LoopEventType =
   | "tool.requested"
   | "tool.completed"
   | "verification.completed"
+  | "run.retrying"
+  | "approval.requested"
+  | "approval.granted"
+  | "run.cancelled"
   | "run.completed"
   | "run.failed";
 
@@ -76,6 +137,8 @@ export type LoopRunStatus =
   | "waiting_tools"
   | "running_tool"
   | "verifying"
+  | "waiting_approval"
+  | "cancelled"
   | "completed"
   | "failed";
 
@@ -88,11 +151,18 @@ export interface LoopRunState {
   messages: LoopMessage[];
   pendingToolCalls: ToolCall[];
   activeToolCallId?: string;
+  activeToolOperationId?: string;
+  pendingApprovalCallId?: string;
+  approvedToolCallIds: string[];
   budget: {
     modelCalls: number;
     toolCalls: number;
+    verificationRetries: number;
+    startedAt: string;
+    limits: RunBudget;
   };
-  verification?: { passed: boolean; summary: string };
+  modelContinuation?: ModelContinuation;
+  verification?: VerificationOutcome;
   finalAnswer?: string;
   failureReason?: string;
   lastAppliedSequence: number;
@@ -105,6 +175,20 @@ export interface LoopCheckpointStore {
   load(runId: string): Promise<LoopRunState | undefined>;
 }
 
+export interface RunBudget {
+  maxModelCalls?: number;
+  maxToolCalls?: number;
+  maxVerificationRetries?: number;
+  maxDurationMs?: number;
+}
+
+export type VerificationOutcome =
+  | { kind: "passed"; summary: string }
+  | { kind: "retryable"; summary: string }
+  | { kind: "needs_replan"; summary: string }
+  | { kind: "needs_approval"; summary: string }
+  | { kind: "failed"; summary: string };
+
 export interface ResponseVerifier {
-  verify(input: { goal: string; answer: string }): Promise<{ passed: boolean; summary: string }>;
+  verify(input: { goal: string; answer: string }): Promise<VerificationOutcome>;
 }
