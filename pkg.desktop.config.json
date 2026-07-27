@@ -1,5 +1,5 @@
 {
-  "assets": ["apps/desktop/ui/index.html"],
+  "assets": ["apps/desktop/ui/index.html", "apps/desktop/ui/style.css", "apps/desktop/ui/app.js"],
   "targets": ["node22-win-x64"],
   "publicPackages": "*"
 }
