@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-export type ScheduleKind = "daily" | "weekly" | "monthly" | "yearly" | "cron";
+export type ScheduleKind = "daily" | "weekly" | "monthly" | "yearly" | "cron" | "interval";
 
 export interface LocalSchedule {
   id: string;
@@ -16,6 +16,8 @@ export interface LocalSchedule {
   month?: number;
   /** Five fields: minute hour day-of-month month day-of-week. */
   cron?: string;
+  /** Fixed gap between runs, in minutes; used by interval schedules. */
+  intervalMinutes?: number;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -33,6 +35,7 @@ export interface CreateScheduleInput {
   dayOfMonth?: number;
   month?: number;
   cron?: string;
+  intervalMinutes?: number;
 }
 
 export interface CreateDailyScheduleInput {
@@ -81,10 +84,11 @@ export class ScheduleStore {
       dayOfMonth: input.dayOfMonth,
       month: input.month,
       cron: input.cron?.trim(),
+      intervalMinutes: input.intervalMinutes,
       enabled: true,
       createdAt: now,
       updatedAt: now,
-      lastRunKey: calendarScheduleDue(input as LocalSchedule, nowDate) ? dueKey(input as LocalSchedule, nowDate) : undefined,
+      lastRunKey: initialLastRunKey(input as LocalSchedule, nowDate),
     };
     await this.mutate((schedules) => [...schedules, schedule]);
     return schedule;
@@ -145,13 +149,23 @@ export function describeSchedule(schedule: LocalSchedule): string {
   if (schedule.kind === "weekly") return `每周 ${schedule.weekdays?.map(weekdayLabel).join("、")} ${schedule.time}`;
   if (schedule.kind === "monthly") return `每月 ${schedule.dayOfMonth} 日 ${schedule.time}`;
   if (schedule.kind === "yearly") return `每年 ${schedule.month} 月 ${schedule.dayOfMonth} 日 ${schedule.time}`;
+  if (schedule.kind === "interval") {
+    const minutes = schedule.intervalMinutes ?? 0;
+    return minutes % 60 === 0 ? `每隔 ${minutes / 60} 小时` : `每隔 ${minutes} 分钟`;
+  }
   return `Cron · ${schedule.cron}`;
 }
 
 function validateScheduleInput(input: CreateScheduleInput): void {
-  if (!(["daily", "weekly", "monthly", "yearly", "cron"] as string[]).includes(input.kind)) throw new Error("Unsupported schedule kind.");
+  if (!(["daily", "weekly", "monthly", "yearly", "cron", "interval"] as string[]).includes(input.kind)) throw new Error("Unsupported schedule kind.");
   if (input.kind === "cron") {
     if (!isCron(input.cron)) throw new Error("Cron uses five fields: minute hour day-of-month month day-of-week.");
+    return;
+  }
+  if (input.kind === "interval") {
+    if (!Number.isInteger(input.intervalMinutes) || input.intervalMinutes! < 1 || input.intervalMinutes! > 10080) {
+      throw new Error("An interval schedule needs an interval between 1 minute and 7 days.");
+    }
     return;
   }
   if (!isTime(input.time)) throw new Error("A calendar schedule time must use HH:mm.");
@@ -167,8 +181,18 @@ function validateScheduleInput(input: CreateScheduleInput): void {
 }
 
 function isDue(schedule: LocalSchedule, now: Date): boolean {
+  // Interval schedules are throttled purely by their bucketed lastRunKey, so
+  // every tick is "due" as long as the current bucket has not been claimed.
+  if (schedule.kind === "interval") return true;
   if (schedule.kind === "cron") return cronMatches(schedule.cron!, now);
   return calendarScheduleDue(schedule, now);
+}
+
+function initialLastRunKey(schedule: LocalSchedule, now: Date): string | undefined {
+  // Interval schedules wait one full interval before their first run instead
+  // of firing immediately after being created.
+  if (schedule.kind === "interval") return dueKey(schedule, now);
+  return calendarScheduleDue(schedule, now) ? dueKey(schedule, now) : undefined;
 }
 
 function calendarScheduleDue(schedule: Pick<LocalSchedule, "kind" | "time" | "weekdays" | "dayOfMonth" | "month">, now: Date): boolean {
@@ -181,7 +205,8 @@ function calendarScheduleDue(schedule: Pick<LocalSchedule, "kind" | "time" | "we
   return false;
 }
 
-function dueKey(schedule: Pick<LocalSchedule, "kind">, now: Date): string {
+function dueKey(schedule: Pick<LocalSchedule, "kind" | "intervalMinutes">, now: Date): string {
+  if (schedule.kind === "interval") return `interval:${schedule.intervalMinutes}:${Math.floor(now.getTime() / 60_000 / schedule.intervalMinutes!)}`;
   if (schedule.kind === "cron") return `${localDayKey(now)}-${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
   return localDayKey(now);
 }
@@ -189,7 +214,7 @@ function dueKey(schedule: Pick<LocalSchedule, "kind">, now: Date): string {
 function isLocalSchedule(value: unknown): value is LocalSchedule {
   if (typeof value !== "object" || value === null) return false;
   const schedule = value as Partial<LocalSchedule>;
-  if (!(["daily", "weekly", "monthly", "yearly", "cron"] as string[]).includes(schedule.kind ?? "")) return false;
+  if (!(["daily", "weekly", "monthly", "yearly", "cron", "interval"] as string[]).includes(schedule.kind ?? "")) return false;
   try {
     validateScheduleInput(schedule as CreateScheduleInput);
     return typeof schedule.id === "string" && typeof schedule.query === "string" && typeof schedule.enabled === "boolean" && typeof schedule.createdAt === "string" && typeof schedule.updatedAt === "string";

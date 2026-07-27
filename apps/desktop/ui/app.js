@@ -1,0 +1,204 @@
+const $ = (id) => document.getElementById(id);
+const state = {
+  signatures: {},
+  drafts: new Map(),
+  dashboard: null,
+  selectedId: localStorage.getItem("clone-ai:selected-session"),
+  refreshTimer: null,
+  scrollPositions: new Map(),
+  openDisclosures: new Map(),
+  disclosureScrollPositions: new Map(),
+  schedules: [],
+  settings: null,
+  providers: [],
+  memories: [],
+  settingsSection: "audit",
+};
+const icon = (name) => name === "spark"
+  ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 1.8 7.2L21 11l-7.2 1.8L12 20l-1.8-7.2L3 11l7.2-1.8L12 2Z"/></svg>`
+  : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>`;
+const escape = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+const time = (value) => new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+const day = (value) => new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" }).format(new Date(value));
+const api = async (path, options) => { const response = await fetch(path, options); const body = response.status === 204 ? {} : await response.json(); if (!response.ok) throw new Error(body.error || "本地请求失败。"); return body; };
+const SIDEBAR_MIN = 220;
+const SIDEBAR_MAX = 520;
+let sidebarResizeActive = false;
+function applySidebarWidth(value, persist = true) { const max = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, window.innerWidth - 400)); const width = Math.round(Math.max(SIDEBAR_MIN, Math.min(max, value))); document.querySelector(".app-shell").style.setProperty("--sidebar-width", `${width}px`); const handle = $("sidebar-resizer"); handle.setAttribute("aria-valuenow", String(width)); if (persist) localStorage.setItem("clone-ai:sidebar-width", String(width)); }
+function restoreSidebarWidth() { const saved = Number(localStorage.getItem("clone-ai:sidebar-width")); applySidebarWidth(Number.isFinite(saved) ? saved : 278, false); }
+const statusMeta = (status) => {
+  if (status === "waiting_approval") return { label: "等待确认", className: "waiting", dot: "waiting" };
+  if (status === "completed") return { label: "已验证", className: "completed", dot: "completed" };
+  if (status === "failed" || status === "cancelled") return { label: "需要处理", className: "needs-attention", dot: "needs-attention" };
+  return { label: "正在推进", className: "running", dot: "running" };
+};
+function announce(message, error = false) { const node = $("notice"); node.textContent = message; node.className = `notice visible${error ? " error" : ""}`; clearTimeout(node.timer); node.timer = setTimeout(() => node.className = "notice", 3200); }
+function sessionMarkup(session) { const status = statusMeta(session.status); return `<div class="session-item"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title">${escape(session.title)}</span><span class="session-meta">${escape(session.preview || status.label)}</span></span></button><button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="删除会话">×</button></div>`; }
+function renderSessions(sessions) {
+  const signature = JSON.stringify([state.selectedId, sessions.map((session) => [session.id, session.title, session.preview, session.status, session.updatedAt])]);
+  if (state.signatures.sessions === signature) return;
+  state.signatures.sessions = signature;
+  if (!sessions.length) { $("session-list").innerHTML = `<div class="empty-sessions">还没有会话。<br/>从下方开始第一件事。</div>`; return; }
+  const todayKey = new Date().toDateString();
+  const today = sessions.filter((session) => new Date(session.updatedAt).toDateString() === todayKey);
+  const earlier = sessions.filter((session) => new Date(session.updatedAt).toDateString() !== todayKey);
+  $("session-list").innerHTML = `${today.length ? `<div class="session-group">今天</div>${today.map(sessionMarkup).join("")}` : ""}${earlier.length ? `<div class="session-group">更早</div>${earlier.map(sessionMarkup).join("")}` : ""}`;
+}
+function renderSchedules(schedules) { state.schedules = schedules; const signature = JSON.stringify(schedules); if (state.signatures.schedules === signature) return; state.signatures.schedules = signature; $("schedule-count").textContent = String(schedules.filter((schedule) => schedule.enabled).length); $("schedule-list").innerHTML = schedules.length ? schedules.map((schedule) => `<div class="schedule-row"><div><b>${escape(schedule.query)}</b><span>${escape(schedule.description)} · ${schedule.enabled ? "已启用" : "已暂停"}</span></div><button class="schedule-toggle" type="button" data-schedule-toggle="${escape(schedule.id)}" data-schedule-enabled="${String(!schedule.enabled)}">${schedule.enabled ? "暂停" : "启用"}</button></div>`).join("") : `<div class="schedule-empty">还没有定时任务。<br/>可以按每天、每周、每月、每年或 Cron 创建。</div>`; }
+function agentRoleLabel(role) { return ({ direct: "主执行", research: "调研", draft: "交付", review: "复核", external: "外部执行" }[role] || role); }
+function providerLabel(id) { return ({ "codex-cli": "Codex CLI", "claude-code": "Claude Code", pi: "Pi" }[id] || id); }
+function renderSettings(settings, providers) { state.settings = settings; state.providers = providers; const signature = JSON.stringify([settings, providers]); if (state.signatures.settings === signature) return; state.signatures.settings = signature; const providerById = new Map(providers.map((provider) => [provider.id, provider])); const missing = providers.filter((provider) => !provider.installed); $("install-missing-providers").disabled = missing.length === 0; $("install-missing-providers").textContent = missing.length ? `自动安装缺失项 (${missing.length})` : "Provider 已就绪"; $("provider-registry").innerHTML = providers.map((provider) => `<article class="provider-card"><div><b>${escape(provider.title)}</b><p>${escape(provider.purpose)}${provider.version ? ` · ${escape(provider.version)}` : ""}</p></div>${provider.installed ? `<span class="provider-status">已检测</span>` : `<button class="provider-install" type="button" data-install-provider="${escape(provider.id)}">安装</button>`}</article>`).join(""); $("agent-settings-list").innerHTML = settings.agents.map((agent) => { const options = providers.map((provider) => `<option value="${escape(provider.id)}" ${agent.providerId === provider.id ? "selected" : ""} ${provider.installed ? "" : "disabled"}>${escape(providerLabel(provider.id))}${provider.installed ? "" : "（未安装）"}</option>`).join(""); const provider = providerById.get(agent.providerId); return `<article class="agent-setting"><div><h3>${escape(agent.title)}<span>${escape(agentRoleLabel(agent.role))}</span></h3><p>${escape(agent.description)}</p><small>${escape(agent.purpose)}</small></div><select class="agent-provider-select" data-agent-provider="${escape(agent.id)}" aria-label="选择 ${escape(agent.title)} 的 Provider" ${provider?.installed ? "" : "disabled"}>${options}</select><label class="agent-switch" title="${agent.required ? "此角色必须保持启用" : agent.enabled ? "关闭此角色" : "启用此角色"}"><input type="checkbox" data-agent-toggle="${escape(agent.id)}" ${agent.enabled ? "checked" : ""} ${agent.required ? "disabled" : ""}/><span></span></label></article>`; }).join(""); }
+function renderAudit(sessions) { const signature = JSON.stringify(sessions.map((session) => [session.id, session.title, session.status, session.updatedAt])); if (state.signatures.audit === signature) return; state.signatures.audit = signature; $("audit-session-list").innerHTML = sessions.length ? sessions.map((session) => `<article class="audit-session"><div><b>${escape(session.title)}</b><span>${escape(statusMeta(session.status).label)} · ${time(session.updatedAt)}</span></div><button class="audit-open" type="button" data-open-audit-run="${escape(session.id)}">查看记录</button></article>`).join("") : `<div class="memory-empty">还没有可查看的执行记录。</div>`; }
+function renderMemories(memory) {
+  state.memories = memory.memories || [];
+  state.memory = memory;
+  const activeElement = document.activeElement;
+  if (activeElement instanceof HTMLElement && activeElement.closest('[data-settings-panel="memory"]')) return;
+  const signature = JSON.stringify(memory);
+  if (state.signatures.memory === signature) return;
+  state.signatures.memory = signature;
+  const stats = memory.stats || { total: 0, active: 0, archived: 0, recallCount: 0, used: 0 };
+  const settings = memory.settings || { enabled: true, maxRecall: 4 };
+  $("memory-overview").innerHTML = `<article class="memory-stat"><b>${stats.active}</b><span>使用中的记忆</span></article><article class="memory-stat"><b>${stats.recallCount}</b><span>被任务召回</span></article><article class="memory-stat"><b>${stats.used}</b><span>实际用过</span></article><article class="memory-stat"><b>${stats.archived}</b><span>已归档</span></article>`;
+  $("memory-settings").innerHTML = `<label class="agent-switch" title="是否把本地记忆放进新任务上下文"><input type="checkbox" data-memory-enabled ${settings.enabled ? "checked" : ""}/><span></span></label><label>在新任务中使用本地 Memory</label><label>最多召回 <select data-memory-limit>${[1, 2, 3, 4, 5, 6, 7, 8].map((value) => `<option value="${value}" ${settings.maxRecall === value ? "selected" : ""}>${value}</option>`).join("")}</select> 条</label>`;
+  $("memory-list").innerHTML = state.memories.length ? state.memories.map((item) => `<article class="memory-card"><textarea data-memory-summary="${escape(item.id)}" aria-label="编辑本地记忆">${escape(item.summary)}</textarea><div class="memory-meta"><span>${escape(item.confidence)} 置信度</span><span>已召回 ${item.useCount || 0} 次</span>${item.lastUsedAt ? `<span>最近使用 ${time(item.lastUsedAt)}</span>` : ""}<select class="memory-status" data-memory-status="${escape(item.id)}"><option value="active" ${item.status === "active" ? "selected" : ""}>使用中</option><option value="archived" ${item.status === "archived" ? "selected" : ""}>已归档</option></select>${item.sourceRunId !== "owner" ? `<button class="memory-source" type="button" data-open-memory-source="${escape(item.sourceRunId)}">查看来源</button>` : `<span>由你添加</span>`}<button class="memory-save" type="button" data-save-memory="${escape(item.id)}">保存</button></div></article>`).join("") : `<div class="memory-empty">还没有可使用的 Memory。你可以手动添加，也可以先完成一条带证据的任务。</div>`;
+}
+function renderMemorySearch(results) { $("memory-search-results").innerHTML = results.length ? results.map((match) => `<article class="memory-match"><div><b>${escape(match.memory.summary)}</b><small>匹配：${escape((match.matchedTerms || []).join("、") || "相关上下文")}</small></div><span>${Math.round(match.score * 100)}%</span></article>`).join("") : `<div class="memory-empty">没有找到会被当前检索规则召回的使用中 Memory。</div>`; }
+function welcomeMarkup() { return `<div class="welcome"><div class="welcome-copy"><div class="welcome-mark">${icon("spark")}</div><h2>今天，想让我替你推进什么？</h2><p>我会先拆解、准备和验证；如果下一步会影响外部世界，我会停下来等你确认。</p><div class="suggestions"><button class="suggestion" data-suggestion="整理今天需要推进的事情">整理今天需要推进的事情</button><button class="suggestion" data-suggestion="为下周的产品发布准备计划">为下周的产品发布准备计划</button><button class="suggestion" data-suggestion="比较三个可执行方案并给我建议">比较三个可执行方案并给我建议</button></div></div></div>`; }
+function richText(value) {
+  return escape(value)
+    .replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => `<div class="md-code-wrap"><button class="md-copy" type="button" data-copy-code>复制</button><pre class="md-code"><code>${code.replace(/^\n+|\n+$/g, "")}</code></pre></div>`)
+    .replace(/`([^`\n]+)`/g, '<code class="md-inline">$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+}
+function messageMarkup(message) { const clone = message.role === "clone"; const tone = message.tone ? ` ${message.tone}` : ""; const collapsible = clone && message.text.length > 480; return `<article class="message ${clone ? "clone" : "person"}"><div class="avatar ${clone ? "clone" : ""}">${clone ? "C" : "你"}</div><div class="message-body"><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div>${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${richText(message.text)}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}</div>` : `<div class="message-copy">${escape(message.text)}</div>`}</div></article>`; }
+function displayAgentTitle(agent) { return agent.title; }
+function displayAgentDetail(agent) { const provider = agent.providerId ? `${providerLabel(agent.providerId)} · ` : ""; return provider + (agent.status === "completed" ? "已提交可验证证据" : (agent.summary || "正在按任务边界推进")); }
+function disclosureOpen(session, name, fallback = false) { return state.openDisclosures.get(session.id)?.get(name) ?? fallback; }
+function planMarkup(session) { if (!session.plan) return ""; const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status); const open = disclosureOpen(session, "plan", fallback) ? " open" : ""; return `<details class="activity-card plan-card" data-disclosure="plan"${open}><summary class="activity-summary">${icon("spark")}<b>执行计划</b><span>${session.plan.steps.length} 步</span></summary><p class="plan-summary">${escape(session.plan.summary)}</p><div class="plan-steps">${session.plan.steps.map((step, index) => `<div class="plan-step"><span class="plan-step-index">${index + 1}</span><b>${escape(step.title)}</b><span>${step.delegated ? "委派执行" : step.risk === "read_only" ? "直接处理" : "需确认"}</span></div>`).join("")}</div></details>`; }
+function agentsMarkup(session) { if (!session.subagents.length) return ""; const completed = session.subagents.filter((agent) => agent.status === "completed").length; const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status); const open = disclosureOpen(session, "agents", fallback) ? " open" : ""; return `<details class="activity-card" data-disclosure="agents"${open}><summary class="activity-summary">${icon("spark")}<b>Agent 协作</b><span>${completed}/${session.subagents.length} 已完成</span></summary><div class="agent-list">${session.subagents.map((agent) => { const status = statusMeta(agent.status); return `<div class="agent-row"><span class="status-dot ${status.dot}"></span><div><strong>${escape(displayAgentTitle(agent))}</strong><small>${escape(displayAgentDetail(agent))}</small></div><span class="agent-status">${escape(status.label)}</span></div>`; }).join("")}</div></details>`; }
+function approvalMarkup(session) { if (!session.approvals.length) return ""; return `<section class="approval-card"><div class="approval-kicker">需要你的决定</div><h2>是否继续执行外部动作？</h2><p>${escape(session.approvals[0].description)}</p><div class="approval-actions"><button class="approve" type="button" data-approve="${escape(session.id)}">确认并继续</button><button class="secondary" type="button" disabled>先保持草稿</button></div></section>`; }
+function recalledMemoryMarkup(session) { const memories = session.recalledMemories || []; if (!memories.length) return ""; return `<details class="activity-card" data-disclosure="memory"><summary class="activity-summary">${icon("spark")}<b>本次任务使用的 Memory</b><span>${memories.length} 条</span></summary><div class="agent-list">${memories.map((memory) => `<div class="agent-row"><div><strong>${escape(memory.summary)}</strong><small>匹配：${escape((memory.matchedTerms || []).join("、") || "相关上下文")} · ${Math.round((memory.score || 0) * 100)}%</small></div></div>`).join("")}</div></details>`; }
+function evidenceMarkup(session) { return session.evidenceCount ? `<div class="evidence">${icon("check")}已记录 ${session.evidenceCount} 条可验证证据</div>` : ""; }
+function traceMarkup(session) { const trace = session.trace || session.activity || []; if (!trace.length) return ""; const open = disclosureOpen(session, "trace") ? " open" : ""; return `<details class="activity-card" data-disclosure="trace"${open}><summary class="activity-summary">${icon("check")}<b>本地执行轨迹</b><span>${trace.length} 条</span></summary><div class="trace" data-scroll-region="trace">${trace.map((item, index) => `<div class="trace-row"><b><span class="trace-sequence">#${item.sequence ?? index + 1}</span>${escape(item.label)}</b><p>${time(item.occurredAt)} · ${escape(item.detail)}</p></div>`).join("")}</div></details>`; }
+function setTopbar(session) { if (!session) { $("session-title").textContent = "新的对话"; $("session-subtitle").textContent = "从一个清晰的意图开始"; $("session-status").textContent = "准备就绪"; $("session-status").className = "status-pill"; return; } const status = statusMeta(session.status); $("session-title").textContent = session.title; $("session-subtitle").textContent = `${session.preview} · 更新于 ${time(session.updatedAt)}`; $("session-status").textContent = status.label; $("session-status").className = `status-pill ${status.className}`; }
+const SCROLL_BOTTOM_THRESHOLD = 28;
+function rememberCurrentScroll() {
+  if (!state.selectedId) return;
+  const viewport = $("conversation");
+  const maxTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+  state.scrollPositions.set(state.selectedId, {
+    top: viewport.scrollTop,
+    anchor: maxTop - viewport.scrollTop <= SCROLL_BOTTOM_THRESHOLD ? "bottom" : "offset",
+  });
+}
+function rememberDisclosureScrolls() {
+  if (!state.selectedId) return;
+  const positions = state.disclosureScrollPositions.get(state.selectedId) || new Map();
+  document.querySelectorAll("#conversation-inner [data-scroll-region]").forEach((region) => {
+    positions.set(region.dataset.scrollRegion, region.scrollTop);
+  });
+  state.disclosureScrollPositions.set(state.selectedId, positions);
+}
+function rememberDisclosureScroll(event) {
+  const region = event.target;
+  if (!(region instanceof HTMLElement) || !region.dataset.scrollRegion || !state.selectedId) return;
+  const positions = state.disclosureScrollPositions.get(state.selectedId) || new Map();
+  positions.set(region.dataset.scrollRegion, region.scrollTop);
+  state.disclosureScrollPositions.set(state.selectedId, positions);
+}
+function rememberDisclosure(event) {
+  const details = event.target;
+  if (!(details instanceof HTMLDetailsElement) || !details.dataset.disclosure || !state.selectedId) return;
+  const disclosures = state.openDisclosures.get(state.selectedId) || new Map();
+  disclosures.set(details.dataset.disclosure, details.open);
+  state.openDisclosures.set(state.selectedId, disclosures);
+}
+function restoreSessionScroll(id, { scrollToBottom = false } = {}) {
+  const saved = scrollToBottom ? { top: 0, anchor: "bottom" } : state.scrollPositions.get(id) || { top: 0, anchor: "bottom" };
+  requestAnimationFrame(() => {
+    if (state.selectedId !== id) return;
+    const viewport = $("conversation");
+    const maxTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+    const top = saved.anchor === "bottom" ? maxTop : Math.min(saved.top, maxTop);
+    viewport.scrollTop = top;
+    state.scrollPositions.set(id, { top, anchor: saved.anchor });
+  });
+}
+function restoreDisclosureScrolls(id) {
+  const positions = state.disclosureScrollPositions.get(id);
+  if (!positions) return;
+  requestAnimationFrame(() => {
+    if (state.selectedId !== id) return;
+    document.querySelectorAll("#conversation-inner [data-scroll-region]").forEach((region) => {
+      const top = positions.get(region.dataset.scrollRegion);
+      if (top !== undefined) region.scrollTop = Math.min(top, Math.max(0, region.scrollHeight - region.clientHeight));
+    });
+  });
+}
+function renderSession(session) { setTopbar(session); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
+async function selectSession(id, { quiet = false, scrollToBottom = false } = {}) { if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
+async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, memory] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory")]); state.dashboard = dashboard; renderSchedules(schedules.schedules || []); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderMemories(memory); const sessions = state.dashboard.sessions || []; if (!state.selectedId || !sessions.some((session) => session.id === state.selectedId)) state.selectedId = sessions[0]?.id || null; renderSessions(sessions); if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
+async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll(); try { const result = await api("/api/requests", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query }) }); state.drafts.delete(state.selectedId); state.selectedId = result.runId; state.scrollPositions.set(result.runId, { top: 0, anchor: "bottom" }); localStorage.setItem("clone-ai:selected-session", result.runId); $("query").value = ""; resizeComposer(); await refresh({ preserveScroll: false, scrollToBottom: true }); announce(result.status === "waiting_approval" ? "准备工作已完成，等待你的确认。" : "任务已开始，正在准备。" ); } catch (error) { announce(error.message, true); } finally { button.disabled = false; $("query").focus(); } }
+async function approve(id) { const button = document.querySelector(`[data-approve="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { const result = await api(`/api/runs/${encodeURIComponent(id)}/approve`, { method: "POST" }); await refresh({ preserveScroll: true, scrollToBottom: true }); announce(result.status === "completed" ? "已完成并验证结果。" : "已记录确认，继续处理中。" ); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
+function resizeComposer() { const input = $("query"); input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 132)}px`; }
+function renderScheduleOptions() { const kind = $("schedule-kind").value; const options = $("schedule-options"); $("schedule-time").hidden = kind === "interval"; $("schedule-time").required = kind !== "interval"; if (kind === "interval") { options.innerHTML = `<label>每隔</label><input id="schedule-interval-value" type="number" min="1" max="10080" value="30" aria-label="间隔时长"/><select id="schedule-interval-unit" aria-label="间隔单位"><option value="1">分钟</option><option value="60">小时</option></select><span class="schedule-cron-help">按固定间隔触发，例如每隔 5 分钟；首次触发要等一个间隔，客户端关闭期间错过的不会补跑。</span>`; return; } if (kind === "weekly") { options.innerHTML = `<label>在这些日子执行：</label>${["日", "一", "二", "三", "四", "五", "六"].map((day, index) => `<label><input type="checkbox" name="schedule-weekday" value="${index}" ${index === 1 ? "checked" : ""}/>周${day}</label>`).join("")}`; return; } if (kind === "monthly") { options.innerHTML = `<label>每月 <input id="schedule-day" type="number" min="1" max="31" value="1"/> 日</label>`; return; } if (kind === "yearly") { options.innerHTML = `<label>每年 <select id="schedule-month">${Array.from({ length: 12 }, (_, index) => `<option value="${index + 1}">${index + 1} 月</option>`).join("")}</select><input id="schedule-day" type="number" min="1" max="31" value="1"/> 日</label>`; return; } options.innerHTML = `<span class="schedule-cron-help">每天在所选时间触发；如果客户端稍后启动，当天会补触发一次。</span>`; }
+function openSchedules() { $("schedule-modal").setAttribute("aria-hidden", "false"); renderScheduleOptions(); $("schedule-query").focus(); }
+function closeSchedules() { $("schedule-modal").setAttribute("aria-hidden", "true"); }
+function selectSettingsSection(section) { state.settingsSection = section; document.querySelectorAll("[data-settings-section]").forEach((button) => button.setAttribute("aria-current", String(button.dataset.settingsSection === section))); document.querySelectorAll("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== section; }); }
+function openSettings() { selectSettingsSection(state.settingsSection); $("settings-modal").setAttribute("aria-hidden", "false"); }
+function closeSettings() { $("settings-modal").setAttribute("aria-hidden", "true"); }
+async function createSchedule(query) { const button = $("schedule-create"); const kind = $("schedule-kind").value; const body = { query, kind, time: $("schedule-time").value }; if (kind === "weekly") body.weekdays = [...document.querySelectorAll('input[name="schedule-weekday"]:checked')].map((input) => Number(input.value)); if (kind === "monthly" || kind === "yearly") body.dayOfMonth = Number($("schedule-day").value); if (kind === "yearly") body.month = Number($("schedule-month").value); if (kind === "interval") body.intervalMinutes = Math.max(1, Math.floor(Number($("schedule-interval-value").value) || 0)) * Number($("schedule-interval-unit").value); button.disabled = true; try { await api("/api/schedules", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); $("schedule-query").value = ""; await refresh(); announce("定时任务已保存到本地运行时。"); } catch (error) { announce(error.message, true); } finally { button.disabled = false; } }
+async function setScheduleEnabled(id, enabled) { try { await api(`/api/schedules/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }) }); await refresh(); announce(enabled ? "定时任务已启用。" : "定时任务已暂停。"); } catch (error) { announce(error.message, true); } }
+async function updateAgent(id, update, message) { try { await api(`/api/settings/agents/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(update) }); await refresh(); announce(message); } catch (error) { announce(error.message, true); await refresh(); } }
+async function setAgentEnabled(id, enabled) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { enabled }, agent ? `${agent.title}${enabled ? "已启用" : "已关闭"}。` : "Agent 设置已更新。"); }
+async function setAgentProvider(id, providerId) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { providerId }, agent ? `${agent.title} 已绑定到 ${providerLabel(providerId)}。` : "Agent Provider 已更新。"); }
+async function installProvider(id) { const button = document.querySelector(`[data-install-provider="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { await api(`/api/agents/${encodeURIComponent(id)}/install`, { method: "POST" }); await refresh(); announce(`${providerLabel(id)} 已安装并完成检测。`); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
+async function installMissingProviders() { const button = $("install-missing-providers"); button.disabled = true; button.textContent = "正在安装…"; try { const result = await api("/api/agents/install-missing", { method: "POST" }); await refresh(); announce(result.installed.length ? `已自动安装 ${result.installed.length} 个 Provider。` : "所有 Provider 已就绪。"); } catch (error) { announce(error.message, true); await refresh(); } }
+async function saveMemory(id) { const summary = document.querySelector(`[data-memory-summary="${CSS.escape(id)}"]`).value; const status = document.querySelector(`[data-memory-status="${CSS.escape(id)}"]`).value; const button = document.querySelector(`[data-save-memory="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { await api(`/api/memory/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ summary, status }) }); await refresh(); announce("本地 Memory 已保存。"); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
+async function updateMemorySettings(update) { try { await api("/api/memory/settings", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(update) }); await refresh(); announce("Memory 检索设置已更新。"); } catch (error) { announce(error.message, true); } }
+async function createMemory() { const input = $("memory-new-summary"); const summary = input.value.trim(); if (summary.length < 3) { announce("请写下一条至少三个字的长期偏好、约束或背景。", true); return; } const button = $("memory-create"); button.disabled = true; try { await api("/api/memory", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ summary }) }); input.value = ""; await refresh(); announce("Memory 已加入本地记忆库，并会参与后续任务检索。"); } catch (error) { announce(error.message, true); } finally { button.disabled = false; } }
+async function searchMemories(query) { try { const result = await api(`/api/memory?q=${encodeURIComponent(query)}`); renderMemorySearch(result.matches || []); } catch (error) { announce(error.message, true); } }
+function confirmDialog(message, okLabel) { return new Promise((resolve) => { const modal = $("confirm-modal"); $("confirm-message").textContent = message; const ok = $("confirm-ok"); ok.textContent = okLabel || "确认"; modal.setAttribute("aria-hidden", "false"); const done = (result) => { modal.setAttribute("aria-hidden", "true"); ok.onclick = $("confirm-cancel").onclick = modal.onclick = null; resolve(result); }; ok.onclick = () => done(true); $("confirm-cancel").onclick = () => done(false); modal.onclick = (event) => { if (event.target === modal) done(false); }; }); }
+async function deleteSession(id) { if (!(await confirmDialog("从会话列表删除这条任务？执行记录会继续保留在本机审计日志中。", "删除"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表移除。"); } catch (error) { announce(error.message, true); } }
+$("session-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { setSidebarOpen(false); void selectSession(button.dataset.session); } });
+$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
+$("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
+$("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
+$("schedule-open").addEventListener("click", openSchedules);
+$("schedule-close").addEventListener("click", closeSchedules);
+$("schedule-modal").addEventListener("click", (event) => { if (event.target === $("schedule-modal")) closeSchedules(); });
+function setSidebarOpen(open) { document.body.classList.toggle("sidebar-open", open); }
+$("menu-open").addEventListener("click", () => setSidebarOpen(true));
+$("sidebar-backdrop").addEventListener("click", () => setSidebarOpen(false));
+$("settings-open").addEventListener("click", openSettings);
+$("settings-close").addEventListener("click", closeSettings);
+$("settings-modal").addEventListener("click", (event) => { if (event.target === $("settings-modal")) closeSettings(); });
+$("settings-modal").addEventListener("click", (event) => { const button = event.target.closest("[data-settings-section]"); if (button) selectSettingsSection(button.dataset.settingsSection); });
+$("schedule-form").addEventListener("submit", (event) => { event.preventDefault(); void createSchedule($("schedule-query").value.trim()); });
+$("schedule-kind").addEventListener("change", renderScheduleOptions);
+$("schedule-list").addEventListener("click", (event) => { const button = event.target.closest("[data-schedule-toggle]"); if (button) void setScheduleEnabled(button.dataset.scheduleToggle, button.dataset.scheduleEnabled === "true"); });
+$("agent-settings-list").addEventListener("change", (event) => { const target = event.target; const toggle = target.closest("[data-agent-toggle]"); if (toggle) { void setAgentEnabled(toggle.dataset.agentToggle, toggle.checked); return; } const provider = target.closest("[data-agent-provider]"); if (provider) void setAgentProvider(provider.dataset.agentProvider, provider.value); });
+$("provider-registry").addEventListener("click", (event) => { const button = event.target.closest("[data-install-provider]"); if (button) void installProvider(button.dataset.installProvider); });
+$("install-missing-providers").addEventListener("click", () => void installMissingProviders());
+$("audit-session-list").addEventListener("click", (event) => { const button = event.target.closest("[data-open-audit-run]"); if (button) { closeSettings(); void selectSession(button.dataset.openAuditRun); } });
+$("memory-list").addEventListener("click", (event) => { const save = event.target.closest("[data-save-memory]"); if (save) { void saveMemory(save.dataset.saveMemory); return; } const source = event.target.closest("[data-open-memory-source]"); if (source) { closeSettings(); void selectSession(source.dataset.openMemorySource); } });
+$("memory-settings").addEventListener("change", (event) => { const target = event.target; const enabled = target.closest("[data-memory-enabled]"); if (enabled) { void updateMemorySettings({ enabled: enabled.checked }); return; } const limit = target.closest("[data-memory-limit]"); if (limit) void updateMemorySettings({ maxRecall: Number(limit.value) }); });
+$("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length < 2) { announce("请输入至少两个字来测试检索。", true); return; } void searchMemories(query); });
+$("memory-create").addEventListener("click", () => void createMemory());
+$("new-session").addEventListener("click", () => { setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
+$("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length < 3) { announce("请再多描述一点你想推进的事情。", true); return; } void createSession(query); });
+$("query").addEventListener("input", resizeComposer);
+$("query").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); $("request-form").requestSubmit(); } });
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") { setSidebarOpen(false); closeSchedules(); closeSettings(); } });
+function updateScrollBottom() { const viewport = $("conversation"); const far = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop > 160; $("scroll-bottom").classList.toggle("visible", far); }
+$("conversation").addEventListener("scroll", rememberCurrentScroll, { passive: true });
+$("conversation").addEventListener("scroll", updateScrollBottom, { passive: true });
+$("scroll-bottom").addEventListener("click", () => { const viewport = $("conversation"); viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" }); });
+$("sidebar-resizer").addEventListener("pointerdown", (event) => { sidebarResizeActive = true; document.body.classList.add("sidebar-resizing"); event.currentTarget.setPointerCapture(event.pointerId); applySidebarWidth(event.clientX); });
+$("sidebar-resizer").addEventListener("pointermove", (event) => { if (sidebarResizeActive) applySidebarWidth(event.clientX); });
+$("sidebar-resizer").addEventListener("pointerup", (event) => { sidebarResizeActive = false; document.body.classList.remove("sidebar-resizing"); event.currentTarget.releasePointerCapture(event.pointerId); });
+$("sidebar-resizer").addEventListener("keydown", (event) => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); const current = Number($("sidebar-resizer").getAttribute("aria-valuenow")); applySidebarWidth(current + (event.key === "ArrowRight" ? 16 : -16)); });
+window.addEventListener("resize", () => applySidebarWidth(Number($("sidebar-resizer").getAttribute("aria-valuenow")), false));
+restoreSidebarWidth();
+if (location.protocol === "http:" || location.protocol === "https:") { void refresh({ preserveScroll: false }); state.refreshTimer = setInterval(() => { if (!document.hidden) void refresh(); }, 3000); }
