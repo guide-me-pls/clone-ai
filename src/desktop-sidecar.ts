@@ -10,6 +10,7 @@ async function main(): Promise<void> {
   const companion = await startCompanionServer({ port: 0, clientPath });
 
   // The Tauri shell consumes this one machine-readable line before creating its window.
+  // Tauri Shell 会在创建窗口前读取这一行机器可读信息。
   console.log(`CLONE_AI_READY ${companion.url}`);
 
   const shutdown = async () => {

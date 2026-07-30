@@ -47,19 +47,34 @@ export interface PlanStep {
   instructions: string;
   risk: RiskClass;
   acceptanceCriteria: string[];
-  /** A single bounded executor for this step. Mutually exclusive with subagents. */
+  /**
+   * A single bounded executor for this step. Mutually exclusive with subagents.
+   * 该步骤的单个有边界执行者；不能与 subagents 同时存在。
+   */
   agentId?: string;
-  /** Required when agentId is present; the Runtime checks it before execution. */
+  /**
+   * Required when agentId is present; the Runtime checks it before execution.
+   * 指定 agentId 时必须提供；Runtime 会在执行前检查。
+   */
   requiredCapabilities?: string[];
-  /** Work orders supervised by this step. They may run in dependency-aware waves. */
+  /**
+   * Work orders supervised by this step. They may run in dependency-aware waves.
+   * 由该步骤监督的工作单；可按依赖关系分批执行。
+   */
   subagents?: SubagentWorkOrder[];
 }
 
 export interface WorkOrderInput {
-  /** Stable name used when building the bounded agent prompt. */
+  /**
+   * Stable name used when building the bounded agent prompt.
+   * 构建有边界 Agent Prompt 时使用的稳定名称。
+   */
   name: string;
   description: string;
-  /** When present, the Runtime injects evidence produced by this dependency. */
+  /**
+   * When present, the Runtime injects evidence produced by this dependency.
+   * 存在时，Runtime 会注入该依赖产生的 Evidence。
+   */
   sourceWorkOrderId?: string;
   required: boolean;
 }
@@ -69,7 +84,10 @@ export interface ArtifactContract {
   kind: Evidence["kind"];
   description: string;
   required: boolean;
-  /** Receipts and files generally need a durable location, not only prose. */
+  /**
+   * Receipts and files generally need a durable location, not only prose.
+   * Receipt 和文件通常需要一个持久定位地址，不能只有文字说明。
+   */
   locatorRequired?: boolean;
 }
 
@@ -92,7 +110,10 @@ export interface WorkOrderBudget {
  */
 export interface SubagentWorkOrder {
   id: string;
-  /** Optional routing preference. The dispatcher still checks capabilities. */
+  /**
+   * Optional routing preference. The dispatcher still checks capabilities.
+   * 可选的路由偏好；Dispatcher 仍然必须检查能力。
+   */
   agentId?: string;
   role: "researcher" | "maker" | "reviewer" | "custom";
   title: string;
@@ -137,7 +158,10 @@ export interface Evidence {
   id: string;
   runId: string;
   stepId: string;
-  /** Present when the evidence came from a child-agent work order. */
+  /**
+   * Present when the evidence came from a child-agent work order.
+   * Evidence 来自子 Agent WorkOrder 时才存在。
+   */
   workOrderId?: string;
   producedBy?: string;
   kind: "artifact" | "tool_result" | "receipt" | "test" | "observation";
@@ -154,7 +178,10 @@ export interface SubagentRun {
   stepId: string;
   workOrderId: string;
   agentId: string;
-  /** Concrete provider pinned when the work order first starts. */
+  /**
+   * Concrete provider pinned when the work order first starts.
+   * WorkOrder 第一次启动时固定下来的具体 Provider。
+   */
   providerId?: string;
   sessionId?: string;
   attempt: number;
@@ -243,14 +270,23 @@ export interface ExecutionAssignment {
   run: Run;
   task: Task;
   step: PlanStep;
-  /** The concrete adapter selected by the Runtime, not merely a planning hint. */
+  /**
+   * The concrete adapter selected by the Runtime, not merely a planning hint.
+   * Runtime 选择的具体 Adapter，而不只是 Planner 的建议。
+   */
   executor: {
     agentId: string;
     providerId: string;
   };
-  /** Defined only for a child agent. The parent Runtime remains the supervisor. */
+  /**
+   * Defined only for a child agent. The parent Runtime remains the supervisor.
+   * 只为子 Agent 定义；父 Runtime 始终是 Supervisor。
+   */
   workOrder?: SubagentWorkOrder;
-  /** Evidence from completed dependencies, curated by the supervisor. */
+  /**
+   * Evidence from completed dependencies, curated by the supervisor.
+   * 已完成依赖产生且由 Supervisor 筛选过的 Evidence。
+   */
   dependencyEvidence?: Evidence[];
   workspacePath?: string;
 }
@@ -270,7 +306,10 @@ export interface RuntimeCapabilities {
   cancellation: boolean;
   approvalCallback: boolean;
   parallelAssignments: boolean;
-  /** Domain abilities used by the dispatcher; tool access remains adapter-owned. */
+  /**
+   * Domain abilities used by the dispatcher; tool access remains adapter-owned.
+   * Dispatcher 使用的领域能力；Tool 权限仍由 Adapter 自己持有。
+   */
   work: string[];
 }
 

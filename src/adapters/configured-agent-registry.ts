@@ -2,7 +2,8 @@ import { join } from "node:path";
 
 import type { AgentSetting } from "../settings/agent-settings.ts";
 import { workCapabilitiesForRole } from "../agents/capabilities.ts";
-import { DemoExecutionAdapter, StaticAgentRegistry } from "./demo-adapter.ts";
+import { StaticAgentRegistry } from "./demo-adapter.ts";
+import { CodingCliAdapter } from "./coding-cli-adapter.ts";
 import { PiAgentAdapter, type PiToolName } from "./pi-agent-adapter.ts";
 
 export interface ConfiguredAgentRegistryOptions {
@@ -26,8 +27,8 @@ export function createConfiguredAgentRegistry(
     .filter((agent) => agent.enabled)
     .map((agent) => {
       const workCapabilities = workCapabilitiesForRole(agent.role);
-      if (agent.providerId !== "pi") {
-        return new DemoExecutionAdapter(agent.id, agent.providerId, workCapabilities);
+      if (agent.providerId === "codex-cli" || agent.providerId === "claude-code") {
+        return new CodingCliAdapter({ id: agent.id, providerId: agent.providerId, workCapabilities });
       }
       if (agent.role !== "direct" && agent.role !== "review") {
         throw new Error(
@@ -48,5 +49,7 @@ export function createConfiguredAgentRegistry(
 function toolsForRole(_role: AgentSetting["role"]): PiToolName[] {
   // Pi's built-in file tools accept absolute paths. Until Pi calls back into
   // Clone AI's workspace-bounded Tool Runtime, this adapter receives no tools.
+  // Pi 内建文件 Tool 接受绝对路径。在 Pi 通过 Clone AI 受 Workspace 限制的 Tool Runtime
+  // 回调前，此 Adapter 不授予任何 Tool。
   return [];
 }

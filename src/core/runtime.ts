@@ -240,7 +240,10 @@ export class CloneRuntime {
     return this.requireRun(runId);
   }
 
-  /** Records the curated local memories that were actually supplied to this run. */
+  /**
+   * Records the curated local memories that were actually supplied to this run.
+   * 记录实际被筛选并提供给当前 Run 的本地 Memory。
+   */
   async recordMemoryRecall(runId: string, query: string, memories: Array<{ id: string; summary: string; score: number; matchedTerms: string[] }>): Promise<void> {
     await this.hydrate();
     const run = this.requireRun(runId);
@@ -324,6 +327,8 @@ export class CloneRuntime {
     // A fresh work order may be routed by capability. Once started, the
     // concrete adapter identity is pinned so replay cannot silently move the
     // persisted provider session to another configured worker.
+    // 新 WorkOrder 可以按能力路由；一旦启动，具体 Adapter 身份会被固定，避免重放时
+    // 悄悄把已持久化的 Provider Session 换到另一个 Worker。
     const adapter = await new CapabilityDispatcher(input.agents).select(
       existing === undefined
         ? input.workOrder
@@ -500,6 +505,8 @@ export class CloneRuntime {
     if (event.type === "message_delta") {
       // Raw model streams may echo file contents or personal data. They remain
       // transient UI events; only the redacted completion/evidence is durable.
+      // 原始模型流可能回显文件内容或个人数据，只能作为瞬时 UI 事件；只有脱敏后的
+      // completion/evidence 才允许持久化。
       return;
     }
     if (event.type === "tool_started") {

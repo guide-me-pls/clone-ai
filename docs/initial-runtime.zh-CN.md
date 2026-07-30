@@ -1,5 +1,7 @@
 # 初始 Runtime
 
+[English](initial-runtime.md) · **简体中文**
+
 这是 `clone-ai` 第一段可运行的代码。它是个人数字分身的本地控制平面，不是聊天机器人，也不是托管网页产品。当前已具备显式开启的 LLM Planner，同时保留确定性的本地回退策略；它先建立未来接入 Codex、Claude Code、Pi 和自定义 Agent 时必须遵守的监督边界。
 
 ```text

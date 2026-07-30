@@ -1,5 +1,7 @@
 # LLM Planner
 
+[English](llm-planner.md) · **简体中文**
+
 `Clone AI` 现在支持显式开启的 LLM Planner。它只负责规划，不能调用 Worker
 工具、修改 Memory、授予审批，或自行把 Run 标记为完成。
 
