@@ -1,5 +1,7 @@
 # WorkOrder 与第一版 Pi Adapter
 
+[English](work-orders-and-pi.md) · **简体中文**
+
 这一阶段把“交给一个子 Agent”从角色名称升级成一份有边界、可验证的执行合同，并接入第一个真实的
 外部 Agent Runtime：通过 JSONL RPC 运行的 Pi。
 

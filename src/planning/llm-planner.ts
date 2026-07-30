@@ -3,7 +3,10 @@ import type { ArtifactContract, PlanStep, RiskClass, SubagentWorkOrder, WorkPlan
 
 export type PlannedWork = Pick<WorkPlan, "summary" | "steps">;
 
-/** A compact catalog supplied to the planner; it never grants tool authority. */
+/**
+ * A compact catalog supplied to the planner; it never grants tool authority.
+ * 提供给 Planner 的精简目录；它绝不会授予 Tool 权限。
+ */
 export interface PlanningAgent {
   id: string;
   providerId: string;
@@ -314,7 +317,10 @@ function readTextArray(value: unknown, location: string): string[] {
   return items;
 }
 
-/** Dependencies may legitimately be empty for the first work-order wave. */
+/**
+ * Dependencies may legitimately be empty for the first work-order wave.
+ * 第一批 WorkOrder 合法地可以没有依赖。
+ */
 function readStringArray(value: unknown, location: string): string[] {
   return readArray(value, location).map((item, index) => readText(item, `${location}[${index}]`));
 }

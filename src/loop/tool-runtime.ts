@@ -20,6 +20,9 @@ export interface ToolRuntimeOptions {
  * The only layer allowed to execute a Tool. It attaches a stable operation ID,
  * constrains execution time, exposes cancellation, and provides a conservative
  * recovery answer for an interrupted operation.
+ *
+ * 唯一允许执行 Tool 的层。它附加稳定 Operation ID、限制执行时间、支持取消，并为中断操作提供
+ * 保守的恢复结论。
  */
 export class ToolRuntime {
   readonly #tools: ToolRegistry;
@@ -86,6 +89,7 @@ export class ToolRuntime {
     }
     if (tool.risk === undefined || tool.risk === "read_only") {
       // Repeating a read is safe. The resume runner may execute it again.
+      // 重复读取是安全的；恢复 Runner 可以再次执行它。
       return { status: "not_started" };
     }
     if (tool.reconcile === undefined) {
@@ -95,7 +99,10 @@ export class ToolRuntime {
   }
 }
 
-/** Safe default while no user-configured standing policy exists. */
+/**
+ * Safe default while no user-configured standing policy exists.
+ * 用户尚未配置长期 Policy 时使用的安全默认值。
+ */
 export class LocalToolPolicy implements ToolPolicy {
   authorize(input: { execution: ToolExecution; definition: ToolDefinition }): ToolAuthorization {
     switch (input.definition.risk ?? "read_only") {

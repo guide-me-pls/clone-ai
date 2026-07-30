@@ -45,6 +45,9 @@ const defaultSettings: LocalMemorySettings = { enabled: true, maxRecall: 4 };
 /**
  * Human-readable working memory. Runtime events remain the provenance source;
  * this store is the curated layer that people can inspect and edit directly.
+ *
+ * 人可读的工作记忆。Runtime Event 仍然是来源证明；这个 Store 是人可以直接查看、编辑的
+ * 筛选层。
  */
 export class LocalMemoryStore {
   readonly #path: string;

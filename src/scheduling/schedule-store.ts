@@ -8,15 +8,27 @@ export interface LocalSchedule {
   id: string;
   kind: ScheduleKind;
   query: string;
-  /** Local time for calendar-based schedules, formatted HH:mm. */
+  /**
+   * Local time for calendar-based schedules, formatted HH:mm.
+   * 日历型定时任务的本地时间，格式为 HH:mm。
+   */
   time?: string;
-  /** Sunday is 0; used by weekly schedules. */
+  /**
+   * Sunday is 0; used by weekly schedules.
+   * 星期日为 0；用于每周任务。
+   */
   weekdays?: number[];
   dayOfMonth?: number;
   month?: number;
-  /** Five fields: minute hour day-of-month month day-of-week. */
+  /**
+   * Five fields: minute hour day-of-month month day-of-week.
+   * 五个字段：分钟、小时、日期、月份、星期。
+   */
   cron?: string;
-  /** Fixed gap between runs, in minutes; used by interval schedules. */
+  /**
+   * Fixed gap between runs, in minutes; used by interval schedules.
+   * 两次执行的固定分钟间隔；用于 interval Schedule。
+   */
   intervalMinutes?: number;
   enabled: boolean;
   createdAt: string;
@@ -24,7 +36,10 @@ export interface LocalSchedule {
   lastRunKey?: string;
 }
 
-/** Kept as a compatibility name for existing callers. */
+/**
+ * Kept as a compatibility name for existing callers.
+ * 为了兼容既有调用方而保留的名称。
+ */
 export type DailySchedule = LocalSchedule;
 
 export interface CreateScheduleInput {
@@ -47,6 +62,9 @@ export interface CreateDailyScheduleInput {
  * Local-first recurrence store. Calendar schedules catch up once when the
  * app starts later on their scheduled date; Cron schedules run only in their
  * matching minute so they cannot replay an unknown number of missed events.
+ *
+ * 本地优先的周期任务存储。日历任务在应用晚于预约时间启动时只补跑一次；Cron 任务只会在
+ * 匹配的那一分钟运行，避免重放数量未知的错过事件。
  */
 export class ScheduleStore {
   readonly #path: string;
@@ -105,7 +123,10 @@ export class ScheduleStore {
     return updated;
   }
 
-  /** Atomically marks all due schedules before the runtime dispatches them. */
+  /**
+   * Atomically marks all due schedules before the runtime dispatches them.
+   * Runtime 派发前，原子地标记所有到期 Schedule。
+   */
   async claimDue(now = new Date()): Promise<LocalSchedule[]> {
     const due: LocalSchedule[] = [];
     await this.mutate((schedules) => schedules.map((schedule) => {
@@ -183,6 +204,7 @@ function validateScheduleInput(input: CreateScheduleInput): void {
 function isDue(schedule: LocalSchedule, now: Date): boolean {
   // Interval schedules are throttled purely by their bucketed lastRunKey, so
   // every tick is "due" as long as the current bucket has not been claimed.
+  // Interval Schedule 只靠分桶的 lastRunKey 限流；只要当前桶尚未被认领，每次 tick 都算到期。
   if (schedule.kind === "interval") return true;
   if (schedule.kind === "cron") return cronMatches(schedule.cron!, now);
   return calendarScheduleDue(schedule, now);
@@ -191,6 +213,7 @@ function isDue(schedule: LocalSchedule, now: Date): boolean {
 function initialLastRunKey(schedule: LocalSchedule, now: Date): string | undefined {
   // Interval schedules wait one full interval before their first run instead
   // of firing immediately after being created.
+  // Interval Schedule 创建后先等待一个完整周期，而不是立刻触发第一次执行。
   if (schedule.kind === "interval") return dueKey(schedule, now);
   return calendarScheduleDue(schedule, now) ? dueKey(schedule, now) : undefined;
 }

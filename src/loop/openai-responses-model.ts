@@ -10,6 +10,9 @@ interface OpenAIResponsesModelOptions {
 /**
  * A dependency-free Responses API adapter. The full transcript remains in this
  * process and each request uses `store: false`; no response ID is retained.
+ *
+ * 无依赖的 Responses API Adapter。完整 Transcript 保留在当前进程内，每个请求都使用
+ * `store: false`；不会保留 Response ID。
  */
 export class OpenAIResponsesModel implements ContinuationCapableModel {
   readonly #apiKey: string;

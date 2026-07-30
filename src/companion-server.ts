@@ -29,6 +29,9 @@ export interface RunningCompanionServer {
 /**
  * Local-only daemon transport used by the desktop shell. The shipped Tauri
  * window opens this loopback URL; it is never a hosted web service.
+ *
+ * 桌面 Shell 使用的仅本地 Daemon Transport。发布的 Tauri Window 会打开这个 Loopback URL；
+ * 它绝不是托管 Web 服务。
  */
 export async function startCompanionServer(options: CompanionServerOptions = {}): Promise<RunningCompanionServer> {
   const host = options.host ?? "127.0.0.1";

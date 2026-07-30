@@ -7,6 +7,9 @@ import type { LoopCheckpointStore, LoopRunState } from "./contracts.ts";
  * Checkpoints are derived caches, not the source of truth. An atomic replace
  * prevents a restart from reading a half-written JSON file; journal replay can
  * then apply anything newer than lastAppliedSequence.
+ *
+ * Checkpoint 是派生缓存，不是事实来源。原子替换可防止重启读到半写入 JSON；随后 Journal Replay
+ * 会应用所有比 lastAppliedSequence 更新的事件。
  */
 export class JsonFileLoopCheckpointStore implements LoopCheckpointStore {
   readonly #directory: string;

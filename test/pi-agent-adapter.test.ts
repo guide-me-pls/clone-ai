@@ -150,6 +150,7 @@ test("Pi receives a minimal environment and no tools by default", async () => {
 
     for await (const _event of adapter.execute(assignment())) {
       // Consume the complete RPC lifecycle.
+      // 消费完整的 RPC 生命周期。
     }
 
     assert.equal(host.starts[0]?.env[hiddenName], undefined);

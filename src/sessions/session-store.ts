@@ -9,6 +9,9 @@ interface SessionIndex {
  * Keeps the conversation list tidy without rewriting the immutable runtime
  * journal. Deleting a session hides it from the companion UI but preserves
  * the evidence ledger for local audit and later recovery work.
+ *
+ * 它让会话列表保持整洁，而不改写不可变的 Runtime Journal。删除 Session 只会在 Companion UI
+ * 中隐藏它，仍会保留 Evidence Ledger 用于本地审计与后续恢复。
  */
 export class SessionStore {
   readonly #path: string;

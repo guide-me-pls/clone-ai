@@ -8,6 +8,9 @@ import type { LoopEvent, LoopJournal, NewLoopEvent } from "./contracts.ts";
  * An inspectable, append-only journal for the learning loop. It is separate
  * from the existing Supervisor journal until the two runtimes share a stable
  * event contract.
+ *
+ * 面向学习 Loop 的可检查、仅追加 Journal。在两个 Runtime 拥有稳定共享的 Event Contract 前，
+ * 它与现有 Supervisor Journal 保持分离。
  */
 export class JsonlLoopJournal implements LoopJournal {
   readonly #path: string;

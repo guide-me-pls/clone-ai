@@ -25,7 +25,10 @@ export type ToolRisk = "read_only" | "reversible_write" | "external_side_effect"
 export interface ToolExecution {
   runId: string;
   call: ToolCall;
-  /** Stable across recovery; never generate a second ID for the same real-world action. */
+  /**
+   * Stable across recovery; never generate a second ID for the same real-world action.
+   * 跨恢复保持稳定；同一个现实动作绝不能生成第二个 ID。
+   */
   operationId: string;
 }
 
@@ -66,6 +69,9 @@ export type ModelTurn =
  * Provider-specific, JSON-serializable protocol state. This is distinct from
  * LoopMessage: it lets an API continue a function-call conversation after a
  * process restart without storing credentials or HTTP headers.
+ *
+ * Provider 特有且可 JSON 序列化的协议状态。它不同于 LoopMessage：它让 API 可以在进程重启后
+ * 继续 Function Call 对话，同时不保存凭据或 HTTP Header。
  */
 export interface ModelContinuation {
   provider: string;
@@ -86,7 +92,10 @@ export interface ToolDefinition {
   schema: ToolSchema;
   risk?: ToolRisk;
   execute(arguments_: JsonObject, context?: ToolExecutionContext): Promise<ToolResult>;
-  /** Required for safe automatic recovery of a side-effecting tool. */
+  /**
+   * Required for safe automatic recovery of a side-effecting tool.
+   * 有副作用 Tool 的安全自动恢复所必需。
+   */
   reconcile?(execution: ToolExecution): Promise<ToolReconcileResult>;
 }
 
@@ -129,7 +138,10 @@ export interface LoopJournal {
   list(runId?: string): Promise<LoopEvent[]>;
 }
 
-/** The next recoverable action for a durable single-agent run. */
+/**
+ * The next recoverable action for a durable single-agent run.
+ * 持久化单 Agent Run 的下一步可恢复动作。
+ */
 export type LoopRunStatus =
   | "created"
   | "waiting_model"
@@ -169,7 +181,10 @@ export interface LoopRunState {
   updatedAt?: string;
 }
 
-/** A materialized view used to start recovery without replaying an entire journal. */
+/**
+ * A materialized view used to start recovery without replaying an entire journal.
+ * 用于启动恢复的物化视图，避免每次重放完整 Journal。
+ */
 export interface LoopCheckpointStore {
   save(state: LoopRunState): Promise<void>;
   load(runId: string): Promise<LoopRunState | undefined>;

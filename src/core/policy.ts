@@ -4,6 +4,9 @@ import type { PolicyDecision, PolicyEngine } from "./contracts.ts";
  * Default policy deliberately errs on the side of preparation. A caller may
  * replace this engine with personal policy, budgets, connector scopes, or a
  * human approval UI without changing the execution runtime.
+ *
+ * 默认 Policy 有意偏向“先准备、后执行”。调用者可以替换为个人 Policy、Budget、Connector
+ * Scope 或人工审批 UI，而无需改动执行 Runtime。
  */
 export class DefaultPolicyEngine implements PolicyEngine {
   evaluate(input: Parameters<PolicyEngine["evaluate"]>[0]): PolicyDecision {

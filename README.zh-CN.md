@@ -86,11 +86,12 @@ npm run typecheck
 npm run demo
 ```
 
-第一条独立的“真实模型与 Tool”学习闭环见[最小 LLM 闭环](docs/minimal-llm-loop.md)。它会跑通
+第一条独立的“真实模型与 Tool”学习闭环见[最小 LLM 闭环](docs/minimal-llm-loop.zh-CN.md)。它会跑通
 模型 → Function Tool → Tool 结果 → 模型的循环；唯一的文件写入 Tool 故意保持为 Mock。
 下一段编排实现见 [WorkOrder 与 Pi Adapter](docs/work-orders-and-pi.zh-CN.md)。
 
 当前从用户请求到完成验证的整条链路见 [Query 执行流程](docs/query-execution-flow.zh-CN.md)；显式开启的模型 Planner 及其安全边界见 [LLM Planner](docs/llm-planner.zh-CN.md)。
+真实 Codex CLI 与 Claude Code 执行 Provider 的边界见 [Coding CLI Adapter](docs/coding-cli-adapters.zh-CN.md)。
 
 CLI 演示仍使用确定性的 Adapter，便于学习、测试和重放；桌面 Runtime 根据本地设置，已经可以把有边界
 的角色交给已安装的 Pi。WorkOrder 现在包含输入、能力要求、产物合同、风险、预算和无环依赖图；Pi
