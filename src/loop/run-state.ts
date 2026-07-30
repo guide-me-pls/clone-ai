@@ -4,6 +4,9 @@ import type { LoopEvent, LoopRunState, ModelContinuation, ToolCall, ToolResult, 
  * Converts append-only events into the next recoverable state. Events remain
  * the source of truth; this projector creates the state a runner needs after
  * restart: call the model, finish a pending tool, verify, or stop.
+ *
+ * 将仅追加 Event 转化为下一步可恢复状态。Event 仍是事实来源；这个 Projector 创建的是 Runner
+ * 在重启后需要的状态：调用 Model、完成待处理 Tool、验证或停止。
  */
 export class LoopRunProjector {
   #state: LoopRunState;
@@ -164,7 +167,10 @@ export class LoopRunProjector {
     return cloneState(this.#state);
   }
 
-  /** Save provider continuation immediately after a model response, before its next checkpoint. */
+  /**
+   * Save provider continuation immediately after a model response, before its next checkpoint.
+   * 模型响应后、写入下一个 Checkpoint 前立刻保存 Provider Continuation。
+   */
   setModelContinuation(continuation: ModelContinuation | undefined): void {
     this.#state.modelContinuation = continuation === undefined ? undefined : structuredClone(continuation);
   }
@@ -199,6 +205,7 @@ function cloneState(state: LoopRunState): LoopRunState {
   const clone = structuredClone(state);
   // Older checkpoints may predate new bookkeeping fields. They remain
   // recoverable because events are the source of truth.
+  // 旧 Checkpoint 可能早于新的记账字段；由于 Event 才是事实来源，它们仍然可以恢复。
   clone.approvedToolCallIds ??= [];
   clone.budget.verificationRetries ??= 0;
   clone.budget.limits ??= {};

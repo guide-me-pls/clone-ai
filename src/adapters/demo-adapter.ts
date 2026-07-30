@@ -5,6 +5,9 @@ import type { AgentSetting } from "../settings/agent-settings.ts";
  * Deterministic agents make the orchestration semantics observable without
  * pretending that a model provider is wired in. The same interface is the
  * seam for Codex, Claude Code, Pi, and custom local workers.
+ *
+ * 确定性 Agent 能让编排语义可观察，而不假装已接入真实模型 Provider。同一接口是 Codex、
+ * Claude Code、Pi 和自定义本地 Worker 的替换边界。
  */
 export class DemoExecutionAdapter implements RuntimeAdapter {
   readonly id: string;
@@ -48,7 +51,10 @@ export class DemoExecutionAdapter implements RuntimeAdapter {
   }
 }
 
-/** A small in-memory registry used only by the demo. */
+/**
+ * A small in-memory registry used only by the demo.
+ * 仅供 Demo 使用的小型内存 Registry。
+ */
 export class StaticAgentRegistry implements AgentRegistry {
   readonly #agents: Map<string, RuntimeAdapter>;
 

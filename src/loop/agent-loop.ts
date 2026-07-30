@@ -42,11 +42,17 @@ export class AgentLoop {
     journal: LoopJournal;
     verifier?: ResponseVerifier;
     instructions?: string;
-    /** Optional emergency guard; durable budgets replace a fixed default later. */
+    /**
+     * Optional emergency guard; durable budgets replace a fixed default later.
+     * 可选的紧急保护；以后由持久化 Budget 取代固定默认值。
+     */
     maxTurns?: number;
     budget?: RunBudget;
     checkpoints?: LoopCheckpointStore;
-    /** Creates a fresh provider adapter from a persisted continuation after restart. */
+    /**
+     * Creates a fresh provider adapter from a persisted continuation after restart.
+     * 重启后根据持久化的 Continuation 创建新的 Provider Adapter。
+     */
     modelFactory?: LoopModelFactory;
     toolRuntime?: ToolRuntime;
   }) {
@@ -75,6 +81,9 @@ export class AgentLoop {
    * Continue a crashed run from its latest checkpoint. Read-only tools can be
    * re-executed safely; a model turn needs the provider continuation captured
    * after its previous response.
+   *
+   * 从最新 Checkpoint 恢复崩溃的 Run。只读 Tool 可安全重执行；Model Turn 则需要其上次响应后保存的
+   * Provider Continuation。
    */
   async *resume(runId: string): AsyncGenerator<LoopEvent> {
     if (this.#checkpoints === undefined) {
@@ -256,6 +265,7 @@ export class AgentLoop {
 
       // A process died between recording intent and recording its result. Tool
       // reconciliation for side effects is added in the Tool Runtime milestone.
+      // 进程在记录意图与记录结果之间崩溃；有副作用 Tool 的对账会在 Tool Runtime 阶段加入。
       yield await record("run.failed", { reason: `Cannot automatically resume from ${state.status}.` });
       return;
     }

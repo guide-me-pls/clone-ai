@@ -1,5 +1,7 @@
 # LLM Planner
 
+**English** · [简体中文](llm-planner.zh-CN.md)
+
 `Clone AI` now supports an opt-in LLM Planner. It plans only; it cannot call
 worker tools, change memory, grant approval, or mark a Run as complete.
 

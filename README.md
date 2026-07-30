@@ -104,6 +104,8 @@ The next orchestration slice is documented in
 For the complete current path from a user request to verified completion, see
 [Query execution flow](docs/query-execution-flow.md). The opt-in model planner
 and its safety boundary are documented in [LLM Planner](docs/llm-planner.md).
+The real Codex CLI and Claude Code provider boundary is documented in
+[Coding CLI adapters](docs/coding-cli-adapters.md).
 
 The first implementation is a local, inspectable trust loop—not a broad autonomous
 assistant. The CLI demo remains deterministic for repeatable learning and tests; the

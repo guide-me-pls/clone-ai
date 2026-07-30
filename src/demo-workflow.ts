@@ -24,7 +24,10 @@ export interface DemoRunResult {
 
 export interface DemoWorkflowOptions {
   workspacePath?: string;
-  /** Test seam and future desktop setting: select an explicit planner. */
+  /**
+   * Test seam and future desktop setting: select an explicit planner.
+   * 测试切口与未来桌面端设置：选择一个明确的 Planner。
+   */
   planner?: WorkPlanner;
 }
 

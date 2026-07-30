@@ -1,4 +1,6 @@
-# Minimal LLM loop / 最小 LLM 闭环
+# Minimal LLM loop
+
+**English** · [简体中文](minimal-llm-loop.zh-CN.md)
 
 This is the first deliberately small, real Agent Loop in clone-ai. It is a learning
 vertical slice, not yet the production Supervisor Runtime.

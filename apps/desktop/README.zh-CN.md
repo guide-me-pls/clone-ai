@@ -1,5 +1,7 @@
 # clone-ai 桌面客户端
 
+[English](README.md) · **简体中文**
+
 这个目录定义可安装的 `clone-ai` 客户端边界。它不是 SaaS 前端，也不拥有用户状态。
 
 ## 职责

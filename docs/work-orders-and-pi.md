@@ -1,5 +1,7 @@
 # Work Orders and the first Pi adapter
 
+**English** · [简体中文](work-orders-and-pi.zh-CN.md)
+
 This slice turns child-agent delegation from a role name into a bounded,
 verifiable execution contract. It also connects the first real external agent
 runtime: Pi, through its JSONL RPC mode.

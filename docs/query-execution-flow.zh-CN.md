@@ -1,5 +1,7 @@
 # Query 的完整执行流程
 
+[English](query-execution-flow.md) · **简体中文**
+
 这份文档描述的是**当前真实能跑的链路**，不是最终产品愿景。请从上往下看：
 Supervisor 拥有整个过程；Planner 与 Worker Agent 都被限制在更小的权限边界内。
 

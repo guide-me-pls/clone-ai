@@ -1,5 +1,7 @@
 # clone-ai Desktop Client
 
+**English** · [简体中文](README.zh-CN.md)
+
 This directory is the boundary for the installed `clone-ai` client. It is not
 a SaaS frontend and it does not own the user's state.
 

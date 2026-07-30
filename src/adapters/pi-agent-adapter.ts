@@ -48,7 +48,10 @@ export interface PiAgentAdapterOptions {
   tools?: PiToolName[];
   workCapabilities?: string[];
   offline?: boolean;
-  /** Extra environment variable names explicitly allowed into the Pi process. */
+  /**
+   * Extra environment variable names explicitly allowed into the Pi process.
+   * 被显式允许传入 Pi 进程的额外环境变量名称。
+   */
   environmentVariables?: string[];
   processHost?: PiProcessHost;
 }
@@ -56,6 +59,9 @@ export interface PiAgentAdapterOptions {
 /**
  * Pi runs as an isolated JSONL RPC subprocess. Clone Runtime owns authority,
  * budgets and completion; Pi owns only the bounded work order it receives.
+ *
+ * Pi 运行在隔离的 JSONL RPC 子进程中。Clone Runtime 拥有权限、预算和完成判定；Pi 只拥有
+ * 它收到的有边界 WorkOrder。
  */
 export class PiAgentAdapter implements RuntimeAdapter {
   readonly id: string;

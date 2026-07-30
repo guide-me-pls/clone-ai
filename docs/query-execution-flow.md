@@ -1,5 +1,7 @@
 # Query execution flow
 
+**English** · [简体中文](query-execution-flow.zh-CN.md)
+
 This page describes the **current runnable path**, not the final product
 vision. Read it from top to bottom: the Supervisor owns the process; planners
 and worker agents have intentionally narrower authority.
