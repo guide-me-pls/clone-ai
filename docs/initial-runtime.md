@@ -1,5 +1,7 @@
 # Initial Runtime
 
+**English** · [简体中文](initial-runtime.zh-CN.md)
+
 This is the first runnable slice of `clone-ai`. It is a local control plane
 for a personal digital twin, not a chatbot and not a hosted web product. It
 uses an opt-in LLM Planner while keeping its deterministic local fallback.

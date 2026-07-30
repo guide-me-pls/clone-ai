@@ -13,6 +13,9 @@ export interface JournalStore {
  * A deliberately small durable event store for the first runtime milestone.
  * The JSONL format is inspectable and replayable; a SQLite implementation can
  * later satisfy the same interface without changing the runtime contract.
+ *
+ * 这是第一阶段刻意保持很小的持久事件存储。JSONL 可检查、可重放；以后 SQLite 实现可以
+ * 复用同一接口，而不用改变 Runtime Contract。
  */
 export class JsonlJournalStore implements JournalStore {
   readonly #path: string;
