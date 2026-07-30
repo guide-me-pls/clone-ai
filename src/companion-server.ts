@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { JournalEvent, MemoryCandidate, Run, Task } from "./core/contracts.ts";
 import { JsonlJournalStore } from "./core/journal.ts";
@@ -34,7 +34,12 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const port = options.port ?? parsePort(process.env.CLONE_AI_PORT, 4317);
   const dataDirectory = options.dataDirectory ?? process.env.CLONE_AI_DATA_DIR ?? join(process.cwd(), ".clone-ai");
   const clientPath = options.clientPath ?? join(process.cwd(), "apps", "desktop", "ui", "index.html");
-  const client = await readFile(clientPath, "utf8");
+  const clientDirectory = dirname(clientPath);
+  const [client, clientCss, clientJs] = await Promise.all([
+    readFile(clientPath, "utf8"),
+    readFile(join(clientDirectory, "style.css"), "utf8"),
+    readFile(join(clientDirectory, "app.js"), "utf8"),
+  ]);
   const schedules = new ScheduleStore(join(dataDirectory, "schedules.json"));
   const sessions = new SessionStore(join(dataDirectory, "sessions.json"));
   const agentSettings = new AgentSettingsStore(join(dataDirectory, "settings.json"));
@@ -54,7 +59,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
 
   const server = createServer(async (request, response) => {
     try {
-      await handleRequest(request, response, { host, dataDirectory, client, schedules, sessions, agentSettings, agentRegistry, memoryStore });
+      await handleRequest(request, response, { host, dataDirectory, client, clientCss, clientJs, schedules, sessions, agentSettings, agentRegistry, memoryStore });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "The local runtime encountered an unexpected error.";
       sendJson(response, 500, { error: message });
@@ -87,13 +92,23 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { host: string; dataDirectory: string; client: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore },
+  context: { host: string; dataDirectory: string; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host}`);
 
   if (request.method === "GET" && url.pathname === "/") {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
     response.end(context.client);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/style.css") {
+    response.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" });
+    response.end(context.clientCss);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/app.js") {
+    response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+    response.end(context.clientJs);
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
@@ -156,8 +171,9 @@ async function handleRequest(
     const dayOfMonth = typeof body.dayOfMonth === "number" ? body.dayOfMonth : undefined;
     const month = typeof body.month === "number" ? body.month : undefined;
     const cron = typeof body.cron === "string" ? body.cron : undefined;
+    const intervalMinutes = typeof body.intervalMinutes === "number" ? body.intervalMinutes : undefined;
     try {
-      sendJson(response, 201, { schedule: toScheduleView(await context.schedules.add({ query, kind, time, weekdays, dayOfMonth, month, cron })) });
+      sendJson(response, 201, { schedule: toScheduleView(await context.schedules.add({ query, kind, time, weekdays, dayOfMonth, month, cron, intervalMinutes })) });
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "The schedule is invalid." });
     }
@@ -541,6 +557,7 @@ function toScheduleView(schedule: LocalSchedule): ScheduleView {
     dayOfMonth: schedule.dayOfMonth,
     month: schedule.month,
     cron: schedule.cron,
+    intervalMinutes: schedule.intervalMinutes,
     description: describeSchedule(schedule),
     enabled: schedule.enabled,
     lastRunKey: schedule.lastRunKey,
@@ -548,7 +565,7 @@ function toScheduleView(schedule: LocalSchedule): ScheduleView {
 }
 
 function isScheduleKind(value: unknown): value is ScheduleKind {
-  return value === "daily" || value === "weekly" || value === "monthly" || value === "yearly" || value === "cron";
+  return value === "daily" || value === "weekly" || value === "monthly" || value === "yearly" || value === "cron" || value === "interval";
 }
 
 function toTraceItem(event: JournalEvent): TraceItem {
@@ -720,6 +737,7 @@ interface ScheduleView {
   dayOfMonth?: number;
   month?: number;
   cron?: string;
+  intervalMinutes?: number;
   description: string;
   enabled: boolean;
   lastRunKey?: string;
