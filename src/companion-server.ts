@@ -17,6 +17,7 @@ export interface CompanionServerOptions {
   host?: string;
   port?: number;
   dataDirectory?: string;
+  workspacePath?: string;
   clientPath?: string;
 }
 
@@ -33,6 +34,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? parsePort(process.env.CLONE_AI_PORT, 4317);
   const dataDirectory = options.dataDirectory ?? process.env.CLONE_AI_DATA_DIR ?? join(process.cwd(), ".clone-ai");
+  const workspacePath = options.workspacePath ?? process.env.CLONE_AI_WORKSPACE ?? process.cwd();
   const clientPath = options.clientPath ?? join(process.cwd(), "apps", "desktop", "ui", "index.html");
   const clientDirectory = dirname(clientPath);
   const [client, clientCss, clientJs] = await Promise.all([
@@ -52,14 +54,26 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       await startDemoWorkflow(dataDirectory, schedule.query, {
         kind: "schedule",
         payload: { scheduleId: schedule.id, scheduleKind: schedule.kind, scheduleDescription: describeSchedule(schedule) },
-      }, await agentSettings.get());
+      }, await agentSettings.get(), { workspacePath });
       await syncMemory(dataDirectory, memoryStore);
     },
   });
 
   const server = createServer(async (request, response) => {
     try {
-      await handleRequest(request, response, { host, dataDirectory, client, clientCss, clientJs, schedules, sessions, agentSettings, agentRegistry, memoryStore });
+      await handleRequest(request, response, {
+        host,
+        dataDirectory,
+        workspacePath,
+        client,
+        clientCss,
+        clientJs,
+        schedules,
+        sessions,
+        agentSettings,
+        agentRegistry,
+        memoryStore,
+      });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "The local runtime encountered an unexpected error.";
       sendJson(response, 500, { error: message });
@@ -92,7 +106,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { host: string; dataDirectory: string; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore },
+  context: { host: string; dataDirectory: string; workspacePath: string; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host}`);
 
@@ -201,7 +215,13 @@ async function handleRequest(
       sendJson(response, 400, { error: "Please describe the work in at least three characters." });
       return;
     }
-    const result = await startDemoWorkflow(context.dataDirectory, query, {}, await context.agentSettings.get());
+    const result = await startDemoWorkflow(
+      context.dataDirectory,
+      query,
+      {},
+      await context.agentSettings.get(),
+      { workspacePath: context.workspacePath },
+    );
     await syncMemory(context.dataDirectory, context.memoryStore);
     sendJson(response, 201, result);
     return;
@@ -299,7 +319,12 @@ async function handleRequest(
 
   const approvalMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/approve$/);
   if (request.method === "POST" && approvalMatch?.[1] !== undefined) {
-    const result = await approveDemoWorkflow(context.dataDirectory, decodeURIComponent(approvalMatch[1]), await context.agentSettings.get());
+    const result = await approveDemoWorkflow(
+      context.dataDirectory,
+      decodeURIComponent(approvalMatch[1]),
+      await context.agentSettings.get(),
+      { workspacePath: context.workspacePath },
+    );
     await syncMemory(context.dataDirectory, context.memoryStore);
     sendJson(response, 200, result);
     return;
@@ -386,7 +411,7 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
       title: subagent.title,
       agentId: subagent.agentId,
       role: subagent.role,
-      providerId: providerByRole.get(subagent.agentId) ?? "demo",
+      providerId: subagent.providerId ?? providerByRole.get(subagent.agentId) ?? "demo",
       status: subagent.status,
       summary: subagent.summary,
       updatedAt: subagent.updatedAt,
@@ -585,9 +610,16 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
     "execution.started": "Started a step",
     "execution.progress": "Execution progress",
     "subagent.dispatched": "Dispatched a child agent",
+    "subagent.resumed": "Resumed a child agent",
+    "subagent.session_started": "Child-agent session started",
     "subagent.progress": "Child-agent progress",
     "subagent.completed": "Child agent returned evidence",
     "subagent.failed": "Child agent failed",
+    "subagent.cancelled": "Child agent cancelled",
+    "subagent.verified": "Verified child-agent evidence",
+    "agent.message_delta": "Agent streamed a message",
+    "agent.tool_started": "Agent started a tool",
+    "agent.tool_completed": "Agent finished a tool",
     "evidence.recorded": "Recorded evidence",
     "verification.completed": "Verified the result",
     "memory.candidate.requested": "Queued memory review",
@@ -600,6 +632,21 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
 function detailFor(type: JournalEvent["type"], payload: Record<string, unknown>): string {
   if ((type === "execution.progress" || type === "subagent.progress") && typeof payload.message === "string") {
     return payload.message;
+  }
+  if (type === "subagent.resumed") {
+    return `Attempt ${String(payload.attempt ?? "?")} resumed for ${String(payload.workOrderId ?? "a work order")}.`;
+  }
+  if (type === "subagent.session_started" && typeof payload.sessionId === "string") {
+    return `Session ${payload.sessionId} started.`;
+  }
+  if (type === "subagent.verified" && typeof payload.summary === "string") {
+    return payload.summary;
+  }
+  if (type === "agent.message_delta" && typeof payload.text === "string") {
+    return payload.text;
+  }
+  if ((type === "agent.tool_started" || type === "agent.tool_completed") && typeof payload.tool === "string") {
+    return String(payload.tool);
   }
   if (type === "policy.decided") {
     const decision = asRecord(payload.decision);

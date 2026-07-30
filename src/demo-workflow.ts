@@ -1,6 +1,8 @@
 import { join } from "node:path";
 
 import { createDemoAgentRegistry } from "./adapters/demo-adapter.ts";
+import { createConfiguredAgentRegistry } from "./adapters/configured-agent-registry.ts";
+import { workCapabilitiesForRole } from "./agents/capabilities.ts";
 import type { TriggerKind } from "./core/contracts.ts";
 import { JsonlJournalStore } from "./core/journal.ts";
 import { DefaultPolicyEngine } from "./core/policy.ts";
@@ -9,7 +11,8 @@ import { EvidenceVerifier } from "./core/verification.ts";
 import { MemoryPipeline } from "./memory/memory-pipeline.ts";
 import { LocalMemoryStore } from "./memory/memory-store.ts";
 import { buildDemoPlan } from "./planning/demo-planner.ts";
-import type { CloneSettings } from "./settings/agent-settings.ts";
+import { createEnvironmentWorkPlanner, type PlanningAgent, type WorkPlanner } from "./planning/llm-planner.ts";
+import { defaultAgentSettings, type CloneSettings } from "./settings/agent-settings.ts";
 
 export interface DemoRunResult {
   runId: string;
@@ -19,11 +22,27 @@ export interface DemoRunResult {
   memoryCandidatesProposed: number;
 }
 
+export interface DemoWorkflowOptions {
+  workspacePath?: string;
+  /** Test seam and future desktop setting: select an explicit planner. */
+  planner?: WorkPlanner;
+}
+
+/**
+ * Runs the current Query-to-outcome path: durable trigger, memory recall,
+ * planning, Runtime execution, verification, then asynchronous memory work.
+ * The function coordinates components; it never lets a planner or worker own
+ * the parent Run.
+ *
+ * 运行当前从 Query 到结果的主链路：持久化触发、记忆召回、规划、Runtime 执行、验证，最后
+ * 才异步处理记忆。这个函数只负责协调组件，不会让 Planner 或 Worker 拥有父 Run 的控制权。
+ */
 export async function startDemoWorkflow(
   dataDirectory: string,
   query: string,
   trigger: { kind?: TriggerKind; payload?: Record<string, unknown> } = {},
   settings?: CloneSettings,
+  options: DemoWorkflowOptions = {},
 ): Promise<DemoRunResult> {
   const { runtime, memory } = await createRuntime(dataDirectory);
   const { run } = await runtime.acceptTrigger({
@@ -41,16 +60,50 @@ export async function startDemoWorkflow(
     matchedTerms: item.matchedTerms,
   })));
 
-  const agents = settings?.agents;
-  const enabledAgentIds = agents === undefined ? undefined : new Set(agents.filter((agent) => agent.enabled).map((agent) => agent.id));
-  await runtime.attachPlan(run.id, buildDemoPlan(query, enabledAgentIds, recalled.map((item) => item.memory.summary)));
+  const agents = settings?.agents ?? defaultAgentSettings();
+  const recalledMemories = recalled.map((item) => item.memory.summary);
+  const planner = options.planner ?? createEnvironmentWorkPlanner();
+  // The LLM planner is opt-in. Without credentials, the transparent local
+  // policy keeps the demo runnable and teaches exactly why it chose a graph.
+  // LLM Planner 是显式开启的。没有凭据时，透明本地策略仍能让 Demo 可运行，
+  // 也能清楚解释它为何选择当前任务图。
+  const plan = planner === undefined
+    ? buildDemoPlan(query, new Set(agents.filter((agent) => agent.enabled).map((agent) => agent.id)), recalledMemories)
+    : await planner.plan({
+      query,
+      recalledMemories,
+      availableAgents: planningAgents(agents),
+    });
+  await runtime.attachPlan(run.id, plan);
 
-  const result = await runtime.execute(run.id, createDemoAgentRegistry(agents));
+  const registry = settings === undefined
+    ? createDemoAgentRegistry()
+    : createConfiguredAgentRegistry(agents, {
+      dataDirectory,
+      workspacePath: options.workspacePath ?? process.env.CLONE_AI_WORKSPACE ?? process.cwd(),
+    });
+  const result = await runtime.execute(run.id, registry);
   const candidates = result.status === "completed" ? await memory.processNext() : [];
   return toDemoResult(runtime, result, candidates.length);
 }
 
-export async function approveDemoWorkflow(dataDirectory: string, runId: string, settings?: CloneSettings): Promise<DemoRunResult> {
+function planningAgents(agents: CloneSettings["agents"]): PlanningAgent[] {
+  return agents
+    .filter((agent) => agent.enabled)
+    .map((agent) => ({
+      id: agent.id,
+      providerId: agent.providerId,
+      role: agent.role,
+      capabilities: workCapabilitiesForRole(agent.role),
+    }));
+}
+
+export async function approveDemoWorkflow(
+  dataDirectory: string,
+  runId: string,
+  settings?: CloneSettings,
+  options: DemoWorkflowOptions = {},
+): Promise<DemoRunResult> {
   const { runtime, memory } = await createRuntime(dataDirectory);
   const run = runtime.getRun(runId);
   if (run.status !== "waiting_approval" || run.activeStepId === undefined) {
@@ -58,7 +111,13 @@ export async function approveDemoWorkflow(dataDirectory: string, runId: string, 
   }
 
   await runtime.grantApproval(run.id, run.activeStepId, "Approved from the local desktop companion.");
-  const result = await runtime.execute(run.id, createDemoAgentRegistry(settings?.agents));
+  const registry = settings === undefined
+    ? createDemoAgentRegistry()
+    : createConfiguredAgentRegistry(settings.agents, {
+      dataDirectory,
+      workspacePath: options.workspacePath ?? process.env.CLONE_AI_WORKSPACE ?? process.cwd(),
+    });
+  const result = await runtime.execute(run.id, registry);
   const candidates = result.status === "completed" ? await memory.processNext() : [];
   return toDemoResult(runtime, result, candidates.length);
 }

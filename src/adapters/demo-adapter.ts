@@ -8,31 +8,43 @@ import type { AgentSetting } from "../settings/agent-settings.ts";
  */
 export class DemoExecutionAdapter implements RuntimeAdapter {
   readonly id: string;
-  readonly #providerId: string;
+  readonly providerId: string;
+  readonly #workCapabilities: string[];
 
-  constructor(id = "operator", providerId = "demo") {
+  constructor(id = "operator", providerId = "demo", workCapabilities: string[] = ["general"]) {
     this.id = id;
-    this.#providerId = providerId;
+    this.providerId = providerId;
+    this.#workCapabilities = [...workCapabilities];
   }
 
   async capabilities(): Promise<RuntimeCapabilities> {
-    return { resume: false, cancellation: false, approvalCallback: false, parallelAssignments: true };
+    return {
+      resume: false,
+      cancellation: false,
+      approvalCallback: false,
+      parallelAssignments: true,
+      work: [...this.#workCapabilities],
+    };
   }
 
   async *execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
     const title = input.workOrder?.title ?? input.step.title;
-    yield { type: "progress", message: `${this.#providerId} is preparing: ${title}` };
+    const risk = input.workOrder?.risk ?? input.step.risk;
+    yield { type: "progress", message: `${this.providerId} is preparing: ${title}` };
     yield {
       type: "evidence",
       evidence: {
-        kind: "artifact",
-        summary: `${title} produced a deterministic demo artifact through the ${this.#providerId} role binding.`,
+        kind: risk === "external_side_effect" || risk === "irreversible" ? "receipt" : "artifact",
+        summary: `${title} produced a deterministic demo artifact through the ${this.providerId} role binding.`,
         locator: `demo://${input.run.id}/${input.step.id}/${input.workOrder?.id ?? this.id}`,
       },
     };
-    if (input.workOrder !== undefined) {
-      yield { type: "completed", summary: `${this.id} returned evidence for ${input.workOrder.id}.` };
-    }
+    yield {
+      type: "completed",
+      summary: input.workOrder !== undefined
+        ? `${this.id} returned evidence for ${input.workOrder.id}.`
+        : `${this.id} completed step ${input.step.id}.`,
+    };
   }
 }
 
@@ -50,13 +62,27 @@ export class StaticAgentRegistry implements AgentRegistry {
   get(agentId: string): RuntimeAdapter | undefined {
     return this.#agents.get(agentId);
   }
+
+  list(): RuntimeAdapter[] {
+    return [...this.#agents.values()];
+  }
 }
 
 export function createDemoAgentRegistry(settings?: AgentSetting[]): StaticAgentRegistry {
   const enabledAgents = settings === undefined
     ? defaultAgentIds.map((id) => ({ id, providerId: "demo" }))
     : settings.filter((agent) => agent.enabled).map((agent) => ({ id: agent.id, providerId: agent.providerId }));
-  return new StaticAgentRegistry(enabledAgents.map((agent) => new DemoExecutionAdapter(agent.id, agent.providerId)));
+  return new StaticAgentRegistry(enabledAgents.map((agent) => (
+    new DemoExecutionAdapter(agent.id, agent.providerId, capabilitiesForAgentId(agent.id))
+  )));
 }
 
 const defaultAgentIds = ["direct-responder", "context-researcher", "draft-maker", "evidence-reviewer", "external-operator"];
+
+function capabilitiesForAgentId(agentId: string): string[] {
+  if (agentId === "context-researcher") return ["research", "filesystem_read"];
+  if (agentId === "draft-maker") return ["drafting", "filesystem_read", "filesystem_write"];
+  if (agentId === "evidence-reviewer") return ["review"];
+  if (agentId === "external-operator") return ["external_action"];
+  return ["direct_response"];
+}

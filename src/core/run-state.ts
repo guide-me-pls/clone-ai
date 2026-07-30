@@ -108,6 +108,23 @@ export function reduceEvent(state: RuntimeProjection, event: JournalEvent): Runt
       const subagent = event.payload as SubagentRun;
       return { ...state, subagents: { ...state.subagents, [subagentKey(subagent.runId, subagent.workOrderId)]: subagent } };
     }
+    case "subagent.resumed": {
+      const payload = event.payload as { workOrderId: string; attempt: number };
+      return updateSubagent(state, event.runId, payload.workOrderId, (subagent) => ({
+        ...subagent,
+        status: "running",
+        attempt: payload.attempt,
+        updatedAt: event.occurredAt,
+      }));
+    }
+    case "subagent.session_started": {
+      const payload = event.payload as { workOrderId: string; sessionId: string };
+      return updateSubagent(state, event.runId, payload.workOrderId, (subagent) => ({
+        ...subagent,
+        sessionId: payload.sessionId,
+        updatedAt: event.occurredAt,
+      }));
+    }
     case "subagent.progress": {
       const payload = event.payload as { workOrderId: string };
       return updateSubagent(state, event.runId, payload.workOrderId, (subagent) => ({
@@ -129,6 +146,15 @@ export function reduceEvent(state: RuntimeProjection, event: JournalEvent): Runt
       return updateSubagent(state, event.runId, payload.workOrderId, (subagent) => ({
         ...subagent,
         status: "failed",
+        summary: payload.message,
+        updatedAt: event.occurredAt,
+      }));
+    }
+    case "subagent.cancelled": {
+      const payload = event.payload as { workOrderId: string; message: string };
+      return updateSubagent(state, event.runId, payload.workOrderId, (subagent) => ({
+        ...subagent,
+        status: "cancelled",
         summary: payload.message,
         updatedAt: event.occurredAt,
       }));
