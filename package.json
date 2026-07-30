@@ -13,6 +13,7 @@
     "desktop:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-desktop.ps1",
     "desktop:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1",
     "demo": "node --experimental-strip-types src/cli.ts",
+    "pi:smoke": "node --experimental-strip-types src/pi-smoke.ts",
     "loop": "node --experimental-strip-types src/loop/cli.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "typecheck": "tsc --noEmit"

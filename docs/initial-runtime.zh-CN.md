@@ -1,6 +1,6 @@
 # 初始 Runtime
 
-这是 `clone-ai` 第一段可运行的代码。它是个人数字分身的本地控制平面，不是聊天机器人，也不是托管网页产品。当前尚未调用 LLM；它先建立未来接入 Codex、Claude Code、Pi 和自定义 Agent 时必须遵守的监督边界。
+这是 `clone-ai` 第一段可运行的代码。它是个人数字分身的本地控制平面，不是聊天机器人，也不是托管网页产品。当前已具备显式开启的 LLM Planner，同时保留确定性的本地回退策略；它先建立未来接入 Codex、Claude Code、Pi 和自定义 Agent 时必须遵守的监督边界。
 
 ```text
 桌面客户端
@@ -75,11 +75,11 @@ src/
 
 ## 有意暂未实现的部分
 
-- 真实的 Codex、Claude Code、Pi Adapter。
+- 真实的 Codex、Claude Code Adapter；Pi 已有第一版受 Supervisor 管理的 JSONL RPC Adapter。
 - 将自然语言和设备信号转为计划的 Planner 与 Context Compiler。
 - SQLite WAL、加密、快照、压缩和长期记忆审核。
-- 取消传播、重试、预算、Worktree 与 Sandbox。
+- 外部动作的细粒度 Sandbox、Worktree 和连接器回执。
 - Tauri 打包桌面壳、托盘、通知、原生审批和自动 daemon 生命周期。
 - 机会发现与受治理的个人世界模型。
 
-下一阶段是接入一个真实 Coding Agent，并用 checkpoint/resume 证明恢复后不会重复执行已经完成的副作用；之后再将同一套本地 Runtime 包装为可安装的桌面客户端。
+下一阶段是用真实 Pi 工作验证 checkpoint/resume，再把相同的 Adapter 合同用于 Codex 和 Claude Code。

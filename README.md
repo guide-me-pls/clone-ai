@@ -58,7 +58,7 @@ You
        -> local automation and specialized Python workers
 ```
 
-## Planned execution providers
+## Execution providers
 
 These are execution integrations, not sources of identity, memory, or authority. Every
 provider is reached through the same `RuntimeAdapter` contract and receives only the
@@ -68,7 +68,7 @@ context and capability grant necessary for an assignment.
 | --- | --- | --- |
 | **Claude Code** | Long-running implementation, local tools, and artifact creation. | Adapter designed |
 | **Codex** | Coding, review, repository operations, and structured execution events. | Adapter designed |
-| **Pi** | Additional interactive or specialist execution capability. | Adapter designed |
+| **Pi** | Tool-free direct reasoning and evidence review through a supervised subprocess. | JSONL RPC adapter implemented |
 | **Custom runtimes** | User- or organization-specific agents, scripts, and local tools. | Extension contract planned |
 | **Python workers** | Extraction, ranking, forecasting, evaluation, and local ML proposals. | Worker protocol planned |
 
@@ -98,12 +98,21 @@ npm run demo
 For the new, deliberately isolated model-and-tool learning vertical slice, read
 [Minimal LLM loop](docs/minimal-llm-loop.md). It runs a real model -> function tool
 -> tool result -> model cycle; its only filesystem write tool is intentionally mocked.
+The next orchestration slice is documented in
+[Work Orders and the Pi adapter](docs/work-orders-and-pi.md).
+
+For the complete current path from a user request to verified completion, see
+[Query execution flow](docs/query-execution-flow.md). The opt-in model planner
+and its safety boundary are documented in [LLM Planner](docs/llm-planner.md).
 
 The first implementation is a local, inspectable trust loop—not a broad autonomous
-assistant. It currently uses deterministic child-agent adapters, not live model
-providers. The demo dispatches bounded research and draft workers in parallel, waits
-for an evidence-review worker, pauses for an external-action approval, and resumes
-without repeating completed child work.
+assistant. The CLI demo remains deterministic for repeatable learning and tests; the
+configured desktop runtime can now route a bounded role to the installed Pi agent.
+Work orders carry inputs, capability requirements, artifact contracts, risk, budgets,
+and an acyclic dependency graph. Pi sessions are persisted and can be resumed without
+letting Pi own Run state, policy, or final completion. The first Pi binding receives no
+built-in file or shell tools; filesystem actions must later return through clone-ai's
+workspace-bounded Tool Runtime.
 
 ### Run the desktop client (Windows)
 

@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createDemoAgentRegistry } from "../src/adapters/demo-adapter.ts";
+import { DemoExecutionAdapter, createDemoAgentRegistry, StaticAgentRegistry } from "../src/adapters/demo-adapter.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { DefaultPolicyEngine } from "../src/core/policy.ts";
 import { CloneRuntime } from "../src/core/runtime.ts";
 import { EvidenceVerifier } from "../src/core/verification.ts";
 import { MemoryPipeline } from "../src/memory/memory-pipeline.ts";
+import type { SubagentWorkOrder } from "../src/core/contracts.ts";
 
 test("a supervisor coordinates child agents, resumes after approval, and preserves the child record", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-runtime-"));
@@ -35,36 +36,45 @@ test("a supervisor coordinates child agents, resumes after approval, and preserv
         risk: "reversible_write",
         acceptanceCriteria: ["Agenda draft exists"],
         subagents: [
-          {
+          workOrder({
             id: "research",
             agentId: "context-researcher",
             role: "researcher",
             title: "Research meeting context",
             objective: "Find the local context for the meeting.",
             acceptanceCriteria: ["Context note exists"],
-          },
-          {
+            requiredCapabilities: ["research", "filesystem_read"],
+          }),
+          workOrder({
             id: "draft",
             agentId: "draft-maker",
             role: "maker",
             title: "Draft agenda",
             objective: "Create the local agenda draft.",
             acceptanceCriteria: ["Draft exists"],
-          },
-          {
+            requiredCapabilities: ["drafting", "filesystem_read", "filesystem_write"],
+            risk: "reversible_write",
+          }),
+          workOrder({
             id: "review",
             agentId: "evidence-reviewer",
             role: "reviewer",
             title: "Review evidence",
             objective: "Review the research and draft evidence.",
             acceptanceCriteria: ["Review exists"],
+            inputs: [
+              { name: "research", description: "Research evidence.", sourceWorkOrderId: "research", required: true },
+              { name: "draft", description: "Draft evidence.", sourceWorkOrderId: "draft", required: true },
+            ],
+            requiredCapabilities: ["review"],
             dependsOn: ["research", "draft"],
-          },
+          }),
         ],
       },
       {
         id: "send",
         agentId: "external-operator",
+        requiredCapabilities: ["external_action"],
         title: "Send agenda",
         instructions: "Send the agenda to attendees.",
         risk: "external_side_effect",
@@ -106,9 +116,69 @@ test("a supervisor coordinates child agents, resumes after approval, and preserv
   const eventTypes = await recoveredRuntime.getEventsForRun(run.id);
   assert.ok(eventTypes.includes("subagent.dispatched"));
   assert.ok(eventTypes.includes("subagent.completed"));
+  assert.ok(eventTypes.includes("subagent.verified"));
   assert.deepEqual(eventTypes.slice(-3), [
     "run.status_changed",
     "memory.candidate.requested",
     "memory.candidate.proposed",
   ]);
 });
+
+test("a single-agent step fails when the bound executor lacks the required capability", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-runtime-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+
+  const journal = new JsonlJournalStore(join(directory, "journal.jsonl"));
+  const memory = new MemoryPipeline(journal);
+  const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory });
+
+  const { run } = await runtime.acceptTrigger({
+    kind: "query",
+    summary: "Send the approved update.",
+    payload: {},
+  });
+  await runtime.attachPlan(run.id, {
+    summary: "Attempt an external action with the wrong executor binding.",
+    steps: [{
+      id: "send",
+      agentId: "external-operator",
+      requiredCapabilities: ["external_action"],
+      title: "Send update",
+      instructions: "Send the already-approved update.",
+      risk: "external_side_effect",
+      acceptanceCriteria: ["Delivery receipt exists"],
+    }],
+  });
+  await runtime.grantApproval(run.id, "send");
+
+  const wrongRegistry = new StaticAgentRegistry([
+    new DemoExecutionAdapter("external-operator", "demo", ["direct_response"]),
+  ]);
+  const result = await runtime.execute(run.id, wrongRegistry);
+
+  assert.equal(result.status, "failed");
+  assert.equal(runtime.getRun(run.id).status, "failed");
+});
+
+function workOrder(
+  input: Pick<SubagentWorkOrder, "id" | "role" | "title" | "objective" | "acceptanceCriteria" | "requiredCapabilities">
+    & Partial<SubagentWorkOrder>,
+): SubagentWorkOrder {
+  return {
+    inputs: [{ name: "task", description: "The bounded parent task.", required: true }],
+    expectedArtifacts: [{
+      id: `${input.id}-artifact`,
+      kind: "artifact",
+      description: "A durable artifact for this work order.",
+      required: true,
+    }],
+    risk: "read_only",
+    budget: {
+      maxDurationMs: 60_000,
+      maxModelCalls: 10,
+      maxToolCalls: 20,
+      maxAttempts: 2,
+    },
+    ...input,
+  };
+}

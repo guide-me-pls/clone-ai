@@ -68,6 +68,17 @@ const DEFAULT_AGENTS: AgentSetting[] = [
   },
 ];
 
+/**
+ * Return a fresh default catalog so callers never mutate the module-level
+ * settings. The catalog is planning metadata, not an execution grant.
+ *
+ * 返回一份全新的默认 Agent 目录，避免调用方修改模块级设置。这个目录只是规划元数据，
+ * 不是执行授权。
+ */
+export function defaultAgentSettings(): AgentSetting[] {
+  return DEFAULT_AGENTS.map((agent) => ({ ...agent }));
+}
+
 export class AgentSettingsStore {
   readonly #path: string;
   #writes: Promise<void> = Promise.resolve();
@@ -82,7 +93,7 @@ export class AgentSettingsStore {
       return normalize(JSON.parse(source) as Partial<CloneSettings>);
     } catch (error: unknown) {
       if (isMissingFile(error)) {
-        return { agents: DEFAULT_AGENTS.map((agent) => ({ ...agent })) };
+        return { agents: defaultAgentSettings() };
       }
       throw error;
     }
@@ -99,6 +110,9 @@ export class AgentSettingsStore {
     }
     if (update.providerId !== undefined && !providerIds.has(update.providerId)) {
       throw new Error("The requested agent provider is not supported.");
+    }
+    if (update.providerId !== undefined && !providerIsAllowedForRole(update.providerId, agent.role)) {
+      throw new Error("Pi is currently limited to tool-free direct and review roles and cannot be assigned to this executor.");
     }
     const next = {
       agents: current.agents.map((candidate) => candidate.id === id ? { ...candidate, ...update } : candidate),
@@ -126,16 +140,26 @@ function normalize(input: Partial<CloneSettings>): CloneSettings {
   return {
     agents: DEFAULT_AGENTS.map((agent) => {
       const saved = configured.get(agent.id);
+      const savedProvider = saved?.providerId as ProviderId | undefined;
       return {
         ...agent,
         enabled: agent.required ? true : saved?.enabled ?? agent.enabled,
-        providerId: providerIds.has(saved?.providerId as ProviderId) ? saved!.providerId as ProviderId : agent.providerId,
+        providerId:
+          savedProvider !== undefined
+          && providerIds.has(savedProvider)
+          && providerIsAllowedForRole(savedProvider, agent.role)
+            ? savedProvider
+            : agent.providerId,
       };
     }),
   };
 }
 
 const providerIds = new Set<ProviderId>(["codex-cli", "claude-code", "pi"]);
+
+function providerIsAllowedForRole(providerId: ProviderId, role: AgentRole): boolean {
+  return providerId !== "pi" || role === "direct" || role === "review";
+}
 
 function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";

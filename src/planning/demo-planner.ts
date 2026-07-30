@@ -12,6 +12,10 @@ const IRREVERSIBLE_ACTION_TERMS = ["删除", "清空", "付款", "支付", "购�
  * LLM planner. It deliberately varies the work graph based on the request:
  * direct questions stay direct, preparation work gets only the roles it
  * needs, and external actions remain a separately approved step.
+ *
+ * 这是面向 Demo 的透明本地规划策略，不是假装成 LLM Planner。它会依据请求
+ * 调整任务图：直接问题保持直接处理；准备型任务只分配必要角色；外部动作始终
+ * 保持为单独审批的步骤。
  */
 export function buildDemoPlan(
   query: string,
@@ -33,7 +37,12 @@ export function buildDemoPlan(
       role: "researcher" as const,
       title: "梳理相关上下文",
       objective: "找出请求涉及的约束、已有信息和待确认事项。",
+      inputs: [{ name: "request", description: "The owner's current request and recalled local context.", required: true }],
+      requiredCapabilities: ["research", "filesystem_read"],
+      expectedArtifacts: [artifactContract("context-note", "A durable context note with sources and uncertainty.")],
       acceptanceCriteria: ["形成一份可核对的上下文说明"],
+      risk: "read_only" as const,
+      budget: defaultWorkOrderBudget(),
     });
   }
   if (needsDelivery && enabledAgentIds.has("draft-maker")) {
@@ -43,7 +52,12 @@ export function buildDemoPlan(
       role: "maker" as const,
       title: needsResearch ? "形成可执行草案" : "准备本地交付物",
       objective: "只在本地准备可修改、可回退的结果，不产生外部影响。",
+      inputs: [{ name: "request", description: "The owner's request and bounded plan-step instructions.", required: true }],
+      requiredCapabilities: ["drafting", "filesystem_read", "filesystem_write"],
+      expectedArtifacts: [artifactContract("local-draft", "A reviewable local draft or implementation artifact.", true)],
       acceptanceCriteria: ["形成一份可复核的本地交付物"],
+      risk: "reversible_write" as const,
+      budget: defaultWorkOrderBudget(),
     });
   }
   if (needsReview && preparationOrders.length > 0 && enabledAgentIds.has("evidence-reviewer")) {
@@ -53,7 +67,17 @@ export function buildDemoPlan(
       role: "reviewer" as const,
       title: "复核计划与证据",
       objective: "检查现有准备是否足以支持下一步，并明确保留的不确定性。",
+      inputs: preparationOrders.map((order) => ({
+        name: `${order.id}-evidence`,
+        description: `Verified evidence from ${order.title}.`,
+        sourceWorkOrderId: order.id,
+        required: true,
+      })),
+      requiredCapabilities: ["review"],
+      expectedArtifacts: [artifactContract("review-note", "An independent review of dependency evidence.")],
       acceptanceCriteria: ["形成一份复核说明"],
+      risk: "read_only" as const,
+      budget: defaultWorkOrderBudget(),
       dependsOn: preparationOrders.map((order) => order.id),
     });
   }
@@ -72,6 +96,7 @@ export function buildDemoPlan(
     steps.push({
       id: "direct-response",
       agentId: "direct-responder",
+      requiredCapabilities: ["direct_response"],
       title: "直接处理请求",
       instructions: "这个请求不需要拆分或授权外部操作，直接在本地完成。",
       risk: "read_only",
@@ -86,6 +111,7 @@ export function buildDemoPlan(
     steps.push({
       id: "external-commitment",
       agentId: "external-operator",
+      requiredCapabilities: ["external_action"],
       title: isIrreversible ? "执行不可逆外部操作" : "执行外部操作",
       instructions: "仅在用户确认这一个具体步骤后才允许影响外部系统。",
       risk: isIrreversible ? "irreversible" : "external_side_effect",
@@ -124,4 +150,23 @@ function describePlan(workerCount: number, needsExternalAction: boolean): string
   }
   const approval = needsExternalAction ? " An external step remains separately approval-gated." : "";
   return `Use ${workerCount} bounded preparation role${workerCount === 1 ? "" : "s"} chosen for this request.${approval}`;
+}
+
+function artifactContract(id: string, description: string, locatorRequired = false) {
+  return {
+    id,
+    kind: "artifact" as const,
+    description,
+    required: true,
+    locatorRequired,
+  };
+}
+
+function defaultWorkOrderBudget() {
+  return {
+    maxDurationMs: 10 * 60_000,
+    maxModelCalls: 20,
+    maxToolCalls: 100,
+    maxAttempts: 2,
+  };
 }
