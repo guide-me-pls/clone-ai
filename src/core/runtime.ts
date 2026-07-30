@@ -21,6 +21,7 @@ import type {
 import type { JournalStore } from "./journal.ts";
 import { approvalKey, emptyProjection, reduceEvent, replay, subagentKey, type RuntimeProjection } from "./run-state.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
+import { CapabilityDispatcher } from "../agents/dispatcher.ts";
 
 export interface CloneRuntimeOptions {
   journal: JournalStore;
@@ -39,6 +40,9 @@ export interface DispatchResult {
  * The Runtime is the supervisor. It owns state transitions, authority,
  * evidence, verification, and memory requests. An agent only receives a
  * bounded execution assignment or child work order; it cannot close a Run.
+ *
+ * Runtime 负责状态流转、授权、证据、验证与记忆请求。Agent 只能收到受边界
+ * 约束的执行 Assignment 或子 WorkOrder，绝不能自行关闭 Run。
  */
 export class CloneRuntime {
   readonly #journal: JournalStore;
@@ -131,7 +135,7 @@ export class CloneRuntime {
     const task = this.requireTask(run.taskId);
     const plan = this.requirePlan(run);
 
-    if (run.status !== "queued" && run.status !== "waiting_approval") {
+    if (run.status !== "queued" && run.status !== "waiting_approval" && run.status !== "running") {
       throw new Error(`Run ${run.id} cannot execute while ${run.status}.`);
     }
 
@@ -202,6 +206,40 @@ export class CloneRuntime {
     return this.#journal.list().then((events) => events.filter((event) => event.runId === runId).map((event) => event.type));
   }
 
+  async cancel(runId: string, agents: AgentRegistry): Promise<Run> {
+    await this.hydrate();
+    const run = this.requireRun(runId);
+    if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+      throw new Error(`Run ${run.id} cannot be cancelled while ${run.status}.`);
+    }
+
+    for (const subagent of this.getSubagentsForRun(runId).filter((item) => item.status === "running")) {
+      if (subagent.sessionId !== undefined) {
+        const adapter = agents.get(subagent.agentId);
+        if (adapter === undefined) {
+          throw new Error(`Cannot cancel ${subagent.workOrderId}; adapter ${subagent.agentId} is not registered.`);
+        }
+        if (subagent.providerId !== undefined && subagent.providerId !== adapter.providerId) {
+          throw new Error(
+            `Cannot cancel ${subagent.workOrderId}; provider changed from ${subagent.providerId} to ${adapter.providerId}.`,
+          );
+        }
+        if (adapter.cancel === undefined) {
+          throw new Error(`Cannot cancel ${subagent.workOrderId}; adapter ${adapter.id} does not support cancellation.`);
+        }
+        await adapter.cancel(subagent.sessionId);
+      }
+      await this.record({
+        type: "subagent.cancelled",
+        taskId: run.taskId,
+        runId,
+        payload: { workOrderId: subagent.workOrderId, message: "Cancelled by the supervisor." },
+      });
+    }
+    await this.changeStatus(runId, "cancelled", run.activeStepId);
+    return this.requireRun(runId);
+  }
+
   /** Records the curated local memories that were actually supplied to this run. */
   async recordMemoryRecall(runId: string, query: string, memories: Array<{ id: string; summary: string; score: number; matchedTerms: string[] }>): Promise<void> {
     await this.hydrate();
@@ -224,13 +262,34 @@ export class CloneRuntime {
     if (adapter === undefined) {
       throw new Error(`No adapter is registered for agent ${agentId}.`);
     }
+    const capabilities = await adapter.capabilities();
+    const missingCapabilities = (input.step.requiredCapabilities ?? []).filter(
+      (capability) => !capabilities.work.includes(capability),
+    );
+    if (missingCapabilities.length > 0) {
+      throw new Error(
+        `Agent ${agentId} cannot execute step ${input.step.id}; missing capabilities: ${missingCapabilities.join(", ")}.`,
+      );
+    }
+    const assignment: ExecutionAssignment = {
+      run: input.run,
+      task: input.task,
+      step: input.step,
+      executor: { agentId: adapter.id, providerId: adapter.providerId },
+    };
     await this.record({
       type: "execution.started",
       taskId: input.task.id,
       runId: input.run.id,
-      payload: { stepId: input.step.id, adapterId: adapter.id },
+      payload: { stepId: input.step.id, adapterId: adapter.id, providerId: adapter.providerId },
     });
-    await this.consumeExecutionEvents(adapter, input);
+    const completion = await this.consumeExecutionEvents(adapter, assignment);
+    if (completion === undefined) {
+      throw new Error(`Agent ${agentId} ended without an explicit completion event.`);
+    }
+    if (!this.stepHasCompletedEvidence(input.run.id, input.step)) {
+      throw new Error(`Agent ${agentId} completed step ${input.step.id} without evidence.`);
+    }
   }
 
   private async executeSubagents(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry }): Promise<void> {
@@ -254,59 +313,164 @@ export class CloneRuntime {
   private async dispatchSubagent(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry }): Promise<void> {
     const existing = this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)];
     if (existing?.status === "completed") {
-      if (this.workOrderHasCompletedEvidence(input.run.id, input.workOrder.id)) {
+      if (await this.ensureWorkOrderVerified(input, existing.agentId)) {
         return;
       }
-      throw new Error(`Subagent ${input.workOrder.id} completed without usable evidence.`);
     }
-    if (existing?.status === "failed") {
-      throw new Error(`Subagent ${input.workOrder.id} previously failed: ${existing.summary ?? "unknown failure"}`);
-    }
-
-    const adapter = input.agents.get(input.workOrder.agentId);
-    if (adapter === undefined) {
-      throw new Error(`No adapter is registered for subagent ${input.workOrder.agentId}.`);
+    if (existing?.status === "cancelled") {
+      throw new Error(`Subagent ${input.workOrder.id} was cancelled.`);
     }
 
-    const startedAt = new Date().toISOString();
-    const subagent: SubagentRun = {
+    // A fresh work order may be routed by capability. Once started, the
+    // concrete adapter identity is pinned so replay cannot silently move the
+    // persisted provider session to another configured worker.
+    const adapter = await new CapabilityDispatcher(input.agents).select(
+      existing === undefined
+        ? input.workOrder
+        : { ...input.workOrder, agentId: existing.agentId },
+    );
+    if (existing?.providerId !== undefined && existing.providerId !== adapter.providerId) {
+      throw new Error(
+        `Work order ${input.workOrder.id} started with provider ${existing.providerId} and cannot resume with ${adapter.providerId}.`,
+      );
+    }
+    const assignment: ExecutionAssignment = {
+      run: input.run,
+      task: input.task,
+      step: input.step,
+      executor: { agentId: adapter.id, providerId: adapter.providerId },
+      workOrder: input.workOrder,
+      dependencyEvidence: this.dependencyEvidence(input.run.id, input.workOrder),
+    };
+
+    const previousAttempt = existing?.attempt ?? 1;
+    let attempt = existing === undefined
+      ? 1
+      : existing.status === "running"
+        ? previousAttempt
+        : previousAttempt + 1;
+    let sessionId = existing?.sessionId;
+    let lastError: unknown = existing?.status === "completed"
+      ? new Error(`Subagent ${input.workOrder.id} did not satisfy its artifact contract.`)
+      : undefined;
+    while (attempt <= input.workOrder.budget.maxAttempts) {
+      if (existing === undefined && attempt === 1) {
+        const startedAt = new Date().toISOString();
+        const subagent: SubagentRun = {
+          id: randomUUID(),
+          runId: input.run.id,
+          stepId: input.step.id,
+          workOrderId: input.workOrder.id,
+          agentId: adapter.id,
+          providerId: adapter.providerId,
+          role: input.workOrder.role,
+          title: input.workOrder.title,
+          status: "running",
+          attempt,
+          startedAt,
+          updatedAt: startedAt,
+        };
+        await this.record({ type: "subagent.dispatched", taskId: input.task.id, runId: input.run.id, payload: subagent });
+      } else {
+        await this.record({
+          type: "subagent.resumed",
+          taskId: input.task.id,
+          runId: input.run.id,
+          payload: { workOrderId: input.workOrder.id, sessionId, adapterId: adapter.id, attempt },
+        });
+      }
+
+      try {
+        const stream = sessionId !== undefined && adapter.resume !== undefined
+          ? { execute: () => adapter.resume!(sessionId!, assignment) }
+          : adapter;
+        const completion = await this.consumeExecutionEvents(stream, assignment);
+        if (completion === undefined) {
+          throw new Error("Subagent ended without an explicit completion event.");
+        }
+        if (!this.workOrderHasEvidence(input.run.id, input.workOrder.id)) {
+          throw new Error("Subagent completed without producing evidence.");
+        }
+        await this.record({
+          type: "subagent.completed",
+          taskId: input.task.id,
+          runId: input.run.id,
+          payload: { workOrderId: input.workOrder.id, summary: redactAuditText(completion) },
+        });
+        if (!(await this.ensureWorkOrderVerified(input, adapter.id))) {
+          throw new Error(`Subagent ${input.workOrder.id} did not satisfy its artifact contract.`);
+        }
+        return;
+      } catch (error: unknown) {
+        lastError = error;
+        const message = redactAuditText(
+          error instanceof Error ? error.message : "Unknown subagent failure.",
+        );
+        await this.record({
+          type: "subagent.failed",
+          taskId: input.task.id,
+          runId: input.run.id,
+          payload: { workOrderId: input.workOrder.id, message },
+        });
+        if (attempt >= input.workOrder.budget.maxAttempts) throw error;
+        sessionId = this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)]?.sessionId;
+        attempt += 1;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("Subagent exhausted its attempt budget.");
+  }
+
+  private dependencyEvidence(runId: string, order: SubagentWorkOrder): Evidence[] {
+    const dependencyIds = new Set(order.dependsOn ?? []);
+    return (this.#state.evidenceByRun[runId] ?? []).filter((item) => (
+      item.workOrderId !== undefined && dependencyIds.has(item.workOrderId)
+    ));
+  }
+
+  private async ensureWorkOrderVerified(
+    input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder },
+    producedBy: string,
+  ): Promise<boolean> {
+    const key = subagentKey(input.run.id, input.workOrder.id);
+    const existing = this.#state.subagentVerificationByKey[key];
+    if (existing?.passed === true) return true;
+
+    const evidence = (this.#state.evidenceByRun[input.run.id] ?? []).filter(
+      (item) => item.workOrderId === input.workOrder.id,
+    );
+    const failures: string[] = [];
+    const usedEvidenceIds = new Set<string>();
+    for (const artifact of input.workOrder.expectedArtifacts.filter((item) => item.required)) {
+      const match = evidence.find((item) => (
+        !usedEvidenceIds.has(item.id)
+        && item.kind === artifact.kind
+        && (!artifact.locatorRequired || (item.locator !== undefined && item.locator.length > 0))
+      ));
+      if (match === undefined) {
+        failures.push(artifact.id);
+      } else {
+        usedEvidenceIds.add(match.id);
+      }
+    }
+    const verification = {
       id: randomUUID(),
       runId: input.run.id,
       stepId: input.step.id,
       workOrderId: input.workOrder.id,
-      agentId: input.workOrder.agentId,
-      role: input.workOrder.role,
-      title: input.workOrder.title,
-      status: "running",
-      startedAt,
-      updatedAt: startedAt,
+      passed: failures.length === 0 && evidence.length > 0,
+      summary: failures.length === 0
+        ? `${producedBy} supplied the required evidence contract.`
+        : `Missing required artifact evidence: ${failures.join(", ")}.`,
+      checkedEvidenceIds: evidence.map((item) => item.id),
+      createdAt: new Date().toISOString(),
     };
-    await this.record({ type: "subagent.dispatched", taskId: input.task.id, runId: input.run.id, payload: subagent });
-
-    try {
-      const completion = await this.consumeExecutionEvents(adapter, input);
-      if (completion === undefined) {
-        throw new Error("Subagent ended without an explicit completion event.");
-      }
-      if (!this.workOrderHasEvidence(input.run.id, input.workOrder.id)) {
-        throw new Error("Subagent completed without producing evidence.");
-      }
-      await this.record({
-        type: "subagent.completed",
-        taskId: input.task.id,
-        runId: input.run.id,
-        payload: { workOrderId: input.workOrder.id, summary: completion },
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Unknown subagent failure.";
-      await this.record({
-        type: "subagent.failed",
-        taskId: input.task.id,
-        runId: input.run.id,
-        payload: { workOrderId: input.workOrder.id, message },
-      });
-      throw error;
-    }
+    await this.record({
+      type: "subagent.verified",
+      taskId: input.task.id,
+      runId: input.run.id,
+      payload: verification,
+    });
+    return verification.passed;
   }
 
   private async consumeExecutionEvents(adapter: { execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> }, input: ExecutionAssignment): Promise<string | undefined> {
@@ -322,14 +486,57 @@ export class CloneRuntime {
   }
 
   private async recordExecutionEvent(input: ExecutionAssignment, event: Exclude<ExecutionEvent, { type: "completed" }>): Promise<void> {
+    if (event.type === "session_started") {
+      await this.record({
+        type: input.workOrder === undefined ? "execution.progress" : "subagent.session_started",
+        taskId: input.task.id,
+        runId: input.run.id,
+        payload: input.workOrder === undefined
+          ? { stepId: input.step.id, message: `Agent session started: ${event.sessionId}`, sessionId: event.sessionId }
+          : { stepId: input.step.id, workOrderId: input.workOrder.id, sessionId: event.sessionId },
+      });
+      return;
+    }
+    if (event.type === "message_delta") {
+      // Raw model streams may echo file contents or personal data. They remain
+      // transient UI events; only the redacted completion/evidence is durable.
+      return;
+    }
+    if (event.type === "tool_started") {
+      await this.record({
+        type: "agent.tool_started",
+        taskId: input.task.id,
+        runId: input.run.id,
+        payload: {
+          stepId: input.step.id,
+          workOrderId: input.workOrder?.id,
+          ...event,
+          inputSummary: event.inputSummary === undefined ? undefined : redactAuditText(event.inputSummary),
+        },
+      });
+      return;
+    }
+    if (event.type === "tool_completed") {
+      await this.record({
+        type: "agent.tool_completed",
+        taskId: input.task.id,
+        runId: input.run.id,
+        payload: { stepId: input.step.id, workOrderId: input.workOrder?.id, ...event },
+      });
+      return;
+    }
     if (event.type === "progress") {
       await this.record({
         type: input.workOrder === undefined ? "execution.progress" : "subagent.progress",
         taskId: input.task.id,
         runId: input.run.id,
         payload: input.workOrder === undefined
-          ? { stepId: input.step.id, message: event.message }
-          : { stepId: input.step.id, workOrderId: input.workOrder.id, message: event.message },
+          ? { stepId: input.step.id, message: redactAuditText(event.message) }
+          : {
+            stepId: input.step.id,
+            workOrderId: input.workOrder.id,
+            message: redactAuditText(event.message),
+          },
       });
       return;
     }
@@ -339,11 +546,12 @@ export class CloneRuntime {
 
     const evidence: Evidence = {
       ...event.evidence,
+      summary: redactAuditText(event.evidence.summary),
       id: randomUUID(),
       runId: input.run.id,
       stepId: input.step.id,
       workOrderId: input.workOrder?.id,
-      producedBy: input.workOrder?.agentId ?? input.step.agentId,
+      producedBy: input.executor.agentId,
       createdAt: new Date().toISOString(),
     };
     await this.record({ type: "evidence.recorded", taskId: input.task.id, runId: input.run.id, payload: evidence });
@@ -395,20 +603,52 @@ export class CloneRuntime {
 
   private workOrderHasCompletedEvidence(runId: string, workOrderId: string): boolean {
     const subagent = this.#state.subagents[subagentKey(runId, workOrderId)];
-    return subagent?.status === "completed" && this.workOrderHasEvidence(runId, workOrderId);
+    const verification = this.#state.subagentVerificationByKey[subagentKey(runId, workOrderId)];
+    return subagent?.status === "completed"
+      && this.workOrderHasEvidence(runId, workOrderId)
+      && verification?.passed === true;
   }
 }
 
 function assertPlanIsExecutable(steps: PlanStep[]): void {
+  if (steps.length === 0) {
+    throw new Error("A plan must contain at least one step.");
+  }
   const stepIds = new Set(steps.map((step) => step.id));
   if (stepIds.size !== steps.length) {
     throw new Error("Plan step identifiers must be unique.");
   }
+  const workOrderIds = new Set<string>();
   for (const step of steps) {
+    assertNonEmpty(step.id, "Plan step id");
+    assertNonEmpty(step.title, `Plan step ${step.id} title`);
+    assertNonEmpty(step.instructions, `Plan step ${step.id} instructions`);
+    if (!riskClasses.has(step.risk)) {
+      throw new Error(`Plan step ${step.id} has an invalid risk class.`);
+    }
+    if (!Array.isArray(step.acceptanceCriteria) || step.acceptanceCriteria.length === 0) {
+      throw new Error(`Plan step ${step.id} needs one or more acceptance criteria.`);
+    }
     if ((step.agentId === undefined) === (step.subagents === undefined)) {
       throw new Error(`Plan step ${step.id} must have exactly one executor or one subagent group.`);
     }
+    if (
+      step.agentId !== undefined
+      && (
+        !Array.isArray(step.requiredCapabilities)
+        || step.requiredCapabilities.length === 0
+        || step.requiredCapabilities.some((item) => typeof item !== "string" || item.trim().length === 0)
+      )
+    ) {
+      throw new Error(`Plan step ${step.id} needs one or more required capabilities.`);
+    }
     if (step.subagents !== undefined) {
+      for (const order of step.subagents) {
+        if (workOrderIds.has(order.id)) {
+          throw new Error(`Work order identifier ${order.id} must be unique across the whole plan.`);
+        }
+        workOrderIds.add(order.id);
+      }
       assertSubagentOrders(step.id, step.subagents);
     }
   }
@@ -423,10 +663,125 @@ function assertSubagentOrders(stepId: string, orders: SubagentWorkOrder[]): void
     throw new Error(`Subagent work order identifiers for step ${stepId} must be unique.`);
   }
   for (const order of orders) {
+    assertNonEmpty(order.id, `Work order id in step ${stepId}`);
+    assertNonEmpty(order.title, `Work order ${order.id} title`);
+    assertNonEmpty(order.objective, `Work order ${order.id} objective`);
+    if (
+      !Array.isArray(order.acceptanceCriteria)
+      || order.acceptanceCriteria.length === 0
+      || order.acceptanceCriteria.some((item) => typeof item !== "string" || item.trim().length === 0)
+    ) {
+      throw new Error(`Subagent work order ${order.id} needs one or more acceptance criteria.`);
+    }
+    if (
+      !Array.isArray(order.requiredCapabilities)
+      || order.requiredCapabilities.length === 0
+      || order.requiredCapabilities.some((item) => typeof item !== "string" || item.trim().length === 0)
+    ) {
+      throw new Error(`Subagent work order ${order.id} needs one or more required capabilities.`);
+    }
+    if (!riskClasses.has(order.risk)) {
+      throw new Error(`Subagent work order ${order.id} has an invalid risk class.`);
+    }
+    if (!Array.isArray(order.inputs)) {
+      throw new Error(`Subagent work order ${order.id} needs an input contract.`);
+    }
+    if (!Array.isArray(order.expectedArtifacts) || order.expectedArtifacts.length === 0) {
+      throw new Error(`Subagent work order ${order.id} needs an artifact contract.`);
+    }
+    for (const artifact of order.expectedArtifacts) {
+      assertNonEmpty(artifact.id, `Artifact id in work order ${order.id}`);
+      assertNonEmpty(artifact.description, `Artifact ${artifact.id} description in work order ${order.id}`);
+      if (!evidenceKinds.has(artifact.kind)) {
+        throw new Error(`Artifact ${artifact.id} in work order ${order.id} has an invalid evidence kind.`);
+      }
+    }
+    const artifactIds = new Set(order.expectedArtifacts.map((artifact) => artifact.id));
+    if (artifactIds.size !== order.expectedArtifacts.length) {
+      throw new Error(`Subagent work order ${order.id} has duplicate artifact contract ids.`);
+    }
+    if (!order.expectedArtifacts.some((artifact) => artifact.required)) {
+      throw new Error(`Subagent work order ${order.id} must require at least one artifact.`);
+    }
+    assertBudget(order);
+    if (
+      (order.risk === "external_side_effect" || order.risk === "irreversible")
+      && order.budget.maxAttempts !== 1
+    ) {
+      throw new Error(
+        `Subagent work order ${order.id} can cause external or irreversible effects and must use maxAttempts=1.`,
+      );
+    }
+    if (order.dependsOn !== undefined && !Array.isArray(order.dependsOn)) {
+      throw new Error(`Subagent work order ${order.id} dependencies must be an array.`);
+    }
     for (const dependencyId of order.dependsOn ?? []) {
       if (!ids.has(dependencyId) || dependencyId === order.id) {
         throw new Error(`Subagent work order ${order.id} has an invalid dependency: ${dependencyId}.`);
       }
     }
+    for (const workInput of order.inputs) {
+      assertNonEmpty(workInput.name, `Input name in work order ${order.id}`);
+      assertNonEmpty(workInput.description, `Input ${workInput.name} description in work order ${order.id}`);
+      if (
+        workInput.sourceWorkOrderId !== undefined
+        && !(order.dependsOn ?? []).includes(workInput.sourceWorkOrderId)
+      ) {
+        throw new Error(
+          `Input ${workInput.name} in work order ${order.id} references ${workInput.sourceWorkOrderId} without a dependency.`,
+        );
+      }
+    }
   }
+  assertAcyclicWorkOrders(stepId, orders);
+}
+
+function assertAcyclicWorkOrders(stepId: string, orders: SubagentWorkOrder[]): void {
+  const byId = new Map(orders.map((order) => [order.id, order]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+
+  const visit = (id: string): void => {
+    if (visited.has(id)) return;
+    if (visiting.has(id)) {
+      throw new Error(`Subagent work orders for step ${stepId} contain a dependency cycle at ${id}.`);
+    }
+    visiting.add(id);
+    for (const dependency of byId.get(id)?.dependsOn ?? []) visit(dependency);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const order of orders) visit(order.id);
+}
+
+function assertBudget(order: SubagentWorkOrder): void {
+  if (typeof order.budget !== "object" || order.budget === null) {
+    throw new Error(`Subagent work order ${order.id} needs an execution budget.`);
+  }
+  for (const name of ["maxDurationMs", "maxModelCalls", "maxToolCalls", "maxAttempts"] as const) {
+    if (!Number.isInteger(order.budget[name]) || order.budget[name] < 1) {
+      throw new Error(`Subagent work order ${order.id} has an invalid budget value for ${name}.`);
+    }
+  }
+  for (const [name, value] of Object.entries(order.budget)) {
+    if (!Number.isInteger(value) || value < 1) {
+      throw new Error(`Subagent work order ${order.id} has an invalid budget value for ${name}.`);
+    }
+  }
+}
+
+function assertNonEmpty(value: string, label: string): void {
+  if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} cannot be empty.`);
+}
+
+const riskClasses = new Set(["read_only", "reversible_write", "external_side_effect", "irreversible"]);
+const evidenceKinds = new Set(["artifact", "tool_result", "receipt", "test", "observation"]);
+
+function redactAuditText(value: string): string {
+  return value
+    .replace(/-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g, "[REDACTED_PRIVATE_KEY]")
+    .replace(/\b(sk|rk)-[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_TOKEN]")
+    .replace(/\b(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, "[REDACTED_TOKEN]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{12,}=*\b/gi, "Bearer [REDACTED]")
+    .replace(/\b(api[_-]?key|token|secret|password|authorization|credential)\b\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
 }

@@ -26,6 +26,26 @@ test("agent settings persist and change which child roles a plan may use", async
   }
 });
 
+test("Pi can only be assigned to the tool-free direct and review roles", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-settings-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+
+  const settings = new AgentSettingsStore(join(directory, "settings.json"));
+  await assert.rejects(
+    settings.updateAgent("external-operator", { providerId: "pi" }),
+    /cannot be assigned to this executor/,
+  );
+  await assert.rejects(
+    settings.updateAgent("draft-maker", { providerId: "pi" }),
+    /cannot be assigned to this executor/,
+  );
+  assert.equal(
+    (await settings.updateAgent("evidence-reviewer", { providerId: "pi" }))
+      .agents.find((agent) => agent.id === "evidence-reviewer")?.providerId,
+    "pi",
+  );
+});
+
 test("deleted sessions disappear from the companion list while their runtime journal can remain intact", async () => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-sessions-"));
   try {

@@ -2,8 +2,9 @@
 
 This is the first runnable slice of `clone-ai`. It is a local control plane
 for a personal digital twin, not a chatbot and not a hosted web product. It
-does not call an LLM yet. Instead, it establishes the supervision boundary
-that future Codex, Claude Code, Pi, and custom agents must obey.
+uses an opt-in LLM Planner while keeping its deterministic local fallback.
+It establishes the supervision boundary that future Codex, Claude Code, Pi,
+and custom agents must obey.
 
 ```text
 Desktop shell
@@ -93,14 +94,14 @@ src/
 
 ## Not implemented yet
 
-- Live Codex, Claude Code, or Pi adapters.
-- Planner and context compiler that turn natural language and device signals
-  into a plan.
+- Live Codex and Claude Code adapters. Pi has an initial supervised JSONL RPC adapter.
+- A production context compiler and governed signal interpreter. The initial
+  opt-in LLM Planner is implemented, but it has no tool or execution authority.
 - SQLite WAL, encryption, snapshots, compaction, and durable-memory review.
-- Cancellation propagation, retries, budgets, worktrees, and sandboxes.
+- Fine-grained external-action sandboxing, worktrees, and connector receipts.
 - The packaged Tauri shell, tray, notifications, native approval dialogs, and
   automatic daemon lifecycle.
 - Opportunity detection and a governed personal world model.
 
-The next milestone is a real coding-agent adapter with checkpoint/resume,
-followed by the installed desktop shell around this same local Runtime.
+The next milestone is proving Pi checkpoint/resume against interrupted real work,
+then applying the same adapter contract to Codex and Claude Code.

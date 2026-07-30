@@ -53,7 +53,7 @@ Agent。clone-ai 负责个人连续性、策略、记忆、规划和验证；被
        -> 本地自动化和专用 Python Worker
 ```
 
-## 计划接入的执行提供方
+## 执行提供方
 
 它们都是执行集成，而不是身份、记忆或授权的来源。每个提供方都经由同一个 `RuntimeAdapter` 合约接入，
 并且只会获得完成当前任务所需的上下文和能力授权。
@@ -62,7 +62,7 @@ Agent。clone-ai 负责个人连续性、策略、记忆、规划和验证；被
 | --- | --- | --- |
 | **Claude Code** | 长任务实现、本地工具调用与产物生成。 | Adapter 已完成设计 |
 | **Codex** | 编码、审查、仓库操作与结构化执行事件。 | Adapter 已完成设计 |
-| **Pi** | 额外的交互式或专长型执行能力。 | Adapter 已完成设计 |
+| **Pi** | 通过受 Supervisor 管理的子进程完成无 Tool 的直接推理与证据复核。 | JSONL RPC Adapter 已实现 |
 | **自定义 Runtime** | 用户或组织专属的 Agent、脚本与本地工具。 | 扩展合约计划中 |
 | **Python Worker** | 信息提取、排序、预测、评估和本地 ML 提案。 | Worker 协议计划中 |
 
@@ -88,8 +88,14 @@ npm run demo
 
 第一条独立的“真实模型与 Tool”学习闭环见[最小 LLM 闭环](docs/minimal-llm-loop.md)。它会跑通
 模型 → Function Tool → Tool 结果 → 模型的循环；唯一的文件写入 Tool 故意保持为 Mock。
+下一段编排实现见 [WorkOrder 与 Pi Adapter](docs/work-orders-and-pi.zh-CN.md)。
 
-目前的演示使用确定性的子 Agent Adapter，而不是已接入的模型 Provider：调研和草稿工作单可并行执行，审查工作单会等待前置 Evidence；外部动作仍会在精确审批前暂停，恢复后不会重复已完成的子工作。
+当前从用户请求到完成验证的整条链路见 [Query 执行流程](docs/query-execution-flow.zh-CN.md)；显式开启的模型 Planner 及其安全边界见 [LLM Planner](docs/llm-planner.zh-CN.md)。
+
+CLI 演示仍使用确定性的 Adapter，便于学习、测试和重放；桌面 Runtime 根据本地设置，已经可以把有边界
+的角色交给已安装的 Pi。WorkOrder 现在包含输入、能力要求、产物合同、风险、预算和无环依赖图；Pi
+Session 可以持久化并恢复，但 Run 状态、策略和最终完成权仍然属于 clone-ai。第一版 Pi 不会直接获得
+内建文件或 Shell Tool；后续文件操作必须回到 clone-ai 自己受 Workspace 边界约束的 Tool Runtime。
 
 产品客户端的方向是可安装的桌面数字分身，不是托管网页。`npm run companion:debug` 只会打开本地的桌面伴随预览，让开发者检查 daemon 边界；它既不是最终发布的桌面壳，也不是对外产品入口。详见[初始 Runtime](docs/initial-runtime.zh-CN.md#桌面端方向)。
 

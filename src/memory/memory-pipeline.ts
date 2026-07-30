@@ -17,6 +17,9 @@ export interface MemoryWorker {
  * Memory is deliberately asynchronous. Completion of a user task records a
  * durable request, while extraction and later human/policy review happen out
  * of band. The worker never writes durable personal memory directly.
+ *
+ * Memory 被刻意设计为异步：任务完成只会写入一条持久化请求；提取以及后续的人或 Policy
+ * 审核在主执行链之外进行。Worker 无权直接写入长期个人记忆。
  */
 export class MemoryPipeline {
   readonly #journal: JournalStore;
