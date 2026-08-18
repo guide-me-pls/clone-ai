@@ -311,6 +311,16 @@ export interface RuntimeCapabilities {
    * Dispatcher 使用的领域能力；Tool 权限仍由 Adapter 自己持有。
    */
   work: string[];
+  /**
+   * Evidence kinds this adapter may record. Omitted means every kind except
+   * "receipt": a receipt attests that an external action really happened, so
+   * an adapter must declare it explicitly, and only when its receipts come
+   * from a trusted runtime rather than from worker-controlled output.
+   * 该 Adapter 允许记录的 Evidence 类型。省略时默认允许除 "receipt" 外的全部类型：
+   * Receipt 用于证明外部动作确实发生，Adapter 必须显式声明，且只有当 Receipt 来自
+   * 可信运行时（而非 Worker 可控输出）时才可以声明。
+   */
+  evidenceKinds?: Evidence["kind"][];
 }
 
 export interface RuntimeAdapter {

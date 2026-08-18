@@ -13,11 +13,11 @@ export interface ConfiguredAgentRegistryOptions {
 
 /**
  * Provider bindings from local settings become concrete adapters here.
- * Codex and Claude remain deterministic adapters until their own integrations
- * are implemented; Pi is the first real execution provider.
+ * Codex and Claude run behind the supervised CodingCliAdapter boundary;
+ * Pi remains limited to tool-free direct and review roles.
  *
- * 本地 Settings 中的 Provider 配置会在这里变成具体 Adapter。Codex 与 Claude 在各自的
- * 真正集成完成前仍使用确定性的 Demo Adapter；Pi 是第一个真实执行 Provider。
+ * 本地 Settings 中的 Provider 配置会在这里变成具体 Adapter。Codex 与 Claude 通过受监督的
+ * CodingCliAdapter 边界运行；Pi 目前仍限于无 Tool 的 direct 与 review 角色。
  */
 export function createConfiguredAgentRegistry(
   settings: AgentSetting[],
