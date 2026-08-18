@@ -2,6 +2,9 @@
 
 > 记录时间：2026-08-18 · 坐标：Phase 0 中段 · 分支参考：PR #10（证据信任）、PR #11（CLI 边界加固）已完成
 >
+> **2026-08-18 晚更新**：阶段 A（站 1-4）复验完成（`npm test` 67 个：66 过 1 跳过；`npm run typecheck` 干净）。
+> 路线升级：执行引擎的六站路线不变（站 5-6 仍待做），但上层已定下 **Main Agent 架构决定与四阶段路线**（见第 5 节），阶段 B 从精读 Pi 源码开始。
+>
 > 这份笔记回答一个问题：**执行引擎（Agent Runtime）按什么顺序补完，每一步学什么、以什么为验收。**
 > 上层平面（个人状态、认知规划、观察边界）不在本路线内，它们在第 6 站之后交接。
 
@@ -182,6 +185,71 @@ README 已规划 SQLite WAL + Drizzle。
 它们全部实现为 **journal 事件的受治理投影**（与 `LoopRunState` 同一模式），
 Memory 重构（MemoryItem 带来源证据与失效规则）也在此时动工。执行引擎的每一课
 （真相在日志、状态是投影、完成要证据）会在那里第二次用上。
+
+---
+
+## 5. Main Agent 架构决定与四阶段路线（2026-08-18 定）
+
+### 5.1 架构决定：Main Agent = Pi 形态二次开发
+
+```text
+┌─────────────────────────────────────────────────┐
+│  Main Agent（大脑）                               │
+│  = 在 Pi 的形态上二次迭代开发                       │
+│  对话、理解意图、规划、提出 WorkPlan                 │
+├─────────────────────────────────────────────────┤
+│  clone-ai Kernel（权威）← 已完成的部分              │
+│  Journal · Policy · 审批 · 证据验证 · 完成判定       │
+├─────────────────────────────────────────────────┤
+│  Worker 插件（手脚）← RuntimeAdapter 合约          │
+│  Claude Code │ Codex │ Pi-RPC │ 未来 Runtime       │
+└─────────────────────────────────────────────────┘
+```
+
+**为什么是 Pi 形态**：
+
+- Pi 提供**进程内 TypeScript SDK**（`docs/work-orders-and-pi` 里早已写过这句话，第一版只是刻意选了 RPC 做进程隔离）；
+- Pi 代码库小而可读，适合二次开发；
+- 已有从外面驱动 Pi 的经验（站 1 的 RPC adapter），现在换成从里面改。
+
+**边界红线（README 第 5/9 条约束的要求）**：Main Agent 是大脑，不是权威。
+它对 Kernel 只能"提案"——`propose_work_plan` / `request_approval` / `recall_memory` /
+`get_run_status` 全部做成它的 tool，每个 tool 的另一端是 Kernel 的校验逻辑。
+这与现有 LLM Planner 是同一模式（只能返回结构化 `create_work_plan`，校验后才生效），
+Main Agent 就是把这个模式从"一个 Planner 调用"扩大到"一整个常驻对话 Agent"。
+
+**不可动摇的一条**：Pi 形态的 loop 可以换、可以崩、可以升级，Kernel 里的状态和
+完成判定权永远不跟着走——这正是与 openclaw/hermes 的本质区别：它们的大脑和权威是
+焊死在一起的。
+
+### 5.2 四阶段路线
+
+| 阶段 | 内容 | 验收 |
+|---|---|---|
+| **A · 执行地基收尾**（= 站 1-4） | Kernel 先可信，再放更聪明的大脑 | ✅ 2026-08-18 完成：kill 任意进程后状态确定；abort 挂死已修；恢复在主入口真实可用 |
+| **B · Main Agent 原型**（Pi 形态二次开发，2-4 周） | 精读 Pi 源码三块 → SDK 起 `clone-main` → CLI/companion 入口改为对话驱动 | 一句自然语言 → Main Agent 规划 → Kernel 校验 → 派发 Worker → 证据验证 → WorkReceipt；Main Agent 全程无法自证完成、无法绕过审批 |
+| **C · Worker 插件化**（= 站 5-6，2-3 周） | Claude Code 走 Agent SDK、Codex 走 app-server 结构化 adapter；registry 从 settings 动态装载；SQLite WAL | 换掉一个 Provider 实现，Kernel 和 Main Agent 零改动 |
+| **D · 个人状态平面**（分身的灵魂） | `SelfModel` / `Goal` / `Commitment` / `Situation` 全部实现为 journal 投影；Memory 分层重构 | Main Agent 的 `recall_memory` 从这里读——"执行引擎"变成"分身" |
+
+### 5.3 阶段 B 起点（下一步）
+
+1. 精读 Pi 源码三块：**agent loop / session 持久化 / extension 与 tool 注册机制**
+   （用 SDK 扩展优先，fork 是最后手段——upstream 还在演进，钉住版本号 0.84.x）；
+2. 用 Pi SDK 起 `clone-main` agent：clone-ai 专属 system prompt + 提案型 tools
+   （`propose_work_plan` / `recall_memory` / `request_approval` / `get_run_status`），
+   每个 tool 落到 Kernel 的现有校验路径；
+3. 把 CLI / companion 入口改成经 Main Agent 对话驱动。
+
+阶段 B 第 1 步的先行收获（2026-08-18 排查 shell 环境时顺带精读）：
+
+- `dist/core/tools/bash.js`：bash 工具 = `spawn(shellPath, ["-c", command])`，
+  `getShellConfig` 查找顺序 = settings.shellPath → Git Bash 固定路径 → PATH 上的 bash；
+- `dist/core/settings-manager.js`：settings 启动时加载进内存，`reload()` 才重读；
+  bash 工具的 shellPath 在 `_buildRuntime()` 创建工具定义时捕获（改文件后必须 `/reload`）；
+- `dist/core/agent-session.js`：`executeBash` 每次动态读 `settingsManager.getShellPath()`
+  （与 agent 工具路径的差异点，对 Main Agent 的 tool 设计有参考价值）；
+- 开发环境备注：本机无 Git Bash（PowerShell 被系统层拦截，spawn UNKNOWN），
+  `~/.pi/agent/settings.json` 的 shellPath 现指向 Python 3.13（`python -c` 兼容 bash 工具的调用方式）。
 
 ---
 
