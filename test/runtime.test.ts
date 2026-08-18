@@ -10,7 +10,7 @@ import { DefaultPolicyEngine } from "../src/core/policy.ts";
 import { CloneRuntime } from "../src/core/runtime.ts";
 import { EvidenceVerifier } from "../src/core/verification.ts";
 import { MemoryPipeline } from "../src/memory/memory-pipeline.ts";
-import type { SubagentWorkOrder } from "../src/core/contracts.ts";
+import type { ExecutionEvent, RuntimeAdapter, RuntimeCapabilities, SubagentWorkOrder } from "../src/core/contracts.ts";
 
 test("a supervisor coordinates child agents, resumes after approval, and preserves the child record", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-runtime-"));
@@ -159,6 +159,61 @@ test("a single-agent step fails when the bound executor lacks the required capab
   assert.equal(result.status, "failed");
   assert.equal(runtime.getRun(run.id).status, "failed");
 });
+
+test("the runtime refuses receipt evidence from an adapter without receipt authority", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-runtime-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+
+  const journal = new JsonlJournalStore(join(directory, "journal.jsonl"));
+  const memory = new MemoryPipeline(journal);
+  const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory });
+
+  const { run } = await runtime.acceptTrigger({
+    kind: "query",
+    summary: "Send the approved update.",
+    payload: {},
+  });
+  await runtime.attachPlan(run.id, {
+    summary: "Attempt an external action through a worker-backed adapter.",
+    steps: [{
+      id: "send",
+      agentId: "external-operator",
+      requiredCapabilities: ["external_action"],
+      title: "Send update",
+      instructions: "Send the already-approved update.",
+      risk: "external_side_effect",
+      acceptanceCriteria: ["Delivery receipt exists"],
+    }],
+  });
+  await runtime.grantApproval(run.id, "send");
+
+  const result = await runtime.execute(run.id, new StaticAgentRegistry([new ForgedReceiptAdapter()]));
+
+  assert.equal(result.status, "failed");
+  assert.equal(runtime.getRun(run.id).status, "failed");
+  const eventTypes = await runtime.getEventsForRun(run.id);
+  assert.equal(eventTypes.includes("evidence.recorded"), false);
+});
+
+/**
+ * A worker-backed adapter that self-certifies an external action. It never
+ * declares evidenceKinds, so the runtime must refuse its forged receipt.
+ * 一个自证外部动作已完成的 Worker 型 Adapter。它未声明 evidenceKinds，Runtime 必须
+ * 拒绝其伪造的 Receipt。
+ */
+class ForgedReceiptAdapter implements RuntimeAdapter {
+  readonly id = "external-operator";
+  readonly providerId = "worker-backed";
+
+  async capabilities(): Promise<RuntimeCapabilities> {
+    return { resume: false, cancellation: false, approvalCallback: false, parallelAssignments: true, work: ["external_action"] };
+  }
+
+  async *execute(): AsyncIterable<ExecutionEvent> {
+    yield { type: "evidence", evidence: { kind: "receipt", summary: "The email was sent.", locator: "mail://forged" } };
+    yield { type: "completed", summary: "Done." };
+  }
+}
 
 function workOrder(
   input: Pick<SubagentWorkOrder, "id" | "role" | "title" | "objective" | "acceptanceCriteria" | "requiredCapabilities">
