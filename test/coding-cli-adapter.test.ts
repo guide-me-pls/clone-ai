@@ -73,11 +73,65 @@ test("the supervised CLI boundary never grants receipt authority", async () => {
   assert.deepEqual(capabilities.evidenceKinds, ["artifact", "observation"]);
 });
 
+test("only allowlisted environment variables reach the CLI child", async (t) => {
+  process.env.CLONE_AI_TEST_SECRET = "super-secret";
+  t.after(() => {
+    delete process.env.CLONE_AI_TEST_SECRET;
+  });
+
+  const hidden = await runSupervisedCli({ mode: "env-probe" });
+  assert.match(finalTextOf(hidden), /secret=absent/);
+
+  const granted = await runSupervisedCli({
+    mode: "env-probe",
+    extraEnvironmentVariables: ["CLONE_AI_TEST_SECRET"],
+  });
+  assert.match(finalTextOf(granted), /secret=super-secret/);
+});
+
+test("a clean exit without protocol output fails instead of completing", async () => {
+  for (const mode of ["silent", "garbage"]) {
+    const events = await runSupervisedCli({ mode });
+    assert.ok(
+      events.some((event) => event.type === "failed" && /no parseable protocol output/.test(event.message)),
+      `expected a protocol failure for mode ${mode}`,
+    );
+    assert.ok(!events.some((event) => event.type === "completed"), `unexpected completion for mode ${mode}`);
+  }
+});
+
+test("a missing CLI binary fails the step instead of crashing the supervisor", async () => {
+  const events = await runSupervisedCli({ command: join(tmpdir(), "clone-ai-missing-cli.exe") });
+
+  assert.ok(events.some((event) => event.type === "failed" && /failed to start/.test(event.message)));
+  assert.ok(!events.some((event) => event.type === "completed"));
+});
+
+test("a hanging CLI is killed at the duration budget", async () => {
+  const events = await runSupervisedCli({ mode: "hang", maxDurationMs: 500 });
+
+  assert.ok(events.some((event) => event.type === "failed" && /duration budget/.test(event.message)));
+  assert.ok(!events.some((event) => event.type === "completed"));
+});
+
+test("a provider-issued session id is journaled once, not per event", async () => {
+  const events = await runSupervisedCli({ mode: "own-session" });
+
+  const sessions = events.filter(
+    (event): event is Extract<ExecutionEvent, { type: "session_started" }> => event.type === "session_started",
+  );
+  assert.equal(sessions.length, 2);
+  assert.equal(sessions[1]?.sessionId, "cli-own-session");
+  assert.ok(events.some((event) => event.type === "completed"));
+});
+
 interface FakeCliOptions {
   evidence?: Record<string, unknown>;
   mode?: string;
   workspacePath?: string;
   maxDurationMs?: number;
+  command?: string;
+  extraEnvironmentVariables?: string[];
 }
 
 async function runSupervisedCli(options: FakeCliOptions): Promise<ExecutionEvent[]> {
@@ -93,8 +147,17 @@ async function runSupervisedCli(options: FakeCliOptions): Promise<ExecutionEvent
     const adapter = new CodingCliAdapter({
       id: "external-operator",
       providerId: "codex-cli",
-      command: process.execPath,
+      command: options.command ?? process.execPath,
       workCapabilities: ["external_action"],
+      // The child environment is default-deny; the fixture's own control
+      // variables must be granted explicitly, exactly like any other secret.
+      // 子进程环境默认拒绝；fixture 自己的控制变量也必须显式授予，与任何机密一视同仁。
+      environmentVariables: [
+        "NODE_OPTIONS",
+        "FAKE_CODING_CLI_MODE",
+        "FAKE_CODING_CLI_EVIDENCE",
+        ...(options.extraEnvironmentVariables ?? []),
+      ],
     });
     const events: ExecutionEvent[] = [];
     for await (const event of adapter.execute(assignment(options))) events.push(event);
@@ -149,4 +212,11 @@ function assignment(options: FakeCliOptions): ExecutionAssignment {
 
 function evidenceEvents(events: ExecutionEvent[]): Array<Extract<ExecutionEvent, { type: "evidence" }>> {
   return events.filter((event): event is Extract<ExecutionEvent, { type: "evidence" }> => event.type === "evidence");
+}
+
+function finalTextOf(events: ExecutionEvent[]): string {
+  return events
+    .filter((event): event is Extract<ExecutionEvent, { type: "message_delta" }> => event.type === "message_delta")
+    .map((event) => event.text)
+    .join("");
 }
