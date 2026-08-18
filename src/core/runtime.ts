@@ -10,6 +10,7 @@ import type {
   PolicyEngine,
   Run,
   RunStatus,
+  RuntimeCapabilities,
   SubagentRun,
   SubagentWorkOrder,
   Task,
@@ -286,7 +287,7 @@ export class CloneRuntime {
       runId: input.run.id,
       payload: { stepId: input.step.id, adapterId: adapter.id, providerId: adapter.providerId },
     });
-    const completion = await this.consumeExecutionEvents(adapter, assignment);
+    const completion = await this.consumeExecutionEvents(adapter, assignment, evidenceAuthorization(capabilities));
     if (completion === undefined) {
       throw new Error(`Agent ${agentId} ended without an explicit completion event.`);
     }
@@ -347,6 +348,7 @@ export class CloneRuntime {
       workOrder: input.workOrder,
       dependencyEvidence: this.dependencyEvidence(input.run.id, input.workOrder),
     };
+    const allowedEvidenceKinds = evidenceAuthorization(await adapter.capabilities());
 
     const previousAttempt = existing?.attempt ?? 1;
     let attempt = existing === undefined
@@ -389,7 +391,7 @@ export class CloneRuntime {
         const stream = sessionId !== undefined && adapter.resume !== undefined
           ? { execute: () => adapter.resume!(sessionId!, assignment) }
           : adapter;
-        const completion = await this.consumeExecutionEvents(stream, assignment);
+        const completion = await this.consumeExecutionEvents(stream, assignment, allowedEvidenceKinds);
         if (completion === undefined) {
           throw new Error("Subagent ended without an explicit completion event.");
         }
@@ -478,19 +480,27 @@ export class CloneRuntime {
     return verification.passed;
   }
 
-  private async consumeExecutionEvents(adapter: { execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> }, input: ExecutionAssignment): Promise<string | undefined> {
+  private async consumeExecutionEvents(
+    adapter: { execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> },
+    input: ExecutionAssignment,
+    allowedEvidenceKinds: ReadonlySet<Evidence["kind"]>,
+  ): Promise<string | undefined> {
     let completion: string | undefined;
     for await (const event of adapter.execute(input)) {
       if (event.type === "completed") {
         completion = event.summary;
         continue;
       }
-      await this.recordExecutionEvent(input, event);
+      await this.recordExecutionEvent(input, event, allowedEvidenceKinds);
     }
     return completion;
   }
 
-  private async recordExecutionEvent(input: ExecutionAssignment, event: Exclude<ExecutionEvent, { type: "completed" }>): Promise<void> {
+  private async recordExecutionEvent(
+    input: ExecutionAssignment,
+    event: Exclude<ExecutionEvent, { type: "completed" }>,
+    allowedEvidenceKinds: ReadonlySet<Evidence["kind"]>,
+  ): Promise<void> {
     if (event.type === "session_started") {
       await this.record({
         type: input.workOrder === undefined ? "execution.progress" : "subagent.session_started",
@@ -551,6 +561,16 @@ export class CloneRuntime {
       throw new Error(`Agent execution failed: ${event.message}`);
     }
 
+    // Evidence kinds are an authorization, not a claim: an adapter may only
+    // record the kinds it declared, and "receipt" is never granted by default,
+    // so no worker can self-certify that an external action really happened.
+    // Evidence 类型是授权而非声明：Adapter 只能记录其声明过的类型，"receipt" 默认永不授予，
+    // 因此任何 Worker 都无法自证外部动作确实发生。
+    if (!allowedEvidenceKinds.has(event.evidence.kind)) {
+      throw new Error(
+        `Adapter ${input.executor.agentId} is not authorized to record "${event.evidence.kind}" evidence.`,
+      );
+    }
     const evidence: Evidence = {
       ...event.evidence,
       summary: redactAuditText(event.evidence.summary),
@@ -783,6 +803,15 @@ function assertNonEmpty(value: string, label: string): void {
 
 const riskClasses = new Set(["read_only", "reversible_write", "external_side_effect", "irreversible"]);
 const evidenceKinds = new Set(["artifact", "tool_result", "receipt", "test", "observation"]);
+
+/**
+ * Receipts attest that an external action really happened, so an adapter must
+ * opt in explicitly; every other evidence kind is granted by default.
+ * Receipt 用于证明外部动作确实发生，Adapter 必须显式声明才可记录；其余 Evidence 类型默认授予。
+ */
+function evidenceAuthorization(capabilities: RuntimeCapabilities): ReadonlySet<Evidence["kind"]> {
+  return new Set(capabilities.evidenceKinds ?? ["artifact", "tool_result", "test", "observation"]);
+}
 
 function redactAuditText(value: string): string {
   return value

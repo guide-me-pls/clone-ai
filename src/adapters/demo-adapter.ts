@@ -27,6 +27,11 @@ export class DemoExecutionAdapter implements RuntimeAdapter {
       approvalCallback: false,
       parallelAssignments: true,
       work: [...this.#workCapabilities],
+      // The deterministic demo simulates external receipts on purpose. A real
+      // provider may only declare "receipt" when a trusted runtime produced it.
+      // 确定性 Demo 有意模拟外部 Receipt；真实 Provider 只有在 Receipt 由可信运行时
+      // 产生时才可以声明该类型。
+      evidenceKinds: ["artifact", "tool_result", "receipt", "test", "observation"],
     };
   }
 
