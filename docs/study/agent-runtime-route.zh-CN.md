@@ -240,6 +240,28 @@ Main Agent 就是把这个模式从"一个 Planner 调用"扩大到"一整个常
    每个 tool 落到 Kernel 的现有校验路径；
 3. 把 CLI / companion 入口改成经 Main Agent 对话驱动。
 
+**阶段 B 进度（2026-08-18）**：
+
+- ✅ 第 1 步：Pi 源码精读三块完成，笔记见 `pi-source-notes.zh-CN.md`
+  （agent loop 双层循环与钩子、session 持久化与崩溃修复、扩展注册链路与拦截链）；
+- ✅ 第 2 步：`clone-main` 原型落地
+  - `src/main-agent/kernel-tools.ts`：4 个提案型工具（propose_work_plan / request_approval /
+    recall_memory / get_run_status），每个工具另一端是 CloneRuntime 的现有校验路径
+    （acceptTrigger → attachPlan → journal）；
+  - `src/main-agent/clone-main.ts`：Pi SDK 入口（无内置工具，`noTools: "builtin"`）；
+  - `test/main-agent.test.ts`：8 个 Kernel 校验测试（合法接受、非法拒绝、只读语义）；
+  - 实测：自然语言 → 提案 → Kernel 校验 → journal（trigger→task→run→plan.created→queued）
+    → 续跑后 get_run_status 读到同一 runId，全程 Main Agent 无自证能力。
+
+**第 2 步踩坑（对 Main Agent 开发有长期价值）**：
+
+- `tools: []` 会把 `allowedToolNames` 变成空 Set，`isAllowedTool` 把**扩展工具也全部过滤**；
+  禁用内置工具必须用 `noTools: "builtin"`（`allowedToolNames` 保持 undefined，扩展工具不受限）；
+- `SessionManager.create()` 总是新建会话；续跑同一会话要用 `SessionManager.continueRecent()`
+  （会话文件按最近时间恢复，cwd 不一致时需自行匹配）；
+- 扩展注册链路（loader → ExtensionRunner → _refreshToolRegistry → agent.state.tools）中
+  任何一环的过滤都会静默丢工具，排查时先查 `session.getAllTools()` 与 `getActiveToolNames()` 的差异。
+
 阶段 B 第 1 步的先行收获（2026-08-18 精读 Pi 源码）：
 
 - `dist/core/tools/bash.js`：bash 工具 = `spawn(shellPath, ["-c", command])`，
