@@ -9,6 +9,15 @@ const { writeSync } = require("node:fs");
 const mode = process.env.FAKE_CODING_CLI_MODE ?? "";
 const evidence = process.env.FAKE_CODING_CLI_EVIDENCE;
 
+// A clean exit with no protocol output: what the wrong binary looks like.
+// 干净退出但没有任何协议输出：指向错误二进制时就是这个样子。
+if (mode === "silent") process.exit(0);
+
+if (mode === "garbage") {
+  writeSync(1, "this line is not a JSONL protocol event\n");
+  process.exit(0);
+}
+
 if (mode === "big-stderr") {
   // Far beyond a 64 KiB pipe buffer: a parent that defers stderr consumption
   // until stdout ends deadlocks right here.
@@ -17,7 +26,24 @@ if (mode === "big-stderr") {
   for (let index = 0; index < 10; index += 1) writeSync(2, chunk);
 }
 
+if (mode === "hang") {
+  writeSync(1, `${JSON.stringify({ text: "Starting work that never finishes." })}\n`);
+  // Block forever without returning to node's CLI-argument resolution; only
+  // the supervisor's kill can end this process.
+  // 永久阻塞而不回到 node 的 CLI 参数解析；只有 Supervisor 的 kill 能结束本进程。
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+}
+
+if (mode === "own-session") {
+  // Real CLIs repeat their own session id on every event line.
+  // 真实 CLI 会在每一行事件上重复自己的会话 ID。
+  writeSync(1, `${JSON.stringify({ session_id: "cli-own-session", text: "First half. " })}\n`);
+  writeSync(1, `${JSON.stringify({ session_id: "cli-own-session", text: "Second half." })}\n`);
+  process.exit(0);
+}
+
 let text = "Work finished.";
+if (mode === "env-probe") text = `secret=${process.env.CLONE_AI_TEST_SECRET ?? "absent"}`;
 if (evidence !== undefined) text += `\nCLONE_AI_EVIDENCE: ${evidence}`;
 writeSync(1, `${JSON.stringify({ text })}\n`);
 process.exit(0);
