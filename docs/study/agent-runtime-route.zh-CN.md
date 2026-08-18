@@ -20,11 +20,11 @@
 已验证的资产：44→54 个确定性测试；Pi JSONL RPC Adapter；受监督 CLI 边界（环境白名单、
 证据授权、孤儿清理）；事件溯源 + 投影 + 原子 Checkpoint 的完整机器（`src/loop/`）。
 
-已知但未修的洞：
-- `loop/cli.ts:16-17` 只接了 Journal，**没接 Checkpoint Store**——恢复机器造好了，主入口没通电。
-- `pi-agent-adapter.ts:171-174` 超时只发协作式 abort，**Pi 挂死则永远等待**，没有硬截止。
-- `coding-cli-adapter.ts` 的 `textDelta`/`toolEvent` 事件格式是**猜的**，从未对过真实 CLI。
-- README 的 9 条不可破坏约束，没有一条是可执行断言。
+已知但未修的洞（**2026-08-18 阶段 A 已全部修复**，保留原文供对照）：
+- ~~`loop/cli.ts:16-17` 只接了 Journal，没接 Checkpoint Store~~ → 站 2 已通电，支持 `--resume <run-id>`。
+- ~~`pi-agent-adapter.ts:171-174` 超时只发协作式 abort，Pi 挂死则永远等待~~ → 站 1 加了 abort 宽限期 + 硬终止。
+- ~~`coding-cli-adapter.ts` 的 `textDelta`/`toolEvent` 事件格式是猜的~~ → 站 3 已对真实 claude-code 2.1.234 验证并修正（发现 3 处解析错误 + 1 处 Windows 启动 bug）。
+- README 的 9 条不可破坏约束，没有一条是可执行断言 → 站 4 已把第 3/5/6 条变成 `src/core/invariants.ts` 的重放断言，其余待续。
 
 ---
 
@@ -32,12 +32,19 @@
 
 | 站 | 名称 | 一句话目标 | 验收证明 |
 |---|---|---|---|
-| 1 | Pi 中断-恢复闭环 | 被打断的 Pi Run 能确定性恢复 | kill 中断后 resume，产物不重复、状态确定 |
-| 2 | 恢复接主入口 | 重启进程后世界还在 | kill -9 → 重启 → 从 checkpoint+journal 续跑通过 |
-| 3 | 真实 CLI 只读冒烟 | 协议猜测被真实事件流证实或证伪 | 真 codex/claude 跑通一个 read-only WorkOrder |
-| 4 | 可执行不变量 | 约束从文档变成断言 | 违反约束的事件序列在测试中必然抛错 |
+| 1 ✅ | Pi 中断-恢复闭环 | 被打断的 Pi Run 能确定性恢复 | kill 中断后 resume，产物不重复、状态确定 |
+| 2 ✅ | 恢复接主入口 | 重启进程后世界还在 | kill -9 → 重启 → 从 checkpoint+journal 续跑通过 |
+| 3 ✅ | 真实 CLI 只读冒烟 | 协议猜测被真实事件流证实或证伪 | 真 codex/claude 跑通一个 read-only WorkOrder |
+| 4 ✅ | 可执行不变量 | 约束从文档变成断言 | 违反约束的事件序列在测试中必然抛错 |
 | 5 | SDK 结构化接入 | 删掉 stdout 启发式解析层 | Agent SDK / app-server 接入，猜测函数整块删除 |
 | 6 | 存储升级 | JSONL → SQLite WAL | 断电/并发写测试通过，投影可重建 |
+
+**阶段 A（站 1-4）于 2026-08-18 完成**，测试从 54 → 67（含 1 个 `CLONE_AI_LIVE_SMOKE=1` 门控的真实冒烟，已实跑通过）。各站"实际学到"：
+
+- **站 1**：协作式 abort 必须配硬截止（宽限期后 `terminate`），否则 `ignore-abort` 场景永久挂住——测试先证明了挂住，再证明修复（704ms 内失败返回）。踩坑：fixture 输出必须 `writeSync`，`process.exit` 会截断异步 stdout。
+- **站 2**：恢复机器本身早就有测试，缺的只是入口接线——"能力存在"和"能力可达"是两回事。跨进程测试的关键是让第一个进程死得不体面（`process.exit(137)` 不做清理），否则测的还是礼貌路径。
+- **站 3**：录一次真实事件流值回票价——一次录制暴露 3 个解析错误（result 才是 settled 信号、result 文本被重复计入、工具事件在 content 块里）+ 1 个启动 bug（Node 拒绝无 shell spawn `.cmd`，CVE-2024-27980，须解析垫片背后的 claude.exe）。意外收获：环境白名单剥掉嵌套会话变量后，真实 CLI 认证反而通了。
+- **站 4**：不变量 = 拒绝非法历史，projector = 拒绝非法转移，两层缺一不可。伪造历史的反向测试和真实运行的零违规测试必须成对出现，否则不知道断言是不是永真式。
 
 顺序依据：站 1-2 是仓库自己声明的里程碑（`docs/initial-runtime.md:108`：
 "proving Pi checkpoint/resume against interrupted real work"）；站 3 是
