@@ -8,10 +8,11 @@ import { fileURLToPath } from "node:url";
 import { CodingCliAdapter } from "../src/adapters/coding-cli-adapter.ts";
 import type { ExecutionAssignment, ExecutionEvent } from "../src/core/contracts.ts";
 
-// NODE_OPTIONS treats backslashes inside quotes as escapes, so the preload
-// path must use forward slashes to survive on Windows.
-// NODE_OPTIONS 会把引号内的反斜杠当作转义符，preload 路径必须用正斜杠才能在 Windows 上存活。
-const fakeCliPath = fileURLToPath(new URL("./fixtures/fake-coding-cli.cjs", import.meta.url)).replaceAll("\\", "/");
+// The fixture runs as the child's main module (via commandArgs), so provider
+// arguments that look like node flags (claude's -p) are never parsed by node.
+// fixture 作为子进程主模块运行（经 commandArgs），因此形如 node flag 的 Provider 参数
+//（claude 的 -p）永远不会被 node 自己解析。
+const fakeCliPath = fileURLToPath(new URL("./fixtures/fake-coding-cli.cjs", import.meta.url));
 
 test("a worker-declared receipt is downgraded to an observation", async () => {
   const events = await runSupervisedCli({
@@ -125,37 +126,80 @@ test("a provider-issued session id is journaled once, not per event", async () =
   assert.ok(events.some((event) => event.type === "completed"));
 });
 
+test("a recorded headless auth failure surfaces the provider result, not stderr noise", async () => {
+  const events = await runSupervisedCli({
+    providerId: "claude-code",
+    mode: "replay",
+    replayFile: "recorded-claude-headless-error.jsonl",
+    replayExit: 1,
+  });
+
+  assert.ok(events.some((event) => event.type === "failed" && /Not logged in/.test(event.message)));
+  assert.ok(!events.some((event) => event.type === "completed"));
+});
+
+test("a recorded claude-code success stream replays into deltas, tools, and one completion", async () => {
+  const events = await runSupervisedCli({
+    providerId: "claude-code",
+    mode: "replay",
+    replayFile: "recorded-claude-success.jsonl",
+  });
+
+  // The result text must not be appended on top of the streamed deltas.
+  // result 文本不能叠加在流式增量之上重复计一遍。
+  assert.equal(finalTextOf(events), "SMOKE_OK");
+  const completed = events.filter((event) => event.type === "completed");
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0]?.type === "completed" ? completed[0].summary : "", "SMOKE_OK");
+  assert.ok(events.some((event) => event.type === "tool_started" && event.tool === "Read"));
+  assert.ok(events.some((event) => event.type === "tool_completed" && event.tool === "Read" && event.isError === false));
+  const sessions = events.filter((event) => event.type === "session_started");
+  assert.equal(sessions.length, 2);
+});
+
 interface FakeCliOptions {
   evidence?: Record<string, unknown>;
   mode?: string;
   workspacePath?: string;
   maxDurationMs?: number;
   command?: string;
+  providerId?: "codex-cli" | "claude-code";
+  replayFile?: string;
+  replayExit?: number;
   extraEnvironmentVariables?: string[];
 }
 
 async function runSupervisedCli(options: FakeCliOptions): Promise<ExecutionEvent[]> {
   const saved = new Map<string, string | undefined>([
-    ["NODE_OPTIONS", process.env.NODE_OPTIONS],
     ["FAKE_CODING_CLI_MODE", process.env.FAKE_CODING_CLI_MODE],
     ["FAKE_CODING_CLI_EVIDENCE", process.env.FAKE_CODING_CLI_EVIDENCE],
+    ["FAKE_CODING_CLI_REPLAY", process.env.FAKE_CODING_CLI_REPLAY],
+    ["FAKE_CODING_CLI_EXIT", process.env.FAKE_CODING_CLI_EXIT],
   ]);
-  process.env.NODE_OPTIONS = `--require "${fakeCliPath}"`;
   setOrDelete("FAKE_CODING_CLI_MODE", options.mode);
   setOrDelete("FAKE_CODING_CLI_EVIDENCE", options.evidence === undefined ? undefined : JSON.stringify(options.evidence));
+  setOrDelete(
+    "FAKE_CODING_CLI_REPLAY",
+    options.replayFile === undefined
+      ? undefined
+      : fileURLToPath(new URL(`./fixtures/${options.replayFile}`, import.meta.url)),
+  );
+  setOrDelete("FAKE_CODING_CLI_EXIT", options.replayExit === undefined ? undefined : String(options.replayExit));
   try {
     const adapter = new CodingCliAdapter({
       id: "external-operator",
-      providerId: "codex-cli",
+      providerId: options.providerId ?? "codex-cli",
       command: options.command ?? process.execPath,
+      commandArgs: options.command === undefined ? [fakeCliPath] : [],
       workCapabilities: ["external_action"],
       // The child environment is default-deny; the fixture's own control
       // variables must be granted explicitly, exactly like any other secret.
       // 子进程环境默认拒绝；fixture 自己的控制变量也必须显式授予，与任何机密一视同仁。
       environmentVariables: [
-        "NODE_OPTIONS",
         "FAKE_CODING_CLI_MODE",
         "FAKE_CODING_CLI_EVIDENCE",
+        "FAKE_CODING_CLI_REPLAY",
+        "FAKE_CODING_CLI_EXIT",
         ...(options.extraEnvironmentVariables ?? []),
       ],
     });
