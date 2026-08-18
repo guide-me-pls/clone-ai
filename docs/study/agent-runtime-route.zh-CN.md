@@ -240,16 +240,14 @@ Main Agent 就是把这个模式从"一个 Planner 调用"扩大到"一整个常
    每个 tool 落到 Kernel 的现有校验路径；
 3. 把 CLI / companion 入口改成经 Main Agent 对话驱动。
 
-阶段 B 第 1 步的先行收获（2026-08-18 排查 shell 环境时顺带精读）：
+阶段 B 第 1 步的先行收获（2026-08-18 精读 Pi 源码）：
 
 - `dist/core/tools/bash.js`：bash 工具 = `spawn(shellPath, ["-c", command])`，
   `getShellConfig` 查找顺序 = settings.shellPath → Git Bash 固定路径 → PATH 上的 bash；
 - `dist/core/settings-manager.js`：settings 启动时加载进内存，`reload()` 才重读；
   bash 工具的 shellPath 在 `_buildRuntime()` 创建工具定义时捕获（改文件后必须 `/reload`）；
 - `dist/core/agent-session.js`：`executeBash` 每次动态读 `settingsManager.getShellPath()`
-  （与 agent 工具路径的差异点，对 Main Agent 的 tool 设计有参考价值）；
-- 开发环境备注：本机无 Git Bash（PowerShell 被系统层拦截，spawn UNKNOWN），
-  `~/.pi/agent/settings.json` 的 shellPath 现指向 Python 3.13（`python -c` 兼容 bash 工具的调用方式）。
+  （与 agent 工具路径的差异点，对 Main Agent 的 tool 设计有参考价值）。
 
 ---
 
