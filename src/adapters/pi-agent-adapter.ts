@@ -53,6 +53,11 @@ export interface PiAgentAdapterOptions {
    * 被显式允许传入 Pi 进程的额外环境变量名称。
    */
   environmentVariables?: string[];
+  /**
+   * Grace period after an abort before the session is forcibly terminated.
+   * 发送 abort 后、强制终止会话前的宽限时间。
+   */
+  abortGraceMs?: number;
   processHost?: PiProcessHost;
 }
 
@@ -68,11 +73,11 @@ export class PiAgentAdapter implements RuntimeAdapter {
   readonly providerId = "pi";
   readonly #options: Required<Pick<
     PiAgentAdapterOptions,
-    "tools" | "workCapabilities" | "offline" | "environmentVariables"
+    "tools" | "workCapabilities" | "offline" | "environmentVariables" | "abortGraceMs"
   >>
     & Omit<
       PiAgentAdapterOptions,
-      "id" | "tools" | "workCapabilities" | "offline" | "environmentVariables" | "processHost"
+      "id" | "tools" | "workCapabilities" | "offline" | "environmentVariables" | "abortGraceMs" | "processHost"
     >;
   readonly #host: PiProcessHost;
   readonly #active = new Map<string, PiRpcSession>();
@@ -90,6 +95,7 @@ export class PiAgentAdapter implements RuntimeAdapter {
       workCapabilities: options.workCapabilities ?? ["review", "direct_response"],
       offline: options.offline ?? false,
       environmentVariables: options.environmentVariables ?? [],
+      abortGraceMs: options.abortGraceMs ?? 5_000,
     };
     this.#host = options.processHost ?? new ChildProcessPiHost();
   }
@@ -168,9 +174,22 @@ export class PiAgentAdapter implements RuntimeAdapter {
     let settled = false;
     let failure: string | undefined;
     let timedOut = false;
+    let hardStop: NodeJS.Timeout | undefined;
+    // A cooperative abort is a request, not a guarantee. If Pi neither settles
+    // nor exits within the grace period, the session is terminated so a wedged
+    // worker can never hang the supervisor forever.
+    // 协作式 abort 只是请求而非保证。若 Pi 在宽限期内既不 settle 也不退出，就强制终止会话，
+    // 确保卡死的 Worker 永远无法把 Supervisor 挂住。
+    const requestAbort = (id: string): void => {
+      session.send({ id, type: "abort" });
+      if (hardStop === undefined) {
+        hardStop = setTimeout(() => void session.terminate(), this.#options.abortGraceMs);
+        hardStop.unref();
+      }
+    };
     const timeout = setTimeout(() => {
       timedOut = true;
-      session.send({ id: `timeout-${sessionId}`, type: "abort" });
+      requestAbort(`timeout-${sessionId}`);
     }, budget.maxDurationMs);
     timeout.unref();
 
@@ -195,7 +214,9 @@ export class PiAgentAdapter implements RuntimeAdapter {
         }
         if (transport.type === "exit") {
           if (!settled && failure === undefined) {
-            failure = `Pi exited before agent_settled (code ${String(transport.code)}, signal ${String(transport.signal)}).`;
+            failure = timedOut
+              ? `Pi exceeded the duration budget (${budget.maxDurationMs} ms).`
+              : `Pi exited before agent_settled (code ${String(transport.code)}, signal ${String(transport.signal)}).`;
             yield { type: "failed", message: failure };
           }
           break;
@@ -215,7 +236,7 @@ export class PiAgentAdapter implements RuntimeAdapter {
           modelCalls += 1;
           if (modelCalls > budget.maxModelCalls) {
             failure = `Pi exceeded the model-call budget (${budget.maxModelCalls}).`;
-            session.send({ id: `budget-model-${sessionId}`, type: "abort" });
+            requestAbort(`budget-model-${sessionId}`);
           }
           continue;
         }
@@ -242,7 +263,7 @@ export class PiAgentAdapter implements RuntimeAdapter {
           };
           if (toolCalls > budget.maxToolCalls) {
             failure = `Pi exceeded the tool-call budget (${budget.maxToolCalls}).`;
-            session.send({ id: `budget-tool-${sessionId}`, type: "abort" });
+            requestAbort(`budget-tool-${sessionId}`);
           }
           continue;
         }
@@ -281,6 +302,7 @@ export class PiAgentAdapter implements RuntimeAdapter {
       }
     } finally {
       clearTimeout(timeout);
+      if (hardStop !== undefined) clearTimeout(hardStop);
       await session.terminate();
       this.#active.delete(sessionId);
     }

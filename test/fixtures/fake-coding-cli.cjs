@@ -4,10 +4,18 @@
 // to resolve the CLI arguments and fully controls stdout/stderr and the exit.
 // 用于测试的确定性 CLI 替身。测试用 NODE_OPTIONS=--require 指向本文件，使其在 node
 // 解析 CLI 参数之前运行，从而完全控制 stdout、stderr 与退出码。
-const { writeSync } = require("node:fs");
+const { readFileSync, writeSync } = require("node:fs");
 
 const mode = process.env.FAKE_CODING_CLI_MODE ?? "";
 const evidence = process.env.FAKE_CODING_CLI_EVIDENCE;
+
+// Replay a recorded real CLI stream byte-for-byte, then exit with the
+// recorded session's exit code.
+// 逐字节回放录制的真实 CLI 事件流，然后以录制会话的退出码退出。
+if (mode === "replay") {
+  writeSync(1, readFileSync(process.env.FAKE_CODING_CLI_REPLAY, "utf8"));
+  process.exit(Number(process.env.FAKE_CODING_CLI_EXIT ?? "0"));
+}
 
 // A clean exit with no protocol output: what the wrong binary looks like.
 // 干净退出但没有任何协议输出：指向错误二进制时就是这个样子。
