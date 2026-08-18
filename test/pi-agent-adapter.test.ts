@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -12,7 +12,7 @@ import {
   type PiRpcSession,
   type PiTransportEvent,
 } from "../src/adapters/pi-agent-adapter.ts";
-import type { ExecutionAssignment, SubagentWorkOrder } from "../src/core/contracts.ts";
+import type { ExecutionAssignment, ExecutionEvent, SubagentWorkOrder } from "../src/core/contracts.ts";
 
 test("Pi RPC events become normalized runtime events without real credentials", async (t) => {
   process.env.CLONE_AI_SECRET = "must-not-pass-through";
@@ -179,6 +179,73 @@ test("the default Pi process host speaks JSONL across a real subprocess boundary
   assert.equal(events.at(-1)?.type, "completed");
 });
 
+// --- Fault injection against a real subprocess boundary ---
+// --- 面向真实子进程边界的故障注入 ---
+
+test("a Pi that dies mid-record fails with a protocol error", async (t) => {
+  const events = await runFixturePi(t, { mode: "die-mid-line" });
+
+  assert.ok(events.some((event) => event.type === "failed" && /incomplete JSONL/.test(event.message)));
+  assert.ok(!events.some((event) => event.type === "completed"));
+});
+
+test("a Pi that exits without settling fails instead of completing", async (t) => {
+  const events = await runFixturePi(t, { mode: "no-settle" });
+
+  assert.ok(events.some((event) => event.type === "message_delta"));
+  assert.ok(events.some((event) => event.type === "failed" && /before agent_settled/.test(event.message)));
+  assert.ok(!events.some((event) => event.type === "completed"));
+});
+
+test("garbage on the protocol stream fails the run", async (t) => {
+  const events = await runFixturePi(t, { mode: "garbage" });
+
+  assert.ok(events.some((event) => event.type === "failed" && /invalid JSONL/.test(event.message)));
+  assert.ok(!events.some((event) => event.type === "completed"));
+});
+
+test("a Pi that ignores abort is hard-terminated at the duration budget", async (t) => {
+  const startedAt = Date.now();
+  const events = await runFixturePi(t, { mode: "ignore-abort", maxDurationMs: 250, abortGraceMs: 400 });
+
+  assert.ok(events.some((event) => event.type === "failed" && /duration budget/.test(event.message)));
+  assert.ok(!events.some((event) => event.type === "completed"));
+  // Before the hard deadline existed, this scenario hung the supervisor forever.
+  // 在硬截止存在之前，这个场景会让 Supervisor 永远挂住。
+  assert.ok(Date.now() - startedAt < 10_000);
+});
+
+test("a duplicated agent_settled yields exactly one completion", async (t) => {
+  const events = await runFixturePi(t, { mode: "double-settle" });
+
+  assert.equal(events.filter((event) => event.type === "completed").length, 1);
+  assert.equal(events.filter((event) => event.type === "evidence").length, 1);
+});
+
+async function runFixturePi(
+  t: TestContext,
+  options: { mode: string; maxDurationMs?: number; abortGraceMs?: number },
+): Promise<ExecutionEvent[]> {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-pi-fault-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const previousMode = process.env.FAKE_PI_MODE;
+  process.env.FAKE_PI_MODE = options.mode;
+  try {
+    const adapter = new PiAgentAdapter({
+      command: process.execPath,
+      commandArgs: [fileURLToPath(new URL("./fixtures/fake-pi-rpc.mjs", import.meta.url))],
+      sessionDirectory: directory,
+      environmentVariables: ["FAKE_PI_MODE"],
+      abortGraceMs: options.abortGraceMs ?? 400,
+    });
+    const events: ExecutionEvent[] = [];
+    for await (const event of adapter.execute(assignment(options.maxDurationMs))) events.push(event);
+    return events;
+  } finally {
+    restoreEnvironment("FAKE_PI_MODE", previousMode);
+  }
+}
+
 class FakePiHost implements PiProcessHost {
   readonly starts: PiProcessStart[] = [];
   readonly #factory: () => PiRpcSession;
@@ -213,7 +280,7 @@ class FakePiSession implements PiRpcSession {
   }
 }
 
-function assignment(): ExecutionAssignment {
+function assignment(maxDurationMs?: number): ExecutionAssignment {
   return {
     run: {
       id: "run-1",
@@ -242,7 +309,7 @@ function assignment(): ExecutionAssignment {
       agentId: "evidence-reviewer",
       providerId: "pi",
     },
-    workOrder: workOrder(),
+    workOrder: workOrder(maxDurationMs),
     dependencyEvidence: [{
       id: "evidence-1",
       runId: "run-1",
@@ -256,7 +323,7 @@ function assignment(): ExecutionAssignment {
   };
 }
 
-function workOrder(): SubagentWorkOrder {
+function workOrder(maxDurationMs = 60_000): SubagentWorkOrder {
   return {
     id: "review",
     agentId: "evidence-reviewer",
@@ -279,7 +346,7 @@ function workOrder(): SubagentWorkOrder {
     acceptanceCriteria: ["Review note explains remaining uncertainty"],
     risk: "read_only",
     budget: {
-      maxDurationMs: 60_000,
+      maxDurationMs,
       maxModelCalls: 5,
       maxToolCalls: 10,
       maxAttempts: 2,
