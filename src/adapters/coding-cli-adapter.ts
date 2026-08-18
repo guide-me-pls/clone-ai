@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import type { ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabilities } from "../core/contracts.ts";
 
@@ -11,6 +12,12 @@ export interface CodingCliAdapterOptions {
   id: string;
   providerId: CodingCliProvider;
   command?: string;
+  /**
+   * Arguments placed before the provider arguments, e.g. a script path when
+   * command is a runtime such as node.
+   * 放在 Provider 参数之前的参数，例如 command 是 node 之类运行时的脚本路径。
+   */
+  commandArgs?: string[];
   model?: string;
   workCapabilities: string[];
   /**
@@ -42,7 +49,7 @@ interface ProcessExit {
 export class CodingCliAdapter implements RuntimeAdapter {
   readonly id: string;
   readonly providerId: CodingCliProvider;
-  readonly #command: string;
+  readonly #launch: { command: string; args: string[] };
   readonly #model?: string;
   readonly #workCapabilities: string[];
   readonly #environmentVariables: string[];
@@ -51,7 +58,7 @@ export class CodingCliAdapter implements RuntimeAdapter {
   constructor(options: CodingCliAdapterOptions) {
     this.id = options.id;
     this.providerId = options.providerId;
-    this.#command = options.command ?? defaultCommand(options.providerId);
+    this.#launch = resolveCliLaunch(options.providerId, options.command, options.commandArgs);
     this.#model = options.model;
     this.#workCapabilities = [...options.workCapabilities];
     this.#environmentVariables = [...(options.environmentVariables ?? [])];
@@ -91,7 +98,7 @@ export class CodingCliAdapter implements RuntimeAdapter {
     const args = this.providerId === "codex-cli"
       ? codexArgs(input, sessionId, resuming, this.#model)
       : claudeArgs(input, sessionId, resuming, this.#model);
-    const child = spawn(this.#command, args, {
+    const child = spawn(this.#launch.command, [...this.#launch.args, ...args], {
       cwd: input.workspacePath ?? process.cwd(),
       env: buildCliEnvironment(this.providerId, this.#environmentVariables),
       stdio: ["ignore", "pipe", "pipe"],
@@ -116,6 +123,8 @@ export class CodingCliAdapter implements RuntimeAdapter {
     let finalText = "";
     let protocolEvents = 0;
     let reportedSessionId = sessionId;
+    let settledResult: { ok: boolean; text: string } | undefined;
+    const toolNames = new Map<string, string>();
 
     try {
       yield { type: "session_started", sessionId };
@@ -138,6 +147,25 @@ export class CodingCliAdapter implements RuntimeAdapter {
           reportedSessionId = session;
           yield { type: "session_started", sessionId: session };
         }
+        if (this.providerId === "claude-code") {
+          // These shapes come from a recorded stream-json session, not guesses:
+          // deltas ride stream_event, tools ride content blocks, and the result
+          // event is the provider's explicit settled signal.
+          // 这些结构来自录制的 stream-json 会话而非猜测：增量在 stream_event 里，工具在
+          // content 块里，result 事件是 Provider 显式的 settled 信号。
+          const result = claudeResult(event);
+          if (result !== undefined) {
+            settledResult = result;
+            continue;
+          }
+          const delta = claudeTextDelta(event);
+          if (delta !== undefined) {
+            finalText += delta;
+            yield { type: "message_delta", text: delta };
+          }
+          yield* claudeToolEvents(event, toolNames);
+          continue;
+        }
         const delta = textDelta(event);
         if (delta !== undefined) {
           finalText += delta;
@@ -156,6 +184,13 @@ export class CodingCliAdapter implements RuntimeAdapter {
         yield { type: "failed", message: `${this.providerId} failed to start: ${exit.error}` };
         return;
       }
+      // A provider-reported error result explains the failure better than
+      // stderr noise, so it is checked before the exit code.
+      // Provider 上报的错误 result 比 stderr 噪音更能解释失败原因，因此先于退出码检查。
+      if (settledResult !== undefined && !settledResult.ok) {
+        yield { type: "failed", message: `${this.providerId} reported an error result: ${(settledResult.text.trim() || "unknown error").slice(0, 500)}` };
+        return;
+      }
       if (exit.code !== 0) {
         yield { type: "failed", message: `${this.providerId} exited with ${describeExit(exit)}: ${stderr.trim().slice(0, 500)}` };
         return;
@@ -169,7 +204,12 @@ export class CodingCliAdapter implements RuntimeAdapter {
         yield { type: "failed", message: `${this.providerId} exited cleanly but produced no parseable protocol output.` };
         return;
       }
-      const evidence = await readWorkerEvidence(finalText, input);
+      if (this.providerId === "claude-code" && settledResult === undefined) {
+        yield { type: "failed", message: `${this.providerId} exited cleanly but never reported a result event.` };
+        return;
+      }
+      const summaryText = (settledResult?.text ?? "").trim() || finalText.trim();
+      const evidence = await readWorkerEvidence(`${finalText}\n${settledResult?.text ?? ""}`, input);
       if (evidence !== undefined) {
         yield { type: "evidence", evidence };
       } else {
@@ -182,7 +222,7 @@ export class CodingCliAdapter implements RuntimeAdapter {
           },
         };
       }
-      yield { type: "completed", summary: finalText.trim() || `${this.providerId} completed its WorkOrder.` };
+      yield { type: "completed", summary: summaryText || `${this.providerId} completed its WorkOrder.` };
     } catch (error: unknown) {
       yield { type: "failed", message: error instanceof Error ? error.message : String(error) };
     } finally {
@@ -409,6 +449,87 @@ async function collectStderr(stream: NodeJS.ReadableStream): Promise<string> {
 function defaultCommand(provider: CodingCliProvider): string {
   const binary = provider === "codex-cli" ? "codex" : "claude";
   return process.platform === "win32" ? `${binary}.cmd` : binary;
+}
+
+/**
+ * Node refuses to spawn .cmd shims without a shell (CVE-2024-27980), so on
+ * Windows the launcher resolves the real executable behind the npm shim.
+ * Node 出于安全原因拒绝在无 shell 时启动 .cmd 垫片（CVE-2024-27980），因此 Windows 上
+ * 由启动器直接解析 npm 垫片背后的真实可执行文件。
+ */
+function resolveCliLaunch(
+  provider: CodingCliProvider,
+  command?: string,
+  commandArgs: string[] = [],
+): { command: string; args: string[] } {
+  if (command !== undefined) return { command, args: [...commandArgs] };
+  if (process.platform === "win32") {
+    const npmRoot = join(process.env.APPDATA ?? "", "npm", "node_modules");
+    const candidates = provider === "claude-code"
+      ? [
+          { command: join(npmRoot, "@anthropic-ai", "claude-code", "bin", "claude.exe"), args: [] as string[] },
+          { command: process.execPath, args: [join(npmRoot, "@anthropic-ai", "claude-code", "cli.js")] },
+        ]
+      : [
+          { command: process.execPath, args: [join(npmRoot, "@openai", "codex", "bin", "codex.js")] },
+        ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate.args[0] ?? candidate.command)) return candidate;
+    }
+  }
+  return { command: defaultCommand(provider), args: [] };
+}
+
+/**
+ * The result event is claude-code's explicit settled signal; is_error marks a
+ * failed session even when the process still exits with code 0.
+ * result 事件是 claude-code 显式的 settled 信号；即便进程仍以 0 退出，is_error 也标记
+ * 这是一次失败会话。
+ */
+function claudeResult(event: Record<string, unknown>): { ok: boolean; text: string } | undefined {
+  if (event.type !== "result") return undefined;
+  const text = typeof event.result === "string" ? event.result : "";
+  const ok = event.is_error !== true && (event.subtype === undefined || event.subtype === "success");
+  return { ok, text };
+}
+
+function claudeTextDelta(event: Record<string, unknown>): string | undefined {
+  if (event.type !== "stream_event") return undefined;
+  const nested = event.event;
+  if (!isRecord(nested) || nested.type !== "content_block_delta") return undefined;
+  const delta = nested.delta;
+  return isRecord(delta) && typeof delta.text === "string" ? delta.text : undefined;
+}
+
+/**
+ * Tool activity rides message content blocks: tool_use inside assistant
+ * events, tool_result inside user events. The name map joins the two halves.
+ * 工具活动位于消息 content 块中：tool_use 在 assistant 事件里，tool_result 在 user
+ * 事件里。名称映射把两半连起来。
+ */
+function* claudeToolEvents(
+  event: Record<string, unknown>,
+  toolNames: Map<string, string>,
+): Generator<Extract<ExecutionEvent, { type: "tool_started" | "tool_completed" }>> {
+  if (event.type !== "assistant" && event.type !== "user") return;
+  const message = event.message;
+  if (!isRecord(message) || !Array.isArray(message.content)) return;
+  for (const block of message.content) {
+    if (!isRecord(block)) continue;
+    if (event.type === "assistant" && block.type === "tool_use" && typeof block.name === "string") {
+      const id = typeof block.id === "string" ? block.id : block.name;
+      toolNames.set(id, block.name);
+      yield { type: "tool_started", toolCallId: id, tool: block.name };
+    }
+    if (event.type === "user" && block.type === "tool_result" && typeof block.tool_use_id === "string") {
+      yield {
+        type: "tool_completed",
+        toolCallId: block.tool_use_id,
+        tool: toolNames.get(block.tool_use_id) ?? "unknown",
+        isError: block.is_error === true,
+      };
+    }
+  }
 }
 
 function stableSessionId(adapterId: string, input: ExecutionAssignment): string {
