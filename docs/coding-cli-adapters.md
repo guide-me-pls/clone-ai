@@ -2,26 +2,26 @@
 
 **English** · [简体中文](coding-cli-adapters.zh-CN.md)
 
-Clone AI treats a coding agent as a black box. It supplies a prompt and a
-workspace, then judges the result by observation alone: the process exit status
-and what actually changed on disk. Nothing about an agent's internal protocol,
-streaming format, or session model is parsed.
+Clone AI treats every coding agent as a black box. It supplies a prompt,
+scoped context, and a workspace, then judges the result by observation: process
+lifecycle and actual filesystem changes. It does not parse a provider's
+protocol, session database, tool stream, or completion claim.
 
 ```text
-WorkOrder -> policy + capability check
-  -> BlackBoxWorkerAdapter    prompt in · budget · deadline · terminate
+WorkOrder -> policy + capability + approval
+  -> BlackBoxWorkerAdapter    prompt · budget · deadline · termination
+     |                        environment allowlist
      |                        workspace snapshot before / after
-  <- exit status + workspace diff + output tail
--> artifacts -> verification -> WorkReceipt
+  <- exit status + workspace diff + redacted output tail
+-> observed artifacts -> verification -> Run state
 ```
 
 ## Integrating an agent is configuration
 
-Any headless agent is a launch recipe. Declare one in
-`<dataDirectory>/providers.json` and it becomes selectable — no source change,
-no adapter class:
+Built-in launch recipes live in `src/adapters/providers.json`. A user can add
+or override a recipe in `<dataDirectory>/providers.json`:
 
-```jsonc
+```json
 {
   "providers": [
     {
@@ -36,10 +36,10 @@ no adapter class:
 }
 ```
 
-`{{prompt}}` and `{{workspace}}` are substituted at dispatch. `promptVia:
-"stdin"` sends the prompt on stdin instead of as an argument. A declaration
-that reuses a built-in id replaces it, so the owner can retune how a shipped
-agent is launched.
+`{{prompt}}` and `{{workspace}}` are substituted at dispatch. With
+`promptVia: "stdin"`, the prompt is sent on stdin instead of appearing in the
+argument list. A declaration with a built-in id overrides that recipe. `env`
+contains variable names only; no credential value belongs in source or config.
 
 | Built-in | Command |
 | --- | --- |
@@ -48,75 +48,61 @@ agent is launched.
 | Pi | `pi -p {{prompt}}` |
 | opencode | `opencode run {{prompt}}` |
 
-**Authority:** a provider declaration says how to launch an agent and which
-credentials it may see. It cannot grant approval, extend a budget, change Run
-state, or declare success.
+A declaration controls launch mechanics and visible environment only. It
+cannot grant approval, extend a WorkOrder budget, change Run state, or declare
+success.
 
-## Evidence is observed, not requested
+## Evidence is observed
 
-A black-box agent does not know Clone AI's conventions and cannot be relied on
-to announce what it produced. So Clone AI does not ask. It snapshots the
-workspace before the dispatch and diffs it afterwards; added and modified files
-are the artifacts, each recorded with its real path as the locator.
+The adapter snapshots the Workspace before dispatch and diffs it afterwards.
+Added and modified files become artifact evidence with their real relative
+paths; deleted files are changes but not artifacts. When an artifact is
+required and no file changed, the result is `no_artifact`, regardless of what
+the agent said. Receipts remain unavailable to a normal black-box provider.
 
-This is stricter than the previous convention of asking the worker to print a
-declaration line, because it needs no cooperation. It also settles the
-completion question: when a work order requires an artifact and the workspace
-is unchanged, the work did not happen — whatever the agent said. A deleted file
-is a real change but never an artifact.
+## Recovery does not use provider memory
 
-Receipts remain ungrantable. An artifact proves a file exists; only a trusted
-runtime can attest that an external action really happened.
+The Kernel stores a durable JSON checkpoint for the Workspace before the first
+attempt. If a worker or supervisor dies, the Kernel compares the checkpoint
+with the current Workspace:
 
-## Failure is compared across agents
+- no changes: rerun a new session;
+- enough added/modified required artifacts: reconcile observed artifacts and
+  avoid repeating the work;
+- deletion, unexpected read-only writes, incomplete artifacts, or a missing
+  checkpoint: emit a structured recovery failure and wait for the owner.
 
-Every failure is classified into a coarse category — `launch_failed`,
-`timeout`, `aborted`, `nonzero_exit`, `no_artifact`, `missing_credential`,
-`missing_input`, `permission_denied`, `network`, `unknown` — with a normalized
-signature that strips paths, ids, numbers, and timestamps.
+This is why `--resume` is not a dependency for Claude Code, Pi, or any future
+provider. Provider resume can optimize a retry, but it cannot be the source of
+truth.
 
-On retry the Runtime deliberately picks a **different** provider. Repeating the
-same black box rarely produces a different outcome, and a second opinion is
-what makes the next step possible:
+## Workspace concurrency
 
-```text
-agent A fails ─┐
-               ├─ different reasons  -> try another agent
-agent B fails ─┘
-               └─ same diagnostic category
-                     -> the obstacle is in the task or environment
-                     -> stop retrying, escalate to the owner
-```
+A Workspace uses an exclusive lease during a WorkOrder. It serializes readers
+with writers as well as writers with writers, preventing agents from
+overwriting each other or observing a half-written project. The lease combines
+an in-process queue with an atomic lock file and can reclaim a dead supervisor's
+lock using the owner PID.
 
-Agreement on a diagnostic category (both agents cannot find a credential) is
-treated as corroboration on its own, because independent products describe the
-same wall in their own words. Agreement on a catch-all category
-(`nonzero_exit`, `unknown`) proves nothing by itself, so those additionally
-require overlapping wording.
+## Failure JSON and corroboration
 
-## The cost of the black box
+Failures use stable categories such as `launch_failed`, `timeout`,
+`nonzero_exit`, `no_artifact`, `missing_credential`, `missing_input`,
+`permission_denied`, `network`, `partial_side_effect`,
+`unexpected_side_effect`, `recovery_blocked`, and `unknown`.
 
-| Property | Consequence |
-| --- | --- |
-| No protocol parsing | Any headless agent integrates by configuration |
-| No session identity | A crashed run **restarts**, it does not resume |
-| No tool events | Progress is the agent's own output lines, nothing finer |
-| Evidence from the filesystem | Work that was not written to a file counts as work not done |
+A report carries provider/agent identity, a normalized signature, and redacted
+human-readable detail. The owner may add patterns and guidance in
+`<dataDirectory>/outcomes/failures.json`; the file is loaded as diagnostics only,
+never as execution authority. Independent providers that fail with the same
+diagnostic category corroborate a task or environment obstacle. Catch-all
+categories also need overlapping signatures before retries are stopped.
 
-Losing resume is the honest price of not parsing protocols: without reading an
-agent's session model there is no session id to reopen. Idempotence is carried
-by the WorkOrder's `maxAttempts` and by artifacts being observable facts.
+## Verified boundary
 
-## Verified and not yet claimed
-
-- The full black-box path is covered by tests against a scripted agent:
-  workspace-diff artifacts, a talkative agent that writes nothing, a missing
-  command, a wedged agent hitting the deadline, the environment allowlist, and
-  cross-provider corroboration.
-- Type checking and the automated suite pass without a paid request.
-- No live run against a real installed agent has been executed **since the
-  black-box rewrite**; the built-in launch recipes are inference from each
-  product's documented headless mode, not observation.
-- `workspace-diff` walks the filesystem and skips common build directories.
-  Very large workspaces are capped at 20,000 files, and files above 2 MB are
-  identified by size and mtime rather than content hash.
+The scripted black-box tests cover workspace artifacts, claims without writes,
+missing commands, hard deadlines, environment isolation, failure categories,
+checkpoint arbitration, workspace locking, and cross-provider corroboration.
+The default suite never needs a paid provider request. Live provider smoke tests
+remain opt-in and are not evidence that another provider's launch recipe is
+correct.

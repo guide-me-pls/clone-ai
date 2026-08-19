@@ -2,23 +2,25 @@
 
 [English](coding-cli-adapters.md) · **简体中文**
 
-Clone AI 把 Coding Agent 当作黑盒：只提供 Prompt 与 Workspace，然后仅凭观察判断结果——
-进程退出状态，以及磁盘上真正发生了什么变化。不解析任何 Agent 的内部协议、流式格式或会话模型。
+Clone AI 把所有 Coding Agent 都当作黑盒：提供 Prompt、有作用域的上下文和 Workspace，随后只
+根据可观察事实判断结果——进程生命周期和磁盘上真正发生的变化。不解析 Provider 协议、Session
+数据库、Tool 流或完成声明。
 
 ```text
-WorkOrder -> 策略 + 能力检查
-  -> BlackBoxWorkerAdapter    传入 Prompt · 预算 · 硬截止 · 终止
-     |                        执行前/后对 Workspace 拍快照
-  <- 退出状态 + Workspace 差异 + 输出尾部
--> Artifact -> 验证 -> WorkReceipt
+WorkOrder -> 策略 + 能力 + 审批
+  -> BlackBoxWorkerAdapter    Prompt · 预算 · 截止 · 终止
+     |                        环境白名单
+     |                        Workspace 执行前/后快照
+  <- 退出状态 + Workspace 差异 + 脱敏输出尾部
+-> 观察型 Artifact -> 验证 -> Run 状态
 ```
 
-## 接入一个 Agent 是改配置
+## 接入 Agent 是配置
 
-任何无头 Agent 都只是一份启动配方。在 `<dataDirectory>/providers.json` 里声明一条，它就可以
-被选用——不改源码，不写 Adapter 类：
+内建启动配方位于 `src/adapters/providers.json`。用户可以在 `<dataDirectory>/providers.json` 中
+新增或覆盖：
 
-```jsonc
+```json
 {
   "providers": [
     {
@@ -33,8 +35,9 @@ WorkOrder -> 策略 + 能力检查
 }
 ```
 
-`{{prompt}}` 与 `{{workspace}}` 会在派发时替换。`promptVia: "stdin"` 表示通过 stdin 而不是
-参数传入 Prompt。与内建 ID 相同的声明会覆盖内建项，因此所有者可以重新调整自带 Agent 的启动方式。
+派发时替换 `{{prompt}}` 与 `{{workspace}}`。`promptVia: "stdin"` 表示通过 stdin 发送 Prompt，
+而不是把 Prompt 放进参数列表。与内建 ID 相同的声明会覆盖内建配方。`env` 只包含变量名；源码
+和配置不应出现凭据值。
 
 | 内建 | 命令 |
 | --- | --- |
@@ -43,61 +46,45 @@ WorkOrder -> 策略 + 能力检查
 | Pi | `pi -p {{prompt}}` |
 | opencode | `opencode run {{prompt}}` |
 
-**权限边界：** Provider 声明只说明如何启动某个 Agent、以及它可以看到哪些凭据。它不能授予审批、
-不能扩大预算、不能改变 Run 状态、不能宣布成功。
+声明只控制启动方式和可见环境，不能授予审批、扩大 WorkOrder 预算、改变 Run 状态或宣布成功。
 
-## 证据靠观察，不靠索取
+## 证据靠观察
 
-黑盒 Agent 不知道 Clone AI 的约定，也不能被指望去申报自己产出了什么。因此 Clone AI 不去问它：
-派发前对 Workspace 拍快照，结束后做差异比较，新增与修改的文件就是产物，每一条都用真实路径作为
-locator 记录。
+Adapter 在派发前对 Workspace 拍快照，结束后比较差异。新增和修改文件成为 Artifact Evidence，
+并用真实相对路径定位；删除是变化，但不是产物。当合同要求产物而没有文件变化时，结果就是
+`no_artifact`，无论 Agent 说了什么。普通黑盒 Provider 仍不能产生 Receipt。
 
-这比之前"要求 Worker 打印一行声明"更严格，因为它**不需要对方配合**。它同时也解决了完成判定：
-当 WorkOrder 要求产物而 Workspace 毫无变化时，工作就是没有发生——无论 Agent 说了什么。
-被删除的文件是真实变更，但永远不是产物。
+## 恢复不使用 Provider 记忆
 
-Receipt 仍然不可授予。Artifact 只能证明某个文件存在；只有可信运行时才能证明外部动作确实发生。
+Kernel 在第一次尝试前保存持久 JSON Workspace 检查点。Worker 或 Supervisor 崩溃后，Kernel 将
+检查点与当前 Workspace 比较：
 
-## 失败要在 Agent 之间比较
+- 没有变化：用新 Session 重跑；
+- 新增/修改文件足以满足必需 Artifact：接受观察到的 Artifact，不重复执行；
+- 发生删除、只读任务写入、产物不完整或检查点缺失：生成结构化恢复失败，等待所有者处理。
 
-每次失败都会被归入一个粗粒度类别——`launch_failed`、`timeout`、`aborted`、`nonzero_exit`、
-`no_artifact`、`missing_credential`、`missing_input`、`permission_denied`、`network`、
-`unknown`——并附带一个去掉了路径、ID、数字与时间戳的归一化 signature。
+因此 Claude Code、Pi 或未来 Provider 的 `--resume` 都不是依赖。Provider resume 可以优化重试，
+但不能成为事实来源。
 
-重试时 Runtime 会刻意换**另一个** Provider。重复同一个黑盒很少产生不同结果，而第二个意见正是
-下一步得以成立的前提：
+## Workspace 并发
 
-```text
-Agent A 失败 ─┐
-              ├─ 原因不同   -> 再换一个 Agent
-Agent B 失败 ─┘
-              └─ 诊断类别相同
-                    -> 障碍在任务或环境中
-                    -> 停止重试，升级给所有者
-```
+WorkOrder 执行期间持有 Workspace 独占 lease。读与写、写与写都会串行，防止 Agent 互相覆盖，
+也防止读者看到写入一半的项目。lease 由进程内队列和原子锁文件组成，可依据持有者 PID 回收
+已经死亡的 Supervisor 的锁。
 
-在**有诊断意义的**类别上一致（两个 Agent 都找不到凭据）本身即构成印证，因为各自独立的产品会用
-自己的措辞描述同一堵墙。而在兜底类别（`nonzero_exit`、`unknown`）上一致本身什么都不能证明，
-因此这些类别还额外要求措辞重合。
+## 失败 JSON 与交叉印证
 
-## 黑盒的代价
+失败使用稳定类别，例如 `launch_failed`、`timeout`、`nonzero_exit`、`no_artifact`、
+`missing_credential`、`missing_input`、`permission_denied`、`network`、`partial_side_effect`、
+`unexpected_side_effect`、`recovery_blocked` 与 `unknown`。
 
-| 特性 | 后果 |
-| --- | --- |
-| 不解析协议 | 任何无头 Agent 都能靠配置接入 |
-| 没有会话身份 | 崩溃后是**重跑**，不是续跑 |
-| 没有工具事件 | 进度就是 Agent 自己的输出行，没有更细粒度 |
-| 证据来自文件系统 | 没写进文件的工作，等于没做 |
+报告带有 Provider/Agent 身份、归一化 signature 和脱敏的可读 detail。所有者可以在
+`<dataDirectory>/outcomes/failures.json` 中增加匹配模式和处理建议；这个文件只用于诊断，绝不
+授予执行权限。独立 Provider 以同一诊断类别失败时，可以印证障碍在任务或环境；兜底类别还需要
+signature 有重合，才会停止重试。
 
-失去续跑是不解析协议的诚实代价：不读 Agent 的会话模型，就没有会话 ID 可以重新打开。
-幂等性由 WorkOrder 的 `maxAttempts` 以及"产物是可观察事实"这一点来承担。
+## 已验证的边界
 
-## 已验证与尚未声称
-
-- 完整的黑盒链路由针对脚本化 Agent 的测试覆盖：workspace-diff 产物、只说话不写文件的 Agent、
-  命令不存在、卡死 Agent 撞上硬截止、环境白名单，以及跨 Provider 的交叉印证。
-- 类型检查与自动化测试套件在不产生付费请求的情况下通过。
-- **黑盒重写之后**尚未对真实安装的 Agent 做过实跑；内建启动配方来自各产品文档中的无头模式，
-  属于推断而非观察。
-- `workspace-diff` 会遍历文件系统并跳过常见构建目录。超大 Workspace 以 20,000 个文件为上限，
-  超过 2 MB 的文件用大小与修改时间而非内容哈希标识。
+脚本化黑盒测试覆盖 Workspace 产物、只声明不写入、命令不存在、硬截止、环境隔离、失败类别、
+检查点裁决、Workspace 锁和跨 Provider 印证。默认测试不需要付费 Provider 请求。真实 Provider
+冒烟仍然是显式开启的，不代表其他 Provider 的启动配方已经实测正确。

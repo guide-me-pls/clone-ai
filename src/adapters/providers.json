@@ -1,0 +1,32 @@
+{
+  "providers": [
+    {
+      "id": "claude-code",
+      "label": "Claude Code",
+      "command": "claude",
+      "args": ["-p", "{{prompt}}"],
+      "env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"]
+    },
+    {
+      "id": "codex-cli",
+      "label": "Codex CLI",
+      "command": "codex",
+      "args": ["exec", "--skip-git-repo-check", "{{prompt}}"],
+      "env": ["OPENAI_API_KEY", "CODEX_HOME"]
+    },
+    {
+      "id": "pi",
+      "label": "Pi",
+      "command": "pi",
+      "args": ["-p", "{{prompt}}"],
+      "env": ["GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "PI_CODING_AGENT_DIR", "PI_PACKAGE_DIR"]
+    },
+    {
+      "id": "opencode",
+      "label": "opencode",
+      "command": "opencode",
+      "args": ["run", "{{prompt}}"],
+      "env": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENCODE_CONFIG"]
+    }
+  ]
+}

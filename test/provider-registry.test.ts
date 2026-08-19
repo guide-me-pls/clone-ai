@@ -48,7 +48,7 @@ test("a third-party provider becomes selectable by registration alone", async ()
   const settings = defaultAgentSettings().map((agent) => (
     agent.id === "context-researcher" ? { ...agent, providerId: "acme-agent" } : agent
   ));
-  const registry = createConfiguredAgentRegistry(settings, {
+  const registry = await createConfiguredAgentRegistry(settings, {
     dataDirectory: join(tmpdir(), "clone-ai-provider-plugin"),
     providers,
   });
@@ -58,14 +58,14 @@ test("a third-party provider becomes selectable by registration alone", async ()
   assert.equal((await adapter!.capabilities()).work.includes("research"), true);
 });
 
-test("an unknown provider fails with the list of registered ones", () => {
+test("an unknown provider fails with the list of registered ones", async () => {
   const providers = createBuiltInProviderRegistry();
   const settings = defaultAgentSettings().map((agent) => (
     agent.id === "context-researcher" ? { ...agent, providerId: "not-installed" } : agent
   ));
 
-  assert.throws(
-    () => createConfiguredAgentRegistry(settings, { dataDirectory: ".", providers }),
+  await assert.rejects(
+    createConfiguredAgentRegistry(settings, { dataDirectory: ".", providers }),
     /Unknown execution provider "not-installed".*codex-cli/s,
   );
 });

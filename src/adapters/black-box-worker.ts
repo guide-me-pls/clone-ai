@@ -8,7 +8,7 @@ import type {
   RuntimeAdapter,
   RuntimeCapabilities,
 } from "../core/contracts.ts";
-import { classifyFailure, failureSignature, type FailureCategory, type FailureReport } from "../core/failure-analysis.ts";
+import { BUILT_IN_CATALOG, classifyFailure, failureSignature, type FailureCategory, type FailureReport, type OutcomeCatalog } from "../core/failure-analysis.ts";
 import {
   artifactChanges,
   describeChanges,
@@ -70,13 +70,21 @@ export class BlackBoxWorkerAdapter implements RuntimeAdapter {
   readonly providerId: string;
   readonly #config: BlackBoxProviderConfig;
   readonly #workCapabilities: string[];
+  readonly #catalog: OutcomeCatalog;
   readonly #active = new Map<string, ChildProcess>();
 
-  constructor(input: { agentId: string; config: BlackBoxProviderConfig; workCapabilities?: string[] }) {
+  constructor(input: {
+    agentId: string;
+    config: BlackBoxProviderConfig;
+    workCapabilities?: string[];
+    /** Owner-authored failure catalog; the built-in minimum is used when absent. 所有者自撰的失败目录；缺省时使用内建最小集合。 */
+    failureCatalog?: OutcomeCatalog;
+  }) {
     this.id = input.agentId;
     this.providerId = input.config.id;
     this.#config = input.config;
     this.#workCapabilities = input.workCapabilities ?? input.config.work ?? DEFAULT_WORK;
+    this.#catalog = input.failureCatalog ?? BUILT_IN_CATALOG;
   }
 
   async capabilities(): Promise<RuntimeCapabilities> {
@@ -166,8 +174,10 @@ export class BlackBoxWorkerAdapter implements RuntimeAdapter {
         timedOut,
         exit,
         detail,
+        changes,
         produced,
         requiresArtifact: (input.workOrder?.expectedArtifacts ?? []).some((artifact) => artifact.required),
+        catalog: this.#catalog,
       });
       if (failure !== undefined) {
         yield { type: "failed", message: `${failure.category}: ${failure.detail.slice(0, 500) || "no output"}`, report: failure };
@@ -215,15 +225,19 @@ function judgeFailure(input: {
   timedOut: boolean;
   exit: ProcessExit;
   detail: string;
+  changes: WorkspaceChange[];
   produced: WorkspaceChange[];
   requiresArtifact: boolean;
+  catalog: OutcomeCatalog;
 }): FailureReport | undefined {
   const base = { providerId: input.providerId, agentId: input.agentId, exitCode: input.exit.code };
-  const report = (category: FailureCategory, detail: string): FailureReport => ({
+  const report = (category: FailureCategory, detail: string, guidance?: string): FailureReport => ({
     ...base,
     category,
     detail,
     signature: failureSignature(detail),
+    ...(guidance === undefined ? {} : { guidance }),
+    ...(input.changes.length === 0 ? {} : { workspaceChanges: input.changes }),
   });
 
   if (input.exit.error !== undefined) return report("launch_failed", input.exit.error);
@@ -232,7 +246,12 @@ function judgeFailure(input: {
   if (input.exit.code !== 0) {
     // The agent's own words decide the category; the exit code only says it failed.
     // 类别由 Agent 自己的措辞决定；退出码只说明它失败了。
-    return report(classifyFailure(input.detail, "nonzero_exit"), input.detail || `exited with code ${String(input.exit.code)}`);
+    const classification = classifyFailure(input.detail, "nonzero_exit", input.catalog);
+    return report(
+      classification.category,
+      input.detail || `exited with code ${String(input.exit.code)}`,
+      classification.guidance,
+    );
   }
   // A clean exit is not delivery. When the contract requires an artifact and
   // the workspace is unchanged, the work did not happen — whatever was said.

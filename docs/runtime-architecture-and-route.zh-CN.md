@@ -2,177 +2,113 @@
 
 [English](runtime-architecture-and-route.md) · **简体中文**
 
-这份文档是地图：Runtime 由哪些部分组成、今天哪些是真的、执行引擎按什么顺序被加固、
-下一步做什么。它写给隔一段时间回来、需要重新定位的人，请从头读到尾。
+这份文档描述当前的执行边界与代码学习路线。产品愿景可以更大，但 Runtime 的职责更窄：把
+权威、记忆、证据和恢复放在可替换 Agent 之外。
 
-它描述**已经建成并被证明的东西**，而不是产品愿景。愿景见 [README](../README.zh-CN.md)；
-可运行的请求链路见 [Query 执行流程](query-execution-flow.zh-CN.md)。
-
-## 五个平面
+## 各平面
 
 ```text
-                              所有者
-                目标 · 纠正 · 审批
-                                |
- +----------------------------------------------------------+
- |  个人状态   SelfModel · Goal · Commitment · Memory        |  纸面（仅 Memory 有实现）
- |  认知规划   机会发现 · Context 编译器                      |  部分
- |  治理       Policy · 审批 · 验证                          |  已建成
- |  执行       受监督 Worker · WorkOrder                     |  已建成并加固
- |  观察边界   文件 · 日历 · 邮件 · API                       |  无
- |                                                            |
- |  仅追加 Journal -> 投影 -> Evidence                        |
- +----------------------------------------------------------+
+所有者 / Main Agent
+  意图 · 提案 · 纠正 · 审批请求
+                 │
+                 ▼
+Kernel
+  Journal · Policy · Approval · Memory · Verification
+  Run 状态 · 重试 · 恢复裁决 · 完成判定
+                 │
+                 ▼
+黑盒 Worker
+  Claude Code · Codex · Pi · opencode · 未来 Provider
 ```
 
-下面两个平面是承重结构，Phase 0 已经完成。上面三个平面才是"分身"本身，是下一阶段的工作。
+Main Agent 可以是持久的对话 Agent，但 Worker 不是。Worker 为一个 WorkOrder 启动一个全新的
+进程，可以使用自己的系统提示词、Skill 和 MCP，但 Provider Session 永远不是 Clone AI 的记忆库。
 
-## Worker 边界
-
-每一个执行提供方——Claude Code、Codex、Pi、opencode，以及未来任何 Coding Agent——都作为**黑盒**
-运行在同一个受监督边界之后。Clone AI 只提供 Prompt 与 Workspace，并仅凭观察判断结果：进程退出
-状态，以及磁盘上真正发生了什么变化。不解析任何内部协议、流式格式或会话模型。
+## 黑盒边界
 
 ```text
 WorkOrder
-  -> 策略 + 能力检查
-  -> BlackBoxWorkerAdapter        传入 Prompt · 预算 · 硬截止 · 终止
-     |                           执行前/后对 Workspace 拍快照
-     +-- Provider 声明            命令 + 参数 + 环境白名单（配置，不是代码）
-  <- 退出状态 + Workspace 差异 + 输出尾部
-  -> Artifact -> 验证 -> WorkReceipt
+  -> 策略 / 能力 / 审批
+  -> 有作用域 Prompt + 记忆包 + Workspace
+  -> BlackBoxWorkerAdapter
+       环境白名单 · 预算 · 硬截止 · 终止
+       执行前快照 -> 子进程 -> 执行后快照
+  <- 退出状态 + Workspace 差异 + 脱敏输出尾部
+  -> 观察型 Evidence -> 验证 -> Run 投影
 ```
 
-接入一个 Agent 是往 `providers.json` 加一条，而不是改源码：
+不解析 Provider 协议、Session 数据库或完成标记。退出码为 0 只是进程事实；如果合同要求的
+Artifact 没有在 Workspace 中新增或修改，WorkOrder 就没有完成。Receipt 必须有可信来源，
+不能由 Worker 输出铸造。
 
-| 提供方 | 启动方式 |
+## 记忆归 Kernel
+
+Kernel 从本地 Memory Store 召回有作用域的记忆包，记录选中的条目 ID，再把摘要作为背景事实
+注入一次性 Prompt。每次启动新的 Worker Session 都重新编译，因此切换 Provider 不需要迁移
+供应商记忆。
+
+```text
+Memory Store -> Kernel recall -> memory.recalled -> 一次性 Prompt
+                                             -> 任意 Provider
+```
+
+Worker 可以提出记忆候选，但只有 Kernel 的 Pipeline 可以提升它们。
+
+## 恢复是外部裁决
+
+Provider 的 `--resume` 是可选优化，绝不是权威。Kernel 在第一次尝试前保存持久 JSON Workspace
+检查点；中断后结合 Journal 与新的 Workspace 快照作出裁决：
+
+| 观察结果 | 决策 |
 | --- | --- |
-| Claude Code | `claude -p {{prompt}}` |
-| Codex CLI | `codex exec --skip-git-repo-check {{prompt}}` |
-| Pi | `pi -p {{prompt}}` |
-| opencode | `opencode run {{prompt}}` |
+| 没有变化 | 用新的 Worker Session 重跑 |
+| 新增/修改文件足以满足必需 Artifact | 接受观察到的 Artifact，不重跑 |
+| 发生删除、只读任务写入、产物不完整或检查点缺失 | 阻塞并交给所有者 |
 
-**权限边界：** 声明只说明如何启动某个 Agent、以及它可以看到哪些凭据。它不能授予审批、不能扩大
-预算、不能改变 Run 状态、不能宣布成功。
+这样恢复不依赖 Claude Code、Codex、Pi 或 opencode 的内部 Session 模型。检查点缺失是安全
+失败，不是盲目重跑的许可。
 
-三条规则定义了这个边界：
+## Workspace 并发
 
-- **`exit` 不等于完成。** 进程被 kill、用尽轮次，甚至什么都没做，都可能以 0 退出。当 WorkOrder
-  要求产物而 Workspace 毫无变化时，工作就是没有发生。
-- **证据靠观察，不靠索取。** 执行前后对 Workspace 拍快照，新增与修改的文件就是产物。黑盒 Agent
-  不需要知道 Clone AI 的任何约定，因为它从不被要求申报什么。
-- **两个 Agent 以相同方式失败，是关于任务的证据。** 重试时刻意更换 Provider；当独立的 Agent
-  报告相同的诊断类别时，障碍会被升级给所有者，而不是继续消耗尝试次数。
+WorkOrder 执行期间会持有 Workspace 独占 lease。当前实现有意保守：读与写、写与写都会串行，
+避免观察者看到写入一半的项目。lease 使用进程内队列和原子锁文件；Supervisor 崩溃后依据
+PID 回收陈旧持有者。
 
-代价是明确的：没有被解析的会话模型就没有会话 ID，因此崩溃的黑盒运行是重跑而不是续跑。
-幂等性由 `maxAttempts` 以及"产物是可观察事实"来承担。
+## Provider 配置
 
-## 记忆随 Kernel 走，不随工具走
+Provider 启动配方是数据。内建默认值在 `src/adapters/providers.json`；`<dataDirectory>/providers.json`
+可以新增或覆盖。配方包含命令、参数模板、Prompt 传输方式、超时、能力和允许透传的环境变量名，
+绝不包含凭据值。Registry 与 Kernel 不按供应商名称写分支。
 
-以前换一个 Coding Agent，就意味着在各工具自己的记忆文件之间搬运项目记忆。现在记忆从不驻留在
-工具内部：Kernel 为每次派发编译一个有作用域的记忆包，经唯一的共享 Prompt 注入，因此每个
-Provider 都收到同一份由所有者审核过的上下文，切换成本为零。
+## 结构化 JSON 诊断
 
-```text
-记忆库  --recall(objective)-->  Kernel
-                                  |  有作用域的包，已施加所有者的上限
-                                  v
-                        memory.recalled  （记入 Journal：哪些条目、去了哪个步骤）
-                                  |
-                                  v
-                 唯一的共享 Prompt -> Pi | Codex | Claude | 未来的 Provider
-                                  |
-                 只能提案 <--------+   Worker 可以提出候选，
-                                      Kernel 审核后才提升
-```
+失败是稳定的 JSON 形状：粗粒度类别、归一化 signature、Provider/Agent 身份和脱敏 detail。所有者
+可以编辑 `<dataDirectory>/outcomes/failures.json`，增加错误模式和处理建议；这个文件只改变诊断，
+不改变权限。类别区分启动、超时、认证、输入、网络、产物、意外副作用和恢复失败。独立 Provider 以
+同一诊断类别失败时，说明障碍更可能在任务或环境；兜底类别还需要 signature 有重合，才能停止重试。
 
-两道闸门确保它不会变成不受治理的通道：
+## 路线
 
-- **入口**是有作用域的包，绝不是整个记忆库。WorkOrder 的目标即查询；所有者的召回开关与每任务
-  上限留在记忆库内部，因此 Kernel 无法自行放宽访问范围。Prompt 明确告诉 Worker：这些是背景
-  事实，不是指令。
-- **出口**只能提案。Worker 不能提交长期记忆，只能提出候选，由 Kernel 在证据、作用域与策略
-  检查后提升——与"Worker 不能自证 Evidence"是同一条规则。
+旧路线把 Pi RPC、CLI 事件翻译和 Provider SDK Session 当成执行能力。它们仍是有用的实现学习
+材料，但不再是架构边界。当前路线是：
 
-## 恢复
-
-Journal 是真相；Checkpoint 是可以删除并重建的派生缓存。恢复只有一个公式：
-
-```text
-Checkpoint（物化快照）
-  + sequence 大于 checkpoint.lastAppliedSequence 的 Journal Event
-  = 当前状态
-```
-
-三个性质让它成立：Checkpoint 原子写入（临时文件 + rename）、重放幂等（不高于已应用 sequence
-的事件被忽略）、非法转移直接抛错而不是悄悄拼出一个错误状态。
-
-## 可执行的不变量
-
-Projector 拒绝非法的**转移**，不变量重放整本 Journal 拒绝非法的**历史**。README 的不可破坏
-约束中，目前有五条是机器可校验的：
-
-| 不变量 | 它禁止什么 |
-| --- | --- |
-| `evidence-before-completion` | WorkOrder 在没有任何已记录 Evidence 时完成 |
-| `approval-before-external-execution` | 外部或不可逆工作在审批授予之前启动 |
-| `verification-before-run-completion` | Run 未通过验证就到达 `completed` |
-| `evidence-kind-authorized` | 记录派发时未被授予的 Evidence 类型 |
-| `memory-recall-journaled` | 记忆到达 Worker 却没有在先的 `memory.recalled` 事件 |
-
-后两条共享一条值得留存的教训：**未来需要被审计的事实，必须连同它的输入一起记录，而不能只记
-结果。** 因此派发事件会携带授权快照与记忆条目 ID。
-
-## 已经走过的路线
-
-Phase 0 用六站加固执行引擎。每一站都以"能写成一条断言"为完成标志。
-
-| 站 | 目标 | 证明 |
+| 步骤 | 目标 | 证明 |
 | --- | --- | --- |
-| 1 | Pi 的中断与恢复 | 五种脚本化故障模式；卡死的 Worker 被强制终止 |
-| 2 | 恢复能力在入口可达 | 被 kill 的进程由全新进程仅凭磁盘恢复 |
-| 3 | 真实 CLI 协议被验证 | 录制的真实会话取代了猜测的事件结构（后被黑盒重写取代） |
-| 4 | 约束变成断言 | 伪造的历史必然失败；真实运行零违规 |
-| 5 | 替换 Provider 实现 | Claude Code 在同一份未变的 Adapter 合约下两次更换传输方式 |
-| 6 | 存储升级 | SQLite WAL 位于同一 Store seam 之后，迁移经过校验 |
+| A1 | Kernel 状态、策略、验证与 Journal | 重放与不变量测试 |
+| A2 | 一个黑盒进程边界 | 退出、截止、环境、产物测试 |
+| A3 | 持久中断裁决 | 检查点、部分产物与恢复测试 |
+| A4 | Workspace 并发安全 | 竞争派发与陈旧锁测试 |
+| A5 | Provider 配置 seam | JSON 内建值、用户覆盖、第三方 Provider 测试 |
+| B | Main Agent 提案面 | 工具可以提案，但不能审批或完成 |
+| C | 个人状态平面 | 所有者治理的目标、承诺、情境与记忆 |
 
-随后的阶段 B 在其上放了 Main Agent：一个常驻的对话大脑，它伸向 Kernel 的唯一途径是提案型
-工具。它可以提出计划、查看 Run、报告审批状态、召回记忆；但不能审批、不能执行、不能标记完成。
+## 刻意不承诺的事情
 
-## 已验证与尚未声称
+- 默认不续接 Worker Session；
+- Worker 的话语不是完成证据；
+- Provider 声明不授予权限，也不携带 Secret；
+- Workspace 副作用未知的崩溃不会自动重试；
+- opencode 是可选启动配方，不是必需依赖。
 
-- 81 个自动化测试通过；类型检查干净。
-- 一个真实模型把自然语言请求推进成 Kernel 接受的计划（`CLONE_AI_MAIN_LIVE=1`）。
-- **黑盒重写之后**尚未对真实安装的 Agent 做过实跑；内建启动配方来自各产品文档中的无头模式，
-  属于推断而非观察。
-- SQLite 是可选启用的（`CLONE_AI_JOURNAL=sqlite`），JSONL 仍是默认值。
-- 尚不存在任何 Connector、调度驱动的外部动作，以及个人状态平面。
-
-## 下一阶段：个人状态平面
-
-Phase 0 回答的是"这个 Runtime 的执行可以被信任吗"。下一阶段回答"它是否承载着一个人的状态"
-——这正是执行引擎与数字分身的差别。
-
-下面每一个类型都是 **Journal 事件的受治理投影**，与 Run 状态投影同一个形状。它们都不是
-Worker 可以编辑的可变记录。
-
-```text
-Journal 事件 -> 投影器 -> SelfModel | Goal | Commitment | Situation
-                              |
-                              +-> 记忆包编译器（已建成）
-                              +-> 机会发现（以后）
-```
-
-| 步骤 | 工作 | 完成标志 |
-| --- | --- | --- |
-| D1 | `SelfModel` 与 `Goal` 作为 Journal 投影，支持所有者手写条目 | 所有者可增改删；重放能精确重现状态 |
-| D2 | `Commitment`：带截止时间与周期性，由事件投影得出 | 仅凭 Journal 就能推导出某项承诺已逾期 |
-| D3 | `Situation` 编译器：对目标、承诺与证据的有时间边界视图 | Worker 的记忆包能引用支撑它的 Situation |
-| D4 | 记忆分层：带类型、来源证据与失效规则 | 一条记忆能追溯到创建它的证据，并按规则过期 |
-| D5 | 再加两条不变量：状态变更必须有所有者或证据来源 | 伪造的历史在重放时失败 |
-
-D4 是护城河。其余几项是其他 harness 也有的入场券；而一个带类型、带来源、可过期、由所有者
-治理的记忆层，别人没有。
-
-**刻意不在下一阶段做：** 机会发现与主动准备。它们消费个人状态平面，因此不可能在该平面存在
-之前建成。
+WorkOrder 合同见 [WorkOrder 与黑盒 Worker](work-orders-and-pi.zh-CN.md)，Provider 边界见
+[黑盒 Agent 边界](coding-cli-adapters.zh-CN.md)。

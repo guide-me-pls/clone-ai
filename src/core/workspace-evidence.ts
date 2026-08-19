@@ -1,11 +1,87 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { join, relative, resolve, sep } from "node:path";
 
 export interface WorkspaceSnapshot {
+  /** Absolute root that was observed. 实际被观察的绝对根目录。 */
+  root?: string;
   /** Relative path -> content hash. 相对路径 -> 内容哈希。 */
   files: Map<string, string>;
   takenAt: string;
+}
+
+/**
+ * A checkpoint is derived evidence, not authority. It lets a fresh Supervisor
+ * compare the interrupted Workspace with the state before dispatch without
+ * depending on a provider session. 检查点是派生证据而不是权威；它让新的 Supervisor
+ * 能比较中断前后的 Workspace，而不依赖 Provider Session。
+ */
+export interface WorkspaceCheckpointStore {
+  save(key: string, snapshot: WorkspaceSnapshot): Promise<string>;
+  load(locator: string): Promise<WorkspaceSnapshot | undefined>;
+}
+
+/**
+ * JSON checkpoints are intentionally inspectable and editable by the owner.
+ * The Kernel still treats them as evidence to arbitrate, never as a completion
+ * claim. JSON 检查点刻意保持可查看、可编辑；Kernel 仍只把它当作裁决证据，绝不把它
+ * 当成完成声明。
+ */
+export class JsonWorkspaceCheckpointStore implements WorkspaceCheckpointStore {
+  readonly #directory: string;
+
+  constructor(directory: string) {
+    this.#directory = resolve(directory);
+  }
+
+  async save(key: string, snapshot: WorkspaceSnapshot): Promise<string> {
+    await mkdir(this.#directory, { recursive: true });
+    const locator = encodeURIComponent(key);
+    const target = join(this.#directory, `${locator}.json`);
+    const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+    const serializable = {
+      root: snapshot.root,
+      takenAt: snapshot.takenAt,
+      files: Object.fromEntries(snapshot.files),
+    };
+    await writeFile(temporary, `${JSON.stringify(serializable, null, 2)}\n`, "utf8");
+    await rename(temporary, target);
+    return locator;
+  }
+
+  async load(locator: string): Promise<WorkspaceSnapshot | undefined> {
+    if (locator.length === 0 || locator.includes("/") || locator.includes("\\") || locator.includes("..")) {
+      throw new Error(`Workspace checkpoint locator ${locator} is invalid.`);
+    }
+    const target = join(this.#directory, `${locator}.json`);
+    let source: string;
+    try {
+      source = await readFile(target, "utf8");
+    } catch (error: unknown) {
+      if (isMissingFile(error)) return undefined;
+      throw error;
+    }
+    const parsed = JSON.parse(source) as { root?: unknown; takenAt?: unknown; files?: unknown };
+    if (
+      (parsed.root !== undefined && typeof parsed.root !== "string")
+      || typeof parsed.takenAt !== "string"
+      || typeof parsed.files !== "object"
+      || parsed.files === null
+      || Array.isArray(parsed.files)
+    ) {
+      throw new Error(`Workspace checkpoint ${locator} is malformed.`);
+    }
+    const files = new Map<string, string>();
+    for (const [path, hash] of Object.entries(parsed.files as Record<string, unknown>)) {
+      if (typeof hash !== "string") throw new Error(`Workspace checkpoint ${locator} has an invalid file hash.`);
+      files.set(path, hash);
+    }
+    return {
+      ...(typeof parsed.root === "string" ? { root: resolve(parsed.root) } : {}),
+      files,
+      takenAt: parsed.takenAt,
+    };
+  }
 }
 
 export interface WorkspaceChange {
@@ -79,7 +155,7 @@ export async function snapshotWorkspace(
   };
 
   await walk(root);
-  return { files, takenAt: new Date().toISOString() };
+  return { root: resolve(root), files, takenAt: new Date().toISOString() };
 }
 
 export function diffWorkspace(before: WorkspaceSnapshot, after: WorkspaceSnapshot): WorkspaceChange[] {
@@ -109,6 +185,10 @@ export function describeChanges(changes: readonly WorkspaceChange[], limit = 20)
   if (changes.length === 0) return "no workspace changes";
   const listed = changes.slice(0, limit).map((change) => `${change.change[0]} ${change.path}`).join(", ");
   return changes.length <= limit ? listed : `${listed}, and ${changes.length - limit} more`;
+}
+
+function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 async function hashFile(path: string): Promise<string> {
