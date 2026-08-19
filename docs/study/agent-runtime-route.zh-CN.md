@@ -1,372 +1,169 @@
-# Agent Runtime 架构路线（学习笔记）
+# Agent Runtime 路线：Kernel 持状态，Worker 是黑盒
 
-> 记录时间：2026-08-18 · 坐标：Phase 0 中段 · 分支参考：PR #10（证据信任）、PR #11（CLI 边界加固）已完成
->
-> **2026-08-18 晚更新**：阶段 A（站 1-4）复验完成（`npm test` 67 个：66 过 1 跳过；`npm run typecheck` 干净）。
-> 路线升级：执行引擎的六站路线不变（站 5-6 仍待做），但上层已定下 **Main Agent 架构决定与四阶段路线**（见第 5 节），阶段 B 从精读 Pi 源码开始。
->
-> 这份笔记回答一个问题：**执行引擎（Agent Runtime）按什么顺序补完，每一步学什么、以什么为验收。**
-> 上层平面（个人状态、认知规划、观察边界）不在本路线内，它们在第 6 站之后交接。
+> 这是一份代码演化学习记录，不是 Agent 工作日志。
+> 记录重点是：为什么把执行 Agent 设计成无状态黑盒，以及 Kernel 如何在黑盒之外保留权威。
 
----
-
-## 0. 当前坐标
+## 1. 当前架构结论
 
 ```text
-┌─ 观察边界（Connector：日历/邮件/文件）──────── 🔴 零
-├─ 个人状态平面（SelfModel/Goal/Commitment）──── 🔴 纸面（仅 Memory 有约 340 行初版）
-├─ 认知与规划平面（Opportunity/Context Compiler）🟡 10%（DemoPlanner + 受限 LLM Planner）
-├─ 治理平面（Policy/审批/验证/证据授权）──────── 🟢 壳已搭好
-└─ 执行与证据平面（Adapter/WorkOrder/Journal）── 🟢 壳已搭好，正在做防水  ← 本路线在这里
+用户 / Main Agent
+        │ 只能提出意图、计划和审批请求
+        ▼
+Kernel（唯一权威）
+  Journal · Policy · Approval · Verification · Memory
+  Run 状态 · 重试 · 恢复裁决 · 完成判定
+        │ 只发送一次性 WorkOrder + 受治理上下文
+        ▼
+BlackBox Worker
+  Claude Code · Codex · Pi · opencode · 未来 Agent
+  每次都是新的无头进程；内部 session、记忆、协议都不属于 Clone AI
 ```
 
-已验证的资产：44→54 个确定性测试；Pi JSONL RPC Adapter；受监督 CLI 边界（环境白名单、
-证据授权、孤儿清理）；事件溯源 + 投影 + 原子 Checkpoint 的完整机器（`src/loop/`）。
+这里的“无状态”不是说 Agent 本身不能使用系统提示词、Skill 或 MCP，而是说这些能力不
+成为 Clone AI 的事实来源。Worker 只在一次 WorkOrder 内工作；项目上下文、长期记忆、
+任务进度和完成判定都留在 Kernel。
 
-已知但未修的洞（**2026-08-18 阶段 A 已全部修复**，保留原文供对照）：
-- ~~`loop/cli.ts:16-17` 只接了 Journal，没接 Checkpoint Store~~ → 站 2 已通电，支持 `--resume <run-id>`。
-- ~~`pi-agent-adapter.ts:171-174` 超时只发协作式 abort，Pi 挂死则永远等待~~ → 站 1 加了 abort 宽限期 + 硬终止。
-- ~~`coding-cli-adapter.ts` 的 `textDelta`/`toolEvent` 事件格式是猜的~~ → 站 3 已对真实 claude-code 2.1.234 验证并修正（发现 3 处解析错误 + 1 处 Windows 启动 bug）。
-- README 的 9 条不可破坏约束，没有一条是可执行断言 → 站 4 已把第 3/5/6 条变成 `src/core/invariants.ts` 的重放断言，其余待续。
+Main Agent 可以是持久的对话大脑，但它也没有权威：它只能调用提案型 Kernel 工具，不能
+审批、派发、伪造 Evidence 或宣布 Run 完成。
 
----
+## 2. 黑盒边界
 
-## 1. 路线总览
+Clone AI 对 Worker 只依赖四类可观察事实：
 
-| 站 | 名称 | 一句话目标 | 验收证明 |
-|---|---|---|---|
-| 1 ✅ | Pi 中断-恢复闭环 | 被打断的 Pi Run 能确定性恢复 | kill 中断后 resume，产物不重复、状态确定 |
-| 2 ✅ | 恢复接主入口 | 重启进程后世界还在 | kill -9 → 重启 → 从 checkpoint+journal 续跑通过 |
-| 3 ✅ | 真实 CLI 只读冒烟 | 协议猜测被真实事件流证实或证伪 | 真 codex/claude 跑通一个 read-only WorkOrder |
-| 4 ✅ | 可执行不变量 | 约束从文档变成断言 | 违反约束的事件序列在测试中必然抛错 |
-| 5 ✅ | SDK 结构化接入 | 删掉 stdout 启发式解析层 | Agent SDK / app-server 接入，猜测函数整块删除 |
-| 6 ✅ | 存储升级 | JSONL → SQLite WAL | 断电/并发写测试通过，投影可重建 |
+1. 进程是否成功启动；
+2. 进程是否在预算和硬截止内退出；
+3. Workspace 前后实际发生了哪些文件变化；
+4. 受限的输出尾部，用于诊断而不是证明完成。
 
-**阶段 A（站 1-4）于 2026-08-18 完成**，测试从 54 → 67（含 1 个 `CLONE_AI_LIVE_SMOKE=1` 门控的真实冒烟，已实跑通过）。各站"实际学到"：
-
-- **站 1**：协作式 abort 必须配硬截止（宽限期后 `terminate`），否则 `ignore-abort` 场景永久挂住——测试先证明了挂住，再证明修复（704ms 内失败返回）。踩坑：fixture 输出必须 `writeSync`，`process.exit` 会截断异步 stdout。
-- **站 2**：恢复机器本身早就有测试，缺的只是入口接线——"能力存在"和"能力可达"是两回事。跨进程测试的关键是让第一个进程死得不体面（`process.exit(137)` 不做清理），否则测的还是礼貌路径。
-- **站 3**：录一次真实事件流值回票价——一次录制暴露 3 个解析错误（result 才是 settled 信号、result 文本被重复计入、工具事件在 content 块里）+ 1 个启动 bug（Node 拒绝无 shell spawn `.cmd`，CVE-2024-27980，须解析垫片背后的 claude.exe）。意外收获：环境白名单剥掉嵌套会话变量后，真实 CLI 认证反而通了。
-- **站 4**：不变量 = 拒绝非法历史，projector = 拒绝非法转移，两层缺一不可。伪造历史的反向测试和真实运行的零违规测试必须成对出现，否则不知道断言是不是永真式。
-
-顺序依据：站 1-2 是仓库自己声明的里程碑（`docs/initial-runtime.md:108`：
-"proving Pi checkpoint/resume against interrupted real work"）；站 3 是
-`docs/coding-cli-adapters` 承认欠下的冒烟测试；站 4 把前三站的成果锁死；站 5-6 是
-在可信地基上做的置换。**每一站都以"能写出断言"为完成标志，写不出断言=还没学会。**
-
----
-
-## 2. 各站详情
-
-### 第 1 站 · Pi 中断-恢复闭环（约 1 周）
-
-**为什么是现在**：正常路径已被 54 个测试覆盖；分水岭能力是"进程在任意一行死掉后，
-世界处于什么状态"。CLI 边界已经练过一遍同样的故障注入（PR #11 的 5 种模式），搬到 Pi 是肌肉记忆。
-
-**做什么**
-1. 给 `test/fixtures/fake-pi-rpc.mjs` 加故障模式（环境变量开关，默认行为不变）：
-   `die-mid-line`（半行 JSON 后自杀）/ `no-settle`（不发 agent_settled 就退出）/
-   `ignore-abort`（收到 abort 装死）/ `garbage` / `double-settle`。
-2. 每种模式一个测试，断言 `ExecutionEvent[]` 序列与确定终态。
-3. **修 abort 挂死 bug**：`ignore-abort` 测试会证明 for-await 永远等待；修法是硬截止
-   （超时后 `session.terminate()` + `Promise.race`），先写测试再修。
-4. resume 语义测试：同一 sessionId 恢复后，Pi 端会话上下文仍在，已完成的部分不重跑。
-
-**读什么**
-- 自己的：`src/adapters/pi-agent-adapter.ts:177-287`（事件循环）、`:302-394`（进程边界）
-- DSH：`docs/subsystems/subagent.md`（可续跑后台子 Agent）、`session-checkpoint-policy`
-  的 README——对比它在哪个**语义时刻**落 checkpoint（模型响应后/工具提交后）与
-  自己每事件全量覆写的差异
-
-**学习点**：协作式取消 vs 硬截止；`agent_settled` 类显式完成信号；重复事件幂等。
-
-**坑**：故障 fixture 别忘了 Windows 的 `\r\n`；`terminate` 后要断言进程真的退了（无孤儿）。
-
----
-
-### 第 2 站 · 恢复接主入口（约 3-5 天）
-
-**为什么**：`restoreLoopRun`（`src/loop/recovery.ts:12-22`）三行公式已实现且有单测，
-但 `loop/cli.ts` 构造 AgentLoop 时没传 Checkpoint Store——文档宣称的恢复能力在默认入口是假的。
-Phase 0 的验收（"重启 Daemon 后仍能准确恢复计划/尝试/验证/阻塞状态"）就卡在这里。
-
-**做什么**
-1. `loop/cli.ts` 接上 `JsonFileLoopCheckpointStore`，启动时先 `restoreLoopRun`：
-   有未完成 Run 则续跑，而不是新建。
-2. 写跨进程测试：子进程跑到 `waiting_tools` 时 kill -9 → 重启 → 断言从 checkpoint
-   续跑且 `lastAppliedSequence` 之前的事件不重放副作用。
-3. 对 `CloneRuntime` 做同样的审视：`subagent.resumed`（`runtime.ts:383`）只在进程存活时
-   走 `adapter.resume`；补"从 journal 重建 Run 状态后再 resume"的重启路径。
-
-**读什么**：`src/loop/run-state.ts:21-27`（sequence 去重）、`:215`（requireStatus 大声失败）、
-`checkpoint.ts:24-26`（tmp+rename 原子写）——这 3 处是恢复正确性的全部支点。
-
-**学习点**：Checkpoint 是可删的派生缓存，Journal 是真相；恢复 = 快照 + 重放高 sequence 事件。
-
-**坑**：恢复后 Model Provider 会话是独立问题（`recovery.ts` 注释明说了）；第一版允许
-"状态恢复了，模型上下文重建"，不要试图一步到位。
-
----
-
-### 第 3 站 · 真实 CLI 只读冒烟（约 2-3 天，需要装 CLI）
-
-**为什么**：`textDelta`/`toolEvent`/`sessionFrom` 的事件字段名全是猜测。假 fixture 只能证明
-"如果协议长这样则处理正确"，不能证明协议真的长这样。
-
-**做什么**
-1. 装 codex CLI 或 Claude Code，用 `--sandbox read-only` / `--permission-mode plan`
-   跑一个真实 read-only WorkOrder（例如"读 README 总结成五点"）。
-2. 把真实事件流录成 fixture（脱敏后存 `test/fixtures/recorded-*.jsonl`），
-   用录制回放代替手写猜测——以后协议变更时测试会先报警。
-3. 修正猜错的字段；确认 `exec resume` / `--resume` 的恢复语义是否如假设。
-
-**学习点**：录制-回放测试法；"设计完成"和"实测通过"之间的距离。
-
-**坑**：真实 CLI 输出含机密（路径、token）——录制前过 `redactFreeText`；
-冒烟测试标记为需要环境的可选测试，不进默认 `npm test`。
-
----
-
-### 第 4 站 · 可执行不变量（约 3-5 天，可与站 3 并行）
-
-**为什么**：README 的 9 条约束（"没有任何 Runtime 能直接标记完成"、"预测不是权限"…）
-目前靠人肉遵守。攻击面每加一个 adapter 就翻倍，只有断言能守住。
-
-**做什么**：建 `src/core/invariants.ts`，从 3 条起步——
-1. `subagent.completed` 之前必须存在通过验证的 evidence 事件（同 WorkOrder）；
-2. `external_side_effect` 风险的步骤必须存在先行的 `approval.granted`；
-3. evidence 的 kind 必须在该 adapter 声明的 `evidenceKinds` 内（已有运行时检查，
-   补成事后可审计的 journal 扫描）。
-   违反即抛 + 一个"重放整本 journal 校验所有不变量"的测试工具（这也是站 6 的迁移验证器）。
-
-**读什么**：DSH `docs/invariants` 与 `defensive-patterns`——"模型可见即已记录"是同一思想。
-
-**学习点**：不变量 = 跨事件的全局断言，projector 里的 `requireStatus` 只是单状态机局部版。
-
----
-
-### 第 5 站 · SDK 结构化接入（约 1-2 周）
-
-**为什么**：站 3 之后你会确切知道 stdout 解析哪里脆。正确终态是官方结构化通道：
-Claude Code 走 Agent SDK，Codex 走 app-server 协议。届时 `textDelta`/`toolEvent`/
-`CLONE_AI_EVIDENCE` 魔法行整层删除，证据回到结构化事件。
-
-**做什么**：精读 DSH `subagent-claude-code/src` 与 `subagent-codex/src` 的接法 →
-为 Claude Code 写第二个 adapter（与 CLI adapter 并存，capabilities 区分）→
-用站 3 的录制流做对照测试 → 稳定后废弃 CLI 解析路径。
-
-**学习点**：同一 `RuntimeAdapter` 合约下替换 Provider 实现——这正是 README 第 9 条约束
-（"接入的 Runtime 可替换"）的第一次真实演练。
-
----
-
-### 第 6 站 · 存储升级 SQLite WAL（约 1 周，可延后）
-
-**为什么**：JSONL 追加在单进程下够用；桌面端 + daemon 并存后需要并发写与崩溃一致性。
-README 已规划 SQLite WAL + Drizzle。
-
-**做什么**：Journal 接口后换 SQLite 实现（接口已是 seam，`JsonlJournalStore` 可留作测试用）；
-迁移工具 = 站 4 的全量不变量校验器跑一遍旧 journal；断电模拟测试（写一半 kill）。
-
-**学习点**：为什么 WAL 模式适合"单写多读"的本地 daemon；seam 让存储替换不动业务代码。
-
----
-
-## 3. 交接点：Phase 0 完成的定义
-
-六站走完时，以下句子全部为真：
-
-- [ ] 任意时刻 kill 掉 Supervisor 或任何子 Agent，重启后状态确定、副作用不重复；
-- [ ] 至少一个真实 Provider（Pi 或 Claude Code）完成过被中断的真实工作并恢复；
-- [ ] 9 条约束中至少 3 条是重放 journal 即可机器校验的不变量；
-- [ ] 换掉一个 Provider 实现（CLI→SDK）没有改动 Runtime 核心。
-
-此时才开始画上层平面的类型：`SelfModel` / `Goal` / `Commitment` / `Situation` ——
-它们全部实现为 **journal 事件的受治理投影**（与 `LoopRunState` 同一模式），
-Memory 重构（MemoryItem 带来源证据与失效规则）也在此时动工。执行引擎的每一课
-（真相在日志、状态是投影、完成要证据）会在那里第二次用上。
-
----
-
-## 5. Main Agent 架构决定与四阶段路线（2026-08-18 定）
-
-### 5.1 架构决定：Main Agent = Pi 形态二次开发
+不解析 stdout 协议、不读取供应商 session、不依赖供应商的 resume、不接受“我完成了”作为
+证据。需要产物时，新增或修改的文件才是 Artifact；只说话、不落盘就是 `no_artifact`。
+Receipt 仍然不能由黑盒 Worker 自报。
 
 ```text
-┌─────────────────────────────────────────────────┐
-│  Main Agent（大脑）                               │
-│  = 在 Pi 的形态上二次迭代开发                       │
-│  对话、理解意图、规划、提出 WorkPlan                 │
-├─────────────────────────────────────────────────┤
-│  clone-ai Kernel（权威）← 已完成的部分              │
-│  Journal · Policy · 审批 · 证据验证 · 完成判定       │
-├─────────────────────────────────────────────────┤
-│  Worker 插件（手脚）← RuntimeAdapter 合约          │
-│  Claude Code │ Codex │ Pi-RPC │ 未来 Runtime       │
-└─────────────────────────────────────────────────┘
+WorkOrder
+  -> Policy / capability / approval
+  -> prompt + workspace + owner-approved memory packet
+  -> BlackBoxWorkerAdapter
+       budget · hard deadline · termination · environment allowlist
+       workspace snapshot(before) -> process -> snapshot(after)
+  <- exit status + diff + redacted output tail
+  -> observed Evidence -> verification -> Run state
 ```
 
-**为什么是 Pi 形态**：
+## 3. 记忆只归 Kernel
 
-- Pi 提供**进程内 TypeScript SDK**（`docs/work-orders-and-pi` 里早已写过这句话，第一版只是刻意选了 RPC 做进程隔离）；
-- Pi 代码库小而可读，适合二次开发；
-- 已有从外面驱动 Pi 的经验（站 1 的 RPC adapter），现在换成从里面改。
+供应商自己的历史不是项目记忆。Kernel 从本地 Memory Store 召回有作用域的条目，写入
+`memory.recalled`，再把摘要作为背景事实注入本次 Prompt。Worker 不获得整个记忆库，也不
+获得修改 Kernel 状态的工具。
 
-**边界红线（README 第 5/9 条约束的要求）**：Main Agent 是大脑，不是权威。
-它对 Kernel 只能"提案"——`propose_work_plan` / `request_approval` / `recall_memory` /
-`get_run_status` 全部做成它的 tool，每个 tool 的另一端是 Kernel 的校验逻辑。
-这与现有 LLM Planner 是同一模式（只能返回结构化 `create_work_plan`，校验后才生效），
-Main Agent 就是把这个模式从"一个 Planner 调用"扩大到"一整个常驻对话 Agent"。
-
-**不可动摇的一条**：Pi 形态的 loop 可以换、可以崩、可以升级，Kernel 里的状态和
-完成判定权永远不跟着走——这正是与 openclaw/hermes 的本质区别：它们的大脑和权威是
-焊死在一起的。
-
-### 5.2 四阶段路线
-
-| 阶段 | 内容 | 验收 |
-|---|---|---|
-| **A · 执行地基收尾**（= 站 1-4） | Kernel 先可信，再放更聪明的大脑 | ✅ 2026-08-18 完成：kill 任意进程后状态确定；abort 挂死已修；恢复在主入口真实可用 |
-| **B · Main Agent 原型**（Pi 形态二次开发，2-4 周） | 精读 Pi 源码三块 → SDK 起 `clone-main` → CLI/companion 入口改为对话驱动 | 一句自然语言 → Main Agent 规划 → Kernel 校验 → 派发 Worker → 证据验证 → WorkReceipt；Main Agent 全程无法自证完成、无法绕过审批 |
-| **C · Worker 插件化**（= 站 5-6，2-3 周） | Claude Code 走 Agent SDK、Codex 走 app-server 结构化 adapter；registry 从 settings 动态装载；SQLite WAL | 换掉一个 Provider 实现，Kernel 和 Main Agent 零改动 |
-| **D · 个人状态平面**（分身的灵魂） | `SelfModel` / `Goal` / `Commitment` / `Situation` 全部实现为 journal 投影；Memory 分层重构 | Main Agent 的 `recall_memory` 从这里读——"执行引擎"变成"分身" |
-
-### 5.3 阶段 B 起点（下一步）
-
-1. 精读 Pi 源码三块：**agent loop / session 持久化 / extension 与 tool 注册机制**
-   （用 SDK 扩展优先，fork 是最后手段——upstream 还在演进，钉住版本号 0.84.x）；
-2. 用 Pi SDK 起 `clone-main` agent：clone-ai 专属 system prompt + 提案型 tools
-   （`propose_work_plan` / `recall_memory` / `request_approval` / `get_run_status`），
-   每个 tool 落到 Kernel 的现有校验路径；
-3. 把 CLI / companion 入口改成经 Main Agent 对话驱动。
-
-**阶段 B 进度（2026-08-18）**：
-
-- ✅ 第 1 步：Pi 源码精读三块完成，笔记见 `pi-source-notes.zh-CN.md`
-  （agent loop 双层循环与钩子、session 持久化与崩溃修复、扩展注册链路与拦截链）；
-- ✅ 第 2 步：`clone-main` 原型落地
-  - `src/main-agent/kernel-tools.ts`：4 个提案型工具（propose_work_plan / request_approval /
-    recall_memory / get_run_status），每个工具另一端是 CloneRuntime 的现有校验路径
-    （acceptTrigger → attachPlan → journal）；
-  - `src/main-agent/clone-main.ts`：Pi SDK 入口（无内置工具，`noTools: "builtin"`）；
-  - `test/main-agent.test.ts`：8 个 Kernel 校验测试（合法接受、非法拒绝、只读语义）；
-  - 实测：自然语言 → 提案 → Kernel 校验 → journal（trigger→task→run→plan.created→queued）
-    → 续跑后 get_run_status 读到同一 runId，全程 Main Agent 无自证能力。
-
-**第 2 步踩坑（对 Main Agent 开发有长期价值）**：
-
-- `tools: []` 会把 `allowedToolNames` 变成空 Set，`isAllowedTool` 把**扩展工具也全部过滤**；
-  禁用内置工具必须用 `noTools: "builtin"`（`allowedToolNames` 保持 undefined，扩展工具不受限）；
-- `SessionManager.create()` 总是新建会话；续跑同一会话要用 `SessionManager.continueRecent()`
-  （会话文件按最近时间恢复，cwd 不一致时需自行匹配）；
-- 扩展注册链路（loader → ExtensionRunner → _refreshToolRegistry → agent.state.tools）中
-  任何一环的过滤都会静默丢工具，排查时先查 `session.getAllTools()` 与 `getActiveToolNames()` 的差异。
-
-阶段 B 第 1 步的先行收获（2026-08-18 精读 Pi 源码）：
-
-- `dist/core/tools/bash.js`：bash 工具 = `spawn(shellPath, ["-c", command])`，
-  `getShellConfig` 查找顺序 = settings.shellPath → Git Bash 固定路径 → PATH 上的 bash；
-- `dist/core/settings-manager.js`：settings 启动时加载进内存，`reload()` 才重读；
-  bash 工具的 shellPath 在 `_buildRuntime()` 创建工具定义时捕获（改文件后必须 `/reload`）；
-- `dist/core/agent-session.js`：`executeBash` 每次动态读 `settingsManager.getShellPath()`
-  （与 agent 工具路径的差异点，对 Main Agent 的 tool 设计有参考价值）。
-
----
-
-## 4. 学习方法约定（给未来的自己）
-
-1. **先写故障测试，再修代码**——写不出断言的地方就是还没理解的地方。
-2. **每站结束在本文件对应小节追加"实际学到/踩坑"三行**，坐标漂移时回来改第 0 节。
-3. 反面教材和正面范本并排读（CLI adapter 旧版 vs Pi adapter），比只读好代码快一倍。
-4. 假 fixture 证明"处理正确"，录制回放证明"协议正确"，两者缺一不可。
-
----
-
-## 6. 2026-08-19 本轮完成记录（站 5、站 6、阶段 B 收尾）
-
-测试 77 → **96**（94 过 + 2 门控跳过）；`tsc --noEmit` 干净。
-
-### 站 6 · SQLite WAL（`src/core/sqlite-journal.ts`）
-- `node:sqlite` 是 Node 24 内置，**零新依赖**；WAL + `synchronous=FULL`（Journal 是事实来源，耐久性优先）+ `AUTOINCREMENT`（sequence 永不复用）。
-- 迁移工具先跑全量不变量校验再复制——**迁移正是"损坏的过去悄悄变成新事实来源"的时刻**；非空目标拒绝执行。
-- `createJournalStore()` 做 seam 选择（`CLONE_AI_JOURNAL=sqlite`），并接进 Kernel 构造入口——**能力必须可达，不能只是存在**（站 2 的教训第二次生效）。
-- 踩坑：Windows 下 `t.after` 按注册顺序执行，SQLite 句柄未关时 `rm` 报 EBUSY；改为单个 after 钩子统一关闭再删除。另：迁移比对要对 `JSON.parse(JSON.stringify(...))`，因为内存对象带显式 `undefined` 属性而 JSON 不存储它们。
-
-### 阶段 B 收尾
-- 会话构造提炼为 `src/main-agent/session.ts` 工厂——**CLI 入口与验收测试构建同一个受治理会话**，测试证明的就是入口运行的。
-- 门控验收测试 `CLONE_AI_MAIN_LIVE=1`：真实模型跑通"自然语言 → propose_work_plan → Kernel 校验 → Run+Plan 落 Journal"，**断言读 Journal 而不是读 Agent 的话**。实跑约 7s 通过。
-- companion 新增 `POST /api/main-agent/query`，响应把 `reply`（Agent 的话）与 `newRuns`（Journal 真正接受的）分开——话语不是证据。
-
-### 站 5 · Claude Agent SDK（`src/adapters/claude-agent-sdk-adapter.ts`）
-- 官方 SDK 的 `query()` 发有类型消息，整层启发式消失：不再猜 delta 字段、不再从顶层键拼工具名、不再依赖 exit code。
-- **有类型的 `result` 消息 = 显式 settled 信号**；流结束却没有 result 判失败——与"进程退出但无 `agent_settled` 不算完成"同一条不变量。
-- 权限边界不变：`permissionMode` 跟随步骤风险、预算超限 abort、receipt 永不授予、artifact 必须是 workspace 内真实存在的文件。
-- `CLONE_AI_CLAUDE_TRANSPORT=sdk` 在 registry 里切换，CLI adapter 仍是默认——**同一 RuntimeAdapter 合约下替换 Provider 实现，Kernel 零改动**，README 第 9 条约束的首次真实演练。
-
-### 交接点状态（第 3 节四条）
-- [x] 任意时刻 kill 后状态确定、副作用不重复（站 1-2）
-- [x] 真实 Provider 完成过被中断的真实工作并恢复（站 2-3）
-- [x] 9 条约束中 4 条是重放 journal 即可机器校验的不变量（站 4 + 授权快照）
-- [x] 换掉一个 Provider 实现（CLI→SDK）没有改动 Runtime 核心（站 5）
-
-**Phase 0 交接条件已全部满足。** 下一步进入阶段 D：个人状态平面（`SelfModel` / `Goal` / `Commitment` / `Situation` 全部实现为 journal 投影）+ Memory 分层重构。
-
----
-
-## 7. 2026-08-19 · Adapter 收敛与记忆随行（阶段 D 的第一块）
-
-测试 96 → **101**（99 过 + 2 门控跳过）。两件事其实是同一个重构，顺序不能反。
-
-### 7.1 为什么先合并 adapter
-
-起因是一个正确的直觉："每接一个 coding agent 都要重写一个 adapter"不对。但**粒度**要纠正：
-不是一个 adapter 通吃，而是**共享监督核心 + 每 provider 一层薄翻译**。
-
-合并前的真实重复（跨文件同名函数）：`readWorkerEvidence` ×2、`promptFor` ×2（加 Pi 的
-`buildPiPrompt` 实际 3 份）、`redact` ×2、`safeInputSummary` ×2、`stableSessionId` ×2、
-`wait` ×2、`isRecord` ×3。
-
-**危险的不是行数，是 `readWorkerEvidence` 有两份拷贝**——"receipt 永不自报、artifact 必须是
-workspace 内真实存在的文件"是安全策略，改一处忘一处，那个 provider 就是绕过证据信任的后门。
-
-`src/adapters/supervised-worker.ts` 现在独占：预算、硬截止、协作 abort→强制终止、孤儿清理、
-"有 settled 才算完成"、delta 脱敏、证据信任策略、唯一的 prompt 构建器。
-Provider 只需把自己的协议映射到七种归一化事件：
-
-```
-session / text / turn / tool_start / tool_end / progress / settled / protocol_error
+```text
+Memory Store --recall(objective)--> Kernel
+                                      │ memory.recalled
+                                      ▼
+                           一次性 Prompt + facts
+                                      ▼
+                         任意 Provider 的新 session
 ```
 
-**收益的正确度量不是总行数（1475→1486，因为核心是新写的），而是"接一个新 agent 要写多少"**：
-约 100 行 translator，且**碰不到权限代码**。
+切换 Claude Code、Codex、Pi 或新 Agent 时，不需要把供应商 session 迁移到另一个供应商；
+只需要让新 Provider 接受同一份 WorkOrder 和记忆包。
 
-顺带统一后暴露并修好的两处不一致：delta 脱敏原来只有 Pi 有；`maxToolCalls` 原来 CLI 路径不检查。
+## 4. JSON 是诊断边界，不是完成捷径
 
-**踩坑**：共享脱敏会吃掉 `secret=...` 形状的文本，env-probe fixture 因此改用 `probe=` 标记——
-测试要观察的是白名单是否放行，不是脱敏是否工作，两者不能混在同一个断言里。
+错误应该是可枚举、可比较、可由用户编辑或 MCP 读取的 JSON 数据。当前错误类别包括：
 
-### 7.2 记忆随 Kernel 走，不随工具走
+- `launch_failed`
+- `timeout`
+- `aborted`
+- `nonzero_exit`
+- `no_artifact`
+- `missing_credential`
+- `missing_input`
+- `permission_denied`
+- `network`
+- `partial_side_effect`
+- `unexpected_side_effect`
+- `recovery_blocked`
+- `unknown`
 
-起因是另一个实际疼痛：用不同 agent 开发同一个项目，迁移项目记忆很麻烦。
+每个失败还带有 `providerId`、`agentId`、`signature` 和脱敏的 `detail`。`signature` 会去掉
+路径、ID、数字和时间戳，用于比较两个不同 Agent 是否撞上同一堵墙。所有者可以编辑
+`<dataDirectory>/outcomes/failures.json`，用 JSON 增加匹配模式和处理建议；它只影响诊断，不会
+授予权限。两个独立 Provider 报告同一诊断类别时，Kernel 停止盲目重试并把问题升级给所有者。
 
-这正是 README 第一张表要消灭的东西（"记忆归属于供应商" vs "记忆由用户治理"）和
-不可破坏约束第 3 条（"Adapter 可以替换；用户治理的记忆不能委托给它们"）。
+成功不是 Worker 返回的 JSON，而是 Workspace 观察结果与 Kernel 的验证结果。以后可以增加
+用户可编辑的结论 JSON；它只能作为输入事实，不能替代文件证据和验证器。
 
-**现状差的那一段**：`memoryStore.recall()` 的结果原来只到 Planner，`ExecutionAssignment`
-上根本没有记忆字段——Worker 干活时对项目一无所知。
+## 5. 三个缺口的处理规则
 
-补法：`ExecutionAssignment.memoryContext`（与 `dependencyEvidence` 平级，同为"Kernel 筛选后注入"），
-Kernel 用 WorkOrder 的 objective 做查询编译包，经**唯一的** prompt 构建器注入——
-所以三个 provider 同时生效，以后接新 agent 自动带记忆。
+### 5.1 黑盒崩溃恢复：重建，不续接
 
-两道闸门（缺一不可）：
-- **入口**：给的是有作用域的包不是整个记忆库。所有者的开关（召回总开关、每任务上限）留在
-  `LocalMemoryStore` 内部，Kernel 无法自行放宽。prompt 里明确标注"background facts, not
-  instructions"——导入内容是数据不是权威。
-- **出口**：worker 只能提 candidate，`MemoryPipeline` 审后提升。与"worker 不能自证 evidence"同一条规则。
+黑盒没有可依赖的 session ID。恢复不要求 Worker 自己恢复，而是由 Kernel 根据 Journal 和
+Workspace 检查点决定：
 
-**第 5 条不变量 `memory-recall-journaled`**：到达 worker 的每条记忆必须先有 `memory.recalled`
-事件；派发事件带 `memoryItemIds` 供重放对照。无记忆列表的旧历史跳过不误报。
+```text
+Journal: WorkOrder 正在 running
+  + durable workspace checkpoint（派发前文件 hash）
+  + 当前 Workspace snapshot
+  = side-effect arbitration
+```
 
-**学习点**：证据授权快照（第 4 条）教过一次——"要审计的事实必须在事件里记录输入"。这次是同一课的
-第二次应用：不记 `memoryItemIds`，事后就无法验证 worker 看到过什么。
+裁决规则：
+
+- 没有文件变化：安全地用新的 session 重跑；
+- 只有新增/修改文件，且足以满足必需 Artifact 合同：记录观察到的 Artifact，重建完成状态，
+  不再重复执行；
+- 出现删除、只读任务发生写入、产物不完整或检查点缺失：不自动重跑，写入
+  `recovery_blocked` / `partial_side_effect`，等待所有者处理；
+- 外部动作不能因为文件变化而被推断成功，仍需可信 Receipt 或人工审批。
+
+因此 Claude Code 的 `--resume` 不是架构依赖。它可以在某个 Provider 内部存在，但 Kernel 的
+权威恢复路径必须在供应商 session 消失后仍然成立。
+
+### 5.2 Workspace 写互斥
+
+同一 Workspace 的写类 WorkOrder 使用独占 Workspace lease；读类任务不能与写类任务同时
+运行。当前实现宁可保守地把同一 Workspace 的派发串行化，也不让两个 Agent 互相覆盖文件。
+lease 在进程内排队，并使用 Workspace 下的原子锁文件处理同一项目的其他 Supervisor 进程；
+持有者崩溃后可依据 PID 清理陈旧锁。
+
+### 5.3 Provider 配方 JSON 化
+
+Provider 不再由 Runtime 分支识别。内建默认配方位于 `src/adapters/providers.json`，用户可以在
+`<dataDirectory>/providers.json` 覆盖内建项或增加新 Agent：
+
+```json
+{
+  "providers": [
+    {
+      "id": "my-agent",
+      "label": "My Agent",
+      "command": "my-agent",
+      "args": ["run", "{{prompt}}"],
+      "promptVia": "arg",
+      "env": ["MY_AGENT_HOME"],
+      "timeoutMs": 900000
+    }
+  ]
+}
+```
+
+`env` 只列出允许透传的变量名，仓库和配置模板不携带 token 或 API key 值。接入一个新 Agent
+变成配置问题；Kernel、WorkOrder、记忆和验证器都不需要知道它来自哪家公司。
+
+## 6. 文档和代码的边界
+
+- `pi-source-notes.zh-CN.md` 仍然有效：它记录 Pi 的 loop、session 和 extension 机制，属于
+  客观源码知识；但这些机制不是 Worker 黑盒边界的依赖。
+- 旧的 Pi RPC / stdout 事件解析路线不再是当前架构；Pi 只是一个可替换 Provider。
+- `BlackBoxWorkerAdapter` 是统一监督边界；Provider 配置只负责启动命令、参数和环境白名单。
+- Journal 是事实来源，Workspace checkpoint 是可重建的派生缓存；用户可查看 JSON，但不能靠
+  修改 Worker 输出绕过 Kernel 的授权和验证。
+
+## 7. 学习方法
+
+1. 先写“崩溃、超时、只说不做、部分产物、并发写入”的测试，再改实现；
+2. 把 Worker 的话与 Kernel 接受的事实分开记录；
+3. 每个可审计事实都记录其输入（授权、记忆 ID、Workspace checkpoint）；
+4. Provider 只通过配置接入，任何新 Agent 都必须经过同一黑盒边界；
+5. 不能证明安全恢复时，宁可阻塞并交给所有者，不要自动重跑可能产生副作用的任务。

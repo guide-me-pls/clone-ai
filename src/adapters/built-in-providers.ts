@@ -1,61 +1,38 @@
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
 import { BlackBoxWorkerAdapter, type BlackBoxProviderConfig } from "./black-box-worker.ts";
 import { ProviderRegistry, type ProviderDefinition } from "./provider-registry.ts";
+import type { AgentRole } from "../settings/agent-settings.ts";
 
 /**
- * The agents Clone AI knows about out of the box. Each is only a launch recipe
- * — command, arguments, and the credentials it may see. Nothing here describes
- * how the agent works internally, because the Runtime never needs to know.
- *
- * Clone AI 开箱认识的 Agent。每一个都只是一份启动配方——命令、参数，以及它可以看到的
- * 凭据。这里没有任何关于 Agent 内部如何工作的描述，因为 Runtime 从不需要知道。
+ * Built-in launch recipes are data, not dispatch branches. The JSON file keeps
+ * commands and environment names user-visible without storing credentials.
+ * 内建启动配方是数据而不是分发分支。JSON 让命令和环境变量名可查看，但不保存凭据。
  */
-export const BUILT_IN_PROVIDER_CONFIGS: readonly BlackBoxProviderConfig[] = [
-  {
-    id: "claude-code",
-    label: "Claude Code",
-    command: process.platform === "win32" ? "claude.cmd" : "claude",
-    args: ["-p", "{{prompt}}"],
-    env: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"],
-  },
-  {
-    id: "codex-cli",
-    label: "Codex CLI",
-    command: process.platform === "win32" ? "codex.cmd" : "codex",
-    args: ["exec", "--skip-git-repo-check", "{{prompt}}"],
-    env: ["OPENAI_API_KEY", "CODEX_HOME"],
-  },
-  {
-    id: "pi",
-    label: "Pi",
-    command: process.platform === "win32" ? "pi.cmd" : "pi",
-    args: ["-p", "{{prompt}}"],
-    env: [
-      "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY",
-      "PI_CODING_AGENT_DIR", "PI_PACKAGE_DIR",
-    ],
-  },
-  {
-    id: "opencode",
-    label: "opencode",
-    command: process.platform === "win32" ? "opencode.cmd" : "opencode",
-    args: ["run", "{{prompt}}"],
-    env: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENCODE_CONFIG"],
-  },
-];
+const BUILT_IN_PROVIDER_FILE = fileURLToPath(new URL("./providers.json", import.meta.url));
+export const BUILT_IN_PROVIDER_CONFIGS: readonly BlackBoxProviderConfig[] = parseProviderDocument(
+  JSON.parse(readFileSync(BUILT_IN_PROVIDER_FILE, "utf8")) as unknown,
+  BUILT_IN_PROVIDER_FILE,
+);
 
 export function toProviderDefinition(config: BlackBoxProviderConfig): ProviderDefinition {
+  const launchConfig: BlackBoxProviderConfig = {
+    ...config,
+    command: commandForPlatform(config.command),
+  };
   return {
     id: config.id,
     label: config.label ?? config.id,
     ...(config.supportedRoles === undefined ? {} : { supportedRoles: config.supportedRoles }),
     ...(config.roleRestrictionReason === undefined ? {} : { roleRestrictionReason: config.roleRestrictionReason }),
-    createAdapter: ({ agentId, workCapabilities }) => new BlackBoxWorkerAdapter({
+    createAdapter: ({ agentId, workCapabilities, failureCatalog }) => new BlackBoxWorkerAdapter({
       agentId,
-      config,
+      config: launchConfig,
       workCapabilities,
+      failureCatalog,
     }),
   };
 }
@@ -68,13 +45,11 @@ export function createBuiltInProviderRegistry(): ProviderRegistry {
 
 /**
  * Loads user-declared agents from <dataDirectory>/providers.json and adds them
- * to the registry. Integrating a new coding agent is a configuration edit, not
- * a source change; a declaration that collides with a built-in id replaces it,
- * so the owner can retune how a shipped agent is launched.
+ * to the built-ins. A colliding id replaces the built-in recipe, so the owner
+ * can retune a shipped agent without changing source code.
  *
- * 从 <dataDirectory>/providers.json 载入用户声明的 Agent 并加入 Registry。接入新的
- * Coding Agent 是改配置而不是改源码；与内建 ID 冲突的声明会覆盖内建项，因此所有者可以
- * 重新调整自带 Agent 的启动方式。
+ * 从 <dataDirectory>/providers.json 载入用户声明的 Agent 并叠加到内建配置。同名 ID 会覆盖
+ * 内建配方，因此所有者无需改源码就能调整自带 Agent。
  */
 export async function loadProviderRegistry(dataDirectory: string): Promise<ProviderRegistry> {
   const declared = await readProviderConfigs(join(dataDirectory, "providers.json"));
@@ -91,12 +66,22 @@ async function readProviderConfigs(path: string): Promise<BlackBoxProviderConfig
   try {
     source = await readFile(path, "utf8");
   } catch (error: unknown) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return [];
+    if (isMissingFile(error)) return [];
     throw error;
   }
-  const parsed = JSON.parse(source) as { providers?: unknown };
-  const entries = Array.isArray(parsed.providers) ? parsed.providers : [];
-  return entries.map((entry, index) => validateProviderConfig(entry, `${path}#${index}`));
+  return parseProviderDocument(JSON.parse(source) as unknown, path);
+}
+
+function parseProviderDocument(value: unknown, where: string): BlackBoxProviderConfig[] {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`Provider configuration at ${where} must be an object.`);
+  }
+  const entries = (value as Record<string, unknown>).providers;
+  if (entries === undefined) return [];
+  if (!Array.isArray(entries)) {
+    throw new Error(`Provider configuration at ${where} needs a "providers" array.`);
+  }
+  return entries.map((entry, index) => validateProviderConfig(entry, `${where}#${index}`));
 }
 
 function validateProviderConfig(value: unknown, where: string): BlackBoxProviderConfig {
@@ -117,12 +102,27 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
     throw new Error(`Provider "${id}" must declare "args" as an array of strings.`);
   }
   const env = record.env;
-  if (env !== undefined && (!Array.isArray(env) || env.some((name) => typeof name !== "string"))) {
+  if (env !== undefined && (!Array.isArray(env) || env.some((name) => typeof name !== "string" || name.trim().length === 0))) {
     throw new Error(`Provider "${id}" must declare "env" as an array of variable names.`);
   }
   const promptVia = record.promptVia;
   if (promptVia !== undefined && promptVia !== "arg" && promptVia !== "stdin") {
     throw new Error(`Provider "${id}" must declare "promptVia" as "arg" or "stdin".`);
+  }
+  const work = record.work;
+  if (work !== undefined && (!Array.isArray(work) || work.some((item) => typeof item !== "string" || item.trim().length === 0))) {
+    throw new Error(`Provider "${id}" must declare "work" as an array of non-empty strings.`);
+  }
+  const supportedRoles = record.supportedRoles;
+  if (
+    supportedRoles !== undefined
+    && (!Array.isArray(supportedRoles) || supportedRoles.some((role) => !isAgentRole(role)))
+  ) {
+    throw new Error(`Provider "${id}" must declare "supportedRoles" with valid agent roles.`);
+  }
+  const timeoutMs = record.timeoutMs;
+  if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs < 1)) {
+    throw new Error(`Provider "${id}" must declare a positive integer "timeoutMs".`);
   }
   return {
     id,
@@ -131,14 +131,26 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
     ...(args === undefined ? {} : { args: args as string[] }),
     ...(env === undefined ? {} : { env: env as string[] }),
     ...(promptVia === undefined ? {} : { promptVia }),
-    ...(Array.isArray(record.work) ? { work: record.work as string[] } : {}),
-    ...(typeof record.timeoutMs === "number" ? { timeoutMs: record.timeoutMs } : {}),
+    ...(Array.isArray(work) ? { work: work as string[] } : {}),
+    ...(Array.isArray(supportedRoles) ? { supportedRoles: supportedRoles as AgentRole[] } : {}),
+    ...(typeof record.roleRestrictionReason === "string" ? { roleRestrictionReason: record.roleRestrictionReason } : {}),
+    ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
   };
 }
 
-/**
- * The process-wide registry of built-ins. Hosts that support user
- * declarations should call loadProviderRegistry() instead.
- * 内建 Provider 的进程级 Registry。支持用户声明的宿主应改用 loadProviderRegistry()。
- */
+function commandForPlatform(command: string): string {
+  if (process.platform !== "win32") return command;
+  if (["claude", "codex", "pi", "opencode"].includes(command)) return `${command}.cmd`;
+  return command;
+}
+
+function isAgentRole(value: unknown): value is AgentRole {
+  return value === "direct" || value === "research" || value === "draft" || value === "review" || value === "external";
+}
+
+function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+/** Process-wide built-ins for callers that do not need user overrides. 不需要用户覆盖时使用的进程级内建 Registry。 */
 export const builtInProviders = createBuiltInProviderRegistry();

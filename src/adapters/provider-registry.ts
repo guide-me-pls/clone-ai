@@ -1,4 +1,5 @@
 import type { RuntimeAdapter } from "../core/contracts.ts";
+import type { OutcomeCatalog } from "../core/failure-analysis.ts";
 import type { AgentRole } from "../settings/agent-settings.ts";
 
 export interface ProviderAdapterInput {
@@ -8,6 +9,8 @@ export interface ProviderAdapterInput {
   workCapabilities: string[];
   dataDirectory: string;
   workspacePath?: string;
+  /** Owner-editable diagnostic catalog. 所有者可编辑的诊断目录。 */
+  failureCatalog?: OutcomeCatalog;
 }
 
 export interface ProviderDefinition {

@@ -158,14 +158,14 @@ test("two providers failing the same way corroborate a task-level obstacle", () 
   const claude = {
     providerId: "claude-code",
     agentId: "worker",
-    category: classifyFailure("Error: ANTHROPIC_API_KEY is missing. Not logged in, please authenticate."),
+    category: classifyFailure("Error: ANTHROPIC_API_KEY is missing. Not logged in, please authenticate.").category,
     signature: failureSignature("Error: ANTHROPIC_API_KEY is missing. Not logged in, please authenticate."),
     detail: "…",
   };
   const codex = {
     providerId: "codex-cli",
     agentId: "worker",
-    category: classifyFailure("fatal: unauthorized — no api key found for this account; authentication failed"),
+    category: classifyFailure("fatal: unauthorized — no api key found for this account; authentication failed").category,
     signature: failureSignature("fatal: unauthorized — no api key found for this account; authentication failed"),
     detail: "…",
   };
@@ -181,7 +181,7 @@ test("one provider alone never corroborates, and unrelated failures do not eithe
   const credential = {
     providerId: "claude-code",
     agentId: "worker",
-    category: classifyFailure("no api key found; unauthorized"),
+    category: classifyFailure("no api key found; unauthorized").category,
     signature: failureSignature("no api key found; unauthorized"),
     detail: "…",
   };
@@ -191,7 +191,7 @@ test("one provider alone never corroborates, and unrelated failures do not eithe
   const unrelated = {
     providerId: "codex-cli",
     agentId: "worker",
-    category: classifyFailure("panic: internal assertion tripped while compacting the arena"),
+    category: classifyFailure("panic: internal assertion tripped while compacting the arena").category,
     signature: failureSignature("panic: internal assertion tripped while compacting the arena"),
     detail: "…",
   };

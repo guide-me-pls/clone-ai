@@ -46,8 +46,8 @@ adapters.
   own external receipt lookup in `reconcile` before it can be safely retried after a crash.
 - Provider-reported token/currency budgets. The current budget is deterministic: elapsed
   time, model calls, tool calls, and verification retries.
-- Claude Code, Codex, and Pi adapters. They belong after this direct model/tool loop
-  is understood and stable.
+- The production Claude Code, Codex, Pi, and opencode black-box Worker boundary. This
+  direct model/tool loop remains an isolated learning vertical slice, not its protocol.
 
 ## Run it
 
