@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
-import { StaticAgentRegistry } from "../src/adapters/demo-adapter.ts";
+import { StaticAgentRegistry } from "../src/agents/static-agent-registry.ts";
 import { buildWorkerPrompt } from "../src/adapters/supervised-worker.ts";
 import type {
   ExecutionAssignment,

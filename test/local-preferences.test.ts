@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { buildDemoPlan } from "../src/planning/demo-planner.ts";
+import { buildFallbackPlan } from "../src/planning/fallback-planner.ts";
 import { LocalMemoryStore } from "../src/memory/memory-store.ts";
 import { AgentSettingsStore } from "../src/settings/agent-settings.ts";
 import { SessionStore } from "../src/sessions/session-store.ts";
@@ -16,7 +16,7 @@ test("agent settings persist and change which child roles a plan may use", async
     await settings.setEnabled("context-researcher", false);
     await settings.setEnabled("evidence-reviewer", false);
     const current = await settings.get();
-    const plan = buildDemoPlan("调研并准备一份详细的发布方案", new Set(current.agents.filter((agent) => agent.enabled).map((agent) => agent.id)));
+    const plan = buildFallbackPlan("调研并准备一份详细的发布方案", new Set(current.agents.filter((agent) => agent.enabled).map((agent) => agent.id)));
     const assigned = plan.steps.flatMap((step) => step.subagents ?? []).map((order) => order.agentId);
 
     assert.deepEqual(assigned, ["draft-maker"]);

@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { startDemoWorkflow } from "../src/demo-workflow.ts";
+import { runQuery } from "../src/workflows/query-workflow.ts";
+import { createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
 import { LlmWorkPlanner, OpenAIResponsesPlannerModel, type PlanningAgent, type StructuredPlannerModel } from "../src/planning/llm-planner.ts";
 
 const agents: PlanningAgent[] = [
@@ -106,8 +107,13 @@ test("workflow uses an injected LLM planner before it dispatches an executor", a
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-llm-planner-"));
   try {
     const model = new ScriptedPlannerModel([directPlan()]);
-    const result = await startDemoWorkflow(directory, "解释这个术语", {}, undefined, {
+    // The registry is injected explicitly: production has no implicit fake
+    // fallback, so a test that must not reach a real provider says so.
+    // Registry 显式注入：生产环境没有隐式的假 Registry 回退，因此不希望触达真实
+    // Provider 的测试必须自己声明。
+    const result = await runQuery(directory, "解释这个术语", {}, undefined, {
       planner: new LlmWorkPlanner(model),
+      agents: createScriptedAgentRegistry(),
     });
 
     assert.equal(result.status, "completed");

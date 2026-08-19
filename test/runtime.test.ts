@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { DemoExecutionAdapter, createDemoAgentRegistry, StaticAgentRegistry } from "../src/adapters/demo-adapter.ts";
+import { ScriptedExecutionAdapter, createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
+import { StaticAgentRegistry } from "../src/agents/static-agent-registry.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { DefaultPolicyEngine } from "../src/core/policy.ts";
 import { CloneRuntime } from "../src/core/runtime.ts";
@@ -83,7 +84,7 @@ test("a supervisor coordinates child agents, resumes after approval, and preserv
     ],
   });
 
-  const agents = createDemoAgentRegistry();
+  const agents = createScriptedAgentRegistry();
   const firstAttempt = await runtime.execute(run.id, agents);
   assert.equal(firstAttempt.status, "waiting_approval");
   assert.equal(firstAttempt.run.activeStepId, "send");
@@ -152,7 +153,7 @@ test("a single-agent step fails when the bound executor lacks the required capab
   await runtime.grantApproval(run.id, "send");
 
   const wrongRegistry = new StaticAgentRegistry([
-    new DemoExecutionAdapter("external-operator", "demo", ["direct_response"]),
+    new ScriptedExecutionAdapter("external-operator", "demo", ["direct_response"]),
   ]);
   const result = await runtime.execute(run.id, wrongRegistry);
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
-import { createDemoAgentRegistry } from "../src/adapters/demo-adapter.ts";
+import { createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
 import { checkJournalInvariants } from "../src/core/invariants.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { DefaultPolicyEngine } from "../src/core/policy.ts";
@@ -110,7 +110,7 @@ test("the runtime completes a supervised run on sqlite without any code changes"
       }],
     }],
   });
-  const result = await runtime.execute(run.id, createDemoAgentRegistry());
+  const result = await runtime.execute(run.id, createScriptedAgentRegistry());
   assert.equal(result.status, "completed");
 
   // A second runtime hydrated from the same file proves restart recovery.

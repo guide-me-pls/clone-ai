@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createDemoAgentRegistry } from "../src/adapters/demo-adapter.ts";
+import { createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
 import { checkJournalInvariants, assertJournalInvariants } from "../src/core/invariants.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { DefaultPolicyEngine } from "../src/core/policy.ts";
@@ -67,7 +67,7 @@ test("a real supervised run produces a journal with zero invariant violations", 
     ],
   });
 
-  const agents = createDemoAgentRegistry();
+  const agents = createScriptedAgentRegistry();
   const firstAttempt = await runtime.execute(run.id, agents);
   assert.equal(firstAttempt.status, "waiting_approval");
   await runtime.grantApproval(run.id, "send");
