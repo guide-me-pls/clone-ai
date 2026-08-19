@@ -1,10 +1,17 @@
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { stat } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join } from "node:path";
 
-import type { ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabilities } from "../core/contracts.ts";
+import type { ExecutionAssignment } from "../core/contracts.ts";
+import {
+  SupervisedWorkerAdapter,
+  isRecord,
+  wait,
+  type NormalizedWorkerEvent,
+  type ProviderTranslator,
+  type WorkerTransport,
+} from "./supervised-worker.ts";
 
 export type CodingCliProvider = "codex-cli" | "claude-code";
 
@@ -27,9 +34,93 @@ export interface CodingCliAdapterOptions {
   environmentVariables?: string[];
 }
 
-interface SupervisedChild {
-  child: ChildProcess;
-  lifetime: Promise<ProcessExit>;
+/**
+ * Codex CLI and Claude Code behind the shared supervised boundary. This class
+ * is now only the CLI protocol translator plus its process transport; budgets,
+ * hard deadlines, completion authority, and evidence policy live once in
+ * SupervisedWorkerAdapter.
+ *
+ * 共享受监督边界之后的 Codex CLI 与 Claude Code。本类现在只是 CLI 协议翻译器加
+ * 进程传输层；预算、硬截止、完成判定权与证据策略都只在 SupervisedWorkerAdapter 存在一份。
+ */
+export class CodingCliAdapter extends SupervisedWorkerAdapter {
+  constructor(options: CodingCliAdapterOptions) {
+    super({
+      id: options.id,
+      providerId: options.providerId,
+      translator: new CodingCliTranslator(options),
+      workCapabilities: options.workCapabilities,
+      // Worker output can only ever claim workspace artifacts. Receipts must
+      // come from a trusted runtime, never from CLI stdout.
+      // Worker 输出最多只能申报 Workspace 内的 Artifact；Receipt 必须来自可信运行时，
+      // 绝不能来自 CLI stdout。
+      evidenceKinds: ["artifact", "observation"],
+      defaultBudget: { maxDurationMs: 20 * 60_000 },
+    });
+  }
+}
+
+class CodingCliTranslator implements ProviderTranslator {
+  readonly evidencePolicy = "worker-claim" as const;
+  readonly #options: CodingCliAdapterOptions;
+  readonly #launch: { command: string; args: string[] };
+
+  constructor(options: CodingCliAdapterOptions) {
+    this.#options = options;
+    this.#launch = resolveCliLaunch(options.providerId, options.command, options.commandArgs);
+  }
+
+  sessionIdFor(input: ExecutionAssignment): string {
+    return stableSessionId(this.#options.id, input);
+  }
+
+  async start(input: {
+    assignment: ExecutionAssignment;
+    sessionId: string | undefined;
+    resuming: boolean;
+    prompt: string;
+  }): Promise<WorkerTransport> {
+    const provider = this.#options.providerId;
+    const sessionId = input.sessionId ?? "clone-cli-session";
+    const args = provider === "codex-cli"
+      ? codexArgs(input.assignment, sessionId, input.resuming, input.prompt, this.#options.model)
+      : claudeArgs(input.assignment, sessionId, input.resuming, input.prompt, this.#options.model);
+    const child = spawn(this.#launch.command, [...this.#launch.args, ...args], {
+      cwd: input.assignment.workspacePath ?? process.cwd(),
+      env: buildCliEnvironment(provider, this.#options.environmentVariables ?? []),
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    return new CliWorkerTransport(child, provider);
+  }
+}
+
+class CliWorkerTransport implements WorkerTransport {
+  readonly events: AsyncIterable<NormalizedWorkerEvent>;
+  readonly #child: ChildProcess;
+  readonly #exited: Promise<ProcessExit>;
+
+  constructor(child: ChildProcess, provider: CodingCliProvider) {
+    this.#child = child;
+    // Exit and error are observed before the first await: a failed spawn emits
+    // "error" on the next tick, and an unobserved ChildProcess "error" event
+    // crashes the whole supervisor process.
+    // 在第一个 await 之前就观察 exit 与 error：spawn 失败会在下一个 tick 触发 "error"，
+    // 而无人监听的 ChildProcess "error" 事件会让整个 Supervisor 进程崩溃。
+    this.#exited = observeExit(child);
+    this.events = translateCliEvents(child, provider, this.#exited);
+  }
+
+  abort(): void {
+    // The CLI protocols have no cooperative stop channel; kill is the abort.
+    // CLI 协议没有协作式停止通道；kill 就是 abort。
+    this.#child.kill();
+  }
+
+  async terminate(): Promise<void> {
+    if (this.#child.exitCode === null && this.#child.signalCode === null) this.#child.kill();
+    await Promise.race([this.#exited, wait(2_000)]);
+  }
 }
 
 interface ProcessExit {
@@ -38,214 +129,92 @@ interface ProcessExit {
   error?: string;
 }
 
-/**
- * A supervised boundary around Codex CLI and Claude Code. Their internal
- * agent loops remain provider-owned; Clone AI owns the WorkOrder, permission,
- * timeout, journal, and completion decision.
- *
- * Codex CLI 与 Claude Code 的受监督边界。它们内部 Agent Loop 仍属于 Provider；Clone AI
- * 拥有 WorkOrder、权限、超时、Journal 与完成判定。
- */
-export class CodingCliAdapter implements RuntimeAdapter {
-  readonly id: string;
-  readonly providerId: CodingCliProvider;
-  readonly #launch: { command: string; args: string[] };
-  readonly #model?: string;
-  readonly #workCapabilities: string[];
-  readonly #environmentVariables: string[];
-  readonly #active = new Map<string, SupervisedChild>();
+async function* translateCliEvents(
+  child: ChildProcess,
+  provider: CodingCliProvider,
+  exited: Promise<ProcessExit>,
+): AsyncGenerator<NormalizedWorkerEvent> {
+  // stderr drains concurrently with stdout: once the pipe buffer fills, a
+  // child blocked on stderr can never finish stdout, and the two processes
+  // deadlock until the supervisor's deadline kills the child.
+  // stderr 与 stdout 并发消费：一旦管道缓冲区写满，卡在 stderr 上的子进程永远无法
+  // 结束 stdout，两个进程会互锁到 Supervisor 的硬截止杀掉子进程为止。
+  const stderrText = collectStderr(child.stderr);
+  const toolNames = new Map<string, string>();
+  let protocolEvents = 0;
+  let settled = false;
 
-  constructor(options: CodingCliAdapterOptions) {
-    this.id = options.id;
-    this.providerId = options.providerId;
-    this.#launch = resolveCliLaunch(options.providerId, options.command, options.commandArgs);
-    this.#model = options.model;
-    this.#workCapabilities = [...options.workCapabilities];
-    this.#environmentVariables = [...(options.environmentVariables ?? [])];
-  }
+  for await (const line of jsonLines(child.stdout)) {
+    const event = parseJson(line);
+    if (event === undefined) continue;
+    protocolEvents += 1;
+    const session = sessionFrom(event);
+    if (session !== undefined) yield { kind: "session", id: session };
 
-  async capabilities(): Promise<RuntimeCapabilities> {
-    return {
-      resume: true,
-      cancellation: true,
-      approvalCallback: false,
-      parallelAssignments: true,
-      work: [...this.#workCapabilities],
-      // Worker output can only ever claim workspace artifacts. Receipts must
-      // come from a trusted runtime, never from CLI stdout.
-      // Worker 输出最多只能申报 Workspace 内的 Artifact；Receipt 必须来自可信运行时，
-      // 绝不能来自 CLI stdout。
-      evidenceKinds: ["artifact", "observation"],
-    };
-  }
-
-  execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
-    return this.run(input, stableSessionId(this.id, input), false);
-  }
-
-  resume(sessionId: string, input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
-    return this.run(input, sessionId, true);
-  }
-
-  async cancel(sessionId: string): Promise<void> {
-    const supervised = this.#active.get(sessionId);
-    if (supervised === undefined) return;
-    this.#active.delete(sessionId);
-    await terminate(supervised);
-  }
-
-  private async *run(input: ExecutionAssignment, sessionId: string, resuming: boolean): AsyncIterable<ExecutionEvent> {
-    const args = this.providerId === "codex-cli"
-      ? codexArgs(input, sessionId, resuming, this.#model)
-      : claudeArgs(input, sessionId, resuming, this.#model);
-    const child = spawn(this.#launch.command, [...this.#launch.args, ...args], {
-      cwd: input.workspacePath ?? process.cwd(),
-      env: buildCliEnvironment(this.providerId, this.#environmentVariables),
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    // Exit and error are observed before the first await: a failed spawn emits
-    // "error" on the next tick, and an unobserved ChildProcess "error" event
-    // crashes the whole supervisor process.
-    // 在第一个 await 之前就观察 exit 与 error：spawn 失败会在下一个 tick 触发 "error"，
-    // 而无人监听的 ChildProcess "error" 事件会让整个 Supervisor 进程崩溃。
-    const supervised: SupervisedChild = { child, lifetime: observeExit(child) };
-    this.#active.set(sessionId, supervised);
-
-    const budget = input.workOrder?.budget;
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, budget?.maxDurationMs ?? 20 * 60_000);
-    timeout.unref();
-
-    let finalText = "";
-    let protocolEvents = 0;
-    let reportedSessionId = sessionId;
-    let settledResult: { ok: boolean; text: string } | undefined;
-    const toolNames = new Map<string, string>();
-
-    try {
-      yield { type: "session_started", sessionId };
-      // stderr drains concurrently with stdout: once the pipe buffer fills, a
-      // child blocked on stderr can never finish stdout, and the two processes
-      // deadlock until the budget timeout kills the child.
-      // stderr 与 stdout 并发消费：一旦管道缓冲区写满，卡在 stderr 上的子进程永远无法
-      // 结束 stdout，两个进程会互锁到预算超时把子进程杀掉为止。
-      const stderrText = collectStderr(child.stderr);
-      for await (const line of jsonLines(child.stdout)) {
-        const event = parseJson(line);
-        if (event === undefined) continue;
-        protocolEvents += 1;
-        const session = sessionFrom(event);
-        // Claude's stream-json repeats session_id on every event; only a
-        // change is a new session worth journaling.
-        // Claude 的 stream-json 在每个事件上都带 session_id；只有变化才是值得写入
-        // Journal 的新会话。
-        if (session !== undefined && session !== reportedSessionId) {
-          reportedSessionId = session;
-          yield { type: "session_started", sessionId: session };
-        }
-        if (this.providerId === "claude-code") {
-          // These shapes come from a recorded stream-json session, not guesses:
-          // deltas ride stream_event, tools ride content blocks, and the result
-          // event is the provider's explicit settled signal.
-          // 这些结构来自录制的 stream-json 会话而非猜测：增量在 stream_event 里，工具在
-          // content 块里，result 事件是 Provider 显式的 settled 信号。
-          const result = claudeResult(event);
-          if (result !== undefined) {
-            settledResult = result;
-            continue;
-          }
-          const delta = claudeTextDelta(event);
-          if (delta !== undefined) {
-            finalText += delta;
-            yield { type: "message_delta", text: delta };
-          }
-          yield* claudeToolEvents(event, toolNames);
-          continue;
-        }
-        const delta = textDelta(event);
-        if (delta !== undefined) {
-          finalText += delta;
-          yield { type: "message_delta", text: delta };
-        }
-        const tool = toolEvent(event);
-        if (tool !== undefined) yield tool;
-      }
-      const stderr = await stderrText;
-      const exit = await supervised.lifetime;
-      if (timedOut) {
-        yield { type: "failed", message: `${this.providerId} exceeded its WorkOrder duration budget.` };
+    if (provider === "claude-code") {
+      // These shapes come from a recorded stream-json session, not guesses:
+      // deltas ride stream_event, tools ride content blocks, and the result
+      // event is the provider's explicit settled signal.
+      // 这些结构来自录制的 stream-json 会话而非猜测：增量在 stream_event 里，工具在
+      // content 块里，result 事件是 Provider 显式的 settled 信号。
+      const result = claudeResult(event);
+      if (result !== undefined) {
+        settled = true;
+        yield { kind: "settled", ok: result.ok, text: result.text };
         return;
       }
-      if (exit.error !== undefined) {
-        yield { type: "failed", message: `${this.providerId} failed to start: ${exit.error}` };
-        return;
-      }
-      // A provider-reported error result explains the failure better than
-      // stderr noise, so it is checked before the exit code.
-      // Provider 上报的错误 result 比 stderr 噪音更能解释失败原因，因此先于退出码检查。
-      if (settledResult !== undefined && !settledResult.ok) {
-        yield { type: "failed", message: `${this.providerId} reported an error result: ${(settledResult.text.trim() || "unknown error").slice(0, 500)}` };
-        return;
-      }
-      if (exit.code !== 0) {
-        yield { type: "failed", message: `${this.providerId} exited with ${describeExit(exit)}: ${stderr.trim().slice(0, 500)}` };
-        return;
-      }
-      // A clean exit alone is not completion: pointing this adapter at the
-      // wrong binary also exits 0. Completion additionally requires that the
-      // child actually spoke the JSONL protocol.
-      // 干净退出本身不等于完成：把 Adapter 指向错误的二进制同样会以 0 退出。完成还要求
-      // 子进程确实说过 JSONL 协议。
-      if (protocolEvents === 0) {
-        yield { type: "failed", message: `${this.providerId} exited cleanly but produced no parseable protocol output.` };
-        return;
-      }
-      if (this.providerId === "claude-code" && settledResult === undefined) {
-        yield { type: "failed", message: `${this.providerId} exited cleanly but never reported a result event.` };
-        return;
-      }
-      const summaryText = (settledResult?.text ?? "").trim() || finalText.trim();
-      const evidence = await readWorkerEvidence(`${finalText}\n${settledResult?.text ?? ""}`, input);
-      if (evidence !== undefined) {
-        yield { type: "evidence", evidence };
-      } else {
-        yield {
-          type: "evidence",
-          evidence: {
-            kind: "observation",
-            summary: `${this.providerId} completed a supervised session.`,
-            locator: `${this.providerId}://${sessionId}`,
-          },
-        };
-      }
-      yield { type: "completed", summary: summaryText || `${this.providerId} completed its WorkOrder.` };
-    } catch (error: unknown) {
-      yield { type: "failed", message: error instanceof Error ? error.message : String(error) };
-    } finally {
-      clearTimeout(timeout);
-      this.#active.delete(sessionId);
-      // The consumer may abandon this generator mid-stream; without an
-      // explicit kill the CLI keeps running as an unsupervised orphan.
-      // 消费方可能在中途放弃这个 Generator；不显式 kill，CLI 会作为脱管孤儿进程继续运行。
-      await terminate(supervised);
+      const delta = claudeTextDelta(event);
+      if (delta !== undefined) yield { kind: "text", delta };
+      yield* claudeToolEvents(event, toolNames);
+      continue;
     }
+
+    const delta = textDelta(event);
+    if (delta !== undefined) yield { kind: "text", delta };
+    const tool = toolEvent(event);
+    if (tool !== undefined) yield tool;
   }
+
+  const stderr = await stderrText;
+  const exit = await exited;
+  if (settled) return;
+  if (exit.error !== undefined) {
+    yield { kind: "protocol_error", message: `${provider} failed to start: ${exit.error}` };
+    return;
+  }
+  if (exit.code !== 0) {
+    yield { kind: "protocol_error", message: `${provider} exited with ${describeExit(exit)}: ${stderr.trim().slice(0, 500)}` };
+    return;
+  }
+  // A clean exit alone is not completion: pointing this adapter at the wrong
+  // binary also exits 0. Completion additionally requires that the child
+  // actually spoke the JSONL protocol.
+  // 干净退出本身不等于完成：把 Adapter 指向错误的二进制同样会以 0 退出。完成还要求
+  // 子进程确实说过 JSONL 协议。
+  if (protocolEvents === 0) {
+    yield { kind: "protocol_error", message: `${provider} exited cleanly but produced no parseable protocol output.` };
+    return;
+  }
+  if (provider === "claude-code") {
+    yield { kind: "protocol_error", message: `${provider} exited cleanly but never reported a result event.` };
+    return;
+  }
+  // Codex has no dedicated settled event; a clean protocol-speaking exit is
+  // its completion signal.
+  // Codex 没有专门的 settled 事件；说过协议且干净退出就是它的完成信号。
+  yield { kind: "settled", ok: true, text: "" };
 }
 
-function codexArgs(input: ExecutionAssignment, sessionId: string, resuming: boolean, model?: string): string[] {
+function codexArgs(input: ExecutionAssignment, sessionId: string, resuming: boolean, prompt: string, model?: string): string[] {
   const sandbox = input.step.risk === "reversible_write" ? "workspace-write" : "read-only";
   const common = ["--json", "--sandbox", sandbox, "--skip-git-repo-check"];
   if (model !== undefined) common.push("--model", model);
   return resuming
-    ? ["exec", "resume", sessionId, ...common, promptFor(input)]
-    : ["exec", ...common, promptFor(input)];
+    ? ["exec", "resume", sessionId, ...common, prompt]
+    : ["exec", ...common, prompt];
 }
 
-function claudeArgs(input: ExecutionAssignment, sessionId: string, resuming: boolean, model?: string): string[] {
+function claudeArgs(input: ExecutionAssignment, sessionId: string, resuming: boolean, prompt: string, model?: string): string[] {
   const write = input.step.risk === "reversible_write";
   const common = [
     "-p",
@@ -256,22 +225,7 @@ function claudeArgs(input: ExecutionAssignment, sessionId: string, resuming: boo
     "--permission-mode", write ? "acceptEdits" : "plan",
   ];
   if (model !== undefined) common.push("--model", model);
-  return resuming ? ["--resume", sessionId, ...common, promptFor(input)] : [...common, promptFor(input)];
-}
-
-function promptFor(input: ExecutionAssignment): string {
-  const order = input.workOrder;
-  const evidence = order?.expectedArtifacts
-    .map((artifact) => ({ kind: artifact.kind, required: artifact.required, locatorRequired: artifact.locatorRequired }))
-    .filter((artifact) => artifact.required) ?? [];
-  return [
-    "You are a bounded worker inside Clone AI. Complete only this assignment in the current workspace.",
-    "Do not perform network, payment, account, or destructive external actions. Do not modify Clone AI policy or task state.",
-    `Objective: ${order?.objective ?? input.step.instructions}`,
-    `Acceptance criteria: ${(order?.acceptanceCriteria ?? input.step.acceptanceCriteria).join("; ")}`,
-    `Required evidence: ${JSON.stringify(evidence)}`,
-    "If you produce a required artifact, end your final message with exactly one line: CLONE_AI_EVIDENCE: {\"kind\":\"artifact\",\"summary\":\"...\",\"locator\":\"relative/path\"}. Only \"artifact\" claims whose locator is an existing workspace-relative path are accepted.",
-  ].join("\n");
+  return resuming ? ["--resume", sessionId, ...common, prompt] : [...common, prompt];
 }
 
 /**
@@ -321,11 +275,6 @@ function observeExit(child: ChildProcess): Promise<ProcessExit> {
   });
 }
 
-async function terminate({ child, lifetime }: SupervisedChild): Promise<void> {
-  if (child.exitCode === null && child.signalCode === null) child.kill();
-  await Promise.race([lifetime, wait(2_000)]);
-}
-
 function describeExit(exit: ProcessExit): string {
   return exit.code !== null ? `code ${exit.code}` : `signal ${String(exit.signal)}`;
 }
@@ -335,7 +284,8 @@ function describeExit(exit: ProcessExit): string {
  * parsed, and the remainder waits in the buffer for the next chunk.
  * 管道 chunk 与协议行不对齐；只有完整的行才会被解析，剩余部分留在缓冲区等下一个 chunk。
  */
-async function* jsonLines(stream: NodeJS.ReadableStream): AsyncIterable<string> {
+async function* jsonLines(stream: NodeJS.ReadableStream | null): AsyncIterable<string> {
+  if (stream === null) return;
   let pending = "";
   for await (const chunk of stream) {
     pending += chunk.toString("utf8");
@@ -361,123 +311,6 @@ function sessionFrom(event: Record<string, unknown>): string | undefined {
     if (typeof value === "string") return value;
   }
   return undefined;
-}
-
-function textDelta(event: Record<string, unknown>): string | undefined {
-  const nested = event.event;
-  if (isRecord(nested)) {
-    const delta = nested.delta;
-    if (isRecord(delta) && typeof delta.text === "string") return delta.text;
-  }
-  for (const key of ["text", "result", "message"]) {
-    const value = event[key];
-    if (typeof value === "string") return value;
-  }
-  const item = event.item;
-  return isRecord(item) && typeof item.text === "string" ? item.text : undefined;
-}
-
-function toolEvent(event: Record<string, unknown>): Extract<ExecutionEvent, { type: "tool_started" | "tool_completed" }> | undefined {
-  const type = String(event.type ?? "");
-  const name = typeof event.tool_name === "string" ? event.tool_name : undefined;
-  if (name === undefined) return undefined;
-  const id = typeof event.tool_use_id === "string" ? event.tool_use_id : `${name}-${type}`;
-  return /start|begin|call/.test(type)
-    ? { type: "tool_started", toolCallId: id, tool: name }
-    : { type: "tool_completed", toolCallId: id, tool: name, isError: /error|fail/.test(type) };
-}
-
-type WorkerEvidence = Extract<ExecutionEvent, { type: "evidence" }>["evidence"];
-
-/**
- * Worker output is untrusted. A worker may only claim an artifact that really
- * exists inside its workspace; its declared kind is never passed through, so a
- * worker cannot mint receipts for external actions it merely described.
- * Worker 输出不可信。Worker 只能申报确实存在于其 Workspace 内的 Artifact；其声明的 kind
- * 绝不透传，因此 Worker 无法为仅仅“描述过”的外部动作伪造 Receipt。
- */
-async function readWorkerEvidence(text: string, input: ExecutionAssignment): Promise<WorkerEvidence | undefined> {
-  const match = /CLONE_AI_EVIDENCE:\s*(\{[^\n]+\})/.exec(text);
-  if (match === null) return undefined;
-  let claim: Record<string, unknown>;
-  try {
-    const value = JSON.parse(match[1]) as unknown;
-    if (!isRecord(value)) return undefined;
-    claim = value;
-  } catch {
-    return undefined;
-  }
-  const summary = typeof claim.summary === "string" && claim.summary.trim().length > 0
-    ? claim.summary
-    : "The worker declared evidence without a summary.";
-  const rejected = (reason: string): WorkerEvidence => ({
-    kind: "observation",
-    summary: `Worker evidence claim rejected (${reason}): ${summary}`,
-  });
-  if (claim.kind !== "artifact") return rejected(`kind "${String(claim.kind)}" cannot be self-reported`);
-  if (typeof claim.locator !== "string" || claim.locator.trim().length === 0) return rejected("an artifact claim needs a locator");
-  if (isAbsolute(claim.locator)) return rejected("the locator must be workspace-relative");
-  const workspace = resolve(input.workspacePath ?? process.cwd());
-  const target = resolve(workspace, claim.locator);
-  const workspaceRelative = relative(workspace, target);
-  if (workspaceRelative.length === 0 || workspaceRelative.startsWith("..") || isAbsolute(workspaceRelative)) {
-    return rejected("the locator escapes the workspace");
-  }
-  try {
-    await stat(target);
-  } catch {
-    return rejected("the locator does not exist in the workspace");
-  }
-  return { kind: "artifact", summary, locator: claim.locator };
-}
-
-async function collectStderr(stream: NodeJS.ReadableStream): Promise<string> {
-  let text = "";
-  try {
-    for await (const chunk of stream) {
-      // Keep draining past the cap so the child never blocks on a full pipe.
-      // 超出上限后继续消费，避免子进程因管道写满而阻塞。
-      if (text.length < 16_384) text += chunk.toString("utf8");
-    }
-  } catch {
-    // Failures surface through the exit code; a broken stderr pipe must not mask them.
-    // 失败由退出码体现；stderr 管道异常不应掩盖它。
-  }
-  return text;
-}
-
-function defaultCommand(provider: CodingCliProvider): string {
-  const binary = provider === "codex-cli" ? "codex" : "claude";
-  return process.platform === "win32" ? `${binary}.cmd` : binary;
-}
-
-/**
- * Node refuses to spawn .cmd shims without a shell (CVE-2024-27980), so on
- * Windows the launcher resolves the real executable behind the npm shim.
- * Node 出于安全原因拒绝在无 shell 时启动 .cmd 垫片（CVE-2024-27980），因此 Windows 上
- * 由启动器直接解析 npm 垫片背后的真实可执行文件。
- */
-function resolveCliLaunch(
-  provider: CodingCliProvider,
-  command?: string,
-  commandArgs: string[] = [],
-): { command: string; args: string[] } {
-  if (command !== undefined) return { command, args: [...commandArgs] };
-  if (process.platform === "win32") {
-    const npmRoot = join(process.env.APPDATA ?? "", "npm", "node_modules");
-    const candidates = provider === "claude-code"
-      ? [
-          { command: join(npmRoot, "@anthropic-ai", "claude-code", "bin", "claude.exe"), args: [] as string[] },
-          { command: process.execPath, args: [join(npmRoot, "@anthropic-ai", "claude-code", "cli.js")] },
-        ]
-      : [
-          { command: process.execPath, args: [join(npmRoot, "@openai", "codex", "bin", "codex.js")] },
-        ];
-    for (const candidate of candidates) {
-      if (existsSync(candidate.args[0] ?? candidate.command)) return candidate;
-    }
-  }
-  return { command: defaultCommand(provider), args: [] };
 }
 
 /**
@@ -510,7 +343,7 @@ function claudeTextDelta(event: Record<string, unknown>): string | undefined {
 function* claudeToolEvents(
   event: Record<string, unknown>,
   toolNames: Map<string, string>,
-): Generator<Extract<ExecutionEvent, { type: "tool_started" | "tool_completed" }>> {
+): Generator<NormalizedWorkerEvent> {
   if (event.type !== "assistant" && event.type !== "user") return;
   const message = event.message;
   if (!isRecord(message) || !Array.isArray(message.content)) return;
@@ -519,17 +352,71 @@ function* claudeToolEvents(
     if (event.type === "assistant" && block.type === "tool_use" && typeof block.name === "string") {
       const id = typeof block.id === "string" ? block.id : block.name;
       toolNames.set(id, block.name);
-      yield { type: "tool_started", toolCallId: id, tool: block.name };
+      yield { kind: "tool_start", id, name: block.name, input: block.input };
     }
     if (event.type === "user" && block.type === "tool_result" && typeof block.tool_use_id === "string") {
       yield {
-        type: "tool_completed",
-        toolCallId: block.tool_use_id,
-        tool: toolNames.get(block.tool_use_id) ?? "unknown",
+        kind: "tool_end",
+        id: block.tool_use_id,
+        name: toolNames.get(block.tool_use_id),
         isError: block.is_error === true,
       };
     }
   }
+}
+
+function textDelta(event: Record<string, unknown>): string | undefined {
+  const nested = event.event;
+  if (isRecord(nested)) {
+    const delta = nested.delta;
+    if (isRecord(delta) && typeof delta.text === "string") return delta.text;
+  }
+  for (const key of ["text", "result", "message"]) {
+    const value = event[key];
+    if (typeof value === "string") return value;
+  }
+  const item = event.item;
+  return isRecord(item) && typeof item.text === "string" ? item.text : undefined;
+}
+
+function toolEvent(event: Record<string, unknown>): NormalizedWorkerEvent | undefined {
+  const type = String(event.type ?? "");
+  const name = typeof event.tool_name === "string" ? event.tool_name : undefined;
+  if (name === undefined) return undefined;
+  const id = typeof event.tool_use_id === "string" ? event.tool_use_id : `${name}-${type}`;
+  return /start|begin|call/.test(type)
+    ? { kind: "tool_start", id, name }
+    : { kind: "tool_end", id, name, isError: /error|fail/.test(type) };
+}
+
+/**
+ * Node refuses to spawn .cmd shims without a shell (CVE-2024-27980), so on
+ * Windows the launcher resolves the real executable behind the npm shim.
+ * Node 出于安全原因拒绝在无 shell 时启动 .cmd 垫片（CVE-2024-27980），因此 Windows 上
+ * 由启动器直接解析 npm 垫片背后的真实可执行文件。
+ */
+function resolveCliLaunch(
+  provider: CodingCliProvider,
+  command?: string,
+  commandArgs: string[] = [],
+): { command: string; args: string[] } {
+  if (command !== undefined) return { command, args: [...commandArgs] };
+  if (process.platform === "win32") {
+    const npmRoot = join(process.env.APPDATA ?? "", "npm", "node_modules");
+    const candidates = provider === "claude-code"
+      ? [
+          { command: join(npmRoot, "@anthropic-ai", "claude-code", "bin", "claude.exe"), args: [] as string[] },
+          { command: process.execPath, args: [join(npmRoot, "@anthropic-ai", "claude-code", "cli.js")] },
+        ]
+      : [
+          { command: process.execPath, args: [join(npmRoot, "@openai", "codex", "bin", "codex.js")] },
+        ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate.args[0] ?? candidate.command)) return candidate;
+    }
+  }
+  const binary = provider === "codex-cli" ? "codex" : "claude";
+  return { command: process.platform === "win32" ? `${binary}.cmd` : binary, args: [] };
 }
 
 function stableSessionId(adapterId: string, input: ExecutionAssignment): string {
@@ -544,13 +431,18 @@ function stableSessionId(adapterId: string, input: ExecutionAssignment): string 
   return `${value.slice(0, 8)}-${value.slice(8, 12)}-4${value.slice(13, 16)}-8${value.slice(17, 20)}-${value.slice(20, 32)}`;
 }
 
-function wait(milliseconds: number): Promise<void> {
-  return new Promise((resolveWait) => {
-    const timer = setTimeout(resolveWait, milliseconds);
-    timer.unref();
-  });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+async function collectStderr(stream: NodeJS.ReadableStream | null): Promise<string> {
+  if (stream === null) return "";
+  let text = "";
+  try {
+    for await (const chunk of stream) {
+      // Keep draining past the cap so the child never blocks on a full pipe.
+      // 超出上限后继续消费，避免子进程因管道写满而阻塞。
+      if (text.length < 16_384) text += chunk.toString("utf8");
+    }
+  } catch {
+    // Failures surface through the exit result; a broken stderr pipe must not mask them.
+    // 失败由退出结果体现；stderr 管道异常不应掩盖它。
+  }
+  return text;
 }

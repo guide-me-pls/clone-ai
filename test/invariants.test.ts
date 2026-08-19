@@ -137,6 +137,77 @@ test("a run completed without passed verification violates the verification inva
   assert.equal(checkJournalInvariants(withFailedVerification)[0]?.invariant, "verification-before-run-completion");
 });
 
+test("an evidence kind outside the dispatch authorization violates the authorization invariant", () => {
+  const dispatch = {
+    id: "sub-1",
+    runId: "run-1",
+    stepId: "send",
+    workOrderId: "wo-1",
+    agentId: "worker",
+    role: "maker",
+    title: "Send",
+    status: "running",
+    attempt: 1,
+    startedAt: "2026-08-18T00:00:00.000Z",
+    updatedAt: "2026-08-18T00:00:00.000Z",
+    authorizedEvidenceKinds: ["artifact", "observation"],
+  };
+  const evidenceOf = (kind: string) => ({
+    id: "ev-1",
+    runId: "run-1",
+    stepId: "send",
+    workOrderId: "wo-1",
+    kind,
+    summary: "Claimed.",
+    createdAt: "2026-08-18T00:00:01.000Z",
+  });
+
+  const forged = [
+    event(1, "subagent.dispatched", dispatch),
+    event(2, "evidence.recorded", evidenceOf("receipt")),
+  ];
+  const violations = checkJournalInvariants(forged);
+  assert.equal(violations.length, 1);
+  assert.equal(violations[0]?.invariant, "evidence-kind-authorized");
+  assert.match(violations[0]?.message ?? "", /receipt/);
+
+  const legitimate = [
+    event(1, "subagent.dispatched", dispatch),
+    event(2, "evidence.recorded", evidenceOf("artifact")),
+  ];
+  assert.deepEqual(checkJournalInvariants(legitimate), []);
+});
+
+test("histories that predate authorization snapshots are skipped, not failed", () => {
+  const legacyDispatch = {
+    id: "sub-1",
+    runId: "run-1",
+    stepId: "send",
+    workOrderId: "wo-1",
+    agentId: "worker",
+    role: "maker",
+    title: "Send",
+    status: "running",
+    attempt: 1,
+    startedAt: "2026-08-18T00:00:00.000Z",
+    updatedAt: "2026-08-18T00:00:00.000Z",
+  };
+  const events = [
+    event(1, "subagent.dispatched", legacyDispatch),
+    event(2, "evidence.recorded", {
+      id: "ev-1",
+      runId: "run-1",
+      stepId: "send",
+      workOrderId: "wo-1",
+      kind: "receipt",
+      summary: "Old journal entry without a snapshot.",
+      createdAt: "2026-08-18T00:00:01.000Z",
+    }),
+  ];
+
+  assert.deepEqual(checkJournalInvariants(events), []);
+});
+
 function event(sequence: number, type: JournalEvent["type"], payload: unknown): JournalEvent {
   return {
     id: `event-${sequence}`,

@@ -27,6 +27,12 @@ are given to the Planner as context.
 Memory can help the Planner understand preference or history. It cannot grant
 permission, change policy, or silently cause an external action.
 
+Recall happens a second time at dispatch: the Kernel compiles a scoped memory
+packet per assignment, keyed on the work order's objective, and injects it
+through the single shared worker prompt. Every provider therefore receives the
+same owner-reviewed context, and each packet is journaled with the step and
+work order it reached.
+
 ### 3. The Planner proposes a bounded plan
 
 The default is the deterministic `buildDemoPlan()` policy so that demos stay

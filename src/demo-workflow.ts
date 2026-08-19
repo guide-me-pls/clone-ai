@@ -138,7 +138,17 @@ function toDemoResult(runtime: CloneRuntime, result: DispatchResult, memoryCandi
 async function createRuntime(dataDirectory: string): Promise<{ runtime: CloneRuntime; memory: MemoryPipeline }> {
   const journal = new JsonlJournalStore(join(dataDirectory, "journal.jsonl"));
   const memory = new MemoryPipeline(journal);
-  const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory });
+  const runtime = new CloneRuntime({
+    journal,
+    policy: new DefaultPolicyEngine(),
+    verifier: new EvidenceVerifier(),
+    memory,
+    // Workers receive the owner's reviewed memory through the Kernel, so
+    // switching providers never means migrating memory into another tool.
+    // Worker 经由 Kernel 收到所有者已审核的记忆，因此更换 Provider 从不意味着
+    // 把记忆迁移进另一个工具。
+    memorySource: new LocalMemoryStore(join(dataDirectory, "memory.json")),
+  });
   await runtime.hydrate();
   return { runtime, memory };
 }

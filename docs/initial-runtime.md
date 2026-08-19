@@ -105,5 +105,8 @@ src/
   automatic daemon lifecycle.
 - Opportunity detection and a governed personal world model.
 
-The next milestone is proving Pi checkpoint/resume against interrupted real work,
-then applying the same adapter contract to Codex and Claude Code.
+Pi checkpoint/resume against interrupted real work is proven, and the same
+adapter contract now carries Codex and Claude Code. The next milestone is the
+personal state plane: `SelfModel`, `Goal`, `Commitment`, and `Situation` as
+governed journal projections. See
+[Runtime architecture and route](runtime-architecture-and-route.md).
