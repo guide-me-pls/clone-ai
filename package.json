@@ -14,6 +14,7 @@
     "desktop:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1",
     "loop": "node --experimental-strip-types src/loop/cli.ts",
     "main": "node --experimental-strip-types src/main-agent/clone-main.ts",
+    "bench": "node --experimental-strip-types benchmark/run.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },

@@ -1,0 +1,56 @@
+{
+  "provider": "pi",
+  "ranAt": "2026-08-19T09:44:12.056Z",
+  "records": [
+    {
+      "taskId": "summarize",
+      "title": "Read-only summary",
+      "passed": false,
+      "expectedFailure": false,
+      "status": "error",
+      "durationMs": 9,
+      "artifacts": [],
+      "error": "Subagent work order summarize needs an input contract."
+    },
+    {
+      "taskId": "two-step-chain",
+      "title": "Two-step dependency chain",
+      "passed": false,
+      "expectedFailure": false,
+      "status": "error",
+      "durationMs": 4,
+      "artifacts": [],
+      "error": "Subagent work order research needs an input contract."
+    },
+    {
+      "taskId": "three-step-pipeline",
+      "title": "Three-step research -> draft -> review pipeline",
+      "passed": false,
+      "expectedFailure": false,
+      "status": "error",
+      "durationMs": 5,
+      "artifacts": [],
+      "error": "Subagent work order research needs an input contract."
+    },
+    {
+      "taskId": "code-tool",
+      "title": "Code task with a real tool call",
+      "passed": false,
+      "expectedFailure": false,
+      "status": "error",
+      "durationMs": 4,
+      "artifacts": [],
+      "error": "Subagent work order code needs an input contract."
+    },
+    {
+      "taskId": "missing-input",
+      "title": "Missing input fails with the right category",
+      "passed": false,
+      "expectedFailure": true,
+      "status": "error",
+      "durationMs": 4,
+      "artifacts": [],
+      "error": "Subagent work order missing needs an input contract."
+    }
+  ]
+}
