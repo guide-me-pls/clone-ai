@@ -260,6 +260,10 @@ export type JournalEventType =
   | "verification.completed"
   | "memory.candidate.requested"
   | "memory.candidate.proposed"
+  | "memory.candidate.promoted"
+  | "memory.candidate.rejected"
+  | "memory.updated"
+  | "memory.archived"
   | "memory.recalled";
 
 export interface JournalEvent {
