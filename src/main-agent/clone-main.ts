@@ -15,8 +15,7 @@
  * be resumed with the same command (same cwd + session dir).
  * 会话状态持久化在 <dataDirectory>/pi-sessions/main-agent，相同命令可续跑。
  */
-import { join } from "node:path";
-
+import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { createMainAgentSession } from "./session.ts";
 
 const query = process.argv.slice(2).join(" ").trim();
@@ -25,8 +24,17 @@ if (query.length === 0) {
   process.exit(1);
 }
 
-const dataDirectory = process.env.CLONE_AI_DATA_DIR ?? join(process.cwd(), ".clone-ai");
-const { session } = await createMainAgentSession({ dataDirectory });
+// The CLI resolves the owner's home exactly as the daemon does, so running a
+// query from a terminal and from the desktop reach the same state.
+// CLI 与 Daemon 用完全相同的方式解析所有者主目录，因此从终端和桌面发起的查询
+// 到达同一份状态。
+const paths = resolveClonePaths();
+await prepareCloneHome(paths);
+await migrateLegacyCloneHome({
+  legacyDirectory: defaultLegacyDirectory(paths.workspacePath),
+  targetDirectory: paths.dataDirectory,
+});
+const { session } = await createMainAgentSession({ dataDirectory: paths.dataDirectory });
 
 session.subscribe((event) => {
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {

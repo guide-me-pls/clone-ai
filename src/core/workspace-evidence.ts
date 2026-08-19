@@ -98,6 +98,7 @@ export interface WorkspaceSnapshotOptions {
 
 const DEFAULT_IGNORED = [
   ".git",
+  ".clone",
   ".clone-ai",
   "node_modules",
   ".venv",

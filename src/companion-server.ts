@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type { JournalEvent, MemoryCandidate, Run, Task } from "./core/contracts.ts";
-import { JsonlJournalStore } from "./core/journal.ts";
+import { createJournalStore } from "./core/sqlite-journal.ts";
 import { replay } from "./core/run-state.ts";
 import { approveQueryRun, runQuery } from "./workflows/query-workflow.ts";
 import { LocalScheduler } from "./scheduling/local-scheduler.ts";
@@ -11,9 +11,23 @@ import { describeSchedule, ScheduleStore, type LocalSchedule, type ScheduleKind 
 import { SessionStore } from "./sessions/session-store.ts";
 import { loadProviderRegistry } from "./adapters/built-in-providers.ts";
 import { AgentSettingsStore } from "./settings/agent-settings.ts";
-import { LocalAgentRegistry } from "./agents/agent-registry.ts";
+import { LocalAgentRegistry } from "./agents/local-provider-registry.ts";
 import { runMainAgentQuery } from "./main-agent/query.ts";
 import { LocalMemoryStore } from "./memory/memory-store.ts";
+import {
+  defaultLegacyDirectory,
+  migrateLegacyCloneHome,
+  prepareCloneHome,
+  resolveClonePaths,
+  type ClonePaths,
+} from "./config/clone-home.ts";
+import { CloneConfigStore } from "./config/clone-config.ts";
+import {
+  listEffectiveProviderConfigs,
+  readUserProviderConfigs,
+  removeUserProviderConfig,
+  upsertUserProviderConfig,
+} from "./adapters/provider-config-store.ts";
 
 export interface CompanionServerOptions {
   host?: string;
@@ -38,8 +52,24 @@ export interface RunningCompanionServer {
 export async function startCompanionServer(options: CompanionServerOptions = {}): Promise<RunningCompanionServer> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? parsePort(process.env.CLONE_AI_PORT, 4317);
-  const dataDirectory = options.dataDirectory ?? process.env.CLONE_AI_DATA_DIR ?? join(process.cwd(), ".clone-ai");
-  const workspacePath = options.workspacePath ?? process.env.CLONE_AI_WORKSPACE ?? process.cwd();
+  // One resolver owns every persistent path, so the daemon, the CLI, and the
+  // Main Agent cannot disagree about where the owner's data lives.
+  // 由唯一的解析器决定所有持久化路径，使 Daemon、CLI 与 Main Agent 不会对
+  // "所有者数据在哪里" 产生分歧。
+  const paths = resolveClonePaths({
+    ...(options.dataDirectory === undefined ? {} : { dataDirectory: options.dataDirectory }),
+    ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+  });
+  await prepareCloneHome(paths);
+  // Copying is additive and never overwrites a file the owner already has in
+  // the new home, so an interrupted upgrade can simply be run again.
+  // 复制只做增量、绝不覆盖新目录中已存在的文件，因此升级中断后可以直接重跑。
+  await migrateLegacyCloneHome({
+    legacyDirectory: defaultLegacyDirectory(paths.workspacePath),
+    targetDirectory: paths.dataDirectory,
+  });
+  const dataDirectory = paths.dataDirectory;
+  const workspacePath = paths.workspacePath;
   const clientPath = options.clientPath ?? join(process.cwd(), "apps", "desktop", "ui", "index.html");
   const clientDirectory = dirname(clientPath);
   const [client, clientCss, clientJs] = await Promise.all([
@@ -47,12 +77,13 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     readFile(join(clientDirectory, "style.css"), "utf8"),
     readFile(join(clientDirectory, "app.js"), "utf8"),
   ]);
-  const schedules = new ScheduleStore(join(dataDirectory, "schedules.json"));
-  const sessions = new SessionStore(join(dataDirectory, "sessions.json"));
+  const schedules = new ScheduleStore(paths.schedulesFile);
+  const sessions = new SessionStore(paths.sessionsFile);
   const providers = await loadProviderRegistry(dataDirectory);
-  const agentSettings = new AgentSettingsStore(join(dataDirectory, "settings.json"), providers);
-  const agentRegistry = new LocalAgentRegistry();
-  const memoryStore = new LocalMemoryStore(join(dataDirectory, "memory.json"));
+  const agentSettings = new AgentSettingsStore(paths.legacyAgentsFile, providers);
+  const agentRegistry = new LocalAgentRegistry(dataDirectory);
+  const memoryStore = new LocalMemoryStore(paths.memoryFile);
+  const config = new CloneConfigStore(paths);
   await syncMemory(dataDirectory, memoryStore);
   const scheduler = new LocalScheduler({
     store: schedules,
@@ -71,6 +102,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         host,
         dataDirectory,
         workspacePath,
+        paths,
+        config,
         client,
         clientCss,
         clientJs,
@@ -112,7 +145,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { host: string; dataDirectory: string; workspacePath: string; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore },
+  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host}`);
 
@@ -135,6 +168,69 @@ async function handleRequest(
     sendJson(response, 200, await buildDashboard(context.dataDirectory, context.sessions));
     return;
   }
+  if (request.method === "GET" && url.pathname === "/api/config") {
+    // Paths are shown so the owner can find and inspect their own data; no
+    // credential value is ever part of this payload.
+    // 展示路径是为了让所有者能找到并检查自己的数据；该响应从不包含任何凭据值。
+    sendJson(response, 200, {
+      config: await context.config.get(),
+      paths: {
+        dataDirectory: context.paths.dataDirectory,
+        workspacePath: context.paths.workspacePath,
+        configFile: context.paths.configFile,
+        providersFile: context.paths.providersFile,
+        memoryFile: context.paths.memoryFile,
+        outcomesDirectory: context.paths.outcomesDirectory,
+        workspaceRuntimeDirectory: context.paths.workspaceRuntimeDirectory,
+      },
+    });
+    return;
+  }
+
+  if (request.method === "PATCH" && url.pathname === "/api/config") {
+    const body = await readJsonBody(request);
+    const update: { workspacePath?: string; locale?: "zh-CN" | "en" } = {};
+    if (typeof body.workspacePath === "string" && body.workspacePath.trim().length > 0) {
+      update.workspacePath = body.workspacePath.trim();
+    }
+    if (body.locale === "zh-CN" || body.locale === "en") update.locale = body.locale;
+    if (Object.keys(update).length === 0) {
+      sendJson(response, 400, { error: "Provide a workspacePath or a locale to change." });
+      return;
+    }
+    sendJson(response, 200, { config: await context.config.update(update) });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/settings/providers") {
+    sendJson(response, 200, {
+      providers: await listEffectiveProviderConfigs(context.dataDirectory),
+      userDefined: await readUserProviderConfigs(context.dataDirectory),
+    });
+    return;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/settings/providers") {
+    const body = await readJsonBody(request);
+    try {
+      // Validation lives in the store, so the GUI cannot write a declaration
+      // the Runtime would later refuse to launch.
+      // 校验在 Store 内进行，因此 GUI 无法写入 Runtime 之后会拒绝启动的声明。
+      const providers = await upsertUserProviderConfig(context.dataDirectory, body as never);
+      sendJson(response, 200, { providers });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid provider declaration." });
+    }
+    return;
+  }
+
+  const providerMatch = url.pathname.match(/^\/api\/settings\/providers\/([^/]+)$/);
+  if (request.method === "DELETE" && providerMatch?.[1] !== undefined) {
+    const providers = await removeUserProviderConfig(context.dataDirectory, decodeURIComponent(providerMatch[1]));
+    sendJson(response, 200, { providers });
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/settings") {
     sendJson(response, 200, await context.agentSettings.get());
     return;
@@ -482,7 +578,11 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
 }
 
 async function loadRuntimeView(dataDirectory: string) {
-  const journal = new JsonlJournalStore(join(dataDirectory, "journal.jsonl"));
+  // Read through the same seam the writers use: hardcoding JSONL here would
+  // silently show an empty history whenever the owner enables SQLite.
+  // 通过写入端使用的同一 seam 读取：在此写死 JSONL 会导致所有者启用 SQLite 后
+  // 界面悄悄显示空历史。
+  const journal = createJournalStore(dataDirectory);
   const events = await journal.list();
   const state = replay(events);
   const tasks = state.tasks;
@@ -699,7 +799,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 async function syncMemory(dataDirectory: string, memoryStore: LocalMemoryStore): Promise<void> {
-  const journal = new JsonlJournalStore(join(dataDirectory, "journal.jsonl"));
+  const journal = createJournalStore(dataDirectory);
   const candidates = (await journal.list())
     .filter((event) => event.type === "memory.candidate.proposed")
     .map((event) => event.payload as MemoryCandidate);

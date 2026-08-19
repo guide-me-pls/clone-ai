@@ -13,11 +13,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import type { PlanStep } from "../core/contracts.ts";
-import { DefaultPolicyEngine } from "../core/policy.ts";
-import { CloneRuntime } from "../core/runtime.ts";
-import { createJournalStore } from "../core/sqlite-journal.ts";
-import { EvidenceVerifier } from "../core/verification.ts";
-import { MemoryPipeline } from "../memory/memory-pipeline.ts";
+import type { CloneRuntime } from "../core/runtime.ts";
+import { createRuntimeAssembly } from "../core/runtime-factory.ts";
+import { resolveClonePaths } from "../config/clone-home.ts";
 import { LocalMemoryStore } from "../memory/memory-store.ts";
 
 export interface KernelToolsOptions {
@@ -39,18 +37,12 @@ export interface PlanProposalResult {
  * CLONE_AI_JOURNAL=sqlite 启用 WAL）位于同一 seam 之后。
  */
 export async function createKernelRuntime(dataDirectory: string): Promise<CloneRuntime> {
-  const journal = createJournalStore(dataDirectory);
-  const runtime = new CloneRuntime({
-    journal,
-    policy: new DefaultPolicyEngine(),
-    verifier: new EvidenceVerifier(),
-    memory: new MemoryPipeline(journal),
-    // The same reviewed memory reaches every worker the plan dispatches,
-    // whichever provider runs it.
-    // 同一份已审核记忆会到达计划派发的每个 Worker，无论由哪个 Provider 执行。
-    memorySource: new LocalMemoryStore(join(dataDirectory, "memory.json")),
-  });
-  await runtime.hydrate();
+  // The Main Agent must see exactly the Kernel the daemon and the Query
+  // workflow see; a second assembly here would let its view of runs, memory,
+  // and recovery drift from the authority it is supposed to be proposing to.
+  // Main Agent 必须看到与 Daemon、Query 工作流完全相同的 Kernel；在这里另建一套组装，
+  // 会让它对 Run、记忆和恢复的视图偏离它本应提案的那个权威。
+  const { runtime } = await createRuntimeAssembly({ dataDirectory });
   return runtime;
 }
 
@@ -110,7 +102,7 @@ export async function requestApprovalInfo(runtime: CloneRuntime, runId: string):
 
 /** Read-only: lexical recall over the local memory store. 只读：本地记忆库的词法召回。 */
 export async function recallMemories(dataDirectory: string, query: string, runId = "main-agent"): Promise<string> {
-  const store = new LocalMemoryStore(join(dataDirectory, "memory.json"));
+  const store = new LocalMemoryStore(resolveClonePaths({ dataDirectory }).memoryFile);
   const matches = await store.recall(query, runId);
   if (matches.length === 0) return "No matching memories.";
   return matches.map((match) => `[${match.score.toFixed(2)}] ${match.memory.summary}`).join("\n");
