@@ -217,6 +217,13 @@ export class CloneRuntime {
     return this.requireRun(runId);
   }
 
+  /** Read-only view of every run in the projection, oldest first. 投影中全部 Run 的只读视图，按创建时间升序。 */
+  listRuns(): Run[] {
+    return Object.values(this.#state.runs)
+      .map((run) => ({ ...run }))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
   getSubagentsForRun(runId: string): SubagentRun[] {
     return Object.values(this.#state.subagents)
       .filter((subagent) => subagent.runId === runId)
