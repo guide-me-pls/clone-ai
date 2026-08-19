@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type { JournalEvent, MemoryCandidate, Run, Task } from "./core/contracts.ts";
-import { JsonlJournalStore } from "./core/journal.ts";
+import { createJournalStore } from "./core/sqlite-journal.ts";
 import { replay } from "./core/run-state.ts";
 import { approveQueryRun, runQuery } from "./workflows/query-workflow.ts";
 import { LocalScheduler } from "./scheduling/local-scheduler.ts";
@@ -14,6 +14,12 @@ import { AgentSettingsStore } from "./settings/agent-settings.ts";
 import { LocalAgentRegistry } from "./agents/agent-registry.ts";
 import { runMainAgentQuery } from "./main-agent/query.ts";
 import { LocalMemoryStore } from "./memory/memory-store.ts";
+import {
+  defaultLegacyDirectory,
+  migrateLegacyCloneHome,
+  prepareCloneHome,
+  resolveClonePaths,
+} from "./config/clone-home.ts";
 
 export interface CompanionServerOptions {
   host?: string;
@@ -38,8 +44,24 @@ export interface RunningCompanionServer {
 export async function startCompanionServer(options: CompanionServerOptions = {}): Promise<RunningCompanionServer> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? parsePort(process.env.CLONE_AI_PORT, 4317);
-  const dataDirectory = options.dataDirectory ?? process.env.CLONE_AI_DATA_DIR ?? join(process.cwd(), ".clone-ai");
-  const workspacePath = options.workspacePath ?? process.env.CLONE_AI_WORKSPACE ?? process.cwd();
+  // One resolver owns every persistent path, so the daemon, the CLI, and the
+  // Main Agent cannot disagree about where the owner's data lives.
+  // 由唯一的解析器决定所有持久化路径，使 Daemon、CLI 与 Main Agent 不会对
+  // "所有者数据在哪里" 产生分歧。
+  const paths = resolveClonePaths({
+    ...(options.dataDirectory === undefined ? {} : { dataDirectory: options.dataDirectory }),
+    ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+  });
+  await prepareCloneHome(paths);
+  // Copying is additive and never overwrites a file the owner already has in
+  // the new home, so an interrupted upgrade can simply be run again.
+  // 复制只做增量、绝不覆盖新目录中已存在的文件，因此升级中断后可以直接重跑。
+  await migrateLegacyCloneHome({
+    legacyDirectory: defaultLegacyDirectory(paths.workspacePath),
+    targetDirectory: paths.dataDirectory,
+  });
+  const dataDirectory = paths.dataDirectory;
+  const workspacePath = paths.workspacePath;
   const clientPath = options.clientPath ?? join(process.cwd(), "apps", "desktop", "ui", "index.html");
   const clientDirectory = dirname(clientPath);
   const [client, clientCss, clientJs] = await Promise.all([
@@ -47,12 +69,12 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     readFile(join(clientDirectory, "style.css"), "utf8"),
     readFile(join(clientDirectory, "app.js"), "utf8"),
   ]);
-  const schedules = new ScheduleStore(join(dataDirectory, "schedules.json"));
-  const sessions = new SessionStore(join(dataDirectory, "sessions.json"));
+  const schedules = new ScheduleStore(paths.schedulesFile);
+  const sessions = new SessionStore(paths.sessionsFile);
   const providers = await loadProviderRegistry(dataDirectory);
-  const agentSettings = new AgentSettingsStore(join(dataDirectory, "settings.json"), providers);
+  const agentSettings = new AgentSettingsStore(paths.legacyAgentsFile, providers);
   const agentRegistry = new LocalAgentRegistry();
-  const memoryStore = new LocalMemoryStore(join(dataDirectory, "memory.json"));
+  const memoryStore = new LocalMemoryStore(paths.memoryFile);
   await syncMemory(dataDirectory, memoryStore);
   const scheduler = new LocalScheduler({
     store: schedules,
@@ -482,7 +504,11 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
 }
 
 async function loadRuntimeView(dataDirectory: string) {
-  const journal = new JsonlJournalStore(join(dataDirectory, "journal.jsonl"));
+  // Read through the same seam the writers use: hardcoding JSONL here would
+  // silently show an empty history whenever the owner enables SQLite.
+  // 通过写入端使用的同一 seam 读取：在此写死 JSONL 会导致所有者启用 SQLite 后
+  // 界面悄悄显示空历史。
+  const journal = createJournalStore(dataDirectory);
   const events = await journal.list();
   const state = replay(events);
   const tasks = state.tasks;
@@ -699,7 +725,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 async function syncMemory(dataDirectory: string, memoryStore: LocalMemoryStore): Promise<void> {
-  const journal = new JsonlJournalStore(join(dataDirectory, "journal.jsonl"));
+  const journal = createJournalStore(dataDirectory);
   const candidates = (await journal.list())
     .filter((event) => event.type === "memory.candidate.proposed")
     .map((event) => event.payload as MemoryCandidate);
