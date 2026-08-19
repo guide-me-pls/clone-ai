@@ -431,7 +431,7 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
       title: subagent.title,
       agentId: subagent.agentId,
       role: subagent.role,
-      providerId: subagent.providerId ?? providerByRole.get(subagent.agentId) ?? "demo",
+      providerId: subagent.providerId ?? providerByRole.get(subagent.agentId) ?? "unknown",
       status: subagent.status,
       summary: subagent.summary,
       updatedAt: subagent.updatedAt,

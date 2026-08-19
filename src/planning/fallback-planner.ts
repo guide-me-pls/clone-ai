@@ -8,12 +8,12 @@ const EXTERNAL_ACTION_TERMS = ["发送", "发给", "发布", "提交", "上传",
 const IRREVERSIBLE_ACTION_TERMS = ["删除", "清空", "付款", "支付", "购买", "下单", "delete", "remove", "pay", "buy", "purchase"];
 
 /**
- * This is a transparent local planning policy for the demo, not a pretend
+ * This is a transparent local planning policy, not a pretend
  * LLM planner. It deliberately varies the work graph based on the request:
  * direct questions stay direct, preparation work gets only the roles it
  * needs, and external actions remain a separately approved step.
  *
- * 这是面向 Demo 的透明本地规划策略，不是假装成 LLM Planner。它会依据请求
+ * 这是透明的本地规划策略，不是假装成 LLM Planner。它会依据请求
  * 调整任务图：直接问题保持直接处理；准备型任务只分配必要角色；外部动作始终
  * 保持为单独审批的步骤。
  */
