@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { startCompanionServer, type RunningCompanionServer } from "../src/companion-server.ts";
+import { JsonlJournalStore } from "../src/core/journal.ts";
 
 async function companion(t: TestContext): Promise<{ url: string; dataDirectory: string }> {
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-api-home-"));
@@ -98,6 +99,55 @@ test("the API refuses a provider declaration that carries a credential value", a
 
   const stored = await (await fetch(`${url}/api/settings/providers`)).json() as { userDefined: unknown[] };
   assert.equal(stored.userDefined.length, 0);
+});
+
+test("memory candidates can be listed and promoted through the API", async (t) => {
+  // Write the proposed candidate before the server starts, so its journal
+  // instance loads it from disk.
+  // 在 Server 启动前写入提案候选，使其 Journal 实例从磁盘加载到它。
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-api-memory-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "clone-api-memory-ws-"));
+  let server: RunningCompanionServer | undefined;
+  t.after(async () => {
+    await server?.close();
+    await rm(dataDirectory, { recursive: true, force: true });
+    await rm(workspacePath, { recursive: true, force: true });
+  });
+  const journal = new JsonlJournalStore(join(dataDirectory, "journal.jsonl"));
+  await journal.append({
+    type: "evidence.recorded",
+    runId: "run-1",
+    payload: {
+      id: "ev-1", runId: "run-1", stepId: "s1", producedBy: "worker", kind: "artifact",
+      summary: "deliverable produced", createdAt: new Date().toISOString(),
+    },
+  });
+  await journal.append({
+    type: "memory.candidate.proposed",
+    runId: "run-1",
+    payload: {
+      id: "c-1", runId: "run-1", sourceEvidenceIds: ["ev-1"],
+      summary: "用户偏好：发布前必须完成风险评审", confidence: "high", status: "proposed",
+      createdAt: new Date().toISOString(), type: "preference", sensitivity: "private",
+    },
+  });
+  server = await startCompanionServer({ port: 0, dataDirectory, workspacePath });
+  const url = server.url;
+
+  const listed = await (await fetch(`${url}/api/memory/candidates`)).json() as { candidates: Array<{ id: string }> };
+  assert.deepEqual(listed.candidates.map((item) => item.id), ["c-1"]);
+
+  const promoted = await fetch(`${url}/api/memory/candidates/c-1/promote`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(promoted.status, 201);
+  const body = await promoted.json() as { memory: { id: string; summary: string } };
+  assert.match(body.memory.summary, /发布前必须完成风险评审/);
+
+  const after = await (await fetch(`${url}/api/memory/candidates`)).json() as { candidates: unknown[] };
+  assert.equal(after.candidates.length, 0);
 });
 
 test("installed agents are reported generically, including user-declared ones", async (t) => {

@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import type { JournalEvent, MemoryCandidate, Run, Task } from "./core/contracts.ts";
+import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task } from "./core/contracts.ts";
 import { createJournalStore } from "./core/sqlite-journal.ts";
 import { replay } from "./core/run-state.ts";
 import { approveQueryRun, runQuery } from "./workflows/query-workflow.ts";
@@ -14,6 +14,9 @@ import { AgentSettingsStore } from "./settings/agent-settings.ts";
 import { LocalAgentRegistry } from "./agents/local-provider-registry.ts";
 import { runMainAgentQuery } from "./main-agent/query.ts";
 import { LocalMemoryStore } from "./memory/memory-store.ts";
+import { MemoryGovernance } from "./memory/memory-governance.ts";
+import { MdMemoryStore } from "./memory/md-memory-store.ts";
+import { JsonlJournalStore } from "./core/journal.ts";
 import {
   defaultLegacyDirectory,
   migrateLegacyCloneHome,
@@ -83,6 +86,10 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const agentSettings = new AgentSettingsStore(paths.legacyAgentsFile, providers);
   const agentRegistry = new LocalAgentRegistry(dataDirectory);
   const memoryStore = new LocalMemoryStore(paths.memoryFile);
+  const memoryGovernance = new MemoryGovernance({
+    journal: new JsonlJournalStore(join(dataDirectory, "journal.jsonl")),
+    store: new MdMemoryStore({ dataDirectory }),
+  });
   const config = new CloneConfigStore(paths);
   await syncMemory(dataDirectory, memoryStore);
   const scheduler = new LocalScheduler({
@@ -112,6 +119,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         agentSettings,
         agentRegistry,
         memoryStore,
+        memoryGovernance,
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "The local runtime encountered an unexpected error.";
@@ -137,7 +145,12 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     url,
     close: () => new Promise((resolve, reject) => {
       scheduler.stop();
-      server.close((error) => (error === undefined ? resolve() : reject(error)));
+      server.close((error) => {
+        memoryGovernance.close().then(
+          () => (error === undefined ? resolve() : reject(error)),
+          (closeError: unknown) => reject(closeError),
+        );
+      });
     }),
   };
 }
@@ -145,7 +158,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore },
+  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore; memoryGovernance: MemoryGovernance },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host}`);
 
@@ -259,6 +272,45 @@ async function handleRequest(
       return;
     }
     sendJson(response, 200, await buildMemoryView(context.memoryStore));
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/memory/candidates") {
+    const candidates = await context.memoryGovernance.pendingCandidates();
+    sendJson(response, 200, { candidates });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/memory/governed") {
+    const [memories, stats] = await Promise.all([
+      context.memoryGovernance.list(),
+      context.memoryGovernance.stats(),
+    ]);
+    sendJson(response, 200, { memories, stats });
+    return;
+  }
+  const candidateDecisionMatch = url.pathname.match(/^\/api\/memory\/candidates\/([^/]+)\/(promote|reject)$/);
+  if (request.method === "POST" && candidateDecisionMatch?.[1] !== undefined && candidateDecisionMatch?.[2] !== undefined) {
+    const candidateId = decodeURIComponent(candidateDecisionMatch[1]);
+    const action = candidateDecisionMatch[2];
+    const body = await readJsonBody(request);
+    try {
+      if (action === "promote") {
+        const candidate = (await context.memoryGovernance.pendingCandidates()).find((item) => item.id === candidateId);
+        if (candidate === undefined) {
+          sendJson(response, 404, { error: "The requested memory candidate does not exist or was already decided." });
+          return;
+        }
+        const memory = await context.memoryGovernance.promote(candidate, {
+          ...(typeof body.type === "string" ? { type: body.type as MemoryType } : {}),
+          ...(typeof body.sensitivity === "string" ? { sensitivity: body.sensitivity as MemorySensitivity } : {}),
+        });
+        sendJson(response, 201, { memory });
+      } else {
+        await context.memoryGovernance.reject(candidateId, typeof body.reason === "string" ? body.reason : undefined);
+        sendJson(response, 200, { decided: candidateId, action: "rejected" });
+      }
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The memory decision could not be recorded." });
+    }
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/memory") {

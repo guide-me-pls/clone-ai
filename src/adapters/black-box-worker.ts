@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 import type {
   ExecutionAssignment,
@@ -128,7 +129,14 @@ export class BlackBoxWorkerAdapter implements RuntimeAdapter {
     const args = (config.args ?? []).map((argument) => argument
       .replaceAll("{{prompt}}", usesStdin ? "" : prompt)
       .replaceAll("{{workspace}}", workspace));
-    const child = spawn(config.command, usesStdin ? args : args.length > 0 ? args : [prompt], {
+    // Windows cannot spawn a .cmd shim without a shell, and spawning through a
+    // shell would open the prompt to argument injection. Resolve the real
+    // executable behind the shim instead.
+    // Windows 不能用无 shell 的 spawn 启动 .cmd 垫片，而走 shell 又会让 Prompt 暴露在
+    // 参数注入之下；因此改为解析垫片背后的真实可执行文件。
+    const resolved = resolveWindowsCommand(config.command);
+    const spawnArgs = usesStdin ? args : args.length > 0 ? args : [prompt];
+    const child = spawn(resolved.command, [...resolved.prefixArgs, ...spawnArgs], {
       cwd: workspace,
       env: buildEnvironment(config.env ?? []),
       stdio: usesStdin ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
@@ -384,13 +392,29 @@ function buildEnvironment(additionalNames: readonly string[]): NodeJS.ProcessEnv
     "PATH", "Path", "SystemRoot", "WINDIR", "ComSpec", "PATHEXT",
     "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
     "LANG", "LC_ALL", "TERM", "NO_COLOR", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS",
-    ...additionalNames,
   ]);
-  return Object.fromEntries(
+  // A trailing "*" matches every variable with that prefix, so provider
+  // recipes stay stable while owners forward e.g. all ANTHROPIC_* settings.
+  // 尾部 "*" 匹配同前缀的所有变量：配方保持稳定，同时所有者可以把例如全部
+  // ANTHROPIC_* 设置透传给 Provider。
+  const wildcards: string[] = [];
+  for (const name of additionalNames) {
+    if (name.endsWith("*")) wildcards.push(name.slice(0, -1));
+    else names.add(name);
+  }
+  const environment: NodeJS.ProcessEnv = Object.fromEntries(
     [...names]
       .map((name) => [name, process.env[name]] as const)
       .filter((entry): entry is readonly [string, string] => entry[1] !== undefined),
   );
+  for (const prefix of wildcards) {
+    for (const [name, value] of Object.entries(process.env)) {
+      if (name.startsWith(prefix) && environment[name] === undefined && value !== undefined) {
+        environment[name] = value;
+      }
+    }
+  }
+  return environment;
 }
 
 export function redactFreeText(value: string): string {
@@ -399,6 +423,54 @@ export function redactFreeText(value: string): string {
     .replace(/\b(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, "[REDACTED_TOKEN]")
     .replace(/\bBearer\s+[A-Za-z0-9._-]{12,}\b/gi, "Bearer [REDACTED]")
     .replace(/\b(api[_-]?key|token|secret|password)\b\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
+}
+
+/**
+ * Windows cannot spawn a .cmd shim without going through a shell, which would
+ * expose the prompt to argument injection. This resolves the shim to its real
+ * executable: an .exe directly, or a node script through process.execPath.
+ * Windows 无法在不用 shell 的情况下启动 .cmd 垫片，而走 shell 会把 Prompt 暴露给参数注入；
+ * 这里把垫片解析为真实可执行文件：.exe 直接启动，node 脚本则经由 process.execPath。
+ */
+export function resolveWindowsCommand(command: string): { command: string; prefixArgs: string[] } {
+  if (process.platform !== "win32") return { command, prefixArgs: [] };
+  if (!/\.(?:cmd|bat)$/i.test(command)) return { command, prefixArgs: [] };
+
+  const shim = findWindowsShim(command);
+  if (shim === undefined) return { command, prefixArgs: [] };
+  let source: string;
+  try {
+    source = readFileSync(shim, "utf8");
+  } catch {
+    return { command, prefixArgs: [] };
+  }
+  // npm shims reference the real target inside the dp0 expansion, e.g.
+  // "%dp0%\node_modules\pkg\bin\tool.exe" or "%dp0%\node_modules\pkg\dist\cli.js".
+  // The last reference is the actual program; earlier ones (like %_prog%=node)
+  // are only the launcher.
+  // npm 垫片在 dp0 展开中引用真实目标；最后一个引用才是真正的程序，前面的（如
+  // %_prog%=node）只是启动器。
+  const references = [...source.matchAll(/["']?%?~?dp0%?\\([^"'%\r\n]+)["']?/gi)]
+    .map((match) => match[1]!);
+  const target = references.length === 0
+    ? undefined
+    : join(dirname(shim), references[references.length - 1]!);
+  if (target === undefined) return { command, prefixArgs: [] };
+  if (/\.[a-z0-9]+$/i.test(target) && !/\.exe$/i.test(target)) {
+    return { command: process.execPath, prefixArgs: [target] };
+  }
+  return { command: target, prefixArgs: [] };
+}
+
+function findWindowsShim(command: string): string | undefined {
+  const candidates: string[] = [];
+  if (command.includes("/") || command.includes("\\")) {
+    candidates.push(resolve(command));
+  } else {
+    const directories = (process.env.PATH ?? "").split(";").filter((entry) => entry.trim().length > 0);
+    for (const directory of directories) candidates.push(join(directory, command));
+  }
+  return candidates.find((candidate) => existsSync(candidate));
 }
 
 export function truncate(value: string, maximum: number): string {
