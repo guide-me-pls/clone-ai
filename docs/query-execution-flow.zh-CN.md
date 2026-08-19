@@ -24,6 +24,10 @@ Runtime 会创建持久化的 `Trigger`、`Task` 和 `Run`，把事件写进 JSO
 
 Memory 能帮助 Planner 理解偏好与历史，但不能授予权限、改变 Policy，也不能暗中触发外部动作。
 
+派发时会发生第二次召回：Kernel 以 WorkOrder 的目标为查询，为每次派发编译一个有作用域的记忆包，
+经唯一的共享 Worker Prompt 注入。因此每个 Provider 都收到同一份由所有者审核过的上下文，
+而每个记忆包都会连同它到达的步骤与 WorkOrder 一起记入 Journal。
+
 ### 3. Planner 提出有边界的计划
 
 默认使用确定性的 `buildDemoPlan()`：这样 Demo 可重复运行，也不会意外产生付费模型调用。当设置
