@@ -37,7 +37,8 @@
 - 真实的邮件、日历、支付或浏览器 Connector。这样的 Tool 必须先在 `reconcile` 中实现外部 Receipt 查询，
   才能在崩溃后安全重试。
 - Provider 上报的 Token/货币预算；当前预算是确定性的：耗时、模型调用、Tool 调用和验证重试。
-- Claude Code、Codex 与 Pi Adapter；应先理解并稳定这个直接的模型/Tool Loop，再接入它们。
+- 生产级 Claude Code、Codex、Pi 与 opencode 黑盒 Worker 边界；本 Loop 仍是隔离的模型/Tool
+  学习垂直切片，不承载这些 Provider 的协议。
 
 ## 运行方式
 

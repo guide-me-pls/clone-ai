@@ -1,88 +1,108 @@
-# Supervised worker boundary
+# Black-box agent boundary
 
 **English** · [简体中文](coding-cli-adapters.zh-CN.md)
 
-Codex CLI, Claude Code, and Pi keep their own internal agent loops. Clone AI
-remains Supervisor: it owns the WorkOrder, permissions, budgets, evidence, and
-the decision that work is complete.
+Clone AI treats every coding agent as a black box. It supplies a prompt,
+scoped context, and a workspace, then judges the result by observation: process
+lifecycle and actual filesystem changes. It does not parse a provider's
+protocol, session database, tool stream, or completion claim.
 
 ```text
-WorkOrder -> policy + capability check
-  -> SupervisedWorkerAdapter     budgets · deadline · abort→terminate
-     |                           completion rule · evidence trust · redaction
-     +-- ProviderTranslator      protocol only
-  <- normalized events, session id, settled signal
--> Clone AI evidence + verification
+WorkOrder -> policy + capability + approval
+  -> BlackBoxWorkerAdapter    prompt · budget · deadline · termination
+     |                        environment allowlist
+     |                        workspace snapshot before / after
+  <- exit status + workspace diff + redacted output tail
+-> observed artifacts -> verification -> Run state
 ```
 
-## One core, several translators
+## Integrating an agent is configuration
 
-Authority lives once, in `SupervisedWorkerAdapter`. A provider contributes only
-a translator that maps its protocol onto seven neutral event shapes:
+Built-in launch recipes live in `src/adapters/providers.json`. A user can add
+or override a recipe in `<dataDirectory>/providers.json`:
 
-```text
-session · text · turn · tool_start · tool_end · progress · settled · protocol_error
+```json
+{
+  "providers": [
+    {
+      "id": "opencode",
+      "label": "opencode",
+      "command": "opencode",
+      "args": ["run", "{{prompt}}"],
+      "env": ["ANTHROPIC_API_KEY"],
+      "timeoutMs": 900000
+    }
+  ]
+}
 ```
 
-| Provider | Invocation | Resume | Settled signal |
-| --- | --- | --- | --- |
-| Codex CLI | `codex exec --json` | `codex exec resume <session>` | clean protocol-speaking exit |
-| Claude Code (CLI) | `claude -p --output-format stream-json` | `claude --resume <session>` | `result` event |
-| Claude Code (SDK) | `@anthropic-ai/claude-agent-sdk` | `resume` option | typed `result` message |
-| Pi | JSONL RPC subprocess | `--session-id` | `agent_settled` |
+`{{prompt}}` and `{{workspace}}` are substituted at dispatch. With
+`promptVia: "stdin"`, the prompt is sent on stdin instead of appearing in the
+argument list. A declaration with a built-in id overrides that recipe. `env`
+contains variable names only; no credential value belongs in source or config.
 
-Adding a coding agent means writing a translator (~100 lines) that cannot grant
-approval, extend a budget, change Run state, or declare success. Selecting the
-SDK transport for Claude Code is `CLONE_AI_CLAUDE_TRANSPORT=sdk`; the CLI
-transport stays the default.
+| Built-in | Command |
+| --- | --- |
+| Claude Code | `claude -p {{prompt}}` |
+| Codex CLI | `codex exec --skip-git-repo-check {{prompt}}` |
+| Pi | `pi -p {{prompt}}` |
+| opencode | `opencode run {{prompt}}` |
 
-Codex uses `read-only` sandbox for read-only work and `workspace-write` only for
-`reversible_write`. Claude Code uses `plan` permission mode for read-only work
-and `acceptEdits` only for `reversible_write`. External side effects still stop
-at Clone AI's approval boundary.
+A declaration controls launch mechanics and visible environment only. It
+cannot grant approval, extend a WorkOrder budget, change Run state, or declare
+success.
 
-## Completion is a protocol fact, not an exit code
+## Evidence is observed
 
-A process can exit 0 after being killed, exhausting its turns, or being pointed
-at the wrong binary. Completion therefore requires an explicit settled signal.
-A clean stream that never settled is reported as a failure.
+The adapter snapshots the Workspace before dispatch and diffs it afterwards.
+Added and modified files become artifact evidence with their real relative
+paths; deleted files are changes but not artifacts. When an artifact is
+required and no file changed, the result is `no_artifact`, regardless of what
+the agent said. Receipts remain unavailable to a normal black-box provider.
 
-A cooperative abort is likewise a request, not a stop. Every abort arms a grace
-timer that force-terminates the session, so a wedged provider cannot hang the
-supervisor. Budgets for duration, model calls, and tool calls are enforced in
-the core for every provider.
+## Recovery does not use provider memory
 
-## Environment and evidence
+The Kernel stores a durable JSON checkpoint for the Workspace before the first
+attempt. If a worker or supervisor dies, the Kernel compares the checkpoint
+with the current Workspace:
 
-Each worker process starts from an empty environment and receives an explicit
-allowlist: baseline OS variables, that one provider's credentials, and any
-configured extras. Other secrets in the supervisor's environment stay invisible.
+- no changes: rerun a new session;
+- enough added/modified required artifacts: reconcile observed artifacts and
+  avoid repeating the work;
+- deletion, unexpected read-only writes, incomplete artifacts, or a missing
+  checkpoint: emit a structured recovery failure and wait for the owner.
 
-Agent completion is not proof of delivery. When an artifact is required, the
-worker ends with this exact line:
+This is why `--resume` is not a dependency for Claude Code, Pi, or any future
+provider. Provider resume can optimize a retry, but it cannot be the source of
+truth.
 
-```text
-CLONE_AI_EVIDENCE: {"kind":"artifact","summary":"...","locator":"relative/path"}
-```
+## Workspace concurrency
 
-The claim is verified, never trusted: only `artifact` is accepted, and only when
-the locator resolves to a file that really exists inside the bounded workspace.
-Every other claim — including any `receipt`, which would attest that an external
-action happened — is downgraded to an observation recording the rejection. This
-policy has exactly one implementation, shared by all providers.
+A Workspace uses an exclusive lease during a WorkOrder. It serializes readers
+with writers as well as writers with writers, preventing agents from
+overwriting each other or observing a half-written project. The lease combines
+an in-process queue with an atomic lock file and can reclaim a dead supervisor's
+lock using the owner PID.
 
-Workers also receive the owner's reviewed memory as a scoped packet compiled by
-the Kernel, so switching providers never means migrating memory between tools.
-See [Runtime architecture and route](runtime-architecture-and-route.md).
+## Failure JSON and corroboration
 
-## Verified and not yet claimed
+Failures use stable categories such as `launch_failed`, `timeout`,
+`nonzero_exit`, `no_artifact`, `missing_credential`, `missing_input`,
+`permission_denied`, `network`, `partial_side_effect`,
+`unexpected_side_effect`, `recovery_blocked`, and `unknown`.
 
-- A live read-only Claude Code session completed end to end through this
-  boundary against `claude-code 2.1.234` (`CLONE_AI_LIVE_SMOKE=1`). Recording it
-  corrected three parsing errors and one Windows launch bug; the redacted stream
-  is checked in as a replay fixture.
-- Type checking and the full automated suite pass without a paid request.
-- Codex CLI event shapes remain **inference, not observation**: no live Codex
-  WorkOrder has been run, so its translator branch is unverified.
-- The `CLONE_AI_EVIDENCE` line is still a text convention. Replacing it with a
-  structured channel is future work for the SDK transport.
+A report carries provider/agent identity, a normalized signature, and redacted
+human-readable detail. The owner may add patterns and guidance in
+`<dataDirectory>/outcomes/failures.json`; the file is loaded as diagnostics only,
+never as execution authority. Independent providers that fail with the same
+diagnostic category corroborate a task or environment obstacle. Catch-all
+categories also need overlapping signatures before retries are stopped.
+
+## Verified boundary
+
+The scripted black-box tests cover workspace artifacts, claims without writes,
+missing commands, hard deadlines, environment isolation, failure categories,
+checkpoint arbitration, workspace locking, and cross-provider corroboration.
+The default suite never needs a paid provider request. Live provider smoke tests
+remain opt-in and are not evidence that another provider's launch recipe is
+correct.

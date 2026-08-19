@@ -1,76 +1,90 @@
-# 受监督的 Worker 边界
+# 黑盒 Agent 边界
 
 [English](coding-cli-adapters.md) · **简体中文**
 
-Codex CLI、Claude Code 与 Pi 都保留各自内部的 Agent Loop。Clone AI 始终是 Supervisor：
-它拥有 WorkOrder、权限、预算、证据，以及"工作是否完成"的判定权。
+Clone AI 把所有 Coding Agent 都当作黑盒：提供 Prompt、有作用域的上下文和 Workspace，随后只
+根据可观察事实判断结果——进程生命周期和磁盘上真正发生的变化。不解析 Provider 协议、Session
+数据库、Tool 流或完成声明。
 
 ```text
-WorkOrder -> 策略 + 能力检查
-  -> SupervisedWorkerAdapter     预算 · 硬截止 · abort→强制终止
-     |                           完成判定 · 证据信任 · 脱敏
-     +-- ProviderTranslator      只管协议
-  <- 归一化事件、会话 ID、settled 信号
--> Clone AI Evidence + 验证
+WorkOrder -> 策略 + 能力 + 审批
+  -> BlackBoxWorkerAdapter    Prompt · 预算 · 截止 · 终止
+     |                        环境白名单
+     |                        Workspace 执行前/后快照
+  <- 退出状态 + Workspace 差异 + 脱敏输出尾部
+-> 观察型 Artifact -> 验证 -> Run 状态
 ```
 
-## 一个核心，多个翻译器
+## 接入 Agent 是配置
 
-权限只存在一份，在 `SupervisedWorkerAdapter` 中。Provider 只贡献一个 Translator，把自己的
-协议映射到七种中立事件形状：
+内建启动配方位于 `src/adapters/providers.json`。用户可以在 `<dataDirectory>/providers.json` 中
+新增或覆盖：
 
-```text
-session · text · turn · tool_start · tool_end · progress · settled · protocol_error
+```json
+{
+  "providers": [
+    {
+      "id": "opencode",
+      "label": "opencode",
+      "command": "opencode",
+      "args": ["run", "{{prompt}}"],
+      "env": ["ANTHROPIC_API_KEY"],
+      "timeoutMs": 900000
+    }
+  ]
+}
 ```
 
-| 提供方 | 调用方式 | 恢复 | Settled 信号 |
-| --- | --- | --- | --- |
-| Codex CLI | `codex exec --json` | `codex exec resume <session>` | 说过协议且干净退出 |
-| Claude Code（CLI） | `claude -p --output-format stream-json` | `claude --resume <session>` | `result` 事件 |
-| Claude Code（SDK） | `@anthropic-ai/claude-agent-sdk` | `resume` 选项 | 有类型的 `result` 消息 |
-| Pi | JSONL RPC 子进程 | `--session-id` | `agent_settled` |
+派发时替换 `{{prompt}}` 与 `{{workspace}}`。`promptVia: "stdin"` 表示通过 stdin 发送 Prompt，
+而不是把 Prompt 放进参数列表。与内建 ID 相同的声明会覆盖内建配方。`env` 只包含变量名；源码
+和配置不应出现凭据值。
 
-接入一个 Coding Agent 意味着写一个 Translator（约 100 行），而它不能授予审批、不能扩大预算、
-不能改变 Run 状态、不能宣布成功。Claude Code 选择 SDK 传输方式用
-`CLONE_AI_CLAUDE_TRANSPORT=sdk`，CLI 传输仍是默认值。
+| 内建 | 命令 |
+| --- | --- |
+| Claude Code | `claude -p {{prompt}}` |
+| Codex CLI | `codex exec --skip-git-repo-check {{prompt}}` |
+| Pi | `pi -p {{prompt}}` |
+| opencode | `opencode run {{prompt}}` |
 
-Codex 对只读工作使用 `read-only` Sandbox，只有 `reversible_write` 才用 `workspace-write`。
-Claude Code 对只读工作使用 `plan` Permission Mode，只有 `reversible_write` 才用 `acceptEdits`。
-外部副作用仍然停在 Clone AI 的审批边界。
+声明只控制启动方式和可见环境，不能授予审批、扩大 WorkOrder 预算、改变 Run 状态或宣布成功。
 
-## 完成是协议事实，不是退出码
+## 证据靠观察
 
-进程被 kill、用尽轮次、或被指向错误的二进制，都可能以 0 退出。因此完成必须来自显式的 settled
-信号；一条干净结束却从未 settle 的流会被报告为失败。
+Adapter 在派发前对 Workspace 拍快照，结束后比较差异。新增和修改文件成为 Artifact Evidence，
+并用真实相对路径定位；删除是变化，但不是产物。当合同要求产物而没有文件变化时，结果就是
+`no_artifact`，无论 Agent 说了什么。普通黑盒 Provider 仍不能产生 Receipt。
 
-同理，协作式 abort 只是请求而非停止。每次 abort 都会启动宽限计时器强制终止会话，因此卡死的
-Provider 无法把 Supervisor 挂住。时长、模型调用数与工具调用数的预算由核心为所有 Provider
-统一施加。
+## 恢复不使用 Provider 记忆
 
-## 环境与证据
+Kernel 在第一次尝试前保存持久 JSON Workspace 检查点。Worker 或 Supervisor 崩溃后，Kernel 将
+检查点与当前 Workspace 比较：
 
-每个 Worker 进程从空环境启动，只收到显式白名单：操作系统基础变量、该 Provider 自己的凭据，
-以及配置的额外名单。Supervisor 环境中的其他机密一律不可见。
+- 没有变化：用新 Session 重跑；
+- 新增/修改文件足以满足必需 Artifact：接受观察到的 Artifact，不重复执行；
+- 发生删除、只读任务写入、产物不完整或检查点缺失：生成结构化恢复失败，等待所有者处理。
 
-Agent 声称完成不等于交付的证明。需要产出 Artifact 时，Worker 以这一行精确格式结束：
+因此 Claude Code、Pi 或未来 Provider 的 `--resume` 都不是依赖。Provider resume 可以优化重试，
+但不能成为事实来源。
 
-```text
-CLONE_AI_EVIDENCE: {"kind":"artifact","summary":"...","locator":"relative/path"}
-```
+## Workspace 并发
 
-这个声明会被校验而非信任：只接受 `artifact`，且 locator 必须解析到有边界 Workspace 内真实
-存在的文件。其他任何声明——包括任何用于证明外部动作确实发生的 `receipt`——都会降级为一条记录
-了拒绝原因的 observation。该策略只有一份实现，被所有 Provider 共享。
+WorkOrder 执行期间持有 Workspace 独占 lease。读与写、写与写都会串行，防止 Agent 互相覆盖，
+也防止读者看到写入一半的项目。lease 由进程内队列和原子锁文件组成，可依据持有者 PID 回收
+已经死亡的 Supervisor 的锁。
 
-Worker 同时会收到由 Kernel 编译的、所有者已审核的有作用域记忆包，因此更换 Provider 从不意味着
-在工具之间迁移记忆。详见 [Runtime 架构与路线](runtime-architecture-and-route.zh-CN.md)。
+## 失败 JSON 与交叉印证
 
-## 已验证与尚未声称
+失败使用稳定类别，例如 `launch_failed`、`timeout`、`nonzero_exit`、`no_artifact`、
+`missing_credential`、`missing_input`、`permission_denied`、`network`、`partial_side_effect`、
+`unexpected_side_effect`、`recovery_blocked` 与 `unknown`。
 
-- 一次真实的只读 Claude Code 会话已经端到端通过本边界完成，对应 `claude-code 2.1.234`
-  （`CLONE_AI_LIVE_SMOKE=1`）。录制这次会话修正了 3 处解析错误和 1 个 Windows 启动 bug；
-  脱敏后的事件流已作为回放 fixture 入库。
-- 类型检查与完整自动化测试套件在不产生付费请求的情况下通过。
-- Codex CLI 的事件结构仍是**推断而非观察**：尚未运行过真实的 Codex WorkOrder，其 Translator
-  分支未经验证。
-- `CLONE_AI_EVIDENCE` 行目前仍是文本约定。把它换成结构化通道是 SDK 传输方式的后续工作。
+报告带有 Provider/Agent 身份、归一化 signature 和脱敏的可读 detail。所有者可以在
+`<dataDirectory>/outcomes/failures.json` 中增加匹配模式和处理建议；这个文件只用于诊断，绝不
+授予执行权限。独立 Provider 以同一诊断类别失败时，可以印证障碍在任务或环境；兜底类别还需要
+signature 有重合，才会停止重试。
+
+## 已验证的边界
+
+脚本化黑盒测试覆盖 Workspace 产物、只声明不写入、命令不存在、硬截止、环境隔离、失败类别、
+检查点裁决、Workspace 锁和跨 Provider 印证。默认测试不需要付费 Provider 请求。真实 Provider
+冒烟仍然是显式开启的，不代表其他 Provider 的启动配方已经实测正确。

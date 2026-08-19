@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { buildDemoPlan } from "../src/planning/demo-planner.ts";
+import { buildFallbackPlan } from "../src/planning/fallback-planner.ts";
 import { LocalMemoryStore } from "../src/memory/memory-store.ts";
 import { AgentSettingsStore } from "../src/settings/agent-settings.ts";
 import { SessionStore } from "../src/sessions/session-store.ts";
@@ -16,7 +16,7 @@ test("agent settings persist and change which child roles a plan may use", async
     await settings.setEnabled("context-researcher", false);
     await settings.setEnabled("evidence-reviewer", false);
     const current = await settings.get();
-    const plan = buildDemoPlan("调研并准备一份详细的发布方案", new Set(current.agents.filter((agent) => agent.enabled).map((agent) => agent.id)));
+    const plan = buildFallbackPlan("调研并准备一份详细的发布方案", new Set(current.agents.filter((agent) => agent.enabled).map((agent) => agent.id)));
     const assigned = plan.steps.flatMap((step) => step.subagents ?? []).map((order) => order.agentId);
 
     assert.deepEqual(assigned, ["draft-maker"]);
@@ -26,24 +26,18 @@ test("agent settings persist and change which child roles a plan may use", async
   }
 });
 
-test("Pi can only be assigned to the tool-free direct and review roles", async (t) => {
+test("every black-box provider is assignable to every role", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-settings-"));
   t.after(async () => rm(directory, { recursive: true, force: true }));
 
+  // Pi used to be restricted to tool-free roles because it ran without tools.
+  // As a black box it launches its own CLI with its own tools, so the
+  // restriction no longer describes reality.
+  // Pi 曾因无 Tool 运行而被限制在无 Tool 角色。作为黑盒，它启动自己的 CLI、使用自己的
+  // Tool，因此该限制已不再符合事实。
   const settings = new AgentSettingsStore(join(directory, "settings.json"));
-  await assert.rejects(
-    settings.updateAgent("external-operator", { providerId: "pi" }),
-    /cannot be assigned to this executor/,
-  );
-  await assert.rejects(
-    settings.updateAgent("draft-maker", { providerId: "pi" }),
-    /cannot be assigned to this executor/,
-  );
-  assert.equal(
-    (await settings.updateAgent("evidence-reviewer", { providerId: "pi" }))
-      .agents.find((agent) => agent.id === "evidence-reviewer")?.providerId,
-    "pi",
-  );
+  const updated = await settings.updateAgent("external-operator", { providerId: "pi" });
+  assert.equal(updated.agents.find((agent) => agent.id === "external-operator")?.providerId, "pi");
 });
 
 test("deleted sessions disappear from the companion list while their runtime journal can remain intact", async () => {

@@ -1,64 +1,39 @@
-import { join } from "node:path";
-
 import type { AgentSetting } from "../settings/agent-settings.ts";
 import { workCapabilitiesForRole } from "../agents/capabilities.ts";
-import { StaticAgentRegistry } from "./demo-adapter.ts";
-import { ClaudeAgentSdkAdapter } from "./claude-agent-sdk-adapter.ts";
-import { CodingCliAdapter } from "./coding-cli-adapter.ts";
-import { PiAgentAdapter, type PiToolName } from "./pi-agent-adapter.ts";
+import { StaticAgentRegistry } from "../agents/static-agent-registry.ts";
+import { loadProviderRegistry } from "./built-in-providers.ts";
+import type { OutcomeCatalog } from "../core/failure-analysis.ts";
+import type { ProviderRegistry } from "./provider-registry.ts";
 
 export interface ConfiguredAgentRegistryOptions {
   dataDirectory: string;
   workspacePath?: string;
+  /** Optional already-loaded registry, mainly for extensions and tests. 可选的已加载 Registry。 */
+  providers?: ProviderRegistry;
+  /** Owner-editable diagnostic catalog passed to black-box providers. 传给黑盒 Provider 的所有者诊断目录。 */
+  failureCatalog?: import("../core/failure-analysis.ts").OutcomeCatalog;
 }
 
 /**
- * Provider bindings from local settings become concrete adapters here.
- * Codex and Claude run behind the supervised CodingCliAdapter boundary;
- * Pi remains limited to tool-free direct and review roles.
- *
- * 本地 Settings 中的 Provider 配置会在这里变成具体 Adapter。Codex 与 Claude 通过受监督的
- * CodingCliAdapter 边界运行；Pi 目前仍限于无 Tool 的 direct 与 review 角色。
+ * Resolves settings through the JSON-backed Provider Registry. Production
+ * loads user overrides before creating adapters; tests may inject a registry.
+ * 通过 JSON-backed Provider Registry 解析设置。生产入口先加载用户覆盖再创建 Adapter；测试
+ * 可以注入 Registry。
  */
-export function createConfiguredAgentRegistry(
+export async function createConfiguredAgentRegistry(
   settings: AgentSetting[],
   options: ConfiguredAgentRegistryOptions,
-): StaticAgentRegistry {
+): Promise<StaticAgentRegistry> {
+  const providers = options.providers ?? await loadProviderRegistry(options.dataDirectory);
   const adapters = settings
     .filter((agent) => agent.enabled)
-    .map((agent) => {
-      const workCapabilities = workCapabilitiesForRole(agent.role);
-      if (agent.providerId === "codex-cli" || agent.providerId === "claude-code") {
-        // CLONE_AI_CLAUDE_TRANSPORT=sdk routes Claude Code through its official
-        // SDK (typed events) instead of parsed CLI stdout; same adapter
-        // contract, same authority, so the Kernel is unaffected either way.
-        // CLONE_AI_CLAUDE_TRANSPORT=sdk 让 Claude Code 走官方 SDK（有类型事件）而不是
-        // 解析 CLI stdout；同一 Adapter 合约、同一权限边界，Kernel 两种情况都不受影响。
-        if (agent.providerId === "claude-code" && process.env.CLONE_AI_CLAUDE_TRANSPORT === "sdk") {
-          return new ClaudeAgentSdkAdapter({ id: agent.id, workCapabilities });
-        }
-        return new CodingCliAdapter({ id: agent.id, providerId: agent.providerId, workCapabilities });
-      }
-      if (agent.role !== "direct" && agent.role !== "review") {
-        throw new Error(
-          `Agent ${agent.id} cannot use Pi yet; the first Pi integration is limited to tool-free direct and review roles.`,
-        );
-      }
-      return new PiAgentAdapter({
-        id: agent.id,
-        cwd: options.workspacePath,
-        sessionDirectory: join(options.dataDirectory, "pi-sessions"),
-        tools: toolsForRole(agent.role),
-        workCapabilities,
-      });
-    });
+    .map((agent) => providers.createAdapter(agent.providerId, {
+      agentId: agent.id,
+      role: agent.role,
+      workCapabilities: workCapabilitiesForRole(agent.role),
+      dataDirectory: options.dataDirectory,
+      workspacePath: options.workspacePath,
+      failureCatalog: options.failureCatalog,
+    }));
   return new StaticAgentRegistry(adapters);
-}
-
-function toolsForRole(_role: AgentSetting["role"]): PiToolName[] {
-  // Pi's built-in file tools accept absolute paths. Until Pi calls back into
-  // Clone AI's workspace-bounded Tool Runtime, this adapter receives no tools.
-  // Pi 内建文件 Tool 接受绝对路径。在 Pi 通过 Clone AI 受 Workspace 限制的 Tool Runtime
-  // 回调前，此 Adapter 不授予任何 Tool。
-  return [];
 }

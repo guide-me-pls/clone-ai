@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join, resolve } from "node:path";
 
 import type {
   AgentRegistry,
@@ -11,6 +12,7 @@ import type {
   PolicyEngine,
   Run,
   RunStatus,
+  RuntimeAdapter,
   RuntimeCapabilities,
   SubagentRun,
   SubagentWorkOrder,
@@ -25,6 +27,16 @@ import type { JournalStore } from "./journal.ts";
 import { approvalKey, emptyProjection, reduceEvent, replay, subagentKey, type RuntimeProjection } from "./run-state.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { CapabilityDispatcher } from "../agents/dispatcher.ts";
+import { BUILT_IN_CATALOG, corroborateFailures, failureSignature, type FailureCategory, type FailureReport, type OutcomeCatalog } from "./failure-analysis.ts";
+import {
+  artifactChanges,
+  diffWorkspace,
+  JsonWorkspaceCheckpointStore,
+  snapshotWorkspace,
+  type WorkspaceChange,
+  type WorkspaceCheckpointStore,
+} from "./workspace-evidence.ts";
+import { workspaceExecutionLock } from "./workspace-lock.ts";
 
 export interface CloneRuntimeOptions {
   journal: JournalStore;
@@ -41,6 +53,14 @@ export interface CloneRuntimeOptions {
    * 从不驻留在工具内部。
    */
   memorySource?: WorkerMemorySource;
+  /** Owner-editable failure taxonomy used for diagnostics. 所有者可编辑的失败分类目录。 */
+  failureCatalog?: OutcomeCatalog;
+  /** Workspace supervised by this Runtime. 工作本次 Runtime 监督的 Workspace。 */
+  workspacePath?: string;
+  /** Optional durable checkpoint store; a JSON store is created when omitted. 可选的持久检查点 Store。 */
+  workspaceCheckpointStore?: WorkspaceCheckpointStore;
+  /** Optional directory used by the default checkpoint store. 默认检查点目录。 */
+  workspaceCheckpointDirectory?: string;
 }
 
 export interface DispatchResult {
@@ -57,12 +77,26 @@ export interface DispatchResult {
  * Runtime 负责状态流转、授权、证据、验证与记忆请求。Agent 只能收到受边界
  * 约束的执行 Assignment 或子 WorkOrder，绝不能自行关闭 Run。
  */
+/** Carries a black-box worker's structured failure report up to the retry loop. 把黑盒 Worker 的结构化失败报告带到重试循环。 */
+export class WorkerFailure extends Error {
+  readonly report?: FailureReport;
+
+  constructor(message: string, report?: FailureReport) {
+    super(message);
+    this.name = "WorkerFailure";
+    if (report !== undefined) this.report = report;
+  }
+}
+
 export class CloneRuntime {
   readonly #journal: JournalStore;
   readonly #policy: PolicyEngine;
   readonly #verifier: Verifier;
   readonly #memory: MemoryPipeline;
   readonly #memorySource?: WorkerMemorySource;
+  readonly #failureCatalog: OutcomeCatalog;
+  readonly #workspacePath?: string;
+  readonly #workspaceCheckpoints?: WorkspaceCheckpointStore;
   #state: RuntimeProjection = emptyProjection();
   #hydrated = false;
 
@@ -72,6 +106,15 @@ export class CloneRuntime {
     this.#verifier = options.verifier;
     this.#memory = options.memory;
     this.#memorySource = options.memorySource;
+    this.#failureCatalog = options.failureCatalog ?? BUILT_IN_CATALOG;
+    this.#workspacePath = options.workspacePath === undefined ? undefined : resolve(options.workspacePath);
+    this.#workspaceCheckpoints = this.#workspacePath === undefined
+      ? undefined
+      : options.workspaceCheckpointStore
+        ?? new JsonWorkspaceCheckpointStore(
+          options.workspaceCheckpointDirectory
+            ?? join(this.#workspacePath, ".clone-ai", "workspace-checkpoints"),
+        );
   }
 
   async hydrate(): Promise<void> {
@@ -299,6 +342,13 @@ export class CloneRuntime {
   }
 
   private async executeSingleAgent(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry }): Promise<void> {
+    if (this.#workspacePath === undefined) {
+      return this.executeSingleAgentUnlocked(input);
+    }
+    return workspaceExecutionLock.run(this.#workspacePath, () => this.executeSingleAgentUnlocked(input));
+  }
+
+  private async executeSingleAgentUnlocked(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry }): Promise<void> {
     const agentId = input.step.agentId;
     if (agentId === undefined) {
       throw new Error(`Plan step ${input.step.id} has no executor.`);
@@ -323,6 +373,8 @@ export class CloneRuntime {
       step: input.step,
       executor: { agentId: adapter.id, providerId: adapter.providerId },
       ...(memoryContext === undefined ? {} : { memoryContext }),
+      failureCatalog: this.#failureCatalog,
+      ...(this.#workspacePath === undefined ? {} : { workspacePath: this.#workspacePath }),
     };
     const executionAuthorization = evidenceAuthorization(capabilities);
     await this.record({
@@ -370,6 +422,13 @@ export class CloneRuntime {
   }
 
   private async dispatchSubagent(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry }): Promise<void> {
+    if (this.#workspacePath === undefined) {
+      return this.dispatchSubagentUnlocked(input);
+    }
+    return workspaceExecutionLock.run(this.#workspacePath, () => this.dispatchSubagentUnlocked(input));
+  }
+
+  private async dispatchSubagentUnlocked(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry }): Promise<void> {
     const existing = this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)];
     if (existing?.status === "completed") {
       if (await this.ensureWorkOrderVerified(input, existing.agentId)) {
@@ -385,7 +444,7 @@ export class CloneRuntime {
     // persisted provider session to another configured worker.
     // 新 WorkOrder 可以按能力路由；一旦启动，具体 Adapter 身份会被固定，避免重放时
     // 悄悄把已持久化的 Provider Session 换到另一个 Worker。
-    const adapter = await new CapabilityDispatcher(input.agents).select(
+    let adapter = await new CapabilityDispatcher(input.agents).select(
       existing === undefined
         ? input.workOrder
         : { ...input.workOrder, agentId: existing.agentId },
@@ -409,8 +468,12 @@ export class CloneRuntime {
       workOrder: input.workOrder,
       dependencyEvidence: this.dependencyEvidence(input.run.id, input.workOrder),
       ...(memoryContext === undefined ? {} : { memoryContext }),
+      failureCatalog: this.#failureCatalog,
+      ...(this.#workspacePath === undefined ? {} : { workspacePath: this.#workspacePath }),
     };
-    const allowedEvidenceKinds = evidenceAuthorization(await adapter.capabilities());
+    let allowedEvidenceKinds = evidenceAuthorization(await adapter.capabilities());
+    const triedAdapterIds = new Set<string>();
+    const failureReports: FailureReport[] = [];
 
     const previousAttempt = existing?.attempt ?? 1;
     let attempt = existing === undefined
@@ -422,9 +485,32 @@ export class CloneRuntime {
     let lastError: unknown = existing?.status === "completed"
       ? new Error(`Subagent ${input.workOrder.id} did not satisfy its artifact contract.`)
       : undefined;
+
+    // A running/failed record after a process restart is not permission to
+    // blindly rerun. First arbitrate the Workspace side effects against the
+    // durable pre-dispatch checkpoint.
+    // 进程重启后留下的 running/failed 记录不能直接变成盲目重跑许可；先用持久的派发前
+    // 检查点裁决 Workspace 副作用。
+    if (existing !== undefined && (existing.status === "running" || existing.status === "failed")) {
+      const recovery = await this.assessWorkspaceRecovery(input, existing, undefined, allowedEvidenceKinds);
+      if (recovery !== undefined) {
+        await this.recordRecoveryDecision(input, recovery);
+        if (recovery.decision === "blocked") {
+          const failure = this.recoveryFailure(input, adapter, recovery);
+          await this.recordSubagentFailure(input, adapter, failure);
+          throw failure;
+        }
+        if (recovery.decision === "reconciled") {
+          await this.reconcileWorkspaceRecovery(input, adapter, recovery);
+          return;
+        }
+      }
+    }
+
     while (attempt <= input.workOrder.budget.maxAttempts) {
       if (existing === undefined && attempt === 1) {
         const startedAt = new Date().toISOString();
+        const workspaceCheckpoint = await this.saveWorkspaceCheckpoint(input, attempt);
         const subagent: SubagentRun = {
           id: randomUUID(),
           runId: input.run.id,
@@ -435,6 +521,8 @@ export class CloneRuntime {
           role: input.workOrder.role,
           title: input.workOrder.title,
           status: "running",
+          ...(workspaceCheckpoint === undefined ? {} : { workspaceCheckpoint }),
+          ...(this.#workspacePath === undefined ? {} : { workspacePath: this.#workspacePath }),
           attempt,
           startedAt,
           updatedAt: startedAt,
@@ -480,18 +568,287 @@ export class CloneRuntime {
         const message = redactAuditText(
           error instanceof Error ? error.message : "Unknown subagent failure.",
         );
-        await this.record({
-          type: "subagent.failed",
-          taskId: input.task.id,
-          runId: input.run.id,
-          payload: { workOrderId: input.workOrder.id, message },
-        });
+        const report = error instanceof WorkerFailure ? error.report : undefined;
+        const recovery = await this.assessWorkspaceRecovery(input, existing, report, allowedEvidenceKinds);
+        if (recovery !== undefined) {
+          await this.recordRecoveryDecision(input, recovery);
+          if (recovery.decision === "reconciled") {
+            await this.reconcileWorkspaceRecovery(input, adapter, recovery);
+            return;
+          }
+          if (recovery.decision === "blocked") {
+            const failure = this.recoveryFailure(input, adapter, recovery);
+            await this.recordSubagentFailure(input, adapter, failure);
+            throw failure;
+          }
+        }
+        if (report !== undefined) failureReports.push(report);
+        await this.recordSubagentFailure(input, adapter, error, message, report);
+
+        // Two independent agents failing the same way is evidence about the
+        // task, not about the agents. Spending another attempt would only
+        // reproduce the same wall, so the obstacle goes to the owner instead.
+        // 两个独立 Agent 以相同方式失败，这是关于任务的证据而不是关于 Agent 的。
+        // 再花一次尝试只会撞上同一堵墙，因此把障碍交给所有者。
+        const corroboration = corroborateFailures(failureReports, this.#failureCatalog);
+        if (corroboration.corroborated) {
+          await this.record({
+            type: "subagent.failed",
+            taskId: input.task.id,
+            runId: input.run.id,
+            payload: {
+              workOrderId: input.workOrder.id,
+              message: redactAuditText(corroboration.summary),
+              corroboration: { ...corroboration, providers: failureReports.map((item) => item.providerId) },
+            },
+          });
+          throw new WorkerFailure(corroboration.summary, report);
+        }
+
         if (attempt >= input.workOrder.budget.maxAttempts) throw error;
-        sessionId = this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)]?.sessionId;
+
+        // Retry on a different provider: repeating the same black box rarely
+        // produces a different outcome, and a second opinion is what makes
+        // corroboration possible at all.
+        // 换一个 Provider 重试：重复同一个黑盒很少产生不同结果，而第二个意见正是
+        // 交叉印证得以成立的前提。
+        triedAdapterIds.add(adapter.id);
+        const alternative = await this.selectAlternativeAdapter(input, triedAdapterIds);
+        if (alternative !== undefined) {
+          adapter = alternative;
+          allowedEvidenceKinds = evidenceAuthorization(await adapter.capabilities());
+          sessionId = undefined;
+        } else {
+          sessionId = this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)]?.sessionId;
+        }
         attempt += 1;
       }
     }
     throw lastError instanceof Error ? lastError : new Error("Subagent exhausted its attempt budget.");
+  }
+
+  private async saveWorkspaceCheckpoint(
+    input: { run: Run; workOrder: SubagentWorkOrder },
+    attempt: number,
+  ): Promise<string | undefined> {
+    if (this.#workspacePath === undefined || this.#workspaceCheckpoints === undefined) return undefined;
+    const snapshot = await snapshotWorkspace(this.#workspacePath);
+    return this.#workspaceCheckpoints.save(
+      `${input.run.id}/${input.workOrder.id}/attempt-${attempt}`,
+      snapshot,
+    );
+  }
+
+  /**
+   * Compares the interrupted Workspace with the durable baseline. A missing
+   * baseline is a safety block, never an invitation to rerun blindly.
+   * 比较中断后的 Workspace 与持久基线。缺少基线时必须安全阻塞，绝不能变成盲目重跑。
+   */
+  private async assessWorkspaceRecovery(
+    input: { run: Run; step: PlanStep; workOrder: SubagentWorkOrder },
+    existing: SubagentRun | undefined,
+    report: FailureReport | undefined,
+    allowedEvidenceKinds: ReadonlySet<Evidence["kind"]>,
+  ): Promise<WorkspaceRecoveryAssessment | undefined> {
+    const reportedChanges = report?.workspaceChanges;
+    let changes: WorkspaceChange[];
+    let checkpointLocator = existing?.workspaceCheckpoint;
+
+    if (reportedChanges !== undefined) {
+      changes = [...reportedChanges];
+    } else {
+      if (this.#workspacePath === undefined || this.#workspaceCheckpoints === undefined) return undefined;
+      const current = existing ?? this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)];
+      checkpointLocator = current?.workspaceCheckpoint;
+      if (checkpointLocator === undefined) {
+        return {
+          decision: "blocked",
+          category: "recovery_blocked",
+          reason: "The interrupted WorkOrder has no durable Workspace checkpoint.",
+          changes: [],
+        };
+      }
+      let before;
+      try {
+        before = await this.#workspaceCheckpoints.load(checkpointLocator);
+      } catch (error: unknown) {
+        return {
+          decision: "blocked",
+          category: "recovery_blocked",
+          reason: `The Workspace checkpoint could not be read: ${error instanceof Error ? error.message : "invalid checkpoint"}.`,
+          changes: [],
+          checkpoint: checkpointLocator,
+        };
+      }
+      if (before === undefined) {
+        return {
+          decision: "blocked",
+          category: "recovery_blocked",
+          reason: `The Workspace checkpoint ${checkpointLocator} is missing.`,
+          changes: [],
+          checkpoint: checkpointLocator,
+        };
+      }
+      if (before.root !== undefined && before.root !== this.#workspacePath) {
+        return {
+          decision: "blocked",
+          category: "recovery_blocked",
+          reason: `The Workspace checkpoint belongs to ${before.root}, not ${this.#workspacePath}.`,
+          changes: [],
+          checkpoint: checkpointLocator,
+        };
+      }
+      changes = diffWorkspace(before, await snapshotWorkspace(this.#workspacePath));
+    }
+
+    const checkpoint = checkpointLocator === undefined ? {} : { checkpoint: checkpointLocator };
+    if (changes.length === 0) {
+      return {
+        decision: "rerun",
+        category: "recovery_blocked",
+        reason: "The interrupted Workspace has no observed changes; a fresh session may rerun it.",
+        changes,
+        ...checkpoint,
+      };
+    }
+
+    const changeSummary = changes.map((change) => `${change.change}:${change.path}`).join(", ");
+    if (input.workOrder.risk === "read_only") {
+      return {
+        decision: "blocked",
+        category: "unexpected_side_effect",
+        reason: `A read-only WorkOrder changed the Workspace: ${changeSummary}.`,
+        changes,
+        ...checkpoint,
+      };
+    }
+    if (changes.some((change) => change.change === "deleted")) {
+      return {
+        decision: "blocked",
+        category: "partial_side_effect",
+        reason: `Recovery found deleted files and cannot safely rerun: ${changeSummary}.`,
+        changes,
+        ...checkpoint,
+      };
+    }
+
+    const requiredArtifacts = input.workOrder.expectedArtifacts.filter((artifact) => artifact.required);
+    const canObserveArtifacts = allowedEvidenceKinds.has("artifact")
+      && requiredArtifacts.every((artifact) => artifact.kind === "artifact")
+      && artifactChanges(changes).length >= requiredArtifacts.length;
+    if (canObserveArtifacts) {
+      return {
+        decision: "reconciled",
+        category: "partial_side_effect",
+        reason: `Recovery observed enough durable artifacts to avoid repeating the WorkOrder: ${changeSummary}.`,
+        changes,
+        ...checkpoint,
+      };
+    }
+    return {
+      decision: "blocked",
+      category: "partial_side_effect",
+      reason: `Recovery found Workspace changes but not a complete artifact contract: ${changeSummary}.`,
+      changes,
+      ...checkpoint,
+    };
+  }
+
+  private async recordRecoveryDecision(
+    input: { task: Task; run: Run; step: PlanStep; workOrder: SubagentWorkOrder },
+    assessment: WorkspaceRecoveryAssessment,
+  ): Promise<void> {
+    await this.record({
+      type: "subagent.recovery_decided",
+      taskId: input.task.id,
+      runId: input.run.id,
+      payload: {
+        workOrderId: input.workOrder.id,
+        stepId: input.step.id,
+        decision: assessment.decision,
+        category: assessment.category,
+        reason: redactAuditText(assessment.reason),
+        checkpoint: assessment.checkpoint,
+        changes: assessment.changes,
+      },
+    });
+  }
+
+  private recoveryFailure(
+    input: { workOrder: SubagentWorkOrder },
+    adapter: RuntimeAdapter,
+    assessment: WorkspaceRecoveryAssessment,
+  ): WorkerFailure {
+    const report: FailureReport = {
+      providerId: adapter.providerId,
+      agentId: adapter.id,
+      category: assessment.category,
+      signature: failureSignature(assessment.reason),
+      detail: redactAuditText(assessment.reason),
+      ...(assessment.changes.length === 0 ? {} : { workspaceChanges: assessment.changes }),
+    };
+    return new WorkerFailure(`Recovery for ${input.workOrder.id} was blocked: ${assessment.reason}`, report);
+  }
+
+  private async recordSubagentFailure(
+    input: { task: Task; run: Run; workOrder: SubagentWorkOrder },
+    adapter: RuntimeAdapter,
+    error: unknown,
+    message?: string,
+    report?: FailureReport,
+  ): Promise<void> {
+    const resolvedMessage = message
+      ?? (error instanceof Error ? redactAuditText(error.message) : "Unknown subagent failure.");
+    const resolvedReport = report ?? (error instanceof WorkerFailure ? error.report : undefined);
+    await this.record({
+      type: "subagent.failed",
+      taskId: input.task.id,
+      runId: input.run.id,
+      payload: {
+        workOrderId: input.workOrder.id,
+        adapterId: adapter.id,
+        providerId: adapter.providerId,
+        message: resolvedMessage,
+        report: resolvedReport,
+      },
+    });
+  }
+
+  private async reconcileWorkspaceRecovery(
+    input: { task: Task; run: Run; step: PlanStep; workOrder: SubagentWorkOrder },
+    adapter: RuntimeAdapter,
+    assessment: WorkspaceRecoveryAssessment,
+  ): Promise<void> {
+    const producedBy = adapter.id;
+    for (const change of artifactChanges(assessment.changes)) {
+      const evidence: Evidence = {
+        id: randomUUID(),
+        runId: input.run.id,
+        stepId: input.step.id,
+        workOrderId: input.workOrder.id,
+        producedBy,
+        kind: "artifact",
+        summary: `Observed durable artifact during recovery: ${change.path}`,
+        locator: change.path,
+        createdAt: new Date().toISOString(),
+      };
+      await this.record({ type: "evidence.recorded", taskId: input.task.id, runId: input.run.id, payload: evidence });
+    }
+    await this.record({
+      type: "subagent.completed",
+      taskId: input.task.id,
+      runId: input.run.id,
+      payload: { workOrderId: input.workOrder.id, summary: "Reconciled observed Workspace artifacts after an interrupted black-box session." },
+    });
+    if (!(await this.ensureWorkOrderVerified(input, producedBy))) {
+      const failure = this.recoveryFailure(input, adapter, {
+        ...assessment,
+        decision: "blocked",
+        category: "recovery_blocked",
+        reason: "Observed Workspace artifacts still failed the WorkOrder contract.",
+      });
+      throw failure;
+    }
   }
 
   /**
@@ -534,6 +891,27 @@ export class CloneRuntime {
       items: matches.map((match) => ({ id: match.memory.id, summary: match.memory.summary })),
       selectedBy: { query },
     };
+  }
+
+  /**
+   * Finds a capable executor that has not already failed this work order.
+   * Provider diversity is the point: a second opinion either succeeds or
+   * corroborates that the obstacle is in the task itself.
+   * 找出尚未在该 WorkOrder 上失败过、且能力匹配的执行者。Provider 多样性正是要点：
+   * 第二个意见要么成功，要么印证障碍在任务本身。
+   */
+  private async selectAlternativeAdapter(
+    input: { workOrder: SubagentWorkOrder; agents: AgentRegistry },
+    tried: ReadonlySet<string>,
+  ): Promise<RuntimeAdapter | undefined> {
+    for (const candidate of input.agents.list()) {
+      if (tried.has(candidate.id)) continue;
+      const capabilities = await candidate.capabilities();
+      if (input.workOrder.requiredCapabilities.every((capability) => capabilities.work.includes(capability))) {
+        return candidate;
+      }
+    }
+    return undefined;
   }
 
   private dependencyEvidence(runId: string, order: SubagentWorkOrder): Evidence[] {
@@ -667,7 +1045,10 @@ export class CloneRuntime {
       return;
     }
     if (event.type === "failed") {
-      throw new Error(`Agent execution failed: ${event.message}`);
+      // The structured report travels with the error so the retry loop can
+      // compare this failure against what a different provider reported.
+      // 结构化报告随错误一起传递，使重试循环能把本次失败与另一个 Provider 的报告比较。
+      throw new WorkerFailure(`Agent execution failed: ${event.message}`, event.report);
     }
 
     // Evidence kinds are an authorization, not a claim: an adapter may only
@@ -744,6 +1125,14 @@ export class CloneRuntime {
       && this.workOrderHasEvidence(runId, workOrderId)
       && verification?.passed === true;
   }
+}
+
+interface WorkspaceRecoveryAssessment {
+  decision: "rerun" | "reconciled" | "blocked";
+  category: FailureCategory;
+  reason: string;
+  changes: WorkspaceChange[];
+  checkpoint?: string;
 }
 
 function assertPlanIsExecutable(steps: PlanStep[]): void {

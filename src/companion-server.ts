@@ -5,10 +5,11 @@ import { dirname, join } from "node:path";
 import type { JournalEvent, MemoryCandidate, Run, Task } from "./core/contracts.ts";
 import { JsonlJournalStore } from "./core/journal.ts";
 import { replay } from "./core/run-state.ts";
-import { approveDemoWorkflow, startDemoWorkflow } from "./demo-workflow.ts";
+import { approveQueryRun, runQuery } from "./workflows/query-workflow.ts";
 import { LocalScheduler } from "./scheduling/local-scheduler.ts";
 import { describeSchedule, ScheduleStore, type LocalSchedule, type ScheduleKind } from "./scheduling/schedule-store.ts";
 import { SessionStore } from "./sessions/session-store.ts";
+import { loadProviderRegistry } from "./adapters/built-in-providers.ts";
 import { AgentSettingsStore } from "./settings/agent-settings.ts";
 import { LocalAgentRegistry } from "./agents/agent-registry.ts";
 import { runMainAgentQuery } from "./main-agent/query.ts";
@@ -48,14 +49,15 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   ]);
   const schedules = new ScheduleStore(join(dataDirectory, "schedules.json"));
   const sessions = new SessionStore(join(dataDirectory, "sessions.json"));
-  const agentSettings = new AgentSettingsStore(join(dataDirectory, "settings.json"));
+  const providers = await loadProviderRegistry(dataDirectory);
+  const agentSettings = new AgentSettingsStore(join(dataDirectory, "settings.json"), providers);
   const agentRegistry = new LocalAgentRegistry();
   const memoryStore = new LocalMemoryStore(join(dataDirectory, "memory.json"));
   await syncMemory(dataDirectory, memoryStore);
   const scheduler = new LocalScheduler({
     store: schedules,
     run: async (schedule) => {
-      await startDemoWorkflow(dataDirectory, schedule.query, {
+      await runQuery(dataDirectory, schedule.query, {
         kind: "schedule",
         payload: { scheduleId: schedule.id, scheduleKind: schedule.kind, scheduleDescription: describeSchedule(schedule) },
       }, await agentSettings.get(), { workspacePath });
@@ -235,7 +237,7 @@ async function handleRequest(
       sendJson(response, 400, { error: "Please describe the work in at least three characters." });
       return;
     }
-    const result = await startDemoWorkflow(
+    const result = await runQuery(
       context.dataDirectory,
       query,
       {},
@@ -272,9 +274,9 @@ async function handleRequest(
   const agentSettingMatch = url.pathname.match(/^\/api\/settings\/agents\/([^/]+)$/);
   if (request.method === "PATCH" && agentSettingMatch?.[1] !== undefined) {
     const body = await readJsonBody(request);
-    const update: { enabled?: boolean; providerId?: "codex-cli" | "claude-code" | "pi" } = {};
+    const update: { enabled?: boolean; providerId?: string } = {};
     if (typeof body.enabled === "boolean") update.enabled = body.enabled;
-    if (body.providerId === "codex-cli" || body.providerId === "claude-code" || body.providerId === "pi") update.providerId = body.providerId;
+    if (typeof body.providerId === "string" && body.providerId.trim().length > 0) update.providerId = body.providerId;
     if (Object.keys(update).length === 0) {
       sendJson(response, 400, { error: "An agent setting update needs an enabled boolean or providerId." });
       return;
@@ -339,7 +341,7 @@ async function handleRequest(
 
   const approvalMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/approve$/);
   if (request.method === "POST" && approvalMatch?.[1] !== undefined) {
-    const result = await approveDemoWorkflow(
+    const result = await approveQueryRun(
       context.dataDirectory,
       decodeURIComponent(approvalMatch[1]),
       await context.agentSettings.get(),
@@ -431,7 +433,7 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
       title: subagent.title,
       agentId: subagent.agentId,
       role: subagent.role,
-      providerId: subagent.providerId ?? providerByRole.get(subagent.agentId) ?? "demo",
+      providerId: subagent.providerId ?? providerByRole.get(subagent.agentId) ?? "unknown",
       status: subagent.status,
       summary: subagent.summary,
       updatedAt: subagent.updatedAt,

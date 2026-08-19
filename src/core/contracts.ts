@@ -5,6 +5,8 @@
  * Run 既可以由用户 Query 发起，也可以由受治理的非 Query 来源发起。Signal 只能请求规划，
  * 绝不会自行授予执行权限。
  */
+import type { FailureReport, OutcomeCatalog } from "./failure-analysis.ts";
+
 export type TriggerKind = "query" | "schedule" | "signal" | "manual";
 
 export type RunStatus =
@@ -184,6 +186,9 @@ export interface SubagentRun {
    */
   providerId?: string;
   sessionId?: string;
+  /** Durable pre-dispatch Workspace checkpoint used for black-box recovery. 黑盒恢复所用的派发前持久 Workspace 检查点。 */
+  workspaceCheckpoint?: string;
+  workspacePath?: string;
   attempt: number;
   role: SubagentWorkOrder["role"];
   title: string;
@@ -239,6 +244,7 @@ export type JournalEventType =
   | "subagent.completed"
   | "subagent.failed"
   | "subagent.cancelled"
+  | "subagent.recovery_decided"
   | "subagent.verified"
   | "agent.message_delta"
   | "agent.tool_started"
@@ -296,6 +302,8 @@ export interface ExecutionAssignment {
    * 每一条都必须已作为本 Run 的 memory.recalled 记入 Journal。
    */
   memoryContext?: MemoryContextPacket;
+  /** Owner-editable failure taxonomy used only for diagnostics. 所有者可编辑的失败分类，仅用于诊断。 */
+  failureCatalog?: OutcomeCatalog;
   workspacePath?: string;
 }
 
@@ -328,7 +336,7 @@ export type ExecutionEvent =
   | { type: "progress"; message: string }
   | { type: "evidence"; evidence: Omit<Evidence, "id" | "runId" | "stepId" | "createdAt"> }
   | { type: "completed"; summary: string }
-  | { type: "failed"; message: string };
+  | { type: "failed"; message: string; report?: FailureReport };
 
 export interface RuntimeCapabilities {
   resume: boolean;
