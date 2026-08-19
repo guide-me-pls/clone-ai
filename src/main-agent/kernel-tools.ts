@@ -45,6 +45,10 @@ export async function createKernelRuntime(dataDirectory: string): Promise<CloneR
     policy: new DefaultPolicyEngine(),
     verifier: new EvidenceVerifier(),
     memory: new MemoryPipeline(journal),
+    // The same reviewed memory reaches every worker the plan dispatches,
+    // whichever provider runs it.
+    // 同一份已审核记忆会到达计划派发的每个 Worker，无论由哪个 Provider 执行。
+    memorySource: new LocalMemoryStore(join(dataDirectory, "memory.json")),
   });
   await runtime.hydrate();
   return runtime;

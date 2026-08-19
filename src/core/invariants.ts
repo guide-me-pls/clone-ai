@@ -14,7 +14,8 @@ export interface InvariantViolation {
     | "evidence-before-completion"
     | "approval-before-external-execution"
     | "verification-before-run-completion"
-    | "evidence-kind-authorized";
+    | "evidence-kind-authorized"
+    | "memory-recall-journaled";
   sequence: number;
   runId?: string;
   message: string;
@@ -43,6 +44,10 @@ export interface InvariantViolation {
  *    the authorization snapshot journaled at dispatch time (constraint 5 again:
  *    a worker cannot mint receipts its adapter was never granted). Histories
  *    that predate authorization snapshots are skipped, not failed.
+ * 5. memory-recall-journaled — every memory item handed to a worker must have
+ *    been journaled as memory.recalled first (constraint 8: the owner can
+ *    inspect what the twin knew and told). Dispatches without a memory list
+ *    are skipped, not failed.
  */
 export function checkJournalInvariants(events: readonly JournalEvent[]): InvariantViolation[] {
   const violations: InvariantViolation[] = [];
@@ -53,6 +58,7 @@ export function checkJournalInvariants(events: readonly JournalEvent[]): Invaria
   const evidencedWorkOrders = new Map<string, Set<string>>();
   const verifiedRuns = new Set<string>();
   const authorizedKinds = new Map<string, Set<string>>();
+  const recalledMemoryIds = new Map<string, Set<string>>();
 
   const key = (runId: string | undefined): string => runId ?? "";
   const stepAuthorizationKey = (runId: string | undefined, stepId: string): string => `${key(runId)}:step:${stepId}`;
@@ -94,6 +100,15 @@ export function checkJournalInvariants(events: readonly JournalEvent[]): Invaria
         }
         break;
       }
+      case "memory.recalled": {
+        const payload = event.payload as { memories?: Array<{ id?: string }> };
+        const seen = recalledMemoryIds.get(key(event.runId)) ?? new Set<string>();
+        for (const memory of payload.memories ?? []) {
+          if (typeof memory.id === "string") seen.add(memory.id);
+        }
+        recalledMemoryIds.set(key(event.runId), seen);
+        break;
+      }
       case "execution.started":
       case "subagent.dispatched":
       case "subagent.resumed": {
@@ -101,9 +116,22 @@ export function checkJournalInvariants(events: readonly JournalEvent[]): Invaria
           stepId?: string;
           workOrderId?: string;
           authorizedEvidenceKinds?: string[];
+          memoryItemIds?: string[];
         };
         const stepId = payload.stepId;
         if (stepId === undefined) break;
+        if (payload.memoryItemIds !== undefined) {
+          const journaled = recalledMemoryIds.get(key(event.runId)) ?? new Set<string>();
+          const unjournaled = payload.memoryItemIds.filter((id) => !journaled.has(id));
+          if (unjournaled.length > 0) {
+            violations.push({
+              invariant: "memory-recall-journaled",
+              sequence: event.sequence,
+              runId: event.runId,
+              message: `Memory reached a worker without a prior memory.recalled event: ${unjournaled.join(", ")}.`,
+            });
+          }
+        }
         if (payload.authorizedEvidenceKinds !== undefined) {
           const authorization = new Set(payload.authorizedEvidenceKinds);
           if (payload.workOrderId !== undefined) {
