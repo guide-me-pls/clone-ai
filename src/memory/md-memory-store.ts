@@ -23,10 +23,10 @@ import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export type MemoryType = "fact" | "preference" | "procedure" | "decision" | "commitment";
+import type { MemorySensitivity, MemoryType } from "../core/contracts.ts";
+
 export type MemoryStatus = "active" | "archived";
 export type MemoryConfidence = "low" | "medium" | "high";
-export type MemorySensitivity = "public" | "private" | "secret";
 
 export interface MemoryEntry {
   id: string;
