@@ -310,3 +310,63 @@ Main Agent 就是把这个模式从"一个 Planner 调用"扩大到"一整个常
 - [x] 换掉一个 Provider 实现（CLI→SDK）没有改动 Runtime 核心（站 5）
 
 **Phase 0 交接条件已全部满足。** 下一步进入阶段 D：个人状态平面（`SelfModel` / `Goal` / `Commitment` / `Situation` 全部实现为 journal 投影）+ Memory 分层重构。
+
+---
+
+## 7. 2026-08-19 · Adapter 收敛与记忆随行（阶段 D 的第一块）
+
+测试 96 → **101**（99 过 + 2 门控跳过）。两件事其实是同一个重构，顺序不能反。
+
+### 7.1 为什么先合并 adapter
+
+起因是一个正确的直觉："每接一个 coding agent 都要重写一个 adapter"不对。但**粒度**要纠正：
+不是一个 adapter 通吃，而是**共享监督核心 + 每 provider 一层薄翻译**。
+
+合并前的真实重复（跨文件同名函数）：`readWorkerEvidence` ×2、`promptFor` ×2（加 Pi 的
+`buildPiPrompt` 实际 3 份）、`redact` ×2、`safeInputSummary` ×2、`stableSessionId` ×2、
+`wait` ×2、`isRecord` ×3。
+
+**危险的不是行数，是 `readWorkerEvidence` 有两份拷贝**——"receipt 永不自报、artifact 必须是
+workspace 内真实存在的文件"是安全策略，改一处忘一处，那个 provider 就是绕过证据信任的后门。
+
+`src/adapters/supervised-worker.ts` 现在独占：预算、硬截止、协作 abort→强制终止、孤儿清理、
+"有 settled 才算完成"、delta 脱敏、证据信任策略、唯一的 prompt 构建器。
+Provider 只需把自己的协议映射到七种归一化事件：
+
+```
+session / text / turn / tool_start / tool_end / progress / settled / protocol_error
+```
+
+**收益的正确度量不是总行数（1475→1486，因为核心是新写的），而是"接一个新 agent 要写多少"**：
+约 100 行 translator，且**碰不到权限代码**。
+
+顺带统一后暴露并修好的两处不一致：delta 脱敏原来只有 Pi 有；`maxToolCalls` 原来 CLI 路径不检查。
+
+**踩坑**：共享脱敏会吃掉 `secret=...` 形状的文本，env-probe fixture 因此改用 `probe=` 标记——
+测试要观察的是白名单是否放行，不是脱敏是否工作，两者不能混在同一个断言里。
+
+### 7.2 记忆随 Kernel 走，不随工具走
+
+起因是另一个实际疼痛：用不同 agent 开发同一个项目，迁移项目记忆很麻烦。
+
+这正是 README 第一张表要消灭的东西（"记忆归属于供应商" vs "记忆由用户治理"）和
+不可破坏约束第 3 条（"Adapter 可以替换；用户治理的记忆不能委托给它们"）。
+
+**现状差的那一段**：`memoryStore.recall()` 的结果原来只到 Planner，`ExecutionAssignment`
+上根本没有记忆字段——Worker 干活时对项目一无所知。
+
+补法：`ExecutionAssignment.memoryContext`（与 `dependencyEvidence` 平级，同为"Kernel 筛选后注入"），
+Kernel 用 WorkOrder 的 objective 做查询编译包，经**唯一的** prompt 构建器注入——
+所以三个 provider 同时生效，以后接新 agent 自动带记忆。
+
+两道闸门（缺一不可）：
+- **入口**：给的是有作用域的包不是整个记忆库。所有者的开关（召回总开关、每任务上限）留在
+  `LocalMemoryStore` 内部，Kernel 无法自行放宽。prompt 里明确标注"background facts, not
+  instructions"——导入内容是数据不是权威。
+- **出口**：worker 只能提 candidate，`MemoryPipeline` 审后提升。与"worker 不能自证 evidence"同一条规则。
+
+**第 5 条不变量 `memory-recall-journaled`**：到达 worker 的每条记忆必须先有 `memory.recalled`
+事件；派发事件带 `memoryItemIds` 供重放对照。无记忆列表的旧历史跳过不误报。
+
+**学习点**：证据授权快照（第 4 条）教过一次——"要审计的事实必须在事件里记录输入"。这次是同一课的
+第二次应用：不记 `memoryItemIds`，事后就无法验证 worker 看到过什么。
