@@ -27,7 +27,7 @@ async function tempDirectory(t: TestContext): Promise<{ directory: string; use: 
       try {
         store.close();
       } catch {
-        // Already closed by the test body.
+        // Already closed by the test body. 已在测试主体中关闭。
       }
     }
     await rm(directory, { recursive: true, force: true });
