@@ -39,8 +39,8 @@
 | 2 ✅ | 恢复接主入口 | 重启进程后世界还在 | kill -9 → 重启 → 从 checkpoint+journal 续跑通过 |
 | 3 ✅ | 真实 CLI 只读冒烟 | 协议猜测被真实事件流证实或证伪 | 真 codex/claude 跑通一个 read-only WorkOrder |
 | 4 ✅ | 可执行不变量 | 约束从文档变成断言 | 违反约束的事件序列在测试中必然抛错 |
-| 5 | SDK 结构化接入 | 删掉 stdout 启发式解析层 | Agent SDK / app-server 接入，猜测函数整块删除 |
-| 6 | 存储升级 | JSONL → SQLite WAL | 断电/并发写测试通过，投影可重建 |
+| 5 ✅ | SDK 结构化接入 | 删掉 stdout 启发式解析层 | Agent SDK / app-server 接入，猜测函数整块删除 |
+| 6 ✅ | 存储升级 | JSONL → SQLite WAL | 断电/并发写测试通过，投影可重建 |
 
 **阶段 A（站 1-4）于 2026-08-18 完成**，测试从 54 → 67（含 1 个 `CLONE_AI_LIVE_SMOKE=1` 门控的真实冒烟，已实跑通过）。各站"实际学到"：
 
@@ -279,3 +279,34 @@ Main Agent 就是把这个模式从"一个 Planner 调用"扩大到"一整个常
 2. **每站结束在本文件对应小节追加"实际学到/踩坑"三行**，坐标漂移时回来改第 0 节。
 3. 反面教材和正面范本并排读（CLI adapter 旧版 vs Pi adapter），比只读好代码快一倍。
 4. 假 fixture 证明"处理正确"，录制回放证明"协议正确"，两者缺一不可。
+
+---
+
+## 6. 2026-08-19 本轮完成记录（站 5、站 6、阶段 B 收尾）
+
+测试 77 → **96**（94 过 + 2 门控跳过）；`tsc --noEmit` 干净。
+
+### 站 6 · SQLite WAL（`src/core/sqlite-journal.ts`）
+- `node:sqlite` 是 Node 24 内置，**零新依赖**；WAL + `synchronous=FULL`（Journal 是事实来源，耐久性优先）+ `AUTOINCREMENT`（sequence 永不复用）。
+- 迁移工具先跑全量不变量校验再复制——**迁移正是"损坏的过去悄悄变成新事实来源"的时刻**；非空目标拒绝执行。
+- `createJournalStore()` 做 seam 选择（`CLONE_AI_JOURNAL=sqlite`），并接进 Kernel 构造入口——**能力必须可达，不能只是存在**（站 2 的教训第二次生效）。
+- 踩坑：Windows 下 `t.after` 按注册顺序执行，SQLite 句柄未关时 `rm` 报 EBUSY；改为单个 after 钩子统一关闭再删除。另：迁移比对要对 `JSON.parse(JSON.stringify(...))`，因为内存对象带显式 `undefined` 属性而 JSON 不存储它们。
+
+### 阶段 B 收尾
+- 会话构造提炼为 `src/main-agent/session.ts` 工厂——**CLI 入口与验收测试构建同一个受治理会话**，测试证明的就是入口运行的。
+- 门控验收测试 `CLONE_AI_MAIN_LIVE=1`：真实模型跑通"自然语言 → propose_work_plan → Kernel 校验 → Run+Plan 落 Journal"，**断言读 Journal 而不是读 Agent 的话**。实跑约 7s 通过。
+- companion 新增 `POST /api/main-agent/query`，响应把 `reply`（Agent 的话）与 `newRuns`（Journal 真正接受的）分开——话语不是证据。
+
+### 站 5 · Claude Agent SDK（`src/adapters/claude-agent-sdk-adapter.ts`）
+- 官方 SDK 的 `query()` 发有类型消息，整层启发式消失：不再猜 delta 字段、不再从顶层键拼工具名、不再依赖 exit code。
+- **有类型的 `result` 消息 = 显式 settled 信号**；流结束却没有 result 判失败——与"进程退出但无 `agent_settled` 不算完成"同一条不变量。
+- 权限边界不变：`permissionMode` 跟随步骤风险、预算超限 abort、receipt 永不授予、artifact 必须是 workspace 内真实存在的文件。
+- `CLONE_AI_CLAUDE_TRANSPORT=sdk` 在 registry 里切换，CLI adapter 仍是默认——**同一 RuntimeAdapter 合约下替换 Provider 实现，Kernel 零改动**，README 第 9 条约束的首次真实演练。
+
+### 交接点状态（第 3 节四条）
+- [x] 任意时刻 kill 后状态确定、副作用不重复（站 1-2）
+- [x] 真实 Provider 完成过被中断的真实工作并恢复（站 2-3）
+- [x] 9 条约束中 4 条是重放 journal 即可机器校验的不变量（站 4 + 授权快照）
+- [x] 换掉一个 Provider 实现（CLI→SDK）没有改动 Runtime 核心（站 5）
+
+**Phase 0 交接条件已全部满足。** 下一步进入阶段 D：个人状态平面（`SelfModel` / `Goal` / `Commitment` / `Situation` 全部实现为 journal 投影）+ Memory 分层重构。
