@@ -6,6 +6,7 @@ import type {
   Evidence,
   ExecutionAssignment,
   ExecutionEvent,
+  MemoryContextPacket,
   PlanStep,
   PolicyEngine,
   Run,
@@ -18,6 +19,7 @@ import type {
   VerificationResult,
   Verifier,
   WorkPlan,
+  WorkerMemorySource,
 } from "./contracts.ts";
 import type { JournalStore } from "./journal.ts";
 import { approvalKey, emptyProjection, reduceEvent, replay, subagentKey, type RuntimeProjection } from "./run-state.ts";
@@ -29,6 +31,16 @@ export interface CloneRuntimeOptions {
   policy: PolicyEngine;
   verifier: Verifier;
   memory: MemoryPipeline;
+  /**
+   * Optional recall port. When present, the Kernel compiles a scoped memory
+   * packet for each assignment so any worker — Pi, a coding CLI, or a future
+   * provider — receives the same owner-governed context without the memory
+   * ever living inside the tool.
+   * 可选的召回端口。存在时，Kernel 会为每次派发编译有作用域的记忆包，使任何 Worker
+   * （Pi、Coding CLI 或未来的 Provider）都收到同一份由所有者治理的上下文，而记忆
+   * 从不驻留在工具内部。
+   */
+  memorySource?: WorkerMemorySource;
 }
 
 export interface DispatchResult {
@@ -50,6 +62,7 @@ export class CloneRuntime {
   readonly #policy: PolicyEngine;
   readonly #verifier: Verifier;
   readonly #memory: MemoryPipeline;
+  readonly #memorySource?: WorkerMemorySource;
   #state: RuntimeProjection = emptyProjection();
   #hydrated = false;
 
@@ -58,6 +71,7 @@ export class CloneRuntime {
     this.#policy = options.policy;
     this.#verifier = options.verifier;
     this.#memory = options.memory;
+    this.#memorySource = options.memorySource;
   }
 
   async hydrate(): Promise<void> {
@@ -302,11 +316,13 @@ export class CloneRuntime {
         `Agent ${agentId} cannot execute step ${input.step.id}; missing capabilities: ${missingCapabilities.join(", ")}.`,
       );
     }
+    const memoryContext = await this.compileMemoryContext({ run: input.run, task: input.task, step: input.step });
     const assignment: ExecutionAssignment = {
       run: input.run,
       task: input.task,
       step: input.step,
       executor: { agentId: adapter.id, providerId: adapter.providerId },
+      ...(memoryContext === undefined ? {} : { memoryContext }),
     };
     const executionAuthorization = evidenceAuthorization(capabilities);
     await this.record({
@@ -323,6 +339,7 @@ export class CloneRuntime {
         // 授权快照让 Journal 可以自审计：事后重放能对照派发时该 Adapter 实际被允许的
         // 证据类型，校验每一条已记录的 Evidence。
         authorizedEvidenceKinds: [...executionAuthorization],
+        memoryItemIds: memoryContext?.items.map((item) => item.id) ?? [],
       },
     });
     const completion = await this.consumeExecutionEvents(adapter, assignment, executionAuthorization);
@@ -378,6 +395,12 @@ export class CloneRuntime {
         `Work order ${input.workOrder.id} started with provider ${existing.providerId} and cannot resume with ${adapter.providerId}.`,
       );
     }
+    const memoryContext = await this.compileMemoryContext({
+      run: input.run,
+      task: input.task,
+      step: input.step,
+      workOrder: input.workOrder,
+    });
     const assignment: ExecutionAssignment = {
       run: input.run,
       task: input.task,
@@ -385,6 +408,7 @@ export class CloneRuntime {
       executor: { agentId: adapter.id, providerId: adapter.providerId },
       workOrder: input.workOrder,
       dependencyEvidence: this.dependencyEvidence(input.run.id, input.workOrder),
+      ...(memoryContext === undefined ? {} : { memoryContext }),
     };
     const allowedEvidenceKinds = evidenceAuthorization(await adapter.capabilities());
 
@@ -419,7 +443,7 @@ export class CloneRuntime {
           type: "subagent.dispatched",
           taskId: input.task.id,
           runId: input.run.id,
-          payload: { ...subagent, authorizedEvidenceKinds: [...allowedEvidenceKinds] },
+          payload: { ...subagent, authorizedEvidenceKinds: [...allowedEvidenceKinds], memoryItemIds: memoryContext?.items.map((item) => item.id) ?? [] },
         });
       } else {
         await this.record({
@@ -468,6 +492,48 @@ export class CloneRuntime {
       }
     }
     throw lastError instanceof Error ? lastError : new Error("Subagent exhausted its attempt budget.");
+  }
+
+  /**
+   * Compiles the scoped memory packet for one assignment and journals exactly
+   * which memories reached which worker. Memory is never handed over wholesale:
+   * the objective is the query, the store applies the owner's recall switch and
+   * per-task cap, and nothing reaches a worker without a memory.recalled event
+   * to audit it against.
+   * 为一次派发编译有作用域的记忆包，并把"哪些记忆到了哪个 Worker"记入 Journal。
+   * 记忆绝不整体移交：以目标为查询、由 Store 施加所有者的召回开关与每任务上限，
+   * 且没有 memory.recalled 事件可供对照的记忆不会到达任何 Worker。
+   */
+  private async compileMemoryContext(input: {
+    run: Run;
+    task: Task;
+    step: PlanStep;
+    workOrder?: SubagentWorkOrder;
+  }): Promise<MemoryContextPacket | undefined> {
+    if (this.#memorySource === undefined) return undefined;
+    const query = input.workOrder?.objective ?? input.step.instructions;
+    const matches = await this.#memorySource.recall(query, input.run.id);
+    if (matches.length === 0) return undefined;
+
+    await this.record({
+      type: "memory.recalled",
+      taskId: input.task.id,
+      runId: input.run.id,
+      payload: {
+        query,
+        scope: { stepId: input.step.id, workOrderId: input.workOrder?.id },
+        memories: matches.map((match) => ({
+          id: match.memory.id,
+          summary: match.memory.summary,
+          score: match.score,
+          matchedTerms: match.matchedTerms,
+        })),
+      },
+    });
+    return {
+      items: matches.map((match) => ({ id: match.memory.id, summary: match.memory.summary })),
+      selectedBy: { query },
+    };
   }
 
   private dependencyEvidence(runId: string, order: SubagentWorkOrder): Evidence[] {

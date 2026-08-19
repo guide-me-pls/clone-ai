@@ -301,8 +301,23 @@ export interface ExecutionAssignment {
 
 export interface MemoryContextPacket {
   items: Array<{ id: string; summary: string }>;
-  /** Why these items: the query and cap that selected them. 为什么是这些条目：筛选它们的查询与上限。 */
-  selectedBy: { query: string; limit: number };
+  /** Why these items reached this worker. 这些条目为何到达该 Worker。 */
+  selectedBy: { query: string };
+}
+
+/**
+ * The narrow recall port the Kernel uses to compile worker memory packets.
+ * The owner's switches (recall enabled, per-task cap) stay inside the store,
+ * so the Kernel cannot widen its own access.
+ * Kernel 编译 Worker 记忆包所用的窄召回端口。所有者的开关（是否启用召回、每任务上限）
+ * 留在 Store 内部，因此 Kernel 无法自行放宽访问范围。
+ */
+export interface WorkerMemorySource {
+  recall(query: string, runId: string): Promise<Array<{
+    memory: { id: string; summary: string };
+    score: number;
+    matchedTerms: string[];
+  }>>;
 }
 
 export type ExecutionEvent =
