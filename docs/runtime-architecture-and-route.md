@@ -32,48 +32,51 @@ are the twin itself and are the next phase's work.
 
 ## The worker boundary
 
-Every execution provider — Pi, Codex CLI, Claude Code, and any future coding
-agent — runs behind one supervised boundary. Providers own their internal agent
-loops. Clone AI owns the WorkOrder, permissions, budgets, evidence, and the
-decision that work is complete.
+Every execution provider — Claude Code, Codex, Pi, opencode, and any future
+coding agent — runs as a black box behind one supervised boundary. Clone AI
+supplies a prompt and a workspace and judges the result by observation: the
+process exit status and what actually changed on disk. No internal protocol,
+streaming format, or session model is parsed.
 
 ```text
 WorkOrder
   -> policy + capability check
-  -> SupervisedWorkerAdapter          budgets · deadline · abort→terminate
-     |                                completion rule · evidence trust · redaction
-     +-- ProviderTranslator           protocol only, ~100 lines each
-           Pi (JSONL RPC) · Codex CLI · Claude Code CLI · Claude Agent SDK
-  <- normalized events
-  -> evidence -> verification -> WorkReceipt
+  -> BlackBoxWorkerAdapter        prompt in · budget · deadline · terminate
+     |                           workspace snapshot before / after
+     +-- provider declaration    command + args + env allowlist (config, not code)
+  <- exit status + workspace diff + output tail
+  -> artifacts -> verification -> WorkReceipt
 ```
 
-A translator maps one provider's protocol onto seven neutral shapes and can
-touch nothing else:
+Integrating an agent is a `providers.json` entry, never a source change:
 
-```text
-session · text · turn · tool_start · tool_end · progress · settled · protocol_error
-```
+| Provider | Launch |
+| --- | --- |
+| Claude Code | `claude -p {{prompt}}` |
+| Codex CLI | `codex exec --skip-git-repo-check {{prompt}}` |
+| Pi | `pi -p {{prompt}}` |
+| opencode | `opencode run {{prompt}}` |
 
-**Authority:** a translator cannot grant approval, change Run state, extend a
-budget, or declare success. Adding a coding agent means writing a translator,
-never re-implementing authority.
+**Authority:** a declaration says how to launch an agent and which credentials
+it may see. It cannot grant approval, extend a budget, change Run state, or
+declare success.
 
-| Provider | Transport | Settled signal |
-| --- | --- | --- |
-| Pi | JSONL RPC subprocess | `agent_settled` |
-| Codex CLI | `codex exec --json` | clean protocol-speaking exit |
-| Claude Code (CLI) | `claude -p --output-format stream-json` | `result` event |
-| Claude Code (SDK) | `@anthropic-ai/claude-agent-sdk` | typed `result` message |
-
-Two rules survived every provider and are worth memorising:
+Three rules define the boundary:
 
 - **`exit` is not completion.** A process can exit 0 after being killed, running
-  out of turns, or being pointed at the wrong binary. Completion requires an
-  explicit settled signal from the protocol.
-- **`abort` is not a stop.** A cooperative abort is a request; a wedged worker
-  may ignore it. Every abort arms a grace timer that force-terminates the
-  session, so a stuck provider can never hang the supervisor.
+  out of turns, or doing nothing at all. When a work order requires an artifact
+  and the workspace is unchanged, the work did not happen.
+- **Evidence is observed, not requested.** The workspace is snapshotted before
+  and after; added and modified files are the artifacts. A black-box agent needs
+  no knowledge of Clone AI's conventions, because it is never asked to declare
+  anything.
+- **Two agents failing alike is evidence about the task.** Retries deliberately
+  switch provider; when independent agents report the same diagnostic failure
+  category, the obstacle is escalated to the owner instead of burning attempts.
+
+The cost is explicit: without a parsed session model there is no session id, so
+a crashed black-box run restarts rather than resumes. Idempotence is carried by
+`maxAttempts` and by artifacts being observable facts.
 
 ## Memory travels with the Kernel, not with the tool
 
@@ -148,9 +151,9 @@ only when it could be stated as an assertion.
 | --- | --- | --- |
 | 1 | Interruption and recovery for Pi | Five scripted failure modes; a wedged worker is hard-terminated |
 | 2 | Recovery reachable from the entry point | A killed process is resumed from disk by a fresh process |
-| 3 | Real CLI protocol verified | A recorded live session replaced guessed event shapes |
+| 3 | Real CLI protocol verified | A recorded live session replaced guessed event shapes (later superseded by the black-box rewrite) |
 | 4 | Constraints become assertions | Forged histories fail; a real run reports zero violations |
-| 5 | Structured SDK integration | Claude Code behind its official SDK, same adapter contract |
+| 5 | Provider implementation swapped | Claude Code moved transport twice under one unchanged adapter contract |
 | 6 | Storage upgrade | SQLite WAL behind the same store seam, migration verified |
 
 Phase B then put a Main Agent on top: a persistent conversational brain whose
@@ -160,12 +163,12 @@ execute, or mark work complete.
 
 ## Verified and not yet claimed
 
-- 101 automated tests pass; type checking is clean.
-- A real Claude Code session completed through the supervised boundary
-  (`CLONE_AI_LIVE_SMOKE=1`), and a real model drove a natural-language request
-  into a Kernel-accepted plan (`CLONE_AI_MAIN_LIVE=1`).
-- Codex CLI event shapes remain unverified against a live session; the CLI
-  translator's codex branch is still inference, not observation.
+- 81 automated tests pass; type checking is clean.
+- A real model drove a natural-language request into a Kernel-accepted plan
+  (`CLONE_AI_MAIN_LIVE=1`).
+- No live run against a real installed agent has been executed **since the
+  black-box rewrite**. The built-in launch recipes are inference from each
+  product's documented headless mode, not observation.
 - SQLite is opt-in (`CLONE_AI_JOURNAL=sqlite`); JSONL remains the default.
 - No connector, no scheduler-driven external action, and no personal state
   plane exists yet.

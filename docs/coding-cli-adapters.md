@@ -1,88 +1,122 @@
-# Supervised worker boundary
+# Black-box agent boundary
 
 **English** · [简体中文](coding-cli-adapters.zh-CN.md)
 
-Codex CLI, Claude Code, and Pi keep their own internal agent loops. Clone AI
-remains Supervisor: it owns the WorkOrder, permissions, budgets, evidence, and
-the decision that work is complete.
+Clone AI treats a coding agent as a black box. It supplies a prompt and a
+workspace, then judges the result by observation alone: the process exit status
+and what actually changed on disk. Nothing about an agent's internal protocol,
+streaming format, or session model is parsed.
 
 ```text
 WorkOrder -> policy + capability check
-  -> SupervisedWorkerAdapter     budgets · deadline · abort→terminate
-     |                           completion rule · evidence trust · redaction
-     +-- ProviderTranslator      protocol only
-  <- normalized events, session id, settled signal
--> Clone AI evidence + verification
+  -> BlackBoxWorkerAdapter    prompt in · budget · deadline · terminate
+     |                        workspace snapshot before / after
+  <- exit status + workspace diff + output tail
+-> artifacts -> verification -> WorkReceipt
 ```
 
-## One core, several translators
+## Integrating an agent is configuration
 
-Authority lives once, in `SupervisedWorkerAdapter`. A provider contributes only
-a translator that maps its protocol onto seven neutral event shapes:
+Any headless agent is a launch recipe. Declare one in
+`<dataDirectory>/providers.json` and it becomes selectable — no source change,
+no adapter class:
+
+```jsonc
+{
+  "providers": [
+    {
+      "id": "opencode",
+      "label": "opencode",
+      "command": "opencode",
+      "args": ["run", "{{prompt}}"],
+      "env": ["ANTHROPIC_API_KEY"],
+      "timeoutMs": 900000
+    }
+  ]
+}
+```
+
+`{{prompt}}` and `{{workspace}}` are substituted at dispatch. `promptVia:
+"stdin"` sends the prompt on stdin instead of as an argument. A declaration
+that reuses a built-in id replaces it, so the owner can retune how a shipped
+agent is launched.
+
+| Built-in | Command |
+| --- | --- |
+| Claude Code | `claude -p {{prompt}}` |
+| Codex CLI | `codex exec --skip-git-repo-check {{prompt}}` |
+| Pi | `pi -p {{prompt}}` |
+| opencode | `opencode run {{prompt}}` |
+
+**Authority:** a provider declaration says how to launch an agent and which
+credentials it may see. It cannot grant approval, extend a budget, change Run
+state, or declare success.
+
+## Evidence is observed, not requested
+
+A black-box agent does not know Clone AI's conventions and cannot be relied on
+to announce what it produced. So Clone AI does not ask. It snapshots the
+workspace before the dispatch and diffs it afterwards; added and modified files
+are the artifacts, each recorded with its real path as the locator.
+
+This is stricter than the previous convention of asking the worker to print a
+declaration line, because it needs no cooperation. It also settles the
+completion question: when a work order requires an artifact and the workspace
+is unchanged, the work did not happen — whatever the agent said. A deleted file
+is a real change but never an artifact.
+
+Receipts remain ungrantable. An artifact proves a file exists; only a trusted
+runtime can attest that an external action really happened.
+
+## Failure is compared across agents
+
+Every failure is classified into a coarse category — `launch_failed`,
+`timeout`, `aborted`, `nonzero_exit`, `no_artifact`, `missing_credential`,
+`missing_input`, `permission_denied`, `network`, `unknown` — with a normalized
+signature that strips paths, ids, numbers, and timestamps.
+
+On retry the Runtime deliberately picks a **different** provider. Repeating the
+same black box rarely produces a different outcome, and a second opinion is
+what makes the next step possible:
 
 ```text
-session · text · turn · tool_start · tool_end · progress · settled · protocol_error
+agent A fails ─┐
+               ├─ different reasons  -> try another agent
+agent B fails ─┘
+               └─ same diagnostic category
+                     -> the obstacle is in the task or environment
+                     -> stop retrying, escalate to the owner
 ```
 
-| Provider | Invocation | Resume | Settled signal |
-| --- | --- | --- | --- |
-| Codex CLI | `codex exec --json` | `codex exec resume <session>` | clean protocol-speaking exit |
-| Claude Code (CLI) | `claude -p --output-format stream-json` | `claude --resume <session>` | `result` event |
-| Claude Code (SDK) | `@anthropic-ai/claude-agent-sdk` | `resume` option | typed `result` message |
-| Pi | JSONL RPC subprocess | `--session-id` | `agent_settled` |
+Agreement on a diagnostic category (both agents cannot find a credential) is
+treated as corroboration on its own, because independent products describe the
+same wall in their own words. Agreement on a catch-all category
+(`nonzero_exit`, `unknown`) proves nothing by itself, so those additionally
+require overlapping wording.
 
-Adding a coding agent means writing a translator (~100 lines) that cannot grant
-approval, extend a budget, change Run state, or declare success. Selecting the
-SDK transport for Claude Code is `CLONE_AI_CLAUDE_TRANSPORT=sdk`; the CLI
-transport stays the default.
+## The cost of the black box
 
-Codex uses `read-only` sandbox for read-only work and `workspace-write` only for
-`reversible_write`. Claude Code uses `plan` permission mode for read-only work
-and `acceptEdits` only for `reversible_write`. External side effects still stop
-at Clone AI's approval boundary.
+| Property | Consequence |
+| --- | --- |
+| No protocol parsing | Any headless agent integrates by configuration |
+| No session identity | A crashed run **restarts**, it does not resume |
+| No tool events | Progress is the agent's own output lines, nothing finer |
+| Evidence from the filesystem | Work that was not written to a file counts as work not done |
 
-## Completion is a protocol fact, not an exit code
-
-A process can exit 0 after being killed, exhausting its turns, or being pointed
-at the wrong binary. Completion therefore requires an explicit settled signal.
-A clean stream that never settled is reported as a failure.
-
-A cooperative abort is likewise a request, not a stop. Every abort arms a grace
-timer that force-terminates the session, so a wedged provider cannot hang the
-supervisor. Budgets for duration, model calls, and tool calls are enforced in
-the core for every provider.
-
-## Environment and evidence
-
-Each worker process starts from an empty environment and receives an explicit
-allowlist: baseline OS variables, that one provider's credentials, and any
-configured extras. Other secrets in the supervisor's environment stay invisible.
-
-Agent completion is not proof of delivery. When an artifact is required, the
-worker ends with this exact line:
-
-```text
-CLONE_AI_EVIDENCE: {"kind":"artifact","summary":"...","locator":"relative/path"}
-```
-
-The claim is verified, never trusted: only `artifact` is accepted, and only when
-the locator resolves to a file that really exists inside the bounded workspace.
-Every other claim — including any `receipt`, which would attest that an external
-action happened — is downgraded to an observation recording the rejection. This
-policy has exactly one implementation, shared by all providers.
-
-Workers also receive the owner's reviewed memory as a scoped packet compiled by
-the Kernel, so switching providers never means migrating memory between tools.
-See [Runtime architecture and route](runtime-architecture-and-route.md).
+Losing resume is the honest price of not parsing protocols: without reading an
+agent's session model there is no session id to reopen. Idempotence is carried
+by the WorkOrder's `maxAttempts` and by artifacts being observable facts.
 
 ## Verified and not yet claimed
 
-- A live read-only Claude Code session completed end to end through this
-  boundary against `claude-code 2.1.234` (`CLONE_AI_LIVE_SMOKE=1`). Recording it
-  corrected three parsing errors and one Windows launch bug; the redacted stream
-  is checked in as a replay fixture.
-- Type checking and the full automated suite pass without a paid request.
-- Codex CLI event shapes remain **inference, not observation**: no live Codex
-  WorkOrder has been run, so its translator branch is unverified.
-- The `CLONE_AI_EVIDENCE` line is still a text convention. Replacing it with a
-  structured channel is future work for the SDK transport.
+- The full black-box path is covered by tests against a scripted agent:
+  workspace-diff artifacts, a talkative agent that writes nothing, a missing
+  command, a wedged agent hitting the deadline, the environment allowlist, and
+  cross-provider corroboration.
+- Type checking and the automated suite pass without a paid request.
+- No live run against a real installed agent has been executed **since the
+  black-box rewrite**; the built-in launch recipes are inference from each
+  product's documented headless mode, not observation.
+- `workspace-diff` walks the filesystem and skips common build directories.
+  Very large workspaces are capped at 20,000 files, and files above 2 MB are
+  identified by size and mtime rather than content hash.

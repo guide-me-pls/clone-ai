@@ -11,20 +11,20 @@ import type { ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabi
 import { AgentSettingsStore, defaultAgentSettings } from "../src/settings/agent-settings.ts";
 
 /**
- * Stands in for a third-party coding agent such as opencode. It lives entirely
+ * Stands in for a third-party coding agent the project has never heard of. It lives entirely
  * outside src/: if this test passes, integrating a provider never requires
  * editing the Kernel, the settings type, or a dispatch branch.
- * 代表 opencode 之类的第三方 Coding Agent。它完全位于 src/ 之外：本测试通过即意味着
+ * 代表项目从未听说过的第三方 Coding Agent。它完全位于 src/ 之外：本测试通过即意味着
  * 接入一个 Provider 从不需要修改 Kernel、设置类型或分发分支。
  */
-const opencodeProvider: ProviderDefinition = {
-  id: "opencode",
-  label: "opencode",
+const acmeProvider: ProviderDefinition = {
+  id: "acme-agent",
+  label: "Acme Agent",
   createAdapter: ({ agentId, workCapabilities }) => new StubAdapter(agentId, workCapabilities),
 };
 
 class StubAdapter implements RuntimeAdapter {
-  readonly providerId = "opencode";
+  readonly providerId = "acme-agent";
   readonly id: string;
   readonly #work: string[];
 
@@ -43,10 +43,10 @@ class StubAdapter implements RuntimeAdapter {
 }
 
 test("a third-party provider becomes selectable by registration alone", async () => {
-  const providers = createBuiltInProviderRegistry().register(opencodeProvider);
+  const providers = createBuiltInProviderRegistry().register(acmeProvider);
 
   const settings = defaultAgentSettings().map((agent) => (
-    agent.id === "context-researcher" ? { ...agent, providerId: "opencode" } : agent
+    agent.id === "context-researcher" ? { ...agent, providerId: "acme-agent" } : agent
   ));
   const registry = createConfiguredAgentRegistry(settings, {
     dataDirectory: join(tmpdir(), "clone-ai-provider-plugin"),
@@ -54,7 +54,7 @@ test("a third-party provider becomes selectable by registration alone", async ()
   });
 
   const adapter = registry.get("context-researcher");
-  assert.equal(adapter?.providerId, "opencode");
+  assert.equal(adapter?.providerId, "acme-agent");
   assert.equal((await adapter!.capabilities()).work.includes("research"), true);
 });
 
@@ -70,38 +70,21 @@ test("an unknown provider fails with the list of registered ones", () => {
   );
 });
 
-test("a provider states its own role limits instead of the registry hardcoding them", () => {
-  const providers = createBuiltInProviderRegistry();
-
-  // Pi declares supportedRoles; the restriction and its reason travel with it.
-  // Pi 声明了 supportedRoles；限制及其原因随该 Provider 一起传递。
-  assert.equal(providers.supportsRole("pi", "review"), true);
-  assert.equal(providers.supportsRole("pi", "external"), false);
-  assert.equal(providers.supportsRole("opencode", "external"), false, "unregistered providers support nothing");
-
-  const settings = defaultAgentSettings().map((agent) => (
-    agent.id === "external-operator" ? { ...agent, providerId: "pi" } : agent
-  ));
-  assert.throws(
-    () => createConfiguredAgentRegistry(settings, { dataDirectory: ".", providers }),
-    /tool-free direct and review roles/,
-  );
-});
 
 test("settings validate provider ids against the registry, not a closed union", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-settings-"));
   t.after(async () => rm(directory, { recursive: true, force: true }));
-  const providers = createBuiltInProviderRegistry().register(opencodeProvider);
+  const providers = createBuiltInProviderRegistry().register(acmeProvider);
   const store = new AgentSettingsStore(join(directory, "settings.json"), providers);
 
-  const updated = await store.updateAgent("context-researcher", { providerId: "opencode" });
-  assert.equal(updated.agents.find((agent) => agent.id === "context-researcher")?.providerId, "opencode");
+  const updated = await store.updateAgent("context-researcher", { providerId: "acme-agent" });
+  assert.equal(updated.agents.find((agent) => agent.id === "context-researcher")?.providerId, "acme-agent");
 
   // Reading back keeps the third-party choice, proving normalize() consults
   // the registry rather than a hardcoded set.
   // 回读仍保留第三方选择，证明 normalize() 查的是 Registry 而不是写死的集合。
   const reloaded = await store.get();
-  assert.equal(reloaded.agents.find((agent) => agent.id === "context-researcher")?.providerId, "opencode");
+  assert.equal(reloaded.agents.find((agent) => agent.id === "context-researcher")?.providerId, "acme-agent");
 
   await assert.rejects(
     store.updateAgent("context-researcher", { providerId: "never-registered" }),
@@ -114,8 +97,8 @@ test("a saved provider that is no longer registered falls back to the default", 
   t.after(async () => rm(directory, { recursive: true, force: true }));
   const path = join(directory, "settings.json");
 
-  const withPlugin = new AgentSettingsStore(path, createBuiltInProviderRegistry().register(opencodeProvider));
-  await withPlugin.updateAgent("context-researcher", { providerId: "opencode" });
+  const withPlugin = new AgentSettingsStore(path, createBuiltInProviderRegistry().register(acmeProvider));
+  await withPlugin.updateAgent("context-researcher", { providerId: "acme-agent" });
 
   // Settings can outlive a plugin being uninstalled; that must not break the
   // runtime, it must fall back.
@@ -126,6 +109,6 @@ test("a saved provider that is no longer registered falls back to the default", 
 });
 
 test("registering the same provider id twice is refused", () => {
-  const providers = new ProviderRegistry().register(opencodeProvider);
-  assert.throws(() => providers.register(opencodeProvider), /already registered/);
+  const providers = new ProviderRegistry().register(acmeProvider);
+  assert.throws(() => providers.register(acmeProvider), /already registered/);
 });

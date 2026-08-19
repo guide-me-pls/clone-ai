@@ -1,71 +1,144 @@
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { ClaudeAgentSdkAdapter } from "./claude-agent-sdk-adapter.ts";
-import { CodingCliAdapter } from "./coding-cli-adapter.ts";
-import { PiAgentAdapter } from "./pi-agent-adapter.ts";
+import { BlackBoxWorkerAdapter, type BlackBoxProviderConfig } from "./black-box-worker.ts";
 import { ProviderRegistry, type ProviderDefinition } from "./provider-registry.ts";
 
 /**
- * The providers Clone AI ships with. Each one is an ordinary registration, so
- * a third-party provider has exactly the same standing as a built-in one.
- * Clone AI 自带的 Provider。每一个都只是一次普通注册，因此第三方 Provider 与内建
- * Provider 拥有完全相同的地位。
+ * The agents Clone AI knows about out of the box. Each is only a launch recipe
+ * — command, arguments, and the credentials it may see. Nothing here describes
+ * how the agent works internally, because the Runtime never needs to know.
+ *
+ * Clone AI 开箱认识的 Agent。每一个都只是一份启动配方——命令、参数，以及它可以看到的
+ * 凭据。这里没有任何关于 Agent 内部如何工作的描述，因为 Runtime 从不需要知道。
  */
-export const codexCliProvider: ProviderDefinition = {
-  id: "codex-cli",
-  label: "Codex CLI",
-  createAdapter: ({ agentId, workCapabilities }) => new CodingCliAdapter({
-    id: agentId,
-    providerId: "codex-cli",
-    workCapabilities,
-  }),
-};
+export const BUILT_IN_PROVIDER_CONFIGS: readonly BlackBoxProviderConfig[] = [
+  {
+    id: "claude-code",
+    label: "Claude Code",
+    command: process.platform === "win32" ? "claude.cmd" : "claude",
+    args: ["-p", "{{prompt}}"],
+    env: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"],
+  },
+  {
+    id: "codex-cli",
+    label: "Codex CLI",
+    command: process.platform === "win32" ? "codex.cmd" : "codex",
+    args: ["exec", "--skip-git-repo-check", "{{prompt}}"],
+    env: ["OPENAI_API_KEY", "CODEX_HOME"],
+  },
+  {
+    id: "pi",
+    label: "Pi",
+    command: process.platform === "win32" ? "pi.cmd" : "pi",
+    args: ["-p", "{{prompt}}"],
+    env: [
+      "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY",
+      "PI_CODING_AGENT_DIR", "PI_PACKAGE_DIR",
+    ],
+  },
+  {
+    id: "opencode",
+    label: "opencode",
+    command: process.platform === "win32" ? "opencode.cmd" : "opencode",
+    args: ["run", "{{prompt}}"],
+    env: ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENCODE_CONFIG"],
+  },
+];
 
-export const claudeCodeProvider: ProviderDefinition = {
-  id: "claude-code",
-  label: "Claude Code",
-  createAdapter: ({ agentId, workCapabilities }) => (
-    // CLONE_AI_CLAUDE_TRANSPORT=sdk routes Claude Code through its official SDK
-    // (typed events) instead of parsed CLI stdout. Same adapter contract and
-    // the same authority either way, so the Kernel is unaffected.
-    // CLONE_AI_CLAUDE_TRANSPORT=sdk 让 Claude Code 走官方 SDK（有类型事件）而不是解析
-    // CLI stdout。两种方式的 Adapter 合约与权限边界相同，Kernel 不受影响。
-    process.env.CLONE_AI_CLAUDE_TRANSPORT === "sdk"
-      ? new ClaudeAgentSdkAdapter({ id: agentId, workCapabilities })
-      : new CodingCliAdapter({ id: agentId, providerId: "claude-code", workCapabilities })
-  ),
-};
-
-export const piProvider: ProviderDefinition = {
-  id: "pi",
-  label: "Pi",
-  // Pi's built-in file tools accept absolute paths, so it runs tool-free until
-  // it calls back into Clone AI's workspace-bounded Tool Runtime.
-  // Pi 内建文件 Tool 接受绝对路径，因此在它回调 Clone AI 受 Workspace 约束的 Tool
-  // Runtime 之前，只以无 Tool 方式运行。
-  supportedRoles: ["direct", "review"],
-  roleRestrictionReason:
-    "Pi is currently limited to tool-free direct and review roles and cannot be assigned to this executor.",
-  createAdapter: ({ agentId, workCapabilities, dataDirectory, workspacePath }) => new PiAgentAdapter({
-    id: agentId,
-    cwd: workspacePath,
-    sessionDirectory: join(dataDirectory, "pi-sessions"),
-    tools: [],
-    workCapabilities,
-  }),
-};
+export function toProviderDefinition(config: BlackBoxProviderConfig): ProviderDefinition {
+  return {
+    id: config.id,
+    label: config.label ?? config.id,
+    ...(config.supportedRoles === undefined ? {} : { supportedRoles: config.supportedRoles }),
+    ...(config.roleRestrictionReason === undefined ? {} : { roleRestrictionReason: config.roleRestrictionReason }),
+    createAdapter: ({ agentId, workCapabilities }) => new BlackBoxWorkerAdapter({
+      agentId,
+      config,
+      workCapabilities,
+    }),
+  };
+}
 
 export function createBuiltInProviderRegistry(): ProviderRegistry {
-  return new ProviderRegistry()
-    .register(codexCliProvider)
-    .register(claudeCodeProvider)
-    .register(piProvider);
+  const registry = new ProviderRegistry();
+  for (const config of BUILT_IN_PROVIDER_CONFIGS) registry.register(toProviderDefinition(config));
+  return registry;
 }
 
 /**
- * The process-wide registry. Host applications extend it at startup:
- * `builtInProviders.register(myProvider)` — no Clone AI source changes.
- * 进程级 Registry。宿主应用在启动时扩展它：`builtInProviders.register(myProvider)`
- * ——无需改动 Clone AI 的源码。
+ * Loads user-declared agents from <dataDirectory>/providers.json and adds them
+ * to the registry. Integrating a new coding agent is a configuration edit, not
+ * a source change; a declaration that collides with a built-in id replaces it,
+ * so the owner can retune how a shipped agent is launched.
+ *
+ * 从 <dataDirectory>/providers.json 载入用户声明的 Agent 并加入 Registry。接入新的
+ * Coding Agent 是改配置而不是改源码；与内建 ID 冲突的声明会覆盖内建项，因此所有者可以
+ * 重新调整自带 Agent 的启动方式。
+ */
+export async function loadProviderRegistry(dataDirectory: string): Promise<ProviderRegistry> {
+  const declared = await readProviderConfigs(join(dataDirectory, "providers.json"));
+  const byId = new Map(BUILT_IN_PROVIDER_CONFIGS.map((config) => [config.id, config]));
+  for (const config of declared) byId.set(config.id, config);
+
+  const registry = new ProviderRegistry();
+  for (const config of byId.values()) registry.register(toProviderDefinition(config));
+  return registry;
+}
+
+async function readProviderConfigs(path: string): Promise<BlackBoxProviderConfig[]> {
+  let source: string;
+  try {
+    source = await readFile(path, "utf8");
+  } catch (error: unknown) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
+  const parsed = JSON.parse(source) as { providers?: unknown };
+  const entries = Array.isArray(parsed.providers) ? parsed.providers : [];
+  return entries.map((entry, index) => validateProviderConfig(entry, `${path}#${index}`));
+}
+
+function validateProviderConfig(value: unknown, where: string): BlackBoxProviderConfig {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`Provider declaration at ${where} must be an object.`);
+  }
+  const record = value as Record<string, unknown>;
+  const id = record.id;
+  const command = record.command;
+  if (typeof id !== "string" || id.trim().length === 0) {
+    throw new Error(`Provider declaration at ${where} needs a non-empty "id".`);
+  }
+  if (typeof command !== "string" || command.trim().length === 0) {
+    throw new Error(`Provider "${id}" needs a non-empty "command".`);
+  }
+  const args = record.args;
+  if (args !== undefined && (!Array.isArray(args) || args.some((argument) => typeof argument !== "string"))) {
+    throw new Error(`Provider "${id}" must declare "args" as an array of strings.`);
+  }
+  const env = record.env;
+  if (env !== undefined && (!Array.isArray(env) || env.some((name) => typeof name !== "string"))) {
+    throw new Error(`Provider "${id}" must declare "env" as an array of variable names.`);
+  }
+  const promptVia = record.promptVia;
+  if (promptVia !== undefined && promptVia !== "arg" && promptVia !== "stdin") {
+    throw new Error(`Provider "${id}" must declare "promptVia" as "arg" or "stdin".`);
+  }
+  return {
+    id,
+    command,
+    ...(typeof record.label === "string" ? { label: record.label } : {}),
+    ...(args === undefined ? {} : { args: args as string[] }),
+    ...(env === undefined ? {} : { env: env as string[] }),
+    ...(promptVia === undefined ? {} : { promptVia }),
+    ...(Array.isArray(record.work) ? { work: record.work as string[] } : {}),
+    ...(typeof record.timeoutMs === "number" ? { timeoutMs: record.timeoutMs } : {}),
+  };
+}
+
+/**
+ * The process-wide registry of built-ins. Hosts that support user
+ * declarations should call loadProviderRegistry() instead.
+ * 内建 Provider 的进程级 Registry。支持用户声明的宿主应改用 loadProviderRegistry()。
  */
 export const builtInProviders = createBuiltInProviderRegistry();

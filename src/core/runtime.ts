@@ -11,6 +11,7 @@ import type {
   PolicyEngine,
   Run,
   RunStatus,
+  RuntimeAdapter,
   RuntimeCapabilities,
   SubagentRun,
   SubagentWorkOrder,
@@ -25,6 +26,7 @@ import type { JournalStore } from "./journal.ts";
 import { approvalKey, emptyProjection, reduceEvent, replay, subagentKey, type RuntimeProjection } from "./run-state.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { CapabilityDispatcher } from "../agents/dispatcher.ts";
+import { corroborateFailures, type FailureReport } from "./failure-analysis.ts";
 
 export interface CloneRuntimeOptions {
   journal: JournalStore;
@@ -57,6 +59,17 @@ export interface DispatchResult {
  * Runtime 负责状态流转、授权、证据、验证与记忆请求。Agent 只能收到受边界
  * 约束的执行 Assignment 或子 WorkOrder，绝不能自行关闭 Run。
  */
+/** Carries a black-box worker's structured failure report up to the retry loop. 把黑盒 Worker 的结构化失败报告带到重试循环。 */
+export class WorkerFailure extends Error {
+  readonly report?: FailureReport;
+
+  constructor(message: string, report?: FailureReport) {
+    super(message);
+    this.name = "WorkerFailure";
+    if (report !== undefined) this.report = report;
+  }
+}
+
 export class CloneRuntime {
   readonly #journal: JournalStore;
   readonly #policy: PolicyEngine;
@@ -385,7 +398,7 @@ export class CloneRuntime {
     // persisted provider session to another configured worker.
     // 新 WorkOrder 可以按能力路由；一旦启动，具体 Adapter 身份会被固定，避免重放时
     // 悄悄把已持久化的 Provider Session 换到另一个 Worker。
-    const adapter = await new CapabilityDispatcher(input.agents).select(
+    let adapter = await new CapabilityDispatcher(input.agents).select(
       existing === undefined
         ? input.workOrder
         : { ...input.workOrder, agentId: existing.agentId },
@@ -410,7 +423,9 @@ export class CloneRuntime {
       dependencyEvidence: this.dependencyEvidence(input.run.id, input.workOrder),
       ...(memoryContext === undefined ? {} : { memoryContext }),
     };
-    const allowedEvidenceKinds = evidenceAuthorization(await adapter.capabilities());
+    let allowedEvidenceKinds = evidenceAuthorization(await adapter.capabilities());
+    const triedAdapterIds = new Set<string>();
+    const failureReports: FailureReport[] = [];
 
     const previousAttempt = existing?.attempt ?? 1;
     let attempt = existing === undefined
@@ -480,14 +495,51 @@ export class CloneRuntime {
         const message = redactAuditText(
           error instanceof Error ? error.message : "Unknown subagent failure.",
         );
+        const report = error instanceof WorkerFailure ? error.report : undefined;
+        if (report !== undefined) failureReports.push(report);
         await this.record({
           type: "subagent.failed",
           taskId: input.task.id,
           runId: input.run.id,
-          payload: { workOrderId: input.workOrder.id, message },
+          payload: { workOrderId: input.workOrder.id, adapterId: adapter.id, providerId: adapter.providerId, message, report },
         });
+
+        // Two independent agents failing the same way is evidence about the
+        // task, not about the agents. Spending another attempt would only
+        // reproduce the same wall, so the obstacle goes to the owner instead.
+        // 两个独立 Agent 以相同方式失败，这是关于任务的证据而不是关于 Agent 的。
+        // 再花一次尝试只会撞上同一堵墙，因此把障碍交给所有者。
+        const corroboration = corroborateFailures(failureReports);
+        if (corroboration.corroborated) {
+          await this.record({
+            type: "subagent.failed",
+            taskId: input.task.id,
+            runId: input.run.id,
+            payload: {
+              workOrderId: input.workOrder.id,
+              message: redactAuditText(corroboration.summary),
+              corroboration: { ...corroboration, providers: failureReports.map((item) => item.providerId) },
+            },
+          });
+          throw new WorkerFailure(corroboration.summary, report);
+        }
+
         if (attempt >= input.workOrder.budget.maxAttempts) throw error;
-        sessionId = this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)]?.sessionId;
+
+        // Retry on a different provider: repeating the same black box rarely
+        // produces a different outcome, and a second opinion is what makes
+        // corroboration possible at all.
+        // 换一个 Provider 重试：重复同一个黑盒很少产生不同结果，而第二个意见正是
+        // 交叉印证得以成立的前提。
+        triedAdapterIds.add(adapter.id);
+        const alternative = await this.selectAlternativeAdapter(input, triedAdapterIds);
+        if (alternative !== undefined) {
+          adapter = alternative;
+          allowedEvidenceKinds = evidenceAuthorization(await adapter.capabilities());
+          sessionId = undefined;
+        } else {
+          sessionId = this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)]?.sessionId;
+        }
         attempt += 1;
       }
     }
@@ -534,6 +586,27 @@ export class CloneRuntime {
       items: matches.map((match) => ({ id: match.memory.id, summary: match.memory.summary })),
       selectedBy: { query },
     };
+  }
+
+  /**
+   * Finds a capable executor that has not already failed this work order.
+   * Provider diversity is the point: a second opinion either succeeds or
+   * corroborates that the obstacle is in the task itself.
+   * 找出尚未在该 WorkOrder 上失败过、且能力匹配的执行者。Provider 多样性正是要点：
+   * 第二个意见要么成功，要么印证障碍在任务本身。
+   */
+  private async selectAlternativeAdapter(
+    input: { workOrder: SubagentWorkOrder; agents: AgentRegistry },
+    tried: ReadonlySet<string>,
+  ): Promise<RuntimeAdapter | undefined> {
+    for (const candidate of input.agents.list()) {
+      if (tried.has(candidate.id)) continue;
+      const capabilities = await candidate.capabilities();
+      if (input.workOrder.requiredCapabilities.every((capability) => capabilities.work.includes(capability))) {
+        return candidate;
+      }
+    }
+    return undefined;
   }
 
   private dependencyEvidence(runId: string, order: SubagentWorkOrder): Evidence[] {
@@ -667,7 +740,10 @@ export class CloneRuntime {
       return;
     }
     if (event.type === "failed") {
-      throw new Error(`Agent execution failed: ${event.message}`);
+      // The structured report travels with the error so the retry loop can
+      // compare this failure against what a different provider reported.
+      // 结构化报告随错误一起传递，使重试循环能把本次失败与另一个 Provider 的报告比较。
+      throw new WorkerFailure(`Agent execution failed: ${event.message}`, event.report);
     }
 
     // Evidence kinds are an authorization, not a claim: an adapter may only
