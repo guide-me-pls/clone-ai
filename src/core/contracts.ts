@@ -217,6 +217,9 @@ export interface VerificationResult {
   createdAt: string;
 }
 
+export type MemoryType = "fact" | "preference" | "procedure" | "decision" | "commitment";
+export type MemorySensitivity = "public" | "private" | "secret";
+
 export interface MemoryCandidate {
   id: string;
   runId: string;
@@ -225,6 +228,10 @@ export interface MemoryCandidate {
   confidence: "low" | "medium" | "high";
   status: "proposed" | "committed" | "rejected";
   createdAt: string;
+  /** Suggested classification from the mining worker, kept for the commit step. 提炼 Worker 建议的分类，供提交时沿用。 */
+  type?: MemoryType;
+  sensitivity?: MemorySensitivity;
+  expiresAt?: string;
 }
 
 export type JournalEventType =
