@@ -5,7 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { CapabilityDispatcher } from "../src/agents/dispatcher.ts";
-import { DemoExecutionAdapter, StaticAgentRegistry } from "../src/adapters/demo-adapter.ts";
+import { StaticAgentRegistry } from "../src/agents/static-agent-registry.ts";
+import { ScriptedExecutionAdapter } from "./fixtures/scripted-adapter.ts";
 import type {
   ExecutionAssignment,
   ExecutionEvent,
@@ -60,8 +61,8 @@ test("a cyclic WorkOrder graph is rejected before any agent is dispatched", asyn
 });
 
 test("the dispatcher chooses by capability and rejects an incompatible preferred agent", async () => {
-  const researcher = new DemoExecutionAdapter("researcher", "demo", ["research", "filesystem_read"]);
-  const maker = new DemoExecutionAdapter("maker", "demo", ["drafting", "filesystem_write"]);
+  const researcher = new ScriptedExecutionAdapter("researcher", "demo", ["research", "filesystem_read"]);
+  const maker = new ScriptedExecutionAdapter("maker", "demo", ["drafting", "filesystem_write"]);
   const registry = new StaticAgentRegistry([maker, researcher]);
   const dispatcher = new CapabilityDispatcher(registry);
 
@@ -203,7 +204,7 @@ test("journal recovery resumes the pinned adapter without consuming a new attemp
     memory: new MemoryPipeline(journal),
   });
   const adapter = new FlakyResumeAdapter();
-  const other = new DemoExecutionAdapter("other-researcher", "demo", ["research", "filesystem_read"]);
+  const other = new ScriptedExecutionAdapter("other-researcher", "demo", ["research", "filesystem_read"]);
   const result = await recovered.execute(run.id, new StaticAgentRegistry([other, adapter]));
 
   assert.equal(result.status, "completed");

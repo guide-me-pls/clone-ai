@@ -1,6 +1,6 @@
 import type { PlanStep, WorkPlan } from "../core/contracts.ts";
 
-export type DemoPlan = Pick<WorkPlan, "summary" | "steps">;
+export type FallbackPlan = Pick<WorkPlan, "summary" | "steps">;
 
 const RESEARCH_TERMS = ["调研", "研究", "比较", "分析", "方案", "推荐", "市场", "资料", "资料", "research", "compare", "analyze"];
 const DELIVERY_TERMS = ["计划", "草稿", "写", "整理", "实现", "开发", "代码", "设计", "准备", "报告", "邮件", "plan", "draft", "build", "implement", "write"];
@@ -17,11 +17,11 @@ const IRREVERSIBLE_ACTION_TERMS = ["删除", "清空", "付款", "支付", "购�
  * 调整任务图：直接问题保持直接处理；准备型任务只分配必要角色；外部动作始终
  * 保持为单独审批的步骤。
  */
-export function buildDemoPlan(
+export function buildFallbackPlan(
   query: string,
   enabledAgentIds: ReadonlySet<string> = new Set(defaultAgentIds),
   recalledMemories: readonly string[] = [],
-): DemoPlan {
+): FallbackPlan {
   const normalized = query.toLocaleLowerCase();
   const needsResearch = includesOne(normalized, RESEARCH_TERMS);
   const needsDelivery = includesOne(normalized, DELIVERY_TERMS) || needsResearch;
@@ -125,7 +125,7 @@ export function buildDemoPlan(
   }, recalledMemories);
 }
 
-function applyMemoryContext(plan: DemoPlan, recalledMemories: readonly string[]): DemoPlan {
+function applyMemoryContext(plan: FallbackPlan, recalledMemories: readonly string[]): FallbackPlan {
   if (recalledMemories.length === 0) return plan;
   const context = ` Owner-approved local memory for this work: ${recalledMemories.join(" | ")}`;
   return {

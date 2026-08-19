@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type { JournalEvent, MemoryCandidate, Run, Task } from "./core/contracts.ts";
 import { JsonlJournalStore } from "./core/journal.ts";
 import { replay } from "./core/run-state.ts";
-import { approveDemoWorkflow, startDemoWorkflow } from "./demo-workflow.ts";
+import { approveQueryRun, runQuery } from "./workflows/query-workflow.ts";
 import { LocalScheduler } from "./scheduling/local-scheduler.ts";
 import { describeSchedule, ScheduleStore, type LocalSchedule, type ScheduleKind } from "./scheduling/schedule-store.ts";
 import { SessionStore } from "./sessions/session-store.ts";
@@ -55,7 +55,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const scheduler = new LocalScheduler({
     store: schedules,
     run: async (schedule) => {
-      await startDemoWorkflow(dataDirectory, schedule.query, {
+      await runQuery(dataDirectory, schedule.query, {
         kind: "schedule",
         payload: { scheduleId: schedule.id, scheduleKind: schedule.kind, scheduleDescription: describeSchedule(schedule) },
       }, await agentSettings.get(), { workspacePath });
@@ -235,7 +235,7 @@ async function handleRequest(
       sendJson(response, 400, { error: "Please describe the work in at least three characters." });
       return;
     }
-    const result = await startDemoWorkflow(
+    const result = await runQuery(
       context.dataDirectory,
       query,
       {},
@@ -339,7 +339,7 @@ async function handleRequest(
 
   const approvalMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/approve$/);
   if (request.method === "POST" && approvalMatch?.[1] !== undefined) {
-    const result = await approveDemoWorkflow(
+    const result = await approveQueryRun(
       context.dataDirectory,
       decodeURIComponent(approvalMatch[1]),
       await context.agentSettings.get(),
