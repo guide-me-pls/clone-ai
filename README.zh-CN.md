@@ -60,9 +60,9 @@ Agent。clone-ai 负责个人连续性、策略、记忆、规划和验证；被
 
 | 提供方 | 预期职责 | 集成状态 |
 | --- | --- | --- |
-| **Claude Code** | 长任务实现、本地工具调用与产物生成。 | Adapter 已完成设计 |
-| **Codex** | 编码、审查、仓库操作与结构化执行事件。 | Adapter 已完成设计 |
-| **Pi** | 通过受 Supervisor 管理的子进程完成无 Tool 的直接推理与证据复核。 | JSONL RPC Adapter 已实现 |
+| **Claude Code** | 长任务实现、本地工具调用与产物生成。 | CLI 与官方 SDK 两个 Translator，已实跑验证 |
+| **Codex** | 编码、审查、仓库操作与结构化执行事件。 | CLI Translator 已实现，尚未实跑验证 |
+| **Pi** | 通过受 Supervisor 管理的子进程完成无 Tool 的直接推理与证据复核。 | JSONL RPC Translator 已实现 |
 | **自定义 Runtime** | 用户或组织专属的 Agent、脚本与本地工具。 | 扩展合约计划中 |
 | **Python Worker** | 信息提取、排序、预测、评估和本地 ML 提案。 | Worker 协议计划中 |
 
@@ -91,7 +91,8 @@ npm run demo
 下一段编排实现见 [WorkOrder 与 Pi Adapter](docs/work-orders-and-pi.zh-CN.md)。
 
 当前从用户请求到完成验证的整条链路见 [Query 执行流程](docs/query-execution-flow.zh-CN.md)；显式开启的模型 Planner 及其安全边界见 [LLM Planner](docs/llm-planner.zh-CN.md)。
-真实 Codex CLI 与 Claude Code 执行 Provider 的边界见 [Coding CLI Adapter](docs/coding-cli-adapters.zh-CN.md)。
+真实 Codex CLI 与 Claude Code 执行 Provider 的边界见 [受监督的 Worker 边界](docs/coding-cli-adapters.zh-CN.md)。
+架构、已经走过的路线与下一阶段见 [Runtime 架构与路线](docs/runtime-architecture-and-route.zh-CN.md)。
 
 CLI 演示仍使用确定性的 Adapter，便于学习、测试和重放；桌面 Runtime 根据本地设置，已经可以把有边界
 的角色交给已安装的 Pi。WorkOrder 现在包含输入、能力要求、产物合同、风险、预算和无环依赖图；Pi
