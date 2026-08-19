@@ -153,8 +153,8 @@ Provider 不再由 Runtime 分支识别。内建默认配方位于 `src/adapters
 
 ## 6. 文档和代码的边界
 
-- `pi-source-notes.zh-CN.md` 仍然有效：它记录 Pi 的 loop、session 和 extension 机制，属于
-  客观源码知识；但这些机制不是 Worker 黑盒边界的依赖。
+- Pi 源码笔记已删除：它记录的 loop/session/extension 机制不是 Worker 黑盒边界的依赖，
+  需要时直接读 `node_modules/@earendil-works/pi-coding-agent/dist` 比看过期笔记更可靠。
 - 旧的 Pi RPC / stdout 事件解析路线不再是当前架构；Pi 只是一个可替换 Provider。
 - `BlackBoxWorkerAdapter` 是统一监督边界；Provider 配置只负责启动命令、参数和环境白名单。
 - Journal 是事实来源，Workspace checkpoint 是可重建的派生缓存；用户可查看 JSON，但不能靠

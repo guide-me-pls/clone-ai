@@ -78,7 +78,7 @@ src/
   adapters/                   replaceable agent adapters and demo registry
   memory/                     asynchronous memory-candidate pipeline
   companion-server.ts         local development preview only
-  demo-workflow.ts            parent plan with subagent work orders
+  workflows/query-workflow.ts parent plan with subagent work orders
   cli.ts                      developer demo and trace surface
 ```
 

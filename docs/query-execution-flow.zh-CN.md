@@ -102,7 +102,7 @@ created -> planning -> queued -> running -> verifying -> completed
 
 ## 推荐的代码阅读顺序
 
-1. [`src/demo-workflow.ts`](../src/demo-workflow.ts)：整条链路的入口。
+1. [`src/workflows/query-workflow.ts`](../src/workflows/query-workflow.ts)：整条链路的入口。
 2. [`src/planning/llm-planner.ts`](../src/planning/llm-planner.ts)：模型提计划、系统校验计划的边界。
 3. [`src/core/runtime.ts`](../src/core/runtime.ts)：Supervisor 与状态机。
 4. [`src/agents/dispatcher.ts`](../src/agents/dispatcher.ts)：基于能力的安全路由。
