@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { BlackBoxWorkerAdapter, buildWorkerPrompt, type BlackBoxProviderConfig } from "../src/adapters/black-box-worker.ts";
+import { BlackBoxWorkerAdapter, buildWorkerPrompt, resolveWindowsCommand, type BlackBoxProviderConfig } from "../src/adapters/black-box-worker.ts";
 import { corroborateFailures, classifyFailure, failureSignature } from "../src/core/failure-analysis.ts";
 import type { ExecutionAssignment, ExecutionEvent } from "../src/core/contracts.ts";
 import { diffWorkspace, snapshotWorkspace } from "../src/core/workspace-evidence.ts";
@@ -152,6 +152,49 @@ test("the worker prompt tells the agent that unsaved work counts as work not don
   // No provider-specific convention is imposed on a black-box agent.
   // 不对黑盒 Agent 强加任何 Provider 专属约定。
   assert.doesNotMatch(prompt, /CLONE_AI_EVIDENCE/);
+});
+
+test("a .cmd shim is resolved to its real executable without a shell", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-shim-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  // On non-Windows hosts there is no shim concept; the command passes through.
+  // 非 Windows 平台没有垫片概念，命令原样透传。
+  if (process.platform !== "win32") {
+    assert.deepEqual(resolveWindowsCommand("tool.cmd"), { command: "tool.cmd", prefixArgs: [] });
+    return;
+  }
+  await mkdir(join(directory, "node_modules", "pkg", "bin"), { recursive: true });
+  // An exe shim points straight at the binary.
+  // exe 垫片直接指向二进制。
+  await writeFile(join(directory, "tool.cmd"), `@ECHO off\n"%dp0%\\node_modules\\pkg\\bin\\tool.exe"  %*\n`, "utf8");
+  const exe = resolveWindowsCommand(join(directory, "tool.cmd"));
+  assert.equal(exe.command.toLowerCase().endsWith("tool.exe"), true);
+  assert.deepEqual(exe.prefixArgs, []);
+
+  // A node shim resolves to process.execPath plus the script.
+  // node 垫片解析为 process.execPath 加脚本路径。
+  await writeFile(join(directory, "node-tool.cmd"), `@ECHO off\nSETLOCAL\n"%dp0%\\node_modules\\pkg\\bin\\cli.js" %*\n`, "utf8");
+  const node = resolveWindowsCommand(join(directory, "node-tool.cmd"));
+  assert.equal(node.command, process.execPath);
+  assert.equal(node.prefixArgs[0]?.toLowerCase().endsWith("cli.js"), true);
+
+  // A non-shim command passes through untouched.
+  // 非垫片命令原样返回。
+  assert.deepEqual(resolveWindowsCommand("claude.exe"), { command: "claude.exe", prefixArgs: [] });
+});
+
+test("environment allowlist supports prefix wildcards for provider recipes", async (t) => {
+  process.env.CLONE_AI_TEST_SECRET = "wildcard-value";
+  t.after(() => {
+    delete process.env.CLONE_AI_TEST_SECRET;
+  });
+
+  const { events } = await runAgent(t, {
+    mode: "env-probe",
+    requireArtifact: false,
+    config: { env: ["FAKE_AGENT_MODE", "CLONE_AI_TEST_*"] },
+  });
+  assert.match(progressText(events), /probe=wildcard-value/);
 });
 
 test("two providers failing the same way corroborate a task-level obstacle", () => {
