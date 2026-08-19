@@ -110,8 +110,28 @@ export class CloneRuntime {
     return plan;
   }
 
-  async grantApproval(runId: string, stepId: string, note?: string): Promise<ApprovalGrant> {
+  /**
+   * Close a run that can no longer proceed (for example a rejected plan
+   * proposal). A journaled terminal status keeps the projection honest;
+   * abandoned runs must not linger as if they were still planning.
+   * 关闭无法继续的 Run（例如被拒绝的计划提案）。记入 Journal 的终态让投影保持诚实；
+   * 被放弃的 Run 不能像仍在规划中一样滞留。
+   */
+  async failRun(runId: string, reason: string): Promise<void> {
     await this.hydrate();
+    const run = this.requireRun(runId);
+    if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+      throw new Error(`Run ${runId} already reached terminal status ${run.status}.`);
+    }
+    await this.record({
+      type: "run.status_changed",
+      taskId: run.taskId,
+      runId,
+      payload: { status: "failed", reason: redactAuditText(reason) },
+    });
+  }
+
+  async grantApproval(runId: string, stepId: string, note?: string): Promise<ApprovalGrant> {    await this.hydrate();
     const run = this.requireRun(runId);
     const plan = this.requirePlan(run);
     if (!plan.steps.some((step) => step.id === stepId)) {
@@ -281,13 +301,24 @@ export class CloneRuntime {
       step: input.step,
       executor: { agentId: adapter.id, providerId: adapter.providerId },
     };
+    const executionAuthorization = evidenceAuthorization(capabilities);
     await this.record({
       type: "execution.started",
       taskId: input.task.id,
       runId: input.run.id,
-      payload: { stepId: input.step.id, adapterId: adapter.id, providerId: adapter.providerId },
+      payload: {
+        stepId: input.step.id,
+        adapterId: adapter.id,
+        providerId: adapter.providerId,
+        // The authorization snapshot makes the journal self-auditing: a later
+        // replay can verify every recorded evidence kind against what this
+        // adapter was actually allowed to record at dispatch time.
+        // 授权快照让 Journal 可以自审计：事后重放能对照派发时该 Adapter 实际被允许的
+        // 证据类型，校验每一条已记录的 Evidence。
+        authorizedEvidenceKinds: [...executionAuthorization],
+      },
     });
-    const completion = await this.consumeExecutionEvents(adapter, assignment, evidenceAuthorization(capabilities));
+    const completion = await this.consumeExecutionEvents(adapter, assignment, executionAuthorization);
     if (completion === undefined) {
       throw new Error(`Agent ${agentId} ended without an explicit completion event.`);
     }
@@ -377,7 +408,12 @@ export class CloneRuntime {
           startedAt,
           updatedAt: startedAt,
         };
-        await this.record({ type: "subagent.dispatched", taskId: input.task.id, runId: input.run.id, payload: subagent });
+        await this.record({
+          type: "subagent.dispatched",
+          taskId: input.task.id,
+          runId: input.run.id,
+          payload: { ...subagent, authorizedEvidenceKinds: [...allowedEvidenceKinds] },
+        });
       } else {
         await this.record({
           type: "subagent.resumed",

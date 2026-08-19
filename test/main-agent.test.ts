@@ -45,7 +45,7 @@ test("a valid plan proposal is accepted, journaled, and returns run/plan ids", a
   assert.equal(result.runStatus, "queued");
 });
 
-test("an empty plan proposal is rejected with feedback and no plan id", async (t) => {
+test("an empty plan proposal is rejected with feedback and its run is closed", async (t) => {
   const { runtime } = await tempKernel(t);
   const result = await proposePlanToKernel(runtime, { summary: "Empty plan", steps: [] });
 
@@ -53,6 +53,10 @@ test("an empty plan proposal is rejected with feedback and no plan id", async (t
   assert.ok(result.runId);
   assert.equal(result.planId, undefined);
   assert.match(result.error ?? "", /at least one step/);
+  // A rejected proposal must not linger as if it were still planning.
+  // 被拒绝的提案不能伪装成仍在规划中。
+  assert.equal(result.runStatus, "failed");
+  assert.equal(runtime.getRun(result.runId!).status, "failed");
 });
 
 test("duplicate step ids are rejected before anything is persisted", async (t) => {
