@@ -1,16 +1,8 @@
-import { join } from "node:path";
-
-
 import { createConfiguredAgentRegistry } from "../adapters/configured-agent-registry.ts";
 import { workCapabilitiesForRole } from "../agents/capabilities.ts";
 import type { AgentRegistry, TriggerKind } from "../core/contracts.ts";
-import { loadOutcomeCatalog } from "../core/failure-analysis.ts";
-import { JsonlJournalStore } from "../core/journal.ts";
-import { DefaultPolicyEngine } from "../core/policy.ts";
-import { CloneRuntime, type DispatchResult } from "../core/runtime.ts";
-import { JsonWorkspaceCheckpointStore } from "../core/workspace-evidence.ts";
-import { EvidenceVerifier } from "../core/verification.ts";
-import { MemoryPipeline } from "../memory/memory-pipeline.ts";
+import { createRuntimeAssembly } from "../core/runtime-factory.ts";
+import type { CloneRuntime, DispatchResult } from "../core/runtime.ts";
 import { LocalMemoryStore } from "../memory/memory-store.ts";
 import { buildFallbackPlan } from "../planning/fallback-planner.ts";
 import { createEnvironmentWorkPlanner, type PlanningAgent, type WorkPlanner } from "../planning/llm-planner.ts";
@@ -57,15 +49,18 @@ export async function runQuery(
   settings?: CloneSettings,
   options: QueryWorkflowOptions = {},
 ): Promise<QueryRunResult> {
-  const workspacePath = options.workspacePath ?? process.env.CLONE_AI_WORKSPACE ?? process.cwd();
-  const { runtime, memory, failureCatalog } = await createRuntime(dataDirectory, workspacePath);
+  const { runtime, memory, failureCatalog, paths } = await createRuntimeAssembly({
+    dataDirectory,
+    ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+  });
+  const workspacePath = paths.workspacePath;
   const { run } = await runtime.acceptTrigger({
     kind: trigger.kind ?? "query",
     summary: query,
     payload: { source: "desktop-client", ...trigger.payload },
   });
 
-  const memoryStore = new LocalMemoryStore(join(dataDirectory, "memory.json"));
+  const memoryStore = new LocalMemoryStore(paths.memoryFile);
   const recalled = await memoryStore.recall(query, run.id);
   await runtime.recordMemoryRecall(run.id, query, recalled.map((item) => ({
     id: item.memory.id,
@@ -117,8 +112,11 @@ export async function approveQueryRun(
   settings?: CloneSettings,
   options: QueryWorkflowOptions = {},
 ): Promise<QueryRunResult> {
-  const workspacePath = options.workspacePath ?? process.env.CLONE_AI_WORKSPACE ?? process.cwd();
-  const { runtime, memory, failureCatalog } = await createRuntime(dataDirectory, workspacePath);
+  const { runtime, memory, failureCatalog, paths } = await createRuntimeAssembly({
+    dataDirectory,
+    ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+  });
+  const workspacePath = paths.workspacePath;
   const run = runtime.getRun(runId);
   if (run.status !== "waiting_approval" || run.activeStepId === undefined) {
     throw new Error(`Run ${runId} is not waiting for an approval.`);
@@ -143,26 +141,4 @@ function toQueryResult(runtime: CloneRuntime, result: DispatchResult, memoryCand
     subagentsCompleted: runtime.getSubagentsForRun(result.run.id).filter((subagent) => subagent.status === "completed").length,
     memoryCandidatesProposed,
   };
-}
-
-async function createRuntime(dataDirectory: string, workspacePath: string): Promise<{ runtime: CloneRuntime; memory: MemoryPipeline; failureCatalog: import("../core/failure-analysis.ts").OutcomeCatalog }> {
-  const journal = new JsonlJournalStore(join(dataDirectory, "journal.jsonl"));
-  const failureCatalog = await loadOutcomeCatalog(dataDirectory);
-  const memory = new MemoryPipeline(journal);
-  const runtime = new CloneRuntime({
-    journal,
-    policy: new DefaultPolicyEngine(),
-    verifier: new EvidenceVerifier(),
-    memory,
-    failureCatalog,
-    // Workers receive the owner's reviewed memory through the Kernel, so
-    // switching providers never means migrating memory into another tool.
-    // Worker 经由 Kernel 收到所有者已审核的记忆，因此更换 Provider 从不意味着
-    // 把记忆迁移进另一个工具。
-    memorySource: new LocalMemoryStore(join(dataDirectory, "memory.json")),
-    workspacePath,
-    workspaceCheckpointStore: new JsonWorkspaceCheckpointStore(join(dataDirectory, "workspace-checkpoints")),
-  });
-  await runtime.hydrate();
-  return { runtime, memory, failureCatalog };
 }

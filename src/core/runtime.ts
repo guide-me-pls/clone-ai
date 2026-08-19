@@ -37,6 +37,7 @@ import {
   type WorkspaceCheckpointStore,
 } from "./workspace-evidence.ts";
 import { workspaceExecutionLock } from "./workspace-lock.ts";
+import { CLONE_DIRECTORY_NAME } from "../config/clone-home.ts";
 
 export interface CloneRuntimeOptions {
   journal: JournalStore;
@@ -113,7 +114,7 @@ export class CloneRuntime {
       : options.workspaceCheckpointStore
         ?? new JsonWorkspaceCheckpointStore(
           options.workspaceCheckpointDirectory
-            ?? join(this.#workspacePath, ".clone-ai", "workspace-checkpoints"),
+            ?? join(this.#workspacePath, CLONE_DIRECTORY_NAME, "workspace-checkpoints"),
         );
   }
 

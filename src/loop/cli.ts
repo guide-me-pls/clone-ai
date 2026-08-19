@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { resolveClonePaths } from "../config/clone-home.ts";
 import { AgentLoop } from "./agent-loop.ts";
 import { JsonFileLoopCheckpointStore } from "./checkpoint.ts";
 import { JsonlLoopJournal } from "./journal.ts";
@@ -21,7 +22,10 @@ if (apiKey === undefined || apiKey.trim().length === 0) {
   process.exitCode = 1;
 } else {
   const workspaceRoot = process.cwd();
-  const stateDirectory = join(workspaceRoot, ".clone-ai");
+  // Loop state is per-project, so it belongs in the workspace runtime
+  // directory rather than the owner's global home.
+  // Loop 状态属于单个项目，因此放在 Workspace 运行目录，而不是所有者的全局主目录。
+  const stateDirectory = resolveClonePaths({ workspacePath: workspaceRoot }).workspaceRuntimeDirectory;
   const journal = new JsonlLoopJournal(join(stateDirectory, "llm-loop.jsonl"));
   const checkpoints = new JsonFileLoopCheckpointStore(join(stateDirectory, "llm-loop-checkpoints"));
   const modelName = process.env.CLONE_AI_OPENAI_MODEL ?? "gpt-5";
