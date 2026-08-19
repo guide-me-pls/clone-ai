@@ -29,43 +29,43 @@
 
 ## Worker 边界
 
-每一个执行提供方——Pi、Codex CLI、Claude Code，以及未来任何 Coding Agent——都运行在同一个
-受监督边界之后。Provider 拥有自己内部的 Agent Loop；Clone AI 拥有 WorkOrder、权限、预算、
-证据，以及"工作是否完成"的判定权。
+每一个执行提供方——Claude Code、Codex、Pi、opencode，以及未来任何 Coding Agent——都作为**黑盒**
+运行在同一个受监督边界之后。Clone AI 只提供 Prompt 与 Workspace，并仅凭观察判断结果：进程退出
+状态，以及磁盘上真正发生了什么变化。不解析任何内部协议、流式格式或会话模型。
 
 ```text
 WorkOrder
   -> 策略 + 能力检查
-  -> SupervisedWorkerAdapter          预算 · 硬截止 · abort→强制终止
-     |                                完成判定 · 证据信任 · 脱敏
-     +-- ProviderTranslator           只管协议，每个约 100 行
-           Pi（JSONL RPC）· Codex CLI · Claude Code CLI · Claude Agent SDK
-  <- 归一化事件
-  -> Evidence -> 验证 -> WorkReceipt
+  -> BlackBoxWorkerAdapter        传入 Prompt · 预算 · 硬截止 · 终止
+     |                           执行前/后对 Workspace 拍快照
+     +-- Provider 声明            命令 + 参数 + 环境白名单（配置，不是代码）
+  <- 退出状态 + Workspace 差异 + 输出尾部
+  -> Artifact -> 验证 -> WorkReceipt
 ```
 
-Translator 把某个 Provider 的协议映射到七种中立形状，除此之外什么都碰不到：
+接入一个 Agent 是往 `providers.json` 加一条，而不是改源码：
 
-```text
-session · text · turn · tool_start · tool_end · progress · settled · protocol_error
-```
+| 提供方 | 启动方式 |
+| --- | --- |
+| Claude Code | `claude -p {{prompt}}` |
+| Codex CLI | `codex exec --skip-git-repo-check {{prompt}}` |
+| Pi | `pi -p {{prompt}}` |
+| opencode | `opencode run {{prompt}}` |
 
-**权限边界：** Translator 不能授予审批、不能改变 Run 状态、不能扩大预算、不能宣布成功。
-接入一个 Coding Agent 意味着写一个 Translator，而绝不是重新实现权限。
+**权限边界：** 声明只说明如何启动某个 Agent、以及它可以看到哪些凭据。它不能授予审批、不能扩大
+预算、不能改变 Run 状态、不能宣布成功。
 
-| 提供方 | 传输方式 | Settled 信号 |
-| --- | --- | --- |
-| Pi | JSONL RPC 子进程 | `agent_settled` |
-| Codex CLI | `codex exec --json` | 说过协议且干净退出 |
-| Claude Code（CLI） | `claude -p --output-format stream-json` | `result` 事件 |
-| Claude Code（SDK） | `@anthropic-ai/claude-agent-sdk` | 有类型的 `result` 消息 |
+三条规则定义了这个边界：
 
-有两条规则经受住了每一个 Provider 的考验，值得记住：
+- **`exit` 不等于完成。** 进程被 kill、用尽轮次，甚至什么都没做，都可能以 0 退出。当 WorkOrder
+  要求产物而 Workspace 毫无变化时，工作就是没有发生。
+- **证据靠观察，不靠索取。** 执行前后对 Workspace 拍快照，新增与修改的文件就是产物。黑盒 Agent
+  不需要知道 Clone AI 的任何约定，因为它从不被要求申报什么。
+- **两个 Agent 以相同方式失败，是关于任务的证据。** 重试时刻意更换 Provider；当独立的 Agent
+  报告相同的诊断类别时，障碍会被升级给所有者，而不是继续消耗尝试次数。
 
-- **`exit` 不等于完成。** 进程被 kill、用尽轮次、或者被指向了错误的二进制，都可能以 0 退出。
-  完成必须来自协议中显式的 settled 信号。
-- **`abort` 不等于停止。** 协作式 abort 只是请求，卡死的 Worker 可能无视它。每次 abort 都会
-  启动一个宽限计时器强制终止会话，因此卡住的 Provider 永远无法把 Supervisor 挂住。
+代价是明确的：没有被解析的会话模型就没有会话 ID，因此崩溃的黑盒运行是重跑而不是续跑。
+幂等性由 `maxAttempts` 以及"产物是可观察事实"来承担。
 
 ## 记忆随 Kernel 走，不随工具走
 
@@ -131,9 +131,9 @@ Phase 0 用六站加固执行引擎。每一站都以"能写成一条断言"为�
 | --- | --- | --- |
 | 1 | Pi 的中断与恢复 | 五种脚本化故障模式；卡死的 Worker 被强制终止 |
 | 2 | 恢复能力在入口可达 | 被 kill 的进程由全新进程仅凭磁盘恢复 |
-| 3 | 真实 CLI 协议被验证 | 录制的真实会话取代了猜测的事件结构 |
+| 3 | 真实 CLI 协议被验证 | 录制的真实会话取代了猜测的事件结构（后被黑盒重写取代） |
 | 4 | 约束变成断言 | 伪造的历史必然失败；真实运行零违规 |
-| 5 | 结构化 SDK 接入 | Claude Code 走官方 SDK，同一 Adapter 合约 |
+| 5 | 替换 Provider 实现 | Claude Code 在同一份未变的 Adapter 合约下两次更换传输方式 |
 | 6 | 存储升级 | SQLite WAL 位于同一 Store seam 之后，迁移经过校验 |
 
 随后的阶段 B 在其上放了 Main Agent：一个常驻的对话大脑，它伸向 Kernel 的唯一途径是提案型
@@ -141,10 +141,10 @@ Phase 0 用六站加固执行引擎。每一站都以"能写成一条断言"为�
 
 ## 已验证与尚未声称
 
-- 101 个自动化测试通过；类型检查干净。
-- 一次真实的 Claude Code 会话经受监督边界完成（`CLONE_AI_LIVE_SMOKE=1`）；一个真实模型把
-  自然语言请求推进成 Kernel 接受的计划（`CLONE_AI_MAIN_LIVE=1`）。
-- Codex CLI 的事件结构尚未对真实会话验证；CLI Translator 的 codex 分支仍是推断而非观察。
+- 81 个自动化测试通过；类型检查干净。
+- 一个真实模型把自然语言请求推进成 Kernel 接受的计划（`CLONE_AI_MAIN_LIVE=1`）。
+- **黑盒重写之后**尚未对真实安装的 Agent 做过实跑；内建启动配方来自各产品文档中的无头模式，
+  属于推断而非观察。
 - SQLite 是可选启用的（`CLONE_AI_JOURNAL=sqlite`），JSONL 仍是默认值。
 - 尚不存在任何 Connector、调度驱动的外部动作，以及个人状态平面。
 

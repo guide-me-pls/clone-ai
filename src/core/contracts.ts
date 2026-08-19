@@ -5,6 +5,8 @@
  * Run 既可以由用户 Query 发起，也可以由受治理的非 Query 来源发起。Signal 只能请求规划，
  * 绝不会自行授予执行权限。
  */
+import type { FailureReport } from "./failure-analysis.ts";
+
 export type TriggerKind = "query" | "schedule" | "signal" | "manual";
 
 export type RunStatus =
@@ -328,7 +330,7 @@ export type ExecutionEvent =
   | { type: "progress"; message: string }
   | { type: "evidence"; evidence: Omit<Evidence, "id" | "runId" | "stepId" | "createdAt"> }
   | { type: "completed"; summary: string }
-  | { type: "failed"; message: string };
+  | { type: "failed"; message: string; report?: FailureReport };
 
 export interface RuntimeCapabilities {
   resume: boolean;
