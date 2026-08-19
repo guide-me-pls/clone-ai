@@ -47,11 +47,12 @@ export async function createKernelRuntime(dataDirectory: string): Promise<CloneR
 
 /**
  * The Kernel validation path shared by the tool and the tests: a proposal
- * creates a durable Run, then attachPlan() validates the steps. Rejection
- * returns feedback so the agent can fix and re-propose; nothing is persisted
- * beyond the Run itself unless validation passes.
+ * creates a durable Run, then attachPlan() validates the steps. A rejected
+ * proposal fails its own run so nothing lingers as if it were still planning,
+ * and the feedback lets the agent fix and re-propose under a fresh run.
  * 工具与测试共用的 Kernel 校验路径：提案先建 Run，再由 attachPlan() 校验步骤。
- * 被拒绝时返回反馈，Agent 可修正后重新提案；校验通过前除了 Run 本身不落任何状态。
+ * 被拒绝的提案会关闭自己的 Run，不让它伪装成仍在规划中；反馈让 Agent 修正后
+ * 以新 Run 重新提案。
  */
 export async function proposePlanToKernel(
   runtime: CloneRuntime,
@@ -70,10 +71,13 @@ export async function proposePlanToKernel(
     const current = runtime.getRun(run.id);
     return { accepted: true, runId: run.id, planId: plan.id, runStatus: current.status };
   } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    await runtime.failRun(run.id, `Plan proposal rejected: ${reason}`);
     return {
       accepted: false,
       runId: run.id,
-      error: error instanceof Error ? error.message : String(error),
+      runStatus: runtime.getRun(run.id).status,
+      error: reason,
     };
   }
 }

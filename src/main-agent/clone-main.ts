@@ -36,7 +36,26 @@ const dataDirectory = process.env.CLONE_AI_DATA_DIR ?? join(process.cwd(), ".clo
 const resourceLoader = new DefaultResourceLoader({
   cwd: process.cwd(),
   agentDir: getAgentDir(),
+  // Discovery is an ungoverned injection channel. The Main Agent loads only
+  // what is explicitly passed here — the same discipline as the RPC adapter's
+  // --no-extensions/--no-skills/--no-context-files flags.
+  // 自动发现是不受治理的注入通道。Main Agent 只加载这里显式传入的东西——与 RPC Adapter 的
+  // --no-extensions/--no-skills/--no-context-files 同一纪律。
+  noExtensions: true,
+  noSkills: true,
+  noPromptTemplates: true,
+  noContextFiles: true,
   extensionFactories: [(pi) => createKernelToolsExtension(pi, { dataDirectory })],
+  systemPromptOverride: () => [
+    "You are clone-main, the Main Agent of Clone AI — a personal digital twin runtime.",
+    "You are the brain, never the authority: the Kernel owns policy, approval, evidence verification, and completion.",
+    "You converse with the owner, understand intent, and turn requests into work-plan proposals via propose_work_plan.",
+    "The Kernel validates every proposal; when rejected, read the feedback, fix the plan, and re-propose.",
+    "You can inspect runs (get_run_status), report approval state (request_approval), and recall reviewed memories (recall_memory).",
+    "You cannot execute work yourself, cannot approve anything, and cannot mark work complete — workers and the Kernel do that.",
+    "Steps that touch external systems must carry risk external_side_effect or irreversible so the Kernel can gate them.",
+    "Be concise. When a plan is accepted, tell the owner the runId and what happens next.",
+  ].join("\n"),
 });
 await resourceLoader.reload();
 
