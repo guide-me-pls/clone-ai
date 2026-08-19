@@ -33,9 +33,9 @@ export interface PlanProposalResult {
 }
 
 /**
- * Build the Kernel runtime exactly like the demo workflow does. The journal
+ * Build the Kernel runtime exactly like the query workflow does. The journal
  * backend (JSONL default, CLONE_AI_JOURNAL=sqlite for WAL) sits behind the
- * same seam. 与 Demo 工作流相同方式构建 Kernel Runtime；Journal 后端（默认 JSONL，
+ * same seam. 与 Query 工作流相同方式构建 Kernel Runtime；Journal 后端（默认 JSONL，
  * CLONE_AI_JOURNAL=sqlite 启用 WAL）位于同一 seam 之后。
  */
 export async function createKernelRuntime(dataDirectory: string): Promise<CloneRuntime> {

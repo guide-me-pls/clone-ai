@@ -140,10 +140,10 @@ export class OpenAIResponsesPlannerModel implements StructuredPlannerModel {
 }
 
 /**
- * Opt-in keeps the local demo deterministic and prevents surprise paid calls.
+ * Opt-in keeps local runs deterministic and prevents surprise paid calls.
  * Set CLONE_AI_PLANNER=openai plus OPENAI_API_KEY to enable the real planner.
  *
- * 显式开启可保证本地 Demo 保持确定性，也避免意外产生付费调用。设置
+ * 显式开启可保证本地运行保持确定性，也避免意外产生付费调用。设置
  * CLONE_AI_PLANNER=openai 和 OPENAI_API_KEY 后才启用真实 Planner。
  */
 export function createEnvironmentWorkPlanner(environment: NodeJS.ProcessEnv = process.env): WorkPlanner | undefined {
