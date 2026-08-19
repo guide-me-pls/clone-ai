@@ -288,7 +288,36 @@ export interface ExecutionAssignment {
    * 已完成依赖产生且由 Supervisor 筛选过的 Evidence。
    */
   dependencyEvidence?: Evidence[];
+  /**
+   * The scoped memory packet compiled by the Kernel for this assignment —
+   * never the whole store. Workers receive it as background facts; every item
+   * must already be journaled as memory.recalled for this run.
+   * Kernel 为本次派发编译的有作用域记忆包——绝不是整个记忆库。Worker 只把它当背景事实；
+   * 每一条都必须已作为本 Run 的 memory.recalled 记入 Journal。
+   */
+  memoryContext?: MemoryContextPacket;
   workspacePath?: string;
+}
+
+export interface MemoryContextPacket {
+  items: Array<{ id: string; summary: string }>;
+  /** Why these items reached this worker. 这些条目为何到达该 Worker。 */
+  selectedBy: { query: string };
+}
+
+/**
+ * The narrow recall port the Kernel uses to compile worker memory packets.
+ * The owner's switches (recall enabled, per-task cap) stay inside the store,
+ * so the Kernel cannot widen its own access.
+ * Kernel 编译 Worker 记忆包所用的窄召回端口。所有者的开关（是否启用召回、每任务上限）
+ * 留在 Store 内部，因此 Kernel 无法自行放宽访问范围。
+ */
+export interface WorkerMemorySource {
+  recall(query: string, runId: string): Promise<Array<{
+    memory: { id: string; summary: string };
+    score: number;
+    matchedTerms: string[];
+  }>>;
 }
 
 export type ExecutionEvent =

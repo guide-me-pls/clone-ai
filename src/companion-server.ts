@@ -11,6 +11,7 @@ import { describeSchedule, ScheduleStore, type LocalSchedule, type ScheduleKind 
 import { SessionStore } from "./sessions/session-store.ts";
 import { AgentSettingsStore } from "./settings/agent-settings.ts";
 import { LocalAgentRegistry } from "./agents/agent-registry.ts";
+import { runMainAgentQuery } from "./main-agent/query.ts";
 import { LocalMemoryStore } from "./memory/memory-store.ts";
 
 export interface CompanionServerOptions {
@@ -211,8 +212,24 @@ async function handleRequest(
     }
     return;
   }
-  if (request.method === "POST" && url.pathname === "/api/requests") {
+  if (request.method === "POST" && url.pathname === "/api/main-agent/query") {
     const body = await readJsonBody(request);
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (text.length < 3) {
+      sendJson(response, 400, { error: "Please describe the request in at least three characters." });
+      return;
+    }
+    // The conversation-driven entry: the Main Agent proposes, the Kernel
+    // validates, and the response separates the agent's words from the runs
+    // the journal actually accepted.
+    // 对话驱动入口：Main Agent 提案、Kernel 校验；响应把 Agent 的话语与 Journal 真正
+    // 接受的 Run 分开返回。
+    const result = await runMainAgentQuery(context.dataDirectory, text);
+    sendJson(response, 200, result);
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/requests") {    const body = await readJsonBody(request);
     const query = typeof body.query === "string" ? body.query.trim() : "";
     if (query.length < 3) {
       sendJson(response, 400, { error: "Please describe the work in at least three characters." });

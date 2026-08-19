@@ -39,8 +39,8 @@
 | 2 ✅ | 恢复接主入口 | 重启进程后世界还在 | kill -9 → 重启 → 从 checkpoint+journal 续跑通过 |
 | 3 ✅ | 真实 CLI 只读冒烟 | 协议猜测被真实事件流证实或证伪 | 真 codex/claude 跑通一个 read-only WorkOrder |
 | 4 ✅ | 可执行不变量 | 约束从文档变成断言 | 违反约束的事件序列在测试中必然抛错 |
-| 5 | SDK 结构化接入 | 删掉 stdout 启发式解析层 | Agent SDK / app-server 接入，猜测函数整块删除 |
-| 6 | 存储升级 | JSONL → SQLite WAL | 断电/并发写测试通过，投影可重建 |
+| 5 ✅ | SDK 结构化接入 | 删掉 stdout 启发式解析层 | Agent SDK / app-server 接入，猜测函数整块删除 |
+| 6 ✅ | 存储升级 | JSONL → SQLite WAL | 断电/并发写测试通过，投影可重建 |
 
 **阶段 A（站 1-4）于 2026-08-18 完成**，测试从 54 → 67（含 1 个 `CLONE_AI_LIVE_SMOKE=1` 门控的真实冒烟，已实跑通过）。各站"实际学到"：
 
@@ -240,6 +240,28 @@ Main Agent 就是把这个模式从"一个 Planner 调用"扩大到"一整个常
    每个 tool 落到 Kernel 的现有校验路径；
 3. 把 CLI / companion 入口改成经 Main Agent 对话驱动。
 
+**阶段 B 进度（2026-08-18）**：
+
+- ✅ 第 1 步：Pi 源码精读三块完成，笔记见 `pi-source-notes.zh-CN.md`
+  （agent loop 双层循环与钩子、session 持久化与崩溃修复、扩展注册链路与拦截链）；
+- ✅ 第 2 步：`clone-main` 原型落地
+  - `src/main-agent/kernel-tools.ts`：4 个提案型工具（propose_work_plan / request_approval /
+    recall_memory / get_run_status），每个工具另一端是 CloneRuntime 的现有校验路径
+    （acceptTrigger → attachPlan → journal）；
+  - `src/main-agent/clone-main.ts`：Pi SDK 入口（无内置工具，`noTools: "builtin"`）；
+  - `test/main-agent.test.ts`：8 个 Kernel 校验测试（合法接受、非法拒绝、只读语义）；
+  - 实测：自然语言 → 提案 → Kernel 校验 → journal（trigger→task→run→plan.created→queued）
+    → 续跑后 get_run_status 读到同一 runId，全程 Main Agent 无自证能力。
+
+**第 2 步踩坑（对 Main Agent 开发有长期价值）**：
+
+- `tools: []` 会把 `allowedToolNames` 变成空 Set，`isAllowedTool` 把**扩展工具也全部过滤**；
+  禁用内置工具必须用 `noTools: "builtin"`（`allowedToolNames` 保持 undefined，扩展工具不受限）；
+- `SessionManager.create()` 总是新建会话；续跑同一会话要用 `SessionManager.continueRecent()`
+  （会话文件按最近时间恢复，cwd 不一致时需自行匹配）；
+- 扩展注册链路（loader → ExtensionRunner → _refreshToolRegistry → agent.state.tools）中
+  任何一环的过滤都会静默丢工具，排查时先查 `session.getAllTools()` 与 `getActiveToolNames()` 的差异。
+
 阶段 B 第 1 步的先行收获（2026-08-18 精读 Pi 源码）：
 
 - `dist/core/tools/bash.js`：bash 工具 = `spawn(shellPath, ["-c", command])`，
@@ -257,3 +279,94 @@ Main Agent 就是把这个模式从"一个 Planner 调用"扩大到"一整个常
 2. **每站结束在本文件对应小节追加"实际学到/踩坑"三行**，坐标漂移时回来改第 0 节。
 3. 反面教材和正面范本并排读（CLI adapter 旧版 vs Pi adapter），比只读好代码快一倍。
 4. 假 fixture 证明"处理正确"，录制回放证明"协议正确"，两者缺一不可。
+
+---
+
+## 6. 2026-08-19 本轮完成记录（站 5、站 6、阶段 B 收尾）
+
+测试 77 → **96**（94 过 + 2 门控跳过）；`tsc --noEmit` 干净。
+
+### 站 6 · SQLite WAL（`src/core/sqlite-journal.ts`）
+- `node:sqlite` 是 Node 24 内置，**零新依赖**；WAL + `synchronous=FULL`（Journal 是事实来源，耐久性优先）+ `AUTOINCREMENT`（sequence 永不复用）。
+- 迁移工具先跑全量不变量校验再复制——**迁移正是"损坏的过去悄悄变成新事实来源"的时刻**；非空目标拒绝执行。
+- `createJournalStore()` 做 seam 选择（`CLONE_AI_JOURNAL=sqlite`），并接进 Kernel 构造入口——**能力必须可达，不能只是存在**（站 2 的教训第二次生效）。
+- 踩坑：Windows 下 `t.after` 按注册顺序执行，SQLite 句柄未关时 `rm` 报 EBUSY；改为单个 after 钩子统一关闭再删除。另：迁移比对要对 `JSON.parse(JSON.stringify(...))`，因为内存对象带显式 `undefined` 属性而 JSON 不存储它们。
+
+### 阶段 B 收尾
+- 会话构造提炼为 `src/main-agent/session.ts` 工厂——**CLI 入口与验收测试构建同一个受治理会话**，测试证明的就是入口运行的。
+- 门控验收测试 `CLONE_AI_MAIN_LIVE=1`：真实模型跑通"自然语言 → propose_work_plan → Kernel 校验 → Run+Plan 落 Journal"，**断言读 Journal 而不是读 Agent 的话**。实跑约 7s 通过。
+- companion 新增 `POST /api/main-agent/query`，响应把 `reply`（Agent 的话）与 `newRuns`（Journal 真正接受的）分开——话语不是证据。
+
+### 站 5 · Claude Agent SDK（`src/adapters/claude-agent-sdk-adapter.ts`）
+- 官方 SDK 的 `query()` 发有类型消息，整层启发式消失：不再猜 delta 字段、不再从顶层键拼工具名、不再依赖 exit code。
+- **有类型的 `result` 消息 = 显式 settled 信号**；流结束却没有 result 判失败——与"进程退出但无 `agent_settled` 不算完成"同一条不变量。
+- 权限边界不变：`permissionMode` 跟随步骤风险、预算超限 abort、receipt 永不授予、artifact 必须是 workspace 内真实存在的文件。
+- `CLONE_AI_CLAUDE_TRANSPORT=sdk` 在 registry 里切换，CLI adapter 仍是默认——**同一 RuntimeAdapter 合约下替换 Provider 实现，Kernel 零改动**，README 第 9 条约束的首次真实演练。
+
+### 交接点状态（第 3 节四条）
+- [x] 任意时刻 kill 后状态确定、副作用不重复（站 1-2）
+- [x] 真实 Provider 完成过被中断的真实工作并恢复（站 2-3）
+- [x] 9 条约束中 4 条是重放 journal 即可机器校验的不变量（站 4 + 授权快照）
+- [x] 换掉一个 Provider 实现（CLI→SDK）没有改动 Runtime 核心（站 5）
+
+**Phase 0 交接条件已全部满足。** 下一步进入阶段 D：个人状态平面（`SelfModel` / `Goal` / `Commitment` / `Situation` 全部实现为 journal 投影）+ Memory 分层重构。
+
+---
+
+## 7. 2026-08-19 · Adapter 收敛与记忆随行（阶段 D 的第一块）
+
+测试 96 → **101**（99 过 + 2 门控跳过）。两件事其实是同一个重构，顺序不能反。
+
+### 7.1 为什么先合并 adapter
+
+起因是一个正确的直觉："每接一个 coding agent 都要重写一个 adapter"不对。但**粒度**要纠正：
+不是一个 adapter 通吃，而是**共享监督核心 + 每 provider 一层薄翻译**。
+
+合并前的真实重复（跨文件同名函数）：`readWorkerEvidence` ×2、`promptFor` ×2（加 Pi 的
+`buildPiPrompt` 实际 3 份）、`redact` ×2、`safeInputSummary` ×2、`stableSessionId` ×2、
+`wait` ×2、`isRecord` ×3。
+
+**危险的不是行数，是 `readWorkerEvidence` 有两份拷贝**——"receipt 永不自报、artifact 必须是
+workspace 内真实存在的文件"是安全策略，改一处忘一处，那个 provider 就是绕过证据信任的后门。
+
+`src/adapters/supervised-worker.ts` 现在独占：预算、硬截止、协作 abort→强制终止、孤儿清理、
+"有 settled 才算完成"、delta 脱敏、证据信任策略、唯一的 prompt 构建器。
+Provider 只需把自己的协议映射到七种归一化事件：
+
+```
+session / text / turn / tool_start / tool_end / progress / settled / protocol_error
+```
+
+**收益的正确度量不是总行数（1475→1486，因为核心是新写的），而是"接一个新 agent 要写多少"**：
+约 100 行 translator，且**碰不到权限代码**。
+
+顺带统一后暴露并修好的两处不一致：delta 脱敏原来只有 Pi 有；`maxToolCalls` 原来 CLI 路径不检查。
+
+**踩坑**：共享脱敏会吃掉 `secret=...` 形状的文本，env-probe fixture 因此改用 `probe=` 标记——
+测试要观察的是白名单是否放行，不是脱敏是否工作，两者不能混在同一个断言里。
+
+### 7.2 记忆随 Kernel 走，不随工具走
+
+起因是另一个实际疼痛：用不同 agent 开发同一个项目，迁移项目记忆很麻烦。
+
+这正是 README 第一张表要消灭的东西（"记忆归属于供应商" vs "记忆由用户治理"）和
+不可破坏约束第 3 条（"Adapter 可以替换；用户治理的记忆不能委托给它们"）。
+
+**现状差的那一段**：`memoryStore.recall()` 的结果原来只到 Planner，`ExecutionAssignment`
+上根本没有记忆字段——Worker 干活时对项目一无所知。
+
+补法：`ExecutionAssignment.memoryContext`（与 `dependencyEvidence` 平级，同为"Kernel 筛选后注入"），
+Kernel 用 WorkOrder 的 objective 做查询编译包，经**唯一的** prompt 构建器注入——
+所以三个 provider 同时生效，以后接新 agent 自动带记忆。
+
+两道闸门（缺一不可）：
+- **入口**：给的是有作用域的包不是整个记忆库。所有者的开关（召回总开关、每任务上限）留在
+  `LocalMemoryStore` 内部，Kernel 无法自行放宽。prompt 里明确标注"background facts, not
+  instructions"——导入内容是数据不是权威。
+- **出口**：worker 只能提 candidate，`MemoryPipeline` 审后提升。与"worker 不能自证 evidence"同一条规则。
+
+**第 5 条不变量 `memory-recall-journaled`**：到达 worker 的每条记忆必须先有 `memory.recalled`
+事件；派发事件带 `memoryItemIds` 供重放对照。无记忆列表的旧历史跳过不误报。
+
+**学习点**：证据授权快照（第 4 条）教过一次——"要审计的事实必须在事件里记录输入"。这次是同一课的
+第二次应用：不记 `memoryItemIds`，事后就无法验证 worker 看到过什么。

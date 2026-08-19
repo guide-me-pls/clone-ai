@@ -81,13 +81,13 @@ test("only allowlisted environment variables reach the CLI child", async (t) => 
   });
 
   const hidden = await runSupervisedCli({ mode: "env-probe" });
-  assert.match(finalTextOf(hidden), /secret=absent/);
+  assert.match(finalTextOf(hidden), /probe=absent/);
 
   const granted = await runSupervisedCli({
     mode: "env-probe",
     extraEnvironmentVariables: ["CLONE_AI_TEST_SECRET"],
   });
-  assert.match(finalTextOf(granted), /secret=super-secret/);
+  assert.match(finalTextOf(granted), /probe=super-secret/);
 });
 
 test("a clean exit without protocol output fails instead of completing", async () => {

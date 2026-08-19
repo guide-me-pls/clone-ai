@@ -84,4 +84,7 @@ src/
 - Tauri 打包桌面壳、托盘、通知、原生审批和自动 daemon 生命周期。
 - 机会发现与受治理的个人世界模型。
 
-下一阶段是用真实 Pi 工作验证 checkpoint/resume，再把相同的 Adapter 合同用于 Codex 和 Claude Code。
+用真实 Pi 工作验证 checkpoint/resume 已经完成，相同的 Adapter 合同现在也承载着 Codex 与
+Claude Code。下一阶段是个人状态平面：把 `SelfModel`、`Goal`、`Commitment`、`Situation`
+实现为受治理的 Journal 投影。详见
+[Runtime 架构与路线](runtime-architecture-and-route.zh-CN.md)。
