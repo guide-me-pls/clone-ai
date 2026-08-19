@@ -41,6 +41,21 @@ if (mode === "env-probe") {
   process.exit(0);
 }
 
+if (mode === "memory-candidates") {
+  // Writes whatever the test put in FAKE_MEMORY_CANDIDATES_JSON verbatim.
+  // 把测试放在 FAKE_MEMORY_CANDIDATES_JSON 的内容原样写入候选文件。
+  const target = join(process.cwd(), "out", "candidates.json");
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, process.env.FAKE_MEMORY_CANDIDATES_JSON ?? "[]", "utf8");
+  say("Wrote memory candidates.");
+  process.exit(0);
+}
+
+if (mode === "memory-mine-fail") {
+  process.stderr.write("mining failed: model unavailable\n");
+  process.exit(2);
+}
+
 // Default: behave like an agent that actually does the work.
 // 默认：表现得像一个真正干活的 Agent。
 const target = join(process.cwd(), process.env.FAKE_AGENT_OUTPUT ?? "out/report.md");

@@ -5,7 +5,7 @@
       "label": "Claude Code",
       "command": "claude",
       "args": ["-p", "{{prompt}}"],
-      "env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR"]
+      "env": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "ANTHROPIC_DEFAULT_*", "ANTHROPIC_SMALL_*", "ANTHROPIC_MODEL", "ANTHROPIC_SONNET", "ANTHROPIC_OPUS", "ANTHROPIC_HAIKU"]
     },
     {
       "id": "codex-cli",

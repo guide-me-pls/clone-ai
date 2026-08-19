@@ -58,11 +58,12 @@ apps/desktop/                 已安装客户端的边界（目标为 Tauri）
 
 src/
   core/                       Journal、策略、Supervisor、验证
-  adapters/                   可替换 Agent Adapter 与演示注册表
+  adapters/                   黑盒 Worker 与 Provider 注册表
+  config/                     ~/.clone 路径解析与配置读写
   memory/                     异步记忆候选管道
-  companion-server.ts         仅用于本地开发预览
-  demo-workflow.ts            带子 Agent 工作单的父计划
-  cli.ts                      开发者演示与 Trace 入口
+  main-agent/                 Main Agent 会话与提案型 Kernel 工具
+  workflows/query-workflow.ts 带子 Agent 工作单的父计划
+  companion-server.ts         本地 Daemon 与桌面 API
 ```
 
 ## Runtime 不可破坏的约束

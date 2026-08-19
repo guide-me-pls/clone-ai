@@ -9,6 +9,7 @@ import { CloneRuntime } from "./runtime.ts";
 import { JsonWorkspaceCheckpointStore } from "./workspace-evidence.ts";
 import { EvidenceVerifier } from "./verification.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
+import { AgentMemoryWorker } from "../memory/agent-memory-worker.ts";
 import { LocalMemoryStore } from "../memory/memory-store.ts";
 
 export interface RuntimeAssembly {
@@ -30,7 +31,14 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
   await prepareCloneHome(paths);
   const journal = createJournalStore(paths.dataDirectory);
   const failureCatalog = await loadOutcomeCatalog(paths.dataDirectory);
-  const memory = new MemoryPipeline(journal);
+  const memory = new MemoryPipeline(
+    journal,
+    // Memory mining by a background agent is opt-in: it costs one real model
+    // call per completed task, so the deterministic worker stays the default.
+    // 后台 Agent 提炼记忆是显式开启的：每完成一个任务会花一次真实模型调用，因此
+    // 默认仍使用确定性 Worker。
+    process.env.CLONE_AI_MEMORY_MINING === "1" ? new AgentMemoryWorker() : undefined,
+  );
   const runtime = new CloneRuntime({
     journal,
     policy: new DefaultPolicyEngine(),
