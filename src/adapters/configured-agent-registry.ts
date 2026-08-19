@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { AgentSetting } from "../settings/agent-settings.ts";
 import { workCapabilitiesForRole } from "../agents/capabilities.ts";
 import { StaticAgentRegistry } from "./demo-adapter.ts";
+import { ClaudeAgentSdkAdapter } from "./claude-agent-sdk-adapter.ts";
 import { CodingCliAdapter } from "./coding-cli-adapter.ts";
 import { PiAgentAdapter, type PiToolName } from "./pi-agent-adapter.ts";
 
@@ -28,6 +29,14 @@ export function createConfiguredAgentRegistry(
     .map((agent) => {
       const workCapabilities = workCapabilitiesForRole(agent.role);
       if (agent.providerId === "codex-cli" || agent.providerId === "claude-code") {
+        // CLONE_AI_CLAUDE_TRANSPORT=sdk routes Claude Code through its official
+        // SDK (typed events) instead of parsed CLI stdout; same adapter
+        // contract, same authority, so the Kernel is unaffected either way.
+        // CLONE_AI_CLAUDE_TRANSPORT=sdk 让 Claude Code 走官方 SDK（有类型事件）而不是
+        // 解析 CLI stdout；同一 Adapter 合约、同一权限边界，Kernel 两种情况都不受影响。
+        if (agent.providerId === "claude-code" && process.env.CLONE_AI_CLAUDE_TRANSPORT === "sdk") {
+          return new ClaudeAgentSdkAdapter({ id: agent.id, workCapabilities });
+        }
         return new CodingCliAdapter({ id: agent.id, providerId: agent.providerId, workCapabilities });
       }
       if (agent.role !== "direct" && agent.role !== "review") {
