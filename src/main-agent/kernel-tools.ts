@@ -13,9 +13,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import type { PlanStep } from "../core/contracts.ts";
-import { JsonlJournalStore } from "../core/journal.ts";
 import { DefaultPolicyEngine } from "../core/policy.ts";
 import { CloneRuntime } from "../core/runtime.ts";
+import { createJournalStore } from "../core/sqlite-journal.ts";
 import { EvidenceVerifier } from "../core/verification.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { LocalMemoryStore } from "../memory/memory-store.ts";
@@ -32,9 +32,14 @@ export interface PlanProposalResult {
   error?: string;
 }
 
-/** Build the Kernel runtime exactly like the demo workflow does. 与 Demo 工作流相同的方式构建 Kernel Runtime。 */
+/**
+ * Build the Kernel runtime exactly like the demo workflow does. The journal
+ * backend (JSONL default, CLONE_AI_JOURNAL=sqlite for WAL) sits behind the
+ * same seam. 与 Demo 工作流相同方式构建 Kernel Runtime；Journal 后端（默认 JSONL，
+ * CLONE_AI_JOURNAL=sqlite 启用 WAL）位于同一 seam 之后。
+ */
 export async function createKernelRuntime(dataDirectory: string): Promise<CloneRuntime> {
-  const journal = new JsonlJournalStore(join(dataDirectory, "journal.jsonl"));
+  const journal = createJournalStore(dataDirectory);
   const runtime = new CloneRuntime({
     journal,
     policy: new DefaultPolicyEngine(),
