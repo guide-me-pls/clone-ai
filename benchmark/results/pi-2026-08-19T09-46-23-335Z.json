@@ -1,0 +1,103 @@
+{
+  "provider": "pi",
+  "ranAt": "2026-08-19T09:46:23.335Z",
+  "records": [
+    {
+      "taskId": "summarize",
+      "title": "Read-only summary",
+      "passed": true,
+      "expectedFailure": false,
+      "status": "completed",
+      "durationMs": 13994,
+      "artifacts": [
+        {
+          "path": "out/summary.md",
+          "bytes": 534
+        },
+        {
+          "path": "README.md",
+          "bytes": 236
+        }
+      ]
+    },
+    {
+      "taskId": "two-step-chain",
+      "title": "Two-step dependency chain",
+      "passed": true,
+      "expectedFailure": false,
+      "status": "completed",
+      "durationMs": 24526,
+      "artifacts": [
+        {
+          "path": "out/brief.md",
+          "bytes": 818
+        },
+        {
+          "path": "out/notes.md",
+          "bytes": 767
+        },
+        {
+          "path": "README.md",
+          "bytes": 236
+        }
+      ]
+    },
+    {
+      "taskId": "three-step-pipeline",
+      "title": "Three-step research -> draft -> review pipeline",
+      "passed": true,
+      "expectedFailure": false,
+      "status": "completed",
+      "durationMs": 53907,
+      "artifacts": [
+        {
+          "path": "out/brief.md",
+          "bytes": 1077
+        },
+        {
+          "path": "out/notes.md",
+          "bytes": 901
+        },
+        {
+          "path": "out/review.md",
+          "bytes": 1707
+        },
+        {
+          "path": "README.md",
+          "bytes": 236
+        }
+      ]
+    },
+    {
+      "taskId": "code-tool",
+      "title": "Code task with a real tool call",
+      "passed": true,
+      "expectedFailure": false,
+      "status": "completed",
+      "durationMs": 11275,
+      "artifacts": [
+        {
+          "path": "lib/add.js",
+          "bytes": 159
+        },
+        {
+          "path": "package.json",
+          "bytes": 46
+        },
+        {
+          "path": "test/add.test.mjs",
+          "bytes": 188
+        }
+      ]
+    },
+    {
+      "taskId": "missing-input",
+      "title": "Missing input fails with the right category",
+      "passed": false,
+      "expectedFailure": true,
+      "status": "failed",
+      "durationMs": 20363,
+      "artifacts": []
+    }
+  ]
+}
