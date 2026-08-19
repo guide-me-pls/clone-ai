@@ -11,7 +11,7 @@ import { describeSchedule, ScheduleStore, type LocalSchedule, type ScheduleKind 
 import { SessionStore } from "./sessions/session-store.ts";
 import { loadProviderRegistry } from "./adapters/built-in-providers.ts";
 import { AgentSettingsStore } from "./settings/agent-settings.ts";
-import { LocalAgentRegistry } from "./agents/agent-registry.ts";
+import { LocalAgentRegistry } from "./agents/local-provider-registry.ts";
 import { runMainAgentQuery } from "./main-agent/query.ts";
 import { LocalMemoryStore } from "./memory/memory-store.ts";
 import {
@@ -19,7 +19,15 @@ import {
   migrateLegacyCloneHome,
   prepareCloneHome,
   resolveClonePaths,
+  type ClonePaths,
 } from "./config/clone-home.ts";
+import { CloneConfigStore } from "./config/clone-config.ts";
+import {
+  listEffectiveProviderConfigs,
+  readUserProviderConfigs,
+  removeUserProviderConfig,
+  upsertUserProviderConfig,
+} from "./adapters/provider-config-store.ts";
 
 export interface CompanionServerOptions {
   host?: string;
@@ -73,8 +81,9 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const sessions = new SessionStore(paths.sessionsFile);
   const providers = await loadProviderRegistry(dataDirectory);
   const agentSettings = new AgentSettingsStore(paths.legacyAgentsFile, providers);
-  const agentRegistry = new LocalAgentRegistry();
+  const agentRegistry = new LocalAgentRegistry(dataDirectory);
   const memoryStore = new LocalMemoryStore(paths.memoryFile);
+  const config = new CloneConfigStore(paths);
   await syncMemory(dataDirectory, memoryStore);
   const scheduler = new LocalScheduler({
     store: schedules,
@@ -93,6 +102,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         host,
         dataDirectory,
         workspacePath,
+        paths,
+        config,
         client,
         clientCss,
         clientJs,
@@ -134,7 +145,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { host: string; dataDirectory: string; workspacePath: string; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore },
+  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host}`);
 
@@ -157,6 +168,69 @@ async function handleRequest(
     sendJson(response, 200, await buildDashboard(context.dataDirectory, context.sessions));
     return;
   }
+  if (request.method === "GET" && url.pathname === "/api/config") {
+    // Paths are shown so the owner can find and inspect their own data; no
+    // credential value is ever part of this payload.
+    // 展示路径是为了让所有者能找到并检查自己的数据；该响应从不包含任何凭据值。
+    sendJson(response, 200, {
+      config: await context.config.get(),
+      paths: {
+        dataDirectory: context.paths.dataDirectory,
+        workspacePath: context.paths.workspacePath,
+        configFile: context.paths.configFile,
+        providersFile: context.paths.providersFile,
+        memoryFile: context.paths.memoryFile,
+        outcomesDirectory: context.paths.outcomesDirectory,
+        workspaceRuntimeDirectory: context.paths.workspaceRuntimeDirectory,
+      },
+    });
+    return;
+  }
+
+  if (request.method === "PATCH" && url.pathname === "/api/config") {
+    const body = await readJsonBody(request);
+    const update: { workspacePath?: string; locale?: "zh-CN" | "en" } = {};
+    if (typeof body.workspacePath === "string" && body.workspacePath.trim().length > 0) {
+      update.workspacePath = body.workspacePath.trim();
+    }
+    if (body.locale === "zh-CN" || body.locale === "en") update.locale = body.locale;
+    if (Object.keys(update).length === 0) {
+      sendJson(response, 400, { error: "Provide a workspacePath or a locale to change." });
+      return;
+    }
+    sendJson(response, 200, { config: await context.config.update(update) });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/settings/providers") {
+    sendJson(response, 200, {
+      providers: await listEffectiveProviderConfigs(context.dataDirectory),
+      userDefined: await readUserProviderConfigs(context.dataDirectory),
+    });
+    return;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/settings/providers") {
+    const body = await readJsonBody(request);
+    try {
+      // Validation lives in the store, so the GUI cannot write a declaration
+      // the Runtime would later refuse to launch.
+      // 校验在 Store 内进行，因此 GUI 无法写入 Runtime 之后会拒绝启动的声明。
+      const providers = await upsertUserProviderConfig(context.dataDirectory, body as never);
+      sendJson(response, 200, { providers });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid provider declaration." });
+    }
+    return;
+  }
+
+  const providerMatch = url.pathname.match(/^\/api\/settings\/providers\/([^/]+)$/);
+  if (request.method === "DELETE" && providerMatch?.[1] !== undefined) {
+    const providers = await removeUserProviderConfig(context.dataDirectory, decodeURIComponent(providerMatch[1]));
+    sendJson(response, 200, { providers });
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/settings") {
     sendJson(response, 200, await context.agentSettings.get());
     return;
