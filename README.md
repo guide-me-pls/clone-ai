@@ -66,9 +66,9 @@ context and capability grant necessary for an assignment.
 
 | Provider | Intended responsibility | Integration status |
 | --- | --- | --- |
-| **Claude Code** | Long-running implementation, local tools, and artifact creation. | Adapter designed |
-| **Codex** | Coding, review, repository operations, and structured execution events. | Adapter designed |
-| **Pi** | Tool-free direct reasoning and evidence review through a supervised subprocess. | JSONL RPC adapter implemented |
+| **Claude Code** | Long-running implementation, local tools, and artifact creation. | CLI and official-SDK translators, verified live |
+| **Codex** | Coding, review, repository operations, and structured execution events. | CLI translator implemented, not yet verified live |
+| **Pi** | Tool-free direct reasoning and evidence review through a supervised subprocess. | JSONL RPC translator implemented |
 | **Custom runtimes** | User- or organization-specific agents, scripts, and local tools. | Extension contract planned |
 | **Python workers** | Extraction, ranking, forecasting, evaluation, and local ML proposals. | Worker protocol planned |
 
@@ -105,7 +105,9 @@ For the complete current path from a user request to verified completion, see
 [Query execution flow](docs/query-execution-flow.md). The opt-in model planner
 and its safety boundary are documented in [LLM Planner](docs/llm-planner.md).
 The real Codex CLI and Claude Code provider boundary is documented in
-[Coding CLI adapters](docs/coding-cli-adapters.md).
+[Supervised worker boundary](docs/coding-cli-adapters.md). The architecture, the
+route already walked, and the next phase are in
+[Runtime architecture and route](docs/runtime-architecture-and-route.md).
 
 The first implementation is a local, inspectable trust loop—not a broad autonomous
 assistant. The CLI demo remains deterministic for repeatable learning and tests; the

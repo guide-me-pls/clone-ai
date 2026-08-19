@@ -12,6 +12,7 @@ const documentPairs = [
   ["docs/llm-planner.md", "docs/llm-planner.zh-CN.md"],
   ["docs/minimal-llm-loop.md", "docs/minimal-llm-loop.zh-CN.md"],
   ["docs/query-execution-flow.md", "docs/query-execution-flow.zh-CN.md"],
+  ["docs/runtime-architecture-and-route.md", "docs/runtime-architecture-and-route.zh-CN.md"],
   ["docs/work-orders-and-pi.md", "docs/work-orders-and-pi.zh-CN.md"],
   ["apps/desktop/README.md", "apps/desktop/README.zh-CN.md"],
 ] as const;
