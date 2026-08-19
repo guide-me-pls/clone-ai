@@ -51,7 +51,11 @@ if (mode === "own-session") {
 }
 
 let text = "Work finished.";
-if (mode === "env-probe") text = `secret=${process.env.CLONE_AI_TEST_SECRET ?? "absent"}`;
+// "probe=" deliberately avoids the shared redaction patterns (secret=, token=...)
+// so the test can observe exactly what crossed the environment allowlist.
+// "probe=" 刻意避开共享脱敏模式（secret=、token= 等），让测试能观察到究竟是什么
+// 穿过了环境变量白名单。
+if (mode === "env-probe") text = `probe=${process.env.CLONE_AI_TEST_SECRET ?? "absent"}`;
 if (evidence !== undefined) text += `\nCLONE_AI_EVIDENCE: ${evidence}`;
 writeSync(1, `${JSON.stringify({ text })}\n`);
 process.exit(0);

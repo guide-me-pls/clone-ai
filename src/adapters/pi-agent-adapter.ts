@@ -3,13 +3,16 @@ import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
-import type {
-  ExecutionAssignment,
-  ExecutionEvent,
-  RuntimeAdapter,
-  RuntimeCapabilities,
-  WorkOrderBudget,
-} from "../core/contracts.ts";
+import type { ExecutionAssignment } from "../core/contracts.ts";
+import {
+  SupervisedWorkerAdapter,
+  isRecord,
+  safeInputSummary,
+  wait,
+  type NormalizedWorkerEvent,
+  type ProviderTranslator,
+  type WorkerTransport,
+} from "./supervised-worker.ts";
 
 export type PiToolName = "read" | "grep" | "find" | "ls" | "edit" | "write" | "bash";
 
@@ -62,86 +65,61 @@ export interface PiAgentAdapterOptions {
 }
 
 /**
- * Pi runs as an isolated JSONL RPC subprocess. Clone Runtime owns authority,
- * budgets and completion; Pi owns only the bounded work order it receives.
+ * Pi runs as an isolated JSONL RPC subprocess. This class is now only the Pi
+ * protocol translator plus its process transport; budgets, cancellation,
+ * completion authority, and evidence policy live in SupervisedWorkerAdapter.
  *
- * Pi 运行在隔离的 JSONL RPC 子进程中。Clone Runtime 拥有权限、预算和完成判定；Pi 只拥有
- * 它收到的有边界 WorkOrder。
+ * Pi 运行在隔离的 JSONL RPC 子进程中。本类现在只是 Pi 协议翻译器加进程传输层；
+ * 预算、取消、完成判定权与证据策略都在 SupervisedWorkerAdapter 中。
  */
-export class PiAgentAdapter implements RuntimeAdapter {
-  readonly id: string;
-  readonly providerId = "pi";
-  readonly #options: Required<Pick<
-    PiAgentAdapterOptions,
-    "tools" | "workCapabilities" | "offline" | "environmentVariables" | "abortGraceMs"
-  >>
-    & Omit<
-      PiAgentAdapterOptions,
-      "id" | "tools" | "workCapabilities" | "offline" | "environmentVariables" | "abortGraceMs" | "processHost"
-    >;
-  readonly #host: PiProcessHost;
-  readonly #active = new Map<string, PiRpcSession>();
-
+export class PiAgentAdapter extends SupervisedWorkerAdapter {
   constructor(options: PiAgentAdapterOptions = {}) {
-    this.id = options.id ?? "pi";
-    this.#options = {
-      command: options.command,
-      commandArgs: options.commandArgs,
-      cwd: options.cwd,
-      sessionDirectory: options.sessionDirectory,
-      provider: options.provider,
-      model: options.model,
-      tools: options.tools ?? [],
+    super({
+      id: options.id ?? "pi",
+      providerId: "pi",
+      label: "Pi",
+      translator: new PiTranslator(options),
       workCapabilities: options.workCapabilities ?? ["review", "direct_response"],
-      offline: options.offline ?? false,
-      environmentVariables: options.environmentVariables ?? [],
       abortGraceMs: options.abortGraceMs ?? 5_000,
-    };
+      // Pi's historical default budget for tool-free bounded work.
+      // Pi 面向无 Tool 有界工作的历史默认预算。
+      defaultBudget: { maxDurationMs: 10 * 60_000, maxModelCalls: 20, maxToolCalls: 100 },
+    });
+  }
+}
+
+class PiTranslator implements ProviderTranslator {
+  readonly evidencePolicy = "session-artifact" as const;
+  readonly #options: PiAgentAdapterOptions;
+  readonly #host: PiProcessHost;
+
+  constructor(options: PiAgentAdapterOptions) {
+    this.#options = options;
     this.#host = options.processHost ?? new ChildProcessPiHost();
   }
 
-  async capabilities(): Promise<RuntimeCapabilities> {
-    return {
-      resume: true,
-      cancellation: true,
-      approvalCallback: false,
-      parallelAssignments: true,
-      work: [...this.#options.workCapabilities],
-    };
+  sessionIdFor(input: ExecutionAssignment): string {
+    return stableSessionId(this.#options.id ?? "pi", input);
   }
 
-  execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
-    return this.run(input, stableSessionId(this.id, input), false);
-  }
-
-  resume(sessionId: string, input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
-    return this.run(input, sessionId, true);
-  }
-
-  async cancel(sessionId: string): Promise<void> {
-    const session = this.#active.get(sessionId);
-    if (session === undefined) return;
-    session.send({ id: `abort-${sessionId}`, type: "abort" });
-    await session.terminate();
-    this.#active.delete(sessionId);
-  }
-
-  private async *run(
-    input: ExecutionAssignment,
-    sessionId: string,
-    resuming: boolean,
-  ): AsyncIterable<ExecutionEvent> {
-    const cwd = resolve(input.workspacePath ?? this.#options.cwd ?? process.cwd());
+  async start(input: {
+    assignment: ExecutionAssignment;
+    sessionId: string | undefined;
+    resuming: boolean;
+    prompt: string;
+  }): Promise<WorkerTransport> {
+    const options = this.#options;
+    const cwd = resolve(input.assignment.workspacePath ?? options.cwd ?? process.cwd());
     const sessionDirectory = resolve(
-      this.#options.sessionDirectory ?? join(process.cwd(), ".clone-ai", "pi-sessions"),
+      options.sessionDirectory ?? join(process.cwd(), ".clone-ai", "pi-sessions"),
     );
     await mkdir(sessionDirectory, { recursive: true });
 
-    const launch = resolvePiLaunch(this.#options.command, this.#options.commandArgs);
+    const launch = resolvePiLaunch(options.command, options.commandArgs);
     const args = [
       ...launch.args,
       "--mode", "rpc",
-      "--session-id", sessionId,
+      "--session-id", input.sessionId ?? "clone-pi-session",
       "--session-dir", sessionDirectory,
       "--no-extensions",
       "--no-skills",
@@ -150,161 +128,131 @@ export class PiAgentAdapter implements RuntimeAdapter {
       "--no-context-files",
       "--no-approve",
     ];
-    if (this.#options.tools.length === 0) {
+    const tools = options.tools ?? [];
+    if (tools.length === 0) {
       args.push("--no-tools");
     } else {
-      args.push("--tools", this.#options.tools.join(","));
+      args.push("--tools", tools.join(","));
     }
-    if (this.#options.provider !== undefined) args.push("--provider", this.#options.provider);
-    if (this.#options.model !== undefined) args.push("--model", this.#options.model);
-    if (this.#options.offline) args.push("--offline");
+    if (options.provider !== undefined) args.push("--provider", options.provider);
+    if (options.model !== undefined) args.push("--model", options.model);
+    if (options.offline ?? false) args.push("--offline");
 
     const session = await this.#host.start({
       command: launch.command,
       args,
       cwd,
-      env: buildPiEnvironment(this.#options.provider, this.#options.environmentVariables),
+      env: buildPiEnvironment(options.provider, options.environmentVariables ?? []),
     });
-    this.#active.set(sessionId, session);
+    return new PiWorkerTransport(session, input.prompt, input.sessionId ?? "clone-pi-session", input.resuming);
+  }
+}
 
-    const budget = input.workOrder?.budget ?? defaultBudget;
-    let finalText = "";
-    let toolCalls = 0;
-    let modelCalls = 0;
-    let settled = false;
-    let failure: string | undefined;
-    let timedOut = false;
-    let hardStop: NodeJS.Timeout | undefined;
-    // A cooperative abort is a request, not a guarantee. If Pi neither settles
-    // nor exits within the grace period, the session is terminated so a wedged
-    // worker can never hang the supervisor forever.
-    // 协作式 abort 只是请求而非保证。若 Pi 在宽限期内既不 settle 也不退出，就强制终止会话，
-    // 确保卡死的 Worker 永远无法把 Supervisor 挂住。
-    const requestAbort = (id: string): void => {
-      session.send({ id, type: "abort" });
-      if (hardStop === undefined) {
-        hardStop = setTimeout(() => void session.terminate(), this.#options.abortGraceMs);
-        hardStop.unref();
+class PiWorkerTransport implements WorkerTransport {
+  readonly events: AsyncIterable<NormalizedWorkerEvent>;
+  readonly #session: PiRpcSession;
+  readonly #sessionId: string;
+
+  constructor(session: PiRpcSession, prompt: string, sessionId: string, resuming: boolean) {
+    this.#session = session;
+    this.#sessionId = sessionId;
+    // The prompt is sent lazily on the first pull, so a cancel that arrives
+    // before consumption starts sends abort as the very first command.
+    // Prompt 在第一次拉取时才发送，因此在消费开始前到达的 cancel 会让 abort 成为
+    // 第一条命令。
+    this.events = translatePiEvents(session, prompt, sessionId, resuming);
+  }
+
+  abort(): void {
+    this.#session.send({ id: `abort-${this.#sessionId}`, type: "abort" });
+  }
+
+  terminate(): Promise<void> {
+    return this.#session.terminate();
+  }
+}
+
+async function* translatePiEvents(
+  session: PiRpcSession,
+  prompt: string,
+  sessionId: string,
+  resuming: boolean,
+): AsyncGenerator<NormalizedWorkerEvent> {
+  session.send({ id: `prompt-${sessionId}`, type: "prompt", message: prompt });
+  let settled = false;
+
+  for await (const transport of session.events) {
+    if (transport.type === "stderr") {
+      const message = transport.text.trim();
+      if (message.length > 0) yield { kind: "progress", message: `Pi: ${message}` };
+      continue;
+    }
+    if (transport.type === "protocol_error" || transport.type === "process_error") {
+      yield { kind: "protocol_error", message: transport.message };
+      return;
+    }
+    if (transport.type === "exit") {
+      if (!settled) {
+        yield {
+          kind: "protocol_error",
+          message: `Pi exited before agent_settled (code ${String(transport.code)}, signal ${String(transport.signal)}).`,
+        };
       }
-    };
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      requestAbort(`timeout-${sessionId}`);
-    }, budget.maxDurationMs);
-    timeout.unref();
+      return;
+    }
 
-    try {
-      yield { type: "session_started", sessionId };
-      session.send({
-        id: `prompt-${sessionId}`,
-        type: "prompt",
-        message: buildPiPrompt(input, resuming),
-      });
-
-      for await (const transport of session.events) {
-        if (transport.type === "stderr") {
-          const message = transport.text.trim();
-          if (message.length > 0) yield { type: "progress", message: `Pi: ${truncate(message, 500)}` };
-          continue;
-        }
-        if (transport.type === "protocol_error" || transport.type === "process_error") {
-          failure = transport.message;
-          yield { type: "failed", message: transport.message };
-          break;
-        }
-        if (transport.type === "exit") {
-          if (!settled && failure === undefined) {
-            failure = timedOut
-              ? `Pi exceeded the duration budget (${budget.maxDurationMs} ms).`
-              : `Pi exited before agent_settled (code ${String(transport.code)}, signal ${String(transport.signal)}).`;
-            yield { type: "failed", message: failure };
-          }
-          break;
-        }
-
-        const event = transport.value;
-        if (isFailedResponse(event)) {
-          failure = `Pi rejected ${String(event.command)}: ${String(event.error)}`;
-          yield { type: "failed", message: failure };
-          break;
-        }
-        if (event.type === "agent_start") {
-          yield { type: "progress", message: resuming ? "Pi resumed the work order." : "Pi started the work order." };
-          continue;
-        }
-        if (event.type === "turn_start") {
-          modelCalls += 1;
-          if (modelCalls > budget.maxModelCalls) {
-            failure = `Pi exceeded the model-call budget (${budget.maxModelCalls}).`;
-            requestAbort(`budget-model-${sessionId}`);
-          }
-          continue;
-        }
-        if (event.type === "message_update") {
-          const delta = readTextDelta(event);
-          if (delta !== undefined) {
-            const safeDelta = redactFreeText(delta);
-            finalText += safeDelta;
-            yield { type: "message_delta", text: safeDelta };
-          }
-          const streamError = readStreamError(event);
-          if (streamError !== undefined) failure = streamError;
-          continue;
-        }
-        if (event.type === "tool_execution_start") {
-          toolCalls += 1;
-          const toolCallId = stringField(event, "toolCallId") ?? `pi-tool-${toolCalls}`;
-          const tool = stringField(event, "toolName") ?? "unknown";
-          yield {
-            type: "tool_started",
-            toolCallId,
-            tool,
-            inputSummary: tool === "bash" ? "[shell command omitted from journal]" : safeInputSummary(event.args),
-          };
-          if (toolCalls > budget.maxToolCalls) {
-            failure = `Pi exceeded the tool-call budget (${budget.maxToolCalls}).`;
-            requestAbort(`budget-tool-${sessionId}`);
-          }
-          continue;
-        }
-        if (event.type === "tool_execution_end") {
-          yield {
-            type: "tool_completed",
-            toolCallId: stringField(event, "toolCallId") ?? "unknown",
-            tool: stringField(event, "toolName") ?? "unknown",
-            isError: event.isError === true,
-          };
-          continue;
-        }
-        if (event.type === "auto_retry_start") {
-          yield { type: "progress", message: `Pi is retrying a transient model failure (attempt ${String(event.attempt)}).` };
-          continue;
-        }
-        if (event.type === "agent_settled") {
-          settled = true;
-          if (timedOut) failure = `Pi exceeded the duration budget (${budget.maxDurationMs} ms).`;
-          if (failure !== undefined) {
-            yield { type: "failed", message: failure };
-            break;
-          }
-          const summary = finalText.trim() || "Pi completed the bounded work order.";
-          yield {
-            type: "evidence",
-            evidence: {
-              kind: "artifact",
-              summary: truncate(redactFreeText(summary), 2_000),
-              locator: `pi-session://${sessionId}`,
-            },
-          };
-          yield { type: "completed", summary: truncate(redactFreeText(summary), 1_000) };
-          break;
-        }
+    const event = transport.value;
+    if (event.type === "response" && event.success === false) {
+      yield { kind: "protocol_error", message: `Pi rejected ${String(event.command)}: ${String(event.error)}` };
+      return;
+    }
+    if (event.type === "agent_start") {
+      yield { kind: "progress", message: resuming ? "Pi resumed the work order." : "Pi started the work order." };
+      continue;
+    }
+    if (event.type === "turn_start") {
+      yield { kind: "turn" };
+      continue;
+    }
+    if (event.type === "message_update") {
+      const assistantEvent = event.assistantMessageEvent;
+      if (isRecord(assistantEvent) && assistantEvent.type === "text_delta" && typeof assistantEvent.delta === "string") {
+        yield { kind: "text", delta: assistantEvent.delta };
       }
-    } finally {
-      clearTimeout(timeout);
-      if (hardStop !== undefined) clearTimeout(hardStop);
-      await session.terminate();
-      this.#active.delete(sessionId);
+      if (isRecord(assistantEvent) && assistantEvent.type === "error") {
+        yield {
+          kind: "protocol_error",
+          message: typeof assistantEvent.error === "string" ? assistantEvent.error : "Pi model stream failed.",
+        };
+      }
+      continue;
+    }
+    if (event.type === "tool_execution_start") {
+      yield {
+        kind: "tool_start",
+        id: stringField(event, "toolCallId") ?? "pi-tool",
+        name: stringField(event, "toolName") ?? "unknown",
+        input: event.args,
+      };
+      continue;
+    }
+    if (event.type === "tool_execution_end") {
+      yield {
+        kind: "tool_end",
+        id: stringField(event, "toolCallId") ?? "unknown",
+        name: stringField(event, "toolName") ?? "unknown",
+        isError: event.isError === true,
+      };
+      continue;
+    }
+    if (event.type === "auto_retry_start") {
+      yield { kind: "progress", message: `Pi is retrying a transient model failure (attempt ${String(event.attempt)}).` };
+      continue;
+    }
+    if (event.type === "agent_settled") {
+      settled = true;
+      yield { kind: "settled", ok: true, text: "" };
+      return;
     }
   }
 }
@@ -415,49 +363,6 @@ class AsyncPushQueue<T> implements AsyncIterable<T>, AsyncIterator<T> {
   }
 }
 
-function buildPiPrompt(input: ExecutionAssignment, resuming: boolean): string {
-  const order = input.workOrder;
-  const objective = order?.objective ?? input.step.instructions;
-  const inputs = order?.inputs.map((item) => (
-    `- ${item.name}${item.required ? " (required)" : ""}: ${item.description}`
-  )).join("\n") || "- The parent task and step instructions below.";
-  const dependencyEvidence = input.dependencyEvidence?.map((item) => (
-    `- [${item.kind}] ${item.summary}${item.locator ? ` (${item.locator})` : ""}`
-  )).join("\n") || "- None.";
-  const artifacts = order?.expectedArtifacts.map((item) => (
-    `- ${item.id}: ${item.description}; kind=${item.kind}; required=${String(item.required)}`
-  )).join("\n") || "- Return one durable, reviewable result.";
-  const acceptance = order?.acceptanceCriteria.map((item) => `- ${item}`).join("\n")
-    || input.step.acceptanceCriteria.map((item) => `- ${item}`).join("\n");
-
-  return [
-    "You are a bounded worker inside Clone AI. The supervisor, not you, owns planning, permissions, and final completion.",
-    resuming
-      ? "Resume this exact work order from the persisted Pi session. Reuse valid prior progress and do not repeat completed side effects."
-      : "Execute only this work order. Do not expand its authority or redefine the parent goal.",
-    "",
-    `Parent task: ${input.task.objective}`,
-    `Plan step: ${input.step.title}`,
-    `Work order: ${order?.title ?? input.step.title}`,
-    `Objective: ${objective}`,
-    `Risk boundary: ${order?.risk ?? input.step.risk}`,
-    "",
-    "Inputs:",
-    inputs,
-    "",
-    "Verified dependency evidence:",
-    dependencyEvidence,
-    "",
-    "Expected artifacts:",
-    artifacts,
-    "",
-    "Acceptance criteria:",
-    acceptance,
-    "",
-    "When finished, give a concise factual summary of the artifact, checks performed, and any remaining uncertainty.",
-  ].join("\n");
-}
-
 function resolvePiLaunch(command?: string, commandArgs: string[] = []): { command: string; args: string[] } {
   if (command !== undefined) return { command, args: [...commandArgs] };
   if (process.platform === "win32") {
@@ -476,27 +381,6 @@ function stableSessionId(adapterId: string, input: ExecutionAssignment): string 
     .replace(/[^A-Za-z0-9._-]+/g, "-")
     .replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "")
     .slice(0, 180);
-}
-
-function isFailedResponse(value: Record<string, unknown>): value is Record<string, unknown> & { success: false } {
-  return value.type === "response" && value.success === false;
-}
-
-function readTextDelta(value: Record<string, unknown>): string | undefined {
-  const assistantEvent = value.assistantMessageEvent;
-  if (!isRecord(assistantEvent) || assistantEvent.type !== "text_delta") return undefined;
-  return typeof assistantEvent.delta === "string" ? assistantEvent.delta : undefined;
-}
-
-function readStreamError(value: Record<string, unknown>): string | undefined {
-  const assistantEvent = value.assistantMessageEvent;
-  if (!isRecord(assistantEvent) || assistantEvent.type !== "error") return undefined;
-  return typeof assistantEvent.error === "string" ? assistantEvent.error : "Pi model stream failed.";
-}
-
-function safeInputSummary(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  return truncate(JSON.stringify(redact(value)), 800);
 }
 
 function buildPiEnvironment(provider: string | undefined, additionalNames: string[]): NodeJS.ProcessEnv {
@@ -557,44 +441,6 @@ function providerEnvironmentVariables(provider: string): string[] {
   return [];
 }
 
-function redactFreeText(value: string): string {
-  return value
-    .replace(/\b(sk|rk)-[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_TOKEN]")
-    .replace(/\b(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, "[REDACTED_TOKEN]")
-    .replace(/\bBearer\s+[A-Za-z0-9._-]{12,}\b/gi, "Bearer [REDACTED]")
-    .replace(/\b(api[_-]?key|token|secret|password)\b\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
-}
-
-function redact(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redact);
-  if (!isRecord(value)) return value;
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => (
-    /key|token|secret|password|authorization/i.test(key) ? [key, "[REDACTED]"] : [key, redact(item)]
-  )));
-}
-
 function stringField(value: Record<string, unknown>, key: string): string | undefined {
   return typeof value[key] === "string" ? value[key] : undefined;
 }
-
-function truncate(value: string, maximum: number): string {
-  return value.length <= maximum ? value : `${value.slice(0, maximum - 1)}...`;
-}
-
-function wait(milliseconds: number): Promise<void> {
-  return new Promise((resolveWait) => {
-    const timer = setTimeout(resolveWait, milliseconds);
-    timer.unref();
-  });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-const defaultBudget: WorkOrderBudget = {
-  maxDurationMs: 10 * 60_000,
-  maxModelCalls: 20,
-  maxToolCalls: 100,
-  maxAttempts: 2,
-};

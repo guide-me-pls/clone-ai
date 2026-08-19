@@ -288,7 +288,21 @@ export interface ExecutionAssignment {
    * 已完成依赖产生且由 Supervisor 筛选过的 Evidence。
    */
   dependencyEvidence?: Evidence[];
+  /**
+   * The scoped memory packet compiled by the Kernel for this assignment —
+   * never the whole store. Workers receive it as background facts; every item
+   * must already be journaled as memory.recalled for this run.
+   * Kernel 为本次派发编译的有作用域记忆包——绝不是整个记忆库。Worker 只把它当背景事实；
+   * 每一条都必须已作为本 Run 的 memory.recalled 记入 Journal。
+   */
+  memoryContext?: MemoryContextPacket;
   workspacePath?: string;
+}
+
+export interface MemoryContextPacket {
+  items: Array<{ id: string; summary: string }>;
+  /** Why these items: the query and cap that selected them. 为什么是这些条目：筛选它们的查询与上限。 */
+  selectedBy: { query: string; limit: number };
 }
 
 export type ExecutionEvent =
