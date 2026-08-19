@@ -66,11 +66,12 @@ context and capability grant necessary for an assignment.
 
 | Provider | Intended responsibility | Integration status |
 | --- | --- | --- |
-| **Claude Code** | Long-running implementation, local tools, and artifact creation. | CLI and official-SDK translators, verified live |
-| **Codex** | Coding, review, repository operations, and structured execution events. | CLI translator implemented, not yet verified live |
-| **Pi** | Tool-free direct reasoning and evidence review through a supervised subprocess. | JSONL RPC translator implemented |
-| **Custom runtimes** | User- or organization-specific agents, scripts, and local tools. | Extension contract planned |
-| **Python workers** | Extraction, ranking, forecasting, evaluation, and local ML proposals. | Worker protocol planned |
+| **Claude Code** | Implementation, review, local tools, and artifact creation. | Black-box launch recipe |
+| **Codex** | Coding, review, repository operations, and artifact creation. | Black-box launch recipe |
+| **Pi** | A replaceable terminal Agent with its own Skills and MCPs. | Black-box launch recipe |
+| **opencode** | An optional alternative coding Agent. | Black-box launch recipe |
+| **Custom runtimes** | User- or organization-specific commands and local tools. | Add a `providers.json` recipe |
+| **Python workers** | Extraction, ranking, forecasting, evaluation, and local ML proposals. | Future black-box recipe |
 
 ## Start here
 
@@ -92,14 +93,14 @@ Then read [Architecture](#architecture), [Roadmap](#roadmap), the planned
 npm install --ignore-scripts
 npm test
 npm run typecheck
-npm run demo
+npm run main
 ```
 
 For the new, deliberately isolated model-and-tool learning vertical slice, read
 [Minimal LLM loop](docs/minimal-llm-loop.md). It runs a real model -> function tool
 -> tool result -> model cycle; its only filesystem write tool is intentionally mocked.
 The next orchestration slice is documented in
-[Work Orders and the Pi adapter](docs/work-orders-and-pi.md).
+[Work Orders and black-box workers](docs/work-orders-and-pi.md).
 
 For the complete current path from a user request to verified completion, see
 [Query execution flow](docs/query-execution-flow.md). The opt-in model planner
@@ -111,12 +112,12 @@ route already walked, and the next phase are in
 
 The first implementation is a local, inspectable trust loop—not a broad autonomous
 assistant. The CLI demo remains deterministic for repeatable learning and tests; the
-configured desktop runtime can now route a bounded role to the installed Pi agent.
+configured desktop runtime routes bounded WorkOrders through a common black-box boundary.
 Work orders carry inputs, capability requirements, artifact contracts, risk, budgets,
-and an acyclic dependency graph. Pi sessions are persisted and can be resumed without
-letting Pi own Run state, policy, or final completion. The first Pi binding receives no
-built-in file or shell tools; filesystem actions must later return through clone-ai's
-workspace-bounded Tool Runtime.
+and an acyclic dependency graph. Claude Code, Codex, Pi, opencode, and future agents
+start as fresh processes with no Clone AI-owned long-term memory. Kernel state, memory,
+Workspace evidence, crash recovery, and final completion remain outside the provider.
+A provider's own `--resume` behavior is optional and never the source of truth.
 
 ### Run the desktop client (Windows)
 
@@ -353,25 +354,23 @@ Agent runtimes are execution providers, not the product's brain or source of tru
 ```ts
 interface RuntimeAdapter {
   readonly id: string;
-
+  readonly providerId: string;
   capabilities(): Promise<RuntimeCapabilities>;
-
-  start(input: ExecutionAssignment): AsyncIterable<RuntimeEvent>;
-
-  resume(
-    runtimeSessionId: string,
-    input: ResumeAssignment,
-  ): AsyncIterable<RuntimeEvent>;
-
-  cancel(runtimeSessionId: string): Promise<void>;
+  execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent>;
+  cancel?(sessionId: string): Promise<void>;
 }
 ```
 
-The runtime can connect Claude Code, Codex, Pi, and future independent runtimes through
-this boundary. A **Skill** is a versioned, policy-scoped capability such as research,
-write code, plan travel, summarize a conversation, prepare a purchase, or reconcile a
-task list. Skills describe their inputs, outputs, required authority, risk class, and
-verification method.
+The runtime connects Claude Code, Codex, Pi, opencode, and future independent runtimes
+through one black-box boundary. A **Skill** remains a provider-owned capability; Clone AI
+only supplies a bounded prompt and workspace, then judges the result from observable facts.
+Provider session memory, tool protocols, and completion prose are not Kernel authority.
+
+The default black-box adapter snapshots the Workspace before and after execution, uses a
+hard deadline, and exposes only an environment allowlist. A durable JSON checkpoint lets
+the Kernel rerun a clean interruption, reconcile complete observed artifacts, or block when
+side effects are ambiguous. Same-Workspace assignments use an exclusive lease so concurrent
+workers cannot overwrite one another.
 
 ## Implementation architecture
 

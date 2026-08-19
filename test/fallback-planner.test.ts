@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildDemoPlan } from "../src/planning/demo-planner.ts";
+import { buildFallbackPlan } from "../src/planning/fallback-planner.ts";
 
 test("direct requests stay direct instead of creating child agents", () => {
-  const plan = buildDemoPlan("解释一下这个术语是什么意思");
+  const plan = buildFallbackPlan("解释一下这个术语是什么意思");
 
   assert.equal(plan.steps.length, 1);
   assert.equal(plan.steps[0]?.agentId, "direct-responder");
@@ -12,7 +12,7 @@ test("direct requests stay direct instead of creating child agents", () => {
 });
 
 test("drafting requests receive only the preparation role they need", () => {
-  const plan = buildDemoPlan("帮我写一封给客户的项目更新邮件草稿");
+  const plan = buildFallbackPlan("帮我写一封给客户的项目更新邮件草稿");
   const orders = plan.steps[0]?.subagents ?? [];
 
   assert.equal(orders.length, 1);
@@ -21,7 +21,7 @@ test("drafting requests receive only the preparation role they need", () => {
 });
 
 test("complex external work uses a dependent review and a separate approval step", () => {
-  const plan = buildDemoPlan("调研三个供应商的报价和风险，比较后形成推荐方案，并发布最终采购结果给团队");
+  const plan = buildFallbackPlan("调研三个供应商的报价和风险，比较后形成推荐方案，并发布最终采购结果给团队");
   const orders = plan.steps[0]?.subagents ?? [];
 
   assert.deepEqual(orders.map((order) => order.id), ["context", "draft", "review"]);

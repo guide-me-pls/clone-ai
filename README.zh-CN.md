@@ -60,11 +60,12 @@ Agent。clone-ai 负责个人连续性、策略、记忆、规划和验证；被
 
 | 提供方 | 预期职责 | 集成状态 |
 | --- | --- | --- |
-| **Claude Code** | 长任务实现、本地工具调用与产物生成。 | CLI 与官方 SDK 两个 Translator，已实跑验证 |
-| **Codex** | 编码、审查、仓库操作与结构化执行事件。 | CLI Translator 已实现，尚未实跑验证 |
-| **Pi** | 通过受 Supervisor 管理的子进程完成无 Tool 的直接推理与证据复核。 | JSONL RPC Translator 已实现 |
-| **自定义 Runtime** | 用户或组织专属的 Agent、脚本与本地工具。 | 扩展合约计划中 |
-| **Python Worker** | 信息提取、排序、预测、评估和本地 ML 提案。 | Worker 协议计划中 |
+| **Claude Code** | 实现、审查、本地 Tool 调用与产物生成。 | 黑盒启动配方 |
+| **Codex** | 编码、审查、仓库操作与产物生成。 | 黑盒启动配方 |
+| **Pi** | 拥有自身 Skill 与 MCP 的可替换终端 Agent。 | 黑盒启动配方 |
+| **opencode** | 可选的替代 Coding Agent。 | 黑盒启动配方 |
+| **自定义 Runtime** | 用户或组织专属的命令与本地工具。 | 增加一条 `providers.json` 配方 |
+| **Python Worker** | 信息提取、排序、预测、评估和本地 ML 提案。 | 未来的黑盒配方 |
 
 ## 从这里开始
 
@@ -83,21 +84,22 @@ cd clone-ai
 npm install --ignore-scripts
 npm test
 npm run typecheck
-npm run demo
+npm run main
 ```
 
 第一条独立的“真实模型与 Tool”学习闭环见[最小 LLM 闭环](docs/minimal-llm-loop.zh-CN.md)。它会跑通
 模型 → Function Tool → Tool 结果 → 模型的循环；唯一的文件写入 Tool 故意保持为 Mock。
-下一段编排实现见 [WorkOrder 与 Pi Adapter](docs/work-orders-and-pi.zh-CN.md)。
+下一段编排实现见 [WorkOrder 与黑盒 Worker](docs/work-orders-and-pi.zh-CN.md)。
 
 当前从用户请求到完成验证的整条链路见 [Query 执行流程](docs/query-execution-flow.zh-CN.md)；显式开启的模型 Planner 及其安全边界见 [LLM Planner](docs/llm-planner.zh-CN.md)。
 真实 Codex CLI 与 Claude Code 执行 Provider 的边界见 [受监督的 Worker 边界](docs/coding-cli-adapters.zh-CN.md)。
 架构、已经走过的路线与下一阶段见 [Runtime 架构与路线](docs/runtime-architecture-and-route.zh-CN.md)。
 
-CLI 演示仍使用确定性的 Adapter，便于学习、测试和重放；桌面 Runtime 根据本地设置，已经可以把有边界
-的角色交给已安装的 Pi。WorkOrder 现在包含输入、能力要求、产物合同、风险、预算和无环依赖图；Pi
-Session 可以持久化并恢复，但 Run 状态、策略和最终完成权仍然属于 clone-ai。第一版 Pi 不会直接获得
-内建文件或 Shell Tool；后续文件操作必须回到 clone-ai 自己受 Workspace 边界约束的 Tool Runtime。
+CLI 演示仍使用确定性的 Adapter，便于学习、测试和重放；桌面 Runtime 根据本地设置，把有边界的
+WorkOrder 交给统一的黑盒边界。WorkOrder 包含输入、能力要求、产物合同、风险、预算和无环依赖图。
+Claude Code、Codex、Pi、opencode 与未来 Agent 每次都从全新的进程开始；Clone AI 的 Kernel 状态、
+记忆、Workspace 证据、崩溃恢复和最终完成判定都在 Provider 之外。Provider 自己的 `--resume` 只能
+是可选优化，不能成为事实来源。
 
 产品客户端的方向是可安装的桌面数字分身，不是托管网页。`npm run companion:debug` 只会打开本地的桌面伴随预览，让开发者检查 daemon 边界；它既不是最终发布的桌面壳，也不是对外产品入口。详见[初始 Runtime](docs/initial-runtime.zh-CN.md#桌面端方向)。
 
@@ -295,23 +297,20 @@ Agent Runtime 是执行提供者，不是产品大脑或事实来源。
 ```ts
 interface RuntimeAdapter {
   readonly id: string;
-
+  readonly providerId: string;
   capabilities(): Promise<RuntimeCapabilities>;
-
-  start(input: ExecutionAssignment): AsyncIterable<RuntimeEvent>;
-
-  resume(
-    runtimeSessionId: string,
-    input: ResumeAssignment,
-  ): AsyncIterable<RuntimeEvent>;
-
-  cancel(runtimeSessionId: string): Promise<void>;
+  execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent>;
+  cancel?(sessionId: string): Promise<void>;
 }
 ```
 
-Runtime 可通过这个边界接入 Claude Code、Codex、Pi 和未来独立的 Runtime。**Skill** 是版本化、受策略
-作用域约束的能力，例如调研、编写代码、规划旅行、总结对话、准备购买或对齐任务清单。Skill 需要声明
-自己的输入、输出、所需权限、风险级别和验证方法。
+Runtime 通过同一个黑盒边界接入 Claude Code、Codex、Pi、opencode 和未来独立的 Runtime。**Skill** 仍是
+Provider 自己拥有的能力；Clone AI 只提供有边界的 Prompt 与 Workspace，再根据可观察事实判断结果。
+Provider 的 Session 记忆、Tool 协议和完成话语都不是 Kernel 权威。
+
+默认黑盒 Adapter 会在执行前后对 Workspace 拍快照，使用硬截止，并只透传环境白名单。持久 JSON 检查点
+让 Kernel 可以安全重跑无变化的中断、接受完整的观察型产物，或在副作用不明确时阻塞。同一个 Workspace
+使用独占 lease，避免并发 Worker 互相覆盖。
 
 ## 实现架构
 

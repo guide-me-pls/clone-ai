@@ -1,5 +1,6 @@
-import type { AgentRegistry, ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabilities } from "../core/contracts.ts";
-import type { AgentSetting } from "../settings/agent-settings.ts";
+import type { ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabilities } from "../../src/core/contracts.ts";
+import type { AgentSetting } from "../../src/settings/agent-settings.ts";
+import { StaticAgentRegistry } from "../../src/agents/static-agent-registry.ts";
 
 /**
  * Deterministic agents make the orchestration semantics observable without
@@ -9,7 +10,7 @@ import type { AgentSetting } from "../settings/agent-settings.ts";
  * 确定性 Agent 能让编排语义可观察，而不假装已接入真实模型 Provider。同一接口是 Codex、
  * Claude Code、Pi 和自定义本地 Worker 的替换边界。
  */
-export class DemoExecutionAdapter implements RuntimeAdapter {
+export class ScriptedExecutionAdapter implements RuntimeAdapter {
   readonly id: string;
   readonly providerId: string;
   readonly #workCapabilities: string[];
@@ -60,31 +61,12 @@ export class DemoExecutionAdapter implements RuntimeAdapter {
  * A small in-memory registry used only by the demo.
  * 仅供 Demo 使用的小型内存 Registry。
  */
-export class StaticAgentRegistry implements AgentRegistry {
-  readonly #agents: Map<string, RuntimeAdapter>;
-
-  constructor(agents: RuntimeAdapter[]) {
-    this.#agents = new Map(agents.map((agent) => [agent.id, agent]));
-    if (this.#agents.size !== agents.length) {
-      throw new Error("Agent identifiers must be unique.");
-    }
-  }
-
-  get(agentId: string): RuntimeAdapter | undefined {
-    return this.#agents.get(agentId);
-  }
-
-  list(): RuntimeAdapter[] {
-    return [...this.#agents.values()];
-  }
-}
-
-export function createDemoAgentRegistry(settings?: AgentSetting[]): StaticAgentRegistry {
+export function createScriptedAgentRegistry(settings?: AgentSetting[]): StaticAgentRegistry {
   const enabledAgents = settings === undefined
     ? defaultAgentIds.map((id) => ({ id, providerId: "demo" }))
     : settings.filter((agent) => agent.enabled).map((agent) => ({ id: agent.id, providerId: agent.providerId }));
   return new StaticAgentRegistry(enabledAgents.map((agent) => (
-    new DemoExecutionAdapter(agent.id, agent.providerId, capabilitiesForAgentId(agent.id))
+    new ScriptedExecutionAdapter(agent.id, agent.providerId, capabilitiesForAgentId(agent.id))
   )));
 }
 
