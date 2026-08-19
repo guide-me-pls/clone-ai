@@ -1,6 +1,8 @@
 import { mkdir, open, readFile, stat, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
+import { CLONE_DIRECTORY_NAME } from "../config/clone-home.ts";
+
 interface LockOwner {
   pid: number;
   acquiredAt: string;
@@ -47,7 +49,7 @@ export class WorkspaceExecutionLock {
 export const workspaceExecutionLock = new WorkspaceExecutionLock();
 
 async function acquireExternalLock(workspace: string): Promise<() => Promise<void>> {
-  const directory = join(workspace, ".clone-ai");
+  const directory = join(workspace, CLONE_DIRECTORY_NAME);
   const path = join(directory, "workspace-execution.lock");
   await mkdir(directory, { recursive: true });
 

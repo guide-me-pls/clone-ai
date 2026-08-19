@@ -5,7 +5,10 @@ import type { JsonObject, ToolCall, ToolDefinition, ToolResult, ToolSchema } fro
 
 const MAX_LISTED_FILES = 200;
 const MAX_FILE_BYTES = 64 * 1024;
-const IGNORED_DIRECTORIES = new Set([".git", "node_modules", "target", ".clone-ai"]);
+// Runtime state is not the owner's project content, so neither the current
+// directory nor a leftover legacy one counts as a file the agent may read.
+// Runtime 状态不属于所有者的项目内容，因此当前目录与遗留旧目录都不算 Agent 可读文件。
+const IGNORED_DIRECTORIES = new Set([".git", "node_modules", "target", ".clone", ".clone-ai"]);
 
 export class ToolRegistry {
   readonly #tools = new Map<string, ToolDefinition>();
