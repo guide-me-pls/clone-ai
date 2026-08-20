@@ -90,8 +90,14 @@ export async function createMainAgentSession(options: MainAgentSessionOptions): 
     // noTools: "builtin" disables built-in tools while keeping extension tools active.
     //          （tools: [] 会把扩展工具也过滤掉；noTools: "builtin" 只禁用内置工具。）
     noTools: "builtin",
+    // The session identity is the owner's clone home, not the current folder.
+    // Pi filters recent sessions by cwd when a custom session directory is
+    // given, so passing the real cwd would start a blank conversation every
+    // time the owner runs clone-ai from a different directory.
+    // 会话身份是所有者的 clone home，而不是当前目录。传入自定义会话目录时 Pi 会按 cwd
+    // 过滤最近会话；若传真实 cwd，所有者每换一个目录跑 clone-ai 就会开一个空白对话。
     sessionManager: options.sessionManager
-      ?? SessionManager.continueRecent(cwd, join(options.dataDirectory, "pi-sessions", "main-agent")),
+      ?? SessionManager.continueRecent(options.dataDirectory, join(options.dataDirectory, "pi-sessions", "main-agent")),
   });
   return { session };
 }

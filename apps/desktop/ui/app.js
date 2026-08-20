@@ -158,34 +158,63 @@ function restoreDisclosureScrolls(id) {
 function renderSession(session) { setTopbar(session); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false } = {}) { if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
 async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, memory, candidates, situation, config, connectors] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors")]); state.dashboard = dashboard; renderSchedules(schedules.schedules || []); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderMemories(memory); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); const sessions = state.dashboard.sessions || []; if (!state.selectedId || !sessions.some((session) => session.id === state.selectedId)) state.selectedId = sessions[0]?.id || null; renderSessions(sessions); if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
-async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll(); try { // The Main Agent owns intent: it routes to a worker or proposes a plan, and the
-  // Kernel journals every accepted run. Words (reply) and evidence (newRuns) stay separate.
-  // Main Agent 负责意图：它路由到 Worker 或提案计划，Kernel 记录每个被接受的 Run。
-  // 话语（reply）与证据（newRuns）保持分离。
-  const result = await api("/api/main-agent/query", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: query }) });
-  state.drafts.delete(state.selectedId);
-  if (result.reply) {
-    const session = await api(`/api/sessions/${encodeURIComponent(state.selectedId || "")}`).catch(() => null);
-    if (session) {
-      // Append the reply as a transient clone message in the current conversation view.
-      // 把回复作为临时 clone 消息追加到当前会话视图。
-      const card = document.createElement("div");
-      card.className = "message clone";
-      card.innerHTML = `<div class="avatar clone">C</div><div class="message-body"><div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="clone-card"><div class="clone-text">${richText(result.reply)}</div></div></div>`;
-      $("conversation-inner").appendChild(card);
-      $("conversation").scrollTop = $("conversation").scrollHeight;
-    }
-  }
-  const firstRun = result.newRuns?.[0];
-  if (firstRun) {
-    state.selectedId = firstRun.id;
-    state.scrollPositions.set(firstRun.id, { top: 0, anchor: "bottom" });
-    localStorage.setItem("clone-ai:selected-session", firstRun.id);
-  }
+async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
+  // The message and a live reply card appear before the request is sent. A model
+  // call can take many seconds, and until now the composer kept the text and the
+  // conversation showed nothing, so the app looked frozen mid-thought.
+  // 消息与实时回复卡片在请求发出之前就出现。模型调用可能耗时数秒，而此前输入框保留原文、
+  // 会话区毫无变化，应用看起来就像在思考中卡住了。
   $("query").value = ""; resizeComposer();
-  await refresh({ preserveScroll: true, scrollToBottom: true });
-  announce(firstRun ? "Main Agent 已提交计划，正在推进。" : "Main Agent 已回复（未创建任务）。");
-  } catch (error) { announce(error.message, true); } finally { button.disabled = false; $("query").focus(); } }
+  const inner = $("conversation-inner");
+  const welcome = inner.querySelector(".welcome"); if (welcome) inner.innerHTML = "";
+  inner.insertAdjacentHTML("beforeend", `<div class="message you"><div class="avatar you">你</div><div class="message-body"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="you-bubble">${escape(query)}</div></div></div>`);
+  const card = document.createElement("div"); card.className = "message clone";
+  card.innerHTML = `<div class="avatar clone">C</div><div class="message-body"><div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="clone-card"><div class="clone-text" data-streaming="1"></div></div></div>`;
+  inner.appendChild(card);
+  const target = card.querySelector(".clone-text");
+  $("conversation").scrollTop = $("conversation").scrollHeight;
+
+  let reply = ""; let result = null;
+  try {
+    const response = await fetch("/api/main-agent/stream", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: query }) });
+    if (!response.ok || !response.body) { const detail = await response.json().catch(() => ({})); throw new Error(detail.error || `请求失败：${response.status}`); }
+    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE frames are separated by a blank line; a partial frame stays buffered.
+      // SSE 帧以空行分隔；不完整的帧留在缓冲区等待后续数据。
+      let split;
+      while ((split = buffer.indexOf(String.fromCharCode(10, 10))) >= 0) {
+        const frame = buffer.slice(0, split); buffer = buffer.slice(split + 2);
+        const event = /^event: (.+)$/m.exec(frame)?.[1]; const data = /^data: (.+)$/m.exec(frame)?.[1];
+        if (!event || !data) continue;
+        const payload = JSON.parse(data);
+        if (event === "delta") { reply += payload.delta; target.textContent = reply; $("conversation").scrollTop = $("conversation").scrollHeight; }
+        else if (event === "done") { result = payload; }
+        else if (event === "failed") { throw new Error(payload.error); }
+      }
+    }
+    if (!result) throw new Error("连接在回复完成前中断。");
+    state.drafts.delete(state.selectedId);
+    // Re-render the finished reply so links and code blocks are formatted; the
+    // streaming view stays plain text because partial markdown renders wrong.
+    // 回复完成后重新渲染，让链接与代码块获得格式；流式过程保持纯文本，因为不完整的
+    // Markdown 会渲染错乱。
+    target.removeAttribute("data-streaming"); target.innerHTML = richText(reply);
+    const firstRun = result.newRuns?.[0];
+    if (firstRun) { state.selectedId = firstRun.id; state.scrollPositions.set(firstRun.id, { top: 0, anchor: "bottom" }); localStorage.setItem("clone-ai:selected-session", firstRun.id); }
+    await refresh({ preserveScroll: true, scrollToBottom: true });
+    announce(firstRun ? "Main Agent 已提交计划，正在推进。" : "Main Agent 已回复（未创建任务）。");
+  } catch (error) {
+    // The typed text is restored so a failed send never loses what was written.
+    // 恢复已输入的文本，使一次失败的发送绝不丢失所写内容。
+    if (!reply) { $("query").value = query; resizeComposer(); card.remove(); }
+    else { target.removeAttribute("data-streaming"); target.innerHTML = richText(reply); }
+    announce(error.message, true);
+  } finally { button.disabled = false; }
+}
+
 async function approve(id) { const button = document.querySelector(`[data-approve="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { const result = await api(`/api/runs/${encodeURIComponent(id)}/approve`, { method: "POST" }); await refresh({ preserveScroll: true, scrollToBottom: true }); announce(result.status === "completed" ? "已完成并验证结果。" : "已记录确认，继续处理中。" ); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
 function resizeComposer() { const input = $("query"); input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 132)}px`; }
 function renderScheduleOptions() { const kind = $("schedule-kind").value; const options = $("schedule-options"); $("schedule-time").hidden = kind === "interval"; $("schedule-time").required = kind !== "interval"; if (kind === "interval") { options.innerHTML = `<label>每隔</label><input id="schedule-interval-value" type="number" min="1" max="10080" value="30" aria-label="间隔时长"/><select id="schedule-interval-unit" aria-label="间隔单位"><option value="1">分钟</option><option value="60">小时</option></select><span class="schedule-cron-help">按固定间隔触发，例如每隔 5 分钟；首次触发要等一个间隔，客户端关闭期间错过的不会补跑。</span>`; return; } if (kind === "weekly") { options.innerHTML = `<label>在这些日子执行：</label>${["日", "一", "二", "三", "四", "五", "六"].map((day, index) => `<label><input type="checkbox" name="schedule-weekday" value="${index}" ${index === 1 ? "checked" : ""}/>周${day}</label>`).join("")}`; return; } if (kind === "monthly") { options.innerHTML = `<label>每月 <input id="schedule-day" type="number" min="1" max="31" value="1"/> 日</label>`; return; } if (kind === "yearly") { options.innerHTML = `<label>每年 <select id="schedule-month">${Array.from({ length: 12 }, (_, index) => `<option value="${index + 1}">${index + 1} 月</option>`).join("")}</select><input id="schedule-day" type="number" min="1" max="31" value="1"/> 日</label>`; return; } options.innerHTML = `<span class="schedule-cron-help">每天在所选时间触发；如果客户端稍后启动，当天会补触发一次。</span>`; }

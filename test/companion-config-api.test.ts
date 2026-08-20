@@ -205,3 +205,20 @@ test("the situation endpoint reports what the twin knows, with no credential con
   assert.ok(Array.isArray(body.activeGoals));
   assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
 });
+
+test("the streaming endpoint validates input before opening a stream", async (t) => {
+  const { url } = await companion(t);
+
+  const response = await fetch(`${url}/api/main-agent/stream`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "  " }),
+  });
+
+  // Rejected as JSON with a status the client can still read; once the stream
+  // is open a status code is no longer available to report a refusal.
+  // 以 JSON 和客户端仍可读取的状态码拒绝；流一旦打开，状态码就无法再用来报告拒绝。
+  assert.equal(response.status, 400);
+  assert.match(response.headers.get("content-type") ?? "", /application\/json/);
+  assert.match((await response.json() as { error: string }).error, /at least three characters/);
+});
