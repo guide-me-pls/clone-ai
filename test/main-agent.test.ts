@@ -153,3 +153,30 @@ test("get_run_status summarizes a run from the Kernel projection", async (t) => 
   const missing = await runStatusInfo(runtime, "run-does-not-exist");
   assert.match(missing, /not found/);
 });
+
+test("the Main Agent conversation continues across working directories", async (t) => {
+  // The bug this pins: Pi filters recent sessions by cwd when a custom session
+  // directory is used, so running clone-ai from another folder used to start a
+  // blank conversation and the owner's history looked lost.
+  // 这条测试钉住的缺陷：使用自定义会话目录时 Pi 会按 cwd 过滤最近会话，因此从另一个
+  // 目录运行 clone-ai 会开出空白对话，所有者的历史看起来"丢了"。
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-session-"));
+  const firstCwd = await mkdtemp(join(tmpdir(), "clone-ai-cwd-a-"));
+  const secondCwd = await mkdtemp(join(tmpdir(), "clone-ai-cwd-b-"));
+  t.after(async () => {
+    await rm(dataDirectory, { recursive: true, force: true });
+    await rm(firstCwd, { recursive: true, force: true });
+    await rm(secondCwd, { recursive: true, force: true });
+  });
+
+  const { createMainAgentSession } = await import("../src/main-agent/session.ts");
+  const first = await createMainAgentSession({ dataDirectory, cwd: firstCwd });
+  const firstId = first.session.sessionManager.sessionPath;
+  first.session.dispose();
+
+  const second = await createMainAgentSession({ dataDirectory, cwd: secondCwd });
+  const secondId = second.session.sessionManager.sessionPath;
+  second.session.dispose();
+
+  assert.equal(secondId, firstId, "a different working directory must continue the same conversation");
+});

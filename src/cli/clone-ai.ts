@@ -34,6 +34,8 @@ Usage:
   clone-ai status                Show runs, workers, memory, and bad cases
   clone-ai workers               List worker CLIs and whether they are installed
   clone-ai install <worker>      Install a missing worker (npm global)
+  clone-ai sessions              List Main Agent conversations
+  clone-ai new "<请求>"           Start a fresh conversation
   clone-ai memory [query]        List or search reviewed memories
   clone-ai cases                 Print the local bad-case log
   clone-ai opportunities         List open opportunity cards
@@ -69,6 +71,8 @@ async function main(): Promise<number> {
     case "status": return showStatus(paths.dataDirectory);
     case "workers": return listWorkers(paths.dataDirectory);
     case "install": return installWorker(paths.dataDirectory, argv[1]);
+    case "sessions": return listSessions(paths.dataDirectory);
+    case "new": return converse(paths.dataDirectory, argv.slice(1).join(" ").trim(), true);
     case "memory": return showMemory(paths.dataDirectory, argv.slice(1).join(" ").trim());
     case "cases": return showCases(paths.dataDirectory);
     case "opportunities": return showOpportunities(paths.dataDirectory);
@@ -79,12 +83,18 @@ async function main(): Promise<number> {
 }
 
 /** Default path: a conversation turn with the Main Agent. 默认路径：与 Main Agent 的一轮对话。 */
-async function converse(dataDirectory: string, query: string): Promise<number> {
+async function converse(dataDirectory: string, query: string, fresh = false): Promise<number> {
   if (query.length < 2) {
     console.error('Please describe what you want. Example: clone-ai "整理今天要推进的事情"');
     return 1;
   }
-  const { session } = await createMainAgentSession({ dataDirectory });
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const { session } = await createMainAgentSession({
+    dataDirectory,
+    // A fresh conversation is explicit; the default continues the last one.
+    // 新会话是显式选择；默认续上一次对话。
+    ...(fresh ? { sessionManager: SessionManager.create(dataDirectory, join(dataDirectory, "pi-sessions", "main-agent")) } : {}),
+  });
   session.subscribe((event) => {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       process.stdout.write(event.assistantMessageEvent.delta);
@@ -159,6 +169,46 @@ async function installWorker(dataDirectory: string, id: string | undefined): Pro
   const result = await installWorkerAgent(dataDirectory, id);
   console.log(result.installed ? `Installed ${id}${result.version ? ` (${result.version})` : ""}.` : `Failed: ${result.error}`);
   return result.installed ? 0 : 1;
+}
+
+/** Lists persisted Main Agent conversations, newest first. 列出已持久化的 Main Agent 对话，新的在前。 */
+async function listSessions(dataDirectory: string): Promise<number> {
+  const { readdir, stat, readFile } = await import("node:fs/promises");
+  const directory = join(dataDirectory, "pi-sessions", "main-agent");
+  let names: string[];
+  try {
+    names = (await readdir(directory)).filter((name) => name.endsWith(".jsonl"));
+  } catch {
+    console.log("No conversations yet. Start one: clone-ai \"你好\"");
+    return 0;
+  }
+  if (names.length === 0) {
+    console.log("No conversations yet. Start one: clone-ai \"你好\"");
+    return 0;
+  }
+  const rows = await Promise.all(names.map(async (name) => {
+    const path = join(directory, name);
+    const info = await stat(path);
+    const source = await readFile(path, "utf8").catch(() => "");
+    const turns = source.split("\n").filter((line) => line.includes('"type":"message"')).length;
+    const firstText = source.split("\n").map((line) => {
+      try {
+        const parsed = JSON.parse(line) as { type?: string; text?: string; content?: unknown };
+        return parsed.type === "text" && typeof parsed.text === "string" ? parsed.text : undefined;
+      } catch {
+        return undefined;
+      }
+    }).find((text) => text !== undefined && text.trim().length > 0);
+    return { name, mtime: info.mtimeMs, turns, preview: (firstText ?? "").replace(/\s+/g, " ").slice(0, 60) };
+  }));
+  rows.sort((left, right) => right.mtime - left.mtime);
+  console.log(`Conversations in ${directory}:`);
+  for (const [index, row] of rows.entries()) {
+    const marker = index === 0 ? "*" : " ";
+    console.log(`${marker} ${new Date(row.mtime).toISOString().slice(0, 16).replace("T", " ")}  ${String(row.turns).padStart(3)} msgs  ${row.preview}`);
+  }
+  console.log("\n* the conversation `clone-ai \"...\"` continues. Use `clone-ai new \"...\"` to start a new one.");
+  return 0;
 }
 
 async function showMemory(dataDirectory: string, query: string): Promise<number> {

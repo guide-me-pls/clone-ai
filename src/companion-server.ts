@@ -459,6 +459,44 @@ async function handleRequest(
     }
     return;
   }
+  if (request.method === "POST" && url.pathname === "/api/main-agent/stream") {
+    const body = await readJsonBody(request);
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (text.length < 3) {
+      sendJson(response, 400, { error: "Please describe the request in at least three characters." });
+      return;
+    }
+    // Server-sent events, so the owner sees the reply forming instead of a
+    // frozen window for the length of a model call.
+    // 用 SSE 推送，让所有者看到回复正在生成，而不是在整个模型调用期间面对一个卡住的窗口。
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+      // Chunks must reach the browser as they are written, not when a proxy
+      // decides the buffer is full.
+      // 分块必须在写出时就抵达浏览器，而不是等某个代理认为缓冲区满了才发。
+      "x-accel-buffering": "no",
+    });
+    const send = (event: string, data: unknown): void => {
+      response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    try {
+      const result = await runMainAgentQuery(context.dataDirectory, text, {
+        onDelta: (delta) => send("delta", { delta }),
+      });
+      send("done", result);
+    } catch (error: unknown) {
+      // The stream is already open, so a failure is delivered as an event
+      // rather than a status code the client can no longer read.
+      // 流已经打开，因此失败以事件形式送达，而不是客户端已无法读取的状态码。
+      send("failed", { error: error instanceof Error ? error.message : "The Main Agent failed." });
+    } finally {
+      response.end();
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/main-agent/query") {
     const body = await readJsonBody(request);
     const text = typeof body.text === "string" ? body.text.trim() : "";
