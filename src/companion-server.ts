@@ -5,14 +5,14 @@ import { dirname, join } from "node:path";
 import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task } from "./core/contracts.ts";
 import { createJournalStore } from "./core/sqlite-journal.ts";
 import { replay } from "./core/run-state.ts";
-import { approveQueryRun, runQuery } from "./workflows/query-workflow.ts";
+import { approveQueryRun, runQuery } from "./application/run-query.ts";
 import { LocalScheduler } from "./scheduling/local-scheduler.ts";
 import { describeSchedule, ScheduleStore, type LocalSchedule, type ScheduleKind } from "./scheduling/schedule-store.ts";
 import { SessionStore } from "./sessions/session-store.ts";
-import { loadProviderRegistry } from "./adapters/built-in-providers.ts";
-import { AgentSettingsStore } from "./settings/agent-settings.ts";
-import { LocalAgentRegistry } from "./agents/local-provider-registry.ts";
-import { runMainAgentQuery } from "./main-agent/query.ts";
+import { loadProviderRegistry } from "./workers/provider-catalog.ts";
+import { WorkerSettingsStore } from "./config/worker-settings.ts";
+import { WorkerRegistry } from "./workers/worker-registry.ts";
+import { runMainAgentQuery } from "./application/run-main-query.ts";
 import { LocalMemoryStore } from "./memory/memory-store.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
 import { MdMemoryStore } from "./memory/md-memory-store.ts";
@@ -30,7 +30,7 @@ import {
   readUserProviderConfigs,
   removeUserProviderConfig,
   upsertUserProviderConfig,
-} from "./adapters/provider-config-store.ts";
+} from "./config/provider-config-store.ts";
 
 export interface CompanionServerOptions {
   host?: string;
@@ -83,8 +83,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const schedules = new ScheduleStore(paths.schedulesFile);
   const sessions = new SessionStore(paths.sessionsFile);
   const providers = await loadProviderRegistry(dataDirectory);
-  const agentSettings = new AgentSettingsStore(paths.legacyAgentsFile, providers);
-  const agentRegistry = new LocalAgentRegistry(dataDirectory);
+  const agentSettings = new WorkerSettingsStore(paths.legacyAgentsFile, providers);
+  const agentRegistry = new WorkerRegistry(dataDirectory);
   const memoryStore = new LocalMemoryStore(paths.memoryFile);
   const memoryGovernance = new MemoryGovernance({
     journal: new JsonlJournalStore(join(dataDirectory, "journal.jsonl")),
@@ -158,7 +158,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore; memoryGovernance: MemoryGovernance },
+  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: WorkerSettingsStore; agentRegistry: WorkerRegistry; memoryStore: LocalMemoryStore; memoryGovernance: MemoryGovernance },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host}`);
 

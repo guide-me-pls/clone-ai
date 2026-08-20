@@ -25,7 +25,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BlackBoxWorkerAdapter, type BlackBoxProviderConfig } from "../adapters/black-box-worker.ts";
+import { BlackBoxCliWorker, type BlackBoxProviderConfig } from "../workers/black-box-cli-worker.ts";
 import type { Evidence, MemoryCandidate, MemorySensitivity, MemoryType } from "../core/contracts.ts";
 import type { MemoryWorker, PendingMemoryJob } from "./memory-pipeline.ts";
 
@@ -63,7 +63,7 @@ export class AgentMemoryWorker implements MemoryWorker {
   async extract(job: PendingMemoryJob): Promise<MemoryCandidate[]> {
     const workspace = await mkdtemp(join(tmpdir(), "clone-ai-memory-mine-"));
     try {
-      const adapter = new BlackBoxWorkerAdapter({
+      const adapter = new BlackBoxCliWorker({
         agentId: "memory-miner",
         config: { ...this.#config, timeoutMs: this.#timeoutMs },
         workCapabilities: ["research", "filesystem_read", "filesystem_write"],

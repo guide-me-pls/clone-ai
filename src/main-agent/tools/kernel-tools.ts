@@ -12,11 +12,11 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import type { PlanStep } from "../core/contracts.ts";
-import type { CloneRuntime } from "../core/runtime.ts";
-import { createRuntimeAssembly } from "../core/runtime-factory.ts";
-import { resolveClonePaths } from "../config/clone-home.ts";
-import { LocalMemoryStore } from "../memory/memory-store.ts";
+import type { PlanStep } from "../../core/contracts.ts";
+import type { CloneRuntime } from "../../core/runtime.ts";
+import { createRuntimeAssembly } from "../../core/runtime-factory.ts";
+import { resolveClonePaths } from "../../config/clone-home.ts";
+import { LocalMemoryStore } from "../../memory/memory-store.ts";
 
 export interface KernelToolsOptions {
   dataDirectory: string;

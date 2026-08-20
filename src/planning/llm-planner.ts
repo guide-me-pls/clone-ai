@@ -1,4 +1,4 @@
-import type { AgentRole } from "../settings/agent-settings.ts";
+import type { AgentRole } from "../config/worker-settings.ts";
 import type { ArtifactContract, PlanStep, RiskClass, SubagentWorkOrder, WorkPlan } from "../core/contracts.ts";
 
 export type PlannedWork = Pick<WorkPlan, "summary" | "steps">;

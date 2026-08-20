@@ -18,7 +18,7 @@ import {
   readUserProviderConfigs,
   removeUserProviderConfig,
   upsertUserProviderConfig,
-} from "../src/adapters/provider-config-store.ts";
+} from "../src/config/provider-config-store.ts";
 
 async function tempDirectory(t: TestContext, prefix: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), prefix));

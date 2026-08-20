@@ -123,8 +123,8 @@ Any active state can become cancelled when cancellation is requested.
 
 ## Code reading order
 
-1. [`src/workflows/query-workflow.ts`](../src/workflows/query-workflow.ts) — the end-to-end entry point.
+1. [`src/application/run-query.ts`](../src/application/run-query.ts) — the end-to-end entry point.
 2. [`src/planning/llm-planner.ts`](../src/planning/llm-planner.ts) — proposal and validation boundary.
 3. [`src/core/runtime.ts`](../src/core/runtime.ts) — the Supervisor and state transitions.
-4. [`src/agents/dispatcher.ts`](../src/agents/dispatcher.ts) — capability-safe routing.
+4. [`src/workers/capability-dispatcher.ts`](../src/workers/capability-dispatcher.ts) — capability-safe routing.
 5. [`src/core/verification.ts`](../src/core/verification.ts) — the current completion gate.

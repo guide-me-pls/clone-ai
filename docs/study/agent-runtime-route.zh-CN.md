@@ -43,7 +43,7 @@ Receipt 仍然不能由黑盒 Worker 自报。
 WorkOrder
   -> Policy / capability / approval
   -> prompt + workspace + owner-approved memory packet
-  -> BlackBoxWorkerAdapter
+  -> BlackBoxCliWorker
        budget · hard deadline · termination · environment allowlist
        workspace snapshot(before) -> process -> snapshot(after)
   <- exit status + diff + redacted output tail
@@ -129,7 +129,7 @@ lease 在进程内排队，并使用 Workspace 下的原子锁文件处理同一
 
 ### 5.3 Provider 配方 JSON 化
 
-Provider 不再由 Runtime 分支识别。内建默认配方位于 `src/adapters/providers.json`，用户可以在
+Provider 不再由 Runtime 分支识别。内建默认配方位于 `src/workers/providers.json`，用户可以在
 `<dataDirectory>/providers.json` 覆盖内建项或增加新 Agent：
 
 ```json
@@ -156,7 +156,7 @@ Provider 不再由 Runtime 分支识别。内建默认配方位于 `src/adapters
 - Pi 源码笔记已删除：它记录的 loop/session/extension 机制不是 Worker 黑盒边界的依赖，
   需要时直接读 `node_modules/@earendil-works/pi-coding-agent/dist` 比看过期笔记更可靠。
 - 旧的 Pi RPC / stdout 事件解析路线不再是当前架构；Pi 只是一个可替换 Provider。
-- `BlackBoxWorkerAdapter` 是统一监督边界；Provider 配置只负责启动命令、参数和环境白名单。
+- `BlackBoxCliWorker` 是统一监督边界；Provider 配置只负责启动命令、参数和环境白名单。
 - Journal 是事实来源，Workspace checkpoint 是可重建的派生缓存；用户可查看 JSON，但不能靠
   修改 Worker 输出绕过 Kernel 的授权和验证。
 

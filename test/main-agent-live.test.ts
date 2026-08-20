@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { createKernelRuntime } from "../src/main-agent/kernel-tools.ts";
+import { createKernelRuntime } from "../src/main-agent/tools/kernel-tools.ts";
 import { createMainAgentSession } from "../src/main-agent/session.ts";
 
 // Phase B acceptance, live: one natural-language request must travel

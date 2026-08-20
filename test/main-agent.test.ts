@@ -11,7 +11,7 @@ import {
   recallMemories,
   requestApprovalInfo,
   runStatusInfo,
-} from "../src/main-agent/kernel-tools.ts";
+} from "../src/main-agent/tools/kernel-tools.ts";
 
 function reviewStep(overrides: Partial<PlanStep> = {}): PlanStep {
   return {

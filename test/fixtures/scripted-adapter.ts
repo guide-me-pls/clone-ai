@@ -1,6 +1,6 @@
 import type { ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabilities } from "../../src/core/contracts.ts";
-import type { AgentSetting } from "../../src/settings/agent-settings.ts";
-import { StaticAgentRegistry } from "../../src/agents/static-agent-registry.ts";
+import type { AgentSetting } from "../../src/config/worker-settings.ts";
+import { StaticAgentRegistry } from "../../src/workers/static-worker-registry.ts";
 
 /**
  * Deterministic agents make the orchestration semantics observable without

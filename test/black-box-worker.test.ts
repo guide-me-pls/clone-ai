@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { BlackBoxWorkerAdapter, buildWorkerPrompt, resolveWindowsCommand, type BlackBoxProviderConfig } from "../src/adapters/black-box-worker.ts";
+import { BlackBoxCliWorker, buildWorkerPrompt, resolveWindowsCommand, type BlackBoxProviderConfig } from "../src/workers/black-box-cli-worker.ts";
 import { corroborateFailures, classifyFailure, failureSignature } from "../src/core/failure-analysis.ts";
 import type { ExecutionAssignment, ExecutionEvent } from "../src/core/contracts.ts";
 import { diffWorkspace, snapshotWorkspace } from "../src/core/workspace-evidence.ts";
@@ -63,7 +63,7 @@ async function runAgent(
   if (options.mode === undefined) delete process.env.FAKE_AGENT_MODE;
   else process.env.FAKE_AGENT_MODE = options.mode;
   try {
-    const adapter = new BlackBoxWorkerAdapter({
+    const adapter = new BlackBoxCliWorker({
       agentId: "worker",
       config: providerConfig(options.config),
       workCapabilities: ["drafting"],

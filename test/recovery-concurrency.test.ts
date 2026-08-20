@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { loadProviderRegistry } from "../src/adapters/built-in-providers.ts";
-import { StaticAgentRegistry } from "../src/agents/static-agent-registry.ts";
+import { loadProviderRegistry } from "../src/workers/provider-catalog.ts";
+import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import type { ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabilities, SubagentWorkOrder } from "../src/core/contracts.ts";
 import { classifyFailure, loadOutcomeCatalog } from "../src/core/failure-analysis.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";

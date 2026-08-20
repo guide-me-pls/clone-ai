@@ -15,7 +15,7 @@ import {
   type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 
-import { createKernelToolsExtension } from "./kernel-tools.ts";
+import { createKernelToolsExtension } from "./tools/kernel-tools.ts";
 
 export interface MainAgentSessionOptions {
   dataDirectory: string;

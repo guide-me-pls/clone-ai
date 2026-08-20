@@ -24,7 +24,7 @@ Main Agent 或 Planner 可以提出这份对象，但 Kernel 会在派发前校�
 WorkOrder
   -> Kernel 策略 / 能力 / 审批
   -> 一次性 Prompt + 有作用域记忆 + Workspace
-  -> BlackBoxWorkerAdapter
+  -> BlackBoxCliWorker
        环境白名单 · 超时 · 终止
        执行前快照 -> 子进程 -> 执行后快照
   <- 退出状态 + Workspace 差异 + 脱敏输出尾部
@@ -37,7 +37,7 @@ Adapter 不解析 Provider 的事件协议、Session 数据库或完成标记，
 
 ## Pi 只是启动配方
 
-内建配方位于 `src/adapters/providers.json`，用户可以用 `<dataDirectory>/providers.json` 覆盖：
+内建配方位于 `src/workers/providers.json`，用户可以用 `<dataDirectory>/providers.json` 覆盖：
 
 ```json
 {
@@ -98,13 +98,13 @@ src/core/workspace-evidence.ts
 src/core/workspace-lock.ts
   独占 Workspace lease 与陈旧持有者回收
 
-src/adapters/black-box-worker.ts
+src/workers/black-box-cli-worker.ts
   进程边界、预算、环境白名单、观察型证据
 
-src/adapters/providers.json
+src/workers/providers.json
   内建启动配方
 
-src/adapters/built-in-providers.ts
+src/workers/provider-catalog.ts
   JSON 加载、用户覆盖、Registry 定义
 ```
 
