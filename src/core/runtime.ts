@@ -127,6 +127,27 @@ export class CloneRuntime {
     this.#hydrated = true;
   }
 
+  /**
+   * Rebuilds the projection from the journal.
+   *
+   * A long-lived Runtime holds an in-memory projection that only grows through
+   * its own writes. Another process — the Main Agent proposing a plan, the CLI,
+   * a second daemon — appends to the same journal, and those runs are invisible
+   * here until the projection is replayed. Anything that watches for work
+   * created elsewhere must refresh before it looks.
+   *
+   * 从 Journal 重建投影。
+   *
+   * 长生命周期的 Runtime 持有的内存投影只会因它自己的写入而增长。另一个进程——正在
+   * 提案的 Main Agent、CLI、第二个 daemon——会向同一本 Journal 追加事件，而那些 Run
+   * 在重放之前对这里是不可见的。任何要观察"别处创建的工作"的组件，都必须先刷新再看。
+   */
+  async refresh(): Promise<void> {
+    await this.#journal.reload?.();
+    this.#state = replay(await this.#journal.list());
+    this.#hydrated = true;
+  }
+
   async acceptTrigger(input: Omit<Trigger, "id" | "occurredAt">): Promise<{ task: Task; run: Run }> {
     await this.hydrate();
 
