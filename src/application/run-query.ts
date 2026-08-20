@@ -4,12 +4,13 @@ import { WorkerRegistry } from "../workers/worker-registry.ts";
 import type { AgentRegistry, PlanStep, TriggerKind } from "../core/contracts.ts";
 import { createRuntimeAssembly } from "../core/runtime-factory.ts";
 import type { CloneRuntime, DispatchResult } from "../core/runtime.ts";
-import { LocalMemoryStore } from "../memory/memory-store.ts";
+import { GovernedMemorySource } from "../memory/md-memory-store.ts";
 import { buildFallbackPlan } from "../planning/fallback-planner.ts";
 import { createEnvironmentWorkPlanner, type PlanningAgent, type WorkPlanner } from "../planning/llm-planner.ts";
 import { defaultWorkerProfiles, type CloneSettings, type WorkerProfile } from "../config/worker-settings.ts";
 import { classifyIntent } from "../main-agent/intent-classifier.ts";
 import { routeTask } from "../main-agent/agent-router.ts";
+import { assignWorkersPerStep } from "../main-agent/plan-routing.ts";
 import { buildMemoryContextFromCandidates } from "../main-agent/memory-context-builder.ts";
 import { describeWorkers } from "../main-agent/worker-descriptors.ts";
 import { JournalDispatchRecorder } from "../main-agent/dispatch-recorder.ts";
@@ -71,7 +72,11 @@ export async function runQuery(
     payload: { source: "desktop-client", ...trigger.payload },
   });
 
-  const memoryStore = new LocalMemoryStore(paths.memoryFile);
+  // The same governed store the Kernel dispatches from. Recalling from a second
+  // store here would let this path act on memories the owner never promoted.
+  // 与 Kernel 派发时使用的同一个受治理 Store。若在此处从第二个 Store 召回，这条路径就会
+  // 基于所有者从未提升过的记忆行事。
+  const memoryStore = new GovernedMemorySource(paths.dataDirectory);
   const recalled = await memoryStore.recall(query, run.id);
   await runtime.recordMemoryRecall(run.id, query, recalled.map((item) => ({
     id: item.memory.id,
@@ -134,20 +139,34 @@ export async function runQuery(
   // model cannot quietly reroute the owner's explicit choice.
   // Planner 只能指派路由已经确定的那个 Worker，因此模型无法悄悄改写所有者的显式选择。
   const selectedId = routed.decision.selectedAgentId;
-  const routableAgents = agents.filter((agent) => agent.id === selectedId);
+  // An explicit request is the owner speaking about the whole task, so it pins
+  // every step. Otherwise the planner may compose a plan across the configured
+  // roles, and per-step routing keeps each assignment authorized.
+  // 显式指定是所有者在谈论整个任务，因此它钉住每一个步骤。否则 Planner 可以跨越所有者
+  // 配置的角色来编排计划，再由按步骤路由保证每次指派都获得授权。
+  const routableAgents = routed.decision.source === "explicit"
+    ? agents.filter((agent) => agent.id === selectedId)
+    : agents.filter((agent) => agent.enabled);
   const planner = options.planner ?? createEnvironmentWorkPlanner();
   // The LLM planner is opt-in. Without credentials the deterministic local
   // policy still produces a plan and states exactly why it chose that graph.
   // LLM Planner 是显式开启的。没有凭据时，确定性的本地策略仍会产出计划，
   // 并明确说明它为何选择当前任务图。
   const plan = planner === undefined
-    ? buildFallbackPlan(query, new Set([selectedId]), recalledMemories)
+    ? buildFallbackPlan(query, new Set(routableAgents.map((agent) => agent.id)), recalledMemories)
     : await planner.plan({
       query,
       recalledMemories,
       availableAgents: planningAgents(routableAgents),
     });
-  await runtime.attachPlan(run.id, assignRoutedWorker(plan, selectedId, routableAgents[0]));
+  const workerDescriptors = describeWorkers(agents, workerStatuses);
+  const routedPlan = assignWorkersPerStep(plan, routed.decision, workerDescriptors);
+  // Each step's executor is journaled with its reason: a multi-agent plan is
+  // only auditable if the owner can see why each worker got its step.
+  // 每个步骤的执行者连同原因一起写入 Journal：只有当所有者能看到每个 Worker 为何拿到
+  // 它那一步时，多 Agent 计划才是可审计的。
+  await recorder.recordStepAssignments(run.id, routedPlan.assignments);
+  await runtime.attachPlan(run.id, routedPlan.plan);
 
   const registry = options.agents ?? await createConfiguredAgentRegistry(agents, {
     dataDirectory,
@@ -163,52 +182,6 @@ export async function runQuery(
       source: routed.decision.source,
       usedMemoryIds: routed.decision.usedMemoryIds,
     },
-  };
-}
-
-/**
- * Applies the routing decision to whatever the planner produced.
- *
- * A planner works from templates or from a model, and either can name an agent
- * that routing already ruled out — the fallback templates hardcode ids like
- * "draft-maker". Routing is the authority on *who* runs the work, so the plan
- * is rewritten to the selected worker rather than trusted to have agreed.
- * Capabilities come from the worker's own profile, because a step demanding a
- * capability the selected worker lacks would fail at dispatch for a reason the
- * owner never chose.
- *
- * 把路由决策应用到 Planner 产出的任何计划上。
- *
- * Planner 要么来自模板要么来自模型，两者都可能指派一个已被路由排除的 Agent——回退模板
- * 就把 "draft-maker" 之类的 ID 写死在里面。路由才是"由谁执行"的权威，因此计划会被改写
- * 到选定的 Worker，而不是指望它恰好一致。能力取自该 Worker 自己的 Profile，否则一个要求
- * 选定 Worker 不具备之能力的步骤，会因为所有者从未做过的选择而在派发时失败。
- */
-function assignRoutedWorker(
-  plan: { summary: string; steps: PlanStep[] },
-  selectedAgentId: string,
-  profile: WorkerProfile | undefined,
-): { summary: string; steps: PlanStep[] } {
-  const capabilities = profile === undefined ? undefined : workCapabilitiesForRole(profile.role);
-  return {
-    summary: plan.summary,
-    steps: plan.steps.map((step) => {
-      if (step.subagents !== undefined) {
-        return {
-          ...step,
-          subagents: step.subagents.map((order) => ({
-            ...order,
-            agentId: selectedAgentId,
-            ...(capabilities === undefined ? {} : { requiredCapabilities: capabilities }),
-          })),
-        };
-      }
-      return {
-        ...step,
-        agentId: selectedAgentId,
-        ...(capabilities === undefined ? {} : { requiredCapabilities: capabilities }),
-      };
-    }),
   };
 }
 
