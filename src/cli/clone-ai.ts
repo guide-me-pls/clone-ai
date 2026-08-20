@@ -35,6 +35,7 @@ Usage:
   clone-ai workers               List worker CLIs and whether they are installed
   clone-ai install <worker>      Install a missing worker (npm global)
   clone-ai sessions              List Main Agent conversations
+  clone-ai resume <n>            Continue conversation number <n> (see sessions)
   clone-ai new "<请求>"           Start a fresh conversation
   clone-ai memory [query]        List or search reviewed memories
   clone-ai cases                 Print the local bad-case log
@@ -72,6 +73,7 @@ async function main(): Promise<number> {
     case "workers": return listWorkers(paths.dataDirectory);
     case "install": return installWorker(paths.dataDirectory, argv[1]);
     case "sessions": return listSessions(paths.dataDirectory);
+    case "resume": return resumeSession(paths.dataDirectory, argv[1]);
     case "new": return converse(paths.dataDirectory, argv.slice(1).join(" ").trim(), true);
     case "memory": return showMemory(paths.dataDirectory, argv.slice(1).join(" ").trim());
     case "cases": return showCases(paths.dataDirectory);
@@ -95,6 +97,13 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
     // 新会话是显式选择；默认续上一次对话。
     ...(fresh ? { sessionManager: SessionManager.create(dataDirectory, join(dataDirectory, "pi-sessions", "main-agent")) } : {}),
   });
+  if (fresh) {
+    const file = session.sessionManager.getSessionFile();
+    if (file !== undefined) {
+      const { writeCurrentSessionPointer } = await import("../main-agent/session.ts");
+      await writeCurrentSessionPointer(join(dataDirectory, "pi-sessions", "main-agent"), file);
+    }
+  }
   session.subscribe((event) => {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
       process.stdout.write(event.assistantMessageEvent.delta);
@@ -173,41 +182,36 @@ async function installWorker(dataDirectory: string, id: string | undefined): Pro
 
 /** Lists persisted Main Agent conversations, newest first. 列出已持久化的 Main Agent 对话，新的在前。 */
 async function listSessions(dataDirectory: string): Promise<number> {
-  const { readdir, stat, readFile } = await import("node:fs/promises");
-  const directory = join(dataDirectory, "pi-sessions", "main-agent");
-  let names: string[];
-  try {
-    names = (await readdir(directory)).filter((name) => name.endsWith(".jsonl"));
-  } catch {
-    console.log("No conversations yet. Start one: clone-ai \"你好\"");
+  const { listOwnerConversations, readCurrentSessionPointer } = await import("../main-agent/session.ts");
+  const rows = await listOwnerConversations(dataDirectory);
+  if (rows.length === 0) {
+    console.log('No conversations yet. Start one: clone-ai "你好"');
     return 0;
   }
-  if (names.length === 0) {
-    console.log("No conversations yet. Start one: clone-ai \"你好\"");
-    return 0;
-  }
-  const rows = await Promise.all(names.map(async (name) => {
-    const path = join(directory, name);
-    const info = await stat(path);
-    const source = await readFile(path, "utf8").catch(() => "");
-    const turns = source.split("\n").filter((line) => line.includes('"type":"message"')).length;
-    const firstText = source.split("\n").map((line) => {
-      try {
-        const parsed = JSON.parse(line) as { type?: string; text?: string; content?: unknown };
-        return parsed.type === "text" && typeof parsed.text === "string" ? parsed.text : undefined;
-      } catch {
-        return undefined;
-      }
-    }).find((text) => text !== undefined && text.trim().length > 0);
-    return { name, mtime: info.mtimeMs, turns, preview: (firstText ?? "").replace(/\s+/g, " ").slice(0, 60) };
-  }));
-  rows.sort((left, right) => right.mtime - left.mtime);
-  console.log(`Conversations in ${directory}:`);
+  const current = await readCurrentSessionPointer(join(dataDirectory, "pi-sessions", "main-agent"));
+  console.log("  #  when              msgs  preview");
   for (const [index, row] of rows.entries()) {
-    const marker = index === 0 ? "*" : " ";
-    console.log(`${marker} ${new Date(row.mtime).toISOString().slice(0, 16).replace("T", " ")}  ${String(row.turns).padStart(3)} msgs  ${row.preview}`);
+    const marker = row.path === current ? "*" : " ";
+    const when = new Date(row.mtimeMs).toISOString().slice(0, 16).replace("T", " ");
+    console.log(`${marker} ${String(index + 1).padStart(2)}  ${when}  ${String(row.messages).padStart(4)}  ${row.preview}`);
   }
-  console.log("\n* the conversation `clone-ai \"...\"` continues. Use `clone-ai new \"...\"` to start a new one.");
+  console.log('\n* is the conversation `clone-ai "..."` continues. Switch with `clone-ai resume <n>`, or start fresh with `clone-ai new "..."`.');
+  return 0;
+}
+
+/** Points every entry point (CLI and GUI) at the chosen conversation. 把所有入口（CLI 与 GUI）指向所选对话。 */
+async function resumeSession(dataDirectory: string, choice: string | undefined): Promise<number> {
+  const { listOwnerConversations, writeCurrentSessionPointer } = await import("../main-agent/session.ts");
+  const rows = await listOwnerConversations(dataDirectory);
+  const index = Number(choice);
+  if (!Number.isInteger(index) || index < 1 || index > rows.length) {
+    console.error(`Usage: clone-ai resume <n>  (1..${rows.length || 1}; see clone-ai sessions)`);
+    return 1;
+  }
+  const row = rows[index - 1]!;
+  await writeCurrentSessionPointer(join(dataDirectory, "pi-sessions", "main-agent"), row.path);
+  console.log(`Continuing conversation #${index} (${row.messages} msgs): ${row.preview || "(no preview)"}`);
+  console.log("The GUI and the CLI now share this conversation.");
   return 0;
 }
 

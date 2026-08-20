@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task } from "./core/contracts.ts";
 import { createJournalStore } from "./core/sqlite-journal.ts";
@@ -31,6 +32,8 @@ import {
 import { CloneConfigStore } from "./config/clone-config.ts";
 import { readConnectorSettings, writeConnectorSettings } from "./connectors/connector-registry.ts";
 import { compileBriefing } from "./main-agent/situation-briefing.ts";
+import { describeHistory, mainAgentSessionDirectory, searchHistory } from "./main-agent/conversation-history.ts";
+import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
 import {
   listEffectiveProviderConfigs,
   readUserProviderConfigs,
@@ -79,7 +82,12 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   });
   const dataDirectory = paths.dataDirectory;
   const workspacePath = paths.workspacePath;
-  const clientPath = options.clientPath ?? join(process.cwd(), "apps", "desktop", "ui", "index.html");
+  // The GUI assets ship with the package, so they must be resolved relative to
+  // this module — `clone-ai gui` runs from whatever directory the owner is in.
+  // GUI 资源随包发布，因此必须相对本模块解析——`clone-ai gui` 会在所有者当前所在的
+  // 任意目录下运行。
+  const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const clientPath = options.clientPath ?? join(packageRoot, "apps", "desktop", "ui", "index.html");
   const clientDirectory = dirname(clientPath);
   const [client, clientCss, clientJs] = await Promise.all([
     readFile(clientPath, "utf8"),
@@ -377,11 +385,97 @@ async function handleRequest(
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/memory/governed") {
+    // The .md files are the content layer the owner owns, and a hand edit made
+    // in a text editor is as legitimate as one made here — so fold those edits
+    // in before reading, or the GUI would show a stale view and quietly
+    // overwrite work done outside it.
+    // .md 文件是所有者拥有的内容层，在文本编辑器里做的手改与在这里做的一样正当——
+    // 所以先把这些改动折回再读，否则 GUI 会显示过期视图，并悄悄覆盖在它之外完成的工作。
+    let syncError: string | undefined;
+    try {
+      await context.memoryGovernance.syncFromFiles();
+    } catch (error: unknown) {
+      syncError = error instanceof Error ? error.message : "The memory files could not be read.";
+    }
     const [memories, stats] = await Promise.all([
       context.memoryGovernance.list(),
       context.memoryGovernance.stats(),
     ]);
-    sendJson(response, 200, { memories, stats });
+    sendJson(response, 200, { memories, stats, ...(syncError === undefined ? {} : { syncError }) });
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/memory/governed/sync") {
+    try {
+      sendJson(response, 200, { synced: await context.memoryGovernance.syncFromFiles() });
+    } catch (error: unknown) {
+      sendJson(response, 500, { error: error instanceof Error ? error.message : "The memory files could not be synced." });
+    }
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/memory/governed") {
+    const body = await readJsonBody(request);
+    if (typeof body.summary !== "string" || body.summary.trim().length < 3) {
+      sendJson(response, 400, { error: "A memory needs a summary of at least three characters." });
+      return;
+    }
+    try {
+      const memory = await context.memoryGovernance.author({
+        summary: body.summary,
+        ...(typeof body.content === "string" ? { content: body.content } : {}),
+        ...(isMemoryType(body.type) ? { type: body.type } : {}),
+        ...(isSensitivity(body.sensitivity) ? { sensitivity: body.sensitivity } : {}),
+        ...(isConfidence(body.confidence) ? { confidence: body.confidence } : {}),
+      });
+      sendJson(response, 201, { memory });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The memory could not be created." });
+    }
+    return;
+  }
+  const governedMatch = url.pathname.match(/^\/api\/memory\/governed\/([^/]+)$/);
+  if (request.method === "PATCH" && governedMatch?.[1] !== undefined) {
+    const id = decodeURIComponent(governedMatch[1]);
+    const body = await readJsonBody(request);
+    const update: Parameters<MemoryGovernance["update"]>[1] = {};
+    if (typeof body.summary === "string") update.summary = body.summary;
+    if (typeof body.content === "string") update.content = body.content;
+    if (isMemoryType(body.type)) update.type = body.type;
+    if (isSensitivity(body.sensitivity)) update.sensitivity = body.sensitivity;
+    if (isConfidence(body.confidence)) update.confidence = body.confidence;
+    const status = body.status === "active" || body.status === "archived" ? body.status : undefined;
+    if (Object.keys(update).length === 0 && status === undefined) {
+      sendJson(response, 400, { error: "A memory update needs at least one field." });
+      return;
+    }
+    try {
+      // Content first, then status: an archive is recorded with its own reason,
+      // so folding it into the edit would lose why the memory went out of use.
+      // 先内容后状态：归档会带着自己的原因入账，把它并进编辑就会丢掉"为什么不再使用"。
+      let memory = Object.keys(update).length === 0
+        ? undefined
+        : await context.memoryGovernance.update(id, update);
+      if (status !== undefined) {
+        memory = status === "archived"
+          ? await context.memoryGovernance.archive(id)
+          : await context.memoryGovernance.restore(id);
+      }
+      sendJson(response, 200, { memory });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The memory could not be updated." });
+    }
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/context") {
+    sendJson(response, 200, await buildContextView(context.dataDirectory));
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/context/search") {
+    const query = url.searchParams.get("q")?.trim() ?? "";
+    if (query.length < 2) {
+      sendJson(response, 400, { error: "A history search needs at least two characters." });
+      return;
+    }
+    sendJson(response, 200, { query, excerpts: await searchHistory(context.dataDirectory, query, { limit: 12 }) });
     return;
   }
   const candidateDecisionMatch = url.pathname.match(/^\/api\/memory\/candidates\/([^/]+)\/(promote|reject)$/);
@@ -900,6 +994,51 @@ function toScheduleView(schedule: LocalSchedule): ScheduleView {
 
 function isScheduleKind(value: unknown): value is ScheduleKind {
   return value === "daily" || value === "weekly" || value === "monthly" || value === "yearly" || value === "cron" || value === "interval";
+}
+
+function isMemoryType(value: unknown): value is MemoryType {
+  return value === "fact" || value === "preference" || value === "procedure" || value === "decision" || value === "commitment";
+}
+
+function isSensitivity(value: unknown): value is MemorySensitivity {
+  return value === "public" || value === "private" || value === "secret";
+}
+
+function isConfidence(value: unknown): value is MemoryCandidate["confidence"] {
+  return value === "low" || value === "medium" || value === "high";
+}
+
+/**
+ * What the Main Agent's context looks like right now.
+ *
+ * The number worth showing is entriesOutOfContext: how much of the
+ * conversation the model can no longer see but that is still on disk. Every
+ * other figure here is scale; that one is the gap search_history closes.
+ *
+ * Main Agent 当前上下文的样子。
+ *
+ * 真正值得展示的数字是 entriesOutOfContext：对话中模型已经看不到、但仍在磁盘上的
+ * 那部分有多少。这里其他数字都只是规模；只有这一个，是 search_history 所要弥合的缺口。
+ */
+async function buildContextView(dataDirectory: string) {
+  const [history, conversations, current] = await Promise.all([
+    describeHistory(dataDirectory),
+    listOwnerConversations(dataDirectory),
+    readCurrentSessionPointer(mainAgentSessionDirectory(dataDirectory)),
+  ]);
+  const active = current ?? conversations[0]?.path;
+  return {
+    ...history,
+    directory: mainAgentSessionDirectory(dataDirectory),
+    ...(active === undefined ? {} : { activeSession: active }),
+    conversations: conversations.map((row) => ({
+      path: row.path,
+      messages: row.messages,
+      preview: row.preview,
+      updatedAt: new Date(row.mtimeMs).toISOString(),
+      active: row.path === active,
+    })),
+  };
 }
 
 function toTraceItem(event: JournalEvent): TraceItem {
