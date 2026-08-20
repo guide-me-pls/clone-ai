@@ -16,6 +16,15 @@ if (mode === "hang") {
   return;
 }
 
+if (mode === "hang-with-child") {
+  // Spawns a grandchild and records its pid, so tests can assert the whole
+  // tree dies with the worker. 派生子进程并记录其 PID，供测试断言整棵进程树随 Worker 一起终止。
+  const { spawnSync } = require("node:child_process");
+  const child = spawnSync(process.execPath, ["-e", "require('node:fs').writeFileSync(process.env.FAKE_GRANDCHILD_PID_FILE, String(process.pid)); setInterval(()=>{},1000)"], { env: { ...process.env, FAKE_GRANDCHILD_PID_FILE: process.env.FAKE_GRANDCHILD_PID_FILE } });
+  setInterval(() => {}, 1000);
+  return;
+}
+
 if (mode === "credential-error") {
   process.stderr.write("Error: ANTHROPIC_API_KEY is missing. Not logged in, please authenticate.\n");
   process.exit(1);

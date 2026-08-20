@@ -7,7 +7,7 @@
  * 最后才把它解析成具体 CLI。
  */
 
-export type TaskIntentKind = "coding" | "review" | "research" | "planning" | "operations";
+export type TaskIntentKind = "coding" | "review" | "research" | "planning" | "operations" | "direct";
 
 export interface TaskIntent {
   kind: TaskIntentKind;

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { CapabilityDispatcher } from "../src/agents/dispatcher.ts";
-import { StaticAgentRegistry } from "../src/agents/static-agent-registry.ts";
+import { CapabilityDispatcher } from "../src/workers/capability-dispatcher.ts";
+import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import { ScriptedExecutionAdapter } from "./fixtures/scripted-adapter.ts";
 import type {
   ExecutionAssignment,

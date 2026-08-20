@@ -1,8 +1,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import { builtInProviders } from "../adapters/built-in-providers.ts";
-import type { ProviderRegistry } from "../adapters/provider-registry.ts";
+import { builtInProviders } from "../workers/provider-catalog.ts";
+import type { ProviderRegistry } from "../workers/provider-registry.ts";
 
 export type AgentRole = "direct" | "research" | "draft" | "review" | "external";
 /**
@@ -14,7 +14,7 @@ export type AgentRole = "direct" | "research" | "draft" | "review" | "external";
  */
 export type ProviderId = string;
 
-export interface AgentSetting {
+export interface WorkerProfile {
   id: string;
   title: string;
   role: AgentRole;
@@ -26,10 +26,10 @@ export interface AgentSetting {
 }
 
 export interface CloneSettings {
-  agents: AgentSetting[];
+  agents: WorkerProfile[];
 }
 
-const DEFAULT_AGENTS: AgentSetting[] = [
+const DEFAULT_AGENTS: WorkerProfile[] = [
   {
     id: "direct-responder",
     title: "直接执行器",
@@ -85,11 +85,11 @@ const DEFAULT_AGENTS: AgentSetting[] = [
  * 返回一份全新的默认 Agent 目录，避免调用方修改模块级设置。这个目录只是规划元数据，
  * 不是执行授权。
  */
-export function defaultAgentSettings(): AgentSetting[] {
+export function defaultWorkerProfiles(): WorkerProfile[] {
   return DEFAULT_AGENTS.map((agent) => ({ ...agent }));
 }
 
-export class AgentSettingsStore {
+export class WorkerSettingsStore {
   readonly #path: string;
   readonly #providers: ProviderRegistry;
   #writes: Promise<void> = Promise.resolve();
@@ -105,7 +105,7 @@ export class AgentSettingsStore {
       return normalize(JSON.parse(source) as Partial<CloneSettings>, this.#providers);
     } catch (error: unknown) {
       if (isMissingFile(error)) {
-        return { agents: defaultAgentSettings() };
+        return { agents: defaultWorkerProfiles() };
       }
       throw error;
     }
@@ -181,3 +181,6 @@ function normalize(input: Partial<CloneSettings>, providers: ProviderRegistry): 
 function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
+
+/** @deprecated Renamed to WorkerProfile. 已更名为 WorkerProfile。 */
+export type AgentSetting = WorkerProfile;

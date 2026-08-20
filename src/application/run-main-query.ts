@@ -7,8 +7,8 @@
  * 的话语，acceptedRuns 则从 Kernel Journal 读回——两者分开返回，因为话语不是证据。
  */
 import type { Run } from "../core/contracts.ts";
-import { createKernelRuntime } from "./kernel-tools.ts";
-import { createMainAgentSession } from "./session.ts";
+import { createKernelRuntime } from "../main-agent/tools/kernel-tools.ts";
+import { createMainAgentSession } from "../main-agent/session.ts";
 
 export interface MainAgentQueryResult {
   reply: string;

@@ -6,13 +6,13 @@ import test from "node:test";
 
 import { buildFallbackPlan } from "../src/planning/fallback-planner.ts";
 import { LocalMemoryStore } from "../src/memory/memory-store.ts";
-import { AgentSettingsStore } from "../src/settings/agent-settings.ts";
+import { WorkerSettingsStore } from "../src/config/worker-settings.ts";
 import { SessionStore } from "../src/sessions/session-store.ts";
 
 test("agent settings persist and change which child roles a plan may use", async () => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-settings-"));
   try {
-    const settings = new AgentSettingsStore(join(directory, "settings.json"));
+    const settings = new WorkerSettingsStore(join(directory, "settings.json"));
     await settings.setEnabled("context-researcher", false);
     await settings.setEnabled("evidence-reviewer", false);
     const current = await settings.get();
@@ -35,7 +35,7 @@ test("every black-box provider is assignable to every role", async (t) => {
   // restriction no longer describes reality.
   // Pi 曾因无 Tool 运行而被限制在无 Tool 角色。作为黑盒，它启动自己的 CLI、使用自己的
   // Tool，因此该限制已不再符合事实。
-  const settings = new AgentSettingsStore(join(directory, "settings.json"));
+  const settings = new WorkerSettingsStore(join(directory, "settings.json"));
   const updated = await settings.updateAgent("external-operator", { providerId: "pi" });
   assert.equal(updated.agents.find((agent) => agent.id === "external-operator")?.providerId, "pi");
 });

@@ -1,6 +1,6 @@
 import { readJsonFile, writeJsonAtomic } from "../config/json-file.ts";
-import { BUILT_IN_PROVIDER_CONFIGS } from "./built-in-providers.ts";
-import type { BlackBoxProviderConfig } from "./black-box-worker.ts";
+import { BUILT_IN_PROVIDER_CONFIGS } from "../workers/provider-catalog.ts";
+import type { BlackBoxProviderConfig } from "../workers/black-box-cli-worker.ts";
 
 /**
  * Read only the owner's overrides. Built-ins remain source-controlled defaults;

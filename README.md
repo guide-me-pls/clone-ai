@@ -96,12 +96,6 @@ npm run typecheck
 npm run main
 ```
 
-For the new, deliberately isolated model-and-tool learning vertical slice, read
-[Minimal LLM loop](docs/minimal-llm-loop.md). It runs a real model -> function tool
--> tool result -> model cycle; its only filesystem write tool is intentionally mocked.
-The next orchestration slice is documented in
-[Work Orders and black-box workers](docs/work-orders-and-pi.md).
-
 For the complete current path from a user request to verified completion, see
 [Query execution flow](docs/query-execution-flow.md). The opt-in model planner
 and its safety boundary are documented in [LLM Planner](docs/llm-planner.md).

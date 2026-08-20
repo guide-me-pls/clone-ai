@@ -32,7 +32,7 @@ and MCPs, but its provider session is never the Clone AI memory store.
 WorkOrder
   -> policy / capability / approval
   -> scoped prompt + memory packet + workspace
-  -> BlackBoxWorkerAdapter
+  -> BlackBoxCliWorker
        environment allowlist · budget · deadline · termination
        snapshot(before) -> child process -> snapshot(after)
   <- exit status + workspace diff + redacted output tail
@@ -86,7 +86,7 @@ owner recovery after a supervisor crash.
 ## Provider configuration
 
 Provider launch recipes are data. Built-in defaults live in
-`src/adapters/providers.json`; `<dataDirectory>/providers.json` can add or
+`src/workers/providers.json`; `<dataDirectory>/providers.json` can add or
 override them. A recipe contains a command, argument template, prompt transport,
 timeout, capabilities, and names of environment variables to allow through.
 It never contains credential values. The registry and Kernel do not branch on

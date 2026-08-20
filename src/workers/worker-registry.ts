@@ -3,12 +3,12 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { listEffectiveProviderConfigs } from "../adapters/provider-config-store.ts";
-import type { ProviderId } from "../settings/agent-settings.ts";
+import { listEffectiveProviderConfigs } from "../config/provider-config-store.ts";
+import type { ProviderId } from "../config/worker-settings.ts";
 
 const execFileAsync = promisify(execFile);
 
-export interface AgentProviderView {
+export interface WorkerProviderStatus {
   id: ProviderId;
   title: string;
   command: string;
@@ -32,21 +32,21 @@ const installers: Readonly<Record<string, { command: string; args: string[] }>> 
  * Inspect every configured black-box command through one generic registry.
  * 新增 Provider 不需要增加 Agent 分支；所有黑盒命令都通过同一个通用 Registry 检测。
  */
-export class LocalAgentRegistry {
+export class WorkerRegistry {
   readonly #dataDirectory: string;
 
   constructor(dataDirectory: string) {
     this.#dataDirectory = dataDirectory;
   }
 
-  async list(): Promise<AgentProviderView[]> {
+  async list(): Promise<WorkerProviderStatus[]> {
     const configs = await listEffectiveProviderConfigs(this.#dataDirectory);
-    const providerStore = await import("../adapters/provider-config-store.ts");
+    const providerStore = await import("../config/provider-config-store.ts");
     const userIds = new Set((await providerStore.readUserProviderConfigs(this.#dataDirectory)).map((provider) => provider.id));
     return Promise.all(configs.map((config) => inspect(config, userIds.has(config.id))));
   }
 
-  async install(id: ProviderId): Promise<AgentProviderView> {
+  async install(id: ProviderId): Promise<WorkerProviderStatus> {
     const installer = installers[id];
     if (installer === undefined) throw new Error(`Provider ${id} has no automatic installer; install its command and restart Clone AI.`);
     await execFileAsync(commandForPlatform(installer.command), installer.args, { windowsHide: true, timeout: 120_000 });
@@ -56,7 +56,7 @@ export class LocalAgentRegistry {
   }
 }
 
-async function inspect(config: Awaited<ReturnType<typeof listEffectiveProviderConfigs>>[number], userConfigured: boolean): Promise<AgentProviderView> {
+async function inspect(config: Awaited<ReturnType<typeof listEffectiveProviderConfigs>>[number], userConfigured: boolean): Promise<WorkerProviderStatus> {
   const command = executableFor(config.command);
   try {
     const result = await execFileAsync(command, ["--version"], {
@@ -79,7 +79,7 @@ function view(
   userConfigured: boolean,
   installed: boolean,
   version?: string,
-): AgentProviderView {
+): WorkerProviderStatus {
   return {
     id: config.id,
     title: config.label ?? config.id,

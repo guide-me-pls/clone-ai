@@ -87,10 +87,6 @@ npm run typecheck
 npm run main
 ```
 
-第一条独立的“真实模型与 Tool”学习闭环见[最小 LLM 闭环](docs/minimal-llm-loop.zh-CN.md)。它会跑通
-模型 → Function Tool → Tool 结果 → 模型的循环；唯一的文件写入 Tool 故意保持为 Mock。
-下一段编排实现见 [WorkOrder 与黑盒 Worker](docs/work-orders-and-pi.zh-CN.md)。
-
 当前从用户请求到完成验证的整条链路见 [Query 执行流程](docs/query-execution-flow.zh-CN.md)；显式开启的模型 Planner 及其安全边界见 [LLM Planner](docs/llm-planner.zh-CN.md)。
 真实 Codex CLI 与 Claude Code 执行 Provider 的边界见 [受监督的 Worker 边界](docs/coding-cli-adapters.zh-CN.md)。
 架构、已经走过的路线与下一阶段见 [Runtime 架构与路线](docs/runtime-architecture-and-route.zh-CN.md)。
