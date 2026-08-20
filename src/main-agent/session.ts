@@ -62,7 +62,9 @@ export async function createMainAgentSession(options: MainAgentSessionOptions): 
       dataDirectory: options.dataDirectory,
       workspacePath: cwd,
     });
-    briefingText = `${MAIN_AGENT_CHARTER}\n\n${compiled.text}`;
+    const { describeExecutors } = await import("./tools/kernel-tools.ts");
+    const executors = await describeExecutors(options.dataDirectory);
+    briefingText = `${MAIN_AGENT_CHARTER}\n\n${executors.text}\n\n${compiled.text}`;
   } catch (error: unknown) {
     // A broken connector or unreadable journal must not silence the agent;
     // it degrades to the charter alone and says so.

@@ -475,3 +475,51 @@ function parseIds(value: string | undefined): string[] {
     return [];
   }
 }
+
+/**
+ * The Kernel's recall port, backed by the governed store.
+ *
+ * Only promoted memories are here: a mined candidate stays a candidate until
+ * the owner promotes it, so nothing reaches a worker that the owner has not
+ * accepted. That is the whole point of governance — a second, ungoverned
+ * store that also feeds recall would quietly undo it.
+ *
+ * Kernel 的召回端口，由受治理的 Store 支撑。
+ *
+ * 这里只有已提升的记忆：提炼出的候选在所有者提升之前一直只是候选，因此不会有任何
+ * 未经所有者接受的内容到达 Worker。这正是治理的全部意义——另一个不受治理、却同样
+ * 供给召回的 Store，会悄悄把它抵消掉。
+ */
+export class GovernedMemorySource {
+  readonly #dataDirectory: string;
+  readonly #maxResults: number;
+
+  constructor(dataDirectory: string, maxResults = 4) {
+    this.#dataDirectory = dataDirectory;
+    this.#maxResults = maxResults;
+  }
+
+  /**
+   * Opens the index for the length of one recall. Recall happens once per
+   * dispatch, so a short-lived connection costs nothing measurable and keeps
+   * the Kernel from holding a database handle for the life of the process —
+   * a handle that would block the owner from moving or deleting their own
+   * clone home.
+   * 只在一次召回期间打开索引。每次派发才召回一次，因此短连接的开销可以忽略，同时
+   * 避免 Kernel 在整个进程生命周期里握着数据库句柄——那样会妨碍所有者移动或删除
+   * 自己的 clone home。
+   */
+  async recall(query: string, _runId: string): Promise<Array<{ memory: { id: string; summary: string }; score: number; matchedTerms: string[] }>> {
+    const store = new MdMemoryStore({ dataDirectory: this.#dataDirectory });
+    try {
+      const matches = await store.recall(query, { maxResults: this.#maxResults });
+      return matches.map((match) => ({
+        memory: { id: match.entry.id, summary: match.entry.summary },
+        score: match.score,
+        matchedTerms: match.matchedTerms,
+      }));
+    } finally {
+      store.close();
+    }
+  }
+}

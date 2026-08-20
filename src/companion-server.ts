@@ -17,6 +17,9 @@ import { runMainAgentQuery } from "./application/run-main-query.ts";
 import { LocalMemoryStore } from "./memory/memory-store.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
 import { OpportunityService } from "./opportunity/opportunity-service.ts";
+import { RunQueueConsumer } from "./application/run-queue.ts";
+import { createRuntimeAssembly } from "./core/runtime-factory.ts";
+import { createConfiguredAgentRegistry } from "./workers/configured-worker-registry.ts";
 import { DailyReportRunner, type DailyReportSettings } from "./reporting/daily-report-runner.ts";
 import { BadCaseLog } from "./reporting/bad-case-log.ts";
 import { readJsonFile } from "./config/json-file.ts";
@@ -105,7 +108,6 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     store: new MdMemoryStore({ dataDirectory }),
   });
   const config = new CloneConfigStore(paths);
-  await syncMemory(dataDirectory, memoryStore);
   const scheduler = new LocalScheduler({
     store: schedules,
     run: async (schedule) => {
@@ -113,13 +115,25 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         kind: "schedule",
         payload: { scheduleId: schedule.id, scheduleKind: schedule.kind, scheduleDescription: describeSchedule(schedule) },
       }, await agentSettings.get(), { workspacePath });
-      await syncMemory(dataDirectory, memoryStore);
     },
   });
   // The opportunity plane and the daily bad-case report share the same
   // journal. The report is opt-in: without reporting.json there is no email.
   // 机会平面与每日坏案例报告共享同一本 Journal。报告是显式开启的：没有 reporting.json
   // 就不会发邮件。
+  // Accepted plans must actually run. Without this consumer a Run reaching
+  // "queued" would sit there while the GUI claims progress.
+  // 已接受的计划必须真的跑起来。没有这个消费者，到达 "queued" 的 Run 会一直停在那里，
+  // 而 GUI 却宣称正在推进。
+  const { runtime: queueRuntime } = await createRuntimeAssembly({ dataDirectory, workspacePath });
+  const runQueue = new RunQueueConsumer({
+    runtime: queueRuntime,
+    registry: async () => createConfiguredAgentRegistry((await agentSettings.get()).agents, { dataDirectory, workspacePath }),
+    onError: (runId, error) => {
+      console.error(`Run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
+    },
+  });
+  runQueue.start();
   const opportunityService = new OpportunityService(new JsonlJournalStore(join(dataDirectory, "journal.jsonl")));
   await opportunityService.scanAndRecord().catch(() => undefined);
   const badCaseLog = new BadCaseLog({ dataDirectory });
@@ -184,15 +198,17 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   scheduler.start();
   return {
     url,
-    close: () => new Promise((resolve, reject) => {
+    // Shutdown waits for the queue: a consumer still writing into the data
+    // directory after close() resolves is a corrupted journal.
+    // 关闭要等待队列：close() 返回后仍在往数据目录写入的消费者，意味着损坏的 Journal。
+    close: async () => {
       scheduler.stop();
-      server.close((error) => {
-        memoryGovernance.close().then(
-          () => (error === undefined ? resolve() : reject(error)),
-          (closeError: unknown) => reject(closeError),
-        );
+      await runQueue.stop();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error === undefined ? resolve() : reject(error)));
       });
-    }),
+      await memoryGovernance.close();
+    },
   };
 }
 
@@ -621,7 +637,6 @@ async function handleRequest(
       await context.agentSettings.get(),
       { workspacePath: context.workspacePath },
     );
-    await syncMemory(context.dataDirectory, context.memoryStore);
     sendJson(response, 201, result);
     return;
   }
@@ -724,7 +739,6 @@ async function handleRequest(
       await context.agentSettings.get(),
       { workspacePath: context.workspacePath },
     );
-    await syncMemory(context.dataDirectory, context.memoryStore);
     sendJson(response, 200, result);
     return;
   }
@@ -1151,13 +1165,20 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
-async function syncMemory(dataDirectory: string, memoryStore: LocalMemoryStore): Promise<void> {
-  const journal = createJournalStore(dataDirectory);
-  const candidates = (await journal.list())
-    .filter((event) => event.type === "memory.candidate.proposed")
-    .map((event) => event.payload as MemoryCandidate);
-  await memoryStore.sync(candidates);
-}
+/**
+ * Candidates are no longer synced into any recall source.
+ *
+ * A mined candidate is a proposal. Copying it into an active memory store made
+ * it reachable by the next task's recall before the owner ever saw it — the
+ * exact memory pollution the governance layer exists to prevent. Candidates now
+ * stay in the journal until the owner promotes them through MemoryGovernance.
+ *
+ * 候选不再被同步进任何召回来源。
+ *
+ * 提炼出的候选只是提案。把它拷贝进活跃记忆库，会让它在所有者见到之前就能被下一个任务
+ * 召回——这正是治理层要防止的记忆污染。候选现在留在 Journal 中，直到所有者经
+ * MemoryGovernance 提升它们。
+ */
 
 async function buildMemoryView(memoryStore: LocalMemoryStore) {
   const [memories, settings] = await Promise.all([memoryStore.list(), memoryStore.settings()]);
