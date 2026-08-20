@@ -30,7 +30,8 @@ clone-ai doctor
 ```bash
 clone-ai "读一下 README 并总结三点"        # 与 Main Agent 对话
 clone-ai "用 pi 调研这个项目并写份笔记"      # 显式指定 Worker
-clone-ai gui                              # 启动 GUI，自动打开浏览器
+clone-ai app                              # 桌面客户端窗口（推荐）
+clone-ai gui                              # 或用默认浏览器打开
 clone-ai status                           # Run、Worker、记忆、坏案例概览
 clone-ai workers                          # 查看已安装的 Worker CLI
 clone-ai install codex-cli                # 安装缺失的 Worker
@@ -43,15 +44,19 @@ clone-ai bench                            # 运行可靠性基准
 默认子命令就是对话：`clone-ai "<请求>"` 的用法和 `pi "..."`、`claude -p "..."`
 一致，区别在于 Main Agent 会把工作路由给 Worker，并由 Kernel 验证结果。
 
-## 3. GUI
+## 3. 桌面客户端
 
 ```bash
-clone-ai gui                # http://127.0.0.1:4317，自动打开浏览器
-clone-ai gui --port 4399    # 指定端口
+clone-ai app                # 真正的窗口：没有地址栏、没有标签页
+clone-ai app --port 4399    # 指定端口
+clone-ai gui                # 同一个服务，改用默认浏览器打开
 ```
 
-不需要单独下载：GUI 由随 CLI 一起安装的本地 daemon 提供。打包版桌面壳（Tauri）
-是可选项，需要 Rust 工具链：
+`clone-ai app` 使用机器上已安装的 Chromium 引擎（Edge 或 Chrome）打开一个独立的
+应用窗口，并使用 clone home 下的独立 profile 目录——你日常浏览器的会话、扩展和
+Cookie 完全不参与。关闭窗口即停止 daemon。
+
+不需要单独下载。如果你想要单文件原生可执行程序，Tauri 外壳是可选项，需要 Rust 工具链：
 
 ```bash
 npm run desktop:build

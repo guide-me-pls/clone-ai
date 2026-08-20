@@ -30,7 +30,8 @@ const HELP = `clone-ai — your local digital twin runtime
 
 Usage:
   clone-ai "<请求>"              Talk to the Main Agent (default)
-  clone-ai gui [--port <n>]      Start the local GUI and open it in a browser
+  clone-ai app [--port <n>]      Open the desktop app window (closing it exits)
+  clone-ai gui [--port <n>]      Same server, opened in your default browser
   clone-ai status                Show runs, workers, memory, and bad cases
   clone-ai workers               List worker CLIs and whether they are installed
   clone-ai install <worker>      Install a missing worker (npm global)
@@ -68,6 +69,7 @@ async function main(): Promise<number> {
   });
 
   switch (command) {
+    case "app": return startApp(argv.slice(1), paths.dataDirectory);
     case "gui": return startGui(argv.slice(1));
     case "status": return showStatus(paths.dataDirectory);
     case "workers": return listWorkers(paths.dataDirectory);
@@ -116,6 +118,36 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
   } finally {
     session.dispose();
   }
+}
+
+/**
+ * The desktop experience: a real window, and the daemon lives exactly as long
+ * as that window does.
+ * 桌面体验：一个真实窗口，daemon 的生命周期与该窗口完全一致。
+ */
+async function startApp(args: string[], dataDirectory: string): Promise<number> {
+  const portIndex = args.indexOf("--port");
+  const port = portIndex >= 0 ? args[portIndex + 1] : undefined;
+  const { startCompanionServer } = await import("../companion-server.ts");
+  const { openAppWindow, appProfileDirectory } = await import("./app-window.ts");
+  const server = await startCompanionServer(port === undefined ? {} : { port: Number(port) });
+
+  const window = openAppWindow({ url: server.url, profileDirectory: appProfileDirectory(dataDirectory) });
+  if (window === undefined) {
+    console.log(`No Chromium-family engine found for an app window. Serving at ${server.url}`);
+    console.log("Install Microsoft Edge or Google Chrome, or use: clone-ai gui");
+    openBrowser(server.url);
+    await new Promise<void>((resolve) => process.on("SIGINT", () => void server.close().then(resolve, resolve)));
+    return 0;
+  }
+
+  console.log(`clone-ai is running in a desktop window (${server.url}). Close the window to exit.`);
+  await Promise.race([
+    window.closed,
+    new Promise<void>((resolve) => process.on("SIGINT", resolve)),
+  ]);
+  await server.close();
+  return 0;
 }
 
 /** Starts the companion daemon and opens the browser at its URL. 启动 companion 并在浏览器打开。 */
