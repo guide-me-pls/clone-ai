@@ -32,7 +32,8 @@ installed.
 ```bash
 clone-ai "读一下 README 并总结三点"        # talk to the Main Agent
 clone-ai "用 pi 调研这个项目并写份笔记"      # explicitly choose a worker
-clone-ai gui                              # start the GUI, opens your browser
+clone-ai app                              # desktop window (recommended)
+clone-ai gui                              # or open in your browser
 clone-ai status                           # runs, workers, memory, bad cases
 clone-ai workers                          # which worker CLIs are installed
 clone-ai install codex-cli                # install a missing worker
@@ -46,16 +47,21 @@ The default subcommand is a conversation: `clone-ai "<request>"` behaves like
 `pi "..."` or `claude -p "..."`, except the Main Agent routes the work to a
 worker and the Kernel verifies the result.
 
-## 3. The GUI
+## 3. The desktop app
 
 ```bash
-clone-ai gui                # http://127.0.0.1:4317, opens automatically
-clone-ai gui --port 4399    # pick a port
+clone-ai app                # a real window: no address bar, no tabs
+clone-ai app --port 4399    # pick a port
+clone-ai gui                # same thing in your default browser instead
 ```
 
-There is no separate download: the GUI is served by the local daemon that ships
-with the CLI. A packaged desktop shell (Tauri) is optional and requires the Rust
-toolchain:
+`clone-ai app` opens a dedicated application window using the Chromium engine
+already installed on the machine (Edge or Chrome), with its own profile
+directory under the clone home — your everyday browser session, extensions, and
+cookies are never involved. Closing the window stops the daemon.
+
+There is no separate download. If you want a single-file native executable
+instead, the Tauri shell is optional and requires the Rust toolchain:
 
 ```bash
 npm run desktop:build
