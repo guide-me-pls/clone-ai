@@ -12,11 +12,14 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import type { PlanStep } from "../core/contracts.ts";
-import type { CloneRuntime } from "../core/runtime.ts";
-import { createRuntimeAssembly } from "../core/runtime-factory.ts";
-import { resolveClonePaths } from "../config/clone-home.ts";
-import { LocalMemoryStore } from "../memory/memory-store.ts";
+import type { PlanStep } from "../../core/contracts.ts";
+import type { CloneRuntime } from "../../core/runtime.ts";
+import { createRuntimeAssembly } from "../../core/runtime-factory.ts";
+import { resolveClonePaths } from "../../config/clone-home.ts";
+import { LocalMemoryStore } from "../../memory/memory-store.ts";
+import { WorkerRegistry } from "../../workers/worker-registry.ts";
+import { compileBriefing } from "../situation-briefing.ts";
+import { createJournalStore } from "../../core/sqlite-journal.ts";
 
 export interface KernelToolsOptions {
   dataDirectory: string;
@@ -128,10 +131,58 @@ export async function runStatusInfo(runtime: CloneRuntime, runId: string): Promi
 }
 
 /**
- * Extension factory: registers the four proposal-only tools for clone-main.
+ * Deterministic, journaled installation of a missing worker CLI. This is the
+ * only way the Main Agent can "help install": the agent proposes, the owner
+ * confirms in conversation, and the Kernel runs the known npm command and
+ * records the outcome. A worker never installs another worker — installation
+ * is environment management, not a task for an LLM.
+ *
+ * 对缺失的 Worker CLI 做确定性、可审计的安装。这是 Main Agent 唯一能"帮忙安装"的
+ * 方式：Agent 提议、所有者在对话中确认、Kernel 执行已知的 npm 命令并记录结果。
+ * Worker 永远不会去安装另一个 Worker——安装是环境管理，不是交给 LLM 的任务。
+ */
+export async function installWorkerAgent(dataDirectory: string, agentId: string): Promise<{ installed: boolean; version?: string; error?: string }> {
+  const registry = new WorkerRegistry(dataDirectory);
+  const providers = await registry.list();
+  const provider = providers.find((candidate) => candidate.id === agentId);
+  if (provider === undefined) {
+    return { installed: false, error: `No worker is registered as "${agentId}".` };
+  }
+  if (provider.installed) {
+    return { installed: true, version: provider.version };
+  }
+  if (!provider.installable) {
+    return { installed: false, error: `Worker "${agentId}" has no automatic installer; install its command and restart Clone AI.` };
+  }
+  try {
+    const after = await registry.install(agentId);
+    const journal = (await createRuntimeAssembly({ dataDirectory })).journal;
+    await journal.append({
+      type: "agent.installed",
+      payload: {
+        agentId,
+        providerId: agentId,
+        installedAt: new Date().toISOString(),
+        ...(after.version === undefined ? {} : { version: after.version }),
+      },
+    });
+    return { installed: true, ...(after.version === undefined ? {} : { version: after.version }) };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    const journal = (await createRuntimeAssembly({ dataDirectory })).journal;
+    await journal.append({
+      type: "agent.install_failed",
+      payload: { agentId, providerId: agentId, message, attemptedAt: new Date().toISOString() },
+    });
+    return { installed: false, error: message };
+  }
+}
+
+/**
+ * Extension factory: registers the five proposal-only tools for clone-main.
  * The Pi agent loop drives the conversation; every tool call ends at the
  * Kernel paths above.
- * 扩展工厂：为 clone-main 注册四个提案型工具。Pi 的 agent loop 驱动对话，
+ * 扩展工厂：为 clone-main 注册五个提案型工具。Pi 的 agent loop 驱动对话，
  * 每个工具调用最终都落在上面的 Kernel 路径。
  */
 export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelToolsOptions): void {
@@ -203,6 +254,54 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
       const runtime = await kernel();
       const text = await runStatusInfo(runtime, params.runId);
       return { content: [{ type: "text", text }], details: {} };
+    },
+  });
+
+  pi.registerTool({
+    name: "get_situation",
+    label: "Get Situation",
+    description:
+      "Read the owner's current situation: active goals, overdue and upcoming commitments, stated preferences and "
+      + "boundaries, and recent connector observations. Read-only. Use it to check what the owner already committed to "
+      + "before proposing new work, or when the owner asks what is going on.",
+    parameters: Type.Object({
+      dueSoonHours: Type.Optional(Type.Number({ description: "How far ahead counts as due soon. Defaults to 48." })),
+      includeObservations: Type.Optional(Type.Boolean({ description: "Read connectors as well. Defaults to true." })),
+    }),
+    execute: async (_toolCallId, params) => {
+      const paths = resolveClonePaths({ dataDirectory: options.dataDirectory });
+      const briefing = await compileBriefing({
+        journal: createJournalStore(options.dataDirectory),
+        dataDirectory: options.dataDirectory,
+        workspacePath: paths.workspacePath,
+        ...(params.dueSoonHours === undefined ? {} : { dueSoonHours: params.dueSoonHours }),
+        ...(params.includeObservations === undefined ? {} : { includeObservations: params.includeObservations }),
+      });
+      return {
+        content: [{ type: "text", text: briefing.text }],
+        details: {
+          overdue: briefing.situation.overdueCommitments.length,
+          dueSoon: briefing.situation.dueSoonCommitments.length,
+          activeGoals: briefing.situation.activeGoals.length,
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "install_agent",
+    label: "Install Agent",
+    description:
+      "Install a missing worker CLI through the Kernel's deterministic installer "
+      + "(npm global install for built-in workers). Call this ONLY after the owner "
+      + "explicitly asks to install the agent. Installation is a system-level "
+      + "side effect and every attempt is journaled.",
+    parameters: Type.Object({
+      agentId: Type.String({ description: "Worker id, e.g. codex-cli, claude-code, pi." }),
+    }),
+    execute: async (_toolCallId, params) => {
+      const result = await installWorkerAgent(options.dataDirectory, params.agentId);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: {} };
     },
   });
 }

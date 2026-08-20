@@ -27,7 +27,7 @@ the parent Run.
 WorkOrder
   -> Kernel policy / capability / approval
   -> one-time prompt + scoped memory + workspace
-  -> BlackBoxWorkerAdapter
+  -> BlackBoxCliWorker
        allowlisted environment · timeout · termination
        snapshot before -> child process -> snapshot after
   <- exit status + workspace diff + redacted output tail
@@ -41,7 +41,7 @@ zero exit is not completion; a required artifact that was not written is a
 
 ## Pi is just a launch recipe
 
-The built-in recipe is stored in `src/adapters/providers.json` and can be
+The built-in recipe is stored in `src/workers/providers.json` and can be
 replaced by `<dataDirectory>/providers.json`:
 
 ```json
@@ -114,13 +114,13 @@ src/core/workspace-evidence.ts
 src/core/workspace-lock.ts
   exclusive Workspace lease and stale-owner recovery
 
-src/adapters/black-box-worker.ts
+src/workers/black-box-cli-worker.ts
   process boundary, budgets, environment allowlist, observed evidence
 
-src/adapters/providers.json
+src/workers/providers.json
   built-in launch recipes
 
-src/adapters/built-in-providers.ts
+src/workers/provider-catalog.ts
   JSON loading, user overrides, registry definitions
 ```
 

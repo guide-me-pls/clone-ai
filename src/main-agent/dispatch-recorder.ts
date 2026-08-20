@@ -33,7 +33,7 @@ export class JournalDispatchRecorder implements DispatchRecorder {
 
   async recordDecision(decision: DispatchDecision): Promise<void> {
     await this.#journal.append({
-      type: "subagent.dispatched",
+      type: "dispatch.decided",
       runId: decision.taskId,
       payload: {
         kind: "dispatch.decision",
@@ -56,7 +56,7 @@ export class JournalDispatchRecorder implements DispatchRecorder {
 
   async recordBlocked(blocked: DispatchBlocked): Promise<void> {
     await this.#journal.append({
-      type: "subagent.failed",
+      type: "dispatch.blocked",
       runId: blocked.taskId,
       payload: {
         kind: "dispatch.blocked",

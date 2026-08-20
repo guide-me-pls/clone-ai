@@ -8,7 +8,7 @@ Clone AI 把所有 Coding Agent 都当作黑盒：提供 Prompt、有作用域�
 
 ```text
 WorkOrder -> 策略 + 能力 + 审批
-  -> BlackBoxWorkerAdapter    Prompt · 预算 · 截止 · 终止
+  -> BlackBoxCliWorker    Prompt · 预算 · 截止 · 终止
      |                        环境白名单
      |                        Workspace 执行前/后快照
   <- 退出状态 + Workspace 差异 + 脱敏输出尾部
@@ -17,7 +17,7 @@ WorkOrder -> 策略 + 能力 + 审批
 
 ## 接入 Agent 是配置
 
-内建启动配方位于 `src/adapters/providers.json`。用户可以在 `<dataDirectory>/providers.json` 中
+内建启动配方位于 `src/workers/providers.json`。用户可以在 `<dataDirectory>/providers.json` 中
 新增或覆盖：
 
 ```json

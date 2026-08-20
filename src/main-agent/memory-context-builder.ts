@@ -46,34 +46,68 @@ export async function buildMemoryContext(
   options: MemoryContextOptions = {},
 ): Promise<MemoryContext | undefined> {
   const maxItems = options.maxItems ?? DEFAULT_MAX_ITEMS;
-  const maxCharacters = options.maxCharacters ?? DEFAULT_MAX_CHARACTERS;
-  const minScore = options.minScore ?? DEFAULT_MIN_SCORE;
-
   // Secrets are never retrievable for worker context, whatever the query says.
   // 无论查询内容如何，secret 记忆永远不进入 Worker 上下文。
   const matches = await retriever.recall(intent.summary, { maxResults: maxItems * 3, includeSecret: false });
-  const relevant = matches
-    .filter((match) => match.score >= minScore)
-    .filter((match) => match.entry.status === "active")
-    .filter((match) => match.entry.sensitivity !== "secret")
+  return buildMemoryContextFromCandidates(
+    matches.map((match) => ({
+      id: match.entry.id,
+      summary: match.entry.summary,
+      score: match.score,
+      status: match.entry.status,
+      sensitivity: match.entry.sensitivity,
+      type: match.entry.type,
+    })),
+    options,
+  );
+}
+
+export interface MemoryCandidateInput {
+  id: string;
+  summary: string;
+  score: number;
+  status?: string;
+  sensitivity?: string;
+  type?: string;
+}
+
+/**
+ * The same boundary for callers that already recalled their memories. The main
+ * query path recalls once for planning, so re-querying would both cost a second
+ * store handle and risk the two views disagreeing.
+ * 面向已经完成召回的调用方的同一条边界。主查询链路为规划已召回过一次，重复查询既会多占
+ * 一个存储句柄，也会带来两份视图互相矛盾的风险。
+ */
+export function buildMemoryContextFromCandidates(
+  candidates: readonly MemoryCandidateInput[],
+  options: MemoryContextOptions = {},
+): MemoryContext | undefined {
+  const maxItems = options.maxItems ?? DEFAULT_MAX_ITEMS;
+  const maxCharacters = options.maxCharacters ?? DEFAULT_MAX_CHARACTERS;
+  const minScore = options.minScore ?? DEFAULT_MIN_SCORE;
+
+  const relevant = candidates
+    .filter((candidate) => candidate.score >= minScore)
+    .filter((candidate) => candidate.status === undefined || candidate.status === "active")
+    .filter((candidate) => candidate.sensitivity !== "secret")
     .slice(0, maxItems);
   if (relevant.length === 0) return undefined;
 
   const evidence: MemoryEvidence[] = [];
   const lines: string[] = [];
   let used = 0;
-  for (const match of relevant) {
+  for (const candidate of relevant) {
     // Only the one-line summary crosses the boundary; full content stays home.
     // 只有一行摘要越界；完整正文留在本地。
-    const line = `- ${sanitize(match.entry.summary)}`;
+    const line = `- ${sanitize(candidate.summary)}`;
     if (used + line.length > maxCharacters) break;
     used += line.length + 1;
     lines.push(line);
     evidence.push({
-      id: match.entry.id,
-      kind: classify(match.entry),
-      summary: match.entry.summary,
-      relevanceScore: Number(match.score.toFixed(3)),
+      id: candidate.id,
+      kind: classifyCandidate(candidate),
+      summary: candidate.summary,
+      relevanceScore: Number(candidate.score.toFixed(3)),
     });
   }
   if (lines.length === 0) return undefined;
@@ -85,10 +119,10 @@ export async function buildMemoryContext(
   };
 }
 
-function classify(entry: MemoryEntry): MemoryEvidence["kind"] {
-  if (entry.type === "preference") return "user_preference";
-  if (entry.type === "procedure" || entry.type === "decision") return "task_outcome";
-  if (/\bagent\b|worker|codex|claude|pi\b/i.test(entry.summary)) return "agent_outcome";
+function classifyCandidate(candidate: MemoryCandidateInput): MemoryEvidence["kind"] {
+  if (candidate.type === "preference") return "user_preference";
+  if (candidate.type === "procedure" || candidate.type === "decision") return "task_outcome";
+  if (/\bagent\b|worker|codex|claude|pi\b/i.test(candidate.summary)) return "agent_outcome";
   return "project_fact";
 }
 

@@ -3,9 +3,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
-import { BlackBoxWorkerAdapter, type BlackBoxProviderConfig } from "./black-box-worker.ts";
+import { BlackBoxCliWorker, type BlackBoxProviderConfig } from "./black-box-cli-worker.ts";
 import { ProviderRegistry, type ProviderDefinition } from "./provider-registry.ts";
-import type { AgentRole } from "../settings/agent-settings.ts";
+import type { AgentRole } from "../config/worker-settings.ts";
 
 /**
  * Built-in launch recipes are data, not dispatch branches. The JSON file keeps
@@ -28,7 +28,7 @@ export function toProviderDefinition(config: BlackBoxProviderConfig): ProviderDe
     label: config.label ?? config.id,
     ...(config.supportedRoles === undefined ? {} : { supportedRoles: config.supportedRoles }),
     ...(config.roleRestrictionReason === undefined ? {} : { roleRestrictionReason: config.roleRestrictionReason }),
-    createAdapter: ({ agentId, workCapabilities, failureCatalog }) => new BlackBoxWorkerAdapter({
+    createAdapter: ({ agentId, workCapabilities, failureCatalog }) => new BlackBoxCliWorker({
       agentId,
       config: launchConfig,
       workCapabilities,

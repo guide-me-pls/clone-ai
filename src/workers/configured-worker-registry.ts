@@ -1,7 +1,7 @@
-import type { AgentSetting } from "../settings/agent-settings.ts";
-import { workCapabilitiesForRole } from "../agents/capabilities.ts";
-import { StaticAgentRegistry } from "../agents/static-agent-registry.ts";
-import { loadProviderRegistry } from "./built-in-providers.ts";
+import type { WorkerProfile } from "../config/worker-settings.ts";
+import { workCapabilitiesForRole } from "./capabilities.ts";
+import { StaticAgentRegistry } from "./static-worker-registry.ts";
+import { loadProviderRegistry } from "./provider-catalog.ts";
 import type { OutcomeCatalog } from "../core/failure-analysis.ts";
 import type { ProviderRegistry } from "./provider-registry.ts";
 
@@ -21,7 +21,7 @@ export interface ConfiguredAgentRegistryOptions {
  * 可以注入 Registry。
  */
 export async function createConfiguredAgentRegistry(
-  settings: AgentSetting[],
+  settings: WorkerProfile[],
   options: ConfiguredAgentRegistryOptions,
 ): Promise<StaticAgentRegistry> {
   const providers = options.providers ?? await loadProviderRegistry(options.dataDirectory);

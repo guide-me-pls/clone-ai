@@ -17,7 +17,7 @@ import {
   snapshotWorkspace,
   type WorkspaceChange,
 } from "../core/workspace-evidence.ts";
-import type { AgentRole } from "../settings/agent-settings.ts";
+import type { AgentRole } from "../config/worker-settings.ts";
 
 export interface BlackBoxProviderConfig {
   id: string;
@@ -66,7 +66,7 @@ const DEFAULT_WORK = [
  * 权限边界不变：预算、硬截止、终止、Evidence 类型与完成判定仍然在这里。Worker 无法
  * 自报成功——成功意味着 Workspace 上出现了合同约定的产物。
  */
-export class BlackBoxWorkerAdapter implements RuntimeAdapter {
+export class BlackBoxCliWorker implements RuntimeAdapter {
   readonly id: string;
   readonly providerId: string;
   readonly #config: BlackBoxProviderConfig;
@@ -109,7 +109,7 @@ export class BlackBoxWorkerAdapter implements RuntimeAdapter {
     const child = this.#active.get(sessionId);
     if (child === undefined) return;
     this.#active.delete(sessionId);
-    child.kill();
+    terminateProcessTree(child);
   }
 
   async *execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
@@ -118,6 +118,9 @@ export class BlackBoxWorkerAdapter implements RuntimeAdapter {
     const budgetMs = input.workOrder?.budget.maxDurationMs ?? config.timeoutMs ?? 20 * 60_000;
     const sessionId = randomUUID();
     const prompt = buildWorkerPrompt(input);
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      throw new Error(`The worker prompt exceeds the ${MAX_PROMPT_CHARS}-character budget (${prompt.length}).`);
+    }
 
     yield { type: "session_started", sessionId };
 
@@ -141,6 +144,9 @@ export class BlackBoxWorkerAdapter implements RuntimeAdapter {
       env: buildEnvironment(config.env ?? []),
       stdio: usesStdin ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      // POSIX: own process group so the whole tree can be terminated.
+      // POSIX：独立进程组，以便能终止整棵进程树。
+      ...(process.platform === "win32" ? {} : { detached: true }),
     });
     this.#active.set(sessionId, child);
     // Exit and error are observed immediately: an unobserved ChildProcess
@@ -155,7 +161,12 @@ export class BlackBoxWorkerAdapter implements RuntimeAdapter {
     let timedOut = false;
     const timeout = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      // Kill the whole process tree, not just the CLI: headless agents spawn
+      // their own children, and an orphaned grandchild keeps retrying forever
+      // (observed with claude.exe).
+      // 终止整棵进程树而不是只杀 CLI：无头 Agent 会派生自己的子进程，孤儿孙进程会
+      // 永远重试（claude.exe 残留即由此而来）。
+      terminateProcessTree(child);
     }, budgetMs);
     timeout.unref();
 
@@ -216,7 +227,7 @@ export class BlackBoxWorkerAdapter implements RuntimeAdapter {
       this.#active.delete(sessionId);
       // An abandoned generator must never leave the agent running unsupervised.
       // 被放弃的 Generator 绝不能留下脱管运行的 Agent。
-      if (child.exitCode === null && child.signalCode === null) child.kill();
+      if (child.exitCode === null && child.signalCode === null) terminateProcessTree(child);
     }
   }
 }
@@ -371,6 +382,44 @@ async function* readLines(stream: NodeJS.ReadableStream | null): AsyncIterable<s
     yield* lines;
   }
   if (pending.length > 0) yield pending;
+}
+
+/**
+ * Maximum prompt characters forwarded to a black-box worker. A prompt beyond
+ * this is a planning or memory bug, not a task to run.
+ * 转发给黑盒 Worker 的 Prompt 最大字符数。超出上限说明规划或记忆出了问题，
+ * 而不是一个可以执行的任务。
+ */
+const MAX_PROMPT_CHARS = 30_000;
+
+/**
+ * Terminates the worker and its whole process tree. Killing only the CLI
+ * leaves grandchildren behind; they hold inherited pipes and keep running
+ * (and retrying) unsupervised. Windows needs taskkill /T; POSIX kills the
+ * detached process group.
+ * 终止 Worker 及其整棵进程树。只杀 CLI 会留下孙进程；它们持有继承的管道并继续
+ * （反复重试地）运行。Windows 用 taskkill /T；POSIX 杀 detached 进程组。
+ */
+export function terminateProcessTree(child: ChildProcess): void {
+  if (child.pid === undefined) return;
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    killer.unref();
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(child.pid, "SIGKILL");
+    } catch {
+      // Already gone.
+      // 进程已经不存在。
+    }
+  }
 }
 
 function observeExit(child: ChildProcess): Promise<ProcessExit> {

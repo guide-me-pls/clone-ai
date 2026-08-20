@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
-import { StaticAgentRegistry } from "../src/agents/static-agent-registry.ts";
-import { buildWorkerPrompt } from "../src/adapters/black-box-worker.ts";
+import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
+import { buildWorkerPrompt } from "../src/workers/black-box-cli-worker.ts";
 import type {
   ExecutionAssignment,
   ExecutionEvent,

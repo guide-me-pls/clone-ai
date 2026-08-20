@@ -5,14 +5,14 @@ import { dirname, join } from "node:path";
 import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task } from "./core/contracts.ts";
 import { createJournalStore } from "./core/sqlite-journal.ts";
 import { replay } from "./core/run-state.ts";
-import { approveQueryRun, runQuery } from "./workflows/query-workflow.ts";
+import { approveQueryRun, runQuery } from "./application/run-query.ts";
 import { LocalScheduler } from "./scheduling/local-scheduler.ts";
 import { describeSchedule, ScheduleStore, type LocalSchedule, type ScheduleKind } from "./scheduling/schedule-store.ts";
 import { SessionStore } from "./sessions/session-store.ts";
-import { loadProviderRegistry } from "./adapters/built-in-providers.ts";
-import { AgentSettingsStore } from "./settings/agent-settings.ts";
-import { LocalAgentRegistry } from "./agents/local-provider-registry.ts";
-import { runMainAgentQuery } from "./main-agent/query.ts";
+import { loadProviderRegistry } from "./workers/provider-catalog.ts";
+import { WorkerSettingsStore } from "./config/worker-settings.ts";
+import { WorkerRegistry } from "./workers/worker-registry.ts";
+import { runMainAgentQuery } from "./application/run-main-query.ts";
 import { LocalMemoryStore } from "./memory/memory-store.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
 import { MdMemoryStore } from "./memory/md-memory-store.ts";
@@ -30,7 +30,7 @@ import {
   readUserProviderConfigs,
   removeUserProviderConfig,
   upsertUserProviderConfig,
-} from "./adapters/provider-config-store.ts";
+} from "./config/provider-config-store.ts";
 
 export interface CompanionServerOptions {
   host?: string;
@@ -83,8 +83,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const schedules = new ScheduleStore(paths.schedulesFile);
   const sessions = new SessionStore(paths.sessionsFile);
   const providers = await loadProviderRegistry(dataDirectory);
-  const agentSettings = new AgentSettingsStore(paths.legacyAgentsFile, providers);
-  const agentRegistry = new LocalAgentRegistry(dataDirectory);
+  const agentSettings = new WorkerSettingsStore(paths.legacyAgentsFile, providers);
+  const agentRegistry = new WorkerRegistry(dataDirectory);
   const memoryStore = new LocalMemoryStore(paths.memoryFile);
   const memoryGovernance = new MemoryGovernance({
     journal: new JsonlJournalStore(join(dataDirectory, "journal.jsonl")),
@@ -158,7 +158,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: AgentSettingsStore; agentRegistry: LocalAgentRegistry; memoryStore: LocalMemoryStore; memoryGovernance: MemoryGovernance },
+  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: WorkerSettingsStore; agentRegistry: WorkerRegistry; memoryStore: LocalMemoryStore; memoryGovernance: MemoryGovernance },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host}`);
 
@@ -791,6 +791,10 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
     "subagent.failed": "Child agent failed",
     "subagent.cancelled": "Child agent cancelled",
     "subagent.verified": "Verified child-agent evidence",
+    "dispatch.decided": "Routed to a worker",
+    "dispatch.blocked": "Dispatch blocked",
+    "agent.installed": "Installed a worker",
+    "agent.install_failed": "Worker installation failed",
     "agent.message_delta": "Agent streamed a message",
     "agent.tool_started": "Agent started a tool",
     "agent.tool_completed": "Agent finished a tool",
@@ -836,6 +840,29 @@ function detailFor(type: JournalEvent["type"], payload: Record<string, unknown>)
   if (type === "memory.recalled") {
     const memories = Array.isArray(payload.memories) ? payload.memories : [];
     return `Used ${memories.length} active local memory item${memories.length === 1 ? "" : "s"} as task context.`;
+  }
+  if (type === "dispatch.decided") {
+    const sourceLabels: Record<string, string> = {
+      explicit: "the owner explicitly requested",
+      rule: "capability and priority rules",
+      memory: "past outcomes in memory",
+      description: "worker self-descriptions",
+    };
+    const source = typeof payload.source === "string" ? payload.source : "rule";
+    const worker = typeof payload.selectedAgentId === "string" ? payload.selectedAgentId : "?";
+    const reason = typeof payload.reason === "string" ? payload.reason : "";
+    return `Selected ${worker} (${sourceLabels[source] ?? source})${reason ? `. ${reason}` : ""}`;
+  }
+  if (type === "dispatch.blocked") {
+    const code = typeof payload.code === "string" ? payload.code : "";
+    const reason = typeof payload.reason === "string" ? payload.reason : "";
+    return `No worker could run this task (${code}). ${reason}`;
+  }
+  if (type === "agent.installed") {
+    return `Installed ${String(payload.agentId ?? "a worker")}${typeof payload.version === "string" ? ` (${payload.version})` : ""}.`;
+  }
+  if (type === "agent.install_failed") {
+    return `Installation of ${String(payload.agentId ?? "a worker")} failed: ${String(payload.message ?? "")}`;
   }
   if (typeof payload.summary === "string") {
     return payload.summary;

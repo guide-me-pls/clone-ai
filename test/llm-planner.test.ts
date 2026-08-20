@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { runQuery } from "../src/workflows/query-workflow.ts";
+import { runQuery } from "../src/application/run-query.ts";
 import { createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
 import { LlmWorkPlanner, OpenAIResponsesPlannerModel, type PlanningAgent, type StructuredPlannerModel } from "../src/planning/llm-planner.ts";
 

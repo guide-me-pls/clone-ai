@@ -1,6 +1,6 @@
 import type { RuntimeAdapter } from "../core/contracts.ts";
 import type { OutcomeCatalog } from "../core/failure-analysis.ts";
-import type { AgentRole } from "../settings/agent-settings.ts";
+import type { AgentRole } from "../config/worker-settings.ts";
 
 export interface ProviderAdapterInput {
   /** Agent id from settings; becomes the adapter's identity. 来自设置的 Agent ID；成为 Adapter 的身份。 */
