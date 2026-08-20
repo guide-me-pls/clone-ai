@@ -96,8 +96,53 @@ export async function createMainAgentSession(options: MainAgentSessionOptions): 
     // time the owner runs clone-ai from a different directory.
     // 会话身份是所有者的 clone home，而不是当前目录。传入自定义会话目录时 Pi 会按 cwd
     // 过滤最近会话；若传真实 cwd，所有者每换一个目录跑 clone-ai 就会开一个空白对话。
-    sessionManager: options.sessionManager
-      ?? SessionManager.continueRecent(options.dataDirectory, join(options.dataDirectory, "pi-sessions", "main-agent")),
+    sessionManager: options.sessionManager ?? await continueOwnerConversation(options.dataDirectory),
   });
   return { session };
+}
+
+/**
+ * Continues the owner's most recent conversation regardless of the directory
+ * clone-ai was started from.
+ *
+ * Pi filters recent sessions by cwd whenever a custom session directory is
+ * given, which is right for a per-project coding agent and wrong for a
+ * personal twin: the owner's conversation is one thread, not one per folder.
+ * So the newest session file is selected here and handed to the manager.
+ *
+ * 无论从哪个目录启动 clone-ai，都继续所有者最近的那次对话。
+ *
+ * 只要传入自定义会话目录，Pi 就会按 cwd 过滤最近会话——这对按项目分会话的编码 Agent
+ * 是对的，对个人分身则是错的：所有者的对话是一条线索，而不是每个目录一条。因此这里自己
+ * 选出最新的会话文件并交给 Manager。
+ */
+export async function continueOwnerConversation(dataDirectory: string): Promise<SessionManager> {
+  const directory = join(dataDirectory, "pi-sessions", "main-agent");
+  // Look before constructing: the manager creates its own file eagerly, which
+  // would otherwise become "the newest session" and hide the real history.
+  // 先看再构造：Manager 会立刻创建自己的文件，否则那个文件会变成"最新会话"并盖住真正的历史。
+  const latest = await findLatestSessionFile(directory);
+  const manager = SessionManager.continueRecent(dataDirectory, directory);
+  if (latest !== undefined && manager.getSessionFile() !== latest) {
+    manager.setSessionFile(latest);
+  }
+  return manager;
+}
+
+async function findLatestSessionFile(directory: string): Promise<string | undefined> {
+  const { readdir, stat } = await import("node:fs/promises");
+  let names: string[];
+  try {
+    names = (await readdir(directory)).filter((name) => name.endsWith(".jsonl"));
+  } catch {
+    return undefined;
+  }
+  let latest: { path: string; mtimeMs: number } | undefined;
+  for (const name of names) {
+    const path = join(directory, name);
+    const info = await stat(path).catch(() => undefined);
+    if (info === undefined) continue;
+    if (latest === undefined || info.mtimeMs > latest.mtimeMs) latest = { path, mtimeMs: info.mtimeMs };
+  }
+  return latest?.path;
 }

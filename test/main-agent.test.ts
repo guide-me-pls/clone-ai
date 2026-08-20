@@ -161,22 +161,28 @@ test("the Main Agent conversation continues across working directories", async (
   // 这条测试钉住的缺陷：使用自定义会话目录时 Pi 会按 cwd 过滤最近会话，因此从另一个
   // 目录运行 clone-ai 会开出空白对话，所有者的历史看起来"丢了"。
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-session-"));
-  const firstCwd = await mkdtemp(join(tmpdir(), "clone-ai-cwd-a-"));
-  const secondCwd = await mkdtemp(join(tmpdir(), "clone-ai-cwd-b-"));
+  const otherCwd = await mkdtemp(join(tmpdir(), "clone-ai-cwd-b-"));
   t.after(async () => {
     await rm(dataDirectory, { recursive: true, force: true });
-    await rm(firstCwd, { recursive: true, force: true });
-    await rm(secondCwd, { recursive: true, force: true });
+    await rm(otherCwd, { recursive: true, force: true });
   });
 
-  const { createMainAgentSession } = await import("../src/main-agent/session.ts");
-  const first = await createMainAgentSession({ dataDirectory, cwd: firstCwd });
-  const firstId = first.session.sessionManager.sessionPath;
-  first.session.dispose();
+  // Seed a conversation recorded from one directory.
+  // 用某个目录记录一段已有对话作为种子。
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const sessionDirectory = join(dataDirectory, "pi-sessions", "main-agent");
+  const seeded = SessionManager.create(process.cwd(), sessionDirectory);
+  seeded.appendMessage({ role: "user", content: "记住：我偏好先跑测试再提交。", timestamp: Date.now() });
+  // Pi only writes the file once an assistant turn exists, so a realistic seed
+  // needs both sides of the exchange.
+  // Pi 只有在出现 assistant 回合后才落盘，因此真实的种子需要包含一问一答。
+  seeded.appendMessage({ role: "assistant", content: [{ type: "text", text: "记住了。" }], timestamp: Date.now(), api: "test", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" });
+  const seededFile = seeded.getSessionFile();
+  assert.ok(seededFile !== undefined);
 
-  const second = await createMainAgentSession({ dataDirectory, cwd: secondCwd });
-  const secondId = second.session.sessionManager.sessionPath;
-  second.session.dispose();
-
-  assert.equal(secondId, firstId, "a different working directory must continue the same conversation");
+  // Starting from a different directory must continue that same file.
+  // 从另一个目录启动，必须续上同一个文件。
+  const { continueOwnerConversation } = await import("../src/main-agent/session.ts");
+  const continued = await continueOwnerConversation(dataDirectory);
+  assert.equal(continued.getSessionFile(), seededFile, "a different working directory must continue the same conversation");
 });
