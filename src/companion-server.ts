@@ -791,6 +791,10 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
     "subagent.failed": "Child agent failed",
     "subagent.cancelled": "Child agent cancelled",
     "subagent.verified": "Verified child-agent evidence",
+    "dispatch.decided": "Routed to a worker",
+    "dispatch.blocked": "Dispatch blocked",
+    "agent.installed": "Installed a worker",
+    "agent.install_failed": "Worker installation failed",
     "agent.message_delta": "Agent streamed a message",
     "agent.tool_started": "Agent started a tool",
     "agent.tool_completed": "Agent finished a tool",
@@ -836,6 +840,29 @@ function detailFor(type: JournalEvent["type"], payload: Record<string, unknown>)
   if (type === "memory.recalled") {
     const memories = Array.isArray(payload.memories) ? payload.memories : [];
     return `Used ${memories.length} active local memory item${memories.length === 1 ? "" : "s"} as task context.`;
+  }
+  if (type === "dispatch.decided") {
+    const sourceLabels: Record<string, string> = {
+      explicit: "the owner explicitly requested",
+      rule: "capability and priority rules",
+      memory: "past outcomes in memory",
+      description: "worker self-descriptions",
+    };
+    const source = typeof payload.source === "string" ? payload.source : "rule";
+    const worker = typeof payload.selectedAgentId === "string" ? payload.selectedAgentId : "?";
+    const reason = typeof payload.reason === "string" ? payload.reason : "";
+    return `Selected ${worker} (${sourceLabels[source] ?? source})${reason ? `. ${reason}` : ""}`;
+  }
+  if (type === "dispatch.blocked") {
+    const code = typeof payload.code === "string" ? payload.code : "";
+    const reason = typeof payload.reason === "string" ? payload.reason : "";
+    return `No worker could run this task (${code}). ${reason}`;
+  }
+  if (type === "agent.installed") {
+    return `Installed ${String(payload.agentId ?? "a worker")}${typeof payload.version === "string" ? ` (${payload.version})` : ""}.`;
+  }
+  if (type === "agent.install_failed") {
+    return `Installation of ${String(payload.agentId ?? "a worker")} failed: ${String(payload.message ?? "")}`;
   }
   if (typeof payload.summary === "string") {
     return payload.summary;

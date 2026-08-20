@@ -485,3 +485,8 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .clone-expand { margin-top: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; color: #4260ae; background: #fff; cursor: pointer; font-size: 11px; }
 .clone-expand:hover { border-color: #afc1ee; color: #3457b8; }
 .workspace { position: relative; }
+
+.memory-candidates h4 { margin: 14px 0 4px; font-size: 13px; color: var(--ink-2, #57606a); }
+.candidates-hint { margin: 0 0 10px; font-size: 12px; color: var(--ink-3, #8b949e); }
+.candidate-card textarea[readonly] { background: var(--panel-soft, #f6f7fb); cursor: default; }
+.candidate-actions { display: flex; gap: 8px; margin-top: 8px; }
