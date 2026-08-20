@@ -137,6 +137,16 @@ export class MdMemoryStore {
     this.#db.close();
   }
 
+  /**
+   * Where the .md files live. The owner is meant to open this folder, so the
+   * path is part of the store's public surface rather than a private detail.
+   * .md 文件所在目录。所有者本就应该能打开这个文件夹，因此路径属于 Store 的公开接口，
+   * 而不是私有细节。
+   */
+  get contentDirectory(): string {
+    return this.#contentDirectory;
+  }
+
   /** Commits a memory: SQLite row + term index + .md file. 提交一条记忆：写 SQLite、词表与 .md 文件。 */
   async commit(input: MemoryCommitInput): Promise<MemoryEntry> {
     const summary = input.summary.trim();
@@ -424,7 +434,11 @@ export function renderMemoryFile(entry: MemoryEntry): string {
 
 /** Parses the front-matter subset used by memory files. 解析记忆文件使用的 front matter 子集。 */
 export function parseMemoryFile(source: string): Omit<MemoryEntry, "id" | "accessCount" | "createdAt" | "updatedAt" | "lastAccessedAt"> | undefined {
-  const match = source.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  // Windows editors save CRLF. A memory the owner edited in Notepad must not be
+  // silently ignored because of line endings.
+  // Windows 编辑器保存的是 CRLF。所有者用记事本改过的记忆，不能因为换行符就被静默忽略。
+  const normalized = source.replace(/\r\n/g, "\n");
+  const match = normalized.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
   if (match === null) return undefined;
   const fields = new Map<string, string>();
   for (const line of match[1]!.split("\n")) {
