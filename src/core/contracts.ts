@@ -264,7 +264,20 @@ export type JournalEventType =
   | "memory.candidate.rejected"
   | "memory.updated"
   | "memory.archived"
-  | "memory.recalled";
+  | "memory.recalled"
+  // Personal state is journal-projected like every other durable fact, so the
+  // owner's model of themselves survives a deleted projection.
+  // 个人状态与其他持久事实一样由 Journal 投影得出，因此即使投影被删除，所有者对自身的
+  // 建模依然能够重建。
+  | "state.self_model.recorded"
+  | "state.self_model.updated"
+  | "state.self_model.archived"
+  | "state.goal.recorded"
+  | "state.goal.updated"
+  | "state.goal.archived"
+  | "state.commitment.recorded"
+  | "state.commitment.updated"
+  | "state.commitment.archived";
 
 export interface JournalEvent {
   id: string;
