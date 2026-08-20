@@ -30,7 +30,7 @@ Main Agent 可以是持久的对话 Agent，但 Worker 不是。Worker 为一个
 WorkOrder
   -> 策略 / 能力 / 审批
   -> 有作用域 Prompt + 记忆包 + Workspace
-  -> BlackBoxWorkerAdapter
+  -> BlackBoxCliWorker
        环境白名单 · 预算 · 硬截止 · 终止
        执行前快照 -> 子进程 -> 执行后快照
   <- 退出状态 + Workspace 差异 + 脱敏输出尾部
@@ -76,7 +76,7 @@ PID 回收陈旧持有者。
 
 ## Provider 配置
 
-Provider 启动配方是数据。内建默认值在 `src/adapters/providers.json`；`<dataDirectory>/providers.json`
+Provider 启动配方是数据。内建默认值在 `src/workers/providers.json`；`<dataDirectory>/providers.json`
 可以新增或覆盖。配方包含命令、参数模板、Prompt 传输方式、超时、能力和允许透传的环境变量名，
 绝不包含凭据值。Registry 与 Kernel 不按供应商名称写分支。
 

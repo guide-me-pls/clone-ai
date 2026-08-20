@@ -9,7 +9,7 @@ protocol, session database, tool stream, or completion claim.
 
 ```text
 WorkOrder -> policy + capability + approval
-  -> BlackBoxWorkerAdapter    prompt · budget · deadline · termination
+  -> BlackBoxCliWorker    prompt · budget · deadline · termination
      |                        environment allowlist
      |                        workspace snapshot before / after
   <- exit status + workspace diff + redacted output tail
@@ -18,7 +18,7 @@ WorkOrder -> policy + capability + approval
 
 ## Integrating an agent is configuration
 
-Built-in launch recipes live in `src/adapters/providers.json`. A user can add
+Built-in launch recipes live in `src/workers/providers.json`. A user can add
 or override a recipe in `<dataDirectory>/providers.json`:
 
 ```json

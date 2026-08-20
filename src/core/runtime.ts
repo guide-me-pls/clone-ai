@@ -26,7 +26,7 @@ import type {
 import type { JournalStore } from "./journal.ts";
 import { approvalKey, emptyProjection, reduceEvent, replay, subagentKey, type RuntimeProjection } from "./run-state.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
-import { CapabilityDispatcher } from "../agents/dispatcher.ts";
+import { CapabilityDispatcher } from "../workers/capability-dispatcher.ts";
 import { BUILT_IN_CATALOG, corroborateFailures, failureSignature, type FailureCategory, type FailureReport, type OutcomeCatalog } from "./failure-analysis.ts";
 import {
   artifactChanges,

@@ -17,7 +17,7 @@ import {
   snapshotWorkspace,
   type WorkspaceChange,
 } from "../core/workspace-evidence.ts";
-import type { AgentRole } from "../settings/agent-settings.ts";
+import type { AgentRole } from "../config/worker-settings.ts";
 
 export interface BlackBoxProviderConfig {
   id: string;
@@ -66,7 +66,7 @@ const DEFAULT_WORK = [
  * 权限边界不变：预算、硬截止、终止、Evidence 类型与完成判定仍然在这里。Worker 无法
  * 自报成功——成功意味着 Workspace 上出现了合同约定的产物。
  */
-export class BlackBoxWorkerAdapter implements RuntimeAdapter {
+export class BlackBoxCliWorker implements RuntimeAdapter {
   readonly id: string;
   readonly providerId: string;
   readonly #config: BlackBoxProviderConfig;

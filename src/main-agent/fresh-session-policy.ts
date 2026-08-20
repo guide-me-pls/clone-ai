@@ -1,4 +1,4 @@
-import type { BlackBoxProviderConfig } from "../adapters/black-box-worker.ts";
+import type { BlackBoxProviderConfig } from "../workers/black-box-cli-worker.ts";
 
 /**
  * Guarantees every worker invocation starts from an empty conversation.

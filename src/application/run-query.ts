@@ -1,12 +1,12 @@
-import { createConfiguredAgentRegistry } from "../adapters/configured-agent-registry.ts";
-import { workCapabilitiesForRole } from "../agents/capabilities.ts";
+import { createConfiguredAgentRegistry } from "../workers/configured-worker-registry.ts";
+import { workCapabilitiesForRole } from "../workers/capabilities.ts";
 import type { AgentRegistry, TriggerKind } from "../core/contracts.ts";
 import { createRuntimeAssembly } from "../core/runtime-factory.ts";
 import type { CloneRuntime, DispatchResult } from "../core/runtime.ts";
 import { LocalMemoryStore } from "../memory/memory-store.ts";
 import { buildFallbackPlan } from "../planning/fallback-planner.ts";
 import { createEnvironmentWorkPlanner, type PlanningAgent, type WorkPlanner } from "../planning/llm-planner.ts";
-import { defaultAgentSettings, type CloneSettings } from "../settings/agent-settings.ts";
+import { defaultWorkerProfiles, type CloneSettings } from "../config/worker-settings.ts";
 
 export interface QueryRunResult {
   runId: string;
@@ -69,7 +69,7 @@ export async function runQuery(
     matchedTerms: item.matchedTerms,
   })));
 
-  const agents = settings?.agents ?? defaultAgentSettings();
+  const agents = settings?.agents ?? defaultWorkerProfiles();
   const recalledMemories = recalled.map((item) => item.memory.summary);
   const planner = options.planner ?? createEnvironmentWorkPlanner();
   // The LLM planner is opt-in. Without credentials the deterministic local
@@ -123,7 +123,7 @@ export async function approveQueryRun(
   }
 
   await runtime.grantApproval(run.id, run.activeStepId, "Approved from the local desktop companion.");
-  const registry = options.agents ?? await createConfiguredAgentRegistry((settings?.agents ?? defaultAgentSettings()), {
+  const registry = options.agents ?? await createConfiguredAgentRegistry((settings?.agents ?? defaultWorkerProfiles()), {
       dataDirectory,
       workspacePath,
       failureCatalog,

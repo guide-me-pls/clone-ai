@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ScriptedExecutionAdapter, createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
-import { StaticAgentRegistry } from "../src/agents/static-agent-registry.ts";
+import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { DefaultPolicyEngine } from "../src/core/policy.ts";
 import { CloneRuntime } from "../src/core/runtime.ts";

@@ -1,4 +1,4 @@
-import type { AgentRole } from "../settings/agent-settings.ts";
+import type { AgentRole } from "../config/worker-settings.ts";
 
 /**
  * Domain capabilities are the routing vocabulary shared by the planner and the
