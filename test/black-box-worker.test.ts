@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { BlackBoxCliWorker, buildWorkerPrompt, resolveWindowsCommand, type BlackBoxProviderConfig } from "../src/workers/black-box-cli-worker.ts";
+import { BlackBoxCliWorker, buildWorkerPrompt, resolveWindowsCommand, terminateProcessTree, type BlackBoxProviderConfig } from "../src/workers/black-box-cli-worker.ts";
 import { corroborateFailures, classifyFailure, failureSignature } from "../src/core/failure-analysis.ts";
 import type { ExecutionAssignment, ExecutionEvent } from "../src/core/contracts.ts";
 import { diffWorkspace, snapshotWorkspace } from "../src/core/workspace-evidence.ts";
@@ -125,6 +125,52 @@ test("a hanging agent is killed at the duration budget", async (t) => {
   const failed = events.find((event) => event.type === "failed");
   assert.equal(failed?.type === "failed" && failed.report?.category, "timeout");
   assert.ok(Date.now() - startedAt < 10_000, "the supervisor must not wait on a wedged agent");
+});
+
+test("terminating a worker also kills its grandchild process", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "clone-ai-tree-"));
+  t.after(async () => rm(workspace, { recursive: true, force: true }));
+  const pidFile = join(workspace, "grandchild.pid");
+  process.env.FAKE_GRANDCHILD_PID_FILE = pidFile;
+  t.after(() => {
+    delete process.env.FAKE_GRANDCHILD_PID_FILE;
+  });
+  const { events } = await runAgent(t, { mode: "hang-with-child", maxDurationMs: 500, config: { env: ["FAKE_AGENT_MODE", "FAKE_AGENT_OUTPUT", "FAKE_GRANDCHILD_PID_FILE"] } });
+
+  const failed = events.find((event) => event.type === "failed");
+  assert.equal(failed?.type === "failed" && failed.report?.category, "timeout");
+  const grandchildPid = Number((await readFile(pidFile, "utf8")).trim());
+  assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0, "the grandchild must have recorded its pid");
+  // Give taskkill a moment, then assert the grandchild is gone.
+  // 给 taskkill 一点时间，然后断言孙进程已消失。
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  let alive = true;
+  try {
+    process.kill(grandchildPid, 0);
+  } catch {
+    alive = false;
+  }
+  assert.equal(alive, false, "the grandchild must die with its worker");
+});
+
+test("an oversized worker prompt is refused before any process starts", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "clone-ai-prompt-budget-"));
+  t.after(async () => rm(workspace, { recursive: true, force: true }));
+  const adapter = new BlackBoxCliWorker({
+    agentId: "worker",
+    config: providerConfig(),
+    workCapabilities: ["drafting"],
+  });
+  const input = assignment(workspace);
+  if (input.workOrder !== undefined) {
+    input.workOrder.objective = "x".repeat(40_000);
+  }
+
+  await assert.rejects(async () => {
+    for await (const _event of adapter.execute(input)) {
+      // Drain the generator so the promise settles. 排空生成器使 Promise 落定。
+    }
+  }, /30000-character budget/i);
 });
 
 test("only allowlisted environment variables reach the agent", async (t) => {
