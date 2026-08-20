@@ -247,6 +247,10 @@ export type JournalEventType =
   // A routing decision is not a dispatch: it records which worker was chosen
   // and why, before any process exists to dispatch to.
   // 路由决策不是一次派发：它在任何可派发的进程存在之前，记录选了哪个 Worker、为什么。
+  // What a connector saw. Journaled so a later proposal can be traced back to
+  // the observation that prompted it.
+  // Connector 看到了什么。写入 Journal，使日后的提案能回溯到引发它的那次观察。
+  | "observation.recorded"
   | "dispatch.decided"
   | "dispatch.blocked"
   | "subagent.dispatched"
@@ -282,7 +286,9 @@ export type JournalEventType =
   | "state.goal.archived"
   | "state.commitment.recorded"
   | "state.commitment.updated"
-  | "state.commitment.archived";
+  | "state.commitment.archived"
+  | "agent.installed"
+  | "agent.install_failed";
 
 export interface JournalEvent {
   id: string;
