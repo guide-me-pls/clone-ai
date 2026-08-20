@@ -2,102 +2,107 @@
 
 **English** · [简体中文](local-setup.zh-CN.md)
 
-How to run Clone AI on your own machine, on Windows and macOS. The runtime is
-local-first: everything lives under your clone home, and no data leaves the
-machine unless you configure an external integration.
+Clone AI runs on your machine as a normal command-line tool, next to the other
+coding agents you already have. Nothing leaves the device unless you configure
+an external integration.
 
-## What you need
-
-- Node.js 24+ (LTS). Clone AI runs on `node --experimental-strip-types`, so no
-  build step is needed.
-- At least one black-box worker CLI. Supported today: **Claude Code**, **Codex
-  CLI**, **Pi**, **opencode**. Each is a launch recipe; nothing about Clone AI
-  depends on which one you have.
-
-## Install
+## 1. Install
 
 ```bash
 git clone https://github.com/guide-me-pls/clone-ai.git
 cd clone-ai
 npm install --ignore-scripts
-npm run typecheck
-npm test
+npm link          # makes `clone-ai` available everywhere (npm i -g . also works)
 ```
 
-## Start the companion (GUI + daemon)
+Requirements: **Node.js 24+** (it runs TypeScript directly, no build step).
+
+Verify:
 
 ```bash
-npm run companion:debug
-# then open http://127.0.0.1:4317 in a browser
+clone-ai --version
+clone-ai doctor
 ```
 
-The desktop shell (Tauri) is a packaged alternative; it builds the same daemon
-as a sidecar. `npm run desktop:build` requires the Rust toolchain.
+`doctor` prints your clone home, Node version, and which worker CLIs are
+installed.
 
-## Talk to the Main Agent from the CLI
+## 2. Use it
 
 ```bash
-npm run main -- "整理今天需要推进的事情"
-npm run main -- "用 pi 调研这个项目的架构并写一份总结"
+clone-ai "读一下 README 并总结三点"        # talk to the Main Agent
+clone-ai "用 pi 调研这个项目并写份笔记"      # explicitly choose a worker
+clone-ai gui                              # start the GUI, opens your browser
+clone-ai status                           # runs, workers, memory, bad cases
+clone-ai workers                          # which worker CLIs are installed
+clone-ai install codex-cli                # install a missing worker
+clone-ai memory "发布流程"                  # search reviewed memories
+clone-ai cases                            # the local bad-case log
+clone-ai opportunities                    # open opportunity cards
+clone-ai bench                            # reliability benchmark
 ```
 
-The Main Agent classifies intent, routes to a worker (your explicit choice
-wins), and the Kernel validates everything before any process starts.
+The default subcommand is a conversation: `clone-ai "<request>"` behaves like
+`pi "..."` or `claude -p "..."`, except the Main Agent routes the work to a
+worker and the Kernel verifies the result.
 
-## Worker recipes (per platform)
+## 3. The GUI
 
-Recipes live in `src/workers/providers.json` and can be overridden per user in
-`<dataDirectory>/providers.json`. The `command` field is resolved automatically:
-`claude.cmd` / `pi.cmd` shims are followed to their real executables, so no
-shell and no manual paths are needed.
+```bash
+clone-ai gui                # http://127.0.0.1:4317, opens automatically
+clone-ai gui --port 4399    # pick a port
+```
 
-| Worker | Windows | macOS |
-| --- | --- | --- |
-| Claude Code | `claude.cmd` (npm global) | `claude` |
-| Codex CLI | `codex.cmd` | `codex` |
-| Pi | `pi.cmd` | `pi` |
-| opencode | `opencode.cmd` | `opencode` |
+There is no separate download: the GUI is served by the local daemon that ships
+with the CLI. A packaged desktop shell (Tauri) is optional and requires the Rust
+toolchain:
 
-Credential variables are allowlisted per recipe (`ANTHROPIC_*`, `OPENAI_API_KEY`,
-`GEMINI_API_KEY`, …). Never put credential values into `providers.json` — only
-variable names belong there.
+```bash
+npm run desktop:build
+# then run apps/desktop/src-tauri/target/.../clone-ai-desktop.exe
+```
 
-## Where your data lives
+## 4. Workers (the agents that do the work)
+
+Clone AI does not implement a coding agent; it supervises the ones you have.
+
+| Worker | Windows command | macOS command | Install |
+| --- | --- | --- | --- |
+| Claude Code | `claude.cmd` | `claude` | `clone-ai install claude-code` |
+| Codex CLI | `codex.cmd` | `codex` | `clone-ai install codex-cli` |
+| Pi | `pi.cmd` | `pi` | `clone-ai install pi` |
+| opencode | `opencode.cmd` | `opencode` | install manually |
+
+Recipes live in `src/workers/providers.json`; override or add your own in
+`<clone home>/providers.json`. Only environment **variable names** belong in a
+recipe — never credential values.
+
+Note: desktop apps (Claude Code Desktop, opencode Desktop) are not usable as
+workers. Clone AI needs a headless CLI it can run with a prompt and a workspace.
+
+## 5. Where your data lives
 
 | Item | Location |
 | --- | --- |
-| Clone home | `~/.clone-ai/` (user level) or `CLONE_AI_DATA_DIR` |
-| Journal | `<dataDirectory>/journal.jsonl` (or SQLite with `CLONE_AI_JOURNAL=sqlite`) |
-| Memory index | `<dataDirectory>/memory-index.db` + `memory/*.md` |
-| Bad cases | `<dataDirectory>/reporting/bad-cases.md` |
-| User provider overrides | `<dataDirectory>/providers.json` |
-| Failure taxonomy | `<dataDirectory>/outcomes/failures.json` |
+| Clone home | `~/.clone` (or `CLONE_AI_DATA_DIR`) |
+| Journal | `<clone home>/journal.jsonl` (`CLONE_AI_JOURNAL=sqlite` for WAL) |
+| Memory | `<clone home>/memory-index.db` + `<clone home>/memory/*.md` |
+| Bad cases | `<clone home>/reporting/bad-cases.md` |
+| Provider overrides | `<clone home>/providers.json` |
+| Failure taxonomy | `<clone home>/outcomes/failures.json` |
 
-`~/.clone-ai` is the user-level home; a workspace keeps its own `.clone-ai/`
-for legacy data until migration completes.
+## 6. Platform notes
 
-## Known platform notes
+- **Windows**: `.cmd` shims are resolved to their real executables (no shell, so
+  prompts cannot be injected as arguments); worker process trees are terminated
+  with `taskkill /T` on timeout, so no orphaned agent processes remain.
+- **macOS**: workers run in their own POSIX process group and are terminated as
+  a group. Recipes use bare command names.
 
-- **Windows**: `.cmd` shims are resolved automatically; process trees are
-  terminated via `taskkill /T` on timeout so orphaned agent grandchildren never
-  linger. Kill stale `claude.exe` processes before running tests if the suite
-  hangs.
-- **macOS**: POSIX process groups are used for termination; recipes use the
-  bare command names.
+## 7. First-run checklist
 
-## First-run checklist
-
-1. `npm test` green.
-2. `npm run main -- "你好"` returns a reply (Main Agent works).
-3. One worker installed and visible in the GUI settings → Agent registry.
-4. A real task completes end to end (see the reliability benchmark below).
-5. Bad cases accumulate in `reporting/bad-cases.md` — this file is your
-   optimization loop input.
-
-## Reliability benchmark
-
-```bash
-npm run bench          # fixed task set against real pi (a few cents)
-```
-
-See [benchmark/README.md](../benchmark/README.md).
+1. `clone-ai doctor` → at least one worker installed.
+2. `clone-ai "你好"` → the Main Agent replies.
+3. `clone-ai gui` → the browser opens the local dashboard.
+4. Run a real task, then `clone-ai status` shows it.
+5. `clone-ai cases` accumulates failures — that file drives your optimization.
