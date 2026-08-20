@@ -81,10 +81,14 @@ export function routeTask(input: RouteInput): DispatchResult {
     if (!worker.installed) {
       return blocked("REQUESTED_AGENT_UNAVAILABLE", `Worker "${requested}" is not installed on this machine.`, requested);
     }
-    const missing = missingCapabilities(worker, input.intent);
-    if (missing.length > 0) {
-      return blocked("CAPABILITY_MISMATCH", `Worker "${requested}" lacks: ${missing.join(", ")}.`, requested);
-    }
+    // No capability check here on purpose. Required capabilities are inferred
+    // from keywords, and a guess about what the task *is* must not veto what
+    // the owner explicitly asked for. The Kernel still validates the plan's
+    // declared capabilities against the adapter before anything executes, so
+    // the real safety net is unaffected.
+    // 此处刻意不做能力检查。所需能力是由关键词推断的，而"这是什么任务"的猜测不能否决
+    // 所有者的明确要求。真正的安全网不受影响：Kernel 仍会在任何执行之前，用计划声明的
+    // 能力去校验 Adapter。
     return selected(worker, "explicit", [], [], `The owner explicitly requested ${requested}.`);
   }
 

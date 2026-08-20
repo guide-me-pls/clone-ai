@@ -1,5 +1,5 @@
 import type { ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabilities } from "../../src/core/contracts.ts";
-import type { AgentSetting } from "../../src/config/worker-settings.ts";
+import type { WorkerProfile } from "../../src/config/worker-settings.ts";
 import { StaticAgentRegistry } from "../../src/workers/static-worker-registry.ts";
 
 /**
@@ -61,7 +61,7 @@ export class ScriptedExecutionAdapter implements RuntimeAdapter {
  * A small in-memory registry used only by the demo.
  * 仅供 Demo 使用的小型内存 Registry。
  */
-export function createScriptedAgentRegistry(settings?: AgentSetting[]): StaticAgentRegistry {
+export function createScriptedAgentRegistry(settings?: WorkerProfile[]): StaticAgentRegistry {
   const enabledAgents = settings === undefined
     ? defaultAgentIds.map((id) => ({ id, providerId: "demo" }))
     : settings.filter((agent) => agent.enabled).map((agent) => ({ id: agent.id, providerId: agent.providerId }));

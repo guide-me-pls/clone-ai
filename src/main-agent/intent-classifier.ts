@@ -25,14 +25,29 @@ const KIND_PATTERNS: ReadonlyArray<{ kind: TaskIntentKind; pattern: RegExp }> = 
   { kind: "planning", pattern: /\b(plan|design|roadmap|schedule|outline)\b|规划|计划|设计|排期/i },
   { kind: "operations", pattern: /\b(deploy|release|publish|send|migrate|rollback)\b|部署|发布|上线|发送|迁移/i },
   { kind: "coding", pattern: /\b(fix|implement|refactor|code|bug|test|compile|typescript)\b|修复|实现|重构|代码|编译|测试/i },
+  // A question is answered, not built. Without this, "explain X" would be
+  // routed to a worker that writes files and produce an artifact nobody asked
+  // for.
+  // 提问是要被回答的，不是要被建造的。没有这一条，"解释 X"会被路由给写文件的 Worker，
+  // 产出一个没人要过的产物。
+  { kind: "direct", pattern: /\b(explain|what is|why|how does|describe|summar)\w*\b|解释|说明|什么是|为什么|总结/i },
 ];
 
+/**
+ * Intent maps onto the capability vocabulary the dispatcher already uses
+ * (see workers/capabilities.ts). Inventing a parallel set here would let an
+ * intent match no worker at all — a request nobody can serve, for a reason
+ * nobody can see.
+ * 意图映射到 Dispatcher 已在使用的能力词汇表（见 workers/capabilities.ts）。在这里另造
+ * 一套平行词汇，会让某个意图匹配不到任何 Worker——一个没人能服务、也没人看得出原因的请求。
+ */
 const CAPABILITY_BY_KIND: Readonly<Record<TaskIntentKind, readonly string[]>> = {
-  coding: ["implementation"],
+  coding: ["drafting"],
   review: ["review"],
   research: ["research"],
   planning: ["drafting"],
   operations: ["external_action"],
+  direct: ["direct_response"],
 };
 
 /**
@@ -61,7 +76,11 @@ function detectKind(text: string): TaskIntentKind {
   for (const { kind, pattern } of KIND_PATTERNS) {
     if (pattern.test(text)) return kind;
   }
-  return "coding";
+  // An unrecognised request is answered rather than built: guessing "write
+  // code" would hand a plain question to a worker that edits the workspace.
+  // 无法识别的请求按"回答"处理而不是"建造"：猜成写代码会把一个普通问题交给会改动
+  // Workspace 的 Worker。
+  return "direct";
 }
 
 function findExplicitAgent(text: string, knownAgentIds: readonly string[]): string | undefined {
