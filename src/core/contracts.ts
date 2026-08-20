@@ -287,6 +287,8 @@ export type JournalEventType =
   | "state.commitment.recorded"
   | "state.commitment.updated"
   | "state.commitment.archived"
+  | "opportunity.proposed"
+  | "opportunity.resolved"
   | "agent.installed"
   | "agent.install_failed";
 

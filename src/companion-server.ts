@@ -15,6 +15,9 @@ import { WorkerRegistry } from "./workers/worker-registry.ts";
 import { runMainAgentQuery } from "./application/run-main-query.ts";
 import { LocalMemoryStore } from "./memory/memory-store.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
+import { OpportunityService } from "./opportunity/opportunity-service.ts";
+import { DailyReportRunner, type DailyReportSettings } from "./reporting/daily-report-runner.ts";
+import { readJsonFile } from "./config/json-file.ts";
 import { MdMemoryStore } from "./memory/md-memory-store.ts";
 import { JsonlJournalStore } from "./core/journal.ts";
 import {
@@ -25,6 +28,8 @@ import {
   type ClonePaths,
 } from "./config/clone-home.ts";
 import { CloneConfigStore } from "./config/clone-config.ts";
+import { readConnectorSettings, writeConnectorSettings } from "./connectors/connector-registry.ts";
+import { compileBriefing } from "./main-agent/situation-briefing.ts";
 import {
   listEffectiveProviderConfigs,
   readUserProviderConfigs,
@@ -102,6 +107,29 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       await syncMemory(dataDirectory, memoryStore);
     },
   });
+  // The opportunity plane and the daily bad-case report share the same
+  // journal. The report is opt-in: without reporting.json there is no email.
+  // 机会平面与每日坏案例报告共享同一本 Journal。报告是显式开启的：没有 reporting.json
+  // 就不会发邮件。
+  const opportunityService = new OpportunityService(new JsonlJournalStore(join(dataDirectory, "journal.jsonl")));
+  await opportunityService.scanAndRecord().catch(() => undefined);
+  const reporting = await readJsonFile<DailyReportSettings>(join(dataDirectory, "reporting.json"));
+  const reportRunner = reporting === undefined || reporting.enabled !== true
+    ? undefined
+    : new DailyReportRunner({
+        journal: new JsonlJournalStore(join(dataDirectory, "journal.jsonl")),
+        dataDirectory,
+        settings: reporting,
+        opportunities: () => opportunityService.list(),
+      });
+  if (reportRunner !== undefined) {
+    // Check hourly; the runner itself sends at most once per local day.
+    // 每小时检查一次；Runner 自身保证每个本地日最多发送一封。
+    const reportTimer = setInterval(() => {
+      void reportRunner.maybeSend().catch(() => undefined);
+    }, 3_600_000);
+    reportTimer.unref();
+  }
 
   const server = createServer(async (request, response) => {
     try {
@@ -120,6 +148,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         agentRegistry,
         memoryStore,
         memoryGovernance,
+        opportunityService,
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "The local runtime encountered an unexpected error.";
@@ -158,7 +187,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: WorkerSettingsStore; agentRegistry: WorkerRegistry; memoryStore: LocalMemoryStore; memoryGovernance: MemoryGovernance },
+  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: WorkerSettingsStore; agentRegistry: WorkerRegistry; memoryStore: LocalMemoryStore; memoryGovernance: MemoryGovernance; opportunityService: OpportunityService },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host}`);
 
@@ -244,6 +273,50 @@ async function handleRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/connectors") {
+    // Declarations only. A connector's target is a path the owner chose; the
+    // env list holds variable names, so nothing here can carry a credential.
+    // 只返回声明。target 是所有者选定的路径；env 只有变量名，因此这里不可能携带凭据。
+    sendJson(response, 200, { connectors: await readConnectorSettings(context.dataDirectory) });
+    return;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/connectors") {
+    const body = await readJsonBody(request);
+    const entries = Array.isArray(body.connectors) ? body.connectors : undefined;
+    if (entries === undefined) {
+      sendJson(response, 400, { error: "Provide a connectors array." });
+      return;
+    }
+    try {
+      sendJson(response, 200, { connectors: await writeConnectorSettings(context.dataDirectory, entries) });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid connector declaration." });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/situation") {
+    const briefing = await compileBriefing({
+      journal: createJournalStore(context.dataDirectory),
+      dataDirectory: context.dataDirectory,
+      workspacePath: context.workspacePath,
+    });
+    sendJson(response, 200, {
+      text: briefing.text,
+      overdue: briefing.situation.overdueCommitments,
+      dueSoon: briefing.situation.dueSoonCommitments,
+      activeGoals: briefing.situation.activeGoals,
+      selfModel: briefing.situation.selfModel,
+      observations: briefing.observations.map((result) => ({
+        connectorId: result.connectorId,
+        count: result.observations.length,
+        error: result.error,
+      })),
+    });
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/settings") {
     sendJson(response, 200, await context.agentSettings.get());
     return;
@@ -272,6 +345,21 @@ async function handleRequest(
       return;
     }
     sendJson(response, 200, await buildMemoryView(context.memoryStore));
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/opportunities") {
+    const opportunities = await context.opportunityService.list();
+    sendJson(response, 200, { opportunities });
+    return;
+  }
+  const opportunityMatch = url.pathname.match(/^\/api\/opportunities\/([^/]+)\/(accept|dismiss)$/);
+  if (request.method === "POST" && opportunityMatch?.[1] !== undefined && opportunityMatch?.[2] !== undefined) {
+    try {
+      await context.opportunityService.resolve(decodeURIComponent(opportunityMatch[1]), opportunityMatch[2] === "accept" ? "accepted" : "dismissed");
+      sendJson(response, 200, { decided: decodeURIComponent(opportunityMatch[1]) });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The opportunity could not be resolved." });
+    }
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/memory/candidates") {
