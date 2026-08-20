@@ -15,7 +15,9 @@
     "main": "node --experimental-strip-types src/main-agent/clone-main.ts",
     "bench": "node --experimental-strip-types benchmark/run.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "cli": "node src/cli/clone-ai.ts",
+    "gui": "node src/cli/clone-ai.ts gui"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
@@ -26,5 +28,16 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.2",
     "typebox": "1.3.7"
-  }
+  },
+  "bin": {
+    "clone-ai": "src/cli/clone-ai.ts"
+  },
+  "files": [
+    "src",
+    "benchmark",
+    "apps/desktop/ui",
+    "docs",
+    "README.md",
+    "README.zh-CN.md"
+  ]
 }

@@ -166,3 +166,42 @@ test("installed agents are reported generically, including user-declared ones", 
   // 命令缺失是被报告而不是抛出：GUI 仍然可用。
   assert.equal(opencode.installed, false);
 });
+
+test("connector declarations round-trip through the API and reject credential values", async (t) => {
+  const { url } = await companion(t);
+
+  const empty = await (await fetch(`${url}/api/connectors`)).json() as { connectors: unknown[] };
+  assert.deepEqual(empty.connectors, []);
+
+  const created = await fetch(`${url}/api/connectors`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ connectors: [{ id: "local-files", enabled: true, target: "/notes" }] }),
+  });
+  assert.equal(created.status, 200);
+  const stored = await (await fetch(`${url}/api/connectors`)).json() as { connectors: Array<{ id: string }> };
+  assert.deepEqual(stored.connectors.map((item) => item.id), ["local-files"]);
+
+  // The same rule as providers: a config file must never hold a credential.
+  // 与 Provider 同一条规则：配置文件绝不能存放凭据。
+  const leaky = await fetch(`${url}/api/connectors`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ connectors: [{ id: "leaky", enabled: true, env: ["TOKEN=sk-not-real"] }] }),
+  });
+  assert.equal(leaky.status, 400);
+  assert.match((await leaky.json() as { error: string }).error, /variable names only/);
+});
+
+test("the situation endpoint reports what the twin knows, with no credential content", async (t) => {
+  const { url } = await companion(t);
+
+  const response = await fetch(`${url}/api/situation`);
+  assert.equal(response.status, 200);
+  const body = await response.json() as { text: string; overdue: unknown[]; activeGoals: unknown[] };
+
+  assert.equal(typeof body.text, "string");
+  assert.ok(Array.isArray(body.overdue));
+  assert.ok(Array.isArray(body.activeGoals));
+  assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
+});
