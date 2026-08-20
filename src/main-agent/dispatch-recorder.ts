@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { JournalStore } from "../core/journal.ts";
+import type { StepAssignment } from "./plan-routing.ts";
 import type { DispatchBlocked, DispatchDecision, WorkerInvocation } from "./dispatch-contracts.ts";
 
 /**
@@ -20,6 +21,7 @@ import type { DispatchBlocked, DispatchDecision, WorkerInvocation } from "./disp
 
 export interface DispatchRecorder {
   recordDecision(decision: DispatchDecision): Promise<void>;
+  recordStepAssignments(taskId: string, assignments: readonly StepAssignment[]): Promise<void>;
   recordBlocked(blocked: DispatchBlocked): Promise<void>;
   recordInvocation(invocation: WorkerInvocation): Promise<void>;
 }
@@ -51,6 +53,26 @@ export class JournalDispatchRecorder implements DispatchRecorder {
         excludedAgentIds: decision.intent.excludedAgentIds,
         createdAt: decision.createdAt,
       },
+    });
+  }
+
+  /**
+   * Records which worker runs which step, and why.
+   *
+   * The task-level decision says who was authorized; it does not say how a
+   * multi-step plan was divided. Without this the owner sees one dispatch
+   * decision and several workers running, with no way to reconcile them.
+   * 记录哪个 Worker 执行哪个步骤，以及原因。
+   *
+   * 任务级决策说明了谁获得授权，但没有说明一个多步骤计划是如何被划分的。缺少这条记录时，
+   * 所有者只会看到一个派发决策和若干个正在运行的 Worker，无法把两者对上。
+   */
+  async recordStepAssignments(taskId: string, assignments: readonly StepAssignment[]): Promise<void> {
+    if (assignments.length === 0) return;
+    await this.#journal.append({
+      type: "dispatch.steps_assigned",
+      runId: taskId,
+      payload: { kind: "dispatch.step_assignments", taskId, assignments: [...assignments] },
     });
   }
 

@@ -252,6 +252,7 @@ export type JournalEventType =
   // Connector 看到了什么。写入 Journal，使日后的提案能回溯到引发它的那次观察。
   | "observation.recorded"
   | "dispatch.decided"
+  | "dispatch.steps_assigned"
   | "dispatch.blocked"
   | "subagent.dispatched"
   | "subagent.resumed"
