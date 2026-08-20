@@ -403,11 +403,19 @@ const MAX_PROMPT_CHARS = 30_000;
 export function terminateProcessTree(child: ChildProcess): void {
   if (child.pid === undefined) return;
   if (process.platform === "win32") {
+    // taskkill enumerates and kills the tree, but it can take seconds under
+    // load. Start it first (so grandchildren are still attached), then kill
+    // the direct child immediately: the supervisor's stream loop must end now,
+    // not when taskkill finishes.
+    // taskkill 会枚举并杀掉整棵树，但系统繁忙时可能要数秒。先启动它（此时孙进程
+    // 仍挂在树上），然后立即杀掉直接子进程：Supervisor 的流循环必须现在结束，
+    // 而不是等 taskkill 完成。
     const killer = spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], {
       stdio: "ignore",
       windowsHide: true,
     });
     killer.unref();
+    child.kill();
     return;
   }
   try {
