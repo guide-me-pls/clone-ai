@@ -186,3 +186,62 @@ test("the Main Agent conversation continues across working directories", async (
   const continued = await continueOwnerConversation(dataDirectory);
   assert.equal(continued.getSessionFile(), seededFile, "a different working directory must continue the same conversation");
 });
+
+test("resume points both the CLI and the GUI at the chosen conversation", async (t) => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-resume-"));
+  t.after(async () => rm(dataDirectory, { recursive: true, force: true }));
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const sessionDirectory = join(dataDirectory, "pi-sessions", "main-agent");
+
+  const seed = (text: string): string => {
+    const manager = SessionManager.create(process.cwd(), sessionDirectory);
+    manager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
+    manager.appendMessage({
+      role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: Date.now(),
+      api: "test", provider: "test", model: "test",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "stop",
+    });
+    return manager.getSessionFile()!;
+  };
+  const older = seed("第一段对话");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const newer = seed("第二段对话");
+
+  const { continueOwnerConversation, listOwnerConversations, writeCurrentSessionPointer } = await import("../src/main-agent/session.ts");
+  // Default: the newest conversation continues.
+  // 默认续最新的那段对话。
+  assert.equal((await continueOwnerConversation(dataDirectory)).getSessionFile(), newer);
+
+  // Resume the older one: every later entry point must follow the pointer.
+  // 恢复较早那段：之后所有入口都必须跟随该指针。
+  const rows = await listOwnerConversations(dataDirectory);
+  assert.equal(rows.length, 2);
+  await writeCurrentSessionPointer(sessionDirectory, older);
+  assert.equal((await continueOwnerConversation(dataDirectory)).getSessionFile(), older);
+
+  // A second caller (the GUI) lands in the same conversation as the CLI.
+  // 第二个调用方（GUI）与 CLI 落在同一段对话。
+  assert.equal((await continueOwnerConversation(dataDirectory)).getSessionFile(), older);
+});
+
+test("a pointer to a conversation that never materialised falls back to real history", async (t) => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-pointer-"));
+  t.after(async () => rm(dataDirectory, { recursive: true, force: true }));
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const sessionDirectory = join(dataDirectory, "pi-sessions", "main-agent");
+  const manager = SessionManager.create(process.cwd(), sessionDirectory);
+  manager.appendMessage({ role: "user", content: "真实历史", timestamp: Date.now() });
+  manager.appendMessage({
+    role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: Date.now(),
+    api: "test", provider: "test", model: "test",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop",
+  });
+  const real = manager.getSessionFile()!;
+
+  const { continueOwnerConversation, writeCurrentSessionPointer } = await import("../src/main-agent/session.ts");
+  await writeCurrentSessionPointer(sessionDirectory, join(sessionDirectory, "never-written.jsonl"));
+
+  assert.equal((await continueOwnerConversation(dataDirectory)).getSessionFile(), real);
+});
