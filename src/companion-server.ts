@@ -17,6 +17,7 @@ import { LocalMemoryStore } from "./memory/memory-store.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
 import { OpportunityService } from "./opportunity/opportunity-service.ts";
 import { DailyReportRunner, type DailyReportSettings } from "./reporting/daily-report-runner.ts";
+import { BadCaseLog } from "./reporting/bad-case-log.ts";
 import { readJsonFile } from "./config/json-file.ts";
 import { MdMemoryStore } from "./memory/md-memory-store.ts";
 import { JsonlJournalStore } from "./core/journal.ts";
@@ -113,6 +114,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   // 就不会发邮件。
   const opportunityService = new OpportunityService(new JsonlJournalStore(join(dataDirectory, "journal.jsonl")));
   await opportunityService.scanAndRecord().catch(() => undefined);
+  const badCaseLog = new BadCaseLog({ dataDirectory });
+  await badCaseLog.appendNew((await new JsonlJournalStore(join(dataDirectory, "journal.jsonl")).list())).catch(() => undefined);
   const reporting = await readJsonFile<DailyReportSettings>(join(dataDirectory, "reporting.json"));
   const reportRunner = reporting === undefined || reporting.enabled !== true
     ? undefined
@@ -149,6 +152,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         memoryStore,
         memoryGovernance,
         opportunityService,
+        badCaseLog,
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "The local runtime encountered an unexpected error.";
@@ -187,7 +191,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: WorkerSettingsStore; agentRegistry: WorkerRegistry; memoryStore: LocalMemoryStore; memoryGovernance: MemoryGovernance; opportunityService: OpportunityService },
+  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: WorkerSettingsStore; agentRegistry: WorkerRegistry; memoryStore: LocalMemoryStore; memoryGovernance: MemoryGovernance; opportunityService: OpportunityService; badCaseLog: BadCaseLog },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host}`);
 
@@ -345,6 +349,11 @@ async function handleRequest(
       return;
     }
     sendJson(response, 200, await buildMemoryView(context.memoryStore));
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/reporting/bad-cases") {
+    const text = await context.badCaseLog.readLog();
+    sendJson(response, 200, { text });
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/opportunities") {

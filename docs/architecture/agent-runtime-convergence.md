@@ -1,10 +1,10 @@
-# Agent Runtime Convergence / Agent Runtime 收敛方案
+# Agent Runtime Convergence
 
-## Outcome / 目标
+**English** · [简体中文](agent-runtime-convergence.zh-CN.md)
+
+## Outcome
 
 Clone AI has two different loops and they must not be mixed:
-
-Clone AI 存在两种不同的 Loop，必须明确分层：
 
 ```text
 Main reasoning loop (Pi Agent Core)
@@ -22,10 +22,7 @@ Pi Agent Core may power Main's reasoning. Pi CLI, Claude Code, Codex, and
 OpenCode are black-box Workers. Using Pi inside Main must never imply that Pi
 is the default Worker.
 
-Pi Agent Core 可以作为 Main 的推理引擎；Pi CLI、Claude Code、Codex、
-OpenCode 都属于黑盒 Worker。Main 使用 Pi 不代表任务默认派发给 Pi。
-
-## Non-negotiable invariants / 不变量
+## Non-negotiable invariants
 
 1. Explicit user selection wins over rules, memory, and descriptions.
 2. An unavailable explicitly requested Worker produces `blocked`; it must not
@@ -38,17 +35,7 @@ OpenCode 都属于黑盒 Worker。Main 使用 Pi 不代表任务默认派发给 
 7. A task finishes only through objective verification, not because the Worker
    claims it is finished.
 
-中文：
-
-1. 用户明确指定 Agent 时，优先级高于规则、Memory 和描述匹配。
-2. 指定 Agent 不可用时必须进入 `blocked`，不能静默切换到其他 Agent。
-3. 长期记忆归 Main 管理，Worker 只能收到有限的 `MemoryContext`。
-4. 每次 Worker 调用都必须是 `sessionPolicy: "fresh"`。
-5. Pi 必须使用 `--no-session`，不能使用续聊参数。
-6. 启动 Worker 前必须持久化 `DispatchDecision`。
-7. 只有客观验证通过才算任务完成。
-
-## Target ownership / 目标目录职责
+## Target ownership
 
 ```text
 src/
@@ -100,12 +87,9 @@ src/
 Existing files should move only after routing tests pass. Until then, imports
 must remain stable and new behavior should depend on `dispatch-contracts.ts`.
 
-只有路由测试通过后才移动已有文件。在此之前保持 import 稳定，新模块统一依赖
-`dispatch-contracts.ts`。
+## Missing modules
 
-## Missing modules / 缺失模块
-
-### P0 - Prove Main dispatch / 证明 Main 真正派发
+### P0 - Prove Main dispatch
 
 - `intent-classifier.ts`
   - Extract task kind, required capabilities, explicit Worker, and exclusions.
@@ -122,7 +106,7 @@ must remain stable and new behavior should depend on `dispatch-contracts.ts`.
 - `fresh-session-policy.ts`
   - Reject continuation flags and guarantee a new process/session per attempt.
 
-### P1 - Run one real task to terminal / 单任务收敛
+### P1 - Run one real task to terminal
 
 - `run-task-until-terminal.ts`
   - Own the loop until `succeeded`, `failed`, `blocked`, or `cancelled`.
@@ -134,7 +118,7 @@ must remain stable and new behavior should depend on `dispatch-contracts.ts`.
 - `task-store.ts`
   - Atomic persistence and restart hydration.
 
-### P2 - Production hardening / 正式化
+### P2 - Production hardening
 
 - Memory scoring by task kind and historical Worker outcomes.
 - Prompt budget and context compaction.
@@ -143,7 +127,7 @@ must remain stable and new behavior should depend on `dispatch-contracts.ts`.
 - Provider failover policies with explicit audit records.
 - GUI views for intent, memory evidence, dispatch decision, and task attempts.
 
-## Required tests / 必须通过的测试
+## Required tests
 
 ```text
 explicit Pi request
@@ -170,14 +154,11 @@ two Pi dispatches
 The first tests use fake Workers and deterministic memory. A real local Pi test
 is an opt-in integration test after the deterministic suite passes.
 
-第一层测试必须使用假 Worker 和确定性 Memory；全部通过后，再运行本地 Pi 的
-可选集成测试。
-
-## Migration notes / 迁移说明
+## Migration notes
 
 - `src/agents` should converge to `src/workers`; these objects execute tasks and
   are not the Main Agent.
-- `src/loop` should converge to `src/task-runtime`; “loop” is too ambiguous and
+- `src/loop` should converge to `src/task-runtime`; "loop" is too ambiguous and
   conflicts with the Pi reasoning loop.
 - Provider configuration stores belong under `src/config`, not under Worker
   adapters.
@@ -186,4 +167,3 @@ is an opt-in integration test after the deterministic suite passes.
 - `scripts/run-pi-task.mjs` is a vertical-slice experiment. After its behavior is
   covered by tests, move the generic behavior into `black-box-worker.ts` and
   keep scripts as thin CLI entry points only.
-
