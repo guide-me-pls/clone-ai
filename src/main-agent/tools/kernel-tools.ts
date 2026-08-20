@@ -18,6 +18,8 @@ import { createRuntimeAssembly } from "../../core/runtime-factory.ts";
 import { resolveClonePaths } from "../../config/clone-home.ts";
 import { LocalMemoryStore } from "../../memory/memory-store.ts";
 import { WorkerRegistry } from "../../workers/worker-registry.ts";
+import { compileBriefing } from "../situation-briefing.ts";
+import { createJournalStore } from "../../core/sqlite-journal.ts";
 
 export interface KernelToolsOptions {
   dataDirectory: string;
@@ -252,6 +254,37 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
       const runtime = await kernel();
       const text = await runStatusInfo(runtime, params.runId);
       return { content: [{ type: "text", text }], details: {} };
+    },
+  });
+
+  pi.registerTool({
+    name: "get_situation",
+    label: "Get Situation",
+    description:
+      "Read the owner's current situation: active goals, overdue and upcoming commitments, stated preferences and "
+      + "boundaries, and recent connector observations. Read-only. Use it to check what the owner already committed to "
+      + "before proposing new work, or when the owner asks what is going on.",
+    parameters: Type.Object({
+      dueSoonHours: Type.Optional(Type.Number({ description: "How far ahead counts as due soon. Defaults to 48." })),
+      includeObservations: Type.Optional(Type.Boolean({ description: "Read connectors as well. Defaults to true." })),
+    }),
+    execute: async (_toolCallId, params) => {
+      const paths = resolveClonePaths({ dataDirectory: options.dataDirectory });
+      const briefing = await compileBriefing({
+        journal: createJournalStore(options.dataDirectory),
+        dataDirectory: options.dataDirectory,
+        workspacePath: paths.workspacePath,
+        ...(params.dueSoonHours === undefined ? {} : { dueSoonHours: params.dueSoonHours }),
+        ...(params.includeObservations === undefined ? {} : { includeObservations: params.includeObservations }),
+      });
+      return {
+        content: [{ type: "text", text: briefing.text }],
+        details: {
+          overdue: briefing.situation.overdueCommitments.length,
+          dueSoon: briefing.situation.dueSoonCommitments.length,
+          activeGoals: briefing.situation.activeGoals.length,
+        },
+      };
     },
   });
 
