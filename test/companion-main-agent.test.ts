@@ -11,10 +11,16 @@ import { startCompanionServer } from "../src/companion-server.ts";
 // 对话驱动入口存在且不触碰模型就校验输入；完整链路由门控的真实验收测试覆盖。
 test("the companion main-agent route rejects an empty request before any model call", async (t) => {
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-companion-"));
-  t.after(async () => rm(dataDirectory, { recursive: true, force: true }));
-
   const server = await startCompanionServer({ port: 0, dataDirectory });
-  t.after(async () => server.close());
+  // after-hooks run in registration order, so the server (and the SQLite
+  // handle it owns) must be closed before the directory is removed; on Windows
+  // an open handle makes the unlink fail with EBUSY.
+  // after 钩子按注册顺序执行，因此必须先关闭 Server（及其持有的 SQLite 句柄）再删目录；
+  // Windows 上未关闭的句柄会让 unlink 以 EBUSY 失败。
+  t.after(async () => {
+    await server.close();
+    await rm(dataDirectory, { recursive: true, force: true });
+  });
 
   const rejected = await fetch(`${server.url}/api/main-agent/query`, {
     method: "POST",
