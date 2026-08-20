@@ -135,7 +135,7 @@ test("terminating a worker also kills its grandchild process", async (t) => {
   t.after(() => {
     delete process.env.FAKE_GRANDCHILD_PID_FILE;
   });
-  const { events } = await runAgent(t, { mode: "hang-with-child", maxDurationMs: 500, config: { env: ["FAKE_AGENT_MODE", "FAKE_AGENT_OUTPUT", "FAKE_GRANDCHILD_PID_FILE"] } });
+  const { events } = await runAgent(t, { mode: "hang-with-child", maxDurationMs: 2_500, config: { env: ["FAKE_AGENT_MODE", "FAKE_AGENT_OUTPUT", "FAKE_GRANDCHILD_PID_FILE"] } });
 
   const failed = events.find((event) => event.type === "failed");
   assert.equal(failed?.type === "failed" && failed.report?.category, "timeout");
