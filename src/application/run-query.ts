@@ -1,13 +1,13 @@
 import { createConfiguredAgentRegistry } from "../workers/configured-worker-registry.ts";
 import { workCapabilitiesForRole } from "../workers/capabilities.ts";
 import { WorkerRegistry } from "../workers/worker-registry.ts";
-import type { AgentRegistry, TriggerKind } from "../core/contracts.ts";
+import type { AgentRegistry, PlanStep, TriggerKind } from "../core/contracts.ts";
 import { createRuntimeAssembly } from "../core/runtime-factory.ts";
 import type { CloneRuntime, DispatchResult } from "../core/runtime.ts";
 import { LocalMemoryStore } from "../memory/memory-store.ts";
 import { buildFallbackPlan } from "../planning/fallback-planner.ts";
 import { createEnvironmentWorkPlanner, type PlanningAgent, type WorkPlanner } from "../planning/llm-planner.ts";
-import { defaultWorkerProfiles, type CloneSettings } from "../config/worker-settings.ts";
+import { defaultWorkerProfiles, type CloneSettings, type WorkerProfile } from "../config/worker-settings.ts";
 import { classifyIntent } from "../main-agent/intent-classifier.ts";
 import { routeTask } from "../main-agent/agent-router.ts";
 import { buildMemoryContextFromCandidates } from "../main-agent/memory-context-builder.ts";
@@ -147,7 +147,7 @@ export async function runQuery(
       recalledMemories,
       availableAgents: planningAgents(routableAgents),
     });
-  await runtime.attachPlan(run.id, plan);
+  await runtime.attachPlan(run.id, assignRoutedWorker(plan, selectedId, routableAgents[0]));
 
   const registry = options.agents ?? await createConfiguredAgentRegistry(agents, {
     dataDirectory,
@@ -163,6 +163,52 @@ export async function runQuery(
       source: routed.decision.source,
       usedMemoryIds: routed.decision.usedMemoryIds,
     },
+  };
+}
+
+/**
+ * Applies the routing decision to whatever the planner produced.
+ *
+ * A planner works from templates or from a model, and either can name an agent
+ * that routing already ruled out — the fallback templates hardcode ids like
+ * "draft-maker". Routing is the authority on *who* runs the work, so the plan
+ * is rewritten to the selected worker rather than trusted to have agreed.
+ * Capabilities come from the worker's own profile, because a step demanding a
+ * capability the selected worker lacks would fail at dispatch for a reason the
+ * owner never chose.
+ *
+ * 把路由决策应用到 Planner 产出的任何计划上。
+ *
+ * Planner 要么来自模板要么来自模型，两者都可能指派一个已被路由排除的 Agent——回退模板
+ * 就把 "draft-maker" 之类的 ID 写死在里面。路由才是"由谁执行"的权威，因此计划会被改写
+ * 到选定的 Worker，而不是指望它恰好一致。能力取自该 Worker 自己的 Profile，否则一个要求
+ * 选定 Worker 不具备之能力的步骤，会因为所有者从未做过的选择而在派发时失败。
+ */
+function assignRoutedWorker(
+  plan: { summary: string; steps: PlanStep[] },
+  selectedAgentId: string,
+  profile: WorkerProfile | undefined,
+): { summary: string; steps: PlanStep[] } {
+  const capabilities = profile === undefined ? undefined : workCapabilitiesForRole(profile.role);
+  return {
+    summary: plan.summary,
+    steps: plan.steps.map((step) => {
+      if (step.subagents !== undefined) {
+        return {
+          ...step,
+          subagents: step.subagents.map((order) => ({
+            ...order,
+            agentId: selectedAgentId,
+            ...(capabilities === undefined ? {} : { requiredCapabilities: capabilities }),
+          })),
+        };
+      }
+      return {
+        ...step,
+        agentId: selectedAgentId,
+        ...(capabilities === undefined ? {} : { requiredCapabilities: capabilities }),
+      };
+    }),
   };
 }
 
