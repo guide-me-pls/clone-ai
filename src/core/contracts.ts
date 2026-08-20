@@ -244,6 +244,11 @@ export type JournalEventType =
   | "approval.granted"
   | "execution.started"
   | "execution.progress"
+  // A routing decision is not a dispatch: it records which worker was chosen
+  // and why, before any process exists to dispatch to.
+  // 路由决策不是一次派发：它在任何可派发的进程存在之前，记录选了哪个 Worker、为什么。
+  | "dispatch.decided"
+  | "dispatch.blocked"
   | "subagent.dispatched"
   | "subagent.resumed"
   | "subagent.session_started"
