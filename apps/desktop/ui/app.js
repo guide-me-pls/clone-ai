@@ -83,6 +83,94 @@ function renderMemories(memory) {
   $("memory-list").innerHTML = state.memories.length ? state.memories.map((item) => `<article class="memory-card"><textarea data-memory-summary="${escape(item.id)}" aria-label="编辑本地记忆">${escape(item.summary)}</textarea><div class="memory-meta"><span>${escape(item.confidence)} 置信度</span><span>已召回 ${item.useCount || 0} 次</span>${item.lastUsedAt ? `<span>最近使用 ${time(item.lastUsedAt)}</span>` : ""}<select class="memory-status" data-memory-status="${escape(item.id)}"><option value="active" ${item.status === "active" ? "selected" : ""}>使用中</option><option value="archived" ${item.status === "archived" ? "selected" : ""}>已归档</option></select>${item.sourceRunId !== "owner" ? `<button class="memory-source" type="button" data-open-memory-source="${escape(item.sourceRunId)}">查看来源</button>` : `<span>由你添加</span>`}<button class="memory-save" type="button" data-save-memory="${escape(item.id)}">保存</button></div></article>`).join("") : `<div class="memory-empty">还没有可使用的 Memory。你可以手动添加，也可以先完成一条带证据的任务。</div>`;
 }
 function renderMemorySearch(results) { $("memory-search-results").innerHTML = results.length ? results.map((match) => `<article class="memory-match"><div><b>${escape(match.memory.summary)}</b><small>匹配：${escape((match.matchedTerms || []).join("、") || "相关上下文")}</small></div><span>${Math.round(match.score * 100)}%</span></article>`).join("") : `<div class="memory-empty">没有找到会被当前检索规则召回的使用中 Memory。</div>`; }
+
+const MEMORY_TYPES = [["preference", "偏好"], ["fact", "事实"], ["decision", "决定"], ["procedure", "流程"], ["commitment", "承诺"]];
+const MEMORY_SENSITIVITIES = [["private", "私有"], ["public", "公开"], ["secret", "机密"]];
+function options(pairs, selected) { return pairs.map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join(""); }
+
+function renderLibrary(library) {
+  state.library = library;
+  // Never redraw a card the owner is typing into: the .md content is long-form
+  // prose, and losing a half-written paragraph to a background poll is the
+  // fastest way to make an editor untrustworthy.
+  const activeElement = document.activeElement;
+  if (activeElement instanceof HTMLElement && activeElement.closest("#library-list, #library-new-content, #library-new-summary")) return;
+  const signature = JSON.stringify(library);
+  if (state.signatures.library === signature) return;
+  state.signatures.library = signature;
+  const stats = library.stats || { active: 0, archived: 0, total: 0, pending: 0, contentDirectory: "" };
+  $("library-overview").innerHTML = `<article class="memory-stat"><b>${stats.active}</b><span>使用中</span></article><article class="memory-stat"><b>${stats.archived}</b><span>已归档</span></article><article class="memory-stat"><b>${stats.pending}</b><span>待确认候选</span></article><article class="memory-stat file-stat"><b>.md</b><span>${escape(stats.contentDirectory || "-")}</span></article>`;
+  const memories = library.memories || [];
+  $("library-list").innerHTML = memories.length ? memories.map((item) => `<article class="memory-card library-card" data-library-card="${escape(item.id)}">
+    <input class="library-summary" type="text" value="${escape(item.summary)}" data-library-summary="${escape(item.id)}" aria-label="记忆摘要"/>
+    <textarea class="library-content" data-library-content="${escape(item.id)}" aria-label="记忆正文" rows="4">${escape(item.content || "")}</textarea>
+    <div class="memory-meta">
+      <select data-library-type="${escape(item.id)}" aria-label="类型">${options(MEMORY_TYPES, item.type)}</select>
+      <select data-library-sensitivity="${escape(item.id)}" aria-label="敏感度">${options(MEMORY_SENSITIVITIES, item.sensitivity)}</select>
+      <select class="memory-status" data-library-status="${escape(item.id)}" aria-label="状态"><option value="active" ${item.status === "active" ? "selected" : ""}>使用中</option><option value="archived" ${item.status === "archived" ? "selected" : ""}>已归档</option></select>
+      <span>${escape(item.confidence)} 置信度</span>
+      <span>召回 ${item.accessCount || 0} 次</span>
+      ${item.sourceRunId && item.sourceRunId !== "owner" ? `<button class="memory-source" type="button" data-open-memory-source="${escape(item.sourceRunId)}">查看来源</button>` : `<span>由你写入</span>`}
+      <span class="library-file">${escape(item.id)}.md</span>
+      <button class="memory-save" type="button" data-save-library="${escape(item.id)}">保存</button>
+    </div>
+  </article>`).join("") : `<div class="memory-empty">记忆库还是空的。写下一条你希望分身长期记住的偏好、边界或事实——它会成为一个你随时可以打开和修改的 .md 文件。</div>`;
+  if (library.syncError) announce(`磁盘上的记忆文件读取失败：${library.syncError}`, true);
+}
+
+async function saveLibraryMemory(id) {
+  const pick = (attribute) => document.querySelector(`[data-library-${attribute}="${CSS.escape(id)}"]`);
+  const body = {
+    summary: pick("summary").value,
+    content: pick("content").value,
+    type: pick("type").value,
+    sensitivity: pick("sensitivity").value,
+    status: pick("status").value,
+  };
+  const button = document.querySelector(`[data-save-library="${CSS.escape(id)}"]`);
+  if (button) button.disabled = true;
+  try {
+    await api(`/api/memory/governed/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    state.signatures.library = null;
+    await refresh();
+    announce("记忆已保存，对应的 .md 文件也已更新。");
+  } catch (error) { announce(error.message, true); } finally { if (button) button.disabled = false; }
+}
+
+async function createLibraryMemory() {
+  const summary = $("library-new-summary").value.trim();
+  if (summary.length < 3) { announce("请写下一条至少三个字的摘要。", true); return; }
+  const button = $("library-create");
+  button.disabled = true;
+  try {
+    await api("/api/memory/governed", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ summary, content: $("library-new-content").value.trim(), type: $("library-new-type").value, sensitivity: $("library-new-sensitivity").value }) });
+    $("library-new-summary").value = "";
+    $("library-new-content").value = "";
+    state.signatures.library = null;
+    await refresh();
+    announce("已写入记忆库。");
+  } catch (error) { announce(error.message, true); } finally { button.disabled = false; }
+}
+
+function renderContext(context) {
+  state.context = context;
+  const signature = JSON.stringify(context);
+  if (state.signatures.context === signature) return;
+  state.signatures.context = signature;
+  const compactions = context.compactions || [];
+  // entriesOutOfContext is the headline: it is the part of the conversation the
+  // model can no longer see but that search_history can still reach.
+  $("context-overview").innerHTML = `<article class="memory-stat"><b>${context.messageEntries || 0}</b><span>历史消息</span></article><article class="memory-stat"><b>${compactions.length}</b><span>压缩次数</span></article><article class="memory-stat"><b>${context.entriesOutOfContext || 0}</b><span>已压缩出上下文</span></article><article class="memory-stat file-stat"><b>jsonl</b><span>${escape(context.directory || "-")}</span></article>`;
+  $("context-compactions").innerHTML = compactions.length ? `<h4>压缩记录</h4><p class="candidates-hint">每一次压缩都写下了一段摘要，被摘要掉的原文仍在磁盘上，可以被搜索回来。</p>${compactions.map((item) => `<article class="memory-card"><div class="memory-meta"><span>${escape(String(item.at || "").slice(0, 16).replace("T", " "))}</span><span>压缩前约 ${item.tokensBefore || 0} tokens</span></div><p class="context-summary">${escape(item.summaryPreview || "（没有摘要文本）")}</p></article>`).join("")}` : `<div class="memory-empty">还没有发生过压缩。对话仍然完整地在模型上下文里。</div>`;
+  const conversations = context.conversations || [];
+  $("context-conversations").innerHTML = conversations.length ? `<h4>对话（${conversations.length}）</h4>${conversations.map((item) => `<article class="memory-card"><div class="memory-meta">${item.active ? `<span class="context-active">当前对话</span>` : ""}<span>${item.messages} 条消息</span><span>${time(item.updatedAt)}</span></div><p class="context-summary">${escape(item.preview || "（没有预览）")}</p></article>`).join("")}` : "";
+}
+
+function renderContextSearch(excerpts) {
+  $("context-search-results").innerHTML = excerpts.length ? excerpts.map((item) => `<article class="memory-match context-match"><div><b>${escape(item.speaker)} · ${escape(String(item.at || "").slice(0, 16).replace("T", " "))}${item.outOfContext ? " · 已压缩出上下文" : ""}</b><small>${escape(item.excerpt)}</small></div><span>${Math.round(item.score * 100)}%</span></article>`).join("") : `<div class="memory-empty">完整历史里没有匹配的内容。</div>`;
+}
+
+async function searchContextHistory(query) { try { renderContextSearch((await api(`/api/context/search?q=${encodeURIComponent(query)}`)).excerpts || []); } catch (error) { announce(error.message, true); } }
 function welcomeMarkup() { return `<div class="welcome"><div class="welcome-copy"><div class="welcome-mark">${icon("spark")}</div><h2>今天，想让我替你推进什么？</h2><p>我会先拆解、准备和验证；如果下一步会影响外部世界，我会停下来等你确认。</p><div class="suggestions"><button class="suggestion" data-suggestion="整理今天需要推进的事情">整理今天需要推进的事情</button><button class="suggestion" data-suggestion="为下周的产品发布准备计划">为下周的产品发布准备计划</button><button class="suggestion" data-suggestion="比较三个可执行方案并给我建议">比较三个可执行方案并给我建议</button></div></div></div>`; }
 function richText(value) {
   return escape(value)
@@ -157,35 +245,64 @@ function restoreDisclosureScrolls(id) {
 }
 function renderSession(session) { setTopbar(session); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false } = {}) { if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
-async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, memory, candidates, situation, config, connectors] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors")]); state.dashboard = dashboard; renderSchedules(schedules.schedules || []); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderMemories(memory); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); const sessions = state.dashboard.sessions || []; if (!state.selectedId || !sessions.some((session) => session.id === state.selectedId)) state.selectedId = sessions[0]?.id || null; renderSessions(sessions); if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
-async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll(); try { // The Main Agent owns intent: it routes to a worker or proposes a plan, and the
-  // Kernel journals every accepted run. Words (reply) and evidence (newRuns) stay separate.
-  // Main Agent 负责意图：它路由到 Worker 或提案计划，Kernel 记录每个被接受的 Run。
-  // 话语（reply）与证据（newRuns）保持分离。
-  const result = await api("/api/main-agent/query", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: query }) });
-  state.drafts.delete(state.selectedId);
-  if (result.reply) {
-    const session = await api(`/api/sessions/${encodeURIComponent(state.selectedId || "")}`).catch(() => null);
-    if (session) {
-      // Append the reply as a transient clone message in the current conversation view.
-      // 把回复作为临时 clone 消息追加到当前会话视图。
-      const card = document.createElement("div");
-      card.className = "message clone";
-      card.innerHTML = `<div class="avatar clone">C</div><div class="message-body"><div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="clone-card"><div class="clone-text">${richText(result.reply)}</div></div></div>`;
-      $("conversation-inner").appendChild(card);
-      $("conversation").scrollTop = $("conversation").scrollHeight;
-    }
-  }
-  const firstRun = result.newRuns?.[0];
-  if (firstRun) {
-    state.selectedId = firstRun.id;
-    state.scrollPositions.set(firstRun.id, { top: 0, anchor: "bottom" });
-    localStorage.setItem("clone-ai:selected-session", firstRun.id);
-  }
+async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, memory, candidates, situation, config, connectors, library, context] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context")]); state.dashboard = dashboard; renderSchedules(schedules.schedules || []); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderMemories(memory); renderLibrary(library); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); const sessions = state.dashboard.sessions || []; if (!state.selectedId || !sessions.some((session) => session.id === state.selectedId)) state.selectedId = sessions[0]?.id || null; renderSessions(sessions); if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
+async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
+  // The message and a live reply card appear before the request is sent. A model
+  // call can take many seconds, and until now the composer kept the text and the
+  // conversation showed nothing, so the app looked frozen mid-thought.
+  // 消息与实时回复卡片在请求发出之前就出现。模型调用可能耗时数秒，而此前输入框保留原文、
+  // 会话区毫无变化，应用看起来就像在思考中卡住了。
   $("query").value = ""; resizeComposer();
-  await refresh({ preserveScroll: true, scrollToBottom: true });
-  announce(firstRun ? "Main Agent 已提交计划，正在推进。" : "Main Agent 已回复（未创建任务）。");
-  } catch (error) { announce(error.message, true); } finally { button.disabled = false; $("query").focus(); } }
+  const inner = $("conversation-inner");
+  const welcome = inner.querySelector(".welcome"); if (welcome) inner.innerHTML = "";
+  inner.insertAdjacentHTML("beforeend", `<div class="message you"><div class="avatar you">你</div><div class="message-body"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="you-bubble">${escape(query)}</div></div></div>`);
+  const card = document.createElement("div"); card.className = "message clone";
+  card.innerHTML = `<div class="avatar clone">C</div><div class="message-body"><div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="clone-card"><div class="clone-text" data-streaming="1"></div></div></div>`;
+  inner.appendChild(card);
+  const target = card.querySelector(".clone-text");
+  $("conversation").scrollTop = $("conversation").scrollHeight;
+
+  let reply = ""; let result = null;
+  try {
+    const response = await fetch("/api/main-agent/stream", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: query }) });
+    if (!response.ok || !response.body) { const detail = await response.json().catch(() => ({})); throw new Error(detail.error || `请求失败：${response.status}`); }
+    const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE frames are separated by a blank line; a partial frame stays buffered.
+      // SSE 帧以空行分隔；不完整的帧留在缓冲区等待后续数据。
+      let split;
+      while ((split = buffer.indexOf(String.fromCharCode(10, 10))) >= 0) {
+        const frame = buffer.slice(0, split); buffer = buffer.slice(split + 2);
+        const event = /^event: (.+)$/m.exec(frame)?.[1]; const data = /^data: (.+)$/m.exec(frame)?.[1];
+        if (!event || !data) continue;
+        const payload = JSON.parse(data);
+        if (event === "delta") { reply += payload.delta; target.textContent = reply; $("conversation").scrollTop = $("conversation").scrollHeight; }
+        else if (event === "done") { result = payload; }
+        else if (event === "failed") { throw new Error(payload.error); }
+      }
+    }
+    if (!result) throw new Error("连接在回复完成前中断。");
+    state.drafts.delete(state.selectedId);
+    // Re-render the finished reply so links and code blocks are formatted; the
+    // streaming view stays plain text because partial markdown renders wrong.
+    // 回复完成后重新渲染，让链接与代码块获得格式；流式过程保持纯文本，因为不完整的
+    // Markdown 会渲染错乱。
+    target.removeAttribute("data-streaming"); target.innerHTML = richText(reply);
+    const firstRun = result.newRuns?.[0];
+    if (firstRun) { state.selectedId = firstRun.id; state.scrollPositions.set(firstRun.id, { top: 0, anchor: "bottom" }); localStorage.setItem("clone-ai:selected-session", firstRun.id); }
+    await refresh({ preserveScroll: true, scrollToBottom: true });
+    announce(firstRun ? "Main Agent 已提交计划，正在推进。" : "Main Agent 已回复（未创建任务）。");
+  } catch (error) {
+    // The typed text is restored so a failed send never loses what was written.
+    // 恢复已输入的文本，使一次失败的发送绝不丢失所写内容。
+    if (!reply) { $("query").value = query; resizeComposer(); card.remove(); }
+    else { target.removeAttribute("data-streaming"); target.innerHTML = richText(reply); }
+    announce(error.message, true);
+  } finally { button.disabled = false; }
+}
+
 async function approve(id) { const button = document.querySelector(`[data-approve="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { const result = await api(`/api/runs/${encodeURIComponent(id)}/approve`, { method: "POST" }); await refresh({ preserveScroll: true, scrollToBottom: true }); announce(result.status === "completed" ? "已完成并验证结果。" : "已记录确认，继续处理中。" ); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
 function resizeComposer() { const input = $("query"); input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 132)}px`; }
 function renderScheduleOptions() { const kind = $("schedule-kind").value; const options = $("schedule-options"); $("schedule-time").hidden = kind === "interval"; $("schedule-time").required = kind !== "interval"; if (kind === "interval") { options.innerHTML = `<label>每隔</label><input id="schedule-interval-value" type="number" min="1" max="10080" value="30" aria-label="间隔时长"/><select id="schedule-interval-unit" aria-label="间隔单位"><option value="1">分钟</option><option value="60">小时</option></select><span class="schedule-cron-help">按固定间隔触发，例如每隔 5 分钟；首次触发要等一个间隔，客户端关闭期间错过的不会补跑。</span>`; return; } if (kind === "weekly") { options.innerHTML = `<label>在这些日子执行：</label>${["日", "一", "二", "三", "四", "五", "六"].map((day, index) => `<label><input type="checkbox" name="schedule-weekday" value="${index}" ${index === 1 ? "checked" : ""}/>周${day}</label>`).join("")}`; return; } if (kind === "monthly") { options.innerHTML = `<label>每月 <input id="schedule-day" type="number" min="1" max="31" value="1"/> 日</label>`; return; } if (kind === "yearly") { options.innerHTML = `<label>每年 <select id="schedule-month">${Array.from({ length: 12 }, (_, index) => `<option value="${index + 1}">${index + 1} 月</option>`).join("")}</select><input id="schedule-day" type="number" min="1" max="31" value="1"/> 日</label>`; return; } options.innerHTML = `<span class="schedule-cron-help">每天在所选时间触发；如果客户端稍后启动，当天会补触发一次。</span>`; }
@@ -234,6 +351,9 @@ $("install-missing-providers").addEventListener("click", () => void installMissi
 $("audit-session-list").addEventListener("click", (event) => { const button = event.target.closest("[data-open-audit-run]"); if (button) { closeSettings(); void selectSession(button.dataset.openAuditRun); } });
 $("memory-candidates").addEventListener("click", (event) => { const promote = event.target.closest("[data-promote-candidate]"); if (promote) { void decideCandidate(promote.dataset.promoteCandidate, "promote"); return; } const reject = event.target.closest("[data-reject-candidate]"); if (reject) void decideCandidate(reject.dataset.rejectCandidate, "reject"); });
 $("memory-list").addEventListener("click", (event) => { const save = event.target.closest("[data-save-memory]"); if (save) { void saveMemory(save.dataset.saveMemory); return; } const source = event.target.closest("[data-open-memory-source]"); if (source) { closeSettings(); void selectSession(source.dataset.openMemorySource); } });
+$("library-list").addEventListener("click", (event) => { const save = event.target.closest("[data-save-library]"); if (save) { void saveLibraryMemory(save.dataset.saveLibrary); return; } const source = event.target.closest("[data-open-memory-source]"); if (source) { closeSettings(); void selectSession(source.dataset.openMemorySource); } });
+$("library-create").addEventListener("click", () => void createLibraryMemory());
+$("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length < 2) { announce("请输入至少两个字来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-settings").addEventListener("change", (event) => { const target = event.target; const enabled = target.closest("[data-memory-enabled]"); if (enabled) { void updateMemorySettings({ enabled: enabled.checked }); return; } const limit = target.closest("[data-memory-limit]"); if (limit) void updateMemorySettings({ maxRecall: Number(limit.value) }); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length < 2) { announce("请输入至少两个字来测试检索。", true); return; } void searchMemories(query); });
 $("memory-create").addEventListener("click", () => void createMemory());

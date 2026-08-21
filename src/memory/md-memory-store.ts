@@ -137,6 +137,16 @@ export class MdMemoryStore {
     this.#db.close();
   }
 
+  /**
+   * Where the .md files live. The owner is meant to open this folder, so the
+   * path is part of the store's public surface rather than a private detail.
+   * .md 文件所在目录。所有者本就应该能打开这个文件夹，因此路径属于 Store 的公开接口，
+   * 而不是私有细节。
+   */
+  get contentDirectory(): string {
+    return this.#contentDirectory;
+  }
+
   /** Commits a memory: SQLite row + term index + .md file. 提交一条记忆：写 SQLite、词表与 .md 文件。 */
   async commit(input: MemoryCommitInput): Promise<MemoryEntry> {
     const summary = input.summary.trim();
@@ -424,7 +434,11 @@ export function renderMemoryFile(entry: MemoryEntry): string {
 
 /** Parses the front-matter subset used by memory files. 解析记忆文件使用的 front matter 子集。 */
 export function parseMemoryFile(source: string): Omit<MemoryEntry, "id" | "accessCount" | "createdAt" | "updatedAt" | "lastAccessedAt"> | undefined {
-  const match = source.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  // Windows editors save CRLF. A memory the owner edited in Notepad must not be
+  // silently ignored because of line endings.
+  // Windows 编辑器保存的是 CRLF。所有者用记事本改过的记忆，不能因为换行符就被静默忽略。
+  const normalized = source.replace(/\r\n/g, "\n");
+  const match = normalized.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
   if (match === null) return undefined;
   const fields = new Map<string, string>();
   for (const line of match[1]!.split("\n")) {
@@ -459,5 +473,53 @@ function parseIds(value: string | undefined): string[] {
     return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * The Kernel's recall port, backed by the governed store.
+ *
+ * Only promoted memories are here: a mined candidate stays a candidate until
+ * the owner promotes it, so nothing reaches a worker that the owner has not
+ * accepted. That is the whole point of governance — a second, ungoverned
+ * store that also feeds recall would quietly undo it.
+ *
+ * Kernel 的召回端口，由受治理的 Store 支撑。
+ *
+ * 这里只有已提升的记忆：提炼出的候选在所有者提升之前一直只是候选，因此不会有任何
+ * 未经所有者接受的内容到达 Worker。这正是治理的全部意义——另一个不受治理、却同样
+ * 供给召回的 Store，会悄悄把它抵消掉。
+ */
+export class GovernedMemorySource {
+  readonly #dataDirectory: string;
+  readonly #maxResults: number;
+
+  constructor(dataDirectory: string, maxResults = 4) {
+    this.#dataDirectory = dataDirectory;
+    this.#maxResults = maxResults;
+  }
+
+  /**
+   * Opens the index for the length of one recall. Recall happens once per
+   * dispatch, so a short-lived connection costs nothing measurable and keeps
+   * the Kernel from holding a database handle for the life of the process —
+   * a handle that would block the owner from moving or deleting their own
+   * clone home.
+   * 只在一次召回期间打开索引。每次派发才召回一次，因此短连接的开销可以忽略，同时
+   * 避免 Kernel 在整个进程生命周期里握着数据库句柄——那样会妨碍所有者移动或删除
+   * 自己的 clone home。
+   */
+  async recall(query: string, _runId: string): Promise<Array<{ memory: { id: string; summary: string }; score: number; matchedTerms: string[] }>> {
+    const store = new MdMemoryStore({ dataDirectory: this.#dataDirectory });
+    try {
+      const matches = await store.recall(query, { maxResults: this.#maxResults });
+      return matches.map((match) => ({
+        memory: { id: match.entry.id, summary: match.entry.summary },
+        score: match.score,
+        matchedTerms: match.matchedTerms,
+      }));
+    } finally {
+      store.close();
+    }
   }
 }

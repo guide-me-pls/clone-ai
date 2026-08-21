@@ -29,8 +29,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { BlackBoxWorkerAdapter, type BlackBoxProviderConfig } from "../src/adapters/black-box-worker.ts";
-import { StaticAgentRegistry } from "../src/agents/static-agent-registry.ts";
+import { BlackBoxCliWorker, type BlackBoxProviderConfig } from "../src/workers/black-box-cli-worker.ts";
+import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { DefaultPolicyEngine } from "../src/core/policy.ts";
 import { CloneRuntime } from "../src/core/runtime.ts";
@@ -98,7 +98,7 @@ async function runTask(task: BenchTask, provider: string): Promise<BenchRecord> 
     if (recipe === undefined) {
       throw new Error(`Unknown provider "${provider}". Known providers: ${Object.keys(PROVIDERS).join(", ")}.`);
     }
-    const adapter = new BlackBoxWorkerAdapter({
+    const adapter = new BlackBoxCliWorker({
       agentId: "bench-worker",
       config: { ...recipe, id: provider, label: provider, timeoutMs: 420_000 },
       workCapabilities: ["research", "drafting", "review", "implementation", "filesystem_read", "filesystem_write", "external_action"],

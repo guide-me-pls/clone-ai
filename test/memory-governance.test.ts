@@ -136,5 +136,10 @@ test("stats reports active, archived, and pending counts", async (t) => {
   await journal.append({ type: "memory.candidate.proposed", runId: "run-1", payload: candidate("c-2") });
 
   const stats = await governance.stats();
-  assert.deepEqual(stats, { active: 1, archived: 0, total: 1, pending: 1 });
+  // The content directory travels with the stats for the GUI; assert the counts.
+  // contentDirectory 随 stats 一起提供给 GUI；这里断言计数部分。
+  assert.equal(stats.active, 1);
+  assert.equal(stats.archived, 0);
+  assert.equal(stats.total, 1);
+  assert.equal(stats.pending, 1);
 });

@@ -7,6 +7,14 @@ import type { JournalEvent, NewJournalEvent } from "./contracts.ts";
 export interface JournalStore {
   append(event: NewJournalEvent): Promise<JournalEvent>;
   list(): Promise<JournalEvent[]>;
+  /**
+   * Re-reads the durable log so events appended by another process become
+   * visible. A store that queries storage on every read may implement this as
+   * a no-op.
+   * 重新读取持久日志，使其他进程追加的事件可见。每次读取都会查询存储的实现可以把它
+   * 实现为空操作。
+   */
+  reload?(): Promise<void>;
 }
 
 /**
@@ -56,6 +64,20 @@ export class JsonlJournalStore implements JournalStore {
     await this.#ready;
     await this.#writes;
     return [...this.#events];
+  }
+
+  /**
+   * Re-reads the file. The in-memory cache is this process's view; another
+   * process writing to the same journal is invisible until it is re-read, and
+   * a consumer that never re-reads would silently ignore work created
+   * elsewhere.
+   * 重新读取文件。内存缓存只是本进程的视图；另一个进程写入同一本 Journal 的内容在重读
+   * 之前不可见，而从不重读的消费者会静默忽略别处创建的工作。
+   */
+  async reload(): Promise<void> {
+    await this.#writes;
+    this.#ready = this.load();
+    await this.#ready;
   }
 
   private async load(): Promise<void> {
