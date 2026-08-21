@@ -16,14 +16,39 @@ export interface MainAgentQueryResult {
   newRuns: Array<Pick<Run, "id" | "status" | "planId">>;
 }
 
-export async function runMainAgentQuery(dataDirectory: string, text: string): Promise<MainAgentQueryResult> {
+export interface MainAgentQueryOptions {
+  /**
+   * Called for each token as the agent produces it. The deltas exist either
+   * way; without a sink they are merely accumulated and delivered at the end,
+   * which makes a slow model look like a frozen interface.
+   * Agent 每产出一个 token 就会调用。增量本来就存在；没有接收方时它们只是被累加、最后
+   * 一次性交付，而这会让一个慢模型看起来像界面卡死。
+   */
+  onDelta?: (delta: string) => void;
+}
+
+export async function runMainAgentQuery(
+  dataDirectory: string,
+  text: string,
+  options: MainAgentQueryOptions = {},
+): Promise<MainAgentQueryResult> {
   const before = new Set((await createKernelRuntime(dataDirectory)).listRuns().map((run) => run.id));
 
   const { session } = await createMainAgentSession({ dataDirectory });
   let reply = "";
   session.subscribe((event) => {
     if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-      reply += event.assistantMessageEvent.delta;
+      const delta = event.assistantMessageEvent.delta;
+      reply += delta;
+      // A failing sink must not abort the run: the owner would lose the work
+      // over a broken pipe to a window they already closed.
+      // 接收方出错不能中断本次运行：否则所有者会因为一个已关闭窗口的断开管道而丢掉工作。
+      try {
+        options.onDelta?.(delta);
+      } catch {
+        // The transport is gone; the reply is still assembled and returned.
+        // 传输已断开；回复仍会被组装并返回。
+      }
     }
   });
   try {

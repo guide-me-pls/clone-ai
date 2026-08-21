@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task } from "./core/contracts.ts";
 import { createJournalStore } from "./core/sqlite-journal.ts";
@@ -16,6 +17,9 @@ import { runMainAgentQuery } from "./application/run-main-query.ts";
 import { LocalMemoryStore } from "./memory/memory-store.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
 import { OpportunityService } from "./opportunity/opportunity-service.ts";
+import { RunQueueConsumer } from "./application/run-queue.ts";
+import { createRuntimeAssembly } from "./core/runtime-factory.ts";
+import { createConfiguredAgentRegistry } from "./workers/configured-worker-registry.ts";
 import { DailyReportRunner, type DailyReportSettings } from "./reporting/daily-report-runner.ts";
 import { BadCaseLog } from "./reporting/bad-case-log.ts";
 import { readJsonFile } from "./config/json-file.ts";
@@ -31,6 +35,8 @@ import {
 import { CloneConfigStore } from "./config/clone-config.ts";
 import { readConnectorSettings, writeConnectorSettings } from "./connectors/connector-registry.ts";
 import { compileBriefing } from "./main-agent/situation-briefing.ts";
+import { describeHistory, mainAgentSessionDirectory, searchHistory } from "./main-agent/conversation-history.ts";
+import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
 import {
   listEffectiveProviderConfigs,
   readUserProviderConfigs,
@@ -79,7 +85,12 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   });
   const dataDirectory = paths.dataDirectory;
   const workspacePath = paths.workspacePath;
-  const clientPath = options.clientPath ?? join(process.cwd(), "apps", "desktop", "ui", "index.html");
+  // The GUI assets ship with the package, so they must be resolved relative to
+  // this module — `clone-ai gui` runs from whatever directory the owner is in.
+  // GUI 资源随包发布，因此必须相对本模块解析——`clone-ai gui` 会在所有者当前所在的
+  // 任意目录下运行。
+  const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const clientPath = options.clientPath ?? join(packageRoot, "apps", "desktop", "ui", "index.html");
   const clientDirectory = dirname(clientPath);
   const [client, clientCss, clientJs] = await Promise.all([
     readFile(clientPath, "utf8"),
@@ -97,7 +108,6 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     store: new MdMemoryStore({ dataDirectory }),
   });
   const config = new CloneConfigStore(paths);
-  await syncMemory(dataDirectory, memoryStore);
   const scheduler = new LocalScheduler({
     store: schedules,
     run: async (schedule) => {
@@ -105,13 +115,25 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         kind: "schedule",
         payload: { scheduleId: schedule.id, scheduleKind: schedule.kind, scheduleDescription: describeSchedule(schedule) },
       }, await agentSettings.get(), { workspacePath });
-      await syncMemory(dataDirectory, memoryStore);
     },
   });
   // The opportunity plane and the daily bad-case report share the same
   // journal. The report is opt-in: without reporting.json there is no email.
   // 机会平面与每日坏案例报告共享同一本 Journal。报告是显式开启的：没有 reporting.json
   // 就不会发邮件。
+  // Accepted plans must actually run. Without this consumer a Run reaching
+  // "queued" would sit there while the GUI claims progress.
+  // 已接受的计划必须真的跑起来。没有这个消费者，到达 "queued" 的 Run 会一直停在那里，
+  // 而 GUI 却宣称正在推进。
+  const { runtime: queueRuntime } = await createRuntimeAssembly({ dataDirectory, workspacePath });
+  const runQueue = new RunQueueConsumer({
+    runtime: queueRuntime,
+    registry: async () => createConfiguredAgentRegistry((await agentSettings.get()).agents, { dataDirectory, workspacePath }),
+    onError: (runId, error) => {
+      console.error(`Run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
+    },
+  });
+  runQueue.start();
   const opportunityService = new OpportunityService(new JsonlJournalStore(join(dataDirectory, "journal.jsonl")));
   await opportunityService.scanAndRecord().catch(() => undefined);
   const badCaseLog = new BadCaseLog({ dataDirectory });
@@ -176,15 +198,17 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   scheduler.start();
   return {
     url,
-    close: () => new Promise((resolve, reject) => {
+    // Shutdown waits for the queue: a consumer still writing into the data
+    // directory after close() resolves is a corrupted journal.
+    // 关闭要等待队列：close() 返回后仍在往数据目录写入的消费者，意味着损坏的 Journal。
+    close: async () => {
       scheduler.stop();
-      server.close((error) => {
-        memoryGovernance.close().then(
-          () => (error === undefined ? resolve() : reject(error)),
-          (closeError: unknown) => reject(closeError),
-        );
+      await runQueue.stop();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error === undefined ? resolve() : reject(error)));
       });
-    }),
+      await memoryGovernance.close();
+    },
   };
 }
 
@@ -377,11 +401,97 @@ async function handleRequest(
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/memory/governed") {
+    // The .md files are the content layer the owner owns, and a hand edit made
+    // in a text editor is as legitimate as one made here — so fold those edits
+    // in before reading, or the GUI would show a stale view and quietly
+    // overwrite work done outside it.
+    // .md 文件是所有者拥有的内容层，在文本编辑器里做的手改与在这里做的一样正当——
+    // 所以先把这些改动折回再读，否则 GUI 会显示过期视图，并悄悄覆盖在它之外完成的工作。
+    let syncError: string | undefined;
+    try {
+      await context.memoryGovernance.syncFromFiles();
+    } catch (error: unknown) {
+      syncError = error instanceof Error ? error.message : "The memory files could not be read.";
+    }
     const [memories, stats] = await Promise.all([
       context.memoryGovernance.list(),
       context.memoryGovernance.stats(),
     ]);
-    sendJson(response, 200, { memories, stats });
+    sendJson(response, 200, { memories, stats, ...(syncError === undefined ? {} : { syncError }) });
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/memory/governed/sync") {
+    try {
+      sendJson(response, 200, { synced: await context.memoryGovernance.syncFromFiles() });
+    } catch (error: unknown) {
+      sendJson(response, 500, { error: error instanceof Error ? error.message : "The memory files could not be synced." });
+    }
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/api/memory/governed") {
+    const body = await readJsonBody(request);
+    if (typeof body.summary !== "string" || body.summary.trim().length < 3) {
+      sendJson(response, 400, { error: "A memory needs a summary of at least three characters." });
+      return;
+    }
+    try {
+      const memory = await context.memoryGovernance.author({
+        summary: body.summary,
+        ...(typeof body.content === "string" ? { content: body.content } : {}),
+        ...(isMemoryType(body.type) ? { type: body.type } : {}),
+        ...(isSensitivity(body.sensitivity) ? { sensitivity: body.sensitivity } : {}),
+        ...(isConfidence(body.confidence) ? { confidence: body.confidence } : {}),
+      });
+      sendJson(response, 201, { memory });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The memory could not be created." });
+    }
+    return;
+  }
+  const governedMatch = url.pathname.match(/^\/api\/memory\/governed\/([^/]+)$/);
+  if (request.method === "PATCH" && governedMatch?.[1] !== undefined) {
+    const id = decodeURIComponent(governedMatch[1]);
+    const body = await readJsonBody(request);
+    const update: Parameters<MemoryGovernance["update"]>[1] = {};
+    if (typeof body.summary === "string") update.summary = body.summary;
+    if (typeof body.content === "string") update.content = body.content;
+    if (isMemoryType(body.type)) update.type = body.type;
+    if (isSensitivity(body.sensitivity)) update.sensitivity = body.sensitivity;
+    if (isConfidence(body.confidence)) update.confidence = body.confidence;
+    const status = body.status === "active" || body.status === "archived" ? body.status : undefined;
+    if (Object.keys(update).length === 0 && status === undefined) {
+      sendJson(response, 400, { error: "A memory update needs at least one field." });
+      return;
+    }
+    try {
+      // Content first, then status: an archive is recorded with its own reason,
+      // so folding it into the edit would lose why the memory went out of use.
+      // 先内容后状态：归档会带着自己的原因入账，把它并进编辑就会丢掉"为什么不再使用"。
+      let memory = Object.keys(update).length === 0
+        ? undefined
+        : await context.memoryGovernance.update(id, update);
+      if (status !== undefined) {
+        memory = status === "archived"
+          ? await context.memoryGovernance.archive(id)
+          : await context.memoryGovernance.restore(id);
+      }
+      sendJson(response, 200, { memory });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The memory could not be updated." });
+    }
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/context") {
+    sendJson(response, 200, await buildContextView(context.dataDirectory));
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/context/search") {
+    const query = url.searchParams.get("q")?.trim() ?? "";
+    if (query.length < 2) {
+      sendJson(response, 400, { error: "A history search needs at least two characters." });
+      return;
+    }
+    sendJson(response, 200, { query, excerpts: await searchHistory(context.dataDirectory, query, { limit: 12 }) });
     return;
   }
   const candidateDecisionMatch = url.pathname.match(/^\/api\/memory\/candidates\/([^/]+)\/(promote|reject)$/);
@@ -459,6 +569,44 @@ async function handleRequest(
     }
     return;
   }
+  if (request.method === "POST" && url.pathname === "/api/main-agent/stream") {
+    const body = await readJsonBody(request);
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (text.length < 3) {
+      sendJson(response, 400, { error: "Please describe the request in at least three characters." });
+      return;
+    }
+    // Server-sent events, so the owner sees the reply forming instead of a
+    // frozen window for the length of a model call.
+    // 用 SSE 推送，让所有者看到回复正在生成，而不是在整个模型调用期间面对一个卡住的窗口。
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+      // Chunks must reach the browser as they are written, not when a proxy
+      // decides the buffer is full.
+      // 分块必须在写出时就抵达浏览器，而不是等某个代理认为缓冲区满了才发。
+      "x-accel-buffering": "no",
+    });
+    const send = (event: string, data: unknown): void => {
+      response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    try {
+      const result = await runMainAgentQuery(context.dataDirectory, text, {
+        onDelta: (delta) => send("delta", { delta }),
+      });
+      send("done", result);
+    } catch (error: unknown) {
+      // The stream is already open, so a failure is delivered as an event
+      // rather than a status code the client can no longer read.
+      // 流已经打开，因此失败以事件形式送达，而不是客户端已无法读取的状态码。
+      send("failed", { error: error instanceof Error ? error.message : "The Main Agent failed." });
+    } finally {
+      response.end();
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/main-agent/query") {
     const body = await readJsonBody(request);
     const text = typeof body.text === "string" ? body.text.trim() : "";
@@ -489,7 +637,6 @@ async function handleRequest(
       await context.agentSettings.get(),
       { workspacePath: context.workspacePath },
     );
-    await syncMemory(context.dataDirectory, context.memoryStore);
     sendJson(response, 201, result);
     return;
   }
@@ -592,7 +739,6 @@ async function handleRequest(
       await context.agentSettings.get(),
       { workspacePath: context.workspacePath },
     );
-    await syncMemory(context.dataDirectory, context.memoryStore);
     sendJson(response, 200, result);
     return;
   }
@@ -864,6 +1010,51 @@ function isScheduleKind(value: unknown): value is ScheduleKind {
   return value === "daily" || value === "weekly" || value === "monthly" || value === "yearly" || value === "cron" || value === "interval";
 }
 
+function isMemoryType(value: unknown): value is MemoryType {
+  return value === "fact" || value === "preference" || value === "procedure" || value === "decision" || value === "commitment";
+}
+
+function isSensitivity(value: unknown): value is MemorySensitivity {
+  return value === "public" || value === "private" || value === "secret";
+}
+
+function isConfidence(value: unknown): value is MemoryCandidate["confidence"] {
+  return value === "low" || value === "medium" || value === "high";
+}
+
+/**
+ * What the Main Agent's context looks like right now.
+ *
+ * The number worth showing is entriesOutOfContext: how much of the
+ * conversation the model can no longer see but that is still on disk. Every
+ * other figure here is scale; that one is the gap search_history closes.
+ *
+ * Main Agent 当前上下文的样子。
+ *
+ * 真正值得展示的数字是 entriesOutOfContext：对话中模型已经看不到、但仍在磁盘上的
+ * 那部分有多少。这里其他数字都只是规模；只有这一个，是 search_history 所要弥合的缺口。
+ */
+async function buildContextView(dataDirectory: string) {
+  const [history, conversations, current] = await Promise.all([
+    describeHistory(dataDirectory),
+    listOwnerConversations(dataDirectory),
+    readCurrentSessionPointer(mainAgentSessionDirectory(dataDirectory)),
+  ]);
+  const active = current ?? conversations[0]?.path;
+  return {
+    ...history,
+    directory: mainAgentSessionDirectory(dataDirectory),
+    ...(active === undefined ? {} : { activeSession: active }),
+    conversations: conversations.map((row) => ({
+      path: row.path,
+      messages: row.messages,
+      preview: row.preview,
+      updatedAt: new Date(row.mtimeMs).toISOString(),
+      active: row.path === active,
+    })),
+  };
+}
+
 function toTraceItem(event: JournalEvent): TraceItem {
   return { ...toTimelineItem(event), sequence: event.sequence, type: event.type };
 }
@@ -974,13 +1165,20 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
-async function syncMemory(dataDirectory: string, memoryStore: LocalMemoryStore): Promise<void> {
-  const journal = createJournalStore(dataDirectory);
-  const candidates = (await journal.list())
-    .filter((event) => event.type === "memory.candidate.proposed")
-    .map((event) => event.payload as MemoryCandidate);
-  await memoryStore.sync(candidates);
-}
+/**
+ * Candidates are no longer synced into any recall source.
+ *
+ * A mined candidate is a proposal. Copying it into an active memory store made
+ * it reachable by the next task's recall before the owner ever saw it — the
+ * exact memory pollution the governance layer exists to prevent. Candidates now
+ * stay in the journal until the owner promotes them through MemoryGovernance.
+ *
+ * 候选不再被同步进任何召回来源。
+ *
+ * 提炼出的候选只是提案。把它拷贝进活跃记忆库，会让它在所有者见到之前就能被下一个任务
+ * 召回——这正是治理层要防止的记忆污染。候选现在留在 Journal 中，直到所有者经
+ * MemoryGovernance 提升它们。
+ */
 
 async function buildMemoryView(memoryStore: LocalMemoryStore) {
   const [memories, settings] = await Promise.all([memoryStore.list(), memoryStore.settings()]);

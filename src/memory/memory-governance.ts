@@ -95,8 +95,53 @@ export class MemoryGovernance {
     });
   }
 
+  /**
+   * The owner writing a memory by hand. This is the one commit path that cites
+   * no evidence, and it is legitimate precisely because the owner is the
+   * evidence — a stated preference is true by virtue of being stated. A mined
+   * candidate has no such standing, which is why promote() still demands
+   * citations.
+   *
+   * 所有者手写一条记忆。这是唯一不引用证据的提交路径，而它之所以正当，恰恰因为所有者
+   * 本人就是证据——一条被声明的偏好，因其被声明而为真。被提炼的候选没有这种地位，
+   * 所以 promote() 依然强制要求引用。
+   */
+  async author(input: {
+    summary: string;
+    content?: string;
+    type?: MemoryType;
+    confidence?: MemoryCandidate["confidence"];
+    sensitivity?: MemoryCandidate["sensitivity"];
+    expiresAt?: string;
+  }): Promise<MemoryEntry> {
+    const entry = await this.#store.commit({
+      summary: input.summary,
+      ...(input.content === undefined ? {} : { content: input.content }),
+      type: input.type ?? "preference",
+      // Owner-authored memory is high confidence by definition: it is not an
+      // inference about the owner, it is the owner speaking.
+      // 所有者手写的记忆按定义就是高置信：它不是对所有者的推断，而是所有者本人在说话。
+      confidence: input.confidence ?? "high",
+      sensitivity: input.sensitivity ?? "private",
+      sourceRunId: "owner",
+      sourceEvidenceIds: [],
+      ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
+    });
+    await this.#journal.append({
+      type: "memory.authored",
+      payload: {
+        memoryId: entry.id,
+        summary: entry.summary,
+        type: entry.type,
+        sensitivity: entry.sensitivity,
+        authoredAt: entry.createdAt,
+      },
+    });
+    return entry;
+  }
+
   /** Corrects a committed memory. 修正一条已提交的记忆。 */
-  async update(memoryId: string, update: { summary?: string; type?: MemoryType; confidence?: MemoryCandidate["confidence"]; sensitivity?: MemoryCandidate["sensitivity"]; expiresAt?: string }): Promise<MemoryEntry> {
+  async update(memoryId: string, update: { summary?: string; content?: string; type?: MemoryType; confidence?: MemoryCandidate["confidence"]; sensitivity?: MemoryCandidate["sensitivity"]; expiresAt?: string }): Promise<MemoryEntry> {
     const entry = await this.#store.update(memoryId, update);
     await this.#journal.append({
       type: "memory.updated",
@@ -131,6 +176,41 @@ export class MemoryGovernance {
     return ids;
   }
 
+  /** Brings an archived memory back into use. 让一条已归档的记忆重新生效。 */
+  async restore(memoryId: string): Promise<MemoryEntry> {
+    const entry = await this.#store.restore(memoryId);
+    await this.#journal.append({
+      type: "memory.restored",
+      payload: { memoryId, restoredAt: entry.updatedAt },
+    });
+    return entry;
+  }
+
+  /**
+   * Folds hand edits made directly to the .md files back into the index.
+   *
+   * The files are the content layer the owner owns, so an edit made in a text
+   * editor is as legitimate as one made in the GUI — but the index would not
+   * know about it until something looks. This is that look, and it is journaled
+   * so the audit trail shows the index changed without a GUI action.
+   *
+   * 把直接在 .md 文件上做的手动编辑折回索引。
+   *
+   * 文件是所有者拥有的内容层，因此在文本编辑器里做的修改与在 GUI 里做的一样正当——
+   * 只是在有人去看之前，索引不会知道。这里就是那次"去看"，并且写入 Journal，
+   * 使审计轨迹能显示索引在没有 GUI 动作的情况下发生了变化。
+   */
+  async syncFromFiles(): Promise<{ added: number; archived: number; updated: number }> {
+    const counters = await this.#store.syncFromFiles();
+    if (counters.added > 0 || counters.archived > 0 || counters.updated > 0) {
+      await this.#journal.append({
+        type: "memory.updated",
+        payload: { source: "files", ...counters, syncedAt: new Date().toISOString() },
+      });
+    }
+    return counters;
+  }
+
   async list(options: { status?: "active" | "archived"; type?: MemoryType } = {}): Promise<MemoryEntry[]> {
     return this.#store.list(options);
   }
@@ -139,10 +219,10 @@ export class MemoryGovernance {
     return this.#store.recall(query, options);
   }
 
-  async stats(): Promise<{ active: number; archived: number; total: number; pending: number }> {
+  async stats(): Promise<{ active: number; archived: number; total: number; pending: number; contentDirectory: string }> {
     const storeStats = await this.#store.stats();
     const pending = (await this.pendingCandidates()).length;
-    return { ...storeStats, pending };
+    return { ...storeStats, pending, contentDirectory: this.#store.contentDirectory };
   }
 
   /** Releases the underlying SQLite handle. 释放底层 SQLite 句柄。 */

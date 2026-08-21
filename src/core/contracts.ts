@@ -252,6 +252,7 @@ export type JournalEventType =
   // Connector 看到了什么。写入 Journal，使日后的提案能回溯到引发它的那次观察。
   | "observation.recorded"
   | "dispatch.decided"
+  | "dispatch.steps_assigned"
   | "dispatch.blocked"
   | "subagent.dispatched"
   | "subagent.resumed"
@@ -271,8 +272,13 @@ export type JournalEventType =
   | "memory.candidate.proposed"
   | "memory.candidate.promoted"
   | "memory.candidate.rejected"
+  // The owner writing a memory by hand. Distinct from a promoted candidate:
+  // it cites no evidence because the owner is the evidence.
+  // 所有者手写的一条记忆。与被提升的候选不同：它不引用任何证据，因为所有者本人就是证据。
+  | "memory.authored"
   | "memory.updated"
   | "memory.archived"
+  | "memory.restored"
   | "memory.recalled"
   // Personal state is journal-projected like every other durable fact, so the
   // owner's model of themselves survives a deleted projection.

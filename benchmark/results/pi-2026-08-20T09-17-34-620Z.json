@@ -1,0 +1,24 @@
+{
+  "provider": "pi",
+  "ranAt": "2026-08-20T09:17:34.620Z",
+  "records": [
+    {
+      "taskId": "summarize",
+      "title": "Read-only summary",
+      "passed": true,
+      "expectedFailure": false,
+      "status": "completed",
+      "durationMs": 18155,
+      "artifacts": [
+        {
+          "path": "out/summary.md",
+          "bytes": 663
+        },
+        {
+          "path": "README.md",
+          "bytes": 236
+        }
+      ]
+    }
+  ]
+}

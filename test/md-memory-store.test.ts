@@ -174,3 +174,21 @@ test("renderMemoryFile and parseMemoryFile round-trip", () => {
   assert.deepEqual(parsed?.sourceEvidenceIds, ["ev-a"]);
   assert.match(parsed?.content ?? "", /详细论证/);
 });
+
+test("a memory edited in a Windows editor (CRLF) is still folded back", async (t) => {
+  const { store, directory } = await openStore(t);
+  const [release] = await seed(store);
+
+  // Notepad and most Windows editors save CRLF; the owner's edit must survive.
+  // 记事本与多数 Windows 编辑器保存 CRLF；所有者的编辑必须能被识别。
+  const fs = await import("node:fs/promises");
+  const path = join(directory, "memory", `${release.id}.md`);
+  const crlf = (await fs.readFile(path, "utf8"))
+    .replace("产品发布前先准备风险清单并保留回滚方案", "记事本里改过的摘要")
+    .replace(/\n/g, "\r\n");
+  await fs.writeFile(path, crlf, "utf8");
+
+  const result = await store.syncFromFiles();
+  assert.equal(result.updated, 1);
+  assert.match((await store.get(release.id))?.summary ?? "", /记事本里改过的摘要/);
+});

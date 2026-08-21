@@ -10,7 +10,7 @@ import { JsonWorkspaceCheckpointStore } from "./workspace-evidence.ts";
 import { EvidenceVerifier } from "./verification.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { AgentMemoryWorker } from "../memory/agent-memory-worker.ts";
-import { LocalMemoryStore } from "../memory/memory-store.ts";
+import { GovernedMemorySource } from "../memory/md-memory-store.ts";
 
 export interface RuntimeAssembly {
   paths: ClonePaths;
@@ -45,7 +45,9 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
     verifier: new EvidenceVerifier(),
     memory,
     failureCatalog,
-    memorySource: new LocalMemoryStore(paths.memoryFile),
+    // Recall comes from the governed store only: promoted memories, never raw
+    // candidates. 召回只来自受治理的 Store：只有已提升的记忆，绝不包含原始候选。
+    memorySource: new GovernedMemorySource(paths.dataDirectory),
     workspacePath: paths.workspacePath,
     workspaceCheckpointStore: new JsonWorkspaceCheckpointStore(paths.checkpointsDirectory),
     workspaceCheckpointDirectory: join(paths.dataDirectory, "checkpoints"),
