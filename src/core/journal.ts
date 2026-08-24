@@ -4,9 +4,41 @@ import { randomUUID } from "node:crypto";
 
 import type { JournalEvent, NewJournalEvent } from "./contracts.ts";
 
+/**
+ * A lease granting one process the exclusive right to execute a Run.
+ * 授予某个进程独占执行某个 Run 的租约。
+ */
+export interface RunClaim {
+  runId: string;
+  ownerId: string;
+  leaseUntil: string;
+  attempt: number;
+}
+
 export interface JournalStore {
   append(event: NewJournalEvent): Promise<JournalEvent>;
   list(): Promise<JournalEvent[]>;
+  /**
+   * Atomically take exclusive ownership of a Run, or return undefined if
+   * another live owner holds it.
+   *
+   * Scanning for `queued` runs and then executing them is a read followed by a
+   * write: two consumers can both read the same run as unclaimed and both
+   * dispatch it. Only a store that decides the winner inside one transaction
+   * can prevent duplicate execution, so the claim belongs here rather than in
+   * the consumer.
+   *
+   * 原子地取得某个 Run 的独占所有权；若已有其他存活持有者，则返回 undefined。
+   *
+   * 先扫描 `queued` 再执行，是一次读后跟一次写：两个消费者可能都读到同一个 Run 尚未
+   * 被领取，然后都去派发。只有在单个事务内定胜负的存储才能阻止重复执行，因此领取
+   * 属于这里，而不是消费者。
+   */
+  claimRun?(input: { runId: string; ownerId: string; leaseMs: number }): Promise<RunClaim | undefined>;
+  /** Extends a held lease so long work is not stolen mid-flight. 延长已持有的租约，避免长任务中途被抢走。 */
+  renewClaim?(input: { runId: string; ownerId: string; leaseMs: number }): Promise<boolean>;
+  /** Releases a lease so a retry can happen immediately. 释放租约，使重试可以立即发生。 */
+  releaseClaim?(input: { runId: string; ownerId: string }): Promise<void>;
   /**
    * Re-reads the durable log so events appended by another process become
    * visible. A store that queries storage on every read may implement this as
@@ -19,11 +51,19 @@ export interface JournalStore {
 
 /**
  * A deliberately small durable event store for the first runtime milestone.
- * The JSONL format is inspectable and replayable; a SQLite implementation can
- * later satisfy the same interface without changing the runtime contract.
+ * The JSONL format is inspectable and replayable.
  *
- * 这是第一阶段刻意保持很小的持久事件存储。JSONL 可检查、可重放；以后 SQLite 实现可以
- * 复用同一接口，而不用改变 Runtime Contract。
+ * It is single-process only. `#nextSequence` lives in memory, so two processes
+ * writing the same file both start from the sequence they read at startup and
+ * produce duplicates; it also offers no way to claim a Run. The daemon uses
+ * SQLite for exactly these reasons — this remains for inspection, tests, and
+ * migration.
+ *
+ * 这是第一阶段刻意保持很小的持久事件存储，JSONL 可检查、可重放。
+ *
+ * 它仅限单进程。`#nextSequence` 住在内存里，两个进程写同一文件时都从启动时读到的
+ * sequence 开始，从而产生重复；它也无法领取 Run。Daemon 正是因此使用 SQLite——
+ * 本实现保留给检查、测试与迁移使用。
  */
 export class JsonlJournalStore implements JournalStore {
   readonly #path: string;

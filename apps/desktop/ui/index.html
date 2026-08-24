@@ -29,6 +29,7 @@
           <div class="top-actions"><span class="status-pill" id="session-status">准备就绪</span><span class="private-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>仅本地</span></div>
         </header>
 
+        <div class="opportunity-strip" id="opportunity-strip" hidden aria-label="分身发现的机会"></div>
         <section class="conversation" id="conversation" aria-live="polite"><div class="conversation-inner" id="conversation-inner"></div></section>
         <button class="scroll-bottom" id="scroll-bottom" type="button">回到底部</button>
 
@@ -84,7 +85,7 @@
               <p class="agent-runtime-note">Agent 以黑盒方式接入：Clone AI 只提供 Prompt 与工作目录，凭退出状态和工作区里真正发生的变化来判断结果，不解析任何 Provider 的内部协议。接入新 Agent 只需增加配置。</p>
             </section>
             <section class="settings-panel" data-settings-panel="memory" hidden>
-              <h3>记忆库</h3><p>每条记忆都是一个 <code>.md</code> 文件，正文归你所有。你可以在这里改，也可以直接用编辑器改文件——打开这个面板时会自动把磁盘上的改动同步回来。子 Agent 只会收到摘要，正文不出本机。</p>
+              <h3>记忆库</h3><p>每条记忆都是一个 <code>.md</code> 文件，正文归你所有。你可以在这里改，也可以直接用编辑器改文件——打开这个面板时会自动把磁盘上的改动同步回来。分身与子 Agent 都从这一个库召回。</p>
               <div class="memory-overview" id="library-overview"></div>
               <div class="memory-tools">
                 <div class="memory-tool-row">
@@ -98,18 +99,11 @@
                   <button class="primary" id="library-create" type="button">写入记忆库</button>
                 </div>
                 <textarea id="library-new-content" placeholder="正文（可选）：展开说明背景、边界或例外。留空则与摘要相同。" aria-label="新记忆正文"></textarea>
+                <form class="memory-tool-row" id="memory-search-form"><input id="memory-search-query" type="text" placeholder="测试当前任务会召回哪些记忆" aria-label="测试 Memory 检索"/><button type="submit">测试检索</button></form>
+                <div class="memory-search-results" id="memory-search-results"></div>
               </div>
               <div class="memory-candidates" id="memory-candidates"></div>
               <div class="memory-list" id="library-list"></div>
-              <h3 class="settings-subheading">任务召回记忆</h3><p>另一套更轻的记忆：只有一行摘要，用于在派发任务时给子 Agent 提供背景。上面的记忆库是分身自己用的，这里是交给别人用的。</p>
-              <div class="memory-overview" id="memory-overview"></div>
-              <div class="memory-tools">
-                <div class="memory-tool-row" id="memory-settings"></div>
-                <form class="memory-tool-row" id="memory-search-form"><input id="memory-search-query" type="text" placeholder="测试当前任务会召回哪些记忆" aria-label="测试 Memory 检索"/><button type="submit">测试检索</button></form>
-                <div class="memory-search-results" id="memory-search-results"></div>
-                <div class="memory-tool-row"><textarea id="memory-new-summary" placeholder="手动添加一条长期偏好、约束或背景信息" aria-label="添加本地 Memory"></textarea><button class="primary" id="memory-create" type="button">添加 Memory</button></div>
-              </div>
-              <div class="memory-list" id="memory-list"></div>
             </section>
             <section class="settings-panel" data-settings-panel="context" hidden>
               <h3>上下文</h3><p>对话变长时上下文会被自动压缩，但没有任何东西被删除：压缩只是写入一段摘要并记下切点，原文仍在磁盘上。分身可以用 <code>search_history</code> 把它们找回来。</p>
