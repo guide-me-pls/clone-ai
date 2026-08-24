@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { startCompanionServer, type RunningCompanionServer } from "../src/companion-server.ts";
-import { JsonlJournalStore } from "../src/core/journal.ts";
+import { createJournalStore } from "../src/core/sqlite-journal.ts";
 
 async function companion(t: TestContext): Promise<{ url: string; dataDirectory: string }> {
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-api-home-"));
@@ -113,7 +113,10 @@ test("memory candidates can be listed and promoted through the API", async (t) =
     await rm(dataDirectory, { recursive: true, force: true });
     await rm(workspacePath, { recursive: true, force: true });
   });
-  const journal = new JsonlJournalStore(join(dataDirectory, "journal.jsonl"));
+  // Seed through the same seam the daemon uses, so the fixture lands in
+  // whichever journal the server will actually read.
+  // 通过 Daemon 使用的同一 seam 写入，使夹具数据落在服务端真正会读的那本 Journal 里。
+  const journal = createJournalStore(dataDirectory);
   await journal.append({
     type: "evidence.recorded",
     runId: "run-1",
@@ -131,6 +134,11 @@ test("memory candidates can be listed and promoted through the API", async (t) =
       createdAt: new Date().toISOString(), type: "preference", sensitivity: "private",
     },
   });
+  // Release the seeding handle before the server opens its own: the fixture is
+  // written, and holding the database open would block cleanup on Windows.
+  // 在服务端打开自己的句柄之前先释放播种用的句柄：夹具已写入，而押着数据库会在
+  // Windows 上阻碍清理。
+  (journal as { close?: () => void }).close?.();
   server = await startCompanionServer({ port: 0, dataDirectory, workspacePath });
   const url = server.url;
 

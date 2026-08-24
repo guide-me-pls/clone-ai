@@ -16,10 +16,11 @@ import type { PlanStep } from "../../core/contracts.ts";
 import type { CloneRuntime } from "../../core/runtime.ts";
 import { createRuntimeAssembly } from "../../core/runtime-factory.ts";
 import { resolveClonePaths } from "../../config/clone-home.ts";
-import { LocalMemoryStore } from "../../memory/memory-store.ts";
+import { GovernedMemorySource } from "../../memory/md-memory-store.ts";
 import { WorkerRegistry } from "../../workers/worker-registry.ts";
 import { compileBriefing } from "../situation-briefing.ts";
 import { describeHistory, searchHistory } from "../conversation-history.ts";
+import { PersonalStateStore } from "../../state/personal-state-store.ts";
 import { createJournalStore } from "../../core/sqlite-journal.ts";
 
 export interface KernelToolsOptions {
@@ -36,9 +37,9 @@ export interface PlanProposalResult {
 
 /**
  * Build the Kernel runtime exactly like the query workflow does. The journal
- * backend (JSONL default, CLONE_AI_JOURNAL=sqlite for WAL) sits behind the
- * same seam. 与 Query 工作流相同方式构建 Kernel Runtime；Journal 后端（默认 JSONL，
- * CLONE_AI_JOURNAL=sqlite 启用 WAL）位于同一 seam 之后。
+ * backend (SQLite by default, CLONE_AI_JOURNAL=jsonl for the plain file) sits
+ * behind the same seam. 与 Query 工作流相同方式构建 Kernel Runtime；Journal 后端
+ * （默认 SQLite，CLONE_AI_JOURNAL=jsonl 切回纯文件）位于同一 seam 之后。
  */
 export async function createKernelRuntime(dataDirectory: string): Promise<CloneRuntime> {
   // The Main Agent must see exactly the Kernel the daemon and the Query
@@ -48,6 +49,27 @@ export async function createKernelRuntime(dataDirectory: string): Promise<CloneR
   // 会让它对 Run、记忆和恢复的视图偏离它本应提案的那个权威。
   const { runtime } = await createRuntimeAssembly({ dataDirectory });
   return runtime;
+}
+
+/**
+ * The same Kernel runtime, plus the handle needed to release it.
+ *
+ * A SQLite journal keeps the database file open for as long as the runtime
+ * lives. A caller that owns the clone home — a test with a temporary
+ * directory, or any short-lived command — must be able to close it, or the
+ * directory cannot be removed and the owner cannot move their own data.
+ *
+ * 同一个 Kernel Runtime，再加上释放它所需的句柄。
+ *
+ * 只要 Runtime 还活着，SQLite Journal 就一直打开着数据库文件。拥有 clone home 的
+ * 调用方——使用临时目录的测试，或任何短命命令——必须能关闭它，否则目录删不掉，
+ * 所有者也搝不动自己的数据。
+ */
+export async function createKernelRuntimeSession(
+  dataDirectory: string,
+): Promise<{ runtime: CloneRuntime; close: () => void }> {
+  const { runtime, close } = await createRuntimeAssembly({ dataDirectory });
+  return { runtime, close };
 }
 
 /**
@@ -104,10 +126,23 @@ export async function requestApprovalInfo(runtime: CloneRuntime, runId: string):
   return `Run ${run.id} status: ${run.status}${run.activeStepId === undefined ? "" : `, active step: ${run.activeStepId}`}.`;
 }
 
-/** Read-only: lexical recall over the local memory store. 只读：本地记忆库的词法召回。 */
+/**
+ * Read-only recall over the owner's governed memory library.
+ *
+ * This is the same store the Kernel compiles into every worker assignment, so
+ * the Main Agent and the workers recall from one library. Reading a separate
+ * legacy store here meant the twin could "remember" something in conversation
+ * that no worker would ever see, and forget something the owner had approved.
+ *
+ * 对所有者受治理记忆库的只读召回。
+ *
+ * 这正是 Kernel 编译进每一次 Worker 派发的同一个 Store，因此 Main Agent 与 Worker 从
+ * 同一个库召回。在这里读另一套 legacy store，意味着分身会在对话中“记得”一些任何
+ * Worker 都看不到的东西，又遗忘所有者已经批准的东西。
+ */
 export async function recallMemories(dataDirectory: string, query: string, runId = "main-agent"): Promise<string> {
-  const store = new LocalMemoryStore(resolveClonePaths({ dataDirectory }).memoryFile);
-  const matches = await store.recall(query, runId);
+  const source = new GovernedMemorySource(dataDirectory);
+  const matches = await source.recall(query, runId);
   if (matches.length === 0) return "No matching memories.";
   return matches.map((match) => `[${match.score.toFixed(2)}] ${match.memory.summary}`).join("\n");
 }
@@ -129,6 +164,85 @@ export async function runStatusInfo(runtime: CloneRuntime, runId: string): Promi
     ...(run.activeStepId === undefined ? [] : [`Active step: ${run.activeStepId}`]),
     `Subagents: ${completed}/${subagents.length} completed`,
   ].join("\n");
+}
+
+export type OwnerStateInput =
+  | { kind: "goal"; ownerSaid: string; title: string; motivation?: string; targetDate?: string }
+  | {
+    kind: "commitment";
+    ownerSaid: string;
+    title: string;
+    commitmentKind: "deadline" | "appointment" | "recurring" | "promise";
+    dueAt?: string;
+    everyDays?: number;
+    goalId?: string;
+  }
+  | { kind: "boundary" | "preference"; ownerSaid: string; statement: string };
+
+/**
+ * Records personal state the owner stated in conversation.
+ *
+ * The agent is the scribe, never the author: the entry is attributed to the
+ * owner, and it only exists if the owner's own words can be found in the
+ * recorded conversation. The quote check is what turns "the agent may propose"
+ * into a mechanical rule — an inferred preference the owner never voiced has
+ * no quote to match and is refused here, not merely discouraged in a prompt.
+ *
+ * 记录所有者在对话中说出的个人状态。
+ *
+ * Agent 是抄写员，永远不是作者：条目归于所有者，且只有当所有者本人的话能在已记录的
+ * 对话中找到时，条目才存在。引文核验把“Agent 只能提案”从一句提示变成一条机械规则——
+ * 所有者从未说过的推断偏好没有可匹配的引文，会在这里被拒绝，而不只是在提示词里被劝阻。
+ */
+export async function recordOwnerState(
+  dataDirectory: string,
+  input: OwnerStateInput,
+): Promise<{ recorded: true; kind: string; id: string; title: string } | { recorded: false; reason: string }> {
+  const { ownerStated } = await import("../conversation-history.ts");
+  if (!(await ownerStated(dataDirectory, input.ownerSaid))) {
+    return {
+      recorded: false,
+      reason:
+        `The owner is not on record as saying this. Quote their exact words from this conversation in ownerSaid; `
+        + `an inference about the owner must be said to them, not recorded.`,
+    };
+  }
+
+  const journal = createJournalStore(dataDirectory);
+  try {
+    const store = new PersonalStateStore(journal);
+    const provenance = { authoredBy: "owner" as const, proposedBy: "clone-main" };
+    if (input.kind === "goal") {
+      const goal = await store.recordGoal({
+        title: input.title,
+        ...(input.motivation === undefined ? {} : { motivation: input.motivation }),
+        ...(input.targetDate === undefined ? {} : { targetDate: input.targetDate }),
+        provenance,
+      });
+      return { recorded: true, kind: "goal", id: goal.id, title: goal.title };
+    }
+    if (input.kind === "commitment") {
+      const commitment = await store.recordCommitment({
+        title: input.title,
+        kind: input.commitmentKind,
+        ...(input.dueAt === undefined ? {} : { dueAt: input.dueAt }),
+        ...(input.everyDays === undefined ? {} : { everyDays: input.everyDays }),
+        ...(input.goalId === undefined ? {} : { goalId: input.goalId }),
+        provenance,
+      });
+      return { recorded: true, kind: "commitment", id: commitment.id, title: commitment.title };
+    }
+    const entry = await store.recordSelfModel({
+      statement: input.statement,
+      category: input.kind === "boundary" ? "boundary" : "preference",
+      provenance,
+    });
+    return { recorded: true, kind: input.kind, id: entry.id, title: entry.statement };
+  } catch (error: unknown) {
+    return { recorded: false, reason: error instanceof Error ? error.message : String(error) };
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
 }
 
 /**
@@ -155,10 +269,14 @@ export async function installWorkerAgent(dataDirectory: string, agentId: string)
   if (!provider.installable) {
     return { installed: false, error: `Worker "${agentId}" has no automatic installer; install its command and restart Clone AI.` };
   }
+  // One assembly for the whole operation, closed on both paths: a leaked
+  // SQLite handle keeps the clone home locked against the owner.
+  // 整个操作只用一个组装，两条路径都关闭：泄露的 SQLite 句柄会把 clone home 锁住，
+  // 连所有者自己都动不了。
+  const assembly = await createRuntimeAssembly({ dataDirectory });
   try {
     const after = await registry.install(agentId);
-    const journal = (await createRuntimeAssembly({ dataDirectory })).journal;
-    await journal.append({
+    await assembly.journal.append({
       type: "agent.installed",
       payload: {
         agentId,
@@ -170,12 +288,13 @@ export async function installWorkerAgent(dataDirectory: string, agentId: string)
     return { installed: true, ...(after.version === undefined ? {} : { version: after.version }) };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    const journal = (await createRuntimeAssembly({ dataDirectory })).journal;
-    await journal.append({
+    await assembly.journal.append({
       type: "agent.install_failed",
       payload: { agentId, providerId: agentId, message, attemptedAt: new Date().toISOString() },
     });
     return { installed: false, error: message };
+  } finally {
+    assembly.close();
   }
 }
 
@@ -313,21 +432,26 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     }),
     execute: async (_toolCallId, params) => {
       const paths = resolveClonePaths({ dataDirectory: options.dataDirectory });
-      const briefing = await compileBriefing({
-        journal: createJournalStore(options.dataDirectory),
-        dataDirectory: options.dataDirectory,
-        workspacePath: paths.workspacePath,
-        ...(params.dueSoonHours === undefined ? {} : { dueSoonHours: params.dueSoonHours }),
-        ...(params.includeObservations === undefined ? {} : { includeObservations: params.includeObservations }),
-      });
-      return {
-        content: [{ type: "text", text: briefing.text }],
-        details: {
-          overdue: briefing.situation.overdueCommitments.length,
-          dueSoon: briefing.situation.dueSoonCommitments.length,
-          activeGoals: briefing.situation.activeGoals.length,
-        },
-      };
+      const journal = createJournalStore(options.dataDirectory);
+      try {
+        const briefing = await compileBriefing({
+          journal,
+          dataDirectory: options.dataDirectory,
+          workspacePath: paths.workspacePath,
+          ...(params.dueSoonHours === undefined ? {} : { dueSoonHours: params.dueSoonHours }),
+          ...(params.includeObservations === undefined ? {} : { includeObservations: params.includeObservations }),
+        });
+        return {
+          content: [{ type: "text", text: briefing.text }],
+          details: {
+            overdue: briefing.situation.overdueCommitments.length,
+            dueSoon: briefing.situation.dueSoonCommitments.length,
+            activeGoals: briefing.situation.activeGoals.length,
+          },
+        };
+      } finally {
+        (journal as { close?: () => void }).close?.();
+      }
     },
   });
 
@@ -371,6 +495,70 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
         content: [{ type: "text", text }],
         details: { matches: excerpts.length, recovered: excerpts.filter((item) => item.outOfContext).length },
       };
+    },
+  });
+
+  pi.registerTool({
+    name: "record_state",
+    label: "Record Owner State",
+    description:
+      "Record something the owner just stated about themselves: a goal, a commitment, or a boundary/preference. "
+      + "Use it when the owner says things like 'remember that I write a weekly report every Friday' or 'never send email without asking me'. "
+      + "ownerSaid must quote the owner's exact words from this conversation — the quote is verified against the recorded history, "
+      + "so paraphrases and your own inferences are refused. If you believe something about the owner that they did not say, "
+      + "say it to them instead of recording it. For recurring commitments ('every Friday'), pass commitmentKind 'recurring' "
+      + "and everyDays 7, with dueAt set to the next occurrence.",
+    parameters: Type.Object({
+      ownerSaid: Type.String({ description: "The owner's exact words, quoted verbatim from this conversation." }),
+      kind: Type.Union([Type.Literal("goal"), Type.Literal("commitment"), Type.Literal("boundary"), Type.Literal("preference")]),
+      title: Type.Optional(Type.String({ description: "Short title for a goal or commitment." })),
+      statement: Type.Optional(Type.String({ description: "The boundary or preference statement, for kind boundary/preference." })),
+      commitmentKind: Type.Optional(Type.Union([
+        Type.Literal("deadline"), Type.Literal("appointment"), Type.Literal("recurring"), Type.Literal("promise"),
+      ])),
+      dueAt: Type.Optional(Type.String({ description: "ISO instant the commitment comes due." })),
+      everyDays: Type.Optional(Type.Number({ description: "Recurrence in days, for recurring commitments." })),
+      motivation: Type.Optional(Type.String({ description: "Why the goal matters, in the owner's framing." })),
+      targetDate: Type.Optional(Type.String({ description: "ISO date the goal targets." })),
+      goalId: Type.Optional(Type.String({ description: "Goal this commitment serves, when one exists." })),
+    }),
+    execute: async (_toolCallId, params) => {
+      if (params.kind === "goal" && typeof params.title !== "string") {
+        return { content: [{ type: "text", text: "A goal needs a title." }], details: { recorded: false } };
+      }
+      if (params.kind === "commitment") {
+        if (typeof params.title !== "string" || typeof params.commitmentKind !== "string") {
+          return { content: [{ type: "text", text: "A commitment needs a title and commitmentKind." }], details: { recorded: false } };
+        }
+      }
+      if ((params.kind === "boundary" || params.kind === "preference") && typeof params.statement !== "string") {
+        return { content: [{ type: "text", text: `A ${params.kind} needs a statement.` }], details: { recorded: false } };
+      }
+      const input: OwnerStateInput = params.kind === "goal"
+        ? {
+          kind: "goal",
+          ownerSaid: params.ownerSaid,
+          title: params.title!,
+          ...(params.motivation === undefined ? {} : { motivation: params.motivation }),
+          ...(params.targetDate === undefined ? {} : { targetDate: params.targetDate }),
+        }
+        : params.kind === "commitment"
+          ? {
+            kind: "commitment",
+            ownerSaid: params.ownerSaid,
+            title: params.title!,
+            commitmentKind: params.commitmentKind as "deadline" | "appointment" | "recurring" | "promise",
+            ...(params.dueAt === undefined ? {} : { dueAt: params.dueAt }),
+            ...(params.everyDays === undefined ? {} : { everyDays: params.everyDays }),
+            ...(params.goalId === undefined ? {} : { goalId: params.goalId }),
+          }
+          : { kind: params.kind, ownerSaid: params.ownerSaid, statement: params.statement! };
+
+      const result = await recordOwnerState(options.dataDirectory, input);
+      const text = result.recorded
+        ? `Recorded: ${result.kind} "${result.title}" (${result.id}). It appears in every future situation briefing.`
+        : `Not recorded. ${result.reason}`;
+      return { content: [{ type: "text", text }], details: { recorded: result.recorded } };
     },
   });
 

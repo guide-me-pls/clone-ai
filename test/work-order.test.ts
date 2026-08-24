@@ -97,7 +97,12 @@ test("an external-risk WorkOrder cannot request automatic retries", async (t) =>
         id: "prepare",
         title: "Prepare",
         instructions: "Prepare the purchase.",
-        risk: "reversible_write",
+        // The step carries the risk it actually contains: the Kernel refuses a
+        // step that hides a riskier child, and this test is about the retry
+        // rule, not about that containment check.
+        // 步骤携带它实际包含的风险：Kernel 会拒绝藏着更高风险子项的步骤，而本测试要验证的
+        // 是重试规则，不是那条包含性检查。
+        risk: "external_side_effect",
         acceptanceCriteria: ["Purchase request is ready"],
         subagents: [
           workOrder({

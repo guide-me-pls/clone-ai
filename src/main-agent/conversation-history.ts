@@ -146,6 +146,41 @@ export async function describeHistory(dataDirectory: string): Promise<HistoryDes
   };
 }
 
+/**
+ * Whether the owner can be shown to have said these words.
+ *
+ * This is the gate for recording personal state from conversation. The agent
+ * proposing the record supplies a quote; the quote is checked against every
+ * user-role message in the owner's history. An agent cannot record a boundary
+ * the owner never stated, because a fabricated quote matches nothing — the rule
+ * is enforced by the file system, not by the model's good behaviour.
+ *
+ * Comparison ignores all whitespace, so a quote survives the agent's own
+ * re-wrapping of the owner's sentence; it does not survive paraphrase, which
+ * is exactly the intent.
+ *
+ * 所有者是否真的说过这些话。
+ *
+ * 这是从对话记录个人状态的门禁。提议记录的 Agent 必须提供引文；引文会与所有者历史中的
+ * 每一条 user 消息比对。Agent 无法记录所有者从未说过的边界，因为编造的引文什么也匹配
+ * 不上——这条规则由文件系统强制执行，而不是寄希望于模型的自觉。
+ *
+ * 比对忽略所有空白字符，因此引文能在 Agent 重新断行的句子里存活；但无法挺过改写，
+ * 而这正是本意。
+ */
+export async function ownerStated(dataDirectory: string, quote: string): Promise<boolean> {
+  const needle = quote.replace(/\s+/g, "");
+  // A quote too short to identify anything would match by accident; refusing
+  // it forces the agent to quote a real span of the owner's words.
+  // 太短的引文什么都识别不了，只会意外命中；拒绝它迫使 Agent 引用所有者话语中
+  // 真实的一段。
+  if (needle.length < 6) return false;
+  const { entries } = await loadEntries(dataDirectory);
+  return entries.some(
+    (entry) => entry.speaker === "user" && entry.text.replace(/\s+/g, "").includes(needle),
+  );
+}
+
 interface LoadedHistory {
   entries: ParsedEntry[];
   /** Keys of entries compaction has cut away, as `session#entryId`. 被压缩切走的条目键。 */
@@ -222,13 +257,23 @@ async function loadEntries(dataDirectory: string): Promise<LoadedHistory> {
     }
 
     // Only the newest cut matters: an earlier compaction's kept range was
-    // itself compacted by the later one.
-    // 只有最新的切点有意义：更早那次压缩保留的范围，已被后一次压缩再次压掉。
+    // itself compacted by the later one, and an earlier summary was merged
+    // into the later summary rather than kept alongside it.
+    // 只有最新的切点有意义：更早那次压缩保留的范围已被后一次压缩再次压掉，更早的摘要
+    // 也被并入了后一次的摘要，而不是与它并存。
     const lastCut = cuts.at(-1);
     if (lastCut !== undefined) {
       const cutIndex = sessionEntries.findIndex((entry) => entry.id === lastCut);
+      const newestCompactionId = sessionEntries.filter((entry) => entry.type === "compaction").at(-1)?.id;
       if (cutIndex > 0) {
         for (const entry of sessionEntries.slice(0, cutIndex)) {
+          // The newest compaction entry sits before the cut but is the one
+          // thing there the model still sees: its summary is the head of the
+          // live context. Counting it as lost would overstate the gap by
+          // exactly the piece that was written to bridge it.
+          // 最新的压缩条目位于切点之前，却是那里唯一仍被模型看到的东西：它的摘要就是
+          // 当前上下文的开头。把它算作丢失，恰好会以那段为弥合缺口而写的内容来夸大缺口。
+          if (entry.id === newestCompactionId) continue;
           outOfContext.add(`${entry.session}#${entry.id}`);
         }
       }
@@ -255,31 +300,83 @@ function speakerOf(raw: Record<string, unknown>, type: string): string {
 }
 
 /**
- * Pulls readable text out of an entry without knowing its exact shape.
+ * Pulls readable text out of an entry.
  *
- * The session format belongs to the agent SDK and may add message part kinds
- * at any time. Matching on a fixed set of shapes would silently stop finding
- * whatever was added; walking for strings keeps working, and the cost of an
- * occasional irrelevant field in an excerpt is far lower than the cost of a
- * search that quietly goes blind.
+ * The obvious implementation — walk the object, collect every string — is
+ * wrong in a way that only shows up against a real session file: it harvests
+ * type discriminators ("message", "assistant", "text"), provider and model
+ * ids, and any raw API payload the SDK kept alongside the message. The
+ * excerpt then reads as machinery rather than conversation, and the noise
+ * matches queries by accident.
  *
- * 在不知道确切结构的情况下从条目里取出可读文本。
+ * So the known text-bearing shapes are read directly, and the tolerant walk is
+ * kept only as a fallback for message part kinds the SDK may add later. The
+ * fallback still filters plumbing keys, because a format that grows should
+ * degrade to a worse excerpt, never to a page of identifiers.
  *
- * 会话格式属于 Agent SDK，随时可能新增消息片段类型。按固定结构匹配会在新增之后悄悄
- * 找不到新东西；而遍历取字符串则一直有效。偶尔在摘录里混进一个无关字段的代价，
- * 远低于让检索悄无声息地失明。
+ * 从条目中取出可读文本。
+ *
+ * 那个显而易见的实现——遍历对象、收集所有字符串——错得只有对着真实会话文件才看得出来：
+ * 它会把类型判别字符串（"message"、"assistant"、"text"）、Provider 与模型 id，以及
+ * SDK 随消息一起保留的原始 API 载荷统统收进来。于是摘录读起来像机器零件而不是对话，
+ * 而这些噪声还会意外命中查询。
+ *
+ * 因此这里直接读已知的承载文本的结构，只把宽容遍历留作后备，用于 SDK 日后可能新增的
+ * 消息片段类型。后备路径仍然过滤管道字段，因为一个会演进的格式应当退化成更差的摘录，
+ * 而绝不该退化成一整页标识符。
  */
-function extractText(value: unknown, depth = 0): string {
-  if (depth > 8) return "";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map((item) => extractText(item, depth + 1)).filter(Boolean).join("\n");
+function extractText(raw: Record<string, unknown>): string {
+  if (raw.type === "compaction") return typeof raw.summary === "string" ? raw.summary : "";
+  const message = raw.message;
+  if (typeof message !== "object" || message === null) return "";
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+
+  const parts: string[] = [];
+  for (const part of content) {
+    if (typeof part === "string") {
+      parts.push(part);
+      continue;
+    }
+    if (typeof part !== "object" || part === null) continue;
+    const record = part as Record<string, unknown>;
+    // Text and reasoning are what the owner and the agent actually said.
+    // text 与 reasoning 才是所有者与 Agent 真正说过的话。
+    for (const key of ["text", "thinking", "reasoning"]) {
+      if (typeof record[key] === "string") parts.push(record[key]);
+    }
+    // A tool result carries its output under content; a tool call carries the
+    // arguments the agent chose, which is often the detail worth recovering.
+    // 工具结果把输出放在 content 下；工具调用带着 Agent 当时选择的参数，
+    // 而那往往正是值得找回的细节。
+    if (record.content !== undefined) parts.push(walkForText(record.content));
+    if (record.input !== undefined) parts.push(walkForText(record.input));
+    if (typeof record.name === "string" && record.type === "toolCall") parts.push(record.name);
+  }
+  return parts.filter((part) => part.length > 0).join("\n");
+}
+
+const PLUMBING_KEYS = new Set([
+  "id", "parentId", "timestamp", "uuid", "parentUuid", "type", "role", "api", "provider",
+  "model", "stopReason", "usage", "cost", "v", "sessionId", "toolCallId", "signature", "isError",
+]);
+
+function walkForText(value: unknown, depth = 0): string {
+  if (depth > 6) return "";
+  if (typeof value === "string") {
+    // A serialized payload that leaked into a field is machinery, not speech.
+    // 泄漏进某个字段的序列化载荷是机器零件，不是话语。
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{\"") || trimmed.startsWith("[{")) return "";
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item) => walkForText(item, depth + 1)).filter(Boolean).join("\n");
   if (typeof value !== "object" || value === null) return "";
   const parts: string[] = [];
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    // Identifiers and timestamps are noise in an excerpt and would also match
-    // queries by accident. 标识符与时间戳在摘录里是噪声，还会意外命中查询。
-    if (key === "id" || key === "parentId" || key === "timestamp" || key === "uuid" || key === "parentUuid") continue;
-    const text = extractText(item, depth + 1);
+    if (PLUMBING_KEYS.has(key)) continue;
+    const text = walkForText(item, depth + 1);
     if (text.length > 0) parts.push(text);
   }
   return parts.join("\n");

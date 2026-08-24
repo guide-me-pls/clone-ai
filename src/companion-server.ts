@@ -14,7 +14,6 @@ import { loadProviderRegistry } from "./workers/provider-catalog.ts";
 import { WorkerSettingsStore } from "./config/worker-settings.ts";
 import { WorkerRegistry } from "./workers/worker-registry.ts";
 import { runMainAgentQuery } from "./application/run-main-query.ts";
-import { LocalMemoryStore } from "./memory/memory-store.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
 import { OpportunityService } from "./opportunity/opportunity-service.ts";
 import { RunQueueConsumer } from "./application/run-queue.ts";
@@ -23,8 +22,9 @@ import { createConfiguredAgentRegistry } from "./workers/configured-worker-regis
 import { DailyReportRunner, type DailyReportSettings } from "./reporting/daily-report-runner.ts";
 import { BadCaseLog } from "./reporting/bad-case-log.ts";
 import { readJsonFile } from "./config/json-file.ts";
-import { MdMemoryStore } from "./memory/md-memory-store.ts";
-import { JsonlJournalStore } from "./core/journal.ts";
+import { MdMemoryStore, GovernedMemorySource } from "./memory/md-memory-store.ts";
+import type { JournalStore } from "./core/journal.ts";
+import type { CloneRuntime } from "./core/runtime.ts";
 import {
   defaultLegacyDirectory,
   migrateLegacyCloneHome,
@@ -35,6 +35,7 @@ import {
 import { CloneConfigStore } from "./config/clone-config.ts";
 import { readConnectorSettings, writeConnectorSettings } from "./connectors/connector-registry.ts";
 import { compileBriefing } from "./main-agent/situation-briefing.ts";
+import { buildFallbackPlan } from "./planning/fallback-planner.ts";
 import { describeHistory, mainAgentSessionDirectory, searchHistory } from "./main-agent/conversation-history.ts";
 import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
 import {
@@ -102,9 +103,16 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const providers = await loadProviderRegistry(dataDirectory);
   const agentSettings = new WorkerSettingsStore(paths.legacyAgentsFile, providers);
   const agentRegistry = new WorkerRegistry(dataDirectory);
-  const memoryStore = new LocalMemoryStore(paths.memoryFile);
+  // One Runtime assembly, and therefore one journal, shared by every module in
+  // this process. Separate stores over the same file each keep their own
+  // sequence counter and their own cached view, which is how duplicate
+  // sequences and stale reads appear.
+  // 本进程内所有模块共用一个 Runtime 组装，因而共用一本 Journal。针对同一文件建多个
+  // Store，每个都持有自己的 sequence 计数器和缓存视图——重复 sequence 与陈旧读数正是这么来的。
+  const assembly = await createRuntimeAssembly({ dataDirectory, workspacePath });
+  const journal = assembly.journal;
   const memoryGovernance = new MemoryGovernance({
-    journal: new JsonlJournalStore(join(dataDirectory, "journal.jsonl")),
+    journal,
     store: new MdMemoryStore({ dataDirectory }),
   });
   const config = new CloneConfigStore(paths);
@@ -125,24 +133,24 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   // "queued" would sit there while the GUI claims progress.
   // 已接受的计划必须真的跑起来。没有这个消费者，到达 "queued" 的 Run 会一直停在那里，
   // 而 GUI 却宣称正在推进。
-  const { runtime: queueRuntime } = await createRuntimeAssembly({ dataDirectory, workspacePath });
+  const { runtime: queueRuntime } = assembly;
   const runQueue = new RunQueueConsumer({
     runtime: queueRuntime,
+    journal,
     registry: async () => createConfiguredAgentRegistry((await agentSettings.get()).agents, { dataDirectory, workspacePath }),
     onError: (runId, error) => {
       console.error(`Run ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
     },
   });
   runQueue.start();
-  const opportunityService = new OpportunityService(new JsonlJournalStore(join(dataDirectory, "journal.jsonl")));
-  await opportunityService.scanAndRecord().catch(() => undefined);
+  const opportunityService = new OpportunityService(journal);
   const badCaseLog = new BadCaseLog({ dataDirectory });
-  await badCaseLog.appendNew((await new JsonlJournalStore(join(dataDirectory, "journal.jsonl")).list())).catch(() => undefined);
+  await badCaseLog.appendNew(await journal.list()).catch(() => undefined);
   const reporting = await readJsonFile<DailyReportSettings>(join(dataDirectory, "reporting.json"));
   const reportRunner = reporting === undefined || reporting.enabled !== true
     ? undefined
     : new DailyReportRunner({
-        journal: new JsonlJournalStore(join(dataDirectory, "journal.jsonl")),
+        journal,
         dataDirectory,
         settings: reporting,
         opportunities: () => opportunityService.list(),
@@ -155,6 +163,40 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     }, 3_600_000);
     reportTimer.unref();
   }
+
+  /**
+   * The background loop that keeps the twin's own state moving.
+   *
+   * Two things previously only happened at startup or not at all: scanning for
+   * opportunities, and turning a completed run's `memory.candidate.requested`
+   * into a reviewable candidate. Both are what makes the twin appear to notice
+   * things and learn, so both belong on a timer rather than on a user action.
+   *
+   * 让分身自身状态持续推进的后台循环。
+   *
+   * 之前有两件事只在启动时发生、或根本不发生：扫描机会，以及把已完成 Run 的
+   * `memory.candidate.requested` 转成可审核的候选。这两件事正是“分身会注意到事情、会
+   * 学习”的来源，因此它们属于定时器，而不是属于某个用户动作。
+   */
+  const runMaintenance = async (): Promise<void> => {
+    // Drain every pending candidate: a completed run must not wait for the
+    // next tick to become something the owner can review.
+    // 排空所有待处理候选：已完成的 Run 不应等到下一次 tick 才变成所有者可审核的东西。
+    try {
+      await assembly.memory.rebuild();
+      for (let drained = 0; drained < 50; drained += 1) {
+        const produced = await assembly.memory.processNext();
+        if (produced.length === 0) break;
+      }
+    } catch {
+      // Memory mining must never take the daemon down. 记忆提炼绝不能弄崩 Daemon。
+    }
+    await opportunityService.scanAndRecord().catch(() => undefined);
+    await badCaseLog.appendNew(await journal.list()).catch(() => undefined);
+  };
+  await runMaintenance();
+  const maintenance = setInterval(() => void runMaintenance(), 5 * 60_000);
+  maintenance.unref();
 
   const server = createServer(async (request, response) => {
     try {
@@ -171,10 +213,11 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         sessions,
         agentSettings,
         agentRegistry,
-        memoryStore,
         memoryGovernance,
         opportunityService,
         badCaseLog,
+        journal,
+        runtime: queueRuntime,
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "The local runtime encountered an unexpected error.";
@@ -203,11 +246,18 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     // 关闭要等待队列：close() 返回后仍在往数据目录写入的消费者，意味着损坏的 Journal。
     close: async () => {
       scheduler.stop();
+      clearInterval(maintenance);
       await runQueue.stop();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error === undefined ? resolve() : reject(error)));
       });
       await memoryGovernance.close();
+      // Release the journal last: the queue and governance above may still be
+      // finishing writes, and closing the database under them would lose those
+      // records or fail the shutdown.
+      // 最后释放 Journal：上面的队列与记忆治理可能仍在收尾写入，在它们下面关掉数据库
+      // 会丢记录或让关停失败。
+      assembly.close();
     },
   };
 }
@@ -215,7 +265,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
-  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: WorkerSettingsStore; agentRegistry: WorkerRegistry; memoryStore: LocalMemoryStore; memoryGovernance: MemoryGovernance; opportunityService: OpportunityService; badCaseLog: BadCaseLog },
+  context: { host: string; dataDirectory: string; workspacePath: string; paths: ClonePaths; config: CloneConfigStore; client: string; clientCss: string; clientJs: string; schedules: ScheduleStore; sessions: SessionStore; agentSettings: WorkerSettingsStore; agentRegistry: WorkerRegistry; memoryGovernance: MemoryGovernance; opportunityService: OpportunityService; badCaseLog: BadCaseLog; journal: JournalStore; runtime: CloneRuntime },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host}`);
 
@@ -249,7 +299,7 @@ async function handleRequest(
         workspacePath: context.paths.workspacePath,
         configFile: context.paths.configFile,
         providersFile: context.paths.providersFile,
-        memoryFile: context.paths.memoryFile,
+        memoryDirectory: join(context.dataDirectory, "memory"),
         outcomesDirectory: context.paths.outcomesDirectory,
         workspaceRuntimeDirectory: context.paths.workspaceRuntimeDirectory,
       },
@@ -325,10 +375,16 @@ async function handleRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/situation") {
+    // Read the shared journal rather than opening a new store, and do not let
+    // a GUI poll trigger connector writes: observation is the background
+    // loop's job, so refreshing a panel cannot append duplicate observations.
+    // 读共享的 Journal，而不是新开一个 Store；且不让 GUI 轮询触发 Connector 写入：
+    // 观察是后台循环的职责，因此刷新面板不会重复追加观察事件。
     const briefing = await compileBriefing({
-      journal: createJournalStore(context.dataDirectory),
+      journal: context.journal,
       dataDirectory: context.dataDirectory,
       workspacePath: context.workspacePath,
+      includeObservations: false,
     });
     sendJson(response, 200, {
       text: briefing.text,
@@ -366,13 +422,27 @@ async function handleRequest(
     }
     return;
   }
-  if (request.method === "GET" && url.pathname === "/api/memory") {
+  if (request.method === "GET" && url.pathname === "/api/memory/governed/recall") {
+    // The owner's way of asking "what will the twin actually remember from
+    // this?" — recall against the one governed library, not a panel-only copy.
+    // The answer is exactly what a worker assignment would receive.
+    // 所有者问"分身到底会从这句话里想起什么"的方式——对唯一的受治理库做召回，
+    // 而不是某个只在面板里存在的副本。答案就是 Worker 派发会收到的东西。
     const query = url.searchParams.get("q")?.trim() ?? "";
-    if (query.length > 0) {
-      sendJson(response, 200, { query, matches: await context.memoryStore.search(query) });
+    if (query.length < 2) {
+      sendJson(response, 400, { error: "A recall test needs at least two characters." });
       return;
     }
-    sendJson(response, 200, await buildMemoryView(context.memoryStore));
+    const source = new GovernedMemorySource(context.dataDirectory);
+    const matches = await source.recall(query, "recall-test");
+    sendJson(response, 200, {
+      query,
+      matches: matches.map((match) => ({
+        summary: match.memory.summary,
+        score: match.score,
+        matchedTerms: match.matchedTerms,
+      })),
+    });
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/reporting/bad-cases") {
@@ -387,9 +457,35 @@ async function handleRequest(
   }
   const opportunityMatch = url.pathname.match(/^\/api\/opportunities\/([^/]+)\/(accept|dismiss)$/);
   if (request.method === "POST" && opportunityMatch?.[1] !== undefined && opportunityMatch?.[2] !== undefined) {
+    const cardId = decodeURIComponent(opportunityMatch[1]);
+    const accepted = opportunityMatch[2] === "accept";
     try {
-      await context.opportunityService.resolve(decodeURIComponent(opportunityMatch[1]), opportunityMatch[2] === "accept" ? "accepted" : "dismissed");
-      sendJson(response, 200, { decided: decodeURIComponent(opportunityMatch[1]) });
+      const card = await context.opportunityService.find(cardId);
+      await context.opportunityService.resolve(cardId, accepted ? "accepted" : "dismissed");
+      // Accepting must produce work, not just a resolved card. The trigger
+      // alone leaves the run in `planning`, which no consumer ever picks up —
+      // so the deterministic planner attaches a plan here and the run reaches
+      // `queued`, where the same consumer that serves the chat takes it.
+      // Otherwise "accept" is a button that creates a run which forever sits
+      // unstarted, which is worse than no run at all: it looks like a promise.
+      // 接受必须产生工作，而不只是一张被处置的卡片。仅 acceptTrigger 会把 Run 留在
+      // `planning`，而没有任何消费者会捡起它——因此这里用确定性规划器附上计划，让 Run
+      // 进入 `queued`，交给与聊天同一个消费者。否则“接受”就是一个创建出永远不启动的
+      // Run 的按钮，比没有 Run 更糟：它看起来像一句承诺。
+      let runId: string | undefined;
+      if (accepted && card !== undefined) {
+        const { run } = await context.runtime.acceptTrigger({
+          kind: "signal",
+          summary: card.title,
+          payload: { opportunityId: card.id, source: card.source, whyNow: card.whyNow, trigger: "opportunity.accepted" },
+        });
+        const settings = await context.agentSettings.get();
+        const enabled = new Set(settings.agents.filter((agent) => agent.enabled).map((agent) => agent.id));
+        const plan = buildFallbackPlan(`${card.title}。${card.proposedResult}`, enabled);
+        await context.runtime.attachPlan(run.id, plan);
+        runId = run.id;
+      }
+      sendJson(response, 200, { decided: cardId, ...(runId === undefined ? {} : { runId }) });
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "The opportunity could not be resolved." });
     }
@@ -517,19 +613,6 @@ async function handleRequest(
       }
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "The memory decision could not be recorded." });
-    }
-    return;
-  }
-  if (request.method === "POST" && url.pathname === "/api/memory") {
-    const body = await readJsonBody(request);
-    if (typeof body.summary !== "string") {
-      sendJson(response, 400, { error: "A new memory needs a summary." });
-      return;
-    }
-    try {
-      sendJson(response, 201, { memory: await context.memoryStore.create(body.summary) });
-    } catch (error: unknown) {
-      sendJson(response, 400, { error: error instanceof Error ? error.message : "The local memory could not be created." });
     }
     return;
   }
@@ -697,37 +780,13 @@ async function handleRequest(
   }
 
   if (request.method === "PATCH" && url.pathname === "/api/memory/settings") {
-    const body = await readJsonBody(request);
-    const update: { enabled?: boolean; maxRecall?: number } = {};
-    if (typeof body.enabled === "boolean") update.enabled = body.enabled;
-    if (typeof body.maxRecall === "number") update.maxRecall = body.maxRecall;
-    if (Object.keys(update).length === 0) {
-      sendJson(response, 400, { error: "A Memory setting update needs enabled or maxRecall." });
-      return;
-    }
-    try {
-      sendJson(response, 200, { settings: await context.memoryStore.updateSettings(update) });
-    } catch (error: unknown) {
-      sendJson(response, 400, { error: error instanceof Error ? error.message : "The Memory setting could not be updated." });
-    }
-    return;
-  }
-
-  const memoryMatch = url.pathname.match(/^\/api\/memory\/([^/]+)$/);
-  if (request.method === "PATCH" && memoryMatch?.[1] !== undefined) {
-    const body = await readJsonBody(request);
-    const update: { summary?: string; status?: "active" | "archived" } = {};
-    if (typeof body.summary === "string") update.summary = body.summary;
-    if (body.status === "active" || body.status === "archived") update.status = body.status;
-    if (Object.keys(update).length === 0) {
-      sendJson(response, 400, { error: "A memory update needs a summary or status." });
-      return;
-    }
-    try {
-      sendJson(response, 200, { memory: await context.memoryStore.update(decodeURIComponent(memoryMatch[1]), update) });
-    } catch (error: unknown) {
-      sendJson(response, 400, { error: error instanceof Error ? error.message : "The local memory could not be updated." });
-    }
+    // Retired with the legacy memory store: recall is governed by the library
+    // itself, and a second settings surface would describe a system that no
+    // longer exists. Kept as an explicit 410 so a stale client learns why
+    // instead of reading a 404 as "wrong path".
+    // 随 legacy 记忆存储一同退役：召回由记忆库本身治理，第二个设置界面描述的是一套
+    // 已不存在的系统。保留显式 410，使旧客户端能知道原因，而不是把 404 当成"路径错了"。
+    sendJson(response, 410, { error: "The legacy memory store was retired; use the governed memory library." });
     return;
   }
 
@@ -878,11 +937,18 @@ async function loadRuntimeView(dataDirectory: string) {
   // 通过写入端使用的同一 seam 读取：在此写死 JSONL 会导致所有者启用 SQLite 后
   // 界面悄悄显示空历史。
   const journal = createJournalStore(dataDirectory);
-  const events = await journal.list();
-  const state = replay(events);
-  const tasks = state.tasks;
-  const runs = Object.values(state.runs).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  return { events, state, tasks, runs };
+  try {
+    const events = await journal.list();
+    const state = replay(events);
+    const tasks = state.tasks;
+    const runs = Object.values(state.runs).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return { events, state, tasks, runs };
+  } finally {
+    // This runs per request; an unclosed SQLite handle would accumulate one
+    // open file per page view. 每个请求都会走到这里；不关闭的 SQLite 句柄会随着每次
+    // 页面访问不断累积。
+    (journal as { close?: () => void }).close?.();
+  }
 }
 
 function toSessionSummary(run: Run, tasks: Record<string, Task>): SessionSummary {
@@ -1179,22 +1245,6 @@ function asRecord(value: unknown): Record<string, unknown> {
  * 召回——这正是治理层要防止的记忆污染。候选现在留在 Journal 中，直到所有者经
  * MemoryGovernance 提升它们。
  */
-
-async function buildMemoryView(memoryStore: LocalMemoryStore) {
-  const [memories, settings] = await Promise.all([memoryStore.list(), memoryStore.settings()]);
-  const active = memories.filter((memory) => memory.status === "active");
-  return {
-    memories,
-    settings,
-    stats: {
-      total: memories.length,
-      active: active.length,
-      archived: memories.length - active.length,
-      recallCount: memories.reduce((total, memory) => total + memory.useCount, 0),
-      used: memories.filter((memory) => memory.useCount > 0).length,
-    },
-  };
-}
 
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   let body = "";

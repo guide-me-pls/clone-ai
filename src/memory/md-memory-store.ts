@@ -56,6 +56,15 @@ export interface MemoryCommitInput {
   sourceRunId?: string;
   sourceEvidenceIds?: string[];
   expiresAt?: string;
+  /**
+   * When the remembered thing actually happened, e.g. the date of the
+   * conversation it came from. Defaults to commit time. Recall's recency
+   * signal reads this field: a memory mined today about last month must not
+   * outrank one mined today about yesterday.
+   * 被记住的事情实际发生的时间，例如它来源的那次对话的日期。默认为提交时间。召回的
+   * 新鲜度信号读取此字段：今天从上月对话里挖出的记忆，不该压过今天从昨天对话里挖出的。
+   */
+  occurredAt?: string;
 }
 
 export interface MemoryRecallMatch {
@@ -162,7 +171,9 @@ export class MdMemoryStore {
       sourceEvidenceIds: input.sourceEvidenceIds ?? [],
       summary,
       content: input.content?.trim() ?? summary,
-      createdAt: now,
+      // createdAt is when the thing happened, not when we wrote it down.
+      // createdAt 是事情发生的时间，不是我们把它写下的时间。
+      createdAt: input.occurredAt ?? now,
       updatedAt: now,
       ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
       accessCount: 0,
@@ -195,11 +206,22 @@ export class MdMemoryStore {
   /**
    * Bigram lexical recall with governance filters. Scoring is the matched-term
    * ratio, nudged by recency and usage so a fresh, frequently used memory wins
-   * ties.
+   * ties. Recency decays from when the remembered thing happened (createdAt),
+   * not from when the row was last edited.
    * bigram 词法召回，带治理过滤。评分是命中词占比，再以新鲜度和使用次数微调，使较新、
-   * 常用的记忆在平分时胜出。
+   * 常用的记忆在平分时胜出。新鲜度从“事情发生的时间”（createdAt）起算，而不是从行
+   * 最后被编辑的时间起算。
+   *
+   * minRatio lowers the match floor for long natural-language questions. The
+   * default 0.2 assumes keyword-style queries where 20% term overlap is
+   * meaningful; a 30-token sentence sharing 3 tokens with a memory is a 10%
+   * overlap and would be dropped. The memory benchmark exposes it so the
+   * floor's cost is measured rather than assumed.
+   * minRatio 为长自然语言问题下调命中下限。默认 0.2 假定关键词式查询——20% 的词命中
+   * 才有意义；而一句 30 个词的话与记忆共享 3 个词只有 10%，会被丢掉。记忆基准把它
+   * 暴露出来，让下限的代价被测量，而不是被默认。
    */
-  async recall(query: string, options: { maxResults?: number; includeSecret?: boolean } = {}): Promise<MemoryRecallMatch[]> {
+  async recall(query: string, options: { maxResults?: number; includeSecret?: boolean; minRatio?: number } = {}): Promise<MemoryRecallMatch[]> {
     const terms = tokenize(query);
     if (terms.length === 0) return [];
     const now = new Date().toISOString();
@@ -226,8 +248,8 @@ export class MdMemoryStore {
       const entry = await this.get(memoryId);
       if (entry === undefined) continue;
       const ratio = matched.size / terms.length;
-      if (ratio < 0.2) continue;
-      const recencyBoost = Math.max(0, 1 - (Date.now() - Date.parse(entry.updatedAt)) / (90 * 24 * 3600 * 1000));
+      if (ratio < (options.minRatio ?? 0.2)) continue;
+      const recencyBoost = Math.max(0, 1 - (Date.now() - Date.parse(entry.createdAt)) / (90 * 24 * 3600 * 1000));
       const usageBoost = Math.min(0.1, entry.accessCount * 0.01);
       matches.push({
         entry,
@@ -361,26 +383,40 @@ export class MdMemoryStore {
     await writeFile(target, renderMemoryFile(entry), "utf8");
 
     const terms = tokenize(`${entry.summary} ${entry.content}`);
-    this.#db.prepare("DELETE FROM memory_terms WHERE memory_id = ?").run(entry.id);
-    const insertTerm = this.#db.prepare("INSERT OR IGNORE INTO memory_terms (memory_id, term) VALUES (?, ?)");
-    for (const term of terms) insertTerm.run(entry.id, term);
+    // One transaction per commit, not one per term: without it every indexed
+    // term becomes its own fsync, and committing a memory with a few hundred
+    // terms turns into a few hundred disk flushes. (Bulk benchmark ingestion
+    // made this visible; owners hit it every time a batch is promoted.)
+    // 每次提交一个事务，而不是每个词一个事务：否则每个索引词都是一次独立 fsync，
+    // 提交一条几百词的记忆就变成几百次磁盘刷写。（基准的批量写入暴露了这一点；所有者
+    // 每次批量提升记忆时都会撞上它。）
+    this.#db.exec("BEGIN");
+    try {
+      this.#db.prepare("DELETE FROM memory_terms WHERE memory_id = ?").run(entry.id);
+      const insertTerm = this.#db.prepare("INSERT OR IGNORE INTO memory_terms (memory_id, term) VALUES (?, ?)");
+      for (const term of terms) insertTerm.run(entry.id, term);
 
-    this.#db.prepare(`
-      INSERT INTO memories (id, type, status, confidence, sensitivity, source_run_id, source_evidence_ids,
-        summary, content, content_path, created_at, updated_at, expires_at, access_count, last_accessed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (id) DO UPDATE SET
-        type = excluded.type, status = excluded.status, confidence = excluded.confidence,
-        sensitivity = excluded.sensitivity, source_run_id = excluded.source_run_id,
-        source_evidence_ids = excluded.source_evidence_ids, summary = excluded.summary,
-        content = excluded.content, content_path = excluded.content_path, updated_at = excluded.updated_at,
-        expires_at = excluded.expires_at
-    `).run(
-      entry.id, entry.type, entry.status, entry.confidence, entry.sensitivity,
-      entry.sourceRunId ?? null, JSON.stringify(entry.sourceEvidenceIds),
-      entry.summary, entry.content, `${entry.id}.md`, entry.createdAt, entry.updatedAt,
-      entry.expiresAt ?? null, entry.accessCount, entry.lastAccessedAt ?? null,
-    );
+      this.#db.prepare(`
+        INSERT INTO memories (id, type, status, confidence, sensitivity, source_run_id, source_evidence_ids,
+          summary, content, content_path, created_at, updated_at, expires_at, access_count, last_accessed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id) DO UPDATE SET
+          type = excluded.type, status = excluded.status, confidence = excluded.confidence,
+          sensitivity = excluded.sensitivity, source_run_id = excluded.source_run_id,
+          source_evidence_ids = excluded.source_evidence_ids, summary = excluded.summary,
+          content = excluded.content, content_path = excluded.content_path, updated_at = excluded.updated_at,
+          expires_at = excluded.expires_at
+      `).run(
+        entry.id, entry.type, entry.status, entry.confidence, entry.sensitivity,
+        entry.sourceRunId ?? null, JSON.stringify(entry.sourceEvidenceIds),
+        entry.summary, entry.content, `${entry.id}.md`, entry.createdAt, entry.updatedAt,
+        entry.expiresAt ?? null, entry.accessCount, entry.lastAccessedAt ?? null,
+      );
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private async touch(id: string): Promise<void> {

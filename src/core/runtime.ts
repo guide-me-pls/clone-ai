@@ -10,6 +10,7 @@ import type {
   MemoryContextPacket,
   PlanStep,
   PolicyEngine,
+  RiskClass,
   Run,
   RunStatus,
   RuntimeAdapter,
@@ -62,6 +63,22 @@ export interface CloneRuntimeOptions {
   workspaceCheckpointStore?: WorkspaceCheckpointStore;
   /** Optional directory used by the default checkpoint store. 默认检查点目录。 */
   workspaceCheckpointDirectory?: string;
+  /**
+   * The executor ids the Kernel will accept in a plan, resolved at proposal
+   * time.
+   *
+   * Without it a plan naming a worker that does not exist is journaled as
+   * `queued` and only fails once a consumer tries to dispatch it: the owner
+   * sees an accepted run that can never run. Validating the name at the gate
+   * turns a silent future failure into an immediate, fixable rejection.
+   *
+   * 由 Kernel 在提案时解析、可被计划接受的执行者 id。
+   *
+   * 没有它时，写了不存在 Worker 的计划会以 `queued` 记入 Journal，直到消费者尝试派发
+   * 才失败：所有者看到的是一个永远跑不起来的已接受 Run。在入口校验名称，把一次沉默的
+   * 未来失败变成即时且可修复的拒绝。
+   */
+  knownAgentIds?: () => Set<string>;
 }
 
 export interface DispatchResult {
@@ -98,6 +115,7 @@ export class CloneRuntime {
   readonly #failureCatalog: OutcomeCatalog;
   readonly #workspacePath?: string;
   readonly #workspaceCheckpoints?: WorkspaceCheckpointStore;
+  readonly #knownAgentIds?: () => Set<string>;
   #state: RuntimeProjection = emptyProjection();
   #hydrated = false;
 
@@ -108,6 +126,7 @@ export class CloneRuntime {
     this.#memory = options.memory;
     this.#memorySource = options.memorySource;
     this.#failureCatalog = options.failureCatalog ?? BUILT_IN_CATALOG;
+    this.#knownAgentIds = options.knownAgentIds;
     this.#workspacePath = options.workspacePath === undefined ? undefined : resolve(options.workspacePath);
     this.#workspaceCheckpoints = this.#workspacePath === undefined
       ? undefined
@@ -181,7 +200,7 @@ export class CloneRuntime {
     if (run.status !== "planning") {
       throw new Error(`A plan can only be attached while planning; run is ${run.status}.`);
     }
-    assertPlanIsExecutable(input.steps);
+    assertPlanIsExecutable(input.steps, this.#knownAgentIds?.());
 
     const plan: WorkPlan = { ...input, id: randomUUID(), runId, createdAt: new Date().toISOString() };
     await this.record({ type: "plan.created", taskId: run.taskId, runId, payload: plan });
@@ -1157,7 +1176,7 @@ interface WorkspaceRecoveryAssessment {
   checkpoint?: string;
 }
 
-function assertPlanIsExecutable(steps: PlanStep[]): void {
+function assertPlanIsExecutable(steps: PlanStep[], knownAgentIds?: Set<string>): void {
   if (steps.length === 0) {
     throw new Error("A plan must contain at least one step.");
   }
@@ -1189,6 +1208,15 @@ function assertPlanIsExecutable(steps: PlanStep[]): void {
     ) {
       throw new Error(`Plan step ${step.id} needs one or more required capabilities.`);
     }
+    // An executor named here but absent from the registry cannot be caught
+    // later without the owner first seeing an accepted run.
+    // 在此命名但不在注册表中的执行者，如果不在这里拦住，所有者就会先看到一个已接受的 Run。
+    if (step.agentId !== undefined && knownAgentIds !== undefined && !knownAgentIds.has(step.agentId)) {
+      throw new Error(
+        `Plan step ${step.id} names unknown executor "${step.agentId}". `
+        + `Known executors: ${[...knownAgentIds].sort().join(", ") || "(none configured)"}.`,
+      );
+    }
     if (step.subagents !== undefined) {
       for (const order of step.subagents) {
         if (workOrderIds.has(order.id)) {
@@ -1196,12 +1224,17 @@ function assertPlanIsExecutable(steps: PlanStep[]): void {
         }
         workOrderIds.add(order.id);
       }
-      assertSubagentOrders(step.id, step.subagents);
+      assertSubagentOrders(step.id, step.subagents, step.risk, knownAgentIds);
     }
   }
 }
 
-function assertSubagentOrders(stepId: string, orders: SubagentWorkOrder[]): void {
+function assertSubagentOrders(
+  stepId: string,
+  orders: SubagentWorkOrder[],
+  stepRisk: RiskClass,
+  knownAgentIds?: Set<string>,
+): void {
   if (orders.length === 0) {
     throw new Error(`Plan step ${stepId} has an empty subagent group.`);
   }
@@ -1229,6 +1262,25 @@ function assertSubagentOrders(stepId: string, orders: SubagentWorkOrder[]): void
     }
     if (!riskClasses.has(order.risk)) {
       throw new Error(`Subagent work order ${order.id} has an invalid risk class.`);
+    }
+    // The step's risk is what the policy engine gates on and what the verifier
+    // demands receipts for. A child order that is riskier than the step it
+    // hangs under would execute an irreversible action behind a `read_only`
+    // label, bypassing both. Risk may narrow going down the tree, never widen.
+    // 步骤的 risk 是 Policy 引擎把关的依据，也是 Verifier 索要 receipt 的依据。比所挂靠步骤
+    // 更危险的子工作单，会在 `read_only` 标签背后执行不可逆动作，同时绕过两者。
+    // 风险沿树向下只能收窄，绝不能放宽。
+    if (riskRank(order.risk) > riskRank(stepRisk)) {
+      throw new Error(
+        `Subagent work order ${order.id} has risk "${order.risk}", which exceeds the risk "${stepRisk}" of step ${stepId}. `
+        + `Raise the step's risk class to at least "${order.risk}" so approval and verification apply.`,
+      );
+    }
+    if (order.agentId !== undefined && knownAgentIds !== undefined && !knownAgentIds.has(order.agentId)) {
+      throw new Error(
+        `Subagent work order ${order.id} names unknown executor "${order.agentId}". `
+        + `Known executors: ${[...knownAgentIds].sort().join(", ") || "(none configured)"}.`,
+      );
     }
     if (!Array.isArray(order.inputs)) {
       throw new Error(`Subagent work order ${order.id} needs an input contract.`);
@@ -1322,6 +1374,18 @@ function assertNonEmpty(value: string, label: string): void {
 }
 
 const riskClasses = new Set(["read_only", "reversible_write", "external_side_effect", "irreversible"]);
+
+/**
+ * Risk ordered by how hard the effect is to take back. Comparison is what lets
+ * the Kernel refuse a plan that hides a dangerous child under a safe parent.
+ * 按“后果有多难收回”排序的风险等级。有了可比较性，Kernel 才能拒绝把危险子项藏在安全
+ * 父项下的计划。
+ */
+const RISK_ORDER: RiskClass[] = ["read_only", "reversible_write", "external_side_effect", "irreversible"];
+
+function riskRank(risk: RiskClass): number {
+  return RISK_ORDER.indexOf(risk);
+}
 const evidenceKinds = new Set(["artifact", "tool_result", "receipt", "test", "observation"]);
 
 /**
