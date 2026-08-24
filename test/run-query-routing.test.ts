@@ -5,10 +5,32 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { runQuery } from "../src/application/run-query.ts";
-import { JsonlJournalStore } from "../src/core/journal.ts";
+import { createJournalStore } from "../src/core/sqlite-journal.ts";
 import { defaultWorkerProfiles } from "../src/config/worker-settings.ts";
 import { createScriptedAgentRegistry, ScriptedExecutionAdapter } from "./fixtures/scripted-adapter.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
+
+/**
+ * Reads the journal through the same seam the writers use.
+ *
+ * Hardcoding one backend here would make the assertion depend on storage
+ * configuration rather than on behaviour: the moment the daemon defaults to
+ * SQLite, a JSONL reader sees an empty history and the test fails while the
+ * product is fine.
+ *
+ * 通过与写入端相同的 seam 读取 Journal。
+ *
+ * 在这里写死某一种后端，会让断言依赖于存储配置而非行为：一旦 Daemon 默认改用
+ * SQLite，JSONL 读取器就会看到空历史，于是产品正常而测试失败。
+ */
+async function journalEvents(dataDirectory: string) {
+  const journal = createJournalStore(dataDirectory);
+  try {
+    return await journal.list();
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
+}
 
 async function home(t: TestContext): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "clone-routing-"));
@@ -70,7 +92,7 @@ test("a blocked query is journaled and its run is closed, not left planning", as
   );
   assert.equal(result.status, "blocked");
 
-  const events = await new JsonlJournalStore(join(dataDirectory, "journal.jsonl")).list();
+  const events = await journalEvents(dataDirectory);
   const blocked = events.find((event) => event.type === "dispatch.blocked");
   assert.ok(blocked, "the refusal must be auditable");
   assert.equal((blocked.payload as { requestedAgentId?: string }).requestedAgentId, "draft-maker");
@@ -91,7 +113,7 @@ test("the dispatch decision is journaled before the worker runs", async (t) => {
     workspacePath: dataDirectory,
   });
 
-  const events = await new JsonlJournalStore(join(dataDirectory, "journal.jsonl")).list();
+  const events = await journalEvents(dataDirectory);
   const decisionIndex = events.findIndex((event) => event.type === "dispatch.decided");
   const firstExecution = events.findIndex((event) => (
     event.type === "execution.started" || event.type === "subagent.dispatched"

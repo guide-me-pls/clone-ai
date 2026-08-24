@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
+import type { CloneRuntime } from "../src/core/runtime.ts";
 import type { PlanStep } from "../src/core/contracts.ts";
 import {
-  createKernelRuntime,
+  createKernelRuntimeSession,
   installWorkerAgent,
   proposePlanToKernel,
   recallMemories,
@@ -14,6 +15,20 @@ import {
   runStatusInfo,
 } from "../src/main-agent/tools/kernel-tools.ts";
 
+/**
+ * A step naming an executor the owner actually has.
+ *
+ * The Kernel now rejects a plan that names an executor absent from the
+ * registry, so a fixture id like "demo-researcher" would be rejected for the
+ * right reason and hide whatever the test meant to check. Using a real default
+ * worker keeps each test about its own subject.
+ *
+ * 一个点名了所有者真实拥有的执行者的步骤。
+ *
+ * Kernel 现在会拒绝点名了注册表中不存在的执行者的计划，因此像 "demo-researcher"
+ * 这样的虚构 id 会因为“正确的理由”被拒，反而掩盖测试真正想检验的东西。使用真实的
+ * 默认 Worker，能让每个测试只围绕它自己的主题。
+ */
 function reviewStep(overrides: Partial<PlanStep> = {}): PlanStep {
   return {
     id: "review-step",
@@ -21,16 +36,27 @@ function reviewStep(overrides: Partial<PlanStep> = {}): PlanStep {
     instructions: "Review the current work order contract.",
     risk: "read_only",
     acceptanceCriteria: ["Review exists"],
-    agentId: "demo-researcher",
+    agentId: "context-researcher",
     requiredCapabilities: ["research"],
     ...overrides,
   };
 }
 
-async function tempKernel(t: TestContext): Promise<{ directory: string; runtime: Awaited<ReturnType<typeof createKernelRuntime>> }> {
+/**
+ * A throwaway clone home with a Kernel runtime that is closed before the
+ * directory is removed, so the SQLite journal never blocks cleanup.
+ *
+ * 一个一次性 clone home，其 Kernel Runtime 会在目录被删除之前关闭，因此 SQLite Journal
+ * 不会阻碍清理。
+ */
+async function tempKernel(t: TestContext): Promise<{ directory: string; runtime: CloneRuntime }> {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-main-agent-"));
-  t.after(async () => rm(directory, { recursive: true, force: true }));
-  return { directory, runtime: await createKernelRuntime(directory) };
+  const { runtime, close } = await createKernelRuntimeSession(directory);
+  t.after(async () => {
+    close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  return { directory, runtime };
 }
 
 test("install_agent reports an already-installed worker without touching npm", async (t) => {

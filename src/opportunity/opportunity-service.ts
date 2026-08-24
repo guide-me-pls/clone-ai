@@ -96,13 +96,42 @@ export class OpportunityService {
     return fresh;
   }
 
-  /** All currently proposed cards, newest first. 全部待处理卡片，新的在前。 */
+  /** All currently open cards, newest first. Resolved cards are excluded: a
+   * card the owner already accepted or dismissed is no longer a decision they
+   * need to make, and re-showing it would make the twin look forgetful.
+   * 当前所有未处置的卡片，新的在前。已处置的卡片被排除：所有者已接受或已拒绝的卡片
+   * 不再是需要他做的决定，重复展示会让分身显得健忘。 */
   async list(): Promise<OpportunityCard[]> {
+    const events = await this.#journal.list();
+    const resolved = new Set(
+      events
+        .filter((event) => event.type === "opportunity.resolved")
+        .map((event) => (event.payload as { id?: unknown }).id as string | undefined)
+        .filter((id): id is string => id !== undefined),
+    );
+    return events
+      .filter((event) => event.type === "opportunity.proposed")
+      .map((event) => event.payload as OpportunityCard)
+      .filter((card) => !resolved.has(card.id))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  /** A card the owner accepted or dismissed, for audit and for tests. 已被所有者处置的卡片。 */
+  async resolvedIds(): Promise<string[]> {
+    const events = await this.#journal.list();
+    return events
+      .filter((event) => event.type === "opportunity.resolved")
+      .map((event) => String((event.payload as { id?: unknown }).id ?? ""))
+      .filter((id) => id.length > 0);
+  }
+
+  /** Finds a proposed card by id, resolved or not. 按 id 查找已提出的卡片。 */
+  async find(cardId: string): Promise<OpportunityCard | undefined> {
     const events = await this.#journal.list();
     return events
       .filter((event) => event.type === "opportunity.proposed")
       .map((event) => event.payload as OpportunityCard)
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+      .find((card) => card.id === cardId);
   }
 
   async resolve(cardId: string, status: "accepted" | "dismissed"): Promise<void> {

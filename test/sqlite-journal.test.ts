@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -9,7 +9,7 @@ import { checkJournalInvariants } from "../src/core/invariants.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { DefaultPolicyEngine } from "../src/core/policy.ts";
 import { CloneRuntime } from "../src/core/runtime.ts";
-import { migrateJsonlJournalToSqlite, SqliteJournalStore } from "../src/core/sqlite-journal.ts";
+import { createJournalStore, migrateJsonlJournalToSqlite, SqliteJournalStore } from "../src/core/sqlite-journal.ts";
 import { EvidenceVerifier } from "../src/core/verification.ts";
 import { MemoryPipeline } from "../src/memory/memory-pipeline.ts";
 
@@ -193,4 +193,139 @@ test("migration stops when the source history violates an invariant", async (t) 
     migrateJsonlJournalToSqlite({ jsonlPath, sqlitePath: join(directory, "journal.sqlite3") }),
     /evidence-before-completion/,
   );
+});
+
+test("a legacy jsonl home is imported automatically on first open", async (t) => {
+  const { directory } = await tempDirectory(t);
+  const jsonl = new JsonlJournalStore(join(directory, "journal.jsonl"));
+  const seeded = await jsonl.append({ type: "trigger.received", payload: { summary: "history" } });
+
+  // The store every entry point builds through — the same seam the daemon
+  // uses — must see the imported past, and continue numbering after it.
+  // 所有入口共同经过的那个 store 构造 seam 必须看到导入的历史，并在其后延续编号。
+  const store = createJournalStore(directory);
+  try {
+    const events = await store.list();
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.id, seeded.id);
+    const next = await store.append({ type: "trigger.received", payload: { summary: "new" } });
+    assert.equal(next.sequence, 2);
+  } finally {
+    (store as { close?: () => void }).close?.();
+  }
+});
+
+test("duplicate sequences from the multi-process bug are renumbered on import", async (t) => {
+  const { directory } = await tempDirectory(t);
+  // Two daemons each counted from 1: the exact failure the claim-based store
+  // now prevents, written by hand the way it appeared in real homes.
+  // 两个 daemon 各自从 1 开始计数：正是领取机制现在阻止的那种故障，按真实用户家里
+  // 出现的样子手写出来。
+  await writeFile(join(directory, "journal.jsonl"), [
+    JSON.stringify({ id: "11111111-1111-1111-1111-111111111111", type: "trigger.received", sequence: 1, occurredAt: "2025-01-01T00:00:00.000Z", payload: { summary: "a" } }),
+    JSON.stringify({ id: "22222222-2222-2222-2222-222222222222", type: "trigger.received", sequence: 1, occurredAt: "2025-01-01T00:00:01.000Z", payload: { summary: "b" } }),
+  ].join("\n") + "\n", "utf8");
+
+  const store = createJournalStore(directory);
+  try {
+    const events = await store.list();
+    assert.deepEqual(events.map((event) => event.sequence), [1, 2]);
+    assert.deepEqual(events.map((event) => event.payload), [{ summary: "a" }, { summary: "b" }]);
+  } finally {
+    (store as { close?: () => void }).close?.();
+  }
+});
+
+test("an empty sqlite beside a populated jsonl still imports, a populated one never", async (t) => {
+  const { directory, use } = await tempDirectory(t);
+  // The broken-default window: an empty SQLite file created next to a real
+  // JSONL history. There is nothing in it to lose, so the import proceeds.
+  // 默认值切换的窗口期：空 SQLite 文件与真实 JSONL 历史并存。里面没有可丢失的东西，
+  // 因此导入照常进行。
+  const empty = use(new SqliteJournalStore(join(directory, "journal.sqlite3")));
+  empty.close();
+  await writeFile(join(directory, "journal.jsonl"),
+    JSON.stringify({ id: "33333333-3333-3333-3333-333333333333", type: "trigger.received", sequence: 1, occurredAt: "2025-02-01T00:00:00.000Z", payload: { summary: "rescued" } }) + "\n", "utf8");
+
+  const imported = createJournalStore(directory);
+  try {
+    const events = await imported.list();
+    assert.equal(events.length, 1);
+    assert.equal((events[0]?.payload as { summary?: string }).summary, "rescued");
+  } finally {
+    (imported as { close?: () => void }).close?.();
+  }
+
+  // Once the SQLite journal holds real events of its own, the JSONL past is
+  // no longer merged in: diverged histories are the owner's call, not boot
+  // code's. 一旦 SQLite Journal 里已有自己的真实事件，就不再并入 JSONL 的过去：
+  // 分叉的历史由所有者决断，而不是启动代码。
+  const diverged = createJournalStore(directory);
+  try {
+    await diverged.append({ type: "trigger.received", payload: { summary: "diverged" } });
+  } finally {
+    (diverged as { close?: () => void }).close?.();
+  }
+  await writeFile(join(directory, "journal.jsonl"),
+    JSON.stringify({ id: "44444444-4444-4444-4444-444444444444", type: "trigger.received", sequence: 9, occurredAt: "2025-03-01T00:00:00.000Z", payload: { summary: "late jsonl write" } }) + "\n", "utf8");
+
+  const settled = createJournalStore(directory);
+  try {
+    const events = await settled.list();
+    assert.equal(events.length, 2);
+    assert.ok(events.every((event) => (event.payload as { summary?: string }).summary !== "late jsonl write"));
+  } finally {
+    (settled as { close?: () => void }).close?.();
+  }
+});
+
+test("only one of two processes can claim a run, and the loser is told", async (t) => {
+  const { directory, use } = await tempDirectory(t);
+  const path = join(directory, "journal.sqlite3");
+
+  // Two store instances over one file are two processes: a GUI daemon and a
+  // CLI that happen to run at the same time. Each holds its own view of the
+  // world; only the transaction can decide between them.
+  // 同一文件上的两个 Store 实例就是两个进程：恰好同时运行的 GUI Daemon 与 CLI。
+  // 各自持有自己的世界观；只有事务能在两者之间做出裁决。
+  const daemon = use(new SqliteJournalStore(path));
+  const cli = use(new SqliteJournalStore(path));
+
+  const byDaemon = await daemon.claimRun({ runId: "run-1", ownerId: "daemon", leaseMs: 60_000 });
+  assert.ok(byDaemon !== undefined, "the first claimer wins");
+  assert.equal(byDaemon.attempt, 1);
+
+  const byCli = await cli.claimRun({ runId: "run-1", ownerId: "cli", leaseMs: 60_000 });
+  assert.equal(byCli, undefined, "a live lease cannot be taken by a second process");
+
+  // The same owner re-claiming (a reconnect) keeps the attempt count flat.
+  // 同一所有者重连再领取时，attempt 不应递增。
+  const reconnected = await daemon.claimRun({ runId: "run-1", ownerId: "daemon", leaseMs: 60_000 });
+  assert.ok(reconnected !== undefined);
+  assert.equal(reconnected.attempt, 1);
+});
+
+test("a lease that expired is stealable, and stealing is visible in the attempt count", async (t) => {
+  const { directory, use } = await tempDirectory(t);
+  const store = use(new SqliteJournalStore(join(directory, "journal.sqlite3")));
+
+  // A consumer killed mid-run holds a lease it will never renew. The work must
+  // not strand, so the lease expires — and the takeover is counted, because a
+  // run that keeps killing its owners is a signal, not noise.
+  // 被中途杀掉的消费者握着一个永远不会再续期的租约。工作不能因此搁浅，所以租约会
+  // 过期——且接管被计数，因为反复弄死持有者的 Run 是信号，不是噪声。
+  await store.claimRun({ runId: "run-2", ownerId: "crashed", leaseMs: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const takeover = await store.claimRun({ runId: "run-2", ownerId: "successor", leaseMs: 60_000 });
+  assert.ok(takeover !== undefined, "an expired lease is stealable");
+  assert.equal(takeover.attempt, 2, "stealing bumps the attempt count");
+
+  assert.equal(await store.renewClaim({ runId: "run-2", ownerId: "crashed", leaseMs: 60_000 }), false);
+  assert.equal(await store.renewClaim({ runId: "run-2", ownerId: "successor", leaseMs: 60_000 }), true);
+
+  await store.releaseClaim({ runId: "run-2", ownerId: "successor" });
+  const reclaimed = await store.claimRun({ runId: "run-2", ownerId: "successor", leaseMs: 60_000 });
+  assert.ok(reclaimed !== undefined);
+  assert.equal(reclaimed.attempt, 2, "release-and-reclaim by the same owner is not a new attempt");
 });

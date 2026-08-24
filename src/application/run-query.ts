@@ -61,10 +61,30 @@ export async function runQuery(
   settings?: CloneSettings,
   options: QueryWorkflowOptions = {},
 ): Promise<QueryRunResult> {
-  const { runtime, memory, failureCatalog, paths, journal } = await createRuntimeAssembly({
+  const assembly = await createRuntimeAssembly({
     dataDirectory,
     ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
   });
+  // Every exit from this workflow must release the journal handle: the caller
+  // owns the clone home and may move or delete it the moment we return.
+  // 本工作流的每一个出口都必须释放 Journal 句柄：调用方拥有 clone home，可能在我们
+  // 返回的一瞬间就移动或删除它。
+  try {
+    return await runQueryWithin(assembly, dataDirectory, query, trigger, settings, options);
+  } finally {
+    assembly.close();
+  }
+}
+
+async function runQueryWithin(
+  assembly: Awaited<ReturnType<typeof createRuntimeAssembly>>,
+  dataDirectory: string,
+  query: string,
+  trigger: { kind?: TriggerKind; payload?: Record<string, unknown> },
+  settings: CloneSettings | undefined,
+  options: QueryWorkflowOptions,
+): Promise<QueryRunResult> {
+  const { runtime, memory, failureCatalog, paths, journal } = assembly;
   const workspacePath = paths.workspacePath;
   const { run } = await runtime.acceptTrigger({
     kind: trigger.kind ?? "query",
@@ -202,25 +222,32 @@ export async function approveQueryRun(
   settings?: CloneSettings,
   options: QueryWorkflowOptions = {},
 ): Promise<QueryRunResult> {
-  const { runtime, memory, failureCatalog, paths } = await createRuntimeAssembly({
+  const assembly = await createRuntimeAssembly({
     dataDirectory,
     ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
   });
-  const workspacePath = paths.workspacePath;
-  const run = runtime.getRun(runId);
-  if (run.status !== "waiting_approval" || run.activeStepId === undefined) {
-    throw new Error(`Run ${runId} is not waiting for an approval.`);
-  }
+  try {
+    const { runtime, memory, failureCatalog, paths } = assembly;
+    const workspacePath = paths.workspacePath;
+    const run = runtime.getRun(runId);
+    if (run.status !== "waiting_approval" || run.activeStepId === undefined) {
+      throw new Error(`Run ${runId} is not waiting for an approval.`);
+    }
 
-  await runtime.grantApproval(run.id, run.activeStepId, "Approved from the local desktop companion.");
-  const registry = options.agents ?? await createConfiguredAgentRegistry((settings?.agents ?? defaultWorkerProfiles()), {
-      dataDirectory,
-      workspacePath,
-      failureCatalog,
-    });
-  const result = await runtime.execute(run.id, registry);
-  const candidates = result.status === "completed" ? await memory.processNext() : [];
-  return toQueryResult(runtime, result, candidates.length);
+    await runtime.grantApproval(run.id, run.activeStepId, "Approved from the local desktop companion.");
+    const registry = options.agents ?? await createConfiguredAgentRegistry((settings?.agents ?? defaultWorkerProfiles()), {
+        dataDirectory,
+        workspacePath,
+        failureCatalog,
+      });
+    const result = await runtime.execute(run.id, registry);
+    const candidates = result.status === "completed" ? await memory.processNext() : [];
+    return toQueryResult(runtime, result, candidates.length);
+  } finally {
+    // Including the error path above: a rejected approval must not leave the
+    // database open. 包括上面的错误路径：被拒绝的审批不能把数据库留在打开状态。
+    assembly.close();
+  }
 }
 
 function toQueryResult(runtime: CloneRuntime, result: DispatchResult, memoryCandidatesProposed: number): QueryRunResult {
