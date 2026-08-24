@@ -114,9 +114,74 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
   try {
     await session.prompt(query);
     process.stdout.write("\n");
+    await drainQueuedRuns(dataDirectory);
     return 0;
   } finally {
     session.dispose();
+  }
+}
+
+/**
+ * Executes whatever the conversation just queued, before the process exits.
+ *
+ * The Main Agent proposes plans through the Kernel, which journals them as
+ * `queued`. In the GUI a long-lived consumer picks those up; in the CLI there
+ * is none, so without this the twin would say "I've started on that" and then
+ * exit having run nothing. The rule is that the system never claims to have
+ * accepted work it has no intention of performing: either an executor takes
+ * over here, or the owner is told the work is only saved.
+ *
+ * 在进程退出前，执行本次对话刚刚排队的工作。
+ *
+ * Main Agent 通过 Kernel 提案，Kernel 会把它们以 `queued` 记入 Journal。GUI 里有常驻
+ * 消费者会接走；CLI 里没有，因此若不做这件事，分身会说“我已经开始做了”然后什么都没
+ * 跑就退出。规则是：系统绝不声称接受了一份它根本不打算执行的工作——要么这里有执行者
+ * 接手，要么明确告知所有者“仅保存、尚未执行”。
+ */
+async function drainQueuedRuns(dataDirectory: string): Promise<void> {
+  const { createRuntimeAssembly } = await import("../core/runtime-factory.ts");
+  const { RunQueueConsumer } = await import("../application/run-queue.ts");
+  const { createConfiguredAgentRegistry } = await import("../workers/configured-worker-registry.ts");
+  const { WorkerSettingsStore } = await import("../config/worker-settings.ts");
+
+  const paths = resolveClonePaths({ dataDirectory });
+  const assembly = await createRuntimeAssembly({ dataDirectory });
+  const { runtime, journal } = assembly;
+  try {
+    await runtime.refresh();
+    const pending = runtime.listRuns().filter((run) => run.status === "queued");
+    if (pending.length === 0) return;
+
+    const settings = new WorkerSettingsStore(paths.legacyAgentsFile);
+    const consumer = new RunQueueConsumer({
+      runtime,
+      journal,
+      registry: async () => createConfiguredAgentRegistry(
+        (await settings.get()).agents,
+        { dataDirectory, workspacePath: paths.workspacePath },
+      ),
+      onError: (runId, error) => {
+        console.error(`\nRun ${runId} failed: ${error instanceof Error ? error.message : String(error)}`);
+      },
+    });
+
+    console.log(`\nExecuting ${pending.length} queued run(s)...`);
+    const started = await consumer.tick();
+    await consumer.stop();
+    await runtime.refresh();
+
+    for (const runId of started) {
+      const run = runtime.getRun(runId);
+      console.log(`  ${run.status === "completed" ? "✓" : run.status === "waiting_approval" ? "⏸" : "✗"} ${runId.slice(0, 8)} → ${run.status}`);
+    }
+    // A run another process already claimed is not silently dropped: the owner
+    // is told where it went. 已被其他进程领取的 Run 不会被静默丢弃：告知所有者它去了哪里。
+    const unclaimed = pending.filter((run) => !started.includes(run.id));
+    if (unclaimed.length > 0) {
+      console.log(`  ${unclaimed.length} run(s) are being executed by another Clone AI process.`);
+    }
+  } finally {
+    assembly.close();
   }
 }
 
@@ -272,12 +337,17 @@ async function showCases(dataDirectory: string): Promise<number> {
 }
 
 async function showOpportunities(dataDirectory: string): Promise<number> {
-  const service = new OpportunityService(createJournalStore(dataDirectory));
-  await service.scanAndRecord();
-  const cards = await service.list();
-  if (cards.length === 0) console.log("No open opportunities.");
-  for (const card of cards) console.log(`- [${card.source}] ${card.title}\n    ${card.whyNow}`);
-  return 0;
+  const journal = createJournalStore(dataDirectory);
+  try {
+    const service = new OpportunityService(journal);
+    await service.scanAndRecord();
+    const cards = await service.list();
+    if (cards.length === 0) console.log("No open opportunities.");
+    for (const card of cards) console.log(`- [${card.source}] ${card.title}\n    ${card.whyNow}`);
+    return 0;
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
 }
 
 async function runBench(args: string[]): Promise<number> {

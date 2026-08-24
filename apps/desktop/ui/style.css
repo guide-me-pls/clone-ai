@@ -92,6 +92,18 @@ button { color: inherit; }
 .private-pill svg { width: 12px; height: 12px; color: var(--accent); }
 
 .conversation { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 34px 28px 22px; scrollbar-width: thin; }
+
+/* 机会卡片：分身主动发现的事，直接放在对话上方而不是藏在设置里。 */
+.opportunity-strip { display: grid; gap: 10px; max-height: 40vh; overflow-y: auto; padding: 14px 28px 4px; }
+.opportunity-card { padding: 13px 15px; border: 1px solid #e4ddc8; border-left: 3px solid var(--warning); border-radius: 10px; background: #fffdf5; }
+.opportunity-head { display: flex; align-items: center; gap: 8px; }
+.opportunity-head b { font-size: 13px; font-weight: 660; }
+.opportunity-source { padding: 2px 7px; border-radius: 999px; color: #6c5a1e; background: #f5ecd2; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.opportunity-why { margin: 6px 0 2px; color: #7a7466; font-size: 12px; line-height: 1.5; }
+.opportunity-proposal { margin: 0 0 9px; color: #4a4a3f; font-size: 12.5px; line-height: 1.5; }
+.opportunity-actions { display: flex; gap: 8px; }
+.opportunity-actions .secondary { padding: 6px 10px; border: 1px solid #dcd7c6; border-radius: 8px; color: #6a6555; background: transparent; font-size: 11.5px; cursor: pointer; }
+.opportunity-actions .approve { padding: 6px 11px; font-size: 11.5px; }
 .conversation::-webkit-scrollbar { width: 10px; }
 .conversation::-webkit-scrollbar-track { background: transparent; }
 .conversation::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px; background-clip: content-box; }

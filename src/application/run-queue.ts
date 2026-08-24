@@ -14,8 +14,11 @@
  * 正在发生。本模块一次性为所有入口补上这一环，因为它观察的是 Run 状态，而不是被某个
  * 特定调用方调用。
  */
+import { randomUUID } from "node:crypto";
+
 import type { AgentRegistry } from "../core/contracts.ts";
 import type { CloneRuntime } from "../core/runtime.ts";
+import type { JournalStore } from "../core/journal.ts";
 
 export interface RunQueueOptions {
   runtime: CloneRuntime;
@@ -23,16 +26,37 @@ export interface RunQueueOptions {
   registry: () => Promise<AgentRegistry>;
   intervalMs?: number;
   onError?: (runId: string, error: unknown) => void;
+  /**
+   * The journal used to claim runs. Without it the consumer falls back to
+   * in-process de-duplication only, which is safe for a single daemon but
+   * cannot stop a second process from executing the same run.
+   * 用于领取 Run 的 Journal。没有它时，消费者只能做进程内去重：对单 Daemon 安全，
+   * 但无法阻止第二个进程执行同一个 Run。
+   */
+  journal?: JournalStore;
+  /** Identifies this consumer in a claim. 在领取中标识本消费者。 */
+  ownerId?: string;
+  /** How long a claim stays valid without renewal. 一次领取在不续期时的有效时长。 */
+  leaseMs?: number;
 }
 
 export class RunQueueConsumer {
   readonly #options: RunQueueOptions;
   readonly #inFlight = new Set<string>();
+  readonly #ownerId: string;
+  readonly #leaseMs: number;
   #timer?: NodeJS.Timeout;
   #ticking = false;
 
   constructor(options: RunQueueOptions) {
     this.#options = options;
+    this.#ownerId = options.ownerId ?? `consumer-${process.pid}-${randomUUID().slice(0, 8)}`;
+    this.#leaseMs = options.leaseMs ?? 5 * 60_000;
+  }
+
+  /** The identity this consumer claims runs under. 本消费者领取 Run 所用的身份。 */
+  get ownerId(): string {
+    return this.#ownerId;
   }
 
   start(): void {
@@ -79,6 +103,11 @@ export class RunQueueConsumer {
       const queued = this.#options.runtime.listRuns().filter((run) => run.status === "queued");
       for (const run of queued) {
         if (this.#inFlight.has(run.id)) continue;
+        // Claim before dispatching: the projection said `queued`, but another
+        // consumer may already be acting on that same reading.
+        // 先领取再派发：投影说它是 `queued`，但另一个消费者可能已经在处理同一次读数。
+        const claimed = await this.#claim(run.id);
+        if (!claimed) continue;
         this.#inFlight.add(run.id);
         started.push(run.id);
         void this.#execute(run.id);
@@ -94,7 +123,26 @@ export class RunQueueConsumer {
     return [...this.#inFlight];
   }
 
+  async #claim(runId: string): Promise<boolean> {
+    const journal = this.#options.journal;
+    if (journal?.claimRun === undefined) return true;
+    try {
+      const claim = await journal.claimRun({ runId, ownerId: this.#ownerId, leaseMs: this.#leaseMs });
+      return claim !== undefined;
+    } catch (error: unknown) {
+      this.#options.onError?.(runId, error);
+      return false;
+    }
+  }
+
   async #execute(runId: string): Promise<void> {
+    // Renew while the worker runs so a slow but healthy run keeps its claim.
+    // 工作期间续期，使慢但健康的 Run 保住领取。
+    const renew = setInterval(() => {
+      void this.#options.journal?.renewClaim?.({ runId, ownerId: this.#ownerId, leaseMs: this.#leaseMs })
+        ?.catch(() => undefined);
+    }, Math.max(1_000, Math.floor(this.#leaseMs / 3)));
+    renew.unref();
     try {
       const registry = await this.#options.registry();
       await this.#options.runtime.execute(runId, registry);
@@ -105,6 +153,11 @@ export class RunQueueConsumer {
       // Worker 失败变成进程崩溃。
       this.#options.onError?.(runId, error);
     } finally {
+      clearInterval(renew);
+      // Release so a terminal run's claim does not linger, and a failed one can
+      // be retried without waiting out the lease.
+      // 释放领取，使终态 Run 不会残留占用，失败的 Run 也无需等租约到期即可重试。
+      await this.#options.journal?.releaseClaim?.({ runId, ownerId: this.#ownerId })?.catch(() => undefined);
       this.#inFlight.delete(runId);
     }
   }
