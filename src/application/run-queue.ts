@@ -19,6 +19,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentRegistry } from "../core/contracts.ts";
 import type { CloneRuntime } from "../core/runtime.ts";
 import type { JournalStore } from "../core/journal.ts";
+import { reconcileCommitments } from "../state/commitment-reconciler.ts";
 
 export interface RunQueueOptions {
   runtime: CloneRuntime;
@@ -100,6 +101,22 @@ export class RunQueueConsumer {
       // the projection must be replayed before looking for work.
       // Run 由其他进程创建（Main Agent、CLI、调度器），因此必须先重放投影再找活干。
       await this.#options.runtime.refresh();
+      // A dead executor's runs come back to life here — re-queued when the work
+      // is reversible, failed when a retry could duplicate an external effect —
+      // so the filter below can pick them up in the same tick. Recovery is
+      // claim-driven: a run with a live lease is somebody else's, in flight
+      // right now, and is not touched.
+      // 死掉的执行者的 Run 在这里复活——可逆的工作回到队列，重试可能复制外部影响的
+      // 工作转为失败——这样下面的过滤能在同一次 tick 里接走它们。恢复由领取驱动：
+      // 带着存活租约的 Run 属于别人、正在飞行中，不会被碰。
+      try {
+        await this.#options.runtime.recoverOrphanedRuns();
+      } catch (error: unknown) {
+        // Recovery failing must not stop the tick from running the healthy
+        // queue; the next tick retries the recovery itself.
+        // 恢复失败不能阻止本次 tick 运行健康的队列；下一次 tick 会重试恢复本身。
+        console.error(`clone-ai: orphan recovery failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
       const queued = this.#options.runtime.listRuns().filter((run) => run.status === "queued");
       for (const run of queued) {
         if (this.#inFlight.has(run.id)) continue;
@@ -159,6 +176,19 @@ export class RunQueueConsumer {
       // 释放领取，使终态 Run 不会残留占用，失败的 Run 也无需等租约到期即可重试。
       await this.#options.journal?.releaseClaim?.({ runId, ownerId: this.#ownerId })?.catch(() => undefined);
       this.#inFlight.delete(runId);
+      // Work landing is what moves the owner's obligations: a run that served a
+      // commitment settles it, and a failed one leaves the occurrence unsatisfied
+      // for the next pass to advance. Idempotent and failure-tolerant — the
+      // maintenance timer makes the same call, so this is an early convergence,
+      // not a single point of it.
+      // 工作落地才会推动所有者的义务：服务过某个承诺的 Run 结算它，失败的 Run 则把该次
+      // 周期留给下一次扫描推进。幂等且容忍失败——维护定时器会做同样的调用，因此这里
+      // 是更早的一次收敛，而不是收敛的唯一机会。
+      try {
+        if (this.#options.journal !== undefined) await reconcileCommitments(this.#options.journal);
+      } catch {
+        // The state plane must never take the consumer down. 状态平面绝不能弄垮消费者。
+      }
     }
   }
 }

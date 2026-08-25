@@ -36,6 +36,7 @@ import { CloneConfigStore } from "./config/clone-config.ts";
 import { readConnectorSettings, writeConnectorSettings } from "./connectors/connector-registry.ts";
 import { compileBriefing } from "./main-agent/situation-briefing.ts";
 import { buildFallbackPlan } from "./planning/fallback-planner.ts";
+import { reconcileCommitments } from "./state/commitment-reconciler.ts";
 import { describeHistory, mainAgentSessionDirectory, searchHistory } from "./main-agent/conversation-history.ts";
 import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
 import {
@@ -179,6 +180,16 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
    * 学习”的来源，因此它们属于定时器，而不是属于某个用户动作。
    */
   const runMaintenance = async (): Promise<void> => {
+    // The reconcile pass runs before the scan and settles what landed since
+    // the last tick — commitments served by verified runs, occurrences that
+    // passed unsatisfied. The scan then reads the advanced due dates, so a
+    // settled Friday proposes next Friday's card instead of re-proposing a
+    // past one. Order is the loop: observe, settle, then look for new diffs.
+    // 收敛扫描先于机会扫描运行，结算自上次 tick 以来落地的东西——被已验证 Run 服务过的
+    // 承诺、未被满足而错过的周期。机会扫描随后读到推进后的到期时间，因此被结算的周五
+    // 提出的是下一个周五的卡片，而不是重复提出已过去的那个。顺序即环路：观察、结算、
+    // 再找新的差异。
+    await reconcileCommitments(journal).catch(() => undefined);
     // Drain every pending candidate: a completed run must not wait for the
     // next tick to become something the owner can review.
     // 排空所有待处理候选：已完成的 Run 不应等到下一次 tick 才变成所有者可审核的东西。
@@ -482,7 +493,16 @@ async function handleRequest(
         const settings = await context.agentSettings.get();
         const enabled = new Set(settings.agents.filter((agent) => agent.enabled).map((agent) => agent.id));
         const plan = buildFallbackPlan(`${card.title}。${card.proposedResult}`, enabled);
-        await context.runtime.attachPlan(run.id, plan);
+        await context.runtime.attachPlan(run.id, {
+          ...plan,
+          // The card knew which commitment it served; the plan inheriting that
+          // link is what lets the reconcile loop settle the commitment when
+          // this run lands. Without it the run completes and the Friday it was
+          // for stays open forever.
+          // 卡片知道自己服务的是哪个承诺；计划继承这条联动，收敛环才能在这个 Run 落地时
+          // 结算该承诺。没有它，Run 完成了，而它为之而做的那个周五永远悬而未结。
+          ...(card.serves?.kind === "commitment" ? { servesCommitmentId: card.serves.id } : {}),
+        });
         runId = run.id;
       }
       sendJson(response, 200, { decided: cardId, ...(runId === undefined ? {} : { runId }) });

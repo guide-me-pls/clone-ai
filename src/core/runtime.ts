@@ -167,6 +167,96 @@ export class CloneRuntime {
     this.#hydrated = true;
   }
 
+  /**
+   * Recovers runs orphaned by a dead executor.
+   *
+   * A process killed mid-execution leaves its run in `running` (or `verifying`)
+   * forever: the queue only picks up `queued`, so the lease being stealable
+   * meant nothing — there was no work left in a claimable state to steal. This
+   * is the missing half of the crash story: liveness is decided by the claim,
+   * not guessed from the status.
+   *
+   * The probe is the claim, and only the claim: a run mid-execution with a
+   * live lease belongs to whoever holds it and is left alone. A run whose
+   * lease is gone has no executor —
+   *
+   *   - reversible work (read-only or reversible_write steps) goes back to the
+   *     queue: re-execution overwrites, it does not duplicate;
+   *   - external or irreversible work fails instead, because a retry cannot
+   *     know whether the email was sent, and the honest outcome is a failed
+   *     run the opportunity engine turns into a follow-up card for the owner;
+   *   - a run orphaned mid-verification fails the same way: the work happened,
+   *     the verdict did not, and a verdict that cannot be reconstructed must
+   *     not be invented.
+   *
+   * Only stores that support claims can be probed; a single-process store has
+   * no orphans by construction, and this method leaves those runs untouched.
+   *
+   * 恢复被死掉的执行者丢下的 Run。
+   *
+   * 执行中途被杀的进程会把它的 Run 永远留在 `running`（或 `verifying`）：队列只认
+   * `queued`，因此"租约可抢占"毫无意义——根本没有留在可领取状态里的工作可抢。这是
+   * 崩溃故事的缺失一半：活性由领取判定，而不是从状态猜测。
+   *
+   * 探针是领取，且只是领取：带着存活租约的执行中 Run 属于持有者，不去碰。租约已消失
+   * 的 Run 没有执行者——
+   *
+   *   - 可逆的工作（read-only 或 reversible_write 步骤）回到队列：重执行是覆盖，
+   *     不是复制；
+   *   - 外部或不可逆的工作改为失败，因为重试无法知道邮件是否已发出，而诚实的结局是
+   *     一个失败的 Run，由机会引擎转成给所有者的跟进卡片；
+   *   - 在验证中途被丢下的 Run 同样失败：工作发生了，结论没有，而无法重建的结论
+   *     绝不能被编造。
+   *
+   * 只有支持领取的存储可被探测；单进程存储按构造没有孤儿，本方法不碰那些 Run。
+   */
+  async recoverOrphanedRuns(): Promise<Array<{ runId: string; action: "requeued" | "failed"; reason: string }>> {
+    await this.hydrate();
+    if (this.#journal.readClaim === undefined) return [];
+    const now = Date.now();
+    const recovered: Array<{ runId: string; action: "requeued" | "failed"; reason: string }> = [];
+
+    for (const run of Object.values(this.#state.runs)) {
+      if (run.status !== "running" && run.status !== "verifying") continue;
+      const claim = await this.#journal.readClaim(run.id);
+      if (claim !== undefined && Date.parse(claim.leaseUntil) > now) continue;
+
+      const external = run.planId === undefined
+        ? false
+        : (this.#state.plans[run.planId]?.steps ?? []).some((step) => (
+          step.risk === "external_side_effect" || step.risk === "irreversible"
+          || step.subagents?.some((order) => order.risk === "external_side_effect" || order.risk === "irreversible")
+        ));
+
+      if (run.status === "verifying" || external) {
+        const reason = run.status === "verifying"
+          ? "executor died while verifying; the verdict cannot be reconstructed"
+          : "executor died with external-effect steps; a retry could duplicate the side effect";
+        await this.record({
+          type: "run.status_changed",
+          taskId: run.taskId,
+          runId: run.id,
+          payload: { status: "failed", activeStepId: run.activeStepId, reason },
+        });
+        recovered.push({ runId: run.id, action: "failed", reason });
+        continue;
+      }
+
+      await this.record({
+        type: "run.status_changed",
+        taskId: run.taskId,
+        runId: run.id,
+        payload: {
+          status: "queued",
+          activeStepId: run.activeStepId,
+          reason: "executor died; lease expired, work returned to the queue",
+        },
+      });
+      recovered.push({ runId: run.id, action: "requeued", reason: "executor died; lease expired" });
+    }
+    return recovered;
+  }
+
   async acceptTrigger(input: Omit<Trigger, "id" | "occurredAt">): Promise<{ task: Task; run: Run }> {
     await this.hydrate();
 
@@ -1217,6 +1307,15 @@ function assertPlanIsExecutable(steps: PlanStep[], knownAgentIds?: Set<string>):
         + `Known executors: ${[...knownAgentIds].sort().join(", ") || "(none configured)"}.`,
       );
     }
+    // The risk class is a proposal; the capabilities are what the work actually
+    // needs. A step that requires filesystem_write but declares itself
+    // read_only would execute writes behind a label the policy engine treats
+    // as safe — the floor is recalculated from the capabilities, so the label
+    // cannot undersell the work.
+    // 风险等级只是提案；能力才是工作真正需要的东西。一个要求 filesystem_write 却自称
+    // read_only 的步骤，会在 Policy 引擎视为安全的标签背后执行写入——下限由能力重新
+    // 计算，因此标签无法贱卖工作。
+    assertRiskFloor(step.id, "Plan step", step.risk, step.requiredCapabilities);
     if (step.subagents !== undefined) {
       for (const order of step.subagents) {
         if (workOrderIds.has(order.id)) {
@@ -1263,6 +1362,9 @@ function assertSubagentOrders(
     if (!riskClasses.has(order.risk)) {
       throw new Error(`Subagent work order ${order.id} has an invalid risk class.`);
     }
+    // Same recalculated floor as the step above, for the same reason.
+    // 与上面步骤相同的重算下限，理由也相同。
+    assertRiskFloor(order.id, "Subagent work order", order.risk, order.requiredCapabilities);
     // The step's risk is what the policy engine gates on and what the verifier
     // demands receipts for. A child order that is riskier than the step it
     // hangs under would execute an irreversible action behind a `read_only`
@@ -1385,6 +1487,39 @@ const RISK_ORDER: RiskClass[] = ["read_only", "reversible_write", "external_side
 
 function riskRank(risk: RiskClass): number {
   return RISK_ORDER.indexOf(risk);
+}
+
+/**
+ * The risk floor implied by what the work says it needs.
+ *
+ * The risk class on a step is the model's proposal. The Kernel recalculates a
+ * floor from the required capabilities — the step's own declaration of what
+ * will actually be done — and refuses any label that undersells it. This is
+ * the boundary the review asked for: the model proposes the risk, the Kernel
+ * derives what the risk must at least be, and the larger of the two governs.
+ *
+ * 由工作自称所需的能力推出的风险下限。
+ *
+ * 步骤上的风险等级是模型的提案。Kernel 从 requiredCapabilities——步骤自己对将要做什么
+ * 的声明——重算一个下限，并拒绝任何贱卖它的标签。这正是评审要的那条边界：模型提议
+ * 风险，Kernel 推导风险至少必须是什么，两者之中更大者生效。
+ */
+function assertRiskFloor(id: string, what: string, declared: RiskClass, requiredCapabilities: unknown): void {
+  if (!Array.isArray(requiredCapabilities)) return;
+  const capabilities = requiredCapabilities.filter((item): item is string => typeof item === "string");
+  let floor: RiskClass = "read_only";
+  if (capabilities.includes("external_action")) {
+    floor = "external_side_effect";
+  } else if (capabilities.includes("filesystem_write")) {
+    floor = "reversible_write";
+  }
+  if (riskRank(declared) < riskRank(floor)) {
+    throw new Error(
+      `${what} ${id} declares risk "${declared}" but requires ${capabilities.includes("external_action") ? "external_action" : "filesystem_write"}. `
+      + `The risk class is recalculated from the capabilities: raise it to at least "${floor}" `
+      + `so approval and verification see the work for what it does.`,
+    );
+  }
 }
 const evidenceKinds = new Set(["artifact", "tool_result", "receipt", "test", "observation"]);
 

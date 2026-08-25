@@ -119,6 +119,14 @@ export class SqliteJournalStore implements JournalStore {
       .run(new Date().toISOString(), input.runId, input.ownerId);
   }
 
+  async readClaim(runId: string): Promise<RunClaim | undefined> {
+    const row = this.#db
+      .prepare("SELECT run_id, owner_id, lease_until, attempt FROM run_claims WHERE run_id = ?")
+      .get(runId) as { run_id: string; owner_id: string; lease_until: string; attempt: number | bigint } | undefined;
+    if (row === undefined) return undefined;
+    return { runId: row.run_id, ownerId: row.owner_id, leaseUntil: row.lease_until, attempt: Number(row.attempt) };
+  }
+
   async append(event: NewJournalEvent): Promise<JournalEvent> {
     const id = randomUUID();
     const occurredAt = new Date().toISOString();
