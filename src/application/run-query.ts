@@ -1,11 +1,15 @@
+import { randomUUID } from "node:crypto";
+
 import { createConfiguredAgentRegistry } from "../workers/configured-worker-registry.ts";
 import { workCapabilitiesForRole } from "../workers/capabilities.ts";
 import { WorkerRegistry } from "../workers/worker-registry.ts";
 import type { AgentRegistry, PlanStep, TriggerKind } from "../core/contracts.ts";
 import { createRuntimeAssembly } from "../core/runtime-factory.ts";
 import type { CloneRuntime, DispatchResult } from "../core/runtime.ts";
+import type { JournalStore } from "../core/journal.ts";
 import { GovernedMemorySource } from "../memory/md-memory-store.ts";
 import { buildFallbackPlan } from "../planning/fallback-planner.ts";
+import { reconcileCommitments } from "../state/commitment-reconciler.ts";
 import { createEnvironmentWorkPlanner, type PlanningAgent, type WorkPlanner } from "../planning/llm-planner.ts";
 import { defaultWorkerProfiles, type CloneSettings, type WorkerProfile } from "../config/worker-settings.ts";
 import { classifyIntent } from "../main-agent/intent-classifier.ts";
@@ -193,7 +197,7 @@ async function runQueryWithin(
     workspacePath,
     failureCatalog,
   });
-  const result = await runtime.execute(run.id, registry);
+  const result = await executeClaimingRun(journal, runtime, run.id, registry);
   const candidates = result.status === "completed" ? await memory.processNext() : [];
   return {
     ...toQueryResult(runtime, result, candidates.length),
@@ -205,8 +209,43 @@ async function runQueryWithin(
   };
 }
 
-function planningAgents(agents: CloneSettings["agents"]): PlanningAgent[] {
-  return agents
+/**
+ * Executes a run while holding a claim.
+ *
+ * The queue consumer claims before it executes; these direct paths (a query,
+ * an approval) must too, or "running without a claim" would stop meaning
+ * "the executor died" and orphan recovery would start requeueing runs that
+ * are executing right now. A claim held here for the length of one execution
+ * keeps the invariant single: running ⟹ someone alive owns it.
+ *
+ * 在持有领取的情况下执行 Run。
+ *
+ * 队列消费者先领取再执行；这些直连路径（一次查询、一次批准）也必须如此，否则
+ * "运行中且无领取"就不再意味着"执行者死了"，孤儿恢复会开始把正在执行的 Run 重新
+ * 入队。在这里为一次执行的时长持有领取，让不变式保持单一：运行中 ⟹ 有活着的所有者。
+ */
+async function executeClaimingRun(
+  journal: JournalStore,
+  runtime: CloneRuntime,
+  runId: string,
+  registry: AgentRegistry,
+): Promise<DispatchResult> {
+  const ownerId = `direct-${process.pid}-${randomUUID().slice(0, 8)}`;
+  const leaseMs = 10 * 60_000;
+  await journal.claimRun?.({ runId, ownerId, leaseMs });
+  const renew = setInterval(() => {
+    void journal.renewClaim?.({ runId, ownerId, leaseMs })?.catch(() => undefined);
+  }, 60_000);
+  renew.unref();
+  try {
+    return await runtime.execute(runId, registry);
+  } finally {
+    clearInterval(renew);
+    await journal.releaseClaim?.({ runId, ownerId })?.catch(() => undefined);
+  }
+}
+
+function planningAgents(agents: CloneSettings["agents"]): PlanningAgent[] {  return agents
     .filter((agent) => agent.enabled)
     .map((agent) => ({
       id: agent.id,
@@ -240,8 +279,14 @@ export async function approveQueryRun(
         workspacePath,
         failureCatalog,
       });
-    const result = await runtime.execute(run.id, registry);
+    const result = await executeClaimingRun(assembly.journal, runtime, run.id, registry);
     const candidates = result.status === "completed" ? await memory.processNext() : [];
+    // An approved run can serve a stated commitment; settling it here is what
+    // lets the owner see "met" (or the next occurrence) immediately after
+    // approving, instead of on the next maintenance tick.
+    // 被批准的 Run 可能服务某条已声明的承诺；在这里结算它，让所有者在批准后立刻看到
+    // "已满足"（或下一次周期），而不是等下一次维护扫描。
+    await reconcileCommitments(assembly.journal).catch(() => undefined);
     return toQueryResult(runtime, result, candidates.length);
   } finally {
     // Including the error path above: a rejected approval must not leave the

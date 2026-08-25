@@ -40,6 +40,17 @@ export interface JournalStore {
   /** Releases a lease so a retry can happen immediately. 释放租约，使重试可以立即发生。 */
   releaseClaim?(input: { runId: string; ownerId: string }): Promise<void>;
   /**
+   * Reads the current claim on a run, if any. The liveness probe for orphan
+   * recovery: a run left mid-execution by a dead process is distinguished from
+   * one being executed right now by whether a live lease still backs it.
+   * Undefined on stores without claim support — those are single-process by
+   * contract, and single-process means no orphan to recover.
+   * 读取某个 Run 当前的领取（若有）。孤儿恢复的活性探针：被死掉的进程中途丢下的 Run，
+   * 与此刻正在被执行的 Run，靠是否仍有存活的租约背书来区分。不支持领取的存储返回
+   * undefined——那种存储按契约是单进程的，而单进程意味着没有孤儿可恢复。
+   */
+  readClaim?(runId: string): Promise<RunClaim | undefined>;
+  /**
    * Re-reads the durable log so events appended by another process become
    * visible. A store that queries storage on every read may implement this as
    * a no-op.
