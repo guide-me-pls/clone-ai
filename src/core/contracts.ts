@@ -135,6 +135,17 @@ export interface WorkPlan {
   summary: string;
   steps: PlanStep[];
   createdAt: string;
+  /**
+   * The commitment this plan exists to satisfy, when the work was raised from
+   * the owner's stated obligations rather than a fresh request. This is the
+   * linkage the reconcile loop reads: when the run completes and verifies, the
+   * commitment is settled (marked met, or advanced to its next occurrence) —
+   * without it, "every Friday" happens exactly once and never again.
+   * 本计划所要满足的承诺（当工作源自所有者声明过的义务而非新请求时）。这是收敛环读取
+   * 的联动关系：Run 完成并验证后，承诺被结算（标记 met，或推进到下一次）——没有它，
+   * “每周五”只发生一次，再也不会有第二次。
+   */
+  servesCommitmentId?: string;
 }
 
 export interface Run {

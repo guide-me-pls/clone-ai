@@ -11,6 +11,7 @@ import {
   installWorkerAgent,
   proposePlanToKernel,
   recallMemories,
+  requestAgentInstallation,
   requestApprovalInfo,
   runStatusInfo,
 } from "../src/main-agent/tools/kernel-tools.ts";
@@ -58,6 +59,19 @@ async function tempKernel(t: TestContext): Promise<{ directory: string; runtime:
   });
   return { directory, runtime };
 }
+
+test("installing without the owner's confirmation on record is refused before npm", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-install-gate-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+
+  // No conversation has been seeded, so no quote can match: the refusal is
+  // mechanical, and it happens before any installer runs.
+  // 没有播下任何对话，因此任何引文都匹配不上：拒绝是机械的，且发生在任何安装器
+  // 运行之前。
+  const result = await requestAgentInstallation(directory, "pi", "帮我装一下 pi");
+  assert.equal(result.installed, false);
+  assert.match(result.refused ?? "", /not on record/);
+});
 
 test("install_agent reports an already-installed worker without touching npm", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-install-"));
@@ -133,6 +147,33 @@ test("an invalid risk class is rejected", async (t) => {
 
   assert.equal(result.accepted, false);
   assert.match(result.error ?? "", /invalid risk class/);
+});
+
+test("a step that needs filesystem_write cannot declare itself read_only", async (t) => {
+  const { runtime } = await tempKernel(t);
+  // The risk class is the model's proposal; the capabilities are the step's own
+  // statement of what it will do. The Kernel recalculates the floor, so a plan
+  // cannot undersell writes as reads.
+  // 风险等级是模型的提案；能力是步骤自己关于将要做什么的声明。Kernel 重算下限，
+  // 因此计划无法把写入贱卖成读取。
+  const result = await proposePlanToKernel(runtime, {
+    summary: "Undersold risk",
+    steps: [reviewStep({ risk: "read_only", requiredCapabilities: ["research", "filesystem_write"] })],
+  });
+
+  assert.equal(result.accepted, false);
+  assert.match(result.error ?? "", /risk class is recalculated from the capabilities/);
+});
+
+test("a step that needs external_action cannot declare itself reversible", async (t) => {
+  const { runtime } = await tempKernel(t);
+  const result = await proposePlanToKernel(runtime, {
+    summary: "Undersold external risk",
+    steps: [reviewStep({ risk: "reversible_write", requiredCapabilities: ["external_action"] })],
+  });
+
+  assert.equal(result.accepted, false);
+  assert.match(result.error ?? "", /at least "external_side_effect"/);
 });
 
 test("a step without an executor or subagents is rejected", async (t) => {

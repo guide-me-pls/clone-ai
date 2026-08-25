@@ -132,6 +132,42 @@ export class PersonalStateStore {
     await this.append("state.commitment.updated", { id, status, updatedAt: new Date().toISOString() });
   }
 
+  /**
+   * The reconcile loop's only write: settles what a completed run did to a
+   * commitment. Marking met closes a one-shot obligation; advancing moves a
+   * recurring one to its next occurrence so "every Friday" keeps meaning every
+   * Friday. The source run is carried in the payload so a replayed journal
+   * shows not only that the commitment moved, but which piece of work moved it.
+   *
+   * 收敛环唯一的写入：结算一次已完成的 Run 对某个承诺做了什么。标记 met 关闭一次性
+   * 义务；推进把周期性义务移到下一次，使“每周五”持续意味着每一个周五。来源 Run 随
+   * 载荷携带，因此重放 Journal 不仅能看到承诺移动了，还能看到是哪件工作移动了它。
+   */
+  async settleCommitment(input: {
+    id: string;
+    outcome: "met" | "missed";
+    reason: string;
+    sourceRunId?: string;
+    /** For recurring commitments: the next occurrence. 周期性承诺的下一次时间。 */
+    dueAt?: string;
+  }): Promise<Commitment> {
+    const commitment = await this.requireCommitment(input.id);
+    const now = new Date().toISOString();
+    const next: Commitment = input.dueAt === undefined
+      ? { ...commitment, status: "met", updatedAt: now }
+      : { ...commitment, dueAt: input.dueAt, status: "open", updatedAt: now };
+    await this.append("state.commitment.updated", {
+      id: input.id,
+      ...(next.status === "met" ? { status: "met" } : {}),
+      ...(input.dueAt === undefined ? {} : { dueAt: input.dueAt }),
+      outcome: input.outcome,
+      reason: input.reason,
+      ...(input.sourceRunId === undefined ? {} : { sourceRunId: input.sourceRunId }),
+      settledAt: now,
+    });
+    return next;
+  }
+
   async updateGoalStatus(id: string, status: Goal["status"]): Promise<void> {
     const state = await this.refresh();
     if (state.goals[id] === undefined) throw new Error(`Goal ${id} does not exist.`);

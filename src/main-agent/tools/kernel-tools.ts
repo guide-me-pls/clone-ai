@@ -83,7 +83,7 @@ export async function createKernelRuntimeSession(
  */
 export async function proposePlanToKernel(
   runtime: CloneRuntime,
-  input: { summary: string; steps: unknown },
+  input: { summary: string; steps: unknown; servesCommitmentId?: string },
 ): Promise<PlanProposalResult> {
   const { run } = await runtime.acceptTrigger({
     kind: "query",
@@ -94,6 +94,7 @@ export async function proposePlanToKernel(
     const plan = await runtime.attachPlan(run.id, {
       summary: input.summary,
       steps: input.steps as PlanStep[], // compile-time assertion; the Kernel is the runtime authority
+      ...(input.servesCommitmentId === undefined ? {} : { servesCommitmentId: input.servesCommitmentId }),
     });
     const current = runtime.getRun(run.id);
     return { accepted: true, runId: run.id, planId: plan.id, runStatus: current.status };
@@ -246,6 +247,42 @@ export async function recordOwnerState(
 }
 
 /**
+ * The tool-facing gate for installing a worker: the owner's confirmation must
+ * be on record before npm runs.
+ *
+ * "Only after the owner explicitly confirms" used to live in the charter
+ * alone — a rule written in a prompt is a rule the model may forget. The
+ * mechanism is the same one record_state uses: the agent quotes the owner's
+ * confirming words, the quote is checked against the recorded conversation,
+ * and a confirmation that was never said refuses the install. The GUI's
+ * install button does not pass through here: a click IS the owner
+ * confirming, in a channel where the owner is the only speaker.
+ *
+ * 安装 Worker 前面向工具的门禁：npm 运行之前，所有者的确认必须已记录在案。
+ *
+ * “仅在所有者明确确认后”原本只写在 charter 里——写在提示词里的规则是模型可能遗忘的
+ * 规则。机制与 record_state 用的是同一个：Agent 引用所有者的确认原话，引文与已记录的
+ * 对话比对，从未被说过的确认会拒绝安装。GUI 的安装按钮不经此处：点击本身就是所有者
+ * 的确认，且在那个通道里所有者是唯一的说话者。
+ */
+export async function requestAgentInstallation(
+  dataDirectory: string,
+  agentId: string,
+  ownerSaid: string,
+): Promise<{ installed: boolean; version?: string; error?: string; refused?: string }> {
+  const { ownerStated } = await import("../conversation-history.ts");
+  if (!(await ownerStated(dataDirectory, ownerSaid))) {
+    return {
+      installed: false,
+      refused:
+        `The owner is not on record as confirming this installation. Ask them explicitly, then quote their exact `
+        + `confirming words in ownerSaid. Installation is a system-level side effect; a guessed confirmation is not one.`,
+    };
+  }
+  return installWorkerAgent(dataDirectory, agentId);
+}
+
+/**
  * Deterministic, journaled installation of a missing worker CLI. This is the
  * only way the Main Agent can "help install": the agent proposes, the owner
  * confirms in conversation, and the Kernel runs the known npm command and
@@ -361,11 +398,21 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
       steps: Type.Array(Type.Any(), {
         description: "Plan steps as described above; the Kernel is the authority on validity.",
       }),
+      servesCommitmentId: Type.Optional(Type.String({
+        description:
+          "The commitment id from the situation briefing that this plan satisfies, when the work was raised "
+          + "by one of the owner's stated obligations. The reconcile loop settles that commitment "
+          + "(marks it met, or advances a recurring one to its next occurrence) when this run completes and verifies.",
+      })),
     }),
     execute: async (_toolCallId, params) => {
       const runtime = await kernel();
       const described = await describeExecutors(options.dataDirectory);
-      const result = await proposePlanToKernel(runtime, { summary: params.summary, steps: params.steps });
+      const result = await proposePlanToKernel(runtime, {
+        summary: params.summary,
+        steps: params.steps,
+        ...(typeof params.servesCommitmentId === "string" ? { servesCommitmentId: params.servesCommitmentId } : {}),
+      });
       // A rejection carries the valid executors, so the next attempt can be right.
       // 被拒绝时附上合法执行者，使下一次尝试能够正确。
       const payload = result.accepted ? result : { ...result, validExecutors: described.text };
@@ -567,14 +614,16 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     label: "Install Agent",
     description:
       "Install a missing worker CLI through the Kernel's deterministic installer "
-      + "(npm global install for built-in workers). Call this ONLY after the owner "
-      + "explicitly asks to install the agent. Installation is a system-level "
-      + "side effect and every attempt is journaled.",
+      + "(npm global install for built-in workers). Call this ONLY after the owner explicitly asks to install "
+      + "the agent, and pass their exact confirming words in ownerSaid — the quote is verified against the recorded "
+      + "conversation, so an unconfirmed install is refused. Installation is a system-level side effect and every "
+      + "attempt is journaled.",
     parameters: Type.Object({
       agentId: Type.String({ description: "Worker id, e.g. codex-cli, claude-code, pi." }),
+      ownerSaid: Type.String({ description: "The owner's exact words confirming this installation, quoted from this conversation." }),
     }),
     execute: async (_toolCallId, params) => {
-      const result = await installWorkerAgent(options.dataDirectory, params.agentId);
+      const result = await requestAgentInstallation(options.dataDirectory, params.agentId, params.ownerSaid);
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: {} };
     },
   });
