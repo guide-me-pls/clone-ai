@@ -40,6 +40,7 @@ import { mainAgentSessionDirectory } from "../src/main-agent/conversation-histor
 import { recordOwnerState, proposePlanToKernel } from "../src/main-agent/tools/kernel-tools.ts";
 import { OpportunityService } from "../src/opportunity/opportunity-service.ts";
 import { PersonalStateStore } from "../src/state/personal-state-store.ts";
+import { reconcileCommitments } from "../src/state/commitment-reconciler.ts";
 import { RunQueueConsumer } from "../src/application/run-queue.ts";
 import { MemoryGovernance } from "../src/memory/memory-governance.ts";
 import { MdMemoryStore } from "../src/memory/md-memory-store.ts";
@@ -179,6 +180,10 @@ test("the golden path: a stated commitment becomes verified work and remembered 
   //        变得真实、而不是数证据条数的东西。
   const proposal = await proposePlanToKernel(assembly.runtime, {
     summary: "为本周五的周报准备 weekly-report.md",
+    // The linkage that closes the loop: this plan exists to satisfy the
+    // commitment, so the reconciler can settle it when the run lands.
+    // 让环闭合的联动：这个计划为满足那条承诺而存在，因此 Run 落地后收敛器能结算它。
+    servesCommitmentId: (recorded as { id: string }).id,
     steps: [{
       id: "write-report",
       title: "写出本周周报",
@@ -250,6 +255,37 @@ test("the golden path: a stated commitment becomes verified work and remembered 
     recalled.some((match) => match.memory.id === promoted.id),
     "next week's request must recall the promoted preference from the governed library",
   );
+
+  // ── 10. The loop closes: the consumer's own reconcile settled the commitment
+  //         the moment the verified run landed — outcome met, one week advanced,
+  //         source run recorded. The second Friday is already on the calendar.
+  //         环闭合：已验证 Run 落地的那一刻，消费者自己的收敛就结算了承诺——结果 met、
+  //         推进一周、来源 Run 入账。第二个周五已经在日历上了。
+  const settled = await assembly.journal.list();
+  const settlement = settled.find((event) => event.type === "state.commitment.updated"
+    && typeof (event.payload as { sourceRunId?: unknown }).sourceRunId === "string");
+  assert.ok(settlement !== undefined, "the run's completion must settle the commitment it served");
+  assert.equal((settlement.payload as { sourceRunId?: string }).sourceRunId, runId);
+  assert.equal((settlement.payload as { outcome?: string }).outcome, "met");
+
+  const advanced = Object.values((await new PersonalStateStore(assembly.journal).refresh()).commitments)[0]!;
+  assert.equal(advanced.status, "open", "a recurring commitment stays open after an occurrence is met");
+  const weekLater = Date.parse(advanced.dueAt!) - Date.now();
+  assert.ok(weekLater > 11 * 24 * 3_600_000 && weekLater < 14 * 24 * 3_600_000, "dueAt must advance by one week past the settled Friday");
+
+  // Idempotent: the settled run is never settled twice, and a satisfied
+  // occurrence never turns into a miss.
+  // 幂等：已结算的 Run 绝不会被结算第二次；被满足的周期绝不会变成错过。
+  assert.deepEqual(await reconcileCommitments(assembly.journal, { now: new Date(Date.now() + 6 * 24 * 3_600_000) }), []);
+
+  // The second Friday: the scan sees the advanced date and proposes the next
+  // card — a different card id, one week later.
+  // 第二个周五：扫描看到推进后的日期，提出下一张卡片——不同的卡片 id，晚一周。
+  const secondFridayMinusOneDay = new Date(Date.parse(advanced.dueAt!) - 24 * 3_600_000);
+  const nextCards = await opportunityService.scanAndRecord(secondFridayMinusOneDay);
+  assert.equal(nextCards.length, 1);
+  assert.notEqual(nextCards[0]?.id, card.id, "next week must be a new card, not the old one resurfacing");
+  assert.equal(nextCards[0]?.serves?.id, advanced.id);
 });
 
 test("accepting an opportunity produces an executable run, not one stuck in planning", async (t) => {

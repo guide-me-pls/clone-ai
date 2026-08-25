@@ -76,7 +76,12 @@ export function scanOpportunities(input: OpportunityScanInput): OpportunityCard[
     ));
     if (recentRun && cards.some((card) => card.serves?.id === commitment.id)) continue;
     cards.push({
-      id: `opp-${commitment.id}-deadline`,
+      // The card is per occurrence, not per commitment: next Friday is a new
+      // card, so settling this Friday's does not silence next week's reminder.
+      // id carries the due date for exactly that reason.
+      // 卡片属于某一次周期而不是整条承诺：下一个周五是一张新卡片，因此结算掉本周五
+      // 不会顺带静默下一周的提醒。id 携带到期日期正是为了这个原因。
+      id: `opp-${commitment.id}-deadline-${due.toISOString().slice(0, 10)}`,
       title: `承诺即将到期：${commitment.title}`,
       source: "deadline",
       whyNow: `距离到期还有约 ${Math.max(1, Math.round(hoursLeft))} 小时（${window} 小时窗口内）。`,

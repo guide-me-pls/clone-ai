@@ -26,7 +26,13 @@ const allowedTransitions: Record<RunStatus, readonly RunStatus[]> = {
   created: ["planning", "cancelled"],
   planning: ["queued", "failed", "cancelled"],
   queued: ["running", "waiting_approval", "failed", "cancelled"],
-  running: ["waiting_approval", "verifying", "failed", "cancelled"],
+  // A run may go back to the queue for exactly one reason: its executor died
+  // and the orphan recovery found no live claim. The event carries that
+  // reason, so a replayed journal never mistakes a recovery for a scheduler
+  // decision.
+  // Run 只因一个原因回到队列：执行者死亡，且孤儿恢复没有找到存活的领取。事件携带该
+  // 原因，因此重放 Journal 时绝不会把恢复误认为调度决策。
+  running: ["waiting_approval", "verifying", "failed", "cancelled", "queued"],
   waiting_approval: ["running", "failed", "cancelled"],
   verifying: ["completed", "failed"],
   completed: [],
