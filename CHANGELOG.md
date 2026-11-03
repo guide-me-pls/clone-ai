@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A quieter empty state
+
+The empty conversation dropped the three starter cards and now centres the welcome copy and the composer as one group, instead of pinning the input to the bottom.
+
+空状态更安静：去掉了三张起始卡片，欢迎语与输入框作为一个整体居中，而不是把输入框钉在底部。
+
 ### One conversation, tasks beside it
 
 The Kernel now refuses a proposal whose only step is `direct_response`: a greeting was creating a Run, a sidebar session and a real worker launch. Conversation is answered in the reply; a plan is for work that changes files or needs an executor.
