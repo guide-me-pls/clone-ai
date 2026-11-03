@@ -101,3 +101,36 @@ test("gateway usage is attached by provider and time window, and labelled as inf
   assert.equal(summary.byProvider.pi?.failed, 1);
   assert.equal(summary.byFailureStage.execution, 1);
 });
+
+test("evaluation compares only runs the system judged, and labels need a finished run", async (t) => {
+  const { summarizeAudits } = await import("../src/audit/run-audit.ts");
+  const { labelRun } = await import("../src/audit/audit-service.ts");
+  const base = { plan: [], policy: [], executions: [], evidence: [], basis: { events: 1, firstSequence: 1, lastSequence: 1 }, digest: "d", outcome: { status: "x", failureStage: "none" as const } };
+  const at = new Date().toISOString();
+  const rec = (runId: string, status: string, verdict?: "pass" | "fail") => ({ ...base, runId, status, createdAt: at, ...(verdict === undefined ? {} : { label: { verdict, labeledAt: at } }) });
+  const summary = summarizeAudits([
+    rec("a", "completed", "pass"),
+    rec("b", "completed", "fail"),
+    rec("c", "failed", "pass"),
+    rec("d", "failed", "fail"),
+    rec("e", "waiting_review", "pass"),
+    rec("f", "completed"),
+    rec("g", "waiting_review"),
+  ]);
+  assert.deepEqual(
+    { labeled: summary.evaluation.labeled, agree: summary.evaluation.agree, falsePass: summary.evaluation.falsePass, falseFail: summary.evaluation.falseFail, unlabeled: summary.evaluation.unlabeledFinished },
+    { labeled: 4, agree: 2, falsePass: 1, falseFail: 1, unlabeled: 2 },
+  );
+  assert.equal(summary.evaluation.agreement, 0.5);
+  assert.equal(summary.passRate, 3 / 5, "waiting_review must not drag the pass rate down");
+
+  const { journal } = await failedRun(t);
+  const [record] = projectRunAudits(await journal.list());
+  await assert.rejects(labelRun(journal, record!.runId, "maybe", ""), /pass|fail/);
+  await assert.rejects(labelRun(journal, "nope", "pass", ""), /Unknown run/);
+  await labelRun(journal, record!.runId, "fail", "  confirmed  ");
+  const labeled = projectRunAudits(await journal.list())[0]!;
+  assert.equal(labeled.label?.verdict, "fail");
+  assert.equal(labeled.label?.note, "confirmed");
+  assert.equal(labeled.digest, record!.digest, "a label is judgement, so it must not change the digest");
+});

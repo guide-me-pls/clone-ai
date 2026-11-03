@@ -120,12 +120,14 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
   const clientPath = options.clientPath ?? join(packageRoot, "apps", "desktop", "ui", "index.html");
   const clientDirectory = dirname(clientPath);
-  const [client, clientCss, componentCss, clientJs, componentJs] = await Promise.all([
+  const [client, clientCss, componentCss, clientJs, componentJs, auditCss, auditJs] = await Promise.all([
     readFile(clientPath, "utf8"),
     readFile(join(clientDirectory, "style.css"), "utf8"),
     readFile(join(clientDirectory, "components.css"), "utf8"),
     readFile(join(clientDirectory, "app.js"), "utf8"),
     readFile(join(clientDirectory, "components.js"), "utf8"),
+    readFile(join(clientDirectory, "audit.css"), "utf8"),
+    readFile(join(clientDirectory, "audit.js"), "utf8"),
   ]);
   const token = issueCompanionToken();
   await persistCompanionToken(paths.dataDirectory, token);
@@ -285,6 +287,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         componentCss,
         clientJs,
         componentJs,
+        auditCss,
+        auditJs,
         schedules,
         sessions,
         agentSettings,
@@ -363,6 +367,8 @@ async function handleRequest(
     componentCss: string;
     clientJs: string;
     componentJs: string;
+    auditCss: string;
+    auditJs: string;
     schedules: ScheduleStore;
     sessions: SessionStore;
     agentSettings: WorkerSettingsStore;
@@ -437,6 +443,16 @@ async function handleRequest(
   if (request.method === "GET" && url.pathname === "/app.js") {
     response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
     response.end(context.clientJs);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/audit.css") {
+    response.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" });
+    response.end(context.auditCss);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/audit.js") {
+    response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+    response.end(context.auditJs);
     return;
   }
   if (request.method === "GET" && url.pathname === "/components.js") {
@@ -603,19 +619,51 @@ async function handleRequest(
     return;
   }
 
-  if (method === "GET" && url.pathname.startsWith("/api/audit")) {
-    // A read-only projection of the journal plus optional gateway usage.
-    // Journal 的只读投影，外加可选的网关用量。
-    const { loadAudits, summarizeAudits } = await import("./audit/audit-service.ts");
-    const runId = url.pathname === "/api/audit" ? undefined : decodeURIComponent(url.pathname.slice("/api/audit/".length));
-    const records = await loadAudits(context.journal, { ...(runId === undefined ? {} : { runId }), gateway: url.searchParams.get("gateway") !== "0" });
-    if (runId !== undefined) {
-      if (records[0] === undefined) sendJson(response, 404, { error: "Unknown run." });
-      else sendJson(response, 200, { record: records[0] });
+  if (url.pathname.startsWith("/api/audit")) {
+    // The audit is a projection of the journal. Deleting a session hides it from the
+    // conversation list only; the record stays here, marked deleted, so an eval never
+    // loses a run because someone tidied their sidebar.
+    // 审计是 Journal 的投影。删除会话只是把它从对话列表隐藏；记录仍留在这里并标为已删除，
+    // 评估不会因为有人整理了侧边栏而丢掉某个 Run。
+    const audit = await import("./audit/audit-service.ts");
+    try {
+      const deletedRunIds = await context.sessions.deletedRunIds();
+      const gateway = url.searchParams.get("gateway") !== "0";
+      if (method === "GET" && url.pathname === "/api/audit/export") {
+        const records = await audit.loadAudits(context.journal, { gateway, deletedRunIds });
+        response.writeHead(200, {
+          "content-type": "application/x-ndjson; charset=utf-8",
+          "content-disposition": `attachment; filename="clone-ai-audit-${new Date().toISOString().slice(0, 10)}.jsonl"`,
+          "cache-control": "no-store",
+        });
+        response.end(audit.toJsonl(records));
+        return;
+      }
+      const labelMatch = /^\/api\/audit\/([^/]+)\/label$/.exec(url.pathname);
+      if (method === "POST" && labelMatch !== null) {
+        const body = await readJsonBody(request);
+        const runId = decodeURIComponent(labelMatch[1]!);
+        await audit.labelRun(context.journal, runId, body.verdict, body.note);
+        const [record] = await audit.loadAudits(context.journal, { runId, gateway: false, deletedRunIds });
+        sendJson(response, 200, { record });
+        return;
+      }
+      if (method === "GET" && url.pathname === "/api/audit") {
+        const records = await audit.loadAudits(context.journal, { gateway, deletedRunIds });
+        sendJson(response, 200, { summary: audit.summarizeAudits(records), records: records.slice(-200).reverse() });
+        return;
+      }
+      const one = /^\/api\/audit\/([^/]+)$/.exec(url.pathname);
+      if (method === "GET" && one !== null) {
+        const [record] = await audit.loadAudits(context.journal, { runId: decodeURIComponent(one[1]!), gateway, deletedRunIds });
+        if (record === undefined) sendJson(response, 404, { error: "Unknown run." });
+        else sendJson(response, 200, { record });
+        return;
+      }
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid audit request." });
       return;
     }
-    sendJson(response, 200, { summary: summarizeAudits(records), records: records.slice(-100).reverse() });
-    return;
   }
 
   if (url.pathname.startsWith("/api/authority")) {
@@ -1159,6 +1207,13 @@ async function handleRequest(
       return;
     }
     await context.sessions.delete(runId);
+    sendJson(response, 204, undefined);
+    return;
+  }
+
+  const restoreMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/restore$/);
+  if (request.method === "POST" && restoreMatch?.[1] !== undefined) {
+    await context.sessions.restore(decodeURIComponent(restoreMatch[1]));
     sendJson(response, 204, undefined);
     return;
   }

@@ -98,3 +98,14 @@ test("active local Memory is recalled for related work, while archived or disabl
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("a deleted session can be restored without touching the journal", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-restore-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const sessions = new SessionStore(join(directory, "sessions.json"));
+  await sessions.delete("run-1");
+  await sessions.delete("run-2");
+  await sessions.restore("run-1");
+  await sessions.restore("never-deleted");
+  assert.deepEqual([...await sessions.deletedRunIds()], ["run-2"]);
+});
