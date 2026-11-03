@@ -148,6 +148,9 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
     ...(record.hostAccess === "unrestricted" ? { hostAccess: "unrestricted" as const } : {}),
     ...(record.sandbox === "seatbelt" ? { sandbox: "seatbelt" as const } : {}),
+    ...(typeof record.model === "string" && record.model.trim().length > 0 ? { model: record.model.trim() } : {}),
+    ...(Array.isArray(record.modelArgs) ? { modelArgs: record.modelArgs as string[] } : {}),
+    ...(Array.isArray(record.sandboxArgs) ? { sandboxArgs: record.sandboxArgs as string[] } : {}),
     ...(record.sandboxNetwork === true ? { sandboxNetwork: true } : {}),
     ...(Array.isArray(record.sandboxWritePaths) ? { sandboxWritePaths: record.sandboxWritePaths as string[] } : {}),
   };

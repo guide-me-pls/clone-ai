@@ -52,6 +52,8 @@ Usage:
   clone-ai authority level <domain> <observe|prepare|act_with_approval|act_auto>
   clone-ai authority grant <files|shell|network> <read|write|exec> <resource> --max <level> [--label <text>] [--until <ISO date>]
   clone-ai authority revoke <policyId>
+  clone-ai audit [<runId>|export [--out file]]  Why runs failed, per run; export JSONL for evals
+  clone-ai model <worker> [<model>|--clear]  Show, pin or clear the model a worker CLI uses
   clone-ai bench [--provider p]  Run the reliability benchmark
   clone-ai doctor                Check the local setup
   clone-ai --help | --version
@@ -98,6 +100,8 @@ async function main(): Promise<number> {
     case "cancel": return decideRun(paths.dataDirectory, argv[1], "cancel");
     case "review": return reviewRun(paths.dataDirectory, argv[1], argv[2]);
     case "authority": return authorityCommand(paths.dataDirectory, argv.slice(1));
+    case "audit": return auditCommand(paths.dataDirectory, argv.slice(1));
+    case "model": return modelCommand(paths.dataDirectory, argv.slice(1));
     case "bench": return runBench(argv.slice(1));
     case "doctor": return doctor(paths.dataDirectory);
     default: return converse(paths.dataDirectory, argv.join(" ").trim());
@@ -402,6 +406,60 @@ async function authorityCommand(dataDirectory: string, args: string[]): Promise<
   } finally {
     (journal as { close?: () => void }).close?.();
   }
+}
+
+/** Pin the model a worker CLI uses, so it does not inherit a default the gateway cannot serve. 固定 worker CLI 使用的模型，避免它沿用网关无法正确服务的默认模型。 */
+/** Audit is a projection of the journal; nothing here writes. 审计是 Journal 的投影，这里不写任何东西。 */
+async function auditCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const { loadAudits, summarizeAudits, toJsonl } = await import("../audit/audit-service.ts");
+  const { writeFile } = await import("node:fs/promises");
+  const journal = createJournalStore(dataDirectory);
+  try {
+    const [first, ...rest] = args;
+    if (first === "export") {
+      const records = await loadAudits(journal);
+      const out = rest.indexOf("--out") === -1 ? undefined : rest[rest.indexOf("--out") + 1];
+      if (out === undefined) process.stdout.write(toJsonl(records));
+      else { await writeFile(out, toJsonl(records), "utf8"); console.log(`Wrote ${records.length} run records to ${out}.`); }
+      return 0;
+    }
+    if (first !== undefined) {
+      const [record] = await loadAudits(journal, { runId: first });
+      if (record === undefined) { console.error(`No run matches "${first}".`); return 1; }
+      console.log(JSON.stringify(record, null, 2));
+      return 0;
+    }
+    const records = await loadAudits(journal);
+    const summary = summarizeAudits(records);
+    console.log(`${summary.runs} runs · by status ${JSON.stringify(summary.byStatus)}`);
+    if (Object.keys(summary.byFailureStage).length > 0) console.log(`failures by stage ${JSON.stringify(summary.byFailureStage)} · category ${JSON.stringify(summary.byFailureCategory)}`);
+    for (const record of records.slice(-15)) {
+      const ms = record.durationMs === undefined ? "-" : `${record.durationMs}ms`;
+      const why = record.outcome.reason === undefined ? "" : `  ${record.outcome.failureStage}${record.outcome.failureCategory === undefined ? "" : `/${record.outcome.failureCategory}`}: ${record.outcome.reason.slice(0, 160)}`;
+      console.log(`${record.runId.slice(0, 8)}  ${record.status.padEnd(10)} ${ms.padStart(8)}  ${(record.taskTitle ?? record.objective ?? "").slice(0, 40)}${why}`);
+    }
+    return 0;
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
+}
+
+async function modelCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const { listEffectiveProviderConfigs, readUserProviderConfigs, upsertUserProviderConfig } = await import("../config/provider-config-store.ts");
+  const [providerId, value] = args;
+  const effective = await listEffectiveProviderConfigs(dataDirectory);
+  if (providerId === undefined) {
+    for (const provider of effective) console.log(`${provider.id}: ${provider.model ?? "(CLI default)"}`);
+    return 0;
+  }
+  const provider = effective.find((candidate) => candidate.id === providerId);
+  if (provider === undefined) { console.error(`Unknown worker "${providerId}".`); return 1; }
+  if (value === undefined) { console.log(`${provider.id}: ${provider.model ?? "(CLI default)"}`); return 0; }
+  const existing = (await readUserProviderConfigs(dataDirectory)).find((candidate) => candidate.id === providerId) ?? { id: provider.id, command: provider.command };
+  const { model: _drop, ...rest } = existing;
+  await upsertUserProviderConfig(dataDirectory, value === "--clear" ? rest : { ...rest, model: value });
+  console.log(value === "--clear" ? `${providerId}: model cleared.` : `${providerId}: model pinned to ${value}.`);
+  return 0;
 }
 
 async function showOpportunities(dataDirectory: string): Promise<number> {
