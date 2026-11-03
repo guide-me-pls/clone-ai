@@ -1,0 +1,23 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import test from "node:test";
+
+test("the native app is the only desktop UI entry", async () => {
+  const [manifestSource, cliSource, macShell] = await Promise.all([
+    readFile(join(process.cwd(), "package.json"), "utf8"),
+    readFile(join(process.cwd(), "src/cli/clone-ai.ts"), "utf8"),
+    readFile(join(process.cwd(), "apps/desktop/macos/main.swift"), "utf8"),
+  ]);
+  const manifest = JSON.parse(manifestSource) as { scripts?: Record<string, string> };
+
+  assert.equal(manifest.scripts?.gui, undefined);
+  assert.equal(manifest.scripts?.["companion:debug"], undefined);
+  assert.doesNotMatch(cliSource, /openAppWindow|openBrowser|app-window/);
+  assert.match(cliSource, /spawn\("\/usr\/bin\/open", \[appBundle\]/);
+  assert.match(macShell, /NSToolbar/);
+  assert.match(macShell, /NSSegmentedControl/);
+  assert.match(macShell, /NSMenu\(title: "视图"\)/);
+  assert.match(macShell, /navigationTitles = \["对话", "定时任务", "Agent", "记忆", "设置"\]/);
+  assert.doesNotMatch(macShell, /loadHTMLString/);
+});

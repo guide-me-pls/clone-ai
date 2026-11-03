@@ -49,6 +49,10 @@ The machine currently needs an arm64 Node.js 24+ runtime for the build; set
 `CLONE_AI_MAC_NODE` to an explicit executable when it is not available at the default
 local runtime path.
 
+The title bar uses a native segmented navigation control for Conversation, Schedules,
+Agents, Memory, and Settings. The macOS menu bar provides File, Edit, View, and Window
+menus, with keyboard shortcuts for the same destinations. No browser window is exposed.
+
 The macOS shell follows standard persistent-app behavior: closing the last window keeps
 the local runtime alive, and reopening from the Dock shows the existing window again.
 Only an explicit Dock-menu **Quit** (or operating-system shutdown) stops the supervised
