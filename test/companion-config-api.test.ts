@@ -51,6 +51,29 @@ test("the config endpoint reports where the owner's data lives", async (t) => {
   assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
 });
 
+test("the gateway inventory is loopback-only and carries no credentials", async (t) => {
+  const { url, token } = await companion(t);
+
+  const response = await companionFetch(url, token, "/api/gateways");
+  assert.equal(response.status, 200);
+  const body = await response.json() as {
+    gateways: Array<{
+      id: string;
+      endpoint: string;
+      installed: boolean;
+      running: boolean;
+      models: Array<{ id: string; compatible: boolean }>;
+    }>;
+  };
+  assert.equal(body.gateways[0]?.id, "magpie");
+  assert.equal(body.gateways[0]?.endpoint, "http://127.0.0.1:3425");
+  assert.equal(typeof body.gateways[0]?.installed, "boolean");
+  assert.equal(typeof body.gateways[0]?.running, "boolean");
+  assert.ok(Array.isArray(body.gateways[0]?.models));
+  for (const model of body.gateways[0]?.models ?? []) assert.equal(typeof model.compatible, "boolean");
+  assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
+});
+
 test("the owner can change the workspace and locale through the API", async (t) => {
   const { url, token } = await companion(t);
 

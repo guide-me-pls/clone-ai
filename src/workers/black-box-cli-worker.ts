@@ -27,6 +27,7 @@ import {
   type WorkspaceChange,
 } from "../core/workspace-evidence.ts";
 import type { AgentRole } from "../config/worker-settings.ts";
+import { augmentedExecutablePath } from "./executable-resolver.ts";
 
 export interface BlackBoxProviderConfig {
   id: string;
@@ -175,7 +176,7 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
       const spawnArgs = usesStdin ? args : args.length > 0 ? args : [prompt];
       child = spawn(resolved.command, [...resolved.prefixArgs, ...spawnArgs], {
         cwd: workspace,
-        env: buildEnvironment(config.env ?? []),
+        env: buildEnvironment(config.env ?? [], config.command),
         stdio: usesStdin ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
         windowsHide: true,
         // POSIX: own process group so the whole tree can be terminated.
@@ -484,7 +485,7 @@ function observeExit(child: ChildProcess): Promise<ProcessExit> {
  * Worker 进程从空环境启动，只拿到其配置中点名的变量，因此其他 Provider 的凭据对它
  * 始终不可见。
  */
-function buildEnvironment(additionalNames: readonly string[]): NodeJS.ProcessEnv {
+function buildEnvironment(additionalNames: readonly string[], command: string): NodeJS.ProcessEnv {
   const names = new Set([
     "PATH", "Path", "SystemRoot", "WINDIR", "ComSpec", "PATHEXT",
     "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
@@ -504,6 +505,10 @@ function buildEnvironment(additionalNames: readonly string[]): NodeJS.ProcessEnv
       .map((name) => [name, process.env[name]] as const)
       .filter((entry): entry is readonly [string, string] => entry[1] !== undefined),
   );
+  environment.PATH = augmentedExecutablePath({
+    environment: process.env,
+    ...(command.includes("/") || command.includes("\\") ? { additionalDirectories: [dirname(command)] } : {}),
+  });
   for (const prefix of wildcards) {
     for (const [name, value] of Object.entries(process.env)) {
       if (name.startsWith(prefix) && environment[name] === undefined && value !== undefined) {
