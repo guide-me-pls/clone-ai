@@ -254,6 +254,23 @@ export class MemoryGovernance {
     });
   }
 
+  /**
+   * Read one memory body by id. Judgement stays with the caller; this only adds
+   * the usage count a recall would have added.
+   * 按 id 读取一条记忆的正文。判断留给调用方；这里只补上召回本来也会加的使用计数。
+   */
+  async read(id: string): Promise<MemoryEntry | undefined> {
+    return this.withLock(async () => {
+      await this.recoverUnlocked();
+      return this.#store.read(id);
+    });
+  }
+
+  /** Path of the .md file the owner can open and edit. 所有者可以直接打开编辑的 .md 文件路径。 */
+  filePathFor(entry: MemoryEntry): string {
+    return this.#store.filePathFor(entry.id, entry.status);
+  }
+
   async list(options: { status?: "active" | "archived"; type?: MemoryType } = {}): Promise<MemoryEntry[]> {
     return this.withLock(async () => {
       await this.recoverUnlocked();

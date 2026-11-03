@@ -321,6 +321,25 @@ export class MdMemoryStore {
   }
 
   /**
+   * Read one entry on demand and count it as use, the way a recall does. This is
+   * the second disclosure level: a recall returns summaries, and the body is only
+   * opened when something actually asks for it.
+   * 按需读取一条记忆，并像召回一样计为一次使用。这是第二个披露层级：召回只返回摘要，
+   * 只有当真有东西来要时，才打开正文。
+   */
+  async read(id: string): Promise<MemoryEntry | undefined> {
+    const entry = await this.get(id);
+    if (entry === undefined) return undefined;
+    await this.touch(id);
+    return { ...entry, accessCount: entry.accessCount + 1, lastAccessedAt: new Date().toISOString() };
+  }
+
+  /** The owner-editable .md file behind an entry; absent for an unknown id. 条目对应、所有者可编辑的 .md 文件；未知 id 返回 undefined。 */
+  filePathFor(id: string, status: MemoryStatus): string {
+    return this.memoryPath(id, status);
+  }
+
+  /**
    * Bigram lexical recall with governance filters. Scoring is the matched-term
    * ratio, nudged by recency and usage so a fresh, frequently used memory wins
    * ties. Recency decays from when the remembered thing happened (createdAt),
