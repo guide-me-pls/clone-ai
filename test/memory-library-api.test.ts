@@ -218,3 +218,37 @@ test("a conflicting file remains accessible and the owner can keep it explicitly
   assert.equal(kept.status, 200);
   assert.equal((await library(url, token)).memories.find((item) => item.id === memory.id)?.summary, "用户手改的偏好");
 });
+
+test("one memory reports the runs that actually recalled it", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const created = await companionFetch(url, token, "/api/memory/governed", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ summary: "周报只在周五写", content: "周五下班前发出。", type: "preference" }),
+  });
+  assert.equal(created.status, 201);
+  const { memory } = await created.json() as { memory: LibraryMemory };
+
+  // A recall is the only record that ties a memory to the work that used it. 只有召回记录把记忆和被使用的工作联系起来。
+  const journal = createJournalStore(dataDirectory);
+  try {
+    await journal.append({
+      type: "memory.recalled",
+      runId: "run-weekly",
+      payload: { query: "把本周周报写出来", memories: [{ id: memory.id, summary: memory.summary, score: 0.9, matchedTerms: [] }] },
+    });
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
+
+  const detail = await companionFetch(url, token, `/api/memory/governed/${memory.id}`);
+  assert.equal(detail.status, 200);
+  const body = await detail.json() as { usage: Array<{ runId?: string; query: string }>; memory: { accessCount: number } };
+  assert.equal(body.usage.length, 1);
+  assert.equal(body.usage[0]?.runId, "run-weekly");
+  assert.equal(body.usage[0]?.query, "把本周周报写出来");
+  assert.ok(body.memory.accessCount >= 1, "opening a memory counts as a use");
+
+  const other = await companionFetch(url, token, "/api/memory/governed/does-not-exist");
+  assert.equal(other.status, 404);
+});
