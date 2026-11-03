@@ -216,20 +216,21 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         guard message.name == "cloneNavigation", let section = message.body as? String else { return }
         if section == "ready" {
             pageReady = true
+            var targetIndex = selectedNavigationIndex
             let previewPrefix = "--preview-section="
             if let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix(previewPrefix) }) {
                 let previewSection = String(argument.dropFirst(previewPrefix.count))
                 let index = ["schedules", "agents", "memory", "settings"].firstIndex(of: previewSection).map { $0 + 1 } ?? 0
                 selectedNavigationIndex = index
                 navigationControl?.selectedSegment = index
-                executeNavigation(index: index)
-                return
+                targetIndex = index
             }
             if let pending = pendingNavigationIndex {
                 pendingNavigationIndex = nil
-                executeNavigation(index: pending)
-            } else if selectedNavigationIndex != 0 {
-                executeNavigation(index: selectedNavigationIndex)
+                targetIndex = pending
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.executeNavigation(index: targetIndex)
             }
             return
         }
@@ -426,9 +427,10 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
                     ).join('\\n');
                     const markdown = "## 今天的推进顺序\\n\\n" + rawText + "\\n\\n1. **先处理阻塞项**\\n2. 再确认等待他人的事项\\n3. 最后整理可延后任务\\n\\n```text\\n/Users/qihoo/.clone\\n```";
                     const conversation = document.getElementById('conversation-inner');
+                    conversation.querySelector('.welcome')?.remove();
                     conversation.insertAdjacentHTML('beforeend', `
-                      <article class="message person"><div class="avatar">你</div><div class="message-body"><div class="message-heading"><b>你</b><time>现在</time></div><div class="message-copy">整理今天的事项</div></div></article>
-                      <article class="message clone"><div class="avatar clone">C</div><div class="message-body"><div class="message-heading"><b>clone-ai</b><time>现在</time></div><div class="clone-card"><div class="clone-text collapsible collapsed">${window.cloneMarkdownForPreview(markdown)}</div><button class="clone-expand" type="button" data-expand>展开全部</button></div></div></article>
+                      <article class="message person"><div class="message-heading"><b>你</b><time>现在</time></div><div class="message-body"><div class="message-copy">整理今天的事项</div></div></article>
+                      <article class="message clone"><div class="message-heading"><b>clone-ai</b><time>现在</time></div><div class="message-body"><div class="clone-card"><div class="clone-text collapsible collapsed">${window.cloneMarkdownForPreview(markdown)}</div><button class="clone-expand" type="button" data-expand>展开全部</button></div></div></article>
                     `);
                     """
                     self?.webView.evaluateJavaScript(script)

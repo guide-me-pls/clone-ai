@@ -75,6 +75,16 @@ export interface RunningCompanionServer {
 }
 
 /**
+ * Normalize the owner's Main Agent text without imposing a minimum length.
+ * Empty or whitespace-only input is the only rejected case.
+ *
+ * 规范化所有者送给 Main Agent 的文本，不设置最小长度；只有空串或纯空白会被拒绝。
+ */
+export function normalizeMainAgentRequestText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
  * Local-only daemon transport used by the desktop shell. The shipped Tauri
  * window opens this loopback URL; it is never a hosted web service.
  *
@@ -986,7 +996,7 @@ async function handleRequest(
   }
   if (request.method === "POST" && url.pathname === "/api/main-agent/stream") {
     const body = await readJsonBody(request);
-    const text = typeof body.text === "string" ? body.text.trim() : "";
+    const text = normalizeMainAgentRequestText(body.text);
     if (text.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
@@ -1031,7 +1041,7 @@ async function handleRequest(
 
   if (request.method === "POST" && url.pathname === "/api/main-agent/query") {
     const body = await readJsonBody(request);
-    const text = typeof body.text === "string" ? body.text.trim() : "";
+    const text = normalizeMainAgentRequestText(body.text);
     if (text.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;

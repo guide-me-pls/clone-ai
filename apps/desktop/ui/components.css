@@ -821,6 +821,7 @@ textarea:focus-visible {
 /* Codex 风格桌面壳：安静的侧栏、扁平对话和唯一的输入焦点；此前蓝绿产品色
    在这一层收敛为中性墨色。 */
 :root {
+  --sidebar-width: 286px;
   --canvas: #ffffff;
   --sidebar: #fbfbfb;
   --surface: #ffffff;
@@ -876,10 +877,14 @@ body { color: #202020; }
 .schedule-button:hover { border-color: transparent; color: #202020; background: #f0f0f0; }
 .schedule-button svg { width: 15px; height: 15px; color: #888; }
 .schedule-button b { min-width: 17px; height: 17px; color: #777; background: #ededed; font-size: 9px; }
-.workspace-heading { display: flex; align-items: center; gap: 7px; margin: 15px 7px 4px; padding: 5px 3px; color: #8e8e8e; font-size: 11px; }
-.workspace-heading svg { width: 14px; height: 14px; }
-.workspace-heading span { color: #888; }
-.workspace-heading b { color: #555; font-weight: 570; }
+.workspace-heading { display: flex; width: calc(100% - 8px); align-items: center; gap: 9px; margin: 12px 4px 5px; padding: 8px; border: 0; border-radius: 7px; color: #8e8e8e; background: transparent; cursor: pointer; text-align: left; }
+.workspace-heading:hover { color: #333; background: #f0f0f0; }
+.workspace-heading:focus-visible { outline: 2px solid #c8c8c8; outline-offset: 0; }
+.workspace-heading > svg { width: 15px; height: 15px; flex: 0 0 auto; color: #8e8e8e; }
+.workspace-copy { display: grid; min-width: 0; gap: 1px; }
+.workspace-copy small { color: #999; font-size: 9.5px; line-height: 1.2; }
+.workspace-copy b { overflow: hidden; color: #454545; font-size: 11.5px; font-weight: 560; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-open-icon { margin-left: auto; color: #a6a6a6; font-size: 12px; }
 .session-label { padding: 10px 9px 4px; color: #9c9c9c; font-size: 11px; font-weight: 520; letter-spacing: 0; text-transform: none; }
 .session-list { gap: 1px; padding: 0; }
 .session-group { margin: 8px 9px 3px; color: #b0b0b0; font-size: 10px; font-weight: 520; letter-spacing: 0; text-transform: none; }
@@ -926,10 +931,10 @@ body { color: #202020; }
 .message-body { min-width: 0; max-width: 100%; }
 .message-copy, .clone-card p, .clone-text { color: #333; font-size: 14px; line-height: 1.7; }
 .message-copy { max-width: none; padding: 0; }
-.message.person { width: min(560px, 84%); margin-left: auto; }
-.message.person .message-heading { justify-content: flex-end; }
+.message.person { width: min(620px, 86%); margin-left: auto; margin-bottom: 25px; }
+.message.person .message-heading { justify-content: flex-end; margin-bottom: 4px; }
 .message.person .message-body { display: flex; justify-content: flex-end; }
-.person .message-copy { display: block; width: fit-content; margin-left: auto; padding: 9px 12px; border: 1px solid #ececec; border-radius: 12px; color: #333; background: #f4f4f4; font-size: 13.5px; line-height: 1.55; }
+.person .message-copy { display: block; width: fit-content; max-width: 100%; margin-left: auto; padding: 8px 12px; border: 1px solid #e9e9e9; border-radius: 13px; color: #333; background: #f5f5f5; font-size: 13.5px; line-height: 1.55; }
 .message.clone .message-heading b { color: #555; }
 .clone-card, .clone-card.success, .clone-card.warning, .clone-card.approval { padding: 0; border: 0; border-radius: 0; color: #333; background: transparent; box-shadow: none; }
 .clone-card.success, .clone-card.warning, .clone-card.approval { padding: 10px 12px; border: 1px solid #ececec; border-radius: 8px; background: #fafafa; }
@@ -956,14 +961,28 @@ body { color: #202020; }
 .trace-row b { color: #555; }
 .trace-row p { color: #999; }
 
-.welcome { min-height: 100%; place-items: start; padding: 42px 0 60px; }
-.welcome-copy { max-width: 620px; text-align: left; }
-.welcome-eyebrow { display: block; margin-bottom: 10px; color: #999; font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-.welcome h2 { margin: 0; color: #202020; font-size: clamp(24px, 3vw, 30px); font-weight: 590; letter-spacing: -.04em; line-height: 1.2; }
-.welcome p { max-width: 570px; margin: 11px 0 0; color: #777; font-size: 13px; line-height: 1.7; }
-.suggestions { justify-content: flex-start; gap: 7px; margin-top: 21px; }
-.suggestion { min-height: 31px; padding: 6px 9px; border: 1px solid #e7e7e7; border-radius: 7px; color: #666; background: #fff; box-shadow: none; font-size: 11.5px; }
-.suggestion:hover { border-color: #d5d5d5; color: #202020; background: #f8f8f8; }
+.welcome { display: grid; min-height: 100%; align-content: start; justify-items: stretch; padding: 8px 0 40px; }
+.welcome-copy { max-width: 690px; text-align: left; }
+.welcome-eyebrow { display: block; margin-bottom: 7px; color: #999; font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; }
+.welcome h2 { margin: 0; color: #202020; font-size: clamp(25px, 3vw, 31px); font-weight: 590; letter-spacing: -.045em; line-height: 1.15; }
+.welcome p { max-width: 650px; margin: 9px 0 0; color: #777; font-size: 13px; line-height: 1.65; }
+.starter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-width: 760px; margin-top: 30px; }
+.starter-card { display: grid; min-height: 104px; grid-template-columns: 1fr auto; grid-template-rows: auto auto 1fr; column-gap: 8px; padding: 12px 14px; border: 1px solid #e7e7e7; border-radius: 10px; color: #333; background: #fff; cursor: pointer; text-align: left; transition: border-color .14s ease, background .14s ease; }
+.starter-card:hover { border-color: #cfcfcf; background: #fafafa; }
+.starter-index { grid-column: 1 / -1; margin-bottom: 12px; color: #a2a2a2; font-family: var(--font-mono); font-size: 9.5px; }
+.starter-card b { grid-column: 1 / -1; overflow: hidden; color: #333; font-size: 12.5px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+.starter-card small { grid-column: 1 / -1; margin-top: 4px; color: #8b8b8b; font-size: 10.5px; line-height: 1.45; }
+.starter-arrow { grid-column: 2; grid-row: 1; justify-self: end; color: #b0b0b0; font-size: 13px; }
+
+/* The empty state should feel ready to work, not like a marketing landing page. */
+/* 空状态应该让人准备开始工作，而不是像一张营销落地页。 */
+body.empty-conversation .conversation { display: block; flex: 0 0 auto; min-height: 0; overflow: visible; padding: 28px 34px 0; }
+body.empty-conversation .conversation-inner { display: block; width: min(760px, 100%); min-height: 0; }
+body.empty-conversation .welcome { width: 100%; min-height: 0; padding: 0; }
+body.empty-conversation .composer-wrap { flex: 0 0 auto; padding-top: 28px; padding-bottom: 18px; }
+body.empty-conversation .workspace::after { content: ""; flex: 1; }
+body.empty-conversation .topbar { display: none; }
+body.empty-conversation #session-subtitle, body.empty-conversation #session-status { display: none; }
 
 .composer-wrap { padding: 0 34px 17px; background: linear-gradient(180deg, rgba(255,255,255,0), #fff 18%); }
 .composer { width: min(760px, 100%); padding: 7px 7px 7px 12px; border: 1px solid #e5e5e5; border-radius: 14px; background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.035); }
@@ -989,6 +1008,15 @@ body { color: #202020; }
 .settings-nav button { color: #777; }
 .settings-nav button:hover { color: #202020; background: #f1f1f1; }
 .settings-nav button[aria-current="true"] { color: #202020; background: #ededed; font-weight: 600; }
+.settings-dialog { border-radius: 14px; background: #fff; }
+.settings-dialog-header { background: #fff; }
+.settings-content { background: #fff; }
+.settings-panel h3 { font-size: 24px; font-weight: 620; letter-spacing: -.035em; }
+.settings-panel > p { color: #777; }
+.c-card--accent { border-color: #e7e7e7; background: #fff; }
+.c-card--warning { border-color: #e7e1d8; background: #fbfaf7; }
+.c-badge--accent { border-color: #e1e1e1; color: #555; background: #f2f2f2; }
+.c-stat--success strong, .c-stat--warning strong { color: #303030; }
 .settings-card .settings-value { color: #555; background: #f0f0f0; }
 .provider-install, .audit-open, .memory-tool-row button, .schedule-toggle { border-color: #dedede; color: #555; background: #fff; }
 .provider-install:hover, .audit-open:hover, .memory-tool-row button:hover, .schedule-toggle:hover { border-color: #c8c8c8; color: #202020; }
@@ -998,9 +1026,66 @@ body { color: #202020; }
 .schedule-dialog, .settings-dialog, .confirm-dialog { border-color: #e2e2e2; }
 .schedule-close:hover { background: #f1f1f1; }
 
+/* Top-level tabs open full workspace pages instead of floating modal sheets. */
+/* 顶层页签打开完整工作区页面，而不是浮在对话之上的弹窗。 */
+.settings-modal[aria-hidden="false"],
+.schedule-modal[aria-hidden="false"] {
+  inset: 0 0 0 calc(var(--sidebar-width) + 1px);
+  display: block;
+  padding: 0;
+  background: #fff;
+  backdrop-filter: none;
+}
+.settings-dialog,
+.schedule-dialog {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
+}
+.settings-dialog-header,
+.schedule-dialog-header {
+  min-height: 64px;
+  flex: 0 0 auto;
+  padding: 14px 22px;
+  background: #fff;
+}
+.settings-shell {
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
+  grid-template-columns: 208px minmax(0, 1fr);
+}
+.settings-content { height: 100%; padding: 22px 28px 30px; }
+.settings-panel { width: 100%; max-width: 980px; margin: 0 auto; }
+.schedule-form { flex: 0 0 auto; padding: 16px 24px; }
+.schedule-list { flex: 1 1 auto; max-height: none; padding: 8px 20px 22px; }
+.schedule-dialog .schedule-form,
+.schedule-dialog .schedule-list { width: 100%; max-width: 980px; margin-right: auto; margin-left: auto; }
+
+@media (max-width: 760px) {
+  .settings-modal[aria-hidden="false"],
+  .schedule-modal[aria-hidden="false"] { left: 0; }
+  .settings-shell { grid-template-columns: 178px minmax(0, 1fr); }
+}
+
 @media (max-width: 760px) {
   .app-shell { grid-template-columns: 1fr; }
   .topbar { min-height: 52px; padding: 0 16px; }
   .conversation { padding: 22px 16px 16px; }
   .composer-wrap { padding: 0 16px 14px; }
+  body.empty-conversation .conversation { padding: 18px 16px 0; }
+  .starter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
+  .starter-card { min-height: 96px; }
+  .starter-index { margin-bottom: 9px; }
+}
+
+@media (max-width: 560px) {
+  .starter-grid { grid-template-columns: 1fr; }
+  .starter-card { min-height: 80px; }
 }
