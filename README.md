@@ -158,6 +158,10 @@ macOS 13.5 or later, and has only been built for Apple Silicon. The app starts w
 `~/Documents/Clone AI` as its default workspace; changing the workspace in Settings is
 persisted under `~/.clone`.
 
+Clicking the red window button closes only the window; the local runtime keeps running.
+Click the Dock icon to show the window again. To stop the runtime, right-click the Dock
+icon and choose **Quit**.
+
 Do not delete `dist/Clone AI.app` while the app is running. Close the app before replacing
 or moving that bundle.
 

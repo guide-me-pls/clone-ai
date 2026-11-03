@@ -126,6 +126,9 @@ npm run desktop:mac:build
 Apple Silicon 版本。应用默认以 `~/Documents/Clone AI` 作为工作目录，在设置中改变后会
 保存在 `~/.clone`。
 
+点击窗口左上角红色关闭按钮只会关闭窗口，本地运行时继续工作；再次点击 Dock 图标即可
+显示窗口。要停止运行时，请右键点击 Dock 中的 Clone AI 图标并选择“退出”。
+
 应用运行时不要删除 `dist/Clone AI.app`；替换或移动应用前请先关闭应用。
 
 ## 安全承诺

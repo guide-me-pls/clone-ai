@@ -27,6 +27,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         )
         window.title = "Clone AI"
         window.minSize = NSSize(width: 720, height: 520)
+        window.isReleasedWhenClosed = false
         window.contentView = webView
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -35,7 +36,17 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         startDaemon()
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    // Closing the window hides the work surface, not the local runtime. The
+    // owner explicitly quits from the Dock menu when they want to stop it.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            window.makeKeyAndOrderFront(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        return true
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let process = daemon, process.isRunning else { return .terminateNow }
@@ -154,6 +165,14 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             webView.load(URLRequest(url: url))
             print("CLONE_AI_DESKTOP_READY \(url.absoluteString)")
             fflush(stdout)
+            if ProcessInfo.processInfo.arguments.contains("--test-close-window") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self else { return }
+                    self.window.performClose(nil)
+                    print("CLONE_AI_DESKTOP_WINDOW_CLOSED")
+                    fflush(stdout)
+                }
+            }
         }
         if stdoutBuffer.count > 16_384 { stdoutBuffer = String(stdoutBuffer.suffix(16_384)) }
     }
@@ -173,8 +192,6 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         bar.addItem(appItem)
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "关于 Clone AI", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
-        appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "退出 Clone AI", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         let editItem = NSMenuItem()
         bar.addItem(editItem)

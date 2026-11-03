@@ -46,3 +46,8 @@ an ad-hoc signed local build, not a notarized App Store or internet-distribution
 The machine currently needs an arm64 Node.js 24+ runtime for the build; set
 `CLONE_AI_MAC_NODE` to an explicit executable when it is not available at the default
 local runtime path.
+
+The macOS shell follows standard persistent-app behavior: closing the last window keeps
+the local runtime alive, and reopening from the Dock shows the existing window again.
+Only an explicit Dock-menu **Quit** (or operating-system shutdown) stops the supervised
+runtime.
