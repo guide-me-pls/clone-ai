@@ -51,6 +51,24 @@ test("the config endpoint reports where the owner's data lives", async (t) => {
   assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
 });
 
+test("the model options endpoint exposes only credential-blind selectable references", async (t) => {
+  const { url, token } = await companion(t);
+
+  const response = await companionFetch(url, token, "/api/options");
+  assert.equal(response.status, 200);
+  const body = await response.json() as {
+    mainAgentModel?: string;
+    models: Array<{ id: string; provider: string; reference: string; label: string }>;
+  };
+  assert.ok(Array.isArray(body.models));
+  for (const model of body.models) {
+    assert.equal(model.reference, `${model.provider}/${model.id}`);
+    assert.equal(typeof model.label, "string");
+    assert.ok(model.label.length > 0);
+  }
+  assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
+});
+
 test("the gateway inventory is loopback-only and carries no credentials", async (t) => {
   const { url, token } = await companion(t);
 
