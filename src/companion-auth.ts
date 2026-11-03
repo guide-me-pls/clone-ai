@@ -86,7 +86,16 @@ export function tokensMatch(expected: string, provided: string | undefined): boo
 
 export function isUnauthenticatedCompanionPath(method: string, pathname: string): boolean {
   if (method === "GET" && pathname === "/api/health") return true;
-  if (method === "GET" && (pathname === "/" || pathname === "/style.css" || pathname === "/app.js")) return true;
+  if (
+    method === "GET"
+    && (
+      pathname === "/"
+      || pathname === "/style.css"
+      || pathname === "/components.css"
+      || pathname === "/app.js"
+      || pathname === "/components.js"
+    )
+  ) return true;
   return false;
 }
 

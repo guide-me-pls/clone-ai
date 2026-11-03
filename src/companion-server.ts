@@ -51,6 +51,8 @@ import { buildFallbackPlan } from "./planning/fallback-planner.ts";
 import { reconcileCommitments } from "./state/commitment-reconciler.ts";
 import { describeHistory, mainAgentSessionDirectory, searchHistory } from "./main-agent/conversation-history.ts";
 import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
+import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
+import { listPiModelIds, piModelReference } from "./main-agent/pi-model-catalog.ts";
 import {
   listEffectiveProviderConfigs,
   readUserProviderConfigs,
@@ -107,10 +109,12 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
   const clientPath = options.clientPath ?? join(packageRoot, "apps", "desktop", "ui", "index.html");
   const clientDirectory = dirname(clientPath);
-  const [client, clientCss, clientJs] = await Promise.all([
+  const [client, clientCss, componentCss, clientJs, componentJs] = await Promise.all([
     readFile(clientPath, "utf8"),
     readFile(join(clientDirectory, "style.css"), "utf8"),
+    readFile(join(clientDirectory, "components.css"), "utf8"),
     readFile(join(clientDirectory, "app.js"), "utf8"),
+    readFile(join(clientDirectory, "components.js"), "utf8"),
   ]);
   const token = issueCompanionToken();
   await persistCompanionToken(paths.dataDirectory, token);
@@ -267,7 +271,9 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         config,
         client: clientHtml,
         clientCss,
+        componentCss,
         clientJs,
+        componentJs,
         schedules,
         sessions,
         agentSettings,
@@ -342,7 +348,9 @@ async function handleRequest(
     config: CloneConfigStore;
     client: string;
     clientCss: string;
+    componentCss: string;
     clientJs: string;
+    componentJs: string;
     schedules: ScheduleStore;
     sessions: SessionStore;
     agentSettings: WorkerSettingsStore;
@@ -408,9 +416,19 @@ async function handleRequest(
     response.end(context.clientCss);
     return;
   }
+  if (request.method === "GET" && url.pathname === "/components.css") {
+    response.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" });
+    response.end(context.componentCss);
+    return;
+  }
   if (request.method === "GET" && url.pathname === "/app.js") {
     response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
     response.end(context.clientJs);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/components.js") {
+    response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+    response.end(context.componentJs);
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
@@ -467,6 +485,70 @@ async function handleRequest(
       providers: await listEffectiveProviderConfigs(context.dataDirectory),
       userDefined: await readUserProviderConfigs(context.dataDirectory),
     });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/gateways") {
+    // This is a loopback-only capability probe. It intentionally returns no
+    // credential material and does not write Magpie's own configuration.
+    // 这只是回环能力探测：刻意不返回任何凭据，也不改写 Magpie 自己的配置。
+    const gateway = await inspectMagpieGateway();
+    const piModels = gateway.running ? new Set(await listPiModelIds("magpie").catch(() => [])) : new Set<string>();
+    sendJson(response, 200, {
+      gateways: [{
+        ...gateway,
+        models: gateway.models.map((model) => ({
+          ...model,
+          compatible: piModels.has(model.id),
+        })),
+        compatibleModelCount: piModels.size === 0
+          ? 0
+          : gateway.models.filter((model) => piModels.has(model.id)).length,
+      }],
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/gateways/magpie/apply") {
+    const body = await readJsonBody(request);
+    if (typeof body.model !== "string") {
+      sendJson(response, 400, { error: "Provide a Magpie model id to apply." });
+      return;
+    }
+    const modelId = body.model.trim().replace(/^magpie\//, "");
+    if (modelId.length === 0) {
+      sendJson(response, 200, { config: await context.config.update({ mainAgentModel: "" }) });
+      return;
+    }
+    const gateway = await inspectMagpieGateway();
+    if (!gateway.running) {
+      sendJson(response, 409, { error: gateway.error ?? "Magpie gateway is not running." });
+      return;
+    }
+    if (!gateway.models.some((model) => model.id === modelId)) {
+      sendJson(response, 400, { error: `Magpie does not expose the model "${modelId}".` });
+      return;
+    }
+    const reference = piModelReference(modelId);
+    try {
+      // The Pi catalog is the final capability check: writing a model Clone AI
+      // cannot construct would turn a settings success into a later chat failure.
+      // Pi 目录是最终能力校验：写入 Clone AI 无法构造的模型会把设置成功变成之后的对话失败。
+      if (!(await listPiModelIds("magpie")).includes(modelId)) {
+        sendJson(response, 409, {
+          error: `Magpie is running, but Pi is not connected to "${modelId}". Enable Pi in Magpie, run magpie sync, then retry.`,
+        });
+        return;
+      }
+      sendJson(response, 200, {
+        config: await context.config.update({ mainAgentModel: reference }),
+        gateway: await inspectMagpieGateway(),
+      });
+    } catch (error: unknown) {
+      sendJson(response, 500, {
+        error: error instanceof Error ? error.message : "Could not validate the Pi model catalog.",
+      });
+    }
     return;
   }
 

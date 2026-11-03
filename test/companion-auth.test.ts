@@ -73,7 +73,7 @@ test("unauthenticated approve is 401; a non-loopback Host is 403", () => {
 });
 
 test("health and the GUI assets stay reachable without a bearer", () => {
-  for (const pathname of ["/", "/style.css", "/app.js", "/api/health"]) {
+  for (const pathname of ["/", "/style.css", "/components.css", "/app.js", "/components.js", "/api/health"]) {
     const allowed = authorizeCompanionRequest({
       method: "GET",
       pathname,

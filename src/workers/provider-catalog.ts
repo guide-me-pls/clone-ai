@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
 import { BlackBoxCliWorker, type BlackBoxProviderConfig } from "./black-box-cli-worker.ts";
+import { resolveExecutable } from "./executable-resolver.ts";
 import { ProviderRegistry, type ProviderDefinition } from "./provider-registry.ts";
 import type { AgentRole } from "../config/worker-settings.ts";
 
@@ -28,12 +29,17 @@ export function toProviderDefinition(config: BlackBoxProviderConfig): ProviderDe
     label: config.label ?? config.id,
     ...(config.supportedRoles === undefined ? {} : { supportedRoles: config.supportedRoles }),
     ...(config.roleRestrictionReason === undefined ? {} : { roleRestrictionReason: config.roleRestrictionReason }),
-    createAdapter: ({ agentId, workCapabilities, failureCatalog }) => new BlackBoxCliWorker({
-      agentId,
-      config: launchConfig,
-      workCapabilities,
-      failureCatalog,
-    }),
+    createAdapter: ({ agentId, workCapabilities, failureCatalog }) => {
+      const resolution = resolveExecutable(launchConfig.command);
+      return new BlackBoxCliWorker({
+        agentId,
+        config: resolution.resolvedPath === undefined
+          ? launchConfig
+          : { ...launchConfig, command: resolution.resolvedPath },
+        workCapabilities,
+        failureCatalog,
+      });
+    },
   };
 }
 
