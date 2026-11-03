@@ -8,6 +8,9 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ### One conversation, tasks beside it
 
+The Kernel now refuses a proposal whose only step is `direct_response`: a greeting was creating a Run, a sidebar session and a real worker launch. Conversation is answered in the reply; a plan is for work that changes files or needs an executor.
+
+
 Every message used to look like a brand-new conversation: the Main Agent answers a greeting with a one-step `direct_response` plan, that Run appeared as its own session, and the interface jumped into it. Conversational runs are no longer listed as sessions (they stay in the journal and the audit), and every turn now lands in the single Main Agent conversation thread, with tasks appearing in the sidebar beside it.
 
 ### Memory library: progressive disclosure
@@ -15,6 +18,9 @@ Every message used to look like a brand-new conversation: the Main Agent answers
 The memory page is an index — summary, type, status and recall count — and opening a row fetches its body, provenance, cited evidence and `.md` path on demand (fetched reads count as uses). Editing stays inside the opened row. The Main Agent gained `read_memory`, so recall can return summaries and a body is opened only when needed, journaled as `memory.recalled`.
 
 ### 对话只有一条，任务在旁边
+
+Kernel 现在拒绝"唯一步骤是 `direct_response`"的提案：一句打招呼过去会创建 Run、侧栏会话，并真的启动一个 Worker。对话在回复里回答；计划只用于会改动文件或需要执行器的工作。
+
 
 此前每条消息都像开了一个新对话：面对一句打招呼，Main Agent 会提案单步 `direct_response` 计划，那个 Run 被显示成一个独立会话，界面还会跳进去。现在对话类 Run 不再列为会话（仍保留在 Journal 与审计中），每一轮都落进唯一的 Main Agent 对话线程，任务则出现在侧栏。
 
