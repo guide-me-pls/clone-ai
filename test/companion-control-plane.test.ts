@@ -186,3 +186,33 @@ test("reject and cancel of an unknown run fail closed", async (t) => {
   assert.equal(cancelled.status, 404);
   assert.match((await cancelled.json() as { error: string }).error, /Unknown run/);
 });
+
+test("the sidebar shows tasks, not one session per conversational turn", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const assembly = await createRuntimeAssembly({ dataDirectory });
+  try {
+    // A greeting: the Main Agent answers with a one-step direct_response plan. 打招呼：Main Agent 用一个 direct_response 单步计划作答。
+    const chat = await assembly.runtime.acceptTrigger({ kind: "query", summary: "你好", payload: {} });
+    await assembly.runtime.attachPlan(chat.run.id, {
+      summary: "直接回答",
+      steps: [{ id: "reply", title: "直接回答", instructions: "回答", risk: "read_only", acceptanceCriteria: ["已回答"], agentId: "direct-responder", requiredCapabilities: ["direct_response"] }],
+    });
+    // A real task, which must stay visible. 真正的任务必须保留。
+    const task = await assembly.runtime.acceptTrigger({ kind: "query", summary: "写一份周报", payload: {} });
+    await assembly.runtime.attachPlan(task.run.id, {
+      summary: "写周报",
+      steps: [{ id: "draft", title: "起草", instructions: "起草", risk: "reversible_write", acceptanceCriteria: ["草稿存在"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+    });
+
+    const response = await companionFetch(url, token, "/api/dashboard");
+    assert.equal(response.status, 200);
+    const body = await response.json() as { sessions: Array<{ id: string; title: string }> };
+    const ids = body.sessions.map((session) => session.id);
+    assert.equal(ids.includes(chat.run.id), false, "a conversational turn must not become a sidebar session");
+    assert.equal(ids.includes(task.run.id), true, "a real task stays in the sidebar");
+    // The run is still a durable fact; only its presentation changed. Run 仍是持久事实，只改变呈现。
+    assert.ok(await assembly.runtime.getRun(chat.run.id));
+  } finally {
+    assembly.close();
+  }
+});

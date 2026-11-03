@@ -4,7 +4,21 @@
     {
       "name": "companion",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "companion:debug"],
+      "runtimeArgs": [
+        "run",
+        "companion:debug"
+      ],
+      "port": 4317
+    },
+    {
+      "name": "main-preview",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "CLONE_AI_DATA_DIR=/tmp/audit-demo3",
+        "node",
+        "--experimental-strip-types",
+        "/tmp/serve-main.mjs"
+      ],
       "port": 4317
     }
   ]

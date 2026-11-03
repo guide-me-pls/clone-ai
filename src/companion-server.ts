@@ -949,6 +949,16 @@ async function handleRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/conversation") {
+    // The continuous thread behind the Chat tab. Runs are tasks and are listed
+    // separately; a conversational turn must not become its own session.
+    // 对话页背后的连续线程。Run 是任务、单独列出；一次普通对话不该变成自己的会话。
+    const { readConversation } = await import("./main-agent/conversation-history.ts");
+    const limit = Number(url.searchParams.get("limit") ?? 200);
+    sendJson(response, 200, { messages: await readConversation(context.dataDirectory, Number.isFinite(limit) ? limit : 200) });
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/situation") {
     // Read the shared journal rather than opening a new store, and do not let
     // a GUI poll trigger connector writes: observation is the background
@@ -1639,8 +1649,16 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
     .slice()
     .sort((left, right) => Date.parse(left.completedAt ?? left.startedAt) - Date.parse(right.completedAt ?? right.startedAt))
     .at(-1);
+  // A conversational turn is not a task. The Main Agent proposes a one-step
+  // direct_response plan for "hello", and showing that as its own session made
+  // every message spawn another conversation box. Those runs stay in the
+  // journal and the audit; the sidebar shows tasks.
+  // 对话不是任务。面对一句"你好"，Main Agent 会提案一个单步 direct_response 计划，把它显示成
+  // 独立会话，就使每条消息都裂变出一个新的对话框。这些 Run 仍留在 Journal 与审计里，
+  // 侧栏只显示任务。
+  const taskRuns = visibleRuns.filter((run) => !isConversationalRun(state, run));
   const allSessions = [
-    ...visibleRuns.map((run) => ({
+    ...taskRuns.map((run) => ({
       ...toSessionSummary(run, tasks, describeRunFailure(run, eventsByRun.get(run.id) ?? []).reason),
       updatedAtMs: Date.parse(run.updatedAt),
     })),
@@ -1708,6 +1726,14 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
 }
 
 type DashboardSession = SessionSummary & { updatedAtMs: number; duplicateCount?: number };
+
+/** A plan that only answers, with nothing to execute. 只作答、没有可执行内容的计划。 */
+function isConversationalRun(state: { plans: Record<string, { steps: Array<{ requiredCapabilities?: string[] }> }> }, run: Run): boolean {
+  const plan = run.planId === undefined ? undefined : state.plans[run.planId];
+  if (plan === undefined || plan.steps.length !== 1) return false;
+  const step = plan.steps[0]!;
+  return (step.requiredCapabilities ?? []).includes("direct_response");
+}
 
 function groupDuplicateFailures(sessions: DashboardSession[]): DashboardSession[] {
   const groups = new Map<string, DashboardSession & { duplicateCount: number }>();

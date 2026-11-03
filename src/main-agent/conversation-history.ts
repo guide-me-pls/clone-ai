@@ -134,6 +134,35 @@ export async function searchHistory(
   return scored.slice(0, options.limit ?? 6);
 }
 
+export interface ConversationMessage {
+  /** Session file the message came from. 消息所属的会话文件。 */
+  session: string;
+  at: string;
+  speaker: "user" | "assistant";
+  text: string;
+}
+
+/**
+ * The owner-visible conversation, oldest first.
+ *
+ * The Chat tab is that conversation, not one Run per message. Runs are tasks; a
+ * greeting is not. Reading the Main Agent's own session files is what lets the
+ * interface keep one thread while tasks come and go beside it.
+ *
+ * 所有者可见的对话，按时间顺序。
+ *
+ * 对话页就是这段对话，而不是每条消息一个 Run。Run 是任务，打招呼不是。读取 Main Agent
+ * 自己的会话文件，界面上才能保持一条线程，而任务在旁边来来去去。
+ */
+export async function readConversation(dataDirectory: string, limit = 200): Promise<ConversationMessage[]> {
+  const { entries } = await loadEntries(dataDirectory);
+  return entries
+    .filter((entry) => entry.type === "message" && (entry.speaker === "user" || entry.speaker === "assistant") && entry.text.trim().length > 0)
+    .sort((left, right) => left.at.localeCompare(right.at))
+    .slice(-Math.max(1, limit))
+    .map((entry) => ({ session: entry.session, at: entry.at, speaker: entry.speaker as "user" | "assistant", text: entry.text.slice(0, MAX_TEXT_PER_ENTRY) }));
+}
+
 /** The shape of the history: how much exists, how much the model can still see. 历史的形状：有多少、模型还能看见多少。 */
 export async function describeHistory(dataDirectory: string): Promise<HistoryDescription> {
   const { entries, outOfContext, compactions, sessions } = await loadEntries(dataDirectory);
