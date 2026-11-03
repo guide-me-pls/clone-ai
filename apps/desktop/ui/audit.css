@@ -95,3 +95,11 @@
 
 /* The pre-existing flat session list is superseded by this view. 原有的扁平会话列表已被本视图取代。 */
 #audit-session-list[hidden] { display: none !important; }
+
+/* Empty state: the welcome copy and the composer read as one centered group.
+ * components.css already puts a flexible spacer after the group; an equal one
+ * before it is what centers the pair instead of pushing it to the bottom.
+ * 空状态：欢迎语与输入框作为一个居中的整体。components.css 已在整体之后放了弹性占位；
+ * 在之前再加一个等量的，才能把它居中而不是推到下方。 */
+body.empty-conversation .workspace::before { content: ""; flex: 1; }
+body.empty-conversation .welcome { padding-bottom: 0; }
