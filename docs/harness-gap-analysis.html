@@ -495,7 +495,7 @@
           workspace 有独占锁，但没有全局「最多 N 个 Worker」配置。
         </p>
         <p>
-          <code>desktop-sidecar.ts:21-22</code> 处理 SIGTERM/SIGINT；<code>companion:debug</code> 路径没有。
+          <code>desktop-sidecar.ts:21-22</code> 处理 SIGTERM/SIGINT；原生应用包由 Swift 壳监督并负责退出清理。
           没有 log rotation（<code>.gitignore</code> 忽略 <code>*.log</code>，代码不切分）。
         </p>
         <p><strong>接到哪里：</strong> 把 sidecar 的 shutdown 提进 <code>startCompanionServer</code>；stream 入口加 in-flight=1 或明确拒绝并发。</p>

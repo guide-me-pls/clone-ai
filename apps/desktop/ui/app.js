@@ -545,9 +545,44 @@ async function createSession(query) { const button = $("submit"); button.disable
   const welcome = inner.querySelector(".welcome"); if (welcome) inner.innerHTML = "";
   inner.insertAdjacentHTML("beforeend", `<div class="message you"><div class="avatar you">你</div><div class="message-body"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="you-bubble">${escape(query)}</div></div></div>`);
   const card = document.createElement("div"); card.className = "message clone";
-  card.innerHTML = `<div class="avatar clone">C</div><div class="message-body"><div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="clone-card"><div class="clone-text" data-streaming="1"></div></div></div>`;
+  card.innerHTML = `<div class="avatar clone">C</div><div class="message-body"><div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="clone-text" data-streaming="1" hidden></div></div></div>`;
   inner.appendChild(card);
   const target = card.querySelector(".clone-text");
+  const pending = card.querySelector("[data-response-pending]");
+  const pendingTitle = card.querySelector("[data-pending-title]");
+  const pendingDetail = card.querySelector("[data-pending-detail]");
+  const pendingElapsed = card.querySelector("[data-pending-elapsed]");
+  const pendingStartedAt = performance.now();
+  const pendingStages = [
+    { at: 0, title: "pending-connect-title", detail: "pending-connect-detail" },
+    { at: 4, title: "pending-think-title", detail: "pending-think-detail" },
+    { at: 10, title: "pending-slow-title", detail: "pending-slow-detail" },
+    { at: 20, title: "pending-long-title", detail: "pending-long-detail" },
+  ];
+  let pendingStage = -1;
+  let pendingTimer = null;
+  const updatePending = () => {
+    const seconds = Math.max(0, Math.floor((performance.now() - pendingStartedAt) / 1000));
+    const nextStage = pendingStages.reduce((selected, stage, index) => seconds >= stage.at ? index : selected, 0);
+    if (nextStage !== pendingStage) {
+      pendingStage = nextStage;
+      pendingTitle.textContent = t(pendingStages[nextStage].title);
+      pendingDetail.textContent = t(pendingStages[nextStage].detail);
+      pending.dataset.phase = String(nextStage);
+    }
+    pendingElapsed.textContent = t("pending-elapsed").replace("{seconds}", String(seconds));
+  };
+  const revealResponse = () => {
+    if (pendingTimer !== null) {
+      clearInterval(pendingTimer);
+      pendingTimer = null;
+    }
+    if (pending && !pending.hidden) pending.hidden = true;
+    target.hidden = false;
+    target.classList.add("is-streaming");
+  };
+  updatePending();
+  pendingTimer = window.setInterval(updatePending, 1000);
   $("conversation").scrollTop = $("conversation").scrollHeight;
 
   let reply = ""; let result = null;
@@ -568,7 +603,7 @@ async function createSession(query) { const button = $("submit"); button.disable
         const event = /^event: (.+)$/m.exec(frame)?.[1]; const data = /^data: (.+)$/m.exec(frame)?.[1];
         if (!event || !data) continue;
         const payload = JSON.parse(data);
-        if (event === "delta") { reply += payload.delta; target.textContent = reply; $("conversation").scrollTop = $("conversation").scrollHeight; }
+        if (event === "delta") { revealResponse(); reply += payload.delta; target.textContent = reply; $("conversation").scrollTop = $("conversation").scrollHeight; }
         else if (event === "done") { result = payload; }
         else if (event === "failed") { throw new Error(payload.error); }
       }
@@ -579,18 +614,36 @@ async function createSession(query) { const button = $("submit"); button.disable
     // streaming view stays plain text because partial markdown renders wrong.
     // 回复完成后重新渲染，让链接与代码块获得格式；流式过程保持纯文本，因为不完整的
     // Markdown 会渲染错乱。
-    target.removeAttribute("data-streaming"); target.innerHTML = richText(reply);
     const firstRun = result.newRuns?.[0];
+    revealResponse();
+    target.classList.remove("is-streaming");
+    target.innerHTML = reply.trim().length > 0
+      ? richText(reply)
+      : `<span class="response-fallback">${escape(t(firstRun ? "empty-model-reply-with-run" : "empty-model-reply"))}</span>`;
     if (firstRun) { state.selectedId = firstRun.id; state.scrollPositions.set(firstRun.id, { top: 0, anchor: "bottom" }); localStorage.setItem("clone-ai:selected-session", firstRun.id); }
     await refresh({ preserveScroll: true, scrollToBottom: true });
     announce(firstRun ? "Main Agent 已提交计划，正在推进。" : "Main Agent 已回复（未创建任务）。");
   } catch (error) {
     // The typed text is restored so a failed send never loses what was written.
     // 恢复已输入的文本，使一次失败的发送绝不丢失所写内容。
-    if (!reply) { $("query").value = query; resizeComposer(); card.remove(); }
-    else { target.removeAttribute("data-streaming"); target.innerHTML = richText(reply); }
+    if (!reply) {
+      revealResponse();
+      target.classList.remove("is-streaming");
+      target.innerHTML = `<span class="response-error">${escape(t("response-failed-detail").replace("{message}", error.message))}</span>`;
+      $("query").value = query;
+      resizeComposer();
+    } else {
+      revealResponse();
+      target.classList.remove("is-streaming");
+      target.innerHTML = richText(reply);
+    }
     announce(error.message, true);
-  } finally { button.disabled = false; }
+  } finally {
+    if (pendingTimer !== null) clearInterval(pendingTimer);
+    target.removeAttribute("data-streaming");
+    target.classList.remove("is-streaming");
+    button.disabled = false;
+  }
 }
 
 async function approve(id) { const button = document.querySelector(`[data-approve="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { const result = await api(`/api/runs/${encodeURIComponent(id)}/approve`, { method: "POST" }); await refresh({ preserveScroll: true, scrollToBottom: true }); announce(result.status === "completed" ? "已完成并验证结果。" : "已记录确认，继续处理中。" ); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }

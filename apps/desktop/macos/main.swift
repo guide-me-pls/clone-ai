@@ -6,6 +6,11 @@ import WebKit
 final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
+    private var startupView: NSView!
+    private var startupTitle: NSTextField!
+    private var startupDetail: NSTextField!
+    private var startupDot: NSView!
+    private var startupDotTimer: Timer?
     private var daemon: Process?
     private var stdoutBuffer = ""
     private var stderrBuffer = ""
@@ -28,7 +33,8 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         window.title = "Clone AI"
         window.minSize = NSSize(width: 720, height: 520)
         window.isReleasedWhenClosed = false
-        window.contentView = webView
+        startupView = makeStartupView()
+        window.contentView = startupView
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -172,9 +178,28 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             localURL = url
             readyTimer?.invalidate()
             readyTimer = nil
+            startupDotTimer?.invalidate()
+            startupDotTimer = nil
+            webView.frame = window.contentLayoutRect
+            window.contentView = webView
             webView.load(URLRequest(url: url))
             print("CLONE_AI_DESKTOP_READY \(url.absoluteString)")
             fflush(stdout)
+            if ProcessInfo.processInfo.arguments.contains("--preview-pending") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                    let script = """
+                    window.fetch = new Proxy(window.fetch, {
+                      apply(target, thisArg, args) {
+                        if (args[0] === '/api/main-agent/stream') return new Promise(() => {});
+                        return Reflect.apply(target, thisArg, args);
+                      }
+                    });
+                    document.getElementById('query').value = '整理今天需要推进的事情';
+                    document.getElementById('request-form').requestSubmit();
+                    """
+                    self?.webView.evaluateJavaScript(script)
+                }
+            }
             if ProcessInfo.processInfo.arguments.contains("--test-close-window") {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                     guard let self else { return }
@@ -188,12 +213,61 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     }
 
     private func showMessage(title: String, detail: String) {
-        let html = """
-        <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-        <style>body{margin:0;background:#f6f7fb;color:#263141;font:15px -apple-system,sans-serif;display:grid;place-items:center;height:100vh}main{text-align:center}h1{font-size:21px}p{color:#667589}</style>
-        <main><h1>\(title)</h1><p>\(detail)</p></main>
-        """
-        webView.loadHTMLString(html, baseURL: nil)
+        if window.contentView !== startupView {
+            window.contentView = startupView
+        }
+        startupTitle.stringValue = title
+        startupDetail.stringValue = detail
+    }
+
+    private func makeStartupView() -> NSView {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1240, height: 820))
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor(calibratedRed: 0.949, green: 0.945, blue: 0.918, alpha: 1).cgColor
+
+        startupDot = NSView()
+        startupDot.wantsLayer = true
+        startupDot.layer?.cornerRadius = 11
+        startupDot.layer?.backgroundColor = NSColor(calibratedRed: 0.137, green: 0.407, blue: 0.31, alpha: 1).cgColor
+        startupDot.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            startupDot.widthAnchor.constraint(equalToConstant: 22),
+            startupDot.heightAnchor.constraint(equalToConstant: 22),
+        ])
+        startupDotTimer = Timer.scheduledTimer(withTimeInterval: 1.1, repeats: true) { [weak self] _ in
+            guard let layer = self?.startupDot.layer else { return }
+            let animation = CABasicAnimation(keyPath: "opacity")
+            animation.fromValue = 1
+            animation.toValue = 0.38
+            animation.duration = 0.55
+            animation.autoreverses = true
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(animation, forKey: "startup-pulse")
+        }
+
+        startupTitle = NSTextField(labelWithString: "正在启动 Clone AI")
+        startupTitle.font = NSFont.systemFont(ofSize: 22, weight: .semibold)
+        startupTitle.textColor = NSColor(calibratedRed: 0.125, green: 0.145, blue: 0.129, alpha: 1)
+        startupTitle.alignment = .center
+
+        startupDetail = NSTextField(wrappingLabelWithString: "正在启动本地运行时，请稍候。")
+        startupDetail.font = NSFont.systemFont(ofSize: 13)
+        startupDetail.textColor = NSColor(calibratedRed: 0.38, green: 0.41, blue: 0.38, alpha: 1)
+        startupDetail.alignment = .center
+        startupDetail.maximumNumberOfLines = 3
+
+        let stack = NSStackView(views: [startupDot, startupTitle, startupDetail])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor, constant: -12),
+            stack.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
+        ])
+        return container
     }
 
     private func installMenu() {

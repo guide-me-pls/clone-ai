@@ -8,7 +8,6 @@
     "node": ">=24"
   },
   "scripts": {
-    "companion:debug": "node --experimental-strip-types src/companion-server.ts",
     "desktop:sidecar": "node scripts/build-sidecar.mjs",
     "desktop:mac:build": "node scripts/build-macos-app.mjs",
     "desktop:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-desktop.ps1",
@@ -18,8 +17,7 @@
     "bench:memory": "node --experimental-strip-types benchmark/long-memory-eval.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "cli": "node src/cli/clone-ai.ts",
-    "gui": "node src/cli/clone-ai.ts gui"
+    "cli": "node src/cli/clone-ai.ts"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
