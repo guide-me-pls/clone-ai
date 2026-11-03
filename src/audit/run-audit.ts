@@ -47,8 +47,18 @@ export interface AuditEvidence {
   summary: string;
 }
 
+export interface AuditLabel {
+  verdict: "pass" | "fail";
+  note?: string;
+  labeledAt: string;
+}
+
 export interface RunAuditRecord {
   runId: string;
+  /** Latest owner verdict, kept out of the digest because it is judgement, not what happened. 所有者最新的判定；它是判断而不是发生过的事，所以不进摘要。 */
+  label?: AuditLabel;
+  /** True when the owner deleted the session from the conversation list; the record itself stays. 所有者已把会话从列表删除；记录本身保留。 */
+  deleted?: boolean;
   taskTitle?: string;
   objective?: string;
   triggerKind?: string;
@@ -101,7 +111,8 @@ function projectOne(
   tasks: Map<string, Payload>,
   triggers: Map<string, Payload>,
 ): RunAuditRecord {
-  const sorted = [...events].sort((a, b) => a.sequence - b.sequence);
+  const all = [...events].sort((a, b) => a.sequence - b.sequence);
+  const sorted = all.filter((event) => event.type !== "audit.labeled");
   const record: RunAuditRecord = {
     runId,
     status: "created",
@@ -110,9 +121,16 @@ function projectOne(
     executions: [],
     evidence: [],
     outcome: { status: "created", failureStage: "none" },
-    basis: { events: sorted.length, firstSequence: sorted[0]!.sequence, lastSequence: sorted.at(-1)!.sequence },
+    basis: { events: sorted.length, firstSequence: sorted[0]?.sequence ?? 0, lastSequence: sorted.at(-1)?.sequence ?? 0 },
     digest: "",
   };
+  for (const event of all) {
+    if (event.type !== "audit.labeled") continue;
+    const p = (event.payload ?? {}) as Payload;
+    if (p.verdict === "pass" || p.verdict === "fail") {
+      record.label = { verdict: p.verdict, ...(typeof p.note === "string" && p.note.length > 0 ? { note: p.note } : {}), labeledAt: event.occurredAt };
+    }
+  }
   const open = new Map<string, AuditExecution>();
   let lastFailure: { stage: FailureStage; category?: string; reason?: string } | undefined;
   let sawExecution = false;
@@ -313,23 +331,101 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-/** Aggregates for eval dashboards: pass rate and failure mix by stage / category / provider. 评估面板用的聚合：通过率，以及按阶段 / 类别 / Provider 的失败构成。 */
-export function summarizeAudits(records: readonly RunAuditRecord[]): {
+export interface ProviderSummary {
+  runs: number;
+  failed: number;
+  completed: number;
+  medianDurationMs: number | null;
+  costUsd: number;
+  gatewayErrors: number;
+}
+
+export interface AuditSummary {
   runs: number;
   byStatus: Record<string, number>;
   byFailureStage: Record<string, number>;
   byFailureCategory: Record<string, number>;
-  byProvider: Record<string, { runs: number; failed: number; completed: number; medianDurationMs: number | null }>;
-} {
+  byProvider: Record<string, ProviderSummary>;
+  /** completed / (completed + failed). Runs waiting on the owner are neither, so they do not drag the rate down. 完成 /（完成 + 失败）；等待所有者复核的 Run 两者都不是，所以不会拉低通过率。 */
+  passRate: number | null;
+  averageDurationMs: number | null;
+  totals: { costUsd: number; inputTokens: number; outputTokens: number; gatewayErrors: number };
+  /** Last 14 local days, so a regression shows as a shape rather than a number. 最近 14 个本地日，让回退以形状而不是数字呈现。 */
+  byDay: Array<{ day: string; completed: number; failed: number; other: number }>;
+  /**
+   * How the system's verdict compares with the owner's: the eval ground truth.
+   * `falsePass` (system completed, owner failed) is the dangerous one.
+   * 系统判定与所有者判定的对照，即评估的真值。`falsePass`（系统判完成、所有者判失败）最危险。
+   */
+  evaluation: { labeled: number; unlabeledFinished: number; agree: number; falsePass: number; falseFail: number; agreement: number | null };
+}
+
+/** Aggregates for eval dashboards: pass rate and failure mix by stage / category / provider. 评估面板用的聚合：通过率，以及按阶段 / 类别 / Provider 的失败构成。 */
+export function summarizeAudits(records: readonly RunAuditRecord[], now = new Date()): AuditSummary {
   const count = (target: Record<string, number>, key: string): void => { target[key] = (target[key] ?? 0) + 1; };
-  const summary = { runs: records.length, byStatus: {} as Record<string, number>, byFailureStage: {} as Record<string, number>, byFailureCategory: {} as Record<string, number>, byProvider: {} as Record<string, { runs: number; failed: number; completed: number; medianDurationMs: number | null }> };
+  const summary: AuditSummary = {
+    runs: records.length, byStatus: {}, byFailureStage: {}, byFailureCategory: {}, byProvider: {},
+    passRate: null, averageDurationMs: null,
+    totals: { costUsd: 0, inputTokens: 0, outputTokens: 0, gatewayErrors: 0 },
+    byDay: [],
+    evaluation: { labeled: 0, unlabeledFinished: 0, agree: 0, falsePass: 0, falseFail: 0, agreement: null },
+  };
   const durations = new Map<string, number[]>();
+  const days = new Map<string, { day: string; completed: number; failed: number; other: number }>();
+  for (let offset = 13; offset >= 0; offset -= 1) {
+    const day = localDay(new Date(now.getTime() - offset * 86_400_000));
+    days.set(day, { day, completed: 0, failed: 0, other: 0 });
+  }
+  let finished = 0;
+  let passed = 0;
+  let durationSum = 0;
+  let durationCount = 0;
   for (const record of records) {
     count(summary.byStatus, record.status);
+    const terminal = record.status === "completed" || record.status === "failed" || record.status === "cancelled";
+    if (terminal) {
+      if (record.status !== "cancelled") finished += 1;
+      if (record.status === "completed") passed += 1;
+      if (record.durationMs !== undefined) { durationSum += record.durationMs; durationCount += 1; }
+      if (record.label === undefined) summary.evaluation.unlabeledFinished += 1;
+    }
+    // waiting_review means the system has no verdict yet, so the owner's label there is the
+    // verdict itself, not something to compare against.
+    // waiting_review 表示系统还没有判定，所以所有者在这里的标注就是判定本身，没有可对照的东西。
+    if (record.status === "waiting_review" && record.label === undefined) summary.evaluation.unlabeledFinished += 1;
+    if (record.label !== undefined && (record.status === "completed" || record.status === "failed")) {
+      const evaluation = summary.evaluation;
+      evaluation.labeled += 1;
+      const systemPass = record.status === "completed";
+      const ownerPass = record.label.verdict === "pass";
+      if (systemPass === ownerPass) evaluation.agree += 1;
+      else if (systemPass) evaluation.falsePass += 1;
+      else evaluation.falseFail += 1;
+    }
+    const bucket = record.createdAt === undefined ? undefined : days.get(localDay(new Date(record.createdAt)));
+    if (bucket !== undefined) {
+      if (record.status === "completed") bucket.completed += 1;
+      else if (record.status === "failed") bucket.failed += 1;
+      else bucket.other += 1;
+    }
     if (record.outcome.failureStage !== "none") count(summary.byFailureStage, record.outcome.failureStage);
     if (record.outcome.failureCategory !== undefined) count(summary.byFailureCategory, record.outcome.failureCategory);
-    for (const provider of new Set(record.executions.map((execution) => execution.providerId).filter((id): id is string => id !== undefined))) {
-      const entry = (summary.byProvider[provider] ??= { runs: 0, failed: 0, completed: 0, medianDurationMs: null });
+    const providers = new Set(record.executions.map((execution) => execution.providerId).filter((id): id is string => id !== undefined));
+    for (const execution of record.executions) {
+      const usage = execution.gatewayUsage;
+      if (usage === undefined) continue;
+      summary.totals.costUsd += usage.costUsd;
+      summary.totals.inputTokens += usage.inputTokens;
+      summary.totals.outputTokens += usage.outputTokens;
+      summary.totals.gatewayErrors += usage.errors;
+      if (execution.providerId !== undefined) {
+        const entry = (summary.byProvider[execution.providerId] ??= emptyProvider());
+        entry.costUsd += usage.costUsd;
+        entry.gatewayErrors += usage.errors;
+      }
+    }
+    for (const provider of providers) {
+      const entry = (summary.byProvider[provider] ??= emptyProvider());
       entry.runs += 1;
       if (record.status === "failed") entry.failed += 1;
       if (record.status === "completed") entry.completed += 1;
@@ -340,7 +436,20 @@ export function summarizeAudits(records: readonly RunAuditRecord[]): {
     const sorted = [...list].sort((a, b) => a - b);
     summary.byProvider[provider]!.medianDurationMs = sorted[Math.floor(sorted.length / 2)] ?? null;
   }
+  summary.passRate = finished === 0 ? null : passed / finished;
+  summary.averageDurationMs = durationCount === 0 ? null : Math.round(durationSum / durationCount);
+  summary.totals.costUsd = Number(summary.totals.costUsd.toFixed(6));
+  summary.byDay = [...days.values()];
+  summary.evaluation.agreement = summary.evaluation.labeled === 0 ? null : summary.evaluation.agree / summary.evaluation.labeled;
   return summary;
+}
+
+function emptyProvider(): ProviderSummary {
+  return { runs: 0, failed: 0, completed: 0, medianDurationMs: null, costUsd: 0, gatewayErrors: 0 };
+}
+
+function localDay(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 /**

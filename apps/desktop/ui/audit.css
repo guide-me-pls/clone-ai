@@ -1,0 +1,89 @@
+/* Audit & eval view. Scoped under #audit-root so it cannot restyle the rest of the app. 审计与评估视图，限定在 #audit-root 内，不影响其他界面。 */
+#audit-root { --au-ok: var(--success, #238653); --au-bad: var(--danger, #c23f45); --au-warn: var(--warning, #b86d12); --au-info: var(--accent, #3468f6); --au-mute: #8791a1; font-size: 13px; color: var(--text, #20242c); }
+#audit-root * { box-sizing: border-box; }
+#audit-root h3 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+#audit-root h4 { margin: 0 0 10px; font-size: 13px; }
+#audit-root h5 { margin: 18px 0 8px; font-size: 12px; color: var(--subtle, #5c6675); text-transform: none; letter-spacing: 0; }
+#audit-root p { margin: 4px 0; }
+#audit-root code, #audit-root pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px; }
+#audit-root pre { margin: 6px 0 0; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; background: rgba(0,0,0,.04); border-radius: 8px; max-height: 220px; overflow: auto; }
+.au-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 14px; }
+.au-head p { color: var(--subtle, #5c6675); font-size: 12px; max-width: 56ch; }
+.au-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.au-btn { border: 1px solid var(--line-strong, #ccd4df); background: var(--surface, #fff); color: inherit; border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; }
+.au-btn:hover:not(:disabled) { background: var(--surface-hover, #f1f4f9); }
+.au-btn:disabled { opacity: .45; cursor: default; }
+.au-btn-ok { border-color: var(--au-ok); color: var(--au-ok); }
+.au-btn-bad { border-color: var(--au-bad); color: var(--au-bad); }
+.au-link { border: 0; background: none; color: var(--au-info); cursor: pointer; font: inherit; padding: 0; }
+.au-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: rgba(0,0,0,.05); margin-bottom: 16px; }
+.au-tab { border: 0; background: none; padding: 6px 16px; border-radius: 8px; font: inherit; cursor: pointer; color: var(--subtle, #5c6675); }
+.au-tab.is-on { background: var(--surface, #fff); color: inherit; box-shadow: 0 1px 3px rgba(0,0,0,.1); font-weight: 600; }
+.au-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.au-stat { padding: 12px 14px; border: 1px solid var(--line, #e3e7ee); border-radius: 12px; background: var(--surface, #fff); display: grid; gap: 2px; }
+.au-stat span { font-size: 11px; color: var(--subtle, #5c6675); }
+.au-stat strong { font-size: 24px; letter-spacing: -.03em; line-height: 1.15; }
+.au-stat small { font-size: 11px; color: var(--muted, #8791a1); }
+.au-stat-bad strong { color: var(--au-bad); } .au-stat-warn strong { color: var(--au-warn); }
+.au-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.au-card { padding: 14px 16px; border: 1px solid var(--line, #e3e7ee); border-radius: 12px; background: var(--surface, #fff); min-width: 0; }
+.au-wide { grid-column: 1 / -1; }
+.au-note { font-size: 11.5px; color: var(--muted, #8791a1); margin-top: 8px !important; }
+.au-empty { color: var(--muted, #8791a1); font-size: 12px; padding: 8px 0; }
+.au-daychart { width: 100%; height: auto; max-height: 190px; } .au-daychart text { font-size: 9px; fill: var(--muted, #8791a1); } .au-daychart .au-count { fill: var(--subtle, #5c6675); }
+.au-seg-ok { fill: var(--au-ok); background: var(--au-ok); } .au-seg-bad { fill: var(--au-bad); background: var(--au-bad); } .au-seg-mute { fill: #c5ccd8; background: #c5ccd8; }
+.au-legend { display: flex; gap: 12px; align-items: center; font-size: 11px; color: var(--subtle, #5c6675); margin-top: 4px; }
+.au-dot { width: 9px; height: 9px; border-radius: 3px; display: inline-block; margin-right: -6px; }
+.au-hbars { display: grid; gap: 8px; }
+.au-hbar { display: grid; grid-template-columns: 92px 1fr 28px; gap: 8px; align-items: center; font-size: 12px; }
+.au-hbar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.au-hbar-track, .au-bar, .au-ratebar { display: block; height: 8px; border-radius: 99px; background: rgba(0,0,0,.07); overflow: hidden; }
+.au-hbar-track i, .au-bar i, .au-ratebar i { display: block; height: 100%; border-radius: 99px; }
+.au-ratebar { display: inline-block; width: 70px; vertical-align: middle; } .au-ratebar i { background: var(--au-ok); }
+.au-fill-bad { background: var(--au-bad); } .au-fill-ok { background: var(--au-ok); } .au-fill-info { background: var(--au-info); } .au-fill-warn { background: var(--au-warn); }
+.au-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.au-table th { text-align: left; font-weight: 600; color: var(--subtle, #5c6675); padding: 6px 8px; border-bottom: 1px solid var(--line, #e3e7ee); }
+.au-table td { padding: 8px; border-bottom: 1px solid var(--line, #eef1f5); }
+.au-badge { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; line-height: 18px; white-space: nowrap; }
+.au-ok { background: color-mix(in srgb, var(--au-ok) 14%, transparent); color: var(--au-ok); }
+.au-bad { background: color-mix(in srgb, var(--au-bad) 14%, transparent); color: var(--au-bad); }
+.au-warn { background: color-mix(in srgb, var(--au-warn) 16%, transparent); color: var(--au-warn); }
+.au-info { background: color-mix(in srgb, var(--au-info) 13%, transparent); color: var(--au-info); }
+.au-mute { background: rgba(0,0,0,.06); color: var(--subtle, #5c6675); }
+.au-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.au-toolbar input[type="search"], .au-toolbar select { border: 1px solid var(--line-strong, #ccd4df); border-radius: 8px; padding: 6px 10px; font: inherit; background: var(--surface, #fff); }
+.au-toolbar input[type="search"] { flex: 1; min-width: 160px; }
+.au-chip { border: 1px solid var(--line-strong, #ccd4df); background: var(--surface, #fff); border-radius: 99px; padding: 4px 12px; font: inherit; cursor: pointer; }
+.au-chip.is-on { background: var(--au-info); border-color: var(--au-info); color: #fff; }
+.au-check { display: inline-flex; gap: 5px; align-items: center; color: var(--subtle, #5c6675); font-size: 12px; }
+.au-split { display: grid; grid-template-columns: minmax(260px, 2fr) minmax(320px, 3fr); gap: 12px; align-items: start; }
+@media (max-width: 900px) { .au-split { grid-template-columns: 1fr; } }
+.au-list { display: grid; gap: 6px; max-height: 70vh; overflow: auto; padding-right: 2px; }
+.au-row { display: grid; gap: 6px; text-align: left; padding: 10px 12px; border: 1px solid var(--line, #e3e7ee); border-radius: 10px; background: var(--surface, #fff); font: inherit; cursor: pointer; color: inherit; }
+.au-row:hover { border-color: var(--line-strong, #ccd4df); } .au-row.is-selected { border-color: var(--au-info); box-shadow: 0 0 0 2px color-mix(in srgb, var(--au-info) 18%, transparent); } .au-row.is-deleted { opacity: .62; }
+.au-row-main { display: grid; gap: 3px; } .au-why { color: var(--au-bad); font-size: 11.5px; line-height: 1.4; }
+.au-row-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; } .au-row-meta small { color: var(--muted, #8791a1); font-size: 11px; }
+.au-detail { padding: 14px 16px; border: 1px solid var(--line, #e3e7ee); border-radius: 12px; background: var(--surface, #fff); max-height: 70vh; overflow: auto; position: sticky; top: 0; }
+.au-detail-head { display: flex; align-items: flex-start; gap: 8px; } .au-detail-head > div { flex: 1; min-width: 0; } .au-detail-head h4 { margin: 0; font-size: 15px; } .au-detail-head small { color: var(--muted, #8791a1); font-size: 11px; word-break: break-all; }
+.au-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 12px; color: var(--subtle, #5c6675); font-size: 12px; }
+.au-stages { display: flex; gap: 6px; list-style: none; padding: 0; margin: 0 0 12px; }
+.au-stage { flex: 1; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 9px; font-size: 12px; font-weight: 600; }
+.au-stage i { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: currentColor; font-style: normal; font-size: 10px; }
+.au-stage i { color: inherit; position: relative; } .au-stage i::before { content: attr(data-n); }
+.au-stage.is-fail { outline: 2px solid var(--au-bad); }
+.au-stage i { color: #fff; background: var(--au-mute); } .au-stage.au-ok i { background: var(--au-ok); } .au-stage.au-bad i { background: var(--au-bad); } .au-stage.au-warn i { background: var(--au-warn); } .au-stage.au-info i { background: var(--au-info); }
+.au-exec { padding: 10px 12px; border: 1px solid var(--line, #e3e7ee); border-radius: 10px; margin-bottom: 8px; }
+.au-exec-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; } .au-exec-head span { color: var(--muted, #8791a1); font-size: 11.5px; } .au-exec-head em { margin-left: auto; font-style: normal; font-variant-numeric: tabular-nums; }
+.au-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; } .au-chips span { font-size: 11px; padding: 1px 8px; border-radius: 6px; background: rgba(0,0,0,.05); color: var(--subtle, #5c6675); }
+.au-callout { margin-top: 8px; padding: 9px 11px; border-radius: 9px; font-size: 12px; }
+.au-callout-bad { background: color-mix(in srgb, var(--au-bad) 9%, transparent); border: 1px solid color-mix(in srgb, var(--au-bad) 30%, transparent); }
+.au-callout-warn { background: color-mix(in srgb, var(--au-warn) 10%, transparent); border: 1px solid color-mix(in srgb, var(--au-warn) 32%, transparent); }
+.au-policy { padding: 8px 0; border-bottom: 1px solid var(--line, #eef1f5); } .au-policy ul { margin: 6px 0 0; padding-left: 18px; color: var(--subtle, #5c6675); font-size: 12px; }
+.au-plain { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; } .au-plain li { font-size: 12px; }
+.au-label { display: grid; gap: 8px; } .au-label textarea { width: 100%; border: 1px solid var(--line-strong, #ccd4df); border-radius: 8px; padding: 8px 10px; font: inherit; resize: vertical; background: var(--surface, #fff); color: inherit; }
+.au-digest code { word-break: break-all; }
+.au-raw { max-height: 320px !important; }
+.au-queue { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line, #eef1f5); } .au-queue small { display: block; color: var(--muted, #8791a1); }
+
+/* The pre-existing flat session list is superseded by this view. 原有的扁平会话列表已被本视图取代。 */
+#audit-session-list[hidden] { display: none !important; }

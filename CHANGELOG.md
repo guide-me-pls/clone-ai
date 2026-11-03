@@ -6,6 +6,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Audit & eval, visual
+
+Settings → 审计与轨迹 is now a dashboard (`apps/desktop/ui/audit.js`): an overview (pass rate, runs per day, where failures happen, failure categories, per-tool comparison with cost and gateway errors), a filterable run list with a detail panel (stage strip, why it failed, execution timeline, policy verdicts per scope, evidence, verification, sha256 digest, raw record), and an evaluation tab. Evaluation uses owner ground truth instead of a model grader: mark a finished run 合格 / 不合格 (`POST /api/audit/:runId/label`, journaled as `audit.labeled`) and the system's own verdict is compared with yours, reporting agreement, false-pass (system completed, owner failed) and false-fail. A run in `waiting_review` has no system verdict, so your label there is the verdict and is not counted as agreement. `GET /api/audit/export` downloads JSONL. Labels are judgement, so they are not part of a record's digest.
+Sessions can be deleted and restored from the audit view as well as the sidebar (`POST /api/sessions/:id/restore`). Deleting only hides the conversation; the audit record stays, marked deleted, so an eval never loses a run because someone tidied the sidebar.
+
+审计与评估可视化：设置 → 审计与轨迹现在是一个面板：总览（通过率、每日运行数、失败发生在哪一步、失败类别、各工具对比含费用与网关错误）、可筛选的运行列表加详情面板（阶段条、失败原因、执行时间线、按 scope 的策略判定、证据、验证、sha256 摘要、原始记录），以及评估页。评估用所有者的真值而不是模型打分：把已结束的 Run 标为 合格 / 不合格（记为 `audit.labeled`），系统会把自己的判定与你的对照，给出一致率、误判通过（系统判完成、你判不合格）与误判失败。`waiting_review` 的 Run 系统尚无判定，你的标注就是判定，不计入一致率。`GET /api/audit/export` 下载 JSONL。标注是判断，不进记录的摘要。
+会话可在审计页和侧边栏删除与恢复。删除只是隐藏对话；审计记录保留并标为已删除，评估不会因为有人整理侧边栏而丢掉某个 Run。
+
 ### Why workers "always failed", and the audit that now says so
 
 Root causes found by running the real CLIs and reading the gateway's request log: (1) every built-in worker was blocked by default ("Unrestricted host execution is disabled"), so every run failed in under two seconds; (2) the reason was never journaled, only `status: failed`; (3) once unblocked, Codex failed inside our sandbox because macOS forbids nested sandboxes, and (4) Pi's inherited default model (`gemini-4-argon` through Magpie) returns HTTP 400 on the turn after a tool call, so Pi did the work and then exited non-zero.
