@@ -6,6 +6,9 @@ const state = {
   drafts: new Map(),
   dashboard: null,
   selectedId: localStorage.getItem("clone-ai:selected-session"),
+  composingNew: false,
+  streaming: false,
+  sessionEpoch: 0,
   refreshTimer: null,
   scrollPositions: new Map(),
   openDisclosures: new Map(),
@@ -88,6 +91,7 @@ function renderSessions(sessions) {
   const signature = JSON.stringify([state.selectedId, sessions.map((session) => [session.id, session.title, session.preview, session.status, session.updatedAt])]);
   if (state.signatures.sessions === signature) return;
   state.signatures.sessions = signature;
+  $("session-count").textContent = String(sessions.length);
   if (!sessions.length) { $("session-list").innerHTML = `<div class="empty-sessions">${t("empty-sessions").replace("\n", "<br/>")}</div>`; return; }
   const todayKey = new Date().toDateString();
   const today = sessions.filter((session) => new Date(session.updatedAt).toDateString() === todayKey);
@@ -499,16 +503,22 @@ function renderOpportunities(cards) {
   const strip = $("opportunity-strip");
   if (!cards.length) { strip.hidden = true; strip.innerHTML = ""; return; }
   strip.hidden = false;
-  strip.innerHTML = cards.slice(0, 4).map((card) => `<article class="opportunity-card">
-    <div class="opportunity-head"><span class="opportunity-source">${escape(opportunitySourceLabel(card.source))}</span><b>${escape(card.title)}</b></div>
-    <p class="opportunity-why">${escape(card.whyNow)}</p>
-    <p class="opportunity-proposal">${escape(card.proposedResult)}</p>
-    <div class="opportunity-actions">
-      <button class="approve" type="button" data-accept-opportunity="${escape(card.id)}">${isFailureCard(card) ? "查看失败原因" : "接受并开始"}</button>
-      ${isFailureCard(card) ? `<button class="secondary" type="button" data-open-failure-settings>打开 Agent 设置</button>` : ""}
-      <button class="secondary" type="button" data-dismiss-opportunity="${escape(card.id)}">不需要</button>
-    </div>
-  </article>`).join("");
+  strip.innerHTML = cards.slice(0, 4).map((card) => {
+    const failed = isFailureCard(card);
+    return `<article class="opportunity-card${failed ? " is-failure" : ""}">
+      <div class="opportunity-icon" aria-hidden="true">${failed ? "!" : "✦"}</div>
+      <div class="opportunity-copy">
+        <div class="opportunity-head"><span class="opportunity-source">${escape(opportunitySourceLabel(card.source))}</span><b>${escape(card.title)}</b></div>
+        <p class="opportunity-why">${escape(card.whyNow)}</p>
+        <p class="opportunity-proposal">${escape(card.proposedResult)}</p>
+      </div>
+      <div class="opportunity-actions">
+        <button class="approve" type="button" data-accept-opportunity="${escape(card.id)}">${failed ? "查看原因" : "开始处理"}</button>
+        ${failed ? `<button class="secondary" type="button" data-open-failure-settings>Agent 设置</button>` : ""}
+        <button class="opportunity-dismiss" type="button" data-dismiss-opportunity="${escape(card.id)}">忽略</button>
+      </div>
+    </article>`;
+  }).join("");
 }
 
 function opportunitySourceLabel(source) { return { deadline: "临近承诺", failed_task: "任务跟进", neglected_goal: "目标提醒", observation: "新观察" }[source] || "机会"; }
@@ -689,7 +699,7 @@ function reviewMarkup(session) { const verification = session.verification; if (
 function recalledMemoryMarkup(session) { const memories = session.recalledMemories || []; if (!memories.length) return ""; return `<details class="activity-card" data-disclosure="memory"><summary class="activity-summary">${icon("spark")}<b>本次任务使用的 Memory</b><span>${memories.length} 条</span></summary><div class="agent-list">${memories.map((memory) => `<div class="agent-row"><div><strong>${escape(memory.summary)}</strong><small>匹配：${escape((memory.matchedTerms || []).join("、") || "相关上下文")} · ${Math.round((memory.score || 0) * 100)}%</small></div></div>`).join("")}</div></details>`; }
 function evidenceMarkup(session) { return session.evidenceCount ? `<div class="evidence">${icon("check")}已记录 ${session.evidenceCount} 条可验证证据</div>` : ""; }
 function traceMarkup(session) { const trace = session.trace || session.activity || []; if (!trace.length) return ""; const open = disclosureOpen(session, "trace") ? " open" : ""; return `<details class="activity-card" data-disclosure="trace"${open}><summary class="activity-summary">${icon("check")}<b>本地执行轨迹</b><span>${trace.length} 条</span></summary><div class="trace" data-scroll-region="trace">${trace.map((item, index) => `<div class="trace-row"><b><span class="trace-sequence">#${item.sequence ?? index + 1}</span>${escape(item.label)}</b><p>${time(item.occurredAt)} · ${escape(item.detail)}</p></div>`).join("")}</div></details>`; }
-function setTopbar(session) { if (!session) { $("session-title").textContent = t("new-conversation"); $("session-subtitle").textContent = t("start-intent"); $("session-status").textContent = t("ready"); $("session-status").className = "status-pill"; return; } const status = statusMeta(session.status); $("session-title").textContent = session.title; $("session-subtitle").textContent = `${session.preview} · 更新于 ${time(session.updatedAt)}`; $("session-status").textContent = status.label; $("session-status").className = `status-pill ${status.className}`; }
+function setTopbar(session) { if (!session) { $("session-kind").textContent = "个人对话"; $("session-title").textContent = t("new-conversation"); $("session-subtitle").textContent = t("start-intent"); $("session-status").textContent = t("ready"); $("session-status").className = "status-pill"; return; } const status = statusMeta(session.status); $("session-kind").textContent = session.id === MAIN_CONVERSATION_ID ? "个人对话" : "任务记录"; $("session-title").textContent = session.title; $("session-subtitle").textContent = `${session.preview} · ${time(session.updatedAt)}`; $("session-status").textContent = session.id === MAIN_CONVERSATION_ID && session.status === "completed" ? "已保存" : status.label; $("session-status").className = `status-pill ${status.className}`; }
 const SCROLL_BOTTOM_THRESHOLD = 28;
 function rememberCurrentScroll() {
   if (!state.selectedId) return;
@@ -745,9 +755,10 @@ function restoreDisclosureScrolls(id) {
   });
 }
 function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", session === null); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
-async function selectSession(id, { quiet = false, scrollToBottom = false } = {}) { if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
-async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities")]); state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.selectedId || !sessions.some((session) => session.id === state.selectedId)) state.selectedId = sessions.find((session) => session.id === MAIN_CONVERSATION_ID)?.id ?? sessions[0]?.id ?? null; renderSessions(sessions); if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
+async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
+async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (state.streaming) return; const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.composingNew && (!state.selectedId || !sessions.some((session) => session.id === state.selectedId))) state.selectedId = sessions.find((session) => session.id === MAIN_CONVERSATION_ID)?.id ?? sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
 async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
+  state.streaming = true;
   // The message and a live reply card appear before the request is sent. A model
   // call can take many seconds, and until now the composer kept the text and the
   // conversation showed nothing, so the app looked frozen mid-thought.
@@ -859,9 +870,11 @@ async function createSession(query) { const button = $("submit"); button.disable
     // what made the interface look like it kept spawning new conversations.
     // 每一轮都落进唯一的对话线程；它提案的计划会作为侧栏中的任务出现。每发一条消息就切换
     // 到一个新对话框，正是界面看起来不断裂变的原因。
+    state.composingNew = false;
     state.selectedId = MAIN_CONVERSATION_ID;
     if (firstRun) state.scrollPositions.set(firstRun.id, { top: 0, anchor: "bottom" });
     localStorage.setItem("clone-ai:selected-session", MAIN_CONVERSATION_ID);
+    state.streaming = false;
     await refresh({ preserveScroll: false, scrollToBottom: true });
     announce(firstRun ? "Main Agent 已提交计划，正在推进。" : "Main Agent 已回复（未创建任务）。");
   } catch (error) {
@@ -886,6 +899,7 @@ async function createSession(query) { const button = $("submit"); button.disable
     }
     announce(failure, true);
   } finally {
+    state.streaming = false;
     if (stallTimer !== null) clearTimeout(stallTimer);
     if (pendingTimer !== null) clearInterval(pendingTimer);
     target.removeAttribute("data-streaming");
@@ -975,7 +989,7 @@ $("library-create").addEventListener("click", () => void createLibraryMemory());
 $("opportunity-strip").addEventListener("click", (event) => { const settings = event.target.closest("[data-open-failure-settings]"); if (settings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const accept = event.target.closest("[data-accept-opportunity]"); if (accept) { void decideOpportunity(accept.dataset.acceptOpportunity, "accept"); return; } const dismiss = event.target.closest("[data-dismiss-opportunity]"); if (dismiss) void decideOpportunity(dismiss.dataset.dismissOpportunity, "dismiss"); });
 $("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
-$("new-session").addEventListener("click", () => { notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
+$("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
 $("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0) { announce("请输入你想推进的事情。", true); return; } void createSession(query); });
 $("query").addEventListener("input", resizeComposer);
 $("query").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); $("request-form").requestSubmit(); } });

@@ -16,11 +16,11 @@
       <aside class="sidebar" aria-label="会话列表" data-i18n="sessions-nav" data-i18n-attr="aria-label">
         <div class="brand-row">
           <div class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M16.6 6.8a7.1 7.1 0 1 0 0 10.4"/><path d="m13.5 8.5 3.5 3.5-3.5 3.5"/></svg></div>
-          <div class="brand">clone<span>-ai</span></div><span class="local-dot" title="本地运行中"></span>
+          <div class="brand-copy"><div class="brand">clone<span>-ai</span></div><span class="brand-caption">personal agent</span></div><span class="local-dot" title="本地运行中"></span>
         </div>
-        <button class="new-session" id="new-session" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="new-session">新建任务</span></button>
+        <button class="new-session" id="new-session" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="new-session">新建任务</span><kbd>⌘N</kbd></button>
         <button class="schedule-button" id="schedule-open" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg><span data-i18n="schedules">定时任务</span><b id="schedule-count">0</b></button>
-        <div class="session-label" data-i18n="your-sessions">对话</div>
+        <div class="session-label"><span data-i18n="your-sessions">最近任务</span><span class="session-count" id="session-count">0</span></div>
         <div class="session-list" id="session-list" aria-live="polite"></div>
       </aside>
 
@@ -28,7 +28,7 @@
       <main class="workspace">
         <header class="topbar">
           <button class="menu-button" id="menu-open" type="button" aria-label="打开会话列表" data-i18n="open-sessions" data-i18n-attr="aria-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
-          <div class="topbar-title"><h1 id="session-title">新的对话</h1><p id="session-subtitle">从一个清晰的意图开始</p></div>
+          <div class="topbar-title"><span class="topbar-kicker" id="session-kind">个人对话</span><h1 id="session-title">新的对话</h1><p id="session-subtitle">从一个清晰的意图开始</p></div>
           <div class="top-actions"><span class="status-pill" id="session-status">准备就绪</span><span class="private-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg><span data-i18n="local-only">本地运行</span></span></div>
         </header>
 

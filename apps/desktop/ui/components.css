@@ -1091,3 +1091,253 @@ body.empty-conversation #session-subtitle, body.empty-conversation #session-stat
   .starter-grid { grid-template-columns: 1fr; }
   .starter-card { min-height: 80px; }
 }
+
+/* Shell refresh: a quiet native-like rail, a compact context bar, and a
+   single-line attention dock instead of a second page inside the chat. */
+/* 外壳刷新：更安静的导航栏、紧凑的上下文标题栏，以及不会遮住对话的单行提醒区。 */
+.app-shell { --sidebar-width: 284px; background: #f6f6f3; }
+.sidebar {
+  padding: 18px 14px 14px;
+  background: linear-gradient(180deg, #fafaf8 0%, #f4f3ef 100%);
+  border-right-color: #e5e4de;
+}
+.brand-row {
+  min-height: 44px;
+  align-items: center;
+  padding: 1px 8px 16px;
+  gap: 10px;
+}
+.brand-copy { display: grid; min-width: 0; gap: 1px; }
+.brand { font-size: 15px; line-height: 1.1; }
+.brand-caption {
+  color: #969a96;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .13em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+.local-dot { width: 7px; height: 7px; }
+.new-session {
+  justify-content: flex-start;
+  min-height: 42px;
+  padding: 0 11px;
+  border: 1px solid #202521;
+  border-radius: 10px;
+  color: #fff;
+  background: #202521;
+  box-shadow: 0 6px 16px rgba(32, 37, 33, .13);
+  font-size: 13px;
+  font-weight: 620;
+}
+.new-session:hover { background: #111512; filter: none; transform: none; }
+.new-session svg { color: #dfe8df; }
+.new-session kbd {
+  margin-left: auto;
+  padding: 2px 5px;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 5px;
+  color: rgba(255,255,255,.62);
+  background: rgba(255,255,255,.08);
+  font: 9px/1.2 var(--font-mono);
+}
+.schedule-button {
+  min-height: 36px;
+  margin: 5px 0 3px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  color: #5f665f;
+  background: transparent;
+  font-size: 12.5px;
+}
+.schedule-button:hover { color: #202521; background: rgba(255,255,255,.7); }
+.schedule-button svg { width: 15px; height: 15px; color: #7b837b; }
+.schedule-button b {
+  min-width: 20px;
+  height: 19px;
+  border: 1px solid #deded8;
+  border-radius: 999px;
+  color: #818781;
+  background: #fafaf8;
+  font-size: 9px;
+}
+.session-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 18px 8px 7px;
+  padding: 0;
+  color: #898e89;
+  font-size: 9.5px;
+  font-weight: 680;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.session-count {
+  min-width: 18px;
+  color: #a3a7a3;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.session-list { gap: 2px; }
+.session {
+  min-height: 50px;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+}
+.session:hover { background: rgba(255,255,255,.68); }
+.session[aria-current="true"] {
+  border-color: #e1e1dc;
+  background: rgba(255,255,255,.9);
+  box-shadow: 0 1px 2px rgba(34, 39, 34, .035);
+}
+.session-title { font-size: 12.5px; font-weight: 610; }
+.session-meta { font-size: 10.5px; }
+
+.workspace { background: #fbfbf9; }
+.topbar {
+  min-height: 74px;
+  padding: 0 30px;
+  border-bottom-color: #e9e8e3;
+  background: rgba(251,251,249,.94);
+  backdrop-filter: blur(18px);
+}
+.topbar-title { display: grid; min-width: 0; gap: 1px; }
+.topbar-kicker {
+  display: block;
+  margin-bottom: 2px;
+  color: #9b9e99;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.topbar-title h1 { color: #2b302b; font-size: 16px; font-weight: 630; letter-spacing: -.025em; }
+.topbar-title p {
+  max-width: min(590px, 62vw);
+  overflow: hidden;
+  color: #8d938c;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.top-actions { gap: 7px; }
+.private-pill, .status-pill {
+  min-height: 26px;
+  padding: 0 9px;
+  border-color: #e2e2dd;
+  color: #70766f;
+  background: #fff;
+  font-size: 10px;
+}
+
+.opportunity-strip {
+  max-height: none;
+  gap: 7px;
+  overflow: visible;
+  padding: 10px 30px 0;
+}
+.opportunity-card {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid #e7e1d5;
+  border-left: 1px solid #e7e1d5;
+  border-radius: 11px;
+  background: #fffdf9;
+  box-shadow: 0 1px 2px rgba(43, 46, 40, .025);
+}
+.opportunity-card.is-failure { border-color: #eadbd4; background: #fffafa; }
+.opportunity-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  color: #8b642d;
+  background: #f8eee0;
+  font-size: 12px;
+  font-weight: 760;
+}
+.opportunity-card.is-failure .opportunity-icon { color: #a75850; background: #f9e9e6; }
+.opportunity-copy { min-width: 0; }
+.opportunity-head { gap: 7px; min-width: 0; }
+.opportunity-head b {
+  overflow: hidden;
+  color: #4c5049;
+  font-size: 12px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.opportunity-source {
+  padding: 2px 6px;
+  color: #806b48;
+  background: #f6ecdc;
+  font-size: 9px;
+  letter-spacing: .02em;
+}
+.opportunity-why {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: #8b877d;
+  font-size: 10.5px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.opportunity-proposal { display: none; }
+.opportunity-actions { flex: 0 0 auto; gap: 5px; }
+.opportunity-actions .approve,
+.opportunity-actions .secondary,
+.opportunity-dismiss {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid #e0dfd9;
+  border-radius: 7px;
+  color: #62675f;
+  background: #fff;
+  font-size: 10px;
+  font-weight: 620;
+  cursor: pointer;
+}
+.opportunity-actions .approve { border-color: #2d332d; color: #fff; background: #2d332d; }
+.opportunity-actions .approve:hover { background: #151915; }
+.opportunity-actions .secondary:hover,
+.opportunity-dismiss:hover { border-color: #c9c9c2; color: #2e322e; background: #f8f8f5; }
+
+body.empty-conversation .topbar { display: flex; }
+body.empty-conversation #session-subtitle,
+body.empty-conversation #session-status { display: inline-flex; }
+body.empty-conversation .workspace::before,
+body.empty-conversation .workspace::after { content: none; display: none; }
+body.empty-conversation .conversation {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 28px 34px;
+}
+body.empty-conversation .conversation-inner { display: flex; width: min(760px, 100%); justify-content: center; margin: 0 auto; }
+body.empty-conversation .welcome { width: 100%; min-height: 0; padding: 0; }
+body.empty-conversation .composer-wrap { padding-top: 0; padding-bottom: 24px; }
+
+@media (max-width: 900px) {
+  .opportunity-card { grid-template-columns: 26px minmax(0, 1fr); }
+  .opportunity-actions { grid-column: 2; justify-content: flex-start; }
+}
+
+@media (max-width: 760px) {
+  .topbar { padding: 0 18px; }
+  .opportunity-strip { padding: 10px 18px 0; }
+  .opportunity-actions { flex-wrap: wrap; }
+  .topbar-title p { max-width: 56vw; }
+}
