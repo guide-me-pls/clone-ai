@@ -74,7 +74,7 @@ export function resolveClonePaths(options: ClonePathOptions = {}): ClonePaths {
     checkpointsDirectory: join(dataDirectory, "checkpoints"),
     sessionsDirectory: join(dataDirectory, "sessions"),
     workspaceRuntimeDirectory,
-    workspaceLockFile: join(workspaceRuntimeDirectory, "workspace-execution.lock"),
+    workspaceLockFile: join(workspaceRuntimeDirectory, "workspace-execution.sqlite3"),
     isolatedWorkspacesDirectory: join(dataDirectory, "isolated-workspaces"),
   };
 }

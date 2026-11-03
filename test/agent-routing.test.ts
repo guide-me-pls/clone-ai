@@ -67,6 +67,17 @@ test("a requested but unavailable worker blocks instead of silently falling back
   assert.equal("decision" in result, false);
 });
 
+test("an installed but unisolated worker is blocked without being reported as missing", () => {
+  const result = routeTask({
+    taskId: "task-security",
+    intent: classifyIntent("请使用 codex 修复编译错误", { knownAgentIds: KNOWN_IDS }),
+    workers: [worker({ id: "codex", executionBlocked: true }), worker({ id: "pi-agent" })],
+  });
+  assert.equal(result.status, "blocked");
+  assert.equal(result.code, "REQUESTED_AGENT_UNISOLATED");
+  assert.match(result.reason, /installed but blocked/);
+});
+
 test("a disabled or unknown request is refused with its own precise code", () => {
   const disabled = routeTask({
     taskId: "task-3",

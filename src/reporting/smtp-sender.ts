@@ -12,8 +12,8 @@
  * MAIL FROM / RCPT TO、DATA、QUIT。每条命令都等待预期的响应码；任何意外响应都会以
  * 可读错误中止对话。
  */
-import { connect, type Socket } from "node:net";
-import { connect as tlsConnect, type TLSSocket } from "node:tls";
+import { connect, isIP, type Socket } from "node:net";
+import { checkServerIdentity, connect as tlsConnect, type TLSSocket } from "node:tls";
 
 export interface SmtpConfig {
   host: string;
@@ -24,7 +24,7 @@ export interface SmtpConfig {
   pass?: string;
   from: string;
   to: string;
-  /** Prefer STARTTLS on plaintext ports; true for 587. 明文端口上优先 STARTTLS；587 用 true。 */
+  /** Require STARTTLS on plaintext ports; true for 587. 在明文端口强制 STARTTLS；587 用 true。 */
   startTls?: boolean;
   /** Connect with TLS immediately; true for 465. 直接 TLS 连接；465 用 true。 */
   secure?: boolean;
@@ -38,25 +38,32 @@ export interface SmtpMessage {
 const CRLF = "\r\n";
 
 export async function sendEmail(config: SmtpConfig, message: SmtpMessage): Promise<void> {
+  const hasCredentials = config.user !== undefined || config.pass !== undefined;
+  if ((config.user === undefined) !== (config.pass === undefined)) throw new Error("SMTP authentication needs both a username and password.");
+  if (config.secure !== true && config.startTls !== true
+    && (hasCredentials || (config.host !== "127.0.0.1" && config.host !== "::1"))) {
+    throw new Error("SMTP requires TLS for credentials and non-loopback servers.");
+  }
+  if (/[\r\n<>\0]/.test(config.from) || /[\r\n<>\0]/.test(config.to) || /[\r\n\0]/.test(message.subject)) {
+    throw new Error("SMTP address or subject contains invalid control characters.");
+  }
   const socket = config.secure === true
     ? await connectTls(config)
     : connect(config.port, config.host);
   const session = new SmtpSession(socket, config.host, 30_000);
   try {
     await session.expect(/^220/);
-    await session.command(`EHLO clone-ai.local`, /^2\d\d/);
+    const greeting = await session.command(`EHLO clone-ai.local`, /^2\d\d/);
     if (config.secure !== true && config.startTls === true) {
-      const features = session.banner.toLocaleLowerCase();
-      if (features.includes("starttls")) {
-        await session.command("STARTTLS", /^220/);
-        await session.upgradeTls(config);
-        await session.command(`EHLO clone-ai.local`, /^2\d\d/);
-      }
+      if (!/^250[- ]STARTTLS(?:\s|$)/im.test(greeting)) throw new Error("SMTP server did not advertise required STARTTLS.");
+      await session.command("STARTTLS", /^220/);
+      await session.upgradeTls(config);
+      await session.command(`EHLO clone-ai.local`, /^2\d\d/);
     }
     if (config.user !== undefined && config.pass !== undefined) {
       await session.command("AUTH LOGIN", /^3\d\d/);
       await session.command(Buffer.from(config.user).toString("base64"), /^3\d\d/);
-      await session.command(Buffer.from(config.pass).toString("base64"), /^2\d\d|^3\d\d/);
+      await session.command(Buffer.from(config.pass).toString("base64"), /^2\d\d/);
     }
     await session.command(`MAIL FROM:<${config.from}>`, /^2\d\d/);
     await session.command(`RCPT TO:<${config.to}>`, /^2\d\d/);
@@ -84,26 +91,34 @@ function toData(config: SmtpConfig, message: SmtpMessage): string {
 
 function connectTls(config: SmtpConfig): Promise<TLSSocket> {
   return new Promise((resolve, reject) => {
-    const socket = tlsConnect({ host: config.host, port: config.port, rejectUnauthorized: true }, () => resolve(socket));
+    const socket = tlsConnect({
+      host: config.host, port: config.port, rejectUnauthorized: true,
+      ...(isIP(config.host) ? {} : { servername: config.host }),
+      checkServerIdentity: (_hostname, certificate) => checkServerIdentity(config.host, certificate),
+    }, () => resolve(socket));
     socket.once("error", reject);
   });
 }
 
 class SmtpSession {
-  readonly #socket: Socket | TLSSocket;
+  #socket: Socket | TLSSocket;
   readonly #timeoutMs: number;
+  readonly #host: string;
   #buffer = "";
   #lines: string[] = [];
-  banner = "";
-  #pending: Array<{ resolve: (line: string) => void; reject: (error: Error) => void }> = [];
+  #replyLines: string[] = [];
+  #failure?: Error;
+  #pending: Array<{ expected: RegExp; resolve: (line: string) => void; reject: (error: Error) => void }> = [];
+  readonly #onSocketData = (chunk: Buffer): void => this.#onData(chunk.toString("utf8"));
+  readonly #onSocketTimeout = (): void => this.#fail(new Error(`SMTP ${this.#host} timed out.`));
+  readonly #onSocketError = (error: Error): void => this.#fail(error);
+  readonly #onSocketClose = (): void => this.#fail(new Error(`SMTP ${this.#host} closed the connection.`));
 
   constructor(socket: Socket | TLSSocket, host: string, timeoutMs: number) {
     this.#socket = socket;
     this.#timeoutMs = timeoutMs;
-    socket.setTimeout(timeoutMs);
-    socket.on("data", (chunk) => this.#onData(chunk.toString("utf8")));
-    socket.on("timeout", () => this.#fail(new Error(`SMTP ${host} timed out.`)));
-    socket.on("error", (error) => this.#fail(error));
+    this.#host = host;
+    this.#attach(socket);
   }
 
   async command(line: string, expected: RegExp): Promise<string> {
@@ -121,31 +136,41 @@ class SmtpSession {
 
   expect(expected: RegExp): Promise<string> {
     return new Promise((resolve, reject) => {
-      this.#pending.push({ resolve, reject });
-      this.#flush(expected);
+      if (this.#failure !== undefined) { reject(this.#failure); return; }
+      this.#pending.push({ expected, resolve, reject });
+      this.#flush();
     });
   }
 
   upgradeTls(config: SmtpConfig): Promise<void> {
     return new Promise((resolve, reject) => {
       const plain = this.#socket as Socket;
-      plain.removeAllListeners("data");
-      const tls = tlsConnect({ socket: plain, rejectUnauthorized: true }, () => {
-        this.#attach(tls);
-        resolve();
+      this.#detach(plain);
+      const tls = tlsConnect({
+        socket: plain, rejectUnauthorized: true,
+        ...(isIP(config.host) ? {} : { servername: config.host }),
+        checkServerIdentity: (_hostname, certificate) => checkServerIdentity(config.host, certificate),
       });
+      this.#socket = tls;
+      this.#attach(tls);
+      tls.once("secureConnect", () => resolve());
       tls.once("error", reject);
     });
   }
 
   #attach(socket: Socket | TLSSocket): void {
-    (this.#socket as Socket).removeAllListeners?.();
     socket.setTimeout(this.#timeoutMs);
-    socket.on("data", (chunk) => this.#onData(chunk.toString("utf8")));
-    socket.on("timeout", () => this.#fail(new Error("SMTP timed out during TLS.")));
-    socket.on("error", (error) => this.#fail(error));
-    // @ts-expect-error reassign readonly for TLS upgrade 升级 TLS 时重新赋值 readonly 字段。
-    this.#socket = socket;
+    socket.on("data", this.#onSocketData);
+    socket.on("timeout", this.#onSocketTimeout);
+    socket.on("error", this.#onSocketError);
+    socket.on("close", this.#onSocketClose);
+  }
+
+  #detach(socket: Socket | TLSSocket): void {
+    socket.off("data", this.#onSocketData);
+    socket.off("timeout", this.#onSocketTimeout);
+    socket.off("error", this.#onSocketError);
+    socket.off("close", this.#onSocketClose);
   }
 
   #onData(chunk: string): void {
@@ -157,26 +182,22 @@ class SmtpSession {
       if (line.length === 0) continue;
       this.#lines.push(line);
     }
-    const expected = this.#pending[0] !== undefined ? undefined : undefined;
-    void expected;
-    this.#flushAll();
+    this.#flush();
   }
 
-  #flushAll(): void {
-    for (const _ of this.#lines) this.#flush(undefined);
-  }
-
-  #flush(expected: RegExp | undefined): void {
+  #flush(): void {
     while (this.#pending.length > 0 && this.#lines.length > 0) {
       const line = this.#lines.shift()!;
+      this.#replyLines.push(line);
       // A reply line ending in '-' continues the multi-line block; only the
       // final line (space separator) completes the response.
       // 以 '-' 结尾的响应行是多行块的续行；只有空格分隔的最终行才算完整响应。
       if (line.length >= 4 && line[3] === "-") continue;
-      this.banner = line;
+      const reply = this.#replyLines.join("\n");
+      this.#replyLines = [];
       const pending = this.#pending.shift()!;
-      if (expected === undefined || expected.test(line)) {
-        pending.resolve(line);
+      if (pending.expected.test(line)) {
+        pending.resolve(reply);
       } else {
         pending.reject(new Error(`SMTP unexpected reply: ${line}`));
       }
@@ -184,6 +205,7 @@ class SmtpSession {
   }
 
   #fail(error: Error): void {
+    this.#failure = error;
     for (const pending of this.#pending.splice(0)) pending.reject(error);
   }
 }

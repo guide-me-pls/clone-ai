@@ -95,8 +95,8 @@ test("a supervisor coordinates child agents, resumes after approval, and preserv
 
   await runtime.grantApproval(run.id, "send");
   const secondAttempt = await runtime.execute(run.id, agents);
-  assert.equal(secondAttempt.status, "completed");
-  assert.equal(secondAttempt.verification?.passed, true);
+  assert.equal(secondAttempt.status, "waiting_review");
+  assert.equal((await runtime.reviewVerification(run.id, "accept")).verification?.passed, true);
 
   const candidates = await memory.processNext();
   assert.equal(candidates.length, 1);
@@ -118,10 +118,11 @@ test("a supervisor coordinates child agents, resumes after approval, and preserv
   assert.ok(eventTypes.includes("subagent.dispatched"));
   assert.ok(eventTypes.includes("subagent.completed"));
   assert.ok(eventTypes.includes("subagent.verified"));
-  assert.deepEqual(eventTypes.slice(-3), [
+  assert.deepEqual(eventTypes.slice(-4), [
     "run.status_changed",
     "memory.candidate.requested",
     "memory.candidate.proposed",
+    "memory.candidate.extracted",
   ]);
 });
 
@@ -238,7 +239,7 @@ test("an external step runs in an isolated workspace and cannot rewrite the owne
   await runtime.grantApproval(run.id, "send");
   const result = await runtime.execute(run.id, new StaticAgentRegistry([writer]));
 
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "waiting_review");
   assert.ok(writer.seenWorkspace);
   assert.notEqual(writer.seenWorkspace, workspace);
   assert.equal(writer.seenIsolation?.kind, "directory_copy");

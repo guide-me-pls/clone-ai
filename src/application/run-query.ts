@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createConfiguredAgentRegistry } from "../workers/configured-worker-registry.ts";
 import { workCapabilitiesForRole } from "../workers/capabilities.ts";
 import { WorkerRegistry } from "../workers/worker-registry.ts";
-import type { AgentRegistry, PlanStep, TriggerKind } from "../core/contracts.ts";
+import type { AgentRegistry, MemoryCandidate, PlanStep, TriggerKind } from "../core/contracts.ts";
 import { createRuntimeAssembly } from "../core/runtime-factory.ts";
 import type { CloneRuntime, DispatchResult } from "../core/runtime.ts";
 import type { JournalStore } from "../core/journal.ts";
@@ -20,6 +20,8 @@ import { describeWorkers } from "../main-agent/worker-descriptors.ts";
 import { JournalDispatchRecorder } from "../main-agent/dispatch-recorder.ts";
 import type { DispatchBlockedCode } from "../main-agent/dispatch-contracts.ts";
 import { recordUsage } from "../observability/usage.ts";
+import { logJson } from "../observability/json-log.ts";
+import type { MemoryPipeline } from "../memory/memory-pipeline.ts";
 
 export interface QueryRunResult {
   runId: string;
@@ -101,7 +103,7 @@ async function runQueryWithin(
   // store here would let this path act on memories the owner never promoted.
   // 与 Kernel 派发时使用的同一个受治理 Store。若在此处从第二个 Store 召回，这条路径就会
   // 基于所有者从未提升过的记忆行事。
-  const memoryStore = new GovernedMemorySource(paths.dataDirectory);
+  const memoryStore = new GovernedMemorySource(paths.dataDirectory, 4, journal);
   const recalled = await memoryStore.recall(query, run.id);
   await runtime.recordMemoryRecall(run.id, query, recalled.map((item) => ({
     id: item.memory.id,
@@ -210,7 +212,7 @@ async function runQueryWithin(
     failureCatalog,
   });
   const result = await executeClaimingRun(journal, runtime, run.id, registry);
-  const candidates = result.status === "completed" ? await memory.processNext() : [];
+  const candidates = result.status === "completed" ? await processMemorySafely(memory, result.run.id) : [];
   return {
     ...toQueryResult(runtime, result, candidates.length),
     routing: {
@@ -244,13 +246,35 @@ async function executeClaimingRun(
 ): Promise<DispatchResult> {
   const ownerId = `direct-${process.pid}-${randomUUID().slice(0, 8)}`;
   const leaseMs = 10 * 60_000;
-  await journal.claimRun?.({ runId, ownerId, leaseMs });
+  const controller = new AbortController();
+  let ownsClaim = false;
+  if (journal.claimRun !== undefined) {
+    const claim = await journal.claimRun({ runId, ownerId, leaseMs });
+    if (claim === undefined) {
+      await runtime.refresh();
+      const run = runtime.getRun(runId);
+      return { run, status: run.status };
+    }
+    ownsClaim = true;
+  }
   const renew = setInterval(() => {
-    void journal.renewClaim?.({ runId, ownerId, leaseMs })?.catch(() => undefined);
-  }, 60_000);
+    if (!ownsClaim) return;
+    if (journal.renewClaim === undefined) { controller.abort(); return; }
+    void journal.renewClaim({ runId, ownerId, leaseMs }).then((renewed) => {
+      if (!renewed) controller.abort();
+    }, () => controller.abort());
+  }, 5_000);
   renew.unref();
   try {
-    return await runtime.execute(runId, registry);
+    // A competing consumer may have finished between planning and this claim.
+    // A lease protects a fresh read; it does not make an old projection current.
+    // 其他消费者可能已完成；领取只保护重读，不会自动刷新旧投影。
+    await runtime.refresh();
+    const run = runtime.getRun(runId);
+    if (run.status !== "queued" && run.status !== "waiting_approval") {
+      return { run, status: run.status };
+    }
+    return await runtime.execute(runId, registry, { signal: controller.signal, ...(ownsClaim ? { ownerId } : {}) });
   } finally {
     clearInterval(renew);
     await journal.releaseClaim?.({ runId, ownerId })?.catch(() => undefined);
@@ -292,7 +316,7 @@ export async function approveQueryRun(
         failureCatalog,
       });
     const result = await executeClaimingRun(assembly.journal, runtime, run.id, registry);
-    const candidates = result.status === "completed" ? await memory.processNext() : [];
+    const candidates = result.status === "completed" ? await processMemorySafely(memory, result.run.id) : [];
     // An approved run can serve a stated commitment; settling it here is what
     // lets the owner see "met" (or the next occurrence) immediately after
     // approving, instead of on the next maintenance tick.
@@ -331,6 +355,39 @@ export async function rejectQueryRun(
     await runtime.failRun(run.id, "Rejected by the owner from the local companion.");
     return toQueryResult(runtime, { run: runtime.getRun(run.id), status: "failed" }, 0);
   } finally {
+    assembly.close();
+  }
+}
+
+export async function reviewQueryRun(
+  dataDirectory: string,
+  runId: string,
+  decision: "accept" | "reject",
+  options: QueryWorkflowOptions = {},
+): Promise<QueryRunResult> {
+  const assembly = await createRuntimeAssembly({
+    dataDirectory,
+    ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+  });
+  const ownerId = `review-${process.pid}-${randomUUID().slice(0, 8)}`;
+  let ownsClaim = false;
+  try {
+    if (assembly.journal.claimRun !== undefined) {
+      const claim = await assembly.journal.claimRun({ runId, ownerId, leaseMs: 60_000 });
+      if (claim === undefined) {
+        await assembly.runtime.refresh();
+        const run = assembly.runtime.getRun(runId);
+        return toQueryResult(assembly.runtime, { run, status: run.status }, 0);
+      }
+      ownsClaim = true;
+    }
+    await assembly.runtime.refresh();
+    const result = await assembly.runtime.reviewVerification(runId, decision, ownsClaim ? { ownerId } : {});
+    const candidates = result.status === "completed" ? await processMemorySafely(assembly.memory, result.run.id) : [];
+    await reconcileCommitments(assembly.journal).catch(() => undefined);
+    return toQueryResult(assembly.runtime, result, candidates.length);
+  } finally {
+    if (ownsClaim) await assembly.journal.releaseClaim?.({ runId, ownerId })?.catch(() => undefined);
     assembly.close();
   }
 }
@@ -374,4 +431,15 @@ function toQueryResult(runtime: CloneRuntime, result: DispatchResult, memoryCand
     subagentsCompleted: runtime.getSubagentsForRun(result.run.id).filter((subagent) => subagent.status === "completed").length,
     memoryCandidatesProposed,
   };
+}
+
+async function processMemorySafely(memory: MemoryPipeline, runId: string): Promise<MemoryCandidate[]> {
+  try {
+    return await memory.processNext(runId);
+  } catch (error: unknown) {
+    logJson("error", "Memory extraction failed; the completed task is unaffected and the job remains pending", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
 }

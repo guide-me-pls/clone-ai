@@ -61,7 +61,7 @@ export function assignWorkersPerStep(
   workers: readonly WorkerDescriptor[],
 ): PlanRoutingResult {
   const assignments: StepAssignment[] = [];
-  const eligible = workers.filter((worker) => worker.enabled && worker.installed);
+  const eligible = workers.filter((worker) => worker.enabled && worker.installed && !worker.executionBlocked);
   const byId = new Map(eligible.map((worker) => [worker.id, worker]));
   const fallback = byId.get(decision.selectedAgentId);
 

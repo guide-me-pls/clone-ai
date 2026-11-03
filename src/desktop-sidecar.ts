@@ -1,13 +1,19 @@
 import { join } from "node:path";
 
 import { startCompanionServer } from "./companion-server.ts";
+import { resolveDesktopLaunchConfig } from "./desktop/launch-config.ts";
 
 const pkgProcess = process as NodeJS.Process & { pkg?: unknown };
 async function main(): Promise<void> {
-  const clientPath = pkgProcess.pkg === undefined
+  const launch = await resolveDesktopLaunchConfig();
+  const fallbackClientPath = pkgProcess.pkg === undefined
     ? join(process.cwd(), "apps", "desktop", "ui", "index.html")
     : join(__dirname, "..", "ui", "index.html");
-  const companion = await startCompanionServer({ port: 0, clientPath });
+  const companion = await startCompanionServer({
+    port: 0,
+    clientPath: launch.clientPath ?? fallbackClientPath,
+    ...(launch.workspacePath === undefined ? {} : { workspacePath: launch.workspacePath }),
+  });
 
   // The Tauri shell consumes this one machine-readable line before creating its window.
   // Tauri Shell 会在创建窗口前读取这一行机器可读信息。

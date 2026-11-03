@@ -200,7 +200,7 @@ export const BENCH_TASKS: BenchTask[] = [
         role: "maker",
         title: "Implement add.js and test.js",
         objective: "Write lib/add.js exporting a function add(a,b) that sums numbers, and test/add.test.mjs that imports it and asserts add(2,3)===5. Run the test with node and confirm it passes. Do not modify package.json.",
-        requiredCapabilities: ["implementation", "filesystem_read", "filesystem_write", "external_action"],
+        requiredCapabilities: ["implementation", "filesystem_read", "filesystem_write"],
         expectedArtifacts: [
           { id: "lib", kind: "artifact", description: "lib/add.js", required: true },
           { id: "test", kind: "artifact", description: "test/add.test.mjs", required: true },

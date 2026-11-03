@@ -5,7 +5,8 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { runQuery } from "../src/application/run-query.ts";
-import { createJournalStore } from "../src/core/sqlite-journal.ts";
+import { createJournalStore, SqliteJournalStore } from "../src/core/sqlite-journal.ts";
+import { createRuntimeAssembly } from "../src/core/runtime-factory.ts";
 import { defaultWorkerProfiles } from "../src/config/worker-settings.ts";
 import { createScriptedAgentRegistry, ScriptedExecutionAdapter } from "./fixtures/scripted-adapter.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
@@ -49,9 +50,62 @@ test("an explicit request reaches the worker the owner named", async (t) => {
     { agents: createScriptedAgentRegistry(), workspacePath: dataDirectory },
   );
 
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "waiting_review");
   assert.equal(result.routing?.selectedAgentId, "evidence-reviewer");
   assert.equal(result.routing?.source, "explicit");
+});
+
+test("a direct query never dispatches after another executor rejects its claim", async (t) => {
+  const dataDirectory = await home(t);
+  const original = SqliteJournalStore.prototype.claimRun;
+  let rejected = 0;
+  SqliteJournalStore.prototype.claimRun = async function (input) {
+    if (input.ownerId.startsWith("direct-")) {
+      rejected += 1;
+      return undefined;
+    }
+    return original.call(this, input);
+  };
+  t.after(() => { SqliteJournalStore.prototype.claimRun = original; });
+
+  const result = await runQuery(dataDirectory, "请让 evidence-reviewer 复核这份材料", {}, undefined, {
+    agents: createScriptedAgentRegistry(), workspacePath: dataDirectory,
+  });
+  const events = await journalEvents(dataDirectory);
+  assert.equal(rejected, 1);
+  assert.equal(result.status, "queued");
+  assert.equal(events.some((event) => event.type === "execution.started" || event.type === "subagent.dispatched"), false);
+});
+
+test("a direct query rechecks a run that another executor completed before its claim", async (t) => {
+  const dataDirectory = await home(t);
+  const agents = createScriptedAgentRegistry();
+  const original = SqliteJournalStore.prototype.claimRun;
+  let interrupted = false;
+  SqliteJournalStore.prototype.claimRun = async function (input) {
+    if (input.ownerId.startsWith("direct-") && !interrupted) {
+      interrupted = true;
+      const competingOwner = "other-consumer";
+      assert.ok(await original.call(this, { ...input, ownerId: competingOwner }));
+      const other = await createRuntimeAssembly({ dataDirectory, workspacePath: dataDirectory });
+      try {
+        assert.equal((await other.runtime.execute(input.runId, agents)).status, "waiting_review");
+        assert.equal((await other.runtime.reviewVerification(input.runId, "accept")).status, "completed");
+      } finally {
+        other.close();
+        await this.releaseClaim({ runId: input.runId, ownerId: competingOwner });
+      }
+    }
+    return original.call(this, input);
+  };
+  t.after(() => { SqliteJournalStore.prototype.claimRun = original; });
+
+  const result = await runQuery(dataDirectory, "请让 evidence-reviewer 复核这份材料", {}, undefined, {
+    agents, workspacePath: dataDirectory,
+  });
+  const events = await journalEvents(dataDirectory);
+  assert.equal(result.status, "completed");
+  assert.equal(events.filter((event) => event.type === "execution.started" || event.type === "subagent.dispatched").length, 1);
 });
 
 test("a named worker that cannot run blocks the query instead of substituting", async (t) => {
@@ -133,7 +187,7 @@ test("routing without an explicit request still records why a worker was chosen"
     workspacePath: dataDirectory,
   });
 
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "waiting_review");
   assert.equal(result.routing?.selectedAgentId, "context-researcher");
   assert.equal(result.routing?.source, "rule");
 });

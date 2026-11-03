@@ -6,6 +6,7 @@ import {
   injectCompanionToken,
   isLoopbackHostname,
   loopbackHostname,
+  normalizeCompanionHost,
   originIsLoopback,
   tokensMatch,
 } from "../src/companion-auth.ts";
@@ -15,6 +16,23 @@ test("loopback hostnames are the only accepted Host values", () => {
   assert.equal(loopbackHostname("localhost:4317"), "localhost");
   assert.equal(isLoopbackHostname("127.0.0.1"), true);
   assert.equal(isLoopbackHostname("evil.example"), false);
+  assert.equal(loopbackHostname("[::1]:4317"), "::1");
+  assert.equal(originIsLoopback("http://[::1]:4317", 4317), true);
+});
+
+test("a remote Host cannot retrieve the HTML containing the local bearer", () => {
+  const result = authorizeCompanionRequest({
+    method: "GET", pathname: "/", hostHeader: "evil.example:4317", originHeader: undefined,
+    authorization: undefined, token: "secret", listenPort: 4317,
+  });
+  assert.deepEqual(result, { ok: false, status: 403, error: "Companion APIs are loopback-only." });
+});
+
+test("the local companion only accepts a literal loopback bind", () => {
+  assert.throws(() => normalizeCompanionHost("0.0.0.0"), /loopback/i);
+  assert.throws(() => normalizeCompanionHost("192.0.2.1"), /loopback/i);
+  assert.equal(normalizeCompanionHost("localhost"), "127.0.0.1");
+  assert.equal(normalizeCompanionHost("::1"), "::1");
 });
 
 test("an Origin on another host or port is refused", () => {

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
+import { delimiter, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 
 import { listEffectiveProviderConfigs } from "../config/provider-config-store.ts";
@@ -19,6 +19,8 @@ export interface WorkerProviderStatus {
   installed: boolean;
   installable: boolean;
   userConfigured: boolean;
+  executionBlocked: boolean;
+  hostAccess?: "unrestricted";
   version?: string;
 }
 
@@ -52,26 +54,14 @@ export class WorkerRegistry {
     await execFileAsync(commandForPlatform(installer.command), installer.args, { windowsHide: true, timeout: 120_000 });
     const provider = (await this.list()).find((candidate) => candidate.id === id);
     if (provider === undefined) throw new Error(`Provider ${id} disappeared after installation.`);
+    if (!provider.installed) throw new Error(`Provider ${id} was not found on PATH after installation.`);
     return provider;
   }
 }
 
 async function inspect(config: Awaited<ReturnType<typeof listEffectiveProviderConfigs>>[number], userConfigured: boolean): Promise<WorkerProviderStatus> {
   const command = executableFor(config.command);
-  try {
-    const result = await execFileAsync(command, ["--version"], {
-      encoding: "utf8",
-      shell: process.platform === "win32" && command.endsWith(".cmd"),
-      timeout: 4_000,
-      windowsHide: true,
-    });
-    const version = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().split(/\r?\n/)[0];
-    return view(config, userConfigured, true, version);
-  } catch (error: unknown) {
-    const result = error as { stdout?: string; stderr?: string };
-    const version = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim().split(/\r?\n/)[0];
-    return view(config, userConfigured, false, version.length > 0 ? version : undefined);
-  }
+  return view(config, userConfigured, executableExists(command));
 }
 
 function view(
@@ -91,6 +81,8 @@ function view(
     installed,
     installable: installers[config.id] !== undefined,
     userConfigured,
+    executionBlocked: config.hostAccess !== "unrestricted",
+    ...(config.hostAccess === "unrestricted" ? { hostAccess: "unrestricted" as const } : {}),
     ...(version === undefined ? {} : { version }),
   };
 }
@@ -103,4 +95,24 @@ function executableFor(command: string): string {
   if (process.platform !== "win32") return command;
   const npmExecutable = join(process.env.APPDATA ?? "", "npm", `${command}.cmd`);
   return existsSync(npmExecutable) ? npmExecutable : command;
+}
+
+function executableExists(command: string): boolean {
+  const hasPath = isAbsolute(command) || command.includes("/") || command.includes("\\");
+  const paths = hasPath ? [command] : (process.env.PATH ?? process.env.Path ?? "").split(delimiter).filter(Boolean).map((directory) => join(directory, command));
+  const extensions = process.platform === "win32" && !/\.[A-Za-z0-9]+$/.test(command)
+    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")
+    : [""];
+  for (const path of paths) {
+    for (const extension of extensions) {
+      try {
+        const candidate = `${path}${extension}`;
+        accessSync(candidate, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+        if (statSync(candidate).isFile()) return true;
+      } catch {
+        continue;
+      }
+    }
+  }
+  return false;
 }

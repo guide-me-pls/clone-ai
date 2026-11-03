@@ -16,6 +16,7 @@ export type RunStatus =
   | "running"
   | "waiting_approval"
   | "verifying"
+  | "waiting_review"
   | "completed"
   | "failed"
   | "cancelled";
@@ -204,6 +205,8 @@ export interface SubagentRun {
    */
   providerId?: string;
   sessionId?: string;
+  /** Trusted adapter attestation; absence means interrupted work cannot be replayed safely. 可信 Adapter 对重放安全的声明；缺省时中断后不得安全重跑。 */
+  retrySafeAfterInterruption?: boolean;
   /** Durable pre-dispatch Workspace checkpoint used for black-box recovery. 黑盒恢复所用的派发前持久 Workspace 检查点。 */
   workspaceCheckpoint?: string;
   workspacePath?: string;
@@ -230,6 +233,9 @@ export interface SubagentVerificationResult {
 export interface VerificationResult {
   runId: string;
   passed: boolean;
+  needsReview?: boolean;
+  unverifiedCriteria?: string[];
+  reviewedBy?: "owner";
   summary: string;
   checkedEvidenceIds: string[];
   createdAt: string;
@@ -292,6 +298,7 @@ export type JournalEventType =
   | "verification.completed"
   | "memory.candidate.requested"
   | "memory.candidate.proposed"
+  | "memory.candidate.extracted"
   | "memory.candidate.promoted"
   | "memory.candidate.rejected"
   // The owner writing a memory by hand. Distinct from a promoted candidate:
@@ -301,6 +308,7 @@ export type JournalEventType =
   | "memory.updated"
   | "memory.archived"
   | "memory.restored"
+  | "memory.mutation.discarded"
   | "memory.recalled"
   // Personal state is journal-projected like every other durable fact, so the
   // owner's model of themselves survives a deleted projection.
@@ -422,6 +430,8 @@ export interface RuntimeCapabilities {
   cancellation: boolean;
   approvalCallback: boolean;
   parallelAssignments: boolean;
+  /** Only a trusted adapter with enforced replay safety may opt in. 只有可信且真正保证重放安全的 Adapter 可以启用。 */
+  retrySafeAfterInterruption?: boolean;
   /**
    * Domain abilities used by the dispatcher; tool access remains adapter-owned.
    * Dispatcher 使用的领域能力；Tool 权限仍由 Adapter 自己持有。

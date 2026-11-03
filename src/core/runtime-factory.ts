@@ -70,7 +70,10 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
     // call per completed task, so the deterministic worker stays the default.
     // 后台 Agent 提炼记忆是显式开启的：每完成一个任务会花一次真实模型调用，因此
     // 默认仍使用确定性 Worker。
-    process.env.CLONE_AI_MEMORY_MINING === "1" ? new AgentMemoryWorker() : undefined,
+    process.env.CLONE_AI_MEMORY_MINING === "1"
+      ? new AgentMemoryWorker({ allowUnrestrictedHost: process.env.CLONE_AI_MEMORY_MINING_UNRESTRICTED === "1" })
+      : undefined,
+    { lockPath: join(paths.dataDirectory, "memory-extraction-lock") },
   );
   const runtime = new CloneRuntime({
     journal,
@@ -80,7 +83,7 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
     failureCatalog,
     // Recall comes from the governed store only: promoted memories, never raw
     // candidates. 召回只来自受治理的 Store：只有已提升的记忆，绝不包含原始候选。
-    memorySource: new GovernedMemorySource(paths.dataDirectory),
+    memorySource: new GovernedMemorySource(paths.dataDirectory, 4, journal),
     workspacePath: paths.workspacePath,
     workspaceCheckpointStore: new JsonWorkspaceCheckpointStore(paths.checkpointsDirectory),
     workspaceCheckpointDirectory: join(paths.dataDirectory, "checkpoints"),

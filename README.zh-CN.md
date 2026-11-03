@@ -10,6 +10,19 @@
 
 ---
 
+## 当前安全边界
+
+- 黑盒 CLI Worker **默认禁止运行**：当前没有由 Clone AI 强制的操作系统沙箱。桌面设置可在明确风险确认后允许某个 Provider 不受限地使用本机权限；这不是沙箱，内部工具也不受逐项审批。
+- 黑盒 Worker 不承接已标记的外部或不可逆动作。安全的外部动作 Connector 尚未实现。
+- 无法自动核验的验收标准进入 `waiting_review`，由所有者查看证据并接受或拒绝；可用 `clone-ai review <runId>` 查看。
+- 定时实例保存在 `schedules.sqlite3`；旧 `schedules.json` 只导入一次并保留为备份。启动后中断、结果不明的实例需要人工核对，不能自动重试。
+- 记忆与审计数据仍以本地 Markdown/SQLite 保存，未实现应用层加密或完整擦除。隐藏会话和归档记忆不等于删除数据；远程模型请求可能把相关上下文发送给服务商。
+- 可选的 CLI 记忆提炼需要 `CLONE_AI_MEMORY_MINING=1`，并额外设置 `CLONE_AI_MEMORY_MINING_UNRESTRICTED=1` 明确允许主机权限；这不是沙箱。提炼失败会保留待重试任务，不会伪装成“没有候选”。
+- 取消会阻止旧执行者继续写入日志，并尝试停止 Worker；进程终止只是尽力而为，不能证明未隔离进程没有产生外部影响。
+- 不受限黑盒任务中断或失败后不会自动重跑：工作区没有变化，也不能证明它没有产生外部动作。
+- 可选的 SMTP 日报记录持久发送状态；结果未知时应先核对邮箱，再决定重试或忽略。SMTP 接收不等于最终送达；远程 SMTP 必须使用 TLS，`reporting.json` 中的凭据仍是明文。
+- Main Agent 不能用对话引文自行授权软件安装，也不能直接保存模型推断的目标、承诺或边界；这些结构化提议的独立用户审核尚未实现。已审核的记忆仍可在界面手动填写。
+
 ## 为什么是 clone-ai？
 
 今天的 AI 已经很有能力，但大多缺乏连续性。每次新的对话都从 Prompt 开始；人不得不承担系统的
@@ -98,6 +111,22 @@ Claude Code、Codex、Pi、opencode 与未来 Agent 每次都从全新的进程�
 是可选优化，不能成为事实来源。
 
 产品客户端的方向是可安装的桌面数字分身，不是托管网页。`npm run companion:debug` 只会打开本地的桌面伴随预览，让开发者检查 daemon 边界；它既不是最终发布的桌面壳，也不是对外产品入口。详见[初始 Runtime](docs/initial-runtime.zh-CN.md#桌面端方向)。
+
+### 运行 macOS 桌面应用（Apple Silicon）
+
+在安装了 Xcode 或 Command Line Tools 的 Apple Silicon Mac 上，构建自带运行时的应用：
+
+```bash
+npm run desktop:mac:build
+```
+
+构建后双击 `dist/Clone AI.app`，或分发 `dist/Clone AI-macOS-arm64.dmg`（也可使用 `.zip` 压缩包）。
+应用会打开原生 WebKit 窗口，不需要单独启动 Node.js。
+当前产物使用 ad-hoc 签名，尚未经过 Apple notarization；最低要求 macOS 13.5，且只构建
+Apple Silicon 版本。应用默认以 `~/Documents/Clone AI` 作为工作目录，在设置中改变后会
+保存在 `~/.clone`。
+
+应用运行时不要删除 `dist/Clone AI.app`；替换或移动应用前请先关闭应用。
 
 ## 安全承诺
 

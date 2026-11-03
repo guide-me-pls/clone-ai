@@ -1,19 +1,15 @@
 /**
- * DailyReportRunner: sends at most one report email per local day.
- *
- * The "last sent" marker is a small JSON file, so a restart in the middle of
- * the day does not double-send. Sending is deliberately conservative: no
- * configured SMTP, no email.
- *
- * DailyReportRunner：每个本地日最多发送一封报告邮件。
- *
- * "上次发送"标记是一个小 JSON 文件，因此当天中途重启不会重复发送。发送刻意保守：
- * 未配置 SMTP 就不发邮件。
+ * Daily reports use a durable delivery record, not a post-send marker. A
+ * process that disappears after sending starts leaves an unknown outcome;
+ * another process must not send the same report without an owner decision.
+ * 日报在发送前写入持久记录。发送开始后进程中断会留下未知结果，其他进程不得盲目重发。
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import type { JournalStore } from "../core/journal.ts";
+import { workspaceExecutionLock } from "../core/workspace-lock.ts";
 import type { SmtpConfig } from "./smtp-sender.ts";
 import { sendEmail } from "./smtp-sender.ts";
 import { buildDailyReport } from "./daily-report.ts";
@@ -34,42 +30,96 @@ export interface DailyReportRunnerOptions {
   now?: () => Date;
 }
 
+export interface UnknownReportDelivery {
+  day: string;
+  status: "unknown";
+}
+
+type DeliveryStatus = "ready" | "dispatching" | "unknown" | "sent" | "dismissed";
+
 export class DailyReportRunner {
   readonly #journal: JournalStore;
   readonly #settings: DailyReportSettings;
-  readonly #markerPath: string;
+  readonly #legacyPath: string;
+  readonly #databasePath: string;
+  readonly #lockPath: string;
   readonly #opportunities: () => Promise<OpportunityCard[]>;
   readonly #now: () => Date;
 
   constructor(options: DailyReportRunnerOptions) {
     this.#journal = options.journal;
     this.#settings = options.settings;
-    this.#markerPath = join(options.dataDirectory, "reporting", "last-sent.json");
+    this.#legacyPath = join(options.dataDirectory, "reporting", "last-sent.json");
+    this.#databasePath = join(options.dataDirectory, "reporting", "deliveries.sqlite3");
+    this.#lockPath = join(options.dataDirectory, "reporting", "delivery-lock");
     this.#opportunities = options.opportunities;
     this.#now = options.now ?? (() => new Date());
   }
 
-  /** Called on a tick; sends only when the local day changed since last send. 在 tick 中调用；仅当本地日变化后才发送。 */
-  async maybeSend(): Promise<"sent" | "skipped" | "disabled"> {
+  /** Dispatches once or reports an uncertain previous outcome. 最多派发一次，或返回上次结果未知。 */
+  async maybeSend(): Promise<"sent" | "skipped" | "disabled" | "unknown"> {
     if (!this.#settings.enabled) return "disabled";
     const now = this.#now();
     const hour = this.#settings.hour;
     if (hour !== undefined) {
-      if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
-        throw new Error("Daily report hour must be an integer 0-23.");
-      }
-      // hour is local. Sending before it would ignore the owner's chosen time.
-      // hour 是本地时。在此之前发送等于忽略所有者选定的时刻。
+      if (!Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error("Daily report hour must be an integer 0-23.");
       if (now.getHours() < hour) return "skipped";
     }
-    const today = localDayKey(now);
-    if (today === await this.#lastSentDay()) return "skipped";
-    await this.#send(now);
-    await this.#remember(today);
-    return "sent";
+    return workspaceExecutionLock.run(this.#lockPath, () => this.withDatabase(async (db) => {
+      const day = localDayKey(now);
+      const row = db.prepare("SELECT status FROM report_deliveries WHERE day = ?").get(day) as { status: DeliveryStatus } | undefined;
+      if (row?.status === "sent" || row?.status === "dismissed") return "skipped";
+      if (row?.status === "dispatching" || row?.status === "unknown") {
+        this.markUnknown(db, day);
+        return "unknown";
+      }
+      if (row !== undefined && row.status !== "ready") throw new Error("The report delivery has an invalid status.");
+      db.prepare(
+        "INSERT INTO report_deliveries (day, status, updated_at) VALUES (?, 'dispatching', ?) "
+        + "ON CONFLICT(day) DO UPDATE SET status = 'dispatching', updated_at = excluded.updated_at",
+      ).run(day, new Date().toISOString());
+      try {
+        await this.send(now);
+        db.prepare("UPDATE report_deliveries SET status = 'sent', updated_at = ? WHERE day = ?")
+          .run(new Date().toISOString(), day);
+        return "sent";
+      } catch (error) {
+        this.markUnknown(db, day);
+        throw error;
+      }
+    }));
   }
 
-  async #send(now: Date): Promise<void> {
+  async unknownDeliveries(): Promise<UnknownReportDelivery[]> {
+    return workspaceExecutionLock.run(this.#lockPath, () => this.withDatabase(async (db) => {
+      db.prepare("UPDATE report_deliveries SET status = 'unknown', updated_at = ? WHERE status = 'dispatching'")
+        .run(new Date().toISOString());
+      const rows = db.prepare("SELECT day FROM report_deliveries WHERE status = 'unknown' ORDER BY day").all() as Array<{ day: string }>;
+      return rows.map((row) => ({ day: row.day, status: "unknown" as const }));
+    }));
+  }
+
+  async resolveDelivery(day: string, resolution: "retry" | "dismiss"): Promise<void> {
+    await workspaceExecutionLock.run(this.#lockPath, () => this.withDatabase(async (db) => {
+      if (resolution === "retry" && !this.#settings.enabled) throw new Error("Daily reporting is disabled.");
+      if (resolution === "retry" && day !== localDayKey(this.#now())) throw new Error("Only today's report can be retried.");
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const result = db.prepare(
+          "UPDATE report_deliveries SET status = ?, updated_at = ? WHERE day = ? AND status IN ('unknown', 'dispatching')",
+        ).run(resolution === "retry" ? "ready" : "dismissed", new Date().toISOString(), day);
+        if (Number(result.changes) !== 1) throw new Error("Only an unknown report delivery can be resolved.");
+        db.prepare("INSERT INTO report_delivery_decisions (day, resolution, decided_at) VALUES (?, ?, ?)")
+          .run(day, resolution, new Date().toISOString());
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    }));
+  }
+
+  private async send(now: Date): Promise<void> {
     const events = await this.#journal.list();
     const since = new Date(now);
     since.setDate(since.getDate() - 1);
@@ -79,19 +129,54 @@ export class DailyReportRunner {
     await sendEmail(this.#settings.smtp, { subject: report.subject, text: report.text });
   }
 
-  async #lastSentDay(): Promise<string | undefined> {
-    try {
-      const parsed = JSON.parse(await readFile(this.#markerPath, "utf8")) as { day?: unknown };
-      return typeof parsed.day === "string" ? parsed.day : undefined;
-    } catch {
-      return undefined;
-    }
+  private markUnknown(db: DatabaseSync, day: string): void {
+    db.prepare("UPDATE report_deliveries SET status = 'unknown', updated_at = ? WHERE day = ?")
+      .run(new Date().toISOString(), day);
   }
 
-  async #remember(day: string): Promise<void> {
-    await mkdir(dirname(this.#markerPath), { recursive: true });
-    await writeFile(this.#markerPath, `${JSON.stringify({ day })}\n`, "utf8");
+  private async withDatabase<T>(operation: (db: DatabaseSync) => Promise<T>): Promise<T> {
+    await mkdir(dirname(this.#databasePath), { recursive: true });
+    const db = new DatabaseSync(this.#databasePath);
+    try {
+      db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000");
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS report_deliveries (day TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS report_delivery_decisions (day TEXT NOT NULL, resolution TEXT NOT NULL, decided_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS report_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      `);
+      if (db.prepare("SELECT value FROM report_metadata WHERE key = 'legacy_imported'").get() === undefined) {
+        let legacy: { day?: unknown; status?: unknown } | undefined;
+        try {
+          legacy = JSON.parse(await readFile(this.#legacyPath, "utf8")) as typeof legacy;
+        } catch (error: unknown) {
+          if (!isMissingFile(error)) throw error;
+        }
+        if (legacy !== undefined && (typeof legacy.day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(legacy.day)
+          || (legacy.status !== undefined && legacy.status !== "sent" && legacy.status !== "dispatching" && legacy.status !== "unknown"))) {
+          throw new Error("The legacy report delivery marker is malformed.");
+        }
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          if (legacy !== undefined) {
+            db.prepare("INSERT OR IGNORE INTO report_deliveries (day, status, updated_at) VALUES (?, ?, ?)")
+              .run(legacy.day as string, legacy.status === "dispatching" || legacy.status === "unknown" ? "unknown" : "sent", new Date().toISOString());
+          }
+          db.prepare("INSERT INTO report_metadata (key, value) VALUES ('legacy_imported', '1')").run();
+          db.exec("COMMIT");
+        } catch (error) {
+          db.exec("ROLLBACK");
+          throw error;
+        }
+      }
+      return await operation(db);
+    } finally {
+      db.close();
+    }
   }
+}
+
+function isMissingFile(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 /** Local calendar day key, e.g. 2026-08-19. 本地日历日键。 */

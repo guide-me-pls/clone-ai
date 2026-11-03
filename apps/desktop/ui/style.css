@@ -336,6 +336,13 @@ body { background: var(--canvas); color: var(--text); font-family: Inter, "SF Pr
 .schedule-row span { display: block; margin-top: 2px; color: #8994a4; font-size: 11px; }
 .schedule-toggle { padding: 6px 8px; border: 1px solid #dbe2eb; border-radius: 7px; color: #647183; background: #fff; cursor: pointer; font-size: 11px; }
 .schedule-toggle:hover { border-color: #afc1ee; color: #3457b8; }
+@media (max-width: 560px) {
+  .schedule-dialog { max-height: calc(100vh - 40px); overflow-y: auto; }
+  .schedule-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+  #schedule-query { grid-column: 1 / -1; }
+  .schedule-create { min-height: 38px; }
+  .schedule-row b { white-space: normal; overflow-wrap: anywhere; }
+}
 .trace-sequence { display: inline-block; min-width: 28px; color: #8492ab; font-variant-numeric: tabular-nums; }
 .session-item { position: relative; }
 .session-item .session { width: 100%; padding-right: 37px; }

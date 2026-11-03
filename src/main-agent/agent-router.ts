@@ -59,7 +59,7 @@ export function routeTask(input: RouteInput): DispatchResult {
       matchedRuleIds: ruleIds,
       usedMemoryIds,
       alternatives: input.workers
-        .filter((candidate) => candidate.id !== worker.id && candidate.enabled && candidate.installed)
+        .filter((candidate) => candidate.id !== worker.id && candidate.enabled && candidate.installed && !candidate.executionBlocked)
         .map((candidate) => candidate.id),
       reason,
       sessionPolicy: "fresh",
@@ -81,6 +81,9 @@ export function routeTask(input: RouteInput): DispatchResult {
     if (!worker.installed) {
       return blocked("REQUESTED_AGENT_UNAVAILABLE", `Worker "${requested}" is not installed on this machine.`, requested);
     }
+    if (worker.executionBlocked) {
+      return blocked("REQUESTED_AGENT_UNISOLATED", `Worker "${requested}" is installed but blocked because no enforced sandbox is configured.`, requested);
+    }
     // No capability check here on purpose. Required capabilities are inferred
     // from keywords, and a guess about what the task *is* must not veto what
     // the owner explicitly asked for. The Kernel still validates the plan's
@@ -99,13 +102,14 @@ export function routeTask(input: RouteInput): DispatchResult {
   const eligible = input.workers.filter((worker) => (
     worker.enabled
     && worker.installed
+    && !worker.executionBlocked
     && !excluded.has(worker.id)
     && missingCapabilities(worker, input.intent).length === 0
   ));
   if (eligible.length === 0) {
     return blocked(
       "NO_MATCHING_AGENT",
-      `No enabled, installed worker satisfies: ${input.intent.requiredCapabilities.join(", ")}.`,
+      `No enabled, installed and permitted worker satisfies: ${input.intent.requiredCapabilities.join(", ")}. Unisolated workers are blocked by default.`,
     );
   }
 

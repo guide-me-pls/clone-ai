@@ -18,12 +18,14 @@
  * 治理哲学：Journal 是真相；这个 SQLite 索引是已提交记忆的可重建投影；每个 .md 文件
  * 是所有者可以手改的内容层。
  */
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { MemorySensitivity, MemoryType } from "../core/contracts.ts";
+import type { JournalStore } from "../core/journal.ts";
 
 export type MemoryStatus = "active" | "archived";
 export type MemoryConfidence = "low" | "medium" | "high";
@@ -67,6 +69,8 @@ export interface MemoryCommitInput {
   occurredAt?: string;
 }
 
+export type MemoryUpdate = Partial<Pick<MemoryEntry, "summary" | "content" | "type" | "confidence" | "sensitivity" | "expiresAt" | "status">>;
+
 export interface MemoryRecallMatch {
   entry: MemoryEntry;
   score: number;
@@ -74,6 +78,11 @@ export interface MemoryRecallMatch {
 }
 
 const DEFAULT_SENSITIVITY: MemorySensitivity = "private";
+const RECALL_ALIASES: readonly (readonly string[])[] = [
+  ["周报", "每周汇报", "工作汇报"],
+  ["会议", "开会"],
+  ["截止时间", "到期时间"],
+];
 
 /**
  * Splits mixed CJK/Latin text into search terms: Latin words as-is, CJK runs
@@ -94,6 +103,17 @@ export function tokenize(text: string): string[] {
     .filter((word) => word.length > 0 && /[a-z0-9]/.test(word));
   for (const word of latin) tokens.add(word);
   return [...tokens];
+}
+
+function expandedRecallTerms(query: string, direct: ReadonlySet<string>): string[] {
+  const terms = new Set<string>();
+  for (const group of RECALL_ALIASES) {
+    if (!group.some((phrase) => query.includes(phrase))) continue;
+    for (const phrase of group) {
+      for (const term of tokenize(phrase)) if (!direct.has(term)) terms.add(term);
+    }
+  }
+  return [...terms].slice(0, 128);
 }
 
 export interface MemoryStoreOptions {
@@ -139,6 +159,10 @@ export class MdMemoryStore {
       );
       CREATE INDEX IF NOT EXISTS idx_terms ON memory_terms (term);
       CREATE INDEX IF NOT EXISTS idx_memories_status ON memories (status);
+      CREATE TABLE IF NOT EXISTS memory_mutations (
+        id TEXT PRIMARY KEY,
+        entry TEXT NOT NULL
+      );
     `);
   }
 
@@ -156,8 +180,18 @@ export class MdMemoryStore {
     return this.#contentDirectory;
   }
 
+  get governanceLockPath(): string {
+    return join(this.#directory, "memory-governance-lock");
+  }
+
   /** Commits a memory: SQLite row + term index + .md file. 提交一条记忆：写 SQLite、词表与 .md 文件。 */
   async commit(input: MemoryCommitInput): Promise<MemoryEntry> {
+    const entry = this.prepareCommit(input);
+    await this.writeEntry(entry);
+    return entry;
+  }
+
+  prepareCommit(input: MemoryCommitInput): MemoryEntry {
     const summary = input.summary.trim();
     if (summary.length < 3) throw new Error("A memory needs at least three characters.");
     const now = new Date().toISOString();
@@ -170,7 +204,7 @@ export class MdMemoryStore {
       ...(input.sourceRunId === undefined ? {} : { sourceRunId: input.sourceRunId }),
       sourceEvidenceIds: input.sourceEvidenceIds ?? [],
       summary,
-      content: input.content?.trim() ?? summary,
+      content: input.content?.trim() || summary,
       // createdAt is when the thing happened, not when we wrote it down.
       // createdAt 是事情发生的时间，不是我们把它写下的时间。
       createdAt: input.occurredAt ?? now,
@@ -178,7 +212,90 @@ export class MdMemoryStore {
       ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
       accessCount: 0,
     };
-    await this.writeEntry(entry);
+    return entry;
+  }
+
+  async prepareUpdate(id: string, update: MemoryUpdate): Promise<MemoryEntry> {
+    const entry = await this.requireEntry(id);
+    const summary = update.summary?.trim() ?? entry.summary;
+    if (summary.length < 3) throw new Error("A memory needs at least three characters.");
+    return {
+      ...entry,
+      ...(update.summary === undefined ? {} : { summary }),
+      content: update.content === undefined ? (entry.content.trim() || summary) : (update.content.trim() || summary),
+      ...(update.type === undefined ? {} : { type: update.type }),
+      ...(update.confidence === undefined ? {} : { confidence: update.confidence }),
+      ...(update.sensitivity === undefined ? {} : { sensitivity: update.sensitivity }),
+      ...(update.expiresAt === undefined ? {} : { expiresAt: update.expiresAt }),
+      ...(update.status === undefined ? {} : { status: update.status }),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  stageMutation(entry: MemoryEntry, options: { acceptFileEdit?: boolean } = {}): string {
+    const row = this.#db.prepare("SELECT * FROM memories WHERE id = ?").get(entry.id);
+    const previous = row === undefined ? undefined : this.rowToEntry(row as Record<string, unknown>);
+    const sourceStatus = previous?.status ?? entry.status;
+    const source = this.memoryPath(entry.id, sourceStatus);
+    const target = this.memoryPath(entry.id, entry.status);
+    const sourceText = readOptionalFile(source);
+    const targetText = source === target ? sourceText : readOptionalFile(target);
+    if (previous !== undefined && !options.acceptFileEdit) {
+      const parsed = sourceText === undefined ? undefined : parseMemoryFile(sourceText);
+      if (parsed === undefined || parsed.summary !== previous.summary || parsed.content !== (previous.content || previous.summary)
+        || parsed.type !== previous.type || parsed.sensitivity !== previous.sensitivity || parsed.status !== previous.status) {
+        throw new Error(`Memory ${entry.id} changed on disk; sync the file before updating it.`);
+      }
+    }
+    if (!options.acceptFileEdit && source !== target && targetText !== undefined && hashOptional(targetText) !== hashOptional(renderMemoryFile(entry))) {
+      throw new Error(`Memory ${entry.id} already has a conflicting file at its destination.`);
+    }
+    const id = randomUUID();
+    this.#db.prepare("INSERT INTO memory_mutations (id, entry) VALUES (?, ?)").run(id, JSON.stringify({
+      entry, sourceStatus, sourceHash: hashOptional(sourceText), targetHash: hashOptional(targetText),
+    }));
+    return id;
+  }
+
+  pendingMutationIds(): string[] {
+    const rows = this.#db.prepare("SELECT id FROM memory_mutations ORDER BY rowid").all() as Array<{ id: string }>;
+    return rows.map((row) => row.id);
+  }
+
+  pendingMutations(): Array<{ id: string; memoryId: string; summary: string }> {
+    const rows = this.#db.prepare("SELECT id, entry FROM memory_mutations ORDER BY rowid").all() as Array<{ id: string; entry: string }>;
+    return rows.map((row) => {
+      const staged = JSON.parse(row.entry) as { entry: MemoryEntry };
+      return { id: row.id, memoryId: staged.entry.id, summary: staged.entry.summary };
+    });
+  }
+
+  discardMutation(id: string): void {
+    this.#db.prepare("DELETE FROM memory_mutations WHERE id = ?").run(id);
+  }
+
+  async applyMutation(id: string): Promise<MemoryEntry | undefined> {
+    const row = this.#db.prepare("SELECT entry FROM memory_mutations WHERE id = ?").get(id) as { entry: string } | undefined;
+    if (row === undefined) return undefined;
+    const staged = JSON.parse(row.entry) as {
+      entry: MemoryEntry;
+      sourceStatus: MemoryStatus;
+      sourceHash: string | null;
+      targetHash: string | null;
+    };
+    const entry = staged.entry;
+    const source = this.memoryPath(entry.id, staged.sourceStatus);
+    const target = this.memoryPath(entry.id, entry.status);
+    const sourceHash = hashOptional(readOptionalFile(source));
+    const targetHash = source === target ? sourceHash : hashOptional(readOptionalFile(target));
+    const desiredHash = hashOptional(renderMemoryFile(entry));
+    const unchanged = sourceHash === staged.sourceHash && targetHash === staged.targetHash;
+    const alreadyWritten = targetHash === desiredHash && (source === target || sourceHash === staged.sourceHash || sourceHash === null);
+    if (!unchanged && !alreadyWritten) {
+      throw new Error(`Memory ${entry.id} changed on disk during recovery; inspect the file before continuing.`);
+    }
+    await this.writeEntry(entry, staged.sourceStatus);
+    this.#db.prepare("DELETE FROM memory_mutations WHERE id = ?").run(id);
     return entry;
   }
 
@@ -222,10 +339,13 @@ export class MdMemoryStore {
    * 暴露出来，让下限的代价被测量，而不是被默认。
    */
   async recall(query: string, options: { maxResults?: number; includeSecret?: boolean; minRatio?: number } = {}): Promise<MemoryRecallMatch[]> {
-    const terms = tokenize(query);
+    const terms = tokenize(query).slice(0, 128);
     if (terms.length === 0) return [];
+    const direct = new Set(terms);
+    const expanded = expandedRecallTerms(query, direct);
+    const searchTerms = [...terms, ...expanded];
     const now = new Date().toISOString();
-    const placeholders = terms.map(() => "?").join(", ");
+    const placeholders = searchTerms.map(() => "?").join(", ");
     const rows = this.#db.prepare(`
       SELECT t.memory_id, t.term
       FROM memory_terms t
@@ -234,7 +354,7 @@ export class MdMemoryStore {
         AND m.status = 'active'
         AND (m.expires_at IS NULL OR m.expires_at > ?)
         AND (m.sensitivity != 'secret' OR ? = 1)
-    `).all(...terms, now, options.includeSecret === true ? 1 : 0) as Array<{ memory_id: string; term: string }>;
+    `).all(...searchTerms, now, options.includeSecret === true ? 1 : 0) as Array<{ memory_id: string; term: string }>;
 
     const byId = new Map<string, Set<string>>();
     for (const row of rows) {
@@ -247,37 +367,30 @@ export class MdMemoryStore {
     for (const [memoryId, matched] of byId) {
       const entry = await this.get(memoryId);
       if (entry === undefined) continue;
-      const ratio = matched.size / terms.length;
+      const directMatches = [...matched].filter((term) => direct.has(term)).length;
+      let expandedMatches = matched.size - directMatches;
+      if (query.includes("周报") && !/(周报|每周|周[一二三四五六日天末]|星期[一二三四五六日天])/.test(`${entry.summary} ${entry.content}`)) {
+        expandedMatches *= 0.5;
+      }
+      const ratio = Math.min(1, (directMatches + expandedMatches * 0.5) / terms.length);
       if (ratio < (options.minRatio ?? 0.2)) continue;
-      const recencyBoost = Math.max(0, 1 - (Date.now() - Date.parse(entry.createdAt)) / (90 * 24 * 3600 * 1000));
+      const recencyBoost = Math.min(1, Math.max(0, 1 - (Date.now() - Date.parse(entry.createdAt)) / (90 * 24 * 3600 * 1000)));
       const usageBoost = Math.min(0.1, entry.accessCount * 0.01);
       matches.push({
         entry,
         score: Number((ratio + recencyBoost * 0.15 + usageBoost).toFixed(3)),
         matchedTerms: [...matched],
       });
-      await this.touch(memoryId);
     }
     matches.sort((left, right) => right.score - left.score);
-    const limit = options.maxResults ?? 4;
-    return matches.slice(0, limit);
+    const limit = Math.max(0, Math.min(100, Math.floor(options.maxResults ?? 4)));
+    const selected = matches.slice(0, limit);
+    for (const match of selected) await this.touch(match.entry.id);
+    return selected;
   }
 
-  async update(id: string, update: Partial<Pick<MemoryEntry, "summary" | "content" | "type" | "confidence" | "sensitivity" | "expiresAt" | "status">>): Promise<MemoryEntry> {
-    const entry = await this.requireEntry(id);
-    const summary = update.summary?.trim() ?? entry.summary;
-    if (summary.length < 3) throw new Error("A memory needs at least three characters.");
-    const next: MemoryEntry = {
-      ...entry,
-      ...(update.summary === undefined ? {} : { summary }),
-      ...(update.content === undefined ? {} : { content: update.content.trim() }),
-      ...(update.type === undefined ? {} : { type: update.type }),
-      ...(update.confidence === undefined ? {} : { confidence: update.confidence }),
-      ...(update.sensitivity === undefined ? {} : { sensitivity: update.sensitivity }),
-      ...(update.expiresAt === undefined ? {} : { expiresAt: update.expiresAt }),
-      ...(update.status === undefined ? {} : { status: update.status }),
-      updatedAt: new Date().toISOString(),
-    };
+  async update(id: string, update: MemoryUpdate): Promise<MemoryEntry> {
+    const next = await this.prepareUpdate(id, update);
     await this.writeEntry(next);
     return next;
   }
@@ -306,7 +419,7 @@ export class MdMemoryStore {
    * 把所有者直接编辑 .md 文件的改动同步回索引：磁盘上有而索引里没有的文件按手写记忆
    * 提交；被删除的文件归档。
    */
-  async syncFromFiles(): Promise<{ added: number; archived: number; updated: number }> {
+  async syncFromFiles(apply: (entry: MemoryEntry, action: "added" | "updated" | "archived") => Promise<void> = async (entry) => this.writeEntry(entry)): Promise<{ added: number; archived: number; updated: number }> {
     await mkdir(this.#contentDirectory, { recursive: true });
     const archivedDirectory = join(this.#contentDirectory, "archived");
     const seen = new Set<string>();
@@ -328,17 +441,17 @@ export class MdMemoryStore {
         seen.add(id);
         const existing = await this.get(id);
         if (existing === undefined) {
-          await this.writeEntry({
+          await apply({
             ...parsed,
             id,
             status,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             accessCount: 0,
-          });
+          }, "added");
           counters.added += 1;
         } else if (existing.summary !== parsed.summary || existing.content !== parsed.content || existing.status !== status) {
-          await this.writeEntry({ ...existing, ...parsed, id, status, updatedAt: new Date().toISOString() });
+          await apply({ ...existing, ...parsed, id, status, updatedAt: new Date().toISOString() }, "updated");
           counters.updated += 1;
         }
       }
@@ -350,7 +463,7 @@ export class MdMemoryStore {
     const known = await this.list();
     for (const entry of known) {
       if (!seen.has(entry.id) && entry.status === "active") {
-        await this.archive(entry.id);
+        await apply(await this.prepareUpdate(entry.id, { status: "archived" }), "archived");
         counters.archived += 1;
       }
     }
@@ -370,17 +483,26 @@ export class MdMemoryStore {
     return entry;
   }
 
-  private async writeEntry(entry: MemoryEntry): Promise<void> {
+  private memoryPath(id: string, status: MemoryStatus): string {
+    return join(this.#contentDirectory, ...(status === "archived" ? ["archived"] : []), `${id}.md`);
+  }
+
+  private async writeEntry(entry: MemoryEntry, sourceStatus?: MemoryStatus): Promise<void> {
     const archived = entry.status === "archived";
     const directory = archived ? join(this.#contentDirectory, "archived") : this.#contentDirectory;
     await mkdir(directory, { recursive: true });
     const target = join(directory, `${entry.id}.md`);
-    const previousDirectory = archived ? this.#contentDirectory : join(this.#contentDirectory, "archived");
-    const previous = join(previousDirectory, `${entry.id}.md`);
-    if (previous !== target) {
-      await rename(previous, target).catch(() => undefined);
+    const existing = this.#db.prepare("SELECT status FROM memories WHERE id = ?").get(entry.id) as { status: MemoryStatus } | undefined;
+    const oldStatus = sourceStatus ?? existing?.status;
+    const previous = oldStatus === undefined || oldStatus === entry.status ? undefined : this.memoryPath(entry.id, oldStatus);
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    await writeFile(temporary, renderMemoryFile(entry), "utf8");
+    try {
+      await rename(temporary, target);
+    } catch (error) {
+      await unlink(temporary).catch(() => undefined);
+      throw error;
     }
-    await writeFile(target, renderMemoryFile(entry), "utf8");
 
     const terms = tokenize(`${entry.summary} ${entry.content}`);
     // One transaction per commit, not one per term: without it every indexed
@@ -417,6 +539,11 @@ export class MdMemoryStore {
       this.#db.exec("ROLLBACK");
       throw error;
     }
+    if (previous !== undefined) {
+      await unlink(previous).catch((error: unknown) => {
+        if (!isMissingMemoryFile(error)) throw error;
+      });
+    }
   }
 
   private async touch(id: string): Promise<void> {
@@ -444,6 +571,23 @@ export class MdMemoryStore {
       ...(row.last_accessed_at == null ? {} : { lastAccessedAt: String(row.last_accessed_at) }),
     };
   }
+}
+
+function readOptionalFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error: unknown) {
+    if (isMissingMemoryFile(error)) return undefined;
+    throw error;
+  }
+}
+
+function isMissingMemoryFile(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+}
+
+function hashOptional(value: string | undefined): string | null {
+  return value === undefined ? null : createHash("sha256").update(value).digest("hex");
 }
 
 /** Renders an entry as a front-matter markdown file. 把条目渲染成带 front matter 的 Markdown 文件。 */
@@ -529,10 +673,12 @@ function parseIds(value: string | undefined): string[] {
 export class GovernedMemorySource {
   readonly #dataDirectory: string;
   readonly #maxResults: number;
+  readonly #journal?: JournalStore;
 
-  constructor(dataDirectory: string, maxResults = 4) {
+  constructor(dataDirectory: string, maxResults = 4, journal?: JournalStore) {
     this.#dataDirectory = dataDirectory;
     this.#maxResults = maxResults;
+    this.#journal = journal;
   }
 
   /**
@@ -547,15 +693,21 @@ export class GovernedMemorySource {
    */
   async recall(query: string, _runId: string): Promise<Array<{ memory: { id: string; summary: string }; score: number; matchedTerms: string[] }>> {
     const store = new MdMemoryStore({ dataDirectory: this.#dataDirectory });
+    const { MemoryGovernance } = await import("./memory-governance.ts");
+    const ownedJournal = this.#journal === undefined
+      ? (await import("../core/sqlite-journal.ts")).createJournalStore(this.#dataDirectory)
+      : undefined;
+    const governance = new MemoryGovernance({ store, journal: this.#journal ?? ownedJournal! });
     try {
-      const matches = await store.recall(query, { maxResults: this.#maxResults });
+      const matches = await governance.recall(query, { maxResults: this.#maxResults });
       return matches.map((match) => ({
         memory: { id: match.entry.id, summary: match.entry.summary },
         score: match.score,
         matchedTerms: match.matchedTerms,
       }));
     } finally {
-      store.close();
+      await governance.close();
+      (ownedJournal as { close?: () => void } | undefined)?.close?.();
     }
   }
 }

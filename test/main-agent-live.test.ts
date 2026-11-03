@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { createKernelRuntime } from "../src/main-agent/tools/kernel-tools.ts";
+import { createKernelRuntimeSession } from "../src/main-agent/tools/kernel-tools.ts";
 import { createMainAgentSession } from "../src/main-agent/session.ts";
 
 // Phase B acceptance, live: one natural-language request must travel
@@ -31,7 +31,7 @@ test("live: a natural-language request becomes a Kernel-accepted plan", { skip: 
   try {
     await session.prompt([
       "Propose a work plan for: review the repository README and summarize its risks.",
-      "Use exactly one step: id 'review', risk read_only, agentId 'demo-researcher', requiredCapabilities ['research'],",
+      "Use exactly one step: id 'review', risk read_only, agentId 'context-researcher', requiredCapabilities ['research'],",
       "acceptance criteria ['A risk summary exists']. Then report the runId.",
     ].join(" "));
   } finally {
@@ -40,7 +40,8 @@ test("live: a natural-language request becomes a Kernel-accepted plan", { skip: 
 
   // The proof lives in the Kernel's journal, not in the agent's words.
   // 证据在 Kernel 的 Journal 里，而不在 Agent 的话语里。
-  const runtime = await createKernelRuntime(dataDirectory);
+  const { runtime, close } = await createKernelRuntimeSession(dataDirectory);
+  t.after(close);
   const runs = runtime.listRuns();
   const accepted = runs.filter((run) => run.planId !== undefined);
   assert.ok(accepted.length >= 1, `expected an accepted plan; runs: ${JSON.stringify(runs)}`);

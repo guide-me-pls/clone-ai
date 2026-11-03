@@ -10,6 +10,7 @@
   "scripts": {
     "companion:debug": "node --experimental-strip-types src/companion-server.ts",
     "desktop:sidecar": "node scripts/build-sidecar.mjs",
+    "desktop:mac:build": "node scripts/build-macos-app.mjs",
     "desktop:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-desktop.ps1",
     "desktop:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1",
     "main": "node --experimental-strip-types src/main-agent/clone-main.ts",

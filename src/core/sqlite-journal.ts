@@ -4,8 +4,8 @@ import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
-import type { JournalEvent, NewJournalEvent } from "./contracts.ts";
-import { JsonlJournalStore, type JournalStore, type RunClaim } from "./journal.ts";
+import type { JournalEvent, NewJournalEvent, RunStatus } from "./contracts.ts";
+import { JsonlJournalStore, parseJournalLines, type JournalStore, type RunClaim } from "./journal.ts";
 import { assertJournalInvariants } from "./invariants.ts";
 import { logJson } from "../observability/json-log.ts";
 
@@ -26,6 +26,7 @@ export class SqliteJournalStore implements JournalStore {
     this.#db = new DatabaseSync(path);
     this.#db.exec("PRAGMA journal_mode=WAL");
     this.#db.exec("PRAGMA synchronous=FULL");
+    this.#db.exec("PRAGMA busy_timeout=5000");
     // AUTOINCREMENT (not plain rowid) guarantees sequences are never reused,
     // even after a crash or a deleted tail — replay ordering depends on it.
     // AUTOINCREMENT（而非普通 rowid）保证 sequence 永不复用，即使崩溃或尾部被删——
@@ -66,16 +67,18 @@ export class SqliteJournalStore implements JournalStore {
    * 永久搛浅——且抢占会递增 `attempt`，使反复弄死持有者的 Run 可被看见，而非静默重试。
    */
   async claimRun(input: { runId: string; ownerId: string; leaseMs: number }): Promise<RunClaim | undefined> {
-    const now = Date.now();
-    const leaseUntil = new Date(now + input.leaseMs).toISOString();
     this.#db.exec("BEGIN IMMEDIATE");
     try {
+      const now = Date.now();
+      const leaseUntil = new Date(now + input.leaseMs).toISOString();
       const existing = this.#db
         .prepare("SELECT run_id, owner_id, lease_until, attempt FROM run_claims WHERE run_id = ?")
         .get(input.runId) as { owner_id: string; lease_until: string; attempt: number | bigint } | undefined;
       let attempt = 1;
       if (existing !== undefined) {
-        const live = Date.parse(existing.lease_until) > now;
+        const deadline = Date.parse(existing.lease_until);
+        if (!Number.isFinite(deadline)) throw new Error(`Run claim for ${input.runId} has an invalid deadline.`);
+        const live = deadline > now;
         if (live && existing.owner_id !== input.ownerId) {
           this.#db.exec("ROLLBACK");
           return undefined;
@@ -98,11 +101,64 @@ export class SqliteJournalStore implements JournalStore {
   }
 
   async renewClaim(input: { runId: string; ownerId: string; leaseMs: number }): Promise<boolean> {
-    const leaseUntil = new Date(Date.now() + input.leaseMs).toISOString();
-    const result = this.#db
-      .prepare("UPDATE run_claims SET lease_until = ? WHERE run_id = ? AND owner_id = ?")
-      .run(leaseUntil, input.runId, input.ownerId);
-    return Number(result.changes) > 0;
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.#db.prepare("SELECT owner_id, lease_until FROM run_claims WHERE run_id = ?").get(input.runId) as { owner_id: string; lease_until: string } | undefined;
+      const now = Date.now();
+      const deadline = current === undefined ? NaN : Date.parse(current.lease_until);
+      if (current === undefined || current.owner_id !== input.ownerId || !Number.isFinite(deadline) || deadline <= now) {
+        this.#db.exec("ROLLBACK");
+        return false;
+      }
+      const leaseUntil = new Date(now + input.leaseMs).toISOString();
+      this.#db.prepare("UPDATE run_claims SET lease_until = ? WHERE run_id = ? AND owner_id = ?")
+        .run(leaseUntil, input.runId, input.ownerId);
+      this.#db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  async cancelRun(runId: string): Promise<void> {
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const rows = this.#db.prepare(
+        "SELECT type, task_id, payload FROM journal_events WHERE run_id = ? ORDER BY sequence",
+      ).all(runId) as Array<{ type: string; task_id: string | null; payload: string }>;
+      const created = rows.find((row) => row.type === "run.created");
+      if (created === undefined) throw new Error(`Unknown run ${runId}.`);
+      const initial = JSON.parse(created.payload) as { status?: string; activeStepId?: string };
+      const lastStatus = rows.findLast((row) => row.type === "run.status_changed");
+      const current = lastStatus === undefined ? initial : JSON.parse(lastStatus.payload) as { status?: string; activeStepId?: string };
+      if (current.status === "completed" || current.status === "failed" || current.status === "cancelled") {
+        throw new Error(`Run ${runId} cannot be cancelled while ${current.status}.`);
+      }
+      const activeOrders = new Set<string>();
+      for (const row of rows) {
+        if (!row.type.startsWith("subagent.")) continue;
+        const payload = JSON.parse(row.payload) as { workOrderId?: unknown };
+        if (typeof payload.workOrderId !== "string") continue;
+        if (row.type === "subagent.dispatched" || row.type === "subagent.resumed") activeOrders.add(payload.workOrderId);
+        if (row.type === "subagent.completed" || row.type === "subagent.failed" || row.type === "subagent.cancelled") activeOrders.delete(payload.workOrderId);
+      }
+      const insert = this.#db.prepare("INSERT INTO journal_events (id, type, occurred_at, task_id, run_id, payload) VALUES (?, ?, ?, ?, ?, ?)");
+      const now = new Date().toISOString();
+      for (const workOrderId of activeOrders) {
+        insert.run(randomUUID(), "subagent.cancelled", now, created.task_id, runId, JSON.stringify({
+          workOrderId, message: "Cancellation requested; worker shutdown is best effort.",
+        }));
+      }
+      insert.run(randomUUID(), "run.status_changed", now, created.task_id, runId, JSON.stringify({
+        status: "cancelled", activeStepId: current.activeStepId,
+      }));
+      this.#db.prepare("UPDATE run_claims SET lease_until = ? WHERE run_id = ?").run(now, runId);
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   async releaseClaim(input: { runId: string; ownerId: string }): Promise<void> {
@@ -143,6 +199,60 @@ export class SqliteJournalStore implements JournalStore {
       sequence: Number(inserted.lastInsertRowid),
       occurredAt,
     };
+  }
+
+  async appendBatch(events: readonly NewJournalEvent[]): Promise<JournalEvent[]> {
+    return this.appendTransactional(events);
+  }
+
+  async appendClaimed(event: NewJournalEvent, claim: { runId: string; ownerId: string }): Promise<JournalEvent> {
+    return this.appendTransactional([event], claim)[0]!;
+  }
+
+  async appendBatchClaimed(events: readonly NewJournalEvent[], claim: { runId: string; ownerId: string }): Promise<JournalEvent[]> {
+    return this.appendTransactional(events, claim);
+  }
+
+  async appendBatchIfStatus(events: readonly NewJournalEvent[], expected: { runId: string; status: RunStatus }): Promise<JournalEvent[]> {
+    return this.appendTransactional(events, undefined, expected);
+  }
+
+  private appendTransactional(
+    events: readonly NewJournalEvent[],
+    claim?: { runId: string; ownerId: string },
+    expected?: { runId: string; status: RunStatus },
+  ): JournalEvent[] {
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      if (expected !== undefined) {
+        if (events.some((event) => event.runId !== expected.runId)) throw new Error("A conditional batch may only write its specified run.");
+        const latest = this.#db.prepare(
+          "SELECT payload FROM journal_events WHERE run_id = ? AND type IN ('run.created', 'run.status_changed') ORDER BY sequence DESC LIMIT 1",
+        ).get(expected.runId) as { payload: string } | undefined;
+        const current = latest === undefined ? undefined : (JSON.parse(latest.payload) as { status?: unknown }).status;
+        if (current !== expected.status) throw new Error(`Run ${expected.runId} status changed from ${expected.status} to ${String(current)}.`);
+      }
+      if (claim !== undefined) {
+        if (events.some((event) => event.runId !== claim.runId)) throw new Error("A fenced batch may only write its claimed run.");
+        const current = this.#db.prepare("SELECT owner_id, lease_until FROM run_claims WHERE run_id = ?").get(claim.runId) as { owner_id: string; lease_until: string } | undefined;
+        const deadline = current === undefined ? NaN : Date.parse(current.lease_until);
+        if (current === undefined || current.owner_id !== claim.ownerId || !Number.isFinite(deadline) || deadline <= Date.now()) {
+          throw new Error(`Run claim lost for ${claim.runId}; refusing a stale executor's journal write.`);
+        }
+      }
+      const insert = this.#db.prepare("INSERT INTO journal_events (id, type, occurred_at, task_id, run_id, payload) VALUES (?, ?, ?, ?, ?, ?)");
+      const recorded = events.map((event) => {
+        const id = randomUUID();
+        const occurredAt = new Date().toISOString();
+        const result = insert.run(id, event.type, occurredAt, event.taskId ?? null, event.runId ?? null, JSON.stringify(event.payload ?? null));
+        return { ...event, id, occurredAt, sequence: Number(result.lastInsertRowid) };
+      });
+      this.#db.exec("COMMIT");
+      return recorded;
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   async list(): Promise<JournalEvent[]> {
@@ -186,10 +296,7 @@ export async function migrateJsonlJournalToSqlite(input: {
   sqlitePath: string;
 }): Promise<{ migrated: number }> {
   const source = await readFile(input.jsonlPath, "utf8");
-  const events = source
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as JournalEvent);
+  const events = parseJournalLines(source);
   assertJournalInvariants(events);
 
   mkdirSync(dirname(input.sqlitePath), { recursive: true });
@@ -336,10 +443,7 @@ function countJsonlEvents(jsonlPath: string): number {
  */
 function importJsonlIntoSqliteSync(jsonlPath: string, sqlitePath: string): void {
   const source = readFileSync(jsonlPath, "utf8");
-  let events = source
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as JournalEvent);
+  let events = parseJournalLines(source);
   // The whole history must pass the invariant checker first: importing a
   // corrupted past would make it the new source of truth.
   // 整段历史必须先通过不变量校验：导入损坏的过去等于让它成为新的事实来源。

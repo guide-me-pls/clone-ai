@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
 
 import { createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
@@ -76,6 +77,45 @@ test("two connections on the same journal interleave writes without corruption",
   );
 });
 
+test("a failed batch rolls back every event", async (t) => {
+  const { directory, use } = await tempDirectory(t);
+  const journal = use(new SqliteJournalStore(join(directory, "journal.sqlite3")));
+  await journal.append({ type: "trigger.received", payload: { summary: "before" } });
+  const cyclic: { self?: unknown } = {};
+  cyclic.self = cyclic;
+  await assert.rejects(journal.appendBatch([
+    { type: "verification.completed", runId: "run-1", payload: { passed: true } },
+    { type: "run.status_changed", runId: "run-1", payload: cyclic },
+  ]));
+  assert.equal((await journal.list()).length, 1);
+});
+
+test("an expired or stolen claim cannot append a fenced event", async (t) => {
+  const { directory, use } = await tempDirectory(t);
+  const journal = use(new SqliteJournalStore(join(directory, "journal.sqlite3")));
+  assert.ok(await journal.claimRun({ runId: "run-1", ownerId: "old", leaseMs: 1 }));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(await journal.renewClaim({ runId: "run-1", ownerId: "old", leaseMs: 60_000 }), false);
+  assert.ok(await journal.claimRun({ runId: "run-1", ownerId: "new", leaseMs: 60_000 }));
+  await assert.rejects(journal.appendClaimed({ type: "execution.progress", runId: "run-1", payload: {} }, { runId: "run-1", ownerId: "old" }), /claim/i);
+  assert.equal((await journal.list()).length, 0);
+  await journal.appendClaimed({ type: "execution.progress", runId: "run-1", payload: {} }, { runId: "run-1", ownerId: "new" });
+  assert.equal((await journal.list()).length, 1);
+});
+
+test("a corrupt lease cannot be renewed or used to append", async (t) => {
+  const { directory, use } = await tempDirectory(t);
+  const path = join(directory, "journal.sqlite3");
+  const journal = use(new SqliteJournalStore(path));
+  assert.ok(await journal.claimRun({ runId: "run-1", ownerId: "old", leaseMs: 60_000 }));
+  const db = new DatabaseSync(path);
+  db.prepare("UPDATE run_claims SET lease_until = ? WHERE run_id = ?").run("not-a-date", "run-1");
+  db.close();
+  assert.equal(await journal.renewClaim({ runId: "run-1", ownerId: "old", leaseMs: 60_000 }), false);
+  await assert.rejects(journal.claimRun({ runId: "run-1", ownerId: "new", leaseMs: 60_000 }), /invalid deadline/i);
+  await assert.rejects(journal.appendClaimed({ type: "execution.progress", runId: "run-1", payload: {} }, { runId: "run-1", ownerId: "old" }), /claim/i);
+});
+
 test("the runtime completes a supervised run on sqlite without any code changes", async (t) => {
   const { directory, use } = await tempDirectory(t);
   const journal = use(new SqliteJournalStore(join(directory, "journal.sqlite3")));
@@ -111,7 +151,8 @@ test("the runtime completes a supervised run on sqlite without any code changes"
     }],
   });
   const result = await runtime.execute(run.id, createScriptedAgentRegistry());
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "waiting_review");
+  assert.equal((await runtime.reviewVerification(run.id, "accept")).status, "completed");
 
   // A second runtime hydrated from the same file proves restart recovery.
   // 从同一文件重建的第二个 Runtime 证明重启恢复成立。

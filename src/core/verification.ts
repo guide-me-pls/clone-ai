@@ -3,6 +3,7 @@ import { isAbsolute, resolve } from "node:path";
 
 import type { Evidence, PlanStep, Verifier, VerificationResult } from "./contracts.ts";
 import { DiffFileVerifier, TestCommandVerifier } from "./verifier-plugins.ts";
+import { verifiedWorkspacePath } from "./verified-workspace-path.ts";
 
 /**
  * What an acceptance criterion can be checked against on this machine.
@@ -114,25 +115,29 @@ export class EvidenceVerifier implements Verifier {
 
       const expectations = extractFileExpectations(step);
       if (expectations.length === 0) {
-        unverified.push(`${step.title}: no machine-checkable file contract`);
+        unverified.push(...step.acceptanceCriteria.map((criterion) => `${step.title}: ${criterion}`));
         continue;
       }
       for (const expectation of expectations) {
         const problem = await this.checkFile(expectation, stepEvidence);
         if (problem !== undefined) failures.push(`${step.title}: ${problem}`);
       }
+      for (const criterion of step.acceptanceCriteria) {
+        if (!isFileCriterionCovered(criterion, expectations)) unverified.push(`${step.title}: ${criterion}`);
+      }
     }
 
-    const passed = failures.length === 0;
+    const needsReview = failures.length === 0 && unverified.length > 0;
+    const passed = failures.length === 0 && !needsReview;
     return {
       runId: input.run.id,
       passed,
+      ...(needsReview ? { needsReview: true, unverifiedCriteria: unverified } : {}),
       summary: passed
-        ? [
-            `Verified ${input.plan.steps.length} step(s) against the workspace.`,
-            ...(unverified.length === 0 ? [] : [`Not machine-checked: ${unverified.join("; ")}.`]),
-          ].join(" ")
-        : `Verification failed. ${failures.join("; ")}.`,
+        ? `Verified ${input.plan.steps.length} step(s) against the workspace.`
+        : needsReview
+          ? `Checks passed, but these criteria need owner review: ${unverified.join("; ")}.`
+          : `Verification failed. ${failures.join("; ")}.`,
       checkedEvidenceIds: input.evidence.map((item) => item.id),
       createdAt: new Date().toISOString(),
     };
@@ -150,8 +155,7 @@ export class EvidenceVerifier implements Verifier {
     for (const item of evidence) {
       const locator = item.locator;
       if (locator === undefined) continue;
-      const cleaned = locator.replace(/^file:\/\//, "");
-      if (cleaned.endsWith(expectation.path) || cleaned.includes(expectation.path)) candidates.push(cleaned);
+      if (locator.endsWith(expectation.path) || locator.includes(expectation.path)) candidates.push(locator);
     }
     if (isAbsolute(expectation.path)) {
       candidates.push(expectation.path);
@@ -165,9 +169,11 @@ export class EvidenceVerifier implements Verifier {
     for (const candidate of candidates) {
       let contents: string;
       try {
-        const info = await stat(candidate);
+        const safe = await verifiedWorkspacePath(candidate, this.#workspacePath);
+        if (safe === undefined) continue;
+        const info = await stat(safe);
         if (!info.isFile()) continue;
-        contents = await readFile(candidate, "utf8");
+        contents = await readFile(safe, "utf8");
       } catch {
         continue;
       }
@@ -185,6 +191,22 @@ export class EvidenceVerifier implements Verifier {
     }
     return `"${expectation.path}" was promised but does not exist on disk`;
   }
+}
+
+function isFileCriterionCovered(criterion: string, expectations: FileExpectation[]): boolean {
+  const contains = /(?:包含|contains?|includes?|mentions?)\s*[:：]?\s*[`"'']([^`"'']{2,80})[`"'']/gi;
+  let remaining = criterion.replace(contains, "");
+  const checkedSubstring = remaining !== criterion && expectations.some((expectation) => expectation.mustContain.length > 0);
+  let namedFile = false;
+  for (const expectation of expectations) {
+    if (remaining.includes(expectation.path)) namedFile = true;
+    remaining = remaining.split(expectation.path).join("");
+  }
+  const existence = /(?:存在|非空|已生成|生成|写入|file|exists?|non-empty|written)/i.test(remaining);
+  remaining = remaining
+    .replace(/(?:文件|存在|非空|已生成|生成|写入|file|exists?|non-empty|written)/gi, "")
+    .replace(/[\s`"''，。,:：；;().（）]/g, "");
+  return remaining.length === 0 && (checkedSubstring || (namedFile && existence));
 }
 
 /**
@@ -206,15 +228,20 @@ export class CompositeVerifier implements Verifier {
     for (const verifier of this.#verifiers) {
       results.push(await verifier.verify(input));
     }
-    const failures = results.filter((result) => !result.passed);
-    const passed = failures.length === 0;
-    const summaries = (passed ? results : failures)
+    const failures = results.filter((result) => !result.passed && !result.needsReview);
+    const needsReview = failures.length === 0 && results.some((result) => result.needsReview);
+    const passed = failures.length === 0 && !needsReview;
+    const summaries = (failures.length === 0 ? results : failures)
       .map((result) => result.summary.trim())
       .filter((summary) => summary.length > 0);
     return {
       runId: input.run.id,
       passed,
-      summary: passed
+      ...(needsReview ? {
+        needsReview: true,
+        unverifiedCriteria: [...new Set(results.flatMap((result) => result.unverifiedCriteria ?? []))],
+      } : {}),
+      summary: failures.length === 0
         ? (summaries.join(" ") || `Verified ${input.plan.steps.length} step(s).`)
         : `Verification failed. ${summaries.join("; ")}`,
       checkedEvidenceIds: [...new Set(results.flatMap((result) => result.checkedEvidenceIds))],

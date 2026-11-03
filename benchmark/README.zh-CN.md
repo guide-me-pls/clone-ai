@@ -8,11 +8,11 @@
 
 ## 运行
 
+真实 CLI 没有由 Clone AI 强制的系统沙箱，默认拒绝运行。如果你已理解它可能访问和修改当前用户
+的文件、网络与凭据，并明确接受该风险，才使用：
+
 ```bash
-npm run bench                          # 全部任务，默认 pi
-npm run bench -- --provider pi         # 显式指定 Provider
-npm run bench -- --tasks summarize     # 只跑单个任务
-npm run bench -- --tasks two-step-chain,three-step-pipeline
+npm run bench -- --unsafe-host --provider pi --tasks summarize
 ```
 
 每个任务只花几美分的真实模型调用，耗时约 20-60 秒。结果以 JSON 记录在
@@ -25,13 +25,13 @@ npm run bench -- --tasks two-step-chain,three-step-pipeline
 | `summarize` | 单个只读 WorkOrder；产物证据来自工作区 diff |
 | `two-step-chain` | 依赖波次：draft 在 research 验证通过后才启动 |
 | `three-step-pipeline` | 两条依赖边；review 使用两个输入 |
-| `code-tool` | Agent 使用自己的 Shell；两个产物；真实测试执行 |
+| `code-tool` | Agent 产生两个代码产物；不证明测试由可信验证器独立执行 |
 | `missing-input` | 期望失败：缺失文件应干净地归为 `no_artifact`，而不是挂死 |
 
 ## 读结果
 
 - `passed`：run 到达 `completed` 且验证通过、预期产物真实存在时为 true。
-- `expectedFailure` 任务（`missing-input`）以**失败**为绿：不能失败的基准没有价值。
+- `expectedFailure` 任务（`missing-input`）只在失败类别为 `no_artifact` 时为绿；权限拒绝或启动失败不能冒充预期失败。
 - `artifacts`：Agent 在工作区留下的全部文件（不含 `.clone-ai`）及大小。
 - 运行器在任何意外失败时以非零退出码结束，可挂进 CI 或升级前检查。
 

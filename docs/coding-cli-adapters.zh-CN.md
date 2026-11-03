@@ -6,6 +6,11 @@ Clone AI 把所有 Coding Agent 都当作黑盒：提供 Prompt、有作用域�
 根据可观察事实判断结果——进程生命周期和磁盘上真正发生的变化。不解析 Provider 协议、Session
 数据库、Tool 流或完成声明。
 
+**安全默认值：** 当前未实现由 Clone AI 强制的系统沙箱，黑盒 Worker 默认不启动。桌面设置允许
+所有者明确确认后启用 `hostAccess: "unrestricted"`；此时进程可使用当前用户的文件、网络和凭据，
+Kernel 无法逐项拦截其内部工具，计划级审批不构成安全隔离。已标记的外部或不可逆工作不会派给
+黑盒 Worker，真正的受控外部动作 Connector 尚未实现。
+
 ```text
 WorkOrder -> 策略 + 能力 + 审批
   -> BlackBoxCliWorker    Prompt · 预算 · 截止 · 终止
@@ -56,21 +61,22 @@ Adapter 在派发前对 Workspace 拍快照，结束后比较差异。新增和�
 
 ## 恢复不使用 Provider 记忆
 
-Kernel 在第一次尝试前保存持久 JSON Workspace 检查点。Worker 或 Supervisor 崩溃后，Kernel 将
-检查点与当前 Workspace 比较：
+不受限的黑盒进程可能修改 Workspace 以外的内容，因此检查点没有变化也不能证明重试安全。
+中断或失败的黑盒工作不会自动重跑，必须由所有者核对结果；缺少重放安全保证的旧记录也会保守停止。
+
+对于明确保证重放安全的可信 Adapter，Kernel 会将持久的派发前检查点与当前 Workspace 比较：
 
 - 没有变化：用新 Session 重跑；
 - 新增/修改文件足以满足必需 Artifact：接受观察到的 Artifact，不重复执行；
 - 发生删除、只读任务写入、产物不完整或检查点缺失：生成结构化恢复失败，等待所有者处理。
 
-因此 Claude Code、Pi 或未来 Provider 的 `--resume` 都不是依赖。Provider resume 可以优化重试，
-但不能成为事实来源。
+Provider resume 可以优化已授权的重试，但不能成为事实来源，也不能让未隔离的黑盒进程变得可安全重放。
 
 ## Workspace 并发
 
 WorkOrder 执行期间持有 Workspace 独占 lease。读与写、写与写都会串行，防止 Agent 互相覆盖，
-也防止读者看到写入一半的项目。lease 由进程内队列和原子锁文件组成，可依据持有者 PID 回收
-已经死亡的 Supervisor 的锁。
+也防止读者看到写入一半的项目。lease 由进程内队列和 SQLite 写锁组成，进程死亡后由系统释放。
+迁移时会检查旧 PID 锁文件；运行新版本前应先停止旧版 Daemon。
 
 ## 失败 JSON 与交叉印证
 

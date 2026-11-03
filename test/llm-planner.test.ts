@@ -183,7 +183,7 @@ test("workflow uses an injected LLM planner before it dispatches an executor", a
       agents: createScriptedAgentRegistry(),
     });
 
-    assert.equal(result.status, "completed");
+    assert.equal(result.status, "waiting_review");
     assert.equal(model.corrections.length, 1);
     const journal = createJournalStore(directory);
     try {

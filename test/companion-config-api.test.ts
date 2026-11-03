@@ -21,6 +21,15 @@ async function companion(t: TestContext): Promise<{ url: string; token: string; 
   return { url: server.url, token: server.token, dataDirectory };
 }
 
+test("software installation endpoints require an explicit owner acknowledgement", async (t) => {
+  const { url, token } = await companion(t);
+  for (const path of ["/api/agents/pi/install", "/api/agents/install-missing"]) {
+    const response = await companionFetch(url, token, path, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    assert.equal(response.status, 400);
+    assert.match((await response.json() as { error: string }).error, /acknowledge|confirm/i);
+  }
+});
+
 test("the config endpoint reports where the owner's data lives", async (t) => {
   const { url, token, dataDirectory } = await companion(t);
 
@@ -130,6 +139,38 @@ test("the API refuses a provider declaration that carries a credential value", a
 
   const stored = await (await companionFetch(url, token, "/api/settings/providers")).json() as { userDefined: unknown[] };
   assert.equal(stored.userDefined.length, 0);
+});
+
+test("unrestricted worker execution requires an explicit API acknowledgement", async (t) => {
+  const { url, token } = await companion(t);
+  const provider = { id: "test-agent", command: "test-agent", hostAccess: "unrestricted" };
+  const endpoint = "/api/settings/providers";
+  const withoutAcknowledgement = await companionFetch(url, token, endpoint, {
+    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(provider),
+  });
+  assert.equal(withoutAcknowledgement.status, 400);
+  const accepted = await companionFetch(url, token, endpoint, {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...provider, acknowledgeUnrestrictedHostAccess: true }),
+  });
+  assert.equal(accepted.status, 200);
+  const configured = await (await companionFetch(url, token, endpoint)).json() as { providers: Array<{ id: string; hostAccess?: string }> };
+  assert.equal(configured.providers.find((item) => item.id === "test-agent")?.hostAccess, "unrestricted");
+  const agents = await (await companionFetch(url, token, "/api/agents")).json() as { providers: Array<{ id: string; executionBlocked: boolean }> };
+  assert.equal(agents.providers.find((item) => item.id === "test-agent")?.executionBlocked, false);
+});
+
+test("a built-in provider with prefix wildcards can be explicitly authorized", async (t) => {
+  const { url, token } = await companion(t);
+  const current = await (await companionFetch(url, token, "/api/settings/providers")).json() as { providers: Array<Record<string, unknown>> };
+  const provider = current.providers.find((item) => item.id === "claude-code")!;
+  const updated = await companionFetch(url, token, "/api/settings/providers", {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...provider, hostAccess: "unrestricted", acknowledgeUnrestrictedHostAccess: true }),
+  });
+  assert.equal(updated.status, 200);
+  const listed = await (await companionFetch(url, token, "/api/agents")).json() as { providers: Array<{ id: string; executionBlocked: boolean }> };
+  assert.equal(listed.providers.find((item) => item.id === "claude-code")?.executionBlocked, false);
 });
 
 test("memory candidates can be listed and promoted through the API", async (t) => {

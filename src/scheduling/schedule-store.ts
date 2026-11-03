@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 export type ScheduleKind = "daily" | "weekly" | "monthly" | "yearly" | "cron" | "interval";
 
@@ -58,29 +59,42 @@ export interface CreateDailyScheduleInput {
   time: string;
 }
 
+export type ScheduleOccurrenceStatus = "pending" | "dispatching" | "dispatched" | "unknown" | "dismissed";
+
+export interface ScheduleOccurrence {
+  id: string;
+  scheduleId: string;
+  runKey: string;
+  schedule: LocalSchedule;
+  status: ScheduleOccurrenceStatus;
+  createdAt: string;
+  updatedAt: string;
+  ownerId?: string;
+  ownerPid?: number;
+  runId?: string;
+  error?: string;
+}
+
 /**
- * Local-first recurrence store. Calendar schedules catch up once when the
- * app starts later on their scheduled date; Cron schedules run only in their
- * matching minute so they cannot replay an unknown number of missed events.
- *
- * 本地优先的周期任务存储。日历任务在应用晚于预约时间启动时只补跑一次；Cron 任务只会在
- * 匹配的那一分钟运行，避免重放数量未知的错过事件。
+ * Schedule definitions and occurrences share a transactional local database.
+ * A committed occurrence stays pending until a dispatcher owns it. A process
+ * that dies after dispatch starts leaves an unknown outcome, never a blind retry.
+ * Existing schedules.json is imported once and left untouched as a backup.
+ * 定时配置与触发实例共用事务数据库；中断的执行标为未知，旧 JSON 保留为备份。
  */
 export class ScheduleStore {
   readonly #path: string;
-  #schedules: LocalSchedule[] = [];
+  readonly #databasePath: string;
   #ready: Promise<void>;
-  #writes: Promise<void> = Promise.resolve();
 
   constructor(path: string) {
     this.#path = path;
-    this.#ready = this.load();
+    this.#databasePath = path.endsWith(".json") ? `${path.slice(0, -5)}.sqlite3` : `${path}.sqlite3`;
+    this.#ready = this.initialize();
   }
 
   async list(): Promise<LocalSchedule[]> {
-    await this.#ready;
-    await this.#writes;
-    return this.#schedules.map((schedule) => ({ ...schedule, weekdays: schedule.weekdays === undefined ? undefined : [...schedule.weekdays] }));
+    return this.withDatabase((db) => readSchedules(db));
   }
 
   async addDaily(input: CreateDailyScheduleInput): Promise<LocalSchedule> {
@@ -108,57 +122,216 @@ export class ScheduleStore {
       updatedAt: now,
       lastRunKey: initialLastRunKey(input as LocalSchedule, nowDate),
     };
-    await this.mutate((schedules) => [...schedules, schedule]);
+    await this.withDatabase((db) => {
+      db.prepare("INSERT INTO schedules (id, body) VALUES (?, ?)").run(schedule.id, JSON.stringify(schedule));
+    });
     return schedule;
   }
 
   async setEnabled(id: string, enabled: boolean): Promise<LocalSchedule> {
-    let updated: LocalSchedule | undefined;
-    await this.mutate((schedules) => schedules.map((schedule) => {
-      if (schedule.id !== id) return schedule;
-      updated = { ...schedule, enabled, updatedAt: new Date().toISOString() };
+    return this.withDatabase((db) => transaction(db, () => {
+      const row = db.prepare("SELECT body FROM schedules WHERE id = ?").get(id) as { body: string } | undefined;
+      if (row === undefined) throw new Error("The requested schedule does not exist.");
+      const updated: LocalSchedule = { ...parseSchedule(row.body), enabled, updatedAt: new Date().toISOString() };
+      db.prepare("UPDATE schedules SET body = ? WHERE id = ?").run(JSON.stringify(updated), id);
       return updated;
     }));
-    if (updated === undefined) throw new Error("The requested schedule does not exist.");
-    return updated;
   }
 
   /**
-   * Atomically marks all due schedules before the runtime dispatches them.
-   * Runtime 派发前，原子地标记所有到期 Schedule。
+   * A recurrence key and its pending occurrence are committed together. The
+   * unique constraint also prevents two local daemons claiming the same slot.
+   * 周期键与待派发实例一起提交，唯一约束阻止多个本地进程重复领取。
    */
   async claimDue(now = new Date()): Promise<LocalSchedule[]> {
-    const due: LocalSchedule[] = [];
-    await this.mutate((schedules) => schedules.map((schedule) => {
-      const key = dueKey(schedule, now);
-      if (!schedule.enabled || schedule.lastRunKey === key || !isDue(schedule, now)) return schedule;
-      const claimed = { ...schedule, lastRunKey: key, updatedAt: now.toISOString() };
-      due.push(claimed);
-      return claimed;
+    return this.withDatabase((db) => transaction(db, () => {
+      const due: LocalSchedule[] = [];
+      for (const schedule of readSchedules(db)) {
+        const key = dueKey(schedule, now);
+        if (!schedule.enabled || schedule.lastRunKey === key || !isDue(schedule, now)) continue;
+        const claimed = { ...schedule, lastRunKey: key, updatedAt: now.toISOString() };
+        const inserted = db.prepare(
+          "INSERT OR IGNORE INTO schedule_occurrences "
+          + "(id, schedule_id, run_key, schedule, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+        ).run(randomUUID(), schedule.id, key, JSON.stringify(claimed), now.toISOString(), now.toISOString());
+        if (Number(inserted.changes) === 0) continue;
+        db.prepare("UPDATE schedules SET body = ? WHERE id = ?").run(JSON.stringify(claimed), schedule.id);
+        due.push(claimed);
+      }
+      return due;
     }));
-    return due;
   }
 
-  private async mutate(update: (schedules: LocalSchedule[]) => LocalSchedule[]): Promise<void> {
-    await this.#ready;
-    const write = this.#writes.then(async () => {
-      this.#schedules = update(this.#schedules);
-      await writeFile(this.#path, JSON.stringify({ schedules: this.#schedules }, null, 2), "utf8");
+  async listOccurrences(): Promise<ScheduleOccurrence[]> {
+    return this.withDatabase((db) => {
+      const rows = db.prepare("SELECT * FROM schedule_occurrences ORDER BY rowid").all();
+      return rows.map((row) => parseOccurrence(row as Record<string, unknown>));
     });
-    this.#writes = write.then(() => undefined, () => undefined);
-    await write;
   }
 
-  private async load(): Promise<void> {
+  async beginOccurrence(id: string, ownerId: string): Promise<ScheduleOccurrence | undefined> {
+    return this.withDatabase((db) => transaction(db, () => {
+      const current = db.prepare("SELECT * FROM schedule_occurrences WHERE id = ? AND status = 'pending'").get(id);
+      if (current === undefined) return undefined;
+      const occurrence = parseOccurrence(current as Record<string, unknown>);
+      const schedule = db.prepare("SELECT body FROM schedules WHERE id = ?").get(occurrence.scheduleId) as { body: string } | undefined;
+      if (schedule === undefined || !parseSchedule(schedule.body).enabled) return undefined;
+      const result = db.prepare(
+        "UPDATE schedule_occurrences SET status = 'dispatching', owner_id = ?, owner_pid = ?, updated_at = ? "
+        + "WHERE id = ? AND status = 'pending'",
+      ).run(ownerId, process.pid, new Date().toISOString(), id);
+      if (Number(result.changes) === 0) return undefined;
+      const row = db.prepare("SELECT * FROM schedule_occurrences WHERE id = ?").get(id);
+      return parseOccurrence(row as Record<string, unknown>);
+    }));
+  }
+
+  async finishOccurrence(input: {
+    id: string;
+    ownerId: string;
+    status: "dispatched" | "unknown";
+    runId?: string;
+    error?: string;
+  }): Promise<void> {
+    await this.withDatabase((db) => {
+      const result = db.prepare(
+        "UPDATE schedule_occurrences SET status = ?, run_id = ?, error = ?, owner_id = NULL, owner_pid = NULL, updated_at = ? "
+        + "WHERE id = ? AND status = 'dispatching' AND owner_id = ?",
+      ).run(input.status, input.runId ?? null, input.error ?? null, new Date().toISOString(), input.id, input.ownerId);
+      if (Number(result.changes) !== 1) throw new Error("The schedule occurrence is not held by this dispatcher.");
+    });
+  }
+
+  async recoverAbandonedOccurrences(isLocalOwnerActive: (ownerId: string) => boolean): Promise<void> {
+    await this.withDatabase((db) => transaction(db, () => {
+      const rows = db.prepare("SELECT * FROM schedule_occurrences WHERE status = 'dispatching'").all();
+      for (const row of rows) {
+        const occurrence = parseOccurrence(row as Record<string, unknown>);
+        const alive = occurrence.ownerPid === process.pid
+          ? occurrence.ownerId !== undefined && isLocalOwnerActive(occurrence.ownerId)
+          : occurrence.ownerPid !== undefined && isProcessAlive(occurrence.ownerPid);
+        if (alive) continue;
+        db.prepare(
+          "UPDATE schedule_occurrences SET status = 'unknown', error = ?, owner_id = NULL, owner_pid = NULL, updated_at = ? "
+          + "WHERE id = ? AND status = 'dispatching'",
+        ).run("Dispatcher stopped after starting; check the outcome before retrying.", new Date().toISOString(), occurrence.id);
+      }
+    }));
+  }
+
+  async resolveOccurrence(id: string, resolution: "retry" | "dismiss"): Promise<void> {
+    await this.withDatabase((db) => {
+      const result = db.prepare(
+        "UPDATE schedule_occurrences SET status = ?, error = NULL, updated_at = ? WHERE id = ? AND status = 'unknown'",
+      ).run(resolution === "retry" ? "pending" : "dismissed", new Date().toISOString(), id);
+      if (Number(result.changes) !== 1) throw new Error("Only an unknown occurrence can be resolved.");
+    });
+  }
+
+  private async initialize(): Promise<void> {
     await mkdir(dirname(this.#path), { recursive: true });
+    const db = this.openDatabase();
     try {
-      const parsed = JSON.parse(await readFile(this.#path, "utf8")) as { schedules?: unknown };
-      this.#schedules = Array.isArray(parsed.schedules) ? parsed.schedules.filter(isLocalSchedule) : [];
-    } catch (error: unknown) {
-      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return;
-      throw error;
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS schedules (id TEXT PRIMARY KEY, body TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS schedule_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS schedule_occurrences (
+          id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, run_key TEXT NOT NULL,
+          schedule TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL, owner_id TEXT, owner_pid INTEGER, run_id TEXT, error TEXT,
+          UNIQUE (schedule_id, run_key)
+        );
+      `);
+      if (db.prepare("SELECT value FROM schedule_metadata WHERE key = 'legacy_imported'").get() !== undefined) return;
+      let legacy: unknown = { schedules: [] };
+      try {
+        legacy = JSON.parse(await readFile(this.#path, "utf8")) as unknown;
+      } catch (error: unknown) {
+        if (!isMissingFile(error)) throw error;
+      }
+      const entries = (legacy as { schedules?: unknown } | null)?.schedules;
+      if (!Array.isArray(entries) || entries.some((entry) => !isLocalSchedule(entry))) {
+        throw new Error("The legacy schedule file is malformed; it was not migrated.");
+      }
+      transaction(db, () => {
+        if (db.prepare("SELECT value FROM schedule_metadata WHERE key = 'legacy_imported'").get() !== undefined) return;
+        const insert = db.prepare("INSERT INTO schedules (id, body) VALUES (?, ?)");
+        for (const schedule of entries as LocalSchedule[]) insert.run(schedule.id, JSON.stringify(schedule));
+        db.prepare("INSERT INTO schedule_metadata (key, value) VALUES ('legacy_imported', '1')").run();
+      });
+    } finally {
+      db.close();
     }
   }
+
+  private openDatabase(): DatabaseSync {
+    const db = new DatabaseSync(this.#databasePath);
+    db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000");
+    return db;
+  }
+
+  private async withDatabase<T>(operation: (db: DatabaseSync) => T): Promise<T> {
+    await this.#ready;
+    const db = this.openDatabase();
+    try {
+      return operation(db);
+    } finally {
+      db.close();
+    }
+  }
+}
+
+function transaction<T>(db: DatabaseSync, operation: () => T): T {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = operation();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function readSchedules(db: DatabaseSync): LocalSchedule[] {
+  const rows = db.prepare("SELECT body FROM schedules ORDER BY rowid").all() as Array<{ body: string }>;
+  return rows.map((row) => parseSchedule(row.body));
+}
+
+function parseSchedule(source: string): LocalSchedule {
+  const schedule = JSON.parse(source) as unknown;
+  if (!isLocalSchedule(schedule)) throw new Error("A stored schedule is malformed.");
+  return schedule;
+}
+
+function parseOccurrence(row: Record<string, unknown>): ScheduleOccurrence {
+  return {
+    id: String(row.id),
+    scheduleId: String(row.schedule_id),
+    runKey: String(row.run_key),
+    schedule: parseSchedule(String(row.schedule)),
+    status: row.status as ScheduleOccurrenceStatus,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    ...(row.owner_id == null ? {} : { ownerId: String(row.owner_id) }),
+    ...(row.owner_pid == null ? {} : { ownerPid: Number(row.owner_pid) }),
+    ...(row.run_id == null ? {} : { runId: String(row.run_id) }),
+    ...(row.error == null ? {} : { error: String(row.error) }),
+  };
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid < 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return !(typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH");
+  }
+}
+
+function isMissingFile(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 export function localDayKey(value: Date): string {

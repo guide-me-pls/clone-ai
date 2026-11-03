@@ -67,10 +67,11 @@ test("a queued run is executed by the consumer, not left claiming progress", asy
 
   // The consumer dispatches asynchronously; wait for the run to settle.
   // 消费者异步派发；等待 Run 落定。
-  for (let attempt = 0; attempt < 50 && runtime.getRun(run.id).status !== "completed"; attempt += 1) {
+  for (let attempt = 0; attempt < 50 && runtime.getRun(run.id).status !== "waiting_review"; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  assert.equal(runtime.getRun(run.id).status, "completed");
+  assert.equal(runtime.getRun(run.id).status, "waiting_review");
+  assert.equal((await runtime.reviewVerification(run.id, "accept")).status, "completed");
   assert.equal(worker.calls, 1);
 });
 
@@ -108,7 +109,7 @@ test("recall serves promoted memories only, never raw candidates", async (t) => 
     await rm(directory, { recursive: true, force: true });
   });
   const governance = new MemoryGovernance({ journal, store });
-  const source = new GovernedMemorySource(directory);
+  const source = new GovernedMemorySource(directory, 4, journal);
 
   // A mined candidate exists in the journal but was never promoted.
   // 一条提炼出的候选存在于 Journal，但从未被提升。

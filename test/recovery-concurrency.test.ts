@@ -32,6 +32,7 @@ class RecoveringAdapter implements RuntimeAdapter {
       cancellation: false,
       approvalCallback: false,
       parallelAssignments: true,
+      retrySafeAfterInterruption: true,
       work: ["drafting", "filesystem_write"],
       evidenceKinds: ["artifact", "observation"],
     };
@@ -185,6 +186,7 @@ async function prepareInterruptedRun(
       role: order.role,
       title: order.title,
       status: "running",
+      retrySafeAfterInterruption: true,
       workspaceCheckpoint: checkpoint,
       workspacePath: workspace,
       attempt: 1,
@@ -197,7 +199,7 @@ async function prepareInterruptedRun(
   return { directory, workspace, journal, store, runId: run.id, stepId: "step-1", order };
 }
 
-test("a restarted Kernel reruns a black-box task only after confirming no Workspace side effect", async (t) => {
+test("a replay-safe adapter reruns only after confirming no Workspace side effect", async (t) => {
   const prepared = await prepareInterruptedRun(t);
   const adapter = new RecoveringAdapter("out/recovered.md");
   const runtime = new CloneRuntime({
@@ -211,7 +213,7 @@ test("a restarted Kernel reruns a black-box task only after confirming no Worksp
 
   const result = await runtime.execute(prepared.runId, new StaticAgentRegistry([adapter]));
 
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "waiting_review");
   assert.equal(adapter.calls, 1);
   assert.match(await readFile(join(prepared.workspace, "out/recovered.md"), "utf8"), /recovered/);
   const events = await runtime.getEventsForRun(prepared.runId);
@@ -219,7 +221,7 @@ test("a restarted Kernel reruns a black-box task only after confirming no Worksp
   assert.ok(events.includes("subagent.resumed"));
 });
 
-test("a deleted file after a black-box crash is restored from checkpoint then rerun", async (t) => {
+test("a deleted file from a replay-safe adapter is restored from checkpoint then rerun", async (t) => {
   const prepared = await prepareInterruptedRun(t, { baselineFile: "out/original.md" });
   await rm(join(prepared.workspace, "out/original.md"));
   const adapter = new RecoveringAdapter("out/recovered.md");
@@ -235,7 +237,7 @@ test("a deleted file after a black-box crash is restored from checkpoint then re
 
   const result = await runtime.execute(prepared.runId, new StaticAgentRegistry([adapter]));
 
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "waiting_review");
   assert.equal(adapter.calls, 1);
   assert.equal(await readFile(join(prepared.workspace, "out/original.md"), "utf8"), "before");
   const events = await journal.list();
@@ -266,7 +268,7 @@ test("a hash-only checkpoint still blocks recovery when files were deleted", asy
   assert.equal((recovery?.payload as { decision?: string }).decision, "blocked");
 });
 
-test("a complete file left by a crashed black box is reconciled without a second process", async (t) => {
+test("a complete file from a replay-safe adapter is reconciled without a second process", async (t) => {
   const prepared = await prepareInterruptedRun(t);
   await mkdir(join(prepared.workspace, "out"), { recursive: true });
   await writeFile(join(prepared.workspace, "out/recovered.md"), "already written", "utf8");
@@ -283,7 +285,7 @@ test("a complete file left by a crashed black box is reconciled without a second
 
   const result = await runtime.execute(prepared.runId, new StaticAgentRegistry([adapter]));
 
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "waiting_review");
   assert.equal(adapter.calls, 0);
   assert.ok((await runtime.getEventsForRun(prepared.runId)).includes("subagent.verified"));
 });
@@ -291,9 +293,9 @@ test("a complete file left by a crashed black box is reconciled without a second
 test("a lock owned by a dead Supervisor is reclaimed", async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), "clone-ai-stale-lock-"));
   t.after(async () => rm(workspace, { recursive: true, force: true }));
-  await mkdir(join(workspace, ".clone-ai"), { recursive: true });
+  await mkdir(join(workspace, ".clone"), { recursive: true });
   await writeFile(
-    join(workspace, ".clone-ai", "workspace-execution.lock"),
+    join(workspace, ".clone", "workspace-execution.lock"),
     JSON.stringify({ pid: 2_147_483_647, acquiredAt: new Date().toISOString() }),
     "utf8",
   );
@@ -303,6 +305,7 @@ test("a lock owned by a dead Supervisor is reclaimed", async (t) => {
     entered = true;
   });
   assert.equal(entered, true);
+  await assert.rejects(readFile(join(workspace, ".clone", "workspace-execution.lock")), /ENOENT/);
 });
 
 test("ready writers sharing one Workspace never overlap", async (t) => {
@@ -344,7 +347,7 @@ test("ready writers sharing one Workspace never overlap", async (t) => {
 
   const result = await runtime.execute(run.id, agents);
 
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "waiting_review");
   assert.equal(state.maximum, 1);
 });
 

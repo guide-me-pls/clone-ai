@@ -36,3 +36,13 @@ On Windows, `npm run desktop:build` creates a directly runnable executable at
 desktop preview: a distributable installer, tray behavior, notifications, and the native
 approval flow remain later milestones. `npm run companion:debug` is still useful only for
 developer browser inspection of the daemon API.
+
+On Apple Silicon macOS, `npm run desktop:mac:build` creates a self-contained
+`dist/Clone AI.app`, a compressed `dist/Clone AI-macOS-arm64.zip`, and a
+`dist/Clone AI-macOS-arm64.dmg`. The native Swift shell hosts a WebKit window and starts
+the bundled Node runtime as a supervised child, waiting for its loopback ready event. The
+default workspace is `~/Documents/Clone AI`; the owner can change it in Settings. This is
+an ad-hoc signed local build, not a notarized App Store or internet-distribution artifact.
+The machine currently needs an arm64 Node.js 24+ runtime for the build; set
+`CLONE_AI_MAC_NODE` to an explicit executable when it is not available at the default
+local runtime path.

@@ -7,6 +7,7 @@ const STATUSES: readonly RunStatus[] = [
   "running",
   "waiting_approval",
   "verifying",
+  "waiting_review",
   "completed",
   "failed",
   "cancelled",

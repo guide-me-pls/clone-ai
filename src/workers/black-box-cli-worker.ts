@@ -44,6 +44,8 @@ export interface BlackBoxProviderConfig {
   supportedRoles?: readonly AgentRole[];
   roleRestrictionReason?: string;
   timeoutMs?: number;
+  /** Explicit owner opt-in to an unisolated host process; this is not a sandbox. 所有者明确允许无限制主机进程；这不是沙箱。 */
+  hostAccess?: "unrestricted";
 }
 
 const DEFAULT_WORK = [
@@ -54,7 +56,6 @@ const DEFAULT_WORK = [
   "implementation",
   "filesystem_read",
   "filesystem_write",
-  "external_action",
 ];
 
 /**
@@ -82,6 +83,7 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
   readonly #workCapabilities: string[];
   readonly #catalog: OutcomeCatalog;
   readonly #active = new Map<string, ChildProcess>();
+  readonly #preparing = new Map<string, { cancelled: boolean }>();
 
   constructor(input: {
     agentId: string;
@@ -106,7 +108,8 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
       cancellation: true,
       approvalCallback: false,
       parallelAssignments: true,
-      work: [...this.#workCapabilities],
+      retrySafeAfterInterruption: false,
+      work: this.#workCapabilities.filter((capability) => capability !== "external_action"),
       // Receipts attest that an external action really happened and can never
       // come from a worker; artifacts are proven by the workspace itself.
       // Receipt 证明外部动作确实发生，永远不能来自 Worker；Artifact 由 Workspace 自身证明。
@@ -115,6 +118,8 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
   }
 
   async cancel(sessionId: string): Promise<void> {
+    const preparing = this.#preparing.get(sessionId);
+    if (preparing !== undefined) preparing.cancelled = true;
     const child = this.#active.get(sessionId);
     if (child === undefined) return;
     this.#active.delete(sessionId);
@@ -123,6 +128,20 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
 
   async *execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
     const config = this.#config;
+    const external = [input.step.risk, input.workOrder?.risk].some((risk) => risk === "external_side_effect" || risk === "irreversible");
+    const refusal = external
+      ? "External actions require a separately governed action connector; black-box CLI workers cannot perform them."
+      : config.hostAccess !== "unrestricted"
+        ? "Unrestricted host execution is disabled: this black-box worker has no enforced sandbox."
+        : undefined;
+    if (refusal !== undefined) {
+      yield {
+        type: "failed",
+        message: refusal,
+        report: { providerId: this.providerId, agentId: this.id, category: "permission_denied", signature: "worker-boundary-refused", detail: refusal },
+      };
+      return;
+    }
     const workspace = resolve(input.workspacePath ?? process.cwd());
     const budgetMs = input.workOrder?.budget.maxDurationMs ?? config.timeoutMs ?? 20 * 60_000;
     const sessionId = randomUUID();
@@ -131,33 +150,42 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
       throw new Error(`The worker prompt exceeds the ${MAX_PROMPT_CHARS}-character budget (${prompt.length}).`);
     }
 
-    yield { type: "session_started", sessionId };
-
-    // Observed before the work starts; the diff afterwards is the evidence.
-    // 在工作开始前观察；之后的差异就是证据。
-    const before = await snapshotWorkspace(workspace);
-
+    const preparation = { cancelled: false };
+    this.#preparing.set(sessionId, preparation);
     const usesStdin = config.promptVia === "stdin";
-    const args = (config.args ?? []).map((argument) => argument
-      .replaceAll("{{prompt}}", usesStdin ? "" : prompt)
-      .replaceAll("{{workspace}}", workspace));
-    // Windows cannot spawn a .cmd shim without a shell, and spawning through a
-    // shell would open the prompt to argument injection. Resolve the real
-    // executable behind the shim instead.
-    // Windows 不能用无 shell 的 spawn 启动 .cmd 垫片，而走 shell 又会让 Prompt 暴露在
-    // 参数注入之下；因此改为解析垫片背后的真实可执行文件。
-    const resolved = resolveWindowsCommand(config.command);
-    const spawnArgs = usesStdin ? args : args.length > 0 ? args : [prompt];
-    const child = spawn(resolved.command, [...resolved.prefixArgs, ...spawnArgs], {
-      cwd: workspace,
-      env: buildEnvironment(config.env ?? []),
-      stdio: usesStdin ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      // POSIX: own process group so the whole tree can be terminated.
-      // POSIX：独立进程组，以便能终止整棵进程树。
-      ...(process.platform === "win32" ? {} : { detached: true }),
-    });
-    this.#active.set(sessionId, child);
+    let before: Awaited<ReturnType<typeof snapshotWorkspace>>;
+    let child: ChildProcess;
+    try {
+      yield { type: "session_started", sessionId };
+      if (preparation.cancelled) return;
+
+      // Observed before the work starts; the diff afterwards is the evidence.
+      // 在工作开始前观察；之后的差异就是证据。
+      before = await snapshotWorkspace(workspace);
+      if (preparation.cancelled) return;
+      const args = (config.args ?? []).map((argument) => argument
+        .replaceAll("{{prompt}}", usesStdin ? "" : prompt)
+        .replaceAll("{{workspace}}", workspace));
+      // Windows cannot spawn a .cmd shim without a shell, and spawning through a
+      // shell would open the prompt to argument injection. Resolve the real
+      // executable behind the shim instead.
+      // Windows 不能用无 shell 的 spawn 启动 .cmd 垫片，而走 shell 又会让 Prompt 暴露在
+      // 参数注入之下；因此改为解析垫片背后的真实可执行文件。
+      const resolved = resolveWindowsCommand(config.command);
+      const spawnArgs = usesStdin ? args : args.length > 0 ? args : [prompt];
+      child = spawn(resolved.command, [...resolved.prefixArgs, ...spawnArgs], {
+        cwd: workspace,
+        env: buildEnvironment(config.env ?? []),
+        stdio: usesStdin ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        // POSIX: own process group so the whole tree can be terminated.
+        // POSIX：独立进程组，以便能终止整棵进程树。
+        ...(process.platform === "win32" ? {} : { detached: true }),
+      });
+      this.#active.set(sessionId, child);
+    } finally {
+      this.#preparing.delete(sessionId);
+    }
     // Exit and error are observed immediately: an unobserved ChildProcess
     // "error" event would crash the supervisor when a command is missing.
     // 立刻观察 exit 与 error：命令不存在时，无人监听的 ChildProcess "error" 事件

@@ -9,7 +9,8 @@
  * evidence id must actually exist in the job — a hallucinated memory never
  * reaches the proposal queue.
  *
- * Failure is deliberately silent: mining must never break the main flow.
+ * Mining failures are reported to the pipeline so it can retain the job;
+ * callers keep the already-completed user task separate from that failure.
  *
  * AgentMemoryWorker：由后台黑盒 Agent 完成的记忆提炼。
  *
@@ -18,7 +19,7 @@
  * out/candidates.json。Kernel 随后校验每一条候选：类型必须是已知分类、摘要不能
  * 空泛、引用的每条 Evidence ID 必须真实存在于任务中——幻觉记忆永远进不了提案队列。
  *
- * 失败被刻意静默：提炼绝不能破坏主流程。
+ * 提炼失败会告知流水线以保留任务；调用方不会因此撤销已完成的用户工作。
  */
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -33,6 +34,8 @@ export interface AgentMemoryWorkerOptions {
   /** Launch recipe for the mining provider. Defaults to the built-in pi recipe. 提炼 Provider 的启动配方，默认内建 pi 配方。 */
   config?: BlackBoxProviderConfig;
   timeoutMs?: number;
+  /** Explicitly permits the default miner to run without a sandbox. 明确允许默认提炼器无沙箱运行。 */
+  allowUnrestrictedHost?: boolean;
   /** Hard cap on candidates per task. 每个任务候选条数上限。 */
   maxCandidates?: number;
 }
@@ -55,7 +58,7 @@ export class AgentMemoryWorker implements MemoryWorker {
   readonly #maxCandidates: number;
 
   constructor(options: AgentMemoryWorkerOptions = {}) {
-    this.#config = options.config ?? DEFAULT_CONFIG;
+    this.#config = options.config ?? { ...DEFAULT_CONFIG, ...(options.allowUnrestrictedHost === true ? { hostAccess: "unrestricted" as const } : {}) };
     this.#timeoutMs = options.timeoutMs ?? 60_000;
     this.#maxCandidates = options.maxCandidates ?? 3;
   }
@@ -69,7 +72,7 @@ export class AgentMemoryWorker implements MemoryWorker {
         workCapabilities: ["research", "filesystem_read", "filesystem_write"],
       });
       const createdAt = new Date().toISOString();
-      for await (const _event of adapter.execute({
+      for await (const event of adapter.execute({
         run: { id: job.run.id, taskId: job.task.id, status: "running", createdAt, updatedAt: createdAt },
         task: job.task,
         step: {
@@ -96,14 +99,12 @@ export class AgentMemoryWorker implements MemoryWorker {
         },
         workspacePath: workspace,
       })) {
-        // The mining WorkOrder either produces the file or fails; progress is noise.
-        // 提炼 WorkOrder 要么产出文件要么失败；进度文本只是噪音。
+        if (event.type === "failed") throw new Error(`Memory mining failed: ${event.report?.category ?? event.message}`);
       }
       const source = await readFile(join(workspace, "out", "candidates.json"), "utf8").catch(() => undefined);
-      if (source === undefined) return [];
+      if (source === undefined) throw new Error("Memory mining did not produce a candidate file.");
+      if (parseJsonArray(source) === undefined) throw new Error("Memory mining produced invalid JSON.");
       return validateCandidates(source, job, this.#maxCandidates);
-    } catch {
-      return [];
     } finally {
       await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
     }
