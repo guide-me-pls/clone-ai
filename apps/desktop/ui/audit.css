@@ -1,3 +1,11 @@
+/* The hidden attribute must beat author display rules. Several panels are laid out
+ * with display:grid/flex, and a CSS display value overrides the browser's [hidden] rule,
+ * so "hidden" cards (the pending-reply indicator, the opportunity strip) stayed on screen.
+ * 隐藏属性必须压过作者样式里的 display。有些面板用 display:grid/flex 布局，而 CSS 的 display
+ * 会盖掉浏览器默认的 [hidden] 规则，导致"已隐藏"的卡片（等待回复提示、机会条）仍然显示。
+ */
+[hidden] { display: none !important; }
+
 /* Audit & eval view. Scoped under #audit-root so it cannot restyle the rest of the app. 审计与评估视图，限定在 #audit-root 内，不影响其他界面。 */
 #audit-root { --au-ok: var(--success, #238653); --au-bad: var(--danger, #c23f45); --au-warn: var(--warning, #b86d12); --au-info: var(--accent, #3468f6); --au-mute: #8791a1; font-size: 13px; color: var(--text, #20242c); }
 #audit-root * { box-sizing: border-box; }

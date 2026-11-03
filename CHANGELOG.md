@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Chat rendering fixes
+
+The "Main Agent is thinking" card stayed on screen after the reply arrived: its CSS sets `display: grid`, which overrode the `hidden` attribute. A global `[hidden] { display: none !important }` now wins, which also fixes the hidden opportunity strip. Markdown list items were double-spaced (each item's trailing `<br>` rendered as an empty line, so the bullet looked detached from its text); line breaks adjacent to block-level list/heading elements are now dropped.
+
+界面修复：「Main Agent 正在思考」在回复到达后仍然显示——它的样式设了 `display: grid`，压过了 `hidden` 属性。现在用全局 `[hidden] { display: none !important }` 压制，也顺带修好了被隐藏的机会条。Markdown 列表项被拉开双倍行距（每项尾部多余的 `<br>` 渲染成一整行空行，圆点看起来与正文分离）；现在会去掉紧邻列表/标题块级元素的换行。
+
 ### Audit & eval, visual
 
 Settings → 审计与轨迹 is now a dashboard (`apps/desktop/ui/audit.js`): an overview (pass rate, runs per day, where failures happen, failure categories, per-tool comparison with cost and gateway errors), a filterable run list with a detail panel (stage strip, why it failed, execution timeline, policy verdicts per scope, evidence, verification, sha256 digest, raw record), and an evaluation tab. Evaluation uses owner ground truth instead of a model grader: mark a finished run 合格 / 不合格 (`POST /api/audit/:runId/label`, journaled as `audit.labeled`) and the system's own verdict is compared with yours, reporting agreement, false-pass (system completed, owner failed) and false-fail. A run in `waiting_review` has no system verdict, so your label there is the verdict and is not counted as agreement. `GET /api/audit/export` downloads JSONL. Labels are judgement, so they are not part of a record's digest.
