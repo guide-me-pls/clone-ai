@@ -22,7 +22,7 @@ export interface PiModelOption {
  * 模型引用，绝不返回凭据。
  */
 export async function listPiModels(providerId?: string): Promise<PiModelOption[]> {
-  const runtime = await ModelRuntime.create({ refreshOnCreate: true, allowModelNetwork: false });
+  const runtime = await ModelRuntime.create({ refreshOnCreate: false, allowModelNetwork: false });
   const configured = await configuredModelKeys();
   const available = new Set(
     runtime.getAvailableSnapshot().map((model) => `${model.provider}\0${model.id}`),

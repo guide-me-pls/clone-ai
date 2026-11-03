@@ -69,7 +69,7 @@ export function reduceEvent(state: RuntimeProjection, event: JournalEvent): Runt
       return { ...state, runs: { ...state.runs, [run.id]: run } };
     }
     case "run.status_changed": {
-      const payload = event.payload as { status: RunStatus; activeStepId?: string };
+      const payload = event.payload as { status: RunStatus; activeStepId?: string; reason?: string };
       const run = requireRun(state, event.runId);
       assertTransition(run.status, payload.status);
       return {
@@ -80,6 +80,7 @@ export function reduceEvent(state: RuntimeProjection, event: JournalEvent): Runt
             ...run,
             status: payload.status,
             activeStepId: payload.activeStepId,
+            ...(payload.status === "failed" && typeof payload.reason === "string" ? { failureReason: payload.reason } : {}),
             updatedAt: event.occurredAt,
           },
         },

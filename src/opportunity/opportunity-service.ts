@@ -18,6 +18,7 @@ import type { JournalStore } from "../core/journal.ts";
 import type { Commitment, Goal } from "../state/personal-state.ts";
 import { projectPersonalState } from "../state/state-projector.ts";
 import { dedupeOpportunities, scanOpportunities, type OpportunityCard } from "./opportunity.ts";
+import { describeFailureForOwner } from "../core/failure-display.ts";
 
 export class OpportunityService {
   readonly #journal: JournalStore;
@@ -109,11 +110,23 @@ export class OpportunityService {
         .map((event) => (event.payload as { id?: unknown }).id as string | undefined)
         .filter((id): id is string => id !== undefined),
     );
-    return events
+    const cards = events
       .filter((event) => event.type === "opportunity.proposed")
-      .map((event) => event.payload as OpportunityCard)
+      .map((event) => normalizeOpportunityForDisplay(event.payload as OpportunityCard))
       .filter((card) => !resolved.has(card.id))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    // Legacy failure clicks produced one card per duplicate Run. Keep the
+    // newest card per failure title so one unresolved problem is one decision.
+    // 旧版失败点击会为每个重复 Run 生成一张卡片。按失败标题只保留最新的一张，
+    // 让一个未解决的问题只对应一个决定。
+    const seenFailureTitles = new Set<string>();
+    return cards.filter((card) => {
+      if (card.source !== "failed_task") return true;
+      const key = card.title.replace(/\s+/g, " ").trim();
+      if (seenFailureTitles.has(key)) return false;
+      seenFailureTitles.add(key);
+      return true;
+    });
   }
 
   /** A card the owner accepted or dismissed, for audit and for tests. 已被所有者处置的卡片。 */
@@ -140,6 +153,28 @@ export class OpportunityService {
       payload: { id: cardId, status, resolvedAt: new Date().toISOString() },
     });
   }
+}
+
+function normalizeOpportunityForDisplay(card: OpportunityCard): OpportunityCard {
+  if (card.source !== "failed_task") return card;
+  const display = describeFailureForOwner(card.title, {});
+  if (display.permissionBlocked || /Unrestricted host execution|no enforced sandbox/i.test(card.title)) {
+    return {
+      ...card,
+      title: "任务需要跟进：本机 Worker 缺少运行权限",
+      whyNow: "这条失败记录由旧版本写入：本机 Worker 没有强制沙箱，默认禁止不受限运行。",
+      proposedResult: "打开「设置 → Agent」，为这个 Worker 明确允许不受限运行；也可以把该角色改绑到其他已允许的 Worker。",
+      serves: card.serves === undefined ? card.serves : { ...card.serves, title: "本机 Worker 缺少运行权限" },
+    };
+  }
+  if (/[\u3400-\u9fff]/.test(card.title)) return card;
+  return {
+    ...card,
+    title: `任务需要跟进：${display.summary}`,
+    whyNow: display.summary,
+    proposedResult: display.guidance,
+    serves: card.serves === undefined ? card.serves : { ...card.serves, title: display.summary },
+  };
 }
 
 export { randomUUID as _randomUuidReexport };

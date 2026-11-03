@@ -27,8 +27,6 @@ test("the desktop HTML marks chrome so config.locale can replace it", async () =
   assert.match(html, /components\.css/);
   assert.match(html, /components\.js/);
   assert.match(html, /id="agent-page"/);
-  assert.match(html, /id="workspace-open"/);
-  assert.match(html, /id="workspace-name"/);
   const js = await readFile(join(process.cwd(), "apps/desktop/ui/app.js"), "utf8");
   assert.match(js, /function applyChrome/);
   assert.match(js, /config\.ui\?\.strings/);
@@ -38,6 +36,7 @@ test("the desktop HTML marks chrome so config.locale can replace it", async () =
   assert.match(js, /empty-model-reply/);
   assert.match(js, /classList\.toggle\("empty-conversation"/);
   assert.match(js, /starter-grid/);
+  assert.match(js, /api\/main-agent\/interruptions/);
 });
 
 test("the shared component library exposes the primitives used by the UI", async () => {

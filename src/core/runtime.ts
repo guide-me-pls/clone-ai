@@ -416,7 +416,23 @@ export class CloneRuntime {
           await this.executeSingleAgent({ run, task, step, agents });
         }
       } catch (error: unknown) {
-        await this.changeStatus(run.id, "failed", step.id);
+        // Persist why the step stopped, including the failure category when a
+        // worker supplied one. "failed" without a reason is not actionable.
+        // 持久化步骤停止的真实原因，并在 Worker 提供时保留失败分类；
+        // 只有状态、没有原因的 "failed" 无法让所有者采取下一步。
+        const message = redactAuditText(error instanceof Error ? error.message : "Unknown execution failure.");
+        const report = error instanceof WorkerFailure ? error.report : undefined;
+        await this.record({
+          type: "execution.failed",
+          taskId: task.id,
+          runId: run.id,
+          payload: {
+            stepId: step.id,
+            message,
+            ...(report === undefined ? {} : { report }),
+          },
+        });
+        await this.changeStatus(run.id, "failed", step.id, message);
         return { run: this.requireRun(run.id), status: "failed" };
       }
     }
@@ -1467,9 +1483,14 @@ export class CloneRuntime {
     await this.record({ type: "evidence.recorded", taskId: input.task.id, runId: input.run.id, payload: evidence });
   }
 
-  private async changeStatus(runId: string, status: RunStatus, activeStepId?: string): Promise<void> {
+  private async changeStatus(runId: string, status: RunStatus, activeStepId?: string, reason?: string): Promise<void> {
     const run = this.requireRun(runId);
-    await this.record({ type: "run.status_changed", taskId: run.taskId, runId, payload: { status, activeStepId } });
+    await this.record({
+      type: "run.status_changed",
+      taskId: run.taskId,
+      runId,
+      payload: { status, activeStepId, ...(reason === undefined ? {} : { reason }) },
+    });
   }
 
   private async record(input: Parameters<JournalStore["append"]>[0]): Promise<void> {

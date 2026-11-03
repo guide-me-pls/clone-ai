@@ -164,6 +164,8 @@ export interface Run {
   updatedAt: string;
   planId?: string;
   activeStepId?: string;
+  /** Last recorded failure reason, when the run stopped before completion. 未完成时记录的最后失败原因。 */
+  failureReason?: string;
 }
 
 export interface ApprovalGrant {
@@ -267,6 +269,7 @@ export type JournalEventType =
   | "policy.decided"
   | "approval.granted"
   | "execution.started"
+  | "execution.failed"
   | "execution.progress"
   // A routing decision is not a dispatch: it records which worker was chosen
   // and why, before any process exists to dispatch to.
