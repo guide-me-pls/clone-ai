@@ -58,6 +58,15 @@
       <small>保存会同时改写对应的 .md 文件。</small></div>`;
   }
 
+  /** A body identical to the summary is not worth saying twice. 正文与摘要相同的，不必重复说一遍。 */
+  function bodyOf(item) {
+    const content = (item.content ?? "").trim();
+    const summary = (item.summary ?? "").trim();
+    return content.length === 0 || content === summary
+      ? `<p class="mem-content mem-content-same">正文与摘要相同；直接编辑即可补充背景或例外。</p>`
+      : `<p class="mem-content">${escape(content)}</p>`;
+  }
+
   function provenance(item) {
     const detail = state.details.get(item.id);
     const runs = item.sourceRunId && item.sourceRunId !== "owner"
@@ -88,7 +97,7 @@
         <span class="mem-meta">召回 ${item.accessCount || 0} · ${day(item.updatedAt)}</span>
       </summary>
       <div class="mem-body">
-        ${editing ? editor(item) : `<p class="mem-content">${escape(item.content || item.summary)}</p>`}
+        ${editing ? editor(item) : bodyOf(item)}
         ${provenance(item)}
         <div class="mem-actions">
           <button type="button" class="mem-btn" data-mem-edit="${escape(item.id)}">${editing ? "收起编辑" : "编辑"}</button>
