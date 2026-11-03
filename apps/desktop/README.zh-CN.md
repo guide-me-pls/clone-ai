@@ -37,3 +37,7 @@ macOS 版本默认以 `~/Documents/Clone AI` 作为工作目录，可在设置�
 ad-hoc 签名，不是经过 Apple notarization 的 App Store 或互联网分发版本。构建机需要
 arm64 Node.js 24+；如果运行时不在默认本地缓存路径，可通过 `CLONE_AI_MAC_NODE` 指向
 显式可执行文件。
+
+macOS 原生壳采用常驻应用语义：关闭最后一个窗口不会退出，本地运行时继续工作；再次点击
+Dock 图标会显示原有窗口。只有显式选择 Dock 菜单中的“退出”（或操作系统关机）才会停止
+受监督的本地运行时。
