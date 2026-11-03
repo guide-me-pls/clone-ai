@@ -277,6 +277,9 @@ export type JournalEventType =
   | "approval.granted"
   | "execution.started"
   | "execution.progress"
+  // Why a single-agent step ended the run. Without it a failed run only said "failed".
+  // 单 Agent 步骤为何让 Run 失败。没有它，失败的 Run 只会说一句 "failed"。
+  | "execution.failed"
   // A routing decision is not a dispatch: it records which worker was chosen
   // and why, before any process exists to dispatch to.
   // 路由决策不是一次派发：它在任何可派发的进程存在之前，记录选了哪个 Worker、为什么。

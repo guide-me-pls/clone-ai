@@ -6,6 +6,16 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Why workers "always failed", and the audit that now says so
+
+Root causes found by running the real CLIs and reading the gateway's request log: (1) every built-in worker was blocked by default ("Unrestricted host execution is disabled"), so every run failed in under two seconds; (2) the reason was never journaled, only `status: failed`; (3) once unblocked, Codex failed inside our sandbox because macOS forbids nested sandboxes, and (4) Pi's inherited default model (`gemini-4-argon` through Magpie) returns HTTP 400 on the turn after a tool call, so Pi did the work and then exited non-zero.
+Fixes: built-in providers now default to the OS sandbox on macOS (`sandbox: "seatbelt"`, network on, CLI state dirs writable; Codex's own sandbox is turned off via `{{sandboxArgs}}` because ours enforces); a provider can pin a model (`clone-ai model pi magpie/360/deepseek/deepseek-v4.1-flash`) through `{{modelArgs}}`; owner provider overrides now merge field-wise over the built-in recipe. A failed single-agent step now journals `execution.failed` with the message and structured failure report.
+Audit: `clone-ai audit [runId|export]` and `GET /api/audit[/:runId]` project one record per run from the journal only: plan, policy verdicts, executions (provider, duration), evidence, verification, `failureStage`/`failureCategory`/`reason`, and a sha256 digest of the run's events. Executions are joined with Magpie's per-request log (tokens, cost, HTTP errors) by provider and time window, labelled `time_window` because the gateway cannot attribute a request to a run.
+
+为什么 worker "总是失败"，以及现在能说清原因的审计：实际运行各 CLI 并读取网关请求日志，找到的根因是：(1) 所有内建 worker 默认被阻断，每个 Run 不到两秒就失败；(2) 失败原因从未写入 Journal，只有 `status: failed`；(3) 解除阻断后，Codex 在我们的沙箱里失败，因为 macOS 不允许嵌套沙箱；(4) Pi 继承的默认模型（经 Magpie 的 `gemini-4-argon`）在工具调用后的下一轮返回 HTTP 400，于是 Pi 干完活却以非零退出。
+修复：内建 provider 在 macOS 上默认使用 OS 沙箱（`sandbox: "seatbelt"`，开网络，CLI 状态目录可写；Codex 自带沙箱通过 `{{sandboxArgs}}` 关闭，由我们的沙箱执行约束）；provider 可通过 `{{modelArgs}}` 固定模型；所有者的 provider 覆盖项改为在内建配方之上按字段合并。单 Agent 步骤失败现在会写入 `execution.failed`，带消息与结构化失败报告。
+审计：`clone-ai audit [runId|export]` 与 `GET /api/audit[/:runId]` 只从 Journal 投影每个 Run 一条记录：计划、策略判定、执行（provider、耗时）、证据、验证、`failureStage`/`failureCategory`/原因，以及该 Run 事件的 sha256 摘要。执行记录按 provider 与时间窗口关联 Magpie 的逐请求日志（token、费用、HTTP 错误），标为 `time_window`，因为网关无法把请求归属到某个 Run。
+
 ### Machine-wide authority kernel (phase 1)
 
 Authority is now expressed as scopes (`files` / `shell` / `network`) and judged by `AuthorityPolicyEngine`: a per-domain autonomy ladder (`observe` < `prepare` < `act_with_approval` < `act_auto`) plus owner-authored standing policies in `policies.json`. Defaults are `observe`, so nothing is writable until the owner raises a domain. Protected locations (SSH/GPG/cloud keys, Keychains, browser profiles, Clone AI's own journal, token and policies) can never be opened by any policy or approval, including through symlinks. Steps may declare `scopes`; each verdict is journaled inside `policy.decided`, and every owner edit as `authority.changed`. Only the owner can edit authority (`clone-ai authority ...`, `/api/authority/*`); the Main Agent can only read it (`get_authority`).

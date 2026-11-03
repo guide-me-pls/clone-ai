@@ -417,6 +417,10 @@ export class CloneRuntime {
           await this.executeSingleAgent({ run, task, step, agents });
         }
       } catch (error: unknown) {
+        // The reason is journaled before the status flips, so an owner or an eval
+        // can always answer "why did this fail?" from the journal alone.
+        // 先把原因写入 Journal 再切换状态，所有者或评估流程永远能只凭 Journal 回答"为什么失败"。
+        await this.recordStepFailure({ run, task, step, error });
         await this.changeStatus(run.id, "failed", step.id);
         return { run: this.requireRun(run.id), status: "failed" };
       }
@@ -1167,6 +1171,28 @@ export class CloneRuntime {
       ...(assessment.changes.length === 0 ? {} : { workspaceChanges: assessment.changes }),
     };
     return new WorkerFailure(`Recovery for ${input.workOrder.id} was blocked: ${assessment.reason}`, report);
+  }
+
+  private async recordStepFailure(input: { run: Run; task: Task; step: PlanStep; error: unknown }): Promise<void> {
+    const { error } = input;
+    const message = error instanceof Error ? redactAuditText(error.message) : "Unknown step failure.";
+    try {
+      await this.record({
+        type: "execution.failed",
+        taskId: input.task.id,
+        runId: input.run.id,
+        payload: {
+          stepId: input.step.id,
+          agentId: input.step.agentId,
+          errorKind: error instanceof WorkerFailure ? "worker" : "kernel",
+          message,
+          ...(error instanceof WorkerFailure && error.report !== undefined ? { report: error.report } : {}),
+        },
+      });
+    } catch {
+      // A lost claim must not stop the status change from being attempted.
+      // 失去 claim 不应阻止接下来对状态变更的尝试。
+    }
   }
 
   private async recordSubagentFailure(

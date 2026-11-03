@@ -603,6 +603,21 @@ async function handleRequest(
     return;
   }
 
+  if (method === "GET" && url.pathname.startsWith("/api/audit")) {
+    // A read-only projection of the journal plus optional gateway usage.
+    // Journal 的只读投影，外加可选的网关用量。
+    const { loadAudits, summarizeAudits } = await import("./audit/audit-service.ts");
+    const runId = url.pathname === "/api/audit" ? undefined : decodeURIComponent(url.pathname.slice("/api/audit/".length));
+    const records = await loadAudits(context.journal, { ...(runId === undefined ? {} : { runId }), gateway: url.searchParams.get("gateway") !== "0" });
+    if (runId !== undefined) {
+      if (records[0] === undefined) sendJson(response, 404, { error: "Unknown run." });
+      else sendJson(response, 200, { record: records[0] });
+      return;
+    }
+    sendJson(response, 200, { summary: summarizeAudits(records), records: records.slice(-100).reverse() });
+    return;
+  }
+
   if (url.pathname.startsWith("/api/authority")) {
     // Only the owner's GUI/CLI reaches this (bearer token above). Workers and the
     // Main Agent have no route or tool that edits authority.
