@@ -163,6 +163,9 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     }
 
     @objc private func newTaskFromMenu(_ sender: NSMenuItem) {
+        // A pending new-task composition must not be replaced by a stale
+        // navigation callback from an earlier request.
+        // 正在新建任务时，旧请求里迟到的导航回调不能把它替换掉。
         selectedNavigationIndex = 0
         navigationControl?.selectedSegment = 0
         guard pageReady else {
