@@ -28,6 +28,9 @@ import {
 } from "../core/workspace-evidence.ts";
 import type { AgentRole } from "../config/worker-settings.ts";
 import { augmentedExecutablePath } from "./executable-resolver.ts";
+import { resolveGrants } from "../authority/path-gateway.ts";
+import { buildSeatbeltProfile, SANDBOX_EXEC, wrapWithSandbox } from "../authority/seatbelt.ts";
+import { expandHome } from "../authority/scope.ts";
 
 export interface BlackBoxProviderConfig {
   id: string;
@@ -47,6 +50,26 @@ export interface BlackBoxProviderConfig {
   timeoutMs?: number;
   /** Explicit owner opt-in to an unisolated host process; this is not a sandbox. 所有者明确允许无限制主机进程；这不是沙箱。 */
   hostAccess?: "unrestricted";
+  /**
+   * Run under an OS-enforced sandbox built from the step's granted scopes.
+   * Today only macOS Seatbelt exists; elsewhere the worker stays blocked.
+   * 在由步骤已授权 Scope 生成的 OS 强制沙箱内运行。目前只有 macOS Seatbelt；其他平台仍然阻断。
+   */
+  sandbox?: "seatbelt";
+  /** State the CLI itself must write (e.g. `~/.claude`); everything else is read-only. CLI 自身必须写入的状态目录，其余一律只读。 */
+  sandboxWritePaths?: string[];
+  /**
+   * Agent CLIs must reach their model API, so the provider (not the step) declares
+   * it needs network. Seatbelt cannot restrict by host, so this is all-or-nothing.
+   * Agent CLI 必须访问自己的模型 API，所以由 Provider（而不是步骤）声明需要网络。Seatbelt
+   * 无法按主机限制，所以这只有开或关。
+   */
+  sandboxNetwork?: boolean;
+}
+
+/** True when this config can run under a real sandbox on this machine. 此配置在本机能否在真实沙箱内运行。 */
+export function sandboxAvailable(config: Pick<BlackBoxProviderConfig, "sandbox">): boolean {
+  return config.sandbox === "seatbelt" && process.platform === "darwin" && existsSync(SANDBOX_EXEC);
 }
 
 const DEFAULT_WORK = [
@@ -132,8 +155,10 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
     const external = [input.step.risk, input.workOrder?.risk].some((risk) => risk === "external_side_effect" || risk === "irreversible");
     const refusal = external
       ? "External actions require a separately governed action connector; black-box CLI workers cannot perform them."
-      : config.hostAccess !== "unrestricted"
-        ? "Unrestricted host execution is disabled: this black-box worker has no enforced sandbox."
+      : config.hostAccess !== "unrestricted" && !sandboxAvailable(config)
+        ? config.sandbox === undefined
+          ? "Unrestricted host execution is disabled: this black-box worker has no enforced sandbox."
+          : "The configured sandbox is not available on this machine, so this worker stays blocked."
         : undefined;
     if (refusal !== undefined) {
       yield {
@@ -174,7 +199,27 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
       // 参数注入之下；因此改为解析垫片背后的真实可执行文件。
       const resolved = resolveWindowsCommand(config.command);
       const spawnArgs = usesStdin ? args : args.length > 0 ? args : [prompt];
-      child = spawn(resolved.command, [...resolved.prefixArgs, ...spawnArgs], {
+      let launch = { command: resolved.command, args: [...resolved.prefixArgs, ...spawnArgs] };
+      if (sandboxAvailable(config) && config.hostAccess !== "unrestricted") {
+        // The step's scopes were already authorised by the policy engine; the
+        // gateway still re-checks them so a protected path can never reach the
+        // profile. The sandbox, not the prompt, is what stops an overreach.
+        // 步骤的 Scope 已由 Policy 引擎授权；网关仍会复核，使受保护路径绝不会进入 profile。
+        // 越界由沙箱而不是 Prompt 拦住。
+        const resolvedGrants = resolveGrants(input.step.scopes, { workspace });
+        const grants = config.sandboxNetwork === true ? { ...resolvedGrants, network: true } : resolvedGrants;
+        const profile = buildSeatbeltProfile({
+          grants,
+          extraWriteRoots: (config.sandboxWritePaths ?? []).map((path) => expandHome(path)),
+        });
+        launch = wrapWithSandbox(profile, launch.command, launch.args);
+        yield {
+          type: "progress",
+          message: `Sandbox: write ${grants.writeRoots.join(", ")}; network ${grants.network ? "on" : "off"}`
+            + (grants.dropped.length === 0 ? "" : `; refused ${grants.dropped.map((d) => `${d.scope.resource} (${d.reason})`).join(", ")}`),
+        };
+      }
+      child = spawn(launch.command, launch.args, {
         cwd: workspace,
         env: buildEnvironment(config.env ?? [], config.command),
         stdio: usesStdin ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],

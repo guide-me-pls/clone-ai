@@ -24,6 +24,7 @@ import {
 } from "./companion-auth.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
 import { scanMemoryPii } from "./memory/memory-hygiene.ts";
+import { describeAuthority, StandingPolicyStore } from "./authority/standing-policy-store.ts";
 import { OpportunityService } from "./opportunity/opportunity-service.ts";
 import { RunQueueConsumer } from "./application/run-queue.ts";
 import { createRuntimeAssembly } from "./core/runtime-factory.ts";
@@ -295,6 +296,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         journal,
         runtime: queueRuntime,
         runQueue,
+        authority: assembly.authority,
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "The local runtime encountered an unexpected error.";
@@ -372,6 +374,7 @@ async function handleRequest(
     journal: JournalStore;
     runtime: CloneRuntime;
     runQueue: RunQueueConsumer;
+    authority: StandingPolicyStore;
   },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host === "::1" ? "[::1]" : context.host}`);
@@ -598,6 +601,53 @@ async function handleRequest(
     const providers = await removeUserProviderConfig(context.dataDirectory, decodeURIComponent(providerMatch[1]));
     sendJson(response, 200, { providers });
     return;
+  }
+
+  if (url.pathname.startsWith("/api/authority")) {
+    // Only the owner's GUI/CLI reaches this (bearer token above). Workers and the
+    // Main Agent have no route or tool that edits authority.
+    // 只有所有者的 GUI/CLI 能到这里（上面的 bearer token）。Worker 与 Main Agent 没有任何
+    // 修改权限的路由或工具。
+    try {
+      if (method === "GET" && url.pathname === "/api/authority") {
+        const config = context.authority.snapshot();
+        sendJson(response, 200, { config, summary: describeAuthority(config) });
+        return;
+      }
+      if (method === "GET" && url.pathname === "/api/authority/decisions") {
+        const events = (await context.journal.list())
+          .filter((event) => event.type === "policy.decided" || event.type === "authority.changed")
+          .slice(-100)
+          .reverse();
+        sendJson(response, 200, { events });
+        return;
+      }
+      if (method === "PUT" && url.pathname === "/api/authority/domains") {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { config: await context.authority.setDomainLevel(body.domain as never, body.level as never) });
+        return;
+      }
+      if (method === "POST" && url.pathname === "/api/authority/policies") {
+        const body = await readJsonBody(request);
+        const policy = await context.authority.addPolicy({
+          label: body.label as string,
+          scopes: body.scopes,
+          maxAutonomy: body.maxAutonomy as never,
+          ...(typeof body.validFrom === "string" ? { validFrom: body.validFrom } : {}),
+          ...(typeof body.validUntil === "string" ? { validUntil: body.validUntil } : {}),
+        });
+        sendJson(response, 201, { policy });
+        return;
+      }
+      const revoke = /^\/api\/authority\/policies\/([^/]+)$/.exec(url.pathname);
+      if (method === "DELETE" && revoke !== null) {
+        sendJson(response, 200, { policy: await context.authority.revokePolicy(decodeURIComponent(revoke[1]!)) });
+        return;
+      }
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid authority request." });
+      return;
+    }
   }
 
   if (request.method === "GET" && url.pathname === "/api/connectors") {
