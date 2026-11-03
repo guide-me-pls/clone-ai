@@ -50,11 +50,11 @@ npm run demo
 
 `clone-ai` 的目标是可安装的桌面数字分身，而不是网站。最终客户端将提供本地工作台、系统托盘、通知、审批和活动追踪；Node.js Runtime 仍是本地 daemon，不会被塞进 UI 进程。
 
-当前静态界面位于 `apps/desktop/ui/`。在原生桌面壳接入前，它只通过 `npm run companion:debug` 作为开发期预览，服务仅绑定 `127.0.0.1`，不会成为公开或托管服务。
+`apps/desktop/ui/` 只作为已安装应用窗口的内部资源，不提供浏览器预览命令，也不构成浏览器产品入口。
 
 ```text
 apps/desktop/                 已安装客户端的边界（目标为 Tauri）
-  ui/                         临时桌面 WebView 资源
+  ui/                         应用窗口内部的 WebView 资源
 
 src/
   core/                       Journal、策略、Supervisor、验证

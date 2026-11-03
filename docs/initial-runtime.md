@@ -65,13 +65,12 @@ it is not moved into the UI process.
 Run `npm run desktop:build` to create the directly runnable executable at
 `apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/clone-ai-desktop.exe`.
 The installer, tray behavior, notifications, and native approval UX remain later work.
-The static interface in `apps/desktop/ui/` is also available through
-`npm run companion:debug` for developer browser inspection only; it binds to
-`127.0.0.1` and is not a public or hosted service.
+The assets in `apps/desktop/ui/` are internal to the installed window. There is
+no supported browser preview or browser product surface.
 
 ```text
 apps/desktop/                 installed client boundary (Tauri target)
-  ui/                         temporary desktop WebView assets
+  ui/                         internal desktop app WebView assets
 
 src/
   core/                       journal, policy, supervisor, verification

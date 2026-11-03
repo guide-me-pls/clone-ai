@@ -138,8 +138,8 @@ npm run desktop:build
 
 Then double-click
 `apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/clone-ai-desktop.exe`.
-`npm run companion:debug` remains a developer-only browser preview for inspecting the
-daemon boundary. See the [desktop client](apps/desktop/README.md).
+There is no browser-based product surface. See the
+[desktop client](apps/desktop/README.md).
 
 ### Run the desktop app (Apple Silicon macOS)
 
