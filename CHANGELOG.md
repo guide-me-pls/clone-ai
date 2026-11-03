@@ -6,6 +6,22 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### One conversation, tasks beside it
+
+Every message used to look like a brand-new conversation: the Main Agent answers a greeting with a one-step `direct_response` plan, that Run appeared as its own session, and the interface jumped into it. Conversational runs are no longer listed as sessions (they stay in the journal and the audit), and every turn now lands in the single Main Agent conversation thread, with tasks appearing in the sidebar beside it.
+
+### Memory library: progressive disclosure
+
+The memory page is an index — summary, type, status and recall count — and opening a row fetches its body, provenance, cited evidence and `.md` path on demand (fetched reads count as uses). Editing stays inside the opened row. The Main Agent gained `read_memory`, so recall can return summaries and a body is opened only when needed, journaled as `memory.recalled`.
+
+### 对话只有一条，任务在旁边
+
+此前每条消息都像开了一个新对话：面对一句打招呼，Main Agent 会提案单步 `direct_response` 计划，那个 Run 被显示成一个独立会话，界面还会跳进去。现在对话类 Run 不再列为会话（仍保留在 Journal 与审计中），每一轮都落进唯一的 Main Agent 对话线程，任务则出现在侧栏。
+
+### 记忆库：渐进式披露
+
+记忆页现在是一份索引——摘要、类型、状态与召回次数——展开某一条时才读取它的正文、来源、引用证据与 `.md` 路径（读取计为一次使用）。编辑仍在展开行内。Main Agent 新增 `read_memory`：召回只返回摘要，需要正文时再按需打开，并记为 `memory.recalled`。
+
 ### Chat rendering fixes
 
 The "Main Agent is thinking" card stayed on screen after the reply arrived: its CSS sets `display: grid`, which overrode the `hidden` attribute. A global `[hidden] { display: none !important }` now wins, which also fixes the hidden opportunity strip. Markdown list items were double-spaced (each item's trailing `<br>` rendered as an empty line, so the bullet looked detached from its text); line breaks adjacent to block-level list/heading elements are now dropped.
