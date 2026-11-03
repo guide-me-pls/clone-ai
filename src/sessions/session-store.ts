@@ -37,6 +37,13 @@ export class SessionStore {
     await this.write({ deletedRunIds: [...index.deletedRunIds, runId] });
   }
 
+  /** Bring a deleted session back to the conversation list. 把已删除的会话恢复到会话列表。 */
+  async restore(runId: string): Promise<void> {
+    const index = await this.index();
+    if (!index.deletedRunIds.includes(runId)) return;
+    await this.write({ deletedRunIds: index.deletedRunIds.filter((id) => id !== runId) });
+  }
+
   private async index(): Promise<SessionIndex> {
     try {
       const source = await readFile(this.#path, "utf8");
