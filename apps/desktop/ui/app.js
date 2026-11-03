@@ -643,6 +643,12 @@ function richText(value) {
     .replace(/^\s*[-*]\s+(.+)$/gm, '<div class="md-list-line"><span aria-hidden="true">•</span><span>$1</span></div>')
     .replace(/^\s*(\d+)[.)]\s+(.+)$/gm, '<div class="md-list-line md-list-line--ordered"><span>$1.</span><span>$2</span></div>')
     .replace(/\n/g, "<br>")
+    // A block element already starts a new line, so a <br> next to it only adds an
+    // empty line: list items used to render double-spaced with the marker far from
+    // its text. 块级元素本身就会换行，紧邻的 <br> 只会多出一整行——列表项因此被拉开双倍行距，
+    // 圆点离正文很远。
+    .replace(/<br>(?=<div class="md-(?:heading|list-line))/g, "")
+    .replace(/(<\/div>)<br>/g, "$1")
     .replace(/\u0000BLOCK(\d+)\u0000/g, (match, index) => blocks[Number(index)] ?? "");
 }
 function messageMarkup(message) {
