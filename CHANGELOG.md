@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Memory, classified and layered
+
+The memory page now groups by kind — commitments and boundaries, preferences, decisions, procedures, facts — with each group's size and total recalls on its header. Rows stay collapsed inside the group; opening one shows its body, provenance, and the runs that actually recalled it (from `memory.recalled` in the journal, with a link to the run and the query). Reading a memory counts as a use, and the detail endpoint now returns that usage list.
+
+记忆库改为分类分层：先按种类分组——承诺与边界、偏好、决定、流程、事实——组头显示条数与总召回次数；组内条目默认收起，展开后显示正文、来源，以及 Journal 里真正召回它的 Run（含跳转与当时的问题）。读取记忆计为一次使用，详情接口同时返回这份使用记录。
+
 ### A quieter empty state
 
 The empty conversation dropped the three starter cards and now centres the welcome copy and the composer as one group, instead of pinning the input to the bottom.
