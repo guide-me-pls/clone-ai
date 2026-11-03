@@ -3,9 +3,12 @@ import Darwin
 import Foundation
 import WebKit
 
-final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegate {
+final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, NSToolbarDelegate {
     private var window: NSWindow!
     private var webView: WKWebView!
+    private var navigationControl: NSSegmentedControl!
+    private let navigationItemIdentifier = NSToolbarItem.Identifier("CloneAINavigation")
+    private let navigationTitles = ["对话", "定时任务", "Agent", "记忆", "设置"]
     private var startupView: NSView!
     private var startupTitle: NSTextField!
     private var startupDetail: NSTextField!
@@ -18,11 +21,16 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     private var shuttingDown = false
     private var readyTimer: Timer?
     private var signalSources: [DispatchSourceSignal] = []
+    private var selectedNavigationIndex = 0
+    private var pendingNavigationIndex: Int?
+    private var pageReady = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installSignalHandlers()
         installMenu()
-        webView = WKWebView(frame: .zero)
+        let webConfiguration = WKWebViewConfiguration()
+        webConfiguration.userContentController.add(self, name: "cloneNavigation")
+        webView = WKWebView(frame: .zero, configuration: webConfiguration)
         webView.navigationDelegate = self
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1240, height: 820),
@@ -36,6 +44,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         startupView = makeStartupView()
         window.contentView = startupView
         window.center()
+        installToolbar()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         showMessage(title: "正在启动 Clone AI", detail: "正在启动本地运行时，请稍候。")
@@ -76,6 +85,146 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         }
         process.waitUntilExit()
         return .terminateNow
+    }
+
+    private func installToolbar() {
+        navigationControl = NSSegmentedControl(
+            labels: navigationTitles,
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(navigateFromToolbar(_:))
+        )
+        navigationControl.segmentStyle = .rounded
+        navigationControl.controlSize = .large
+        navigationControl.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        let widths: [CGFloat] = [68, 92, 78, 68, 68]
+        for (index, width) in widths.enumerated() {
+            navigationControl.setWidth(width, forSegment: index)
+        }
+        navigationControl.selectedSegment = selectedNavigationIndex
+
+        let toolbar = NSToolbar(identifier: "CloneAIMainToolbar")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = false
+        toolbar.autosavesConfiguration = false
+        window.toolbarStyle = .unified
+        window.titleVisibility = .hidden
+        window.toolbar = toolbar
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.flexibleSpace, navigationItemIdentifier, .flexibleSpace]
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.flexibleSpace, navigationItemIdentifier]
+    }
+
+    func toolbar(
+        _ toolbar: NSToolbar,
+        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        guard itemIdentifier == navigationItemIdentifier else { return nil }
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        item.view = navigationControl
+        item.label = "导航"
+        item.paletteLabel = "主导航"
+        item.toolTip = "在对话、定时任务、Agent、记忆和设置之间切换"
+        item.visibilityPriority = .high
+        return item
+    }
+
+    @objc private func navigateFromToolbar(_ sender: NSSegmentedControl) {
+        navigate(to: sender.selectedSegment)
+    }
+
+    @objc private func navigateFromMenu(_ sender: NSMenuItem) {
+        navigate(to: sender.tag)
+    }
+
+    @objc private func newTaskFromMenu(_ sender: NSMenuItem) {
+        selectedNavigationIndex = 0
+        navigationControl?.selectedSegment = 0
+        guard pageReady else {
+            pendingNavigationIndex = 0
+            return
+        }
+        webView.evaluateJavaScript("window.closeSchedules?.(); window.closeSettings?.(); document.getElementById('new-session')?.click();")
+    }
+
+    @objc private func openSchedulesFromMenu(_ sender: NSMenuItem) {
+        navigate(to: 1)
+    }
+
+    @objc private func showSettingsFromMenu(_ sender: NSMenuItem) {
+        navigate(to: 4)
+    }
+
+    private func navigate(to index: Int) {
+        guard navigationTitles.indices.contains(index) else { return }
+        selectedNavigationIndex = index
+        navigationControl?.selectedSegment = index
+        guard pageReady else {
+            pendingNavigationIndex = index
+            return
+        }
+        executeNavigation(index: index)
+    }
+
+    private func executeNavigation(index: Int) {
+        let script: String
+        switch index {
+        case 1:
+            script = "window.closeSettings?.(); window.openSchedules?.();"
+        case 2:
+            script = "window.closeSchedules?.(); window.openSettings?.(); window.selectSettingsSection?.('agents');"
+        case 3:
+            script = "window.closeSchedules?.(); window.openSettings?.(); window.selectSettingsSection?.('memory');"
+        case 4:
+            script = "window.closeSchedules?.(); window.openSettings?.(); window.selectSettingsSection?.('situation');"
+        default:
+            script = "window.closeSchedules?.(); window.closeSettings?.(); window.setSidebarOpen?.(false); setTimeout(() => document.getElementById('query')?.focus(), 40);"
+        }
+        webView.evaluateJavaScript(script)
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "cloneNavigation", let section = message.body as? String else { return }
+        if section == "ready" {
+            pageReady = true
+            let previewPrefix = "--preview-section="
+            if let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix(previewPrefix) }) {
+                let previewSection = String(argument.dropFirst(previewPrefix.count))
+                let index = ["schedules", "agents", "memory", "settings"].firstIndex(of: previewSection).map { $0 + 1 } ?? 0
+                selectedNavigationIndex = index
+                navigationControl?.selectedSegment = index
+                executeNavigation(index: index)
+                return
+            }
+            if let pending = pendingNavigationIndex {
+                pendingNavigationIndex = nil
+                executeNavigation(index: pending)
+            } else if selectedNavigationIndex != 0 {
+                executeNavigation(index: selectedNavigationIndex)
+            }
+            return
+        }
+        let index: Int
+        switch section {
+        case "schedules": index = 1
+        case "agents": index = 2
+        case "memory": index = 3
+        case "settings": index = 4
+        default: index = 0
+        }
+        selectedNavigationIndex = index
+        navigationControl?.selectedSegment = index
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        pageReady = false
     }
 
     func webView(
@@ -272,12 +421,56 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
 
     private func installMenu() {
         let bar = NSMenu()
-        let appItem = NSMenuItem()
+        let appItem = NSMenuItem(title: "Clone AI", action: nil, keyEquivalent: "")
         bar.addItem(appItem)
-        let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "关于 Clone AI", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let appMenu = NSMenu(title: "Clone AI")
+        let about = NSMenuItem(title: "关于 Clone AI", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        about.target = NSApp
+        appMenu.addItem(about)
+        appMenu.addItem(.separator())
+        let settings = NSMenuItem(title: "设置…", action: #selector(showSettingsFromMenu(_:)), keyEquivalent: ",")
+        settings.target = self
+        appMenu.addItem(settings)
+        appMenu.addItem(.separator())
+        let servicesItem = NSMenuItem(title: "服务", action: nil, keyEquivalent: "")
+        let servicesMenu = NSMenu(title: "服务")
+        servicesItem.submenu = servicesMenu
+        appMenu.addItem(servicesItem)
+        NSApp.servicesMenu = servicesMenu
+        appMenu.addItem(.separator())
+        let hide = NSMenuItem(title: "隐藏 Clone AI", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        hide.target = NSApp
+        appMenu.addItem(hide)
+        let hideOthers = NSMenuItem(title: "隐藏其他", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        hideOthers.target = NSApp
+        appMenu.addItem(hideOthers)
+        let showAll = NSMenuItem(title: "显示全部", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        showAll.target = NSApp
+        appMenu.addItem(showAll)
+        appMenu.addItem(.separator())
+        let quit = NSMenuItem(title: "退出 Clone AI", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quit.target = NSApp
+        appMenu.addItem(quit)
         appItem.submenu = appMenu
-        let editItem = NSMenuItem()
+
+        let fileItem = NSMenuItem(title: "文件", action: nil, keyEquivalent: "")
+        bar.addItem(fileItem)
+        let fileMenu = NSMenu(title: "文件")
+        let newTask = NSMenuItem(title: "新建任务", action: #selector(newTaskFromMenu(_:)), keyEquivalent: "n")
+        newTask.target = self
+        fileMenu.addItem(newTask)
+        let schedules = NSMenuItem(title: "定时任务", action: #selector(openSchedulesFromMenu(_:)), keyEquivalent: "t")
+        schedules.keyEquivalentModifierMask = [.command, .shift]
+        schedules.target = self
+        fileMenu.addItem(schedules)
+        fileMenu.addItem(.separator())
+        let close = NSMenuItem(title: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        close.target = nil
+        fileMenu.addItem(close)
+        fileItem.submenu = fileMenu
+
+        let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: "")
         bar.addItem(editItem)
         let editMenu = NSMenu(title: "编辑")
         editMenu.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
@@ -285,6 +478,33 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         editMenu.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = editMenu
+
+        let viewItem = NSMenuItem(title: "视图", action: nil, keyEquivalent: "")
+        bar.addItem(viewItem)
+        let viewMenu = NSMenu(title: "视图")
+        for (index, title) in navigationTitles.enumerated() {
+            let item = NSMenuItem(title: title, action: #selector(navigateFromMenu(_:)), keyEquivalent: String(index + 1))
+            item.tag = index
+            item.keyEquivalentModifierMask = [.command]
+            item.target = self
+            viewMenu.addItem(item)
+        }
+        viewMenu.addItem(.separator())
+        let fullScreen = NSMenuItem(title: "进入全屏幕", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+        fullScreen.keyEquivalentModifierMask = [.command, .control]
+        viewMenu.addItem(fullScreen)
+        viewItem.submenu = viewMenu
+
+        let windowItem = NSMenuItem(title: "窗口", action: nil, keyEquivalent: "")
+        bar.addItem(windowItem)
+        let windowMenu = NSMenu(title: "窗口")
+        windowMenu.addItem(withTitle: "最小化", action: #selector(NSWindow.miniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "缩放", action: #selector(NSWindow.zoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle: "前置全部窗口", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        windowItem.submenu = windowMenu
+        NSApp.windowsMenu = windowMenu
+
         NSApp.mainMenu = bar
     }
 
