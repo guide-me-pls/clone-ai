@@ -31,11 +31,13 @@ Node daemon as a supervised sidecar, waits for its ready event, then navigates t
 window to an available loopback port. The port is selected dynamically, so a stale
 developer preview on `4317` cannot block the desktop client.
 
+The WebView assets are an internal implementation detail of the installed window. Clone AI
+does not expose a supported browser UI, browser preview command, or Chrome app window.
+
 On Windows, `npm run desktop:build` creates a directly runnable executable at
 `src-tauri/target/x86_64-pc-windows-msvc/release/clone-ai-desktop.exe`. It is an early
 desktop preview: a distributable installer, tray behavior, notifications, and the native
-approval flow remain later milestones. `npm run companion:debug` is still useful only for
-developer browser inspection of the daemon API.
+approval flow remain later milestones.
 
 On Apple Silicon macOS, `npm run desktop:mac:build` creates a self-contained
 `dist/Clone AI.app`, a compressed `dist/Clone AI-macOS-arm64.zip`, and a

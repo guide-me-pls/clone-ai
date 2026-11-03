@@ -110,7 +110,7 @@ Claude Code、Codex、Pi、opencode 与未来 Agent 每次都从全新的进程�
 记忆、Workspace 证据、崩溃恢复和最终完成判定都在 Provider 之外。Provider 自己的 `--resume` 只能
 是可选优化，不能成为事实来源。
 
-产品客户端的方向是可安装的桌面数字分身，不是托管网页。`npm run companion:debug` 只会打开本地的桌面伴随预览，让开发者检查 daemon 边界；它既不是最终发布的桌面壳，也不是对外产品入口。详见[初始 Runtime](docs/initial-runtime.zh-CN.md#桌面端方向)。
+产品客户端是可安装的桌面数字分身，不提供浏览器产品入口。所有界面验收都在原生应用窗口中进行。详见[初始 Runtime](docs/initial-runtime.zh-CN.md#桌面端方向)。
 
 ### 运行 macOS 桌面应用（Apple Silicon）
 

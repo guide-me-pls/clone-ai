@@ -11,6 +11,7 @@
  * 其余功能都是子命令。
  */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -32,8 +33,7 @@ const HELP = `clone-ai — your local digital twin runtime
 
 Usage:
   clone-ai "<请求>"              Talk to the Main Agent (default)
-  clone-ai app [--port <n>]      Open the desktop app window (closing it exits)
-  clone-ai gui [--port <n>]      Same server, opened in your default browser
+  clone-ai app                   Open the installed native desktop app
   clone-ai status                Show runs, workers, memory, and bad cases
   clone-ai workers               List worker CLIs and whether they are installed
   clone-ai install <worker>      Install a missing worker (npm global)
@@ -75,8 +75,10 @@ async function main(): Promise<number> {
   });
 
   switch (command) {
-    case "app": return startApp(argv.slice(1), paths.dataDirectory);
-    case "gui": return startGui(argv.slice(1));
+    case "app": return startApp();
+    case "gui":
+      console.error("Browser preview was removed. Use `clone-ai app` to open the native Clone AI application.");
+      return 1;
     case "status": return showStatus(paths.dataDirectory);
     case "workers": return listWorkers(paths.dataDirectory);
     case "install": return installWorker(paths.dataDirectory, argv[1]);
@@ -206,57 +208,36 @@ async function drainQueuedRuns(dataDirectory: string): Promise<void> {
 }
 
 /**
- * The desktop experience: a real window, and the daemon lives exactly as long
- * as that window does.
- * 桌面体验：一个真实窗口，daemon 的生命周期与该窗口完全一致。
+ * The native application bundle is the only product UI. This command never
+ * starts a companion server or opens a browser.
+ *
+ * 原生应用包是唯一的产品界面。这个命令不会启动 companion server，也不会打开浏览器。
  */
-async function startApp(args: string[], dataDirectory: string): Promise<number> {
-  const portIndex = args.indexOf("--port");
-  const port = portIndex >= 0 ? args[portIndex + 1] : undefined;
-  const { startCompanionServer } = await import("../companion-server.ts");
-  const { openAppWindow, appProfileDirectory } = await import("./app-window.ts");
-  const server = await startCompanionServer(port === undefined ? {} : { port: Number(port) });
-
-  const window = openAppWindow({ url: server.url, profileDirectory: appProfileDirectory(dataDirectory) });
-  if (window === undefined) {
-    console.log(`No Chromium-family engine found for an app window. Serving at ${server.url}`);
-    console.log("Install Microsoft Edge or Google Chrome, or use: clone-ai gui");
-    openBrowser(server.url);
-    await new Promise<void>((resolve) => process.on("SIGINT", () => void server.close().then(resolve, resolve)));
-    return 0;
+async function startApp(): Promise<number> {
+  if (process.platform !== "darwin") {
+    console.error("The native desktop app launcher is available on macOS. Build the platform app with `npm run desktop:build`.");
+    return 1;
   }
-
-  console.log(`clone-ai is running in a desktop window (${server.url}). Close the window to exit.`);
-  await Promise.race([
-    window.closed,
-    new Promise<void>((resolve) => process.on("SIGINT", resolve)),
-  ]);
-  await server.close();
-  return 0;
-}
-
-/** Starts the companion daemon and opens the browser at its URL. 启动 companion 并在浏览器打开。 */
-async function startGui(args: string[]): Promise<number> {
-  const portIndex = args.indexOf("--port");
-  const port = portIndex >= 0 ? args[portIndex + 1] : undefined;
-  const { startCompanionServer } = await import("../companion-server.ts");
-  const server = await startCompanionServer(port === undefined ? {} : { port: Number(port) });
-  console.log(`clone-ai GUI: ${server.url}`);
-  openBrowser(server.url);
-  console.log("Press Ctrl+C to stop.");
-  await new Promise<void>((resolve) => {
-    process.on("SIGINT", () => {
-      void server.close().then(resolve, resolve);
-    });
+  const appBundle = [
+    join(packageRoot, "dist", "Clone AI.app"),
+    join(process.cwd(), "dist", "Clone AI.app"),
+    "/Applications/Clone AI.app",
+  ].find((candidate) => existsSync(candidate));
+  if (appBundle === undefined) {
+    console.error("Clone AI.app was not found. Build it with `npm run desktop:mac:build`.");
+    return 1;
+  }
+  const child = spawn("/usr/bin/open", [appBundle], { stdio: "ignore", windowsHide: true });
+  const code = await new Promise<number | null>((resolve) => {
+    child.once("close", resolve);
+    child.once("error", () => resolve(1));
   });
+  if (code !== 0) {
+    console.error(`Could not open ${appBundle}.`);
+    return 1;
+  }
+  console.log(`Opened ${appBundle}`);
   return 0;
-}
-
-function openBrowser(url: string): void {
-  const command = process.platform === "win32" ? "cmd" : process.platform === "darwin" ? "open" : "xdg-open";
-  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-  const child = spawn(command, args, { stdio: "ignore", detached: true, windowsHide: true });
-  child.unref();
 }
 
 async function showStatus(dataDirectory: string): Promise<number> {

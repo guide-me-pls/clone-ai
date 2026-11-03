@@ -32,9 +32,18 @@ test("clone-ai --help lists the subcommands a new owner needs", async (t) => {
   const { code, stdout } = await runCli(t, ["--help"]);
 
   assert.equal(code, 0);
-  for (const command of ["gui", "status", "workers", "install", "memory", "cases", "opportunities", "approve", "reject", "cancel", "doctor"]) {
+  for (const command of ["app", "status", "workers", "install", "memory", "cases", "opportunities", "approve", "reject", "cancel", "doctor"]) {
     assert.match(stdout, new RegExp(`clone-ai ${command}`), `help must document ${command}`);
   }
+  assert.doesNotMatch(stdout, /opened in your default browser/i);
+});
+
+test("the removed browser preview points the owner at the native app", async (t) => {
+  const { code, stdout } = await runCli(t, ["gui"]);
+
+  assert.equal(code, 1);
+  assert.match(stdout, /Browser preview was removed/);
+  assert.match(stdout, /clone-ai app/);
 });
 
 test("clone-ai --version prints the package version", async (t) => {

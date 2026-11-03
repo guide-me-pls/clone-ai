@@ -103,9 +103,9 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const dataDirectory = paths.dataDirectory;
   const workspacePath = paths.workspacePath;
   // The GUI assets ship with the package, so they must be resolved relative to
-  // this module — `clone-ai gui` runs from whatever directory the owner is in.
-  // GUI 资源随包发布，因此必须相对本模块解析——`clone-ai gui` 会在所有者当前所在的
-  // 任意目录下运行。
+  // this module — the desktop app runs from its bundle, not the owner's cwd.
+  // GUI 资源随应用包发布，因此必须相对本模块解析——桌面应用从应用包运行，
+  // 而不是所有者的当前目录。
   const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
   const clientPath = options.clientPath ?? join(packageRoot, "apps", "desktop", "ui", "index.html");
   const clientDirectory = dirname(clientPath);

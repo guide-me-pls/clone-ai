@@ -30,6 +30,9 @@ test("the desktop HTML marks chrome so config.locale can replace it", async () =
   const js = await readFile(join(process.cwd(), "apps/desktop/ui/app.js"), "utf8");
   assert.match(js, /function applyChrome/);
   assert.match(js, /config\.ui\?\.strings/);
+  assert.match(js, /data-response-pending/);
+  assert.match(js, /pending-connect-title/);
+  assert.match(js, /empty-model-reply/);
 });
 
 test("the shared component library exposes the primitives used by the UI", async () => {

@@ -25,8 +25,8 @@
           -> journal、策略、supervisor、记忆、adapter
 ```
 
-`ui/` 存放临时的 WebView 资源。仅在开发期，Node companion server 会通过
-`npm run companion:debug` 服务这些资源，以便验证本地 API；它不是发布产品。
+`ui/` 存放应用窗口内部的 WebView 资源。它是已安装窗口的实现细节；Clone AI
+不提供受支持的浏览器界面、浏览器预览命令或 Chrome 应用窗口。
 
 Windows 原生壳使用 Tauri。在 Apple Silicon Mac 上，
 `npm run desktop:mac:build` 会生成自带 Node.js 运行时的 `dist/Clone AI.app` 和
