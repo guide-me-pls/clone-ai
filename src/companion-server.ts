@@ -120,7 +120,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
   const clientPath = options.clientPath ?? join(packageRoot, "apps", "desktop", "ui", "index.html");
   const clientDirectory = dirname(clientPath);
-  const [client, clientCss, componentCss, clientJs, componentJs, auditCss, auditJs] = await Promise.all([
+  const [client, clientCss, componentCss, clientJs, componentJs, auditCss, auditJs, memoryCss, memoryJs] = await Promise.all([
     readFile(clientPath, "utf8"),
     readFile(join(clientDirectory, "style.css"), "utf8"),
     readFile(join(clientDirectory, "components.css"), "utf8"),
@@ -128,6 +128,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     readFile(join(clientDirectory, "components.js"), "utf8"),
     readFile(join(clientDirectory, "audit.css"), "utf8"),
     readFile(join(clientDirectory, "audit.js"), "utf8"),
+    readFile(join(clientDirectory, "memory.css"), "utf8"),
+    readFile(join(clientDirectory, "memory.js"), "utf8"),
   ]);
   const token = issueCompanionToken();
   await persistCompanionToken(paths.dataDirectory, token);
@@ -289,6 +291,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         componentJs,
         auditCss,
         auditJs,
+        memoryCss,
+        memoryJs,
         schedules,
         sessions,
         agentSettings,
@@ -369,6 +373,8 @@ async function handleRequest(
     componentJs: string;
     auditCss: string;
     auditJs: string;
+    memoryCss: string;
+    memoryJs: string;
     schedules: ScheduleStore;
     sessions: SessionStore;
     agentSettings: WorkerSettingsStore;
@@ -453,6 +459,16 @@ async function handleRequest(
   if (request.method === "GET" && url.pathname === "/audit.js") {
     response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
     response.end(context.auditJs);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/memory.css") {
+    response.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" });
+    response.end(context.memoryCss);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/memory.js") {
+    response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+    response.end(context.memoryJs);
     return;
   }
   if (request.method === "GET" && url.pathname === "/components.js") {
@@ -930,6 +946,36 @@ async function handleRequest(
     }
     return;
   }
+  const memoryDetailMatch = url.pathname.match(/^\/api\/memory\/governed\/([^/]+)$/);
+  if (request.method === "GET" && memoryDetailMatch?.[1] !== undefined) {
+    // Progressive disclosure: the list carries summaries, and the body plus
+    // provenance is fetched only when the owner opens one memory. A read counts
+    // as use, exactly like a recall.
+    // 渐进式披露：列表只带摘要，正文与来源只在所有者展开某一条时才读取。读取与召回一样计为使用。
+    try {
+      const memory = await context.memoryGovernance.read(decodeURIComponent(memoryDetailMatch[1]));
+      if (memory === undefined) {
+        sendJson(response, 404, { error: "This memory does not exist." });
+        return;
+      }
+      const wanted = new Set(memory.sourceEvidenceIds);
+      const evidence = wanted.size === 0 ? [] : (await context.journal.list())
+        .filter((event) => event.type === "evidence.recorded" && wanted.has((event.payload as { id?: string }).id ?? ""))
+        .map((event) => {
+          const payload = event.payload as { id: string; kind: string; summary: string; locator?: string };
+          return { id: payload.id, kind: payload.kind, summary: payload.summary, ...(payload.locator === undefined ? {} : { locator: payload.locator }) };
+        });
+      sendJson(response, 200, {
+        memory,
+        file: { path: context.memoryGovernance.filePathFor(memory) },
+        evidence,
+      });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The memory could not be read." });
+    }
+    return;
+  }
+
   const memoryConflictMatch = url.pathname.match(/^\/api\/memory\/governed\/conflicts\/([^/]+)\/keep-file$/);
   if (request.method === "POST" && memoryConflictMatch?.[1] !== undefined) {
     const body = await readJsonBody(request);
