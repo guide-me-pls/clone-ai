@@ -1,4 +1,5 @@
 const $ = (id) => document.getElementById(id);
+const ui = window.CloneUI;
 const state = {
   signatures: {},
   drafts: new Map(),
@@ -11,8 +12,10 @@ const state = {
   schedules: [],
   settings: null,
   providers: [],
+  gateways: [],
+  gatewayLoading: false,
   memories: [],
-  settingsSection: "audit",
+  settingsSection: "agents",
   locale: "zh-CN",
   strings: {},
 };
@@ -92,25 +95,200 @@ function agentRoleLabel(role) { return ({ direct: t("role-direct"), research: t(
 function providerLabel(id) { return ({ "codex-cli": "Codex CLI", "claude-code": "Claude Code", pi: "Pi" }[id] || id); }
 function renderSettings(settings, providers) {
   state.settings = settings; state.providers = providers;
-  const signature = JSON.stringify([settings, providers]);
-  if (state.signatures.settings === signature) return;
-  state.signatures.settings = signature;
+  renderAgentPage();
+}
+function renderGateways(gateways) {
+  state.gateways = gateways;
+  renderAgentPage();
+}
+function renderAgentPage() {
+  const host = $("agent-page");
+  if (!host || !state.settings) return;
+  const settings = state.settings;
+  const providers = state.providers || [];
+  const gateway = state.gateways.find((candidate) => candidate.id === "magpie");
+  const mainAgentModel = state.config?.config?.mainAgentModel || "";
+  const signature = JSON.stringify([settings, providers, gateway, mainAgentModel, state.gatewayLoading]);
+  if (state.signatures.agentPage === signature) return;
+  state.signatures.agentPage = signature;
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const missing = providers.filter((provider) => !provider.installed && provider.installable);
-  $("install-missing-providers").disabled = missing.length === 0;
-  $("install-missing-providers").textContent = missing.length ? `${t("install-missing")} (${missing.length})` : providers.some((provider) => !provider.installed) ? t("no-auto-install") : t("providers-ready");
-  $("provider-registry").innerHTML = providers.map((provider) => {
+  const installed = providers.filter((provider) => provider.installed);
+  const enabledRoles = settings.agents.filter((agent) => agent.enabled).length;
+  const gatewayState = gateway?.running
+    ? { label: t("gateway-running"), tone: "success" }
+    : gateway?.installed
+      ? { label: t("gateway-stopped"), tone: "warning" }
+      : { label: t("gateway-not-found"), tone: "neutral" };
+  const installButton = ui.button({
+    label: missing.length ? `${t("install-missing")} (${missing.length})` : providers.some((provider) => !provider.installed) ? t("no-auto-install") : t("providers-ready"),
+    iconName: missing.length ? "plus" : "check",
+    variant: missing.length ? "primary" : "secondary",
+    disabled: missing.length === 0,
+    attributes: { "data-install-missing": "", id: "install-missing-providers" },
+  });
+  const gatewayBadge = ui.badge(
+    state.gatewayLoading && gateway === undefined ? t("gateway-checking") : gatewayState.label,
+    state.gatewayLoading && gateway === undefined ? "neutral" : gatewayState.tone,
+    { dot: true },
+  );
+  const gatewayApis = (gateway?.apis || []).filter((api) => ["/v1/responses", "/v1/messages", "/v1/chat/completions"].includes(api)).slice(0, 3);
+  const exposedModels = (gateway?.models || []).filter((model) => model.compatible !== false);
+  const selectedModel = selectedGatewayModel(mainAgentModel, exposedModels);
+  const modelSelect = exposedModels.length
+    ? ui.select({
+        value: selectedModel,
+        attributes: { id: "gateway-model", "aria-label": t("gateway-model") },
+        options: exposedModels.map((model) => ({
+          value: model.id,
+          label: `${model.name}${model.provider && model.provider !== "360" ? ` · ${model.provider}` : ""}`,
+        })),
+      })
+    : "";
+  const gatewayControls = gateway?.running && exposedModels.length
+    ? `<div class="gateway-controls">
+        <div class="gateway-controls__row">${modelSelect}${ui.button({ label: t("gateway-use"), iconName: "arrow", variant: "primary", disabled: !selectedModel, attributes: { "data-gateway-apply": "" } })}</div>
+        <div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}${mainAgentModel.startsWith("magpie/") ? ui.button({ label: t("gateway-clear"), variant: "ghost", attributes: { "data-gateway-clear": "" } }) : ""}</div>
+      </div>`
+    : `<div class="gateway-controls"><div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}</div><span class="gateway-hint">${escape(gateway?.running && gateway.modelCount > 0 ? t("gateway-pi-hint") : gateway?.error || t("gateway-start-hint"))}</span></div>`;
+  const gatewayCard = ui.card({
+    title: "Magpie Gateway",
+    subtitle: t("gateway-subtitle"),
+    tone: gateway?.running ? "accent" : "warning",
+    className: "agent-gateway",
+    actions: gatewayBadge,
+    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
+  });
+  const providerRows = providers.map((provider) => {
     const access = provider.executionBlocked ? t("worker-blocked") : t("worker-unrestricted");
     const action = provider.installed
-      ? `<button class="provider-install" type="button" data-provider-access="${escape(provider.id)}" data-allow="${String(provider.executionBlocked)}">${escape(provider.executionBlocked ? t("worker-allow") : t("worker-disable"))}</button>`
+      ? ui.button({
+          label: provider.executionBlocked ? t("worker-allow") : t("worker-disable"),
+          variant: provider.executionBlocked ? "secondary" : "ghost",
+          className: "c-button--compact",
+          attributes: { "data-provider-access": provider.id, "data-allow": String(provider.executionBlocked) },
+        })
       : provider.installable
-        ? `<button class="provider-install" type="button" data-install-provider="${escape(provider.id)}">${t("install")}</button>`
-        : `<span class="settings-value">${escape(t("manual-install"))}</span>`;
-    return `<article class="provider-card"><div><b>${escape(provider.title)}</b><p>${escape(provider.purpose)} · ${escape(access)}${provider.version ? ` · ${escape(provider.version)}` : ""}</p></div>${action}</article>`;
+        ? ui.button({
+            label: t("install"),
+            variant: "primary",
+            className: "c-button--compact",
+            attributes: { "data-install-provider": provider.id },
+          })
+        : ui.badge(t("manual-install"), "neutral");
+    const status = provider.installed
+      ? ui.badge(t("detected"), "success", { dot: true })
+      : provider.installable
+        ? ui.badge(t("installable"), "warning")
+        : ui.badge(t("missing"), "danger");
+    const source = provider.resolutionSource === "path"
+      ? t("resolution-path")
+      : provider.resolutionSource === "known-directory"
+        ? t("resolution-fallback")
+        : provider.resolutionSource === "absolute"
+          ? t("resolution-explicit")
+          : "";
+    const meta = `${status}${provider.userConfigured ? ui.badge(t("user-config"), "accent") : ""}<span>${escape(provider.command)}</span><span>${escape(access)}</span>${source ? `<span>${escape(source)}</span>` : ""}`;
+    return ui.listRow({
+      leading: ui.providerMark(provider.title, provider.id),
+      title: provider.title,
+      description: `${t("provider-purpose")} · ${provider.command}`,
+      meta: `<span class="c-cluster">${meta}</span>${provider.resolvedPath ? `<code class="agent-provider-path" title="${escape(provider.resolvedPath)}">${escape(provider.resolvedPath)}</code>` : ""}`,
+      actions: action,
+      tone: provider.installed ? "default" : "warning",
+    });
   }).join("");
-  $("agent-settings-list").innerHTML = settings.agents.map((agent) => { const options = providers.map((provider) => `<option value="${escape(provider.id)}" ${agent.providerId === provider.id ? "selected" : ""} ${provider.installed ? "" : "disabled"}>${escape(providerLabel(provider.id))}${provider.installed ? "" : "（未安装）"}</option>`).join(""); const provider = providerById.get(agent.providerId); const description = agent.role === "external" ? t("external-unavailable") : agent.description; const purpose = agent.role === "external" ? t("external-unavailable-detail") : agent.purpose; return `<article class="agent-setting"><div><h3>${escape(agent.title)}<span>${escape(agentRoleLabel(agent.role))}</span></h3><p>${escape(description)}</p><small>${escape(purpose)}</small></div><select class="agent-provider-select" data-agent-provider="${escape(agent.id)}" aria-label="选择 ${escape(agent.title)} 的 Provider" ${provider?.installed ? "" : "disabled"}>${options}</select><label class="agent-switch" title="${agent.required ? "此角色必须保持启用" : agent.enabled ? "关闭此角色" : "启用此角色"}"><input type="checkbox" data-agent-toggle="${escape(agent.id)}" ${agent.enabled ? "checked" : ""} ${agent.required ? "disabled" : ""}/><span></span></label></article>`; }).join("");
+  const agentRows = settings.agents.map((agent) => {
+    const provider = providerById.get(agent.providerId);
+    const options = providers.map((candidate) => ({
+      value: candidate.id,
+      label: `${providerLabel(candidate.id)}${candidate.installed ? "" : ` · ${t("missing")}`}`,
+      disabled: !candidate.installed,
+    }));
+    const description = agent.role === "external" ? t("external-unavailable") : agent.description;
+    const purpose = agent.role === "external" ? t("external-unavailable-detail") : agent.purpose;
+    return ui.listRow({
+      leading: ui.providerMark(providerLabel(agent.providerId), agent.providerId),
+      title: agent.title,
+      description,
+      meta: `${ui.badge(agentRoleLabel(agent.role), "neutral")}${provider?.installed ? ui.badge(providerLabel(agent.providerId), "accent") : ui.badge(`${providerLabel(agent.providerId)} · ${t("missing")}`, "warning")}<span>${escape(purpose)}</span>`,
+      actions: `<div class="c-cluster">${ui.select({ options, value: agent.providerId, className: "agent-role-select", attributes: { "data-agent-provider": agent.id, "aria-label": `${t("provider-for")} ${agent.title}` } })}${ui.switchControl({ checked: agent.enabled, disabled: agent.required, label: agent.required ? t("required-role") : agent.enabled ? t("disable-role") : t("enable-role"), attributes: { "data-agent-toggle": agent.id } })}</div>`,
+      tone: provider?.installed ? "default" : "warning",
+    });
+  }).join("");
+  host.innerHTML = `<div class="agent-page">
+    ${ui.sectionHeader({
+      eyebrow: t("agent-page-eyebrow"),
+      title: t("agents-title"),
+      description: t("agents-lead"),
+      actions: `${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-settings-refresh": "" } })}${installButton}`,
+    })}
+    <div class="c-stat-grid agent-overview">${ui.stat({ label: t("stat-providers"), value: `${installed.length}/${providers.length}`, detail: t("stat-providers-detail"), tone: installed.length ? "success" : "warning" })}${ui.stat({ label: t("stat-roles"), value: `${enabledRoles}/${settings.agents.length}`, detail: t("stat-roles-detail") })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}` : t("gateway-subtitle"), tone: gateway?.running && exposedModels.length ? "success" : "warning" })}</div>
+    ${gatewayCard}
+    <div class="agent-section-head"><div><h3>${t("local-providers")}</h3><p>${t("providers-section-lead")}</p></div><div class="c-segmented" aria-label="${escape(t("providers-state"))}">${ui.badge(`${installed.length} ${t("connected")}`, "success", { dot: true })}${missing.length ? ui.badge(`${missing.length} ${t("installable")}`, "warning") : ""}</div></div>
+    <div id="provider-registry" class="c-list agent-provider-list">${providerRows || ui.emptyState({ iconName: "terminal", title: t("empty-providers"), body: t("empty-providers-body") })}</div>
+    <div class="agent-section-head"><div><h3>${t("roles-bindings")}</h3><p>${t("roles-section-lead")}</p></div></div>
+    <div id="agent-settings-list" class="c-list agent-role-list">${agentRows}</div>
+    <p class="agent-role-note">${escape(t("agents-note"))}</p>
+  </div>`;
 }
-function renderSituation(situation, config) { state.situation = situation; state.config = config; const signature = JSON.stringify([situation, config]); if (state.signatures.situation === signature) return; state.signatures.situation = signature; const overdue = situation.overdue || []; const dueSoon = situation.dueSoon || []; const goals = situation.activeGoals || []; const boundaries = situation.selfModel || []; const rows = []; if (overdue.length) rows.push(`<div class="settings-card"><h4>已逾期 (${overdue.length})</h4>${overdue.slice(0, 6).map((item) => `<p>${escape(item.title)} · 应于 ${escape(String(item.dueAt || "").slice(0, 10))}</p>`).join("")}</div>`); if (dueSoon.length) rows.push(`<div class="settings-card"><h4>即将到期 (${dueSoon.length})</h4>${dueSoon.slice(0, 6).map((item) => `<p>${escape(item.title)} · ${escape(String(item.dueAt || "").slice(0, 10))}</p>`).join("")}</div>`); if (goals.length) rows.push(`<div class="settings-card"><h4>进行中的目标 (${goals.length})</h4>${goals.slice(0, 6).map((item) => `<p>${escape(item.title)}</p>`).join("")}</div>`); if (boundaries.length) rows.push(`<div class="settings-card"><h4>你声明过的边界 (${boundaries.length})</h4>${boundaries.slice(0, 6).map((item) => `<p>${escape(item.statement)}</p>`).join("")}</div>`); const observed = (situation.observations || []); if (observed.length) rows.push(`<div class="settings-card"><h4>观察来源</h4>${observed.map((item) => `<p>${escape(item.connectorId)} · ${item.error ? `读取失败：${escape(item.error)}` : `${item.count} 条`}</p>`).join("")}</div>`); $("situation-overview").innerHTML = rows.length ? rows.join("") : `<div class="memory-empty">还没有记录任何目标、承诺或观察。分身只会依据你确认过的内容行动。</div>`; const paths = config.paths || {}; $("config-paths").innerHTML = `<h4>本地数据</h4><p>数据目录：${escape(paths.dataDirectory || "-")}</p><p>项目运行目录：${escape(paths.workspaceRuntimeDirectory || "-")}</p><p>Provider 配置：${escape(paths.providersFile || "-")}</p><p>记忆：${escape(paths.memoryDirectory || "-")}</p><span class="settings-value">仅本机</span>`; if (document.activeElement !== $("config-workspace")) $("config-workspace").value = config.config?.workspacePath || ""; const modelInput = $("config-main-agent-model"); if (modelInput && document.activeElement !== modelInput) modelInput.value = config.config?.mainAgentModel || ""; }
+function selectedGatewayModel(current, models) {
+  const selected = current.startsWith("magpie/") ? current.slice("magpie/".length) : "";
+  return models.some((model) => model.id === selected) ? selected : models[0]?.id || "";
+}
+async function refreshGateways({ announceFailure = false } = {}) {
+  state.gatewayLoading = true;
+  state.signatures.agentPage = "";
+  renderAgentPage();
+  try {
+    const result = await api("/api/gateways");
+    renderGateways(result.gateways || []);
+  } catch (error) {
+    if (announceFailure) announce(error.message, true);
+  } finally {
+    state.gatewayLoading = false;
+    state.signatures.agentPage = "";
+    renderAgentPage();
+  }
+}
+async function useGatewayModel() {
+  const model = $("gateway-model")?.value;
+  if (!model) {
+    announce(t("gateway-model-required"), true);
+    return;
+  }
+  const button = document.querySelector("[data-gateway-apply]");
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/gateways/magpie/apply", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    if (state.config?.config) state.config.config.mainAgentModel = result.config?.mainAgentModel;
+    await refresh({ preserveScroll: true });
+    await refreshGateways();
+    announce(t("gateway-model-applied"));
+  } catch (error) {
+    if (button) button.disabled = false;
+    announce(error.message, true);
+  }
+}
+async function clearGatewayModel() {
+  try {
+    await api("/api/gateways/magpie/apply", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "" }),
+    });
+    await refresh({ preserveScroll: true });
+    await refreshGateways();
+    announce(t("gateway-model-cleared"));
+  } catch (error) {
+    announce(error.message, true);
+  }
+}
+function renderSituation(situation, config) { state.situation = situation; state.config = config; const signature = JSON.stringify([situation, config]); if (state.signatures.situation === signature) { renderAgentPage(); return; } state.signatures.situation = signature; const overdue = situation.overdue || []; const dueSoon = situation.dueSoon || []; const goals = situation.activeGoals || []; const boundaries = situation.selfModel || []; const rows = []; if (overdue.length) rows.push(`<div class="settings-card"><h4>已逾期 (${overdue.length})</h4>${overdue.slice(0, 6).map((item) => `<p>${escape(item.title)} · 应于 ${escape(String(item.dueAt || "").slice(0, 10))}</p>`).join("")}</div>`); if (dueSoon.length) rows.push(`<div class="settings-card"><h4>即将到期 (${dueSoon.length})</h4>${dueSoon.slice(0, 6).map((item) => `<p>${escape(item.title)} · ${escape(String(item.dueAt || "").slice(0, 10))}</p>`).join("")}</div>`); if (goals.length) rows.push(`<div class="settings-card"><h4>进行中的目标 (${goals.length})</h4>${goals.slice(0, 6).map((item) => `<p>${escape(item.title)}</p>`).join("")}</div>`); if (boundaries.length) rows.push(`<div class="settings-card"><h4>你声明过的边界 (${boundaries.length})</h4>${boundaries.slice(0, 6).map((item) => `<p>${escape(item.statement)}</p>`).join("")}</div>`); const observed = (situation.observations || []); if (observed.length) rows.push(`<div class="settings-card"><h4>观察来源</h4>${observed.map((item) => `<p>${escape(item.connectorId)} · ${item.error ? `读取失败：${escape(item.error)}` : `${item.count} 条`}</p>`).join("")}</div>`); $("situation-overview").innerHTML = rows.length ? rows.join("") : `<div class="memory-empty">还没有记录任何目标、承诺或观察。分身只会依据你确认过的内容行动。</div>`; const paths = config.paths || {}; $("config-paths").innerHTML = `<h4>本地数据</h4><p>数据目录：${escape(paths.dataDirectory || "-")}</p><p>项目运行目录：${escape(paths.workspaceRuntimeDirectory || "-")}</p><p>Provider 配置：${escape(paths.providersFile || "-")}</p><p>记忆：${escape(paths.memoryDirectory || "-")}</p><span class="settings-value">仅本机</span>`; if (document.activeElement !== $("config-workspace")) $("config-workspace").value = config.config?.workspacePath || ""; const modelInput = $("config-main-agent-model"); if (modelInput && document.activeElement !== modelInput) modelInput.value = config.config?.mainAgentModel || ""; renderAgentPage(); }
 
 function renderConnectors(connectors) { state.connectors = connectors; const signature = JSON.stringify(connectors); if (state.signatures.connectors === signature) return; state.signatures.connectors = signature; $("connector-list").innerHTML = connectors.length ? connectors.map((connector) => `<article class="agent-setting"><div><h3>${escape(connector.id)}</h3><p>${escape(connector.target || "（未设置目录）")}</p><small>只读观察，绝不获得执行权限</small></div><label class="agent-switch" title="${connector.enabled ? "停用此来源" : "启用此来源"}"><input type="checkbox" data-connector-toggle="${escape(connector.id)}" ${connector.enabled ? "checked" : ""}/><span></span></label><button class="schedule-toggle" type="button" data-connector-remove="${escape(connector.id)}">移除</button></article>`).join("") : `<div class="memory-empty">还没有观察来源。添加一个目录后，分身才能知道你没主动告诉它的事。</div>`; }
 
@@ -355,7 +533,7 @@ function restoreDisclosureScrolls(id) {
 }
 function renderSession(session) { setTopbar(session); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false } = {}) { if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
-async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities")]); state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); const sessions = state.dashboard.sessions || []; if (!state.selectedId || !sessions.some((session) => session.id === state.selectedId)) state.selectedId = sessions[0]?.id || null; renderSessions(sessions); if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
+async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities")]); state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.selectedId || !sessions.some((session) => session.id === state.selectedId)) state.selectedId = sessions[0]?.id || null; renderSessions(sessions); if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
 async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
   // The message and a live reply card appear before the request is sent. A model
   // call can take many seconds, and until now the composer kept the text and the
@@ -422,7 +600,7 @@ function resizeComposer() { const input = $("query"); input.style.height = "auto
 function renderScheduleOptions() { const kind = $("schedule-kind").value; const options = $("schedule-options"); $("schedule-time").hidden = kind === "interval"; $("schedule-time").required = kind !== "interval"; if (kind === "interval") { options.innerHTML = `<label>每隔</label><input id="schedule-interval-value" type="number" min="1" max="10080" value="30" aria-label="间隔时长"/><select id="schedule-interval-unit" aria-label="间隔单位"><option value="1">分钟</option><option value="60">小时</option></select><span class="schedule-cron-help">按固定间隔触发，例如每隔 5 分钟；首次触发要等一个间隔，客户端关闭期间错过的不会补跑。</span>`; return; } if (kind === "weekly") { options.innerHTML = `<label>在这些日子执行：</label>${["日", "一", "二", "三", "四", "五", "六"].map((day, index) => `<label><input type="checkbox" name="schedule-weekday" value="${index}" ${index === 1 ? "checked" : ""}/>周${day}</label>`).join("")}`; return; } if (kind === "monthly") { options.innerHTML = `<label>每月 <input id="schedule-day" type="number" min="1" max="31" value="1"/> 日</label>`; return; } if (kind === "yearly") { options.innerHTML = `<label>每年 <select id="schedule-month">${Array.from({ length: 12 }, (_, index) => `<option value="${index + 1}">${index + 1} 月</option>`).join("")}</select><input id="schedule-day" type="number" min="1" max="31" value="1"/> 日</label>`; return; } options.innerHTML = `<span class="schedule-cron-help">每天在所选时间触发；如果客户端稍后启动，当天会补触发一次。</span>`; }
 function openSchedules() { $("schedule-modal").setAttribute("aria-hidden", "false"); renderScheduleOptions(); $("schedule-query").focus(); }
 function closeSchedules() { $("schedule-modal").setAttribute("aria-hidden", "true"); }
-function selectSettingsSection(section) { state.settingsSection = section; document.querySelectorAll("[data-settings-section]").forEach((button) => button.setAttribute("aria-current", String(button.dataset.settingsSection === section))); document.querySelectorAll("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== section; }); }
+function selectSettingsSection(section) { state.settingsSection = section; document.querySelectorAll("[data-settings-section]").forEach((button) => button.setAttribute("aria-current", String(button.dataset.settingsSection === section))); document.querySelectorAll("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== section; }); if (section === "agents" && !state.gatewayLoading) void refreshGateways(); }
 function openSettings() { selectSettingsSection(state.settingsSection); $("settings-modal").setAttribute("aria-hidden", "false"); }
 function closeSettings() { $("settings-modal").setAttribute("aria-hidden", "true"); }
 async function createSchedule(query) { const button = $("schedule-create"); const kind = $("schedule-kind").value; const body = { query, kind, time: $("schedule-time").value }; if (kind === "weekly") body.weekdays = [...document.querySelectorAll('input[name="schedule-weekday"]:checked')].map((input) => Number(input.value)); if (kind === "monthly" || kind === "yearly") body.dayOfMonth = Number($("schedule-day").value); if (kind === "yearly") body.month = Number($("schedule-month").value); if (kind === "interval") body.intervalMinutes = Math.max(1, Math.floor(Number($("schedule-interval-value").value) || 0)) * Number($("schedule-interval-unit").value); button.disabled = true; try { await api("/api/schedules", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); $("schedule-query").value = ""; await refresh(); announce("定时任务已保存到本地运行时。"); } catch (error) { announce(error.message, true); } finally { button.disabled = false; } }
@@ -434,7 +612,7 @@ async function setAgentEnabled(id, enabled) { const agent = state.settings?.agen
 async function setAgentProvider(id, providerId) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { providerId }, agent ? `${agent.title} 已绑定到 ${providerLabel(providerId)}。` : "Agent Provider 已更新。"); }
 async function installProvider(id) { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector(`[data-install-provider="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { await api(`/api/agents/${encodeURIComponent(id)}/install`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); await refresh(); announce(`${providerLabel(id)} 已安装并完成检测。`); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
 async function setProviderHostAccess(id, allow) { if (allow && !(await confirmDialog(t("worker-allow-warning"), t("worker-allow")))) return; try { const current = await api("/api/settings/providers"); const provider = current.providers.find((item) => item.id === id); if (!provider) throw new Error("Provider not found."); const next = { ...provider }; if (allow) { next.hostAccess = "unrestricted"; next.acknowledgeUnrestrictedHostAccess = true; } else delete next.hostAccess; await api("/api/settings/providers", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) }); await refresh(); announce(t("worker-access-saved")); } catch (error) { announce(error.message, true); } }
-async function installMissingProviders() { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = $("install-missing-providers"); button.disabled = true; button.textContent = "正在安装…"; try { const result = await api("/api/agents/install-missing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); await refresh(); announce(result.installed.length ? `已自动安装 ${result.installed.length} 个 Provider。` : "没有可自动安装的缺失 Provider。"); } catch (error) { announce(error.message, true); await refresh(); } }
+async function installMissingProviders() { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector("[data-install-missing]"); if (button) { button.disabled = true; button.querySelector("span").textContent = t("installing"); } try { const result = await api("/api/agents/install-missing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); state.signatures.agentPage = ""; await refresh(); announce(result.installed.length ? `已自动安装 ${result.installed.length} 个 Provider。` : "没有可自动安装的缺失 Provider。"); } catch (error) { announce(error.message, true); await refresh(); } }
 async function searchMemories(query) { try { const result = await api(`/api/memory/governed/recall?q=${encodeURIComponent(query)}`); renderMemorySearch(result.matches || []); } catch (error) { announce(error.message, true); } }
 function confirmDialog(message, okLabel) { return new Promise((resolve) => { const modal = $("confirm-modal"); $("confirm-message").textContent = message; const ok = $("confirm-ok"); ok.textContent = okLabel || "确认"; modal.setAttribute("aria-hidden", "false"); const done = (result) => { modal.setAttribute("aria-hidden", "true"); ok.onclick = $("confirm-cancel").onclick = modal.onclick = null; resolve(result); }; ok.onclick = () => done(true); $("confirm-cancel").onclick = () => done(false); modal.onclick = (event) => { if (event.target === modal) done(false); }; }); }
 async function deleteSession(id) { if (!(await confirmDialog("从会话列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。", "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
@@ -461,9 +639,21 @@ $("settings-modal").addEventListener("click", (event) => { const button = event.
 $("schedule-form").addEventListener("submit", (event) => { event.preventDefault(); void createSchedule($("schedule-query").value.trim()); });
 $("schedule-kind").addEventListener("change", renderScheduleOptions);
 $("schedule-list").addEventListener("click", (event) => { const report = event.target.closest("[data-report-day]"); if (report) { void resolveReportDelivery(report.dataset.reportDay, report.dataset.resolution); return; } const occurrence = event.target.closest("[data-schedule-occurrence]"); if (occurrence) { void resolveScheduleOccurrence(occurrence.dataset.scheduleOccurrence, occurrence.dataset.resolution); return; } const button = event.target.closest("[data-schedule-toggle]"); if (button) void setScheduleEnabled(button.dataset.scheduleToggle, button.dataset.scheduleEnabled === "true"); });
-$("agent-settings-list").addEventListener("change", (event) => { const target = event.target; const toggle = target.closest("[data-agent-toggle]"); if (toggle) { void setAgentEnabled(toggle.dataset.agentToggle, toggle.checked); return; } const provider = target.closest("[data-agent-provider]"); if (provider) void setAgentProvider(provider.dataset.agentProvider, provider.value); });
-$("provider-registry").addEventListener("click", (event) => { const access = event.target.closest("[data-provider-access]"); if (access) { void setProviderHostAccess(access.dataset.providerAccess, access.dataset.allow === "true"); return; } const button = event.target.closest("[data-install-provider]"); if (button) void installProvider(button.dataset.installProvider); });
-$("install-missing-providers").addEventListener("click", () => void installMissingProviders());
+$("agent-page").addEventListener("change", (event) => { const target = event.target; const toggle = target.closest("[data-agent-toggle]"); if (toggle) { void setAgentEnabled(toggle.dataset.agentToggle, toggle.checked); return; } const provider = target.closest("[data-agent-provider]"); if (provider) void setAgentProvider(provider.dataset.agentProvider, provider.value); });
+$("agent-page").addEventListener("click", (event) => {
+  const refresh = event.target.closest("[data-settings-refresh], [data-gateway-refresh]");
+  if (refresh) { void refreshGateways({ announceFailure: true }); return; }
+  const applyGateway = event.target.closest("[data-gateway-apply]");
+  if (applyGateway) { void useGatewayModel(); return; }
+  const clearGateway = event.target.closest("[data-gateway-clear]");
+  if (clearGateway) { void clearGatewayModel(); return; }
+  const access = event.target.closest("[data-provider-access]");
+  if (access) { void setProviderHostAccess(access.dataset.providerAccess, access.dataset.allow === "true"); return; }
+  const install = event.target.closest("[data-install-provider]");
+  if (install) { void installProvider(install.dataset.installProvider); return; }
+  const installMissing = event.target.closest("[data-install-missing]");
+  if (installMissing) { void installMissingProviders(); }
+});
 $("audit-session-list").addEventListener("click", (event) => { const button = event.target.closest("[data-open-audit-run]"); if (button) { closeSettings(); void selectSession(button.dataset.openAuditRun); } });
 $("memory-candidates").addEventListener("click", (event) => { const promote = event.target.closest("[data-promote-candidate]"); if (promote) { void decideCandidate(promote.dataset.promoteCandidate, "promote"); return; } const reject = event.target.closest("[data-reject-candidate]"); if (reject) void decideCandidate(reject.dataset.rejectCandidate, "reject"); });
 $("library-list").addEventListener("click", (event) => { const conflict = event.target.closest("[data-memory-conflict]"); if (conflict) { void keepMemoryFile(conflict.dataset.memoryConflict); return; } const save = event.target.closest("[data-save-library]"); if (save) { void saveLibraryMemory(save.dataset.saveLibrary); return; } const source = event.target.closest("[data-open-memory-source]"); if (source) { closeSettings(); void selectSession(source.dataset.openMemorySource); } });

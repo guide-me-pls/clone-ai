@@ -24,7 +24,18 @@ test("the desktop HTML marks chrome so config.locale can replace it", async () =
   const html = await readFile(join(process.cwd(), "apps/desktop/ui/index.html"), "utf8");
   assert.match(html, /data-i18n="new-session"/);
   assert.match(html, /id="config-locale"/);
+  assert.match(html, /components\.css/);
+  assert.match(html, /components\.js/);
+  assert.match(html, /id="agent-page"/);
   const js = await readFile(join(process.cwd(), "apps/desktop/ui/app.js"), "utf8");
   assert.match(js, /function applyChrome/);
   assert.match(js, /config\.ui\?\.strings/);
+});
+
+test("the shared component library exposes the primitives used by the UI", async () => {
+  const source = await readFile(join(process.cwd(), "apps/desktop/ui/components.js"), "utf8");
+  for (const primitive of ["button", "card", "emptyState", "field", "listRow", "sectionHeader", "segmented", "select", "switchControl"]) {
+    assert.match(source, new RegExp(`${primitive}[,:]`), primitive);
+  }
+  assert.match(source, /window\.CloneUI/);
 });

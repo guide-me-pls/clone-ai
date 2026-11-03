@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
-import { accessSync, constants, existsSync, statSync } from "node:fs";
-import { delimiter, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 
 import { listEffectiveProviderConfigs } from "../config/provider-config-store.ts";
 import type { ProviderId } from "../config/worker-settings.ts";
+import {
+  resolveExecutable,
+  type ExecutableResolutionSource,
+} from "./executable-resolver.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,6 +22,8 @@ export interface WorkerProviderStatus {
   installable: boolean;
   userConfigured: boolean;
   executionBlocked: boolean;
+  resolvedPath?: string;
+  resolutionSource?: ExecutableResolutionSource;
   hostAccess?: "unrestricted";
   version?: string;
 }
@@ -51,7 +55,11 @@ export class WorkerRegistry {
   async install(id: ProviderId): Promise<WorkerProviderStatus> {
     const installer = installers[id];
     if (installer === undefined) throw new Error(`Provider ${id} has no automatic installer; install its command and restart Clone AI.`);
-    await execFileAsync(commandForPlatform(installer.command), installer.args, { windowsHide: true, timeout: 120_000 });
+    const resolution = resolveExecutable(commandForPlatform(installer.command));
+    await execFileAsync(resolution.resolvedPath ?? commandForPlatform(installer.command), installer.args, {
+      windowsHide: true,
+      timeout: 120_000,
+    });
     const provider = (await this.list()).find((candidate) => candidate.id === id);
     if (provider === undefined) throw new Error(`Provider ${id} disappeared after installation.`);
     if (!provider.installed) throw new Error(`Provider ${id} was not found on PATH after installation.`);
@@ -60,14 +68,15 @@ export class WorkerRegistry {
 }
 
 async function inspect(config: Awaited<ReturnType<typeof listEffectiveProviderConfigs>>[number], userConfigured: boolean): Promise<WorkerProviderStatus> {
-  const command = executableFor(config.command);
-  return view(config, userConfigured, executableExists(command));
+  const resolution = resolveExecutable(config.command);
+  return view(config, userConfigured, resolution.resolvedPath !== undefined, resolution);
 }
 
 function view(
   config: Awaited<ReturnType<typeof listEffectiveProviderConfigs>>[number],
   userConfigured: boolean,
   installed: boolean,
+  resolution?: ReturnType<typeof resolveExecutable>,
   version?: string,
 ): WorkerProviderStatus {
   return {
@@ -82,6 +91,8 @@ function view(
     installable: installers[config.id] !== undefined,
     userConfigured,
     executionBlocked: config.hostAccess !== "unrestricted",
+    ...(resolution?.resolvedPath === undefined ? {} : { resolvedPath: resolution.resolvedPath }),
+    ...(resolution?.source === undefined ? {} : { resolutionSource: resolution.source }),
     ...(config.hostAccess === "unrestricted" ? { hostAccess: "unrestricted" as const } : {}),
     ...(version === undefined ? {} : { version }),
   };
@@ -89,30 +100,4 @@ function view(
 
 function commandForPlatform(command: string): string {
   return process.platform === "win32" && command === "npm" ? "npm.cmd" : command;
-}
-
-function executableFor(command: string): string {
-  if (process.platform !== "win32") return command;
-  const npmExecutable = join(process.env.APPDATA ?? "", "npm", `${command}.cmd`);
-  return existsSync(npmExecutable) ? npmExecutable : command;
-}
-
-function executableExists(command: string): boolean {
-  const hasPath = isAbsolute(command) || command.includes("/") || command.includes("\\");
-  const paths = hasPath ? [command] : (process.env.PATH ?? process.env.Path ?? "").split(delimiter).filter(Boolean).map((directory) => join(directory, command));
-  const extensions = process.platform === "win32" && !/\.[A-Za-z0-9]+$/.test(command)
-    ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")
-    : [""];
-  for (const path of paths) {
-    for (const extension of extensions) {
-      try {
-        const candidate = `${path}${extension}`;
-        accessSync(candidate, process.platform === "win32" ? constants.F_OK : constants.X_OK);
-        if (statSync(candidate).isFile()) return true;
-      } catch {
-        continue;
-      }
-    }
-  }
-  return false;
 }

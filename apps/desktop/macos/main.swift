@@ -102,7 +102,17 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         var environment = ProcessInfo.processInfo.environment
         let home = FileManager.default.homeDirectoryForCurrentUser
         let defaultWorkspace = home.appendingPathComponent("Documents/Clone AI", isDirectory: true)
-        let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin", home.appendingPathComponent(".local/bin").path]
+        let extraPaths = [
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin",
+            home.appendingPathComponent(".local/bin").path,
+            home.appendingPathComponent(".npm-global/bin").path,
+            home.appendingPathComponent(".bun/bin").path,
+            home.appendingPathComponent("Library/pnpm").path
+        ]
         environment["PATH"] = ([environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"] + extraPaths).joined(separator: ":")
         environment["CLONE_AI_DESKTOP_CLIENT_PATH"] = client.path
         environment["CLONE_AI_DESKTOP_DEFAULT_WORKSPACE"] = defaultWorkspace.path
