@@ -1,0 +1,48 @@
+/* Memory library index. Scoped under #memory-root. 记忆库索引，限定在 #memory-root 内。 */
+/* The legacy always-expanded editor list is replaced by the index below. 旧的始终展开的编辑列表由下方索引取代。 */
+#library-list { display: none; }
+
+#memory-root { margin-top: 14px; font-size: 13px; }
+#memory-root * { box-sizing: border-box; }
+.mem-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.mem-search { flex: 1; min-width: 180px; padding: 7px 11px; border: 1px solid var(--line-strong, #ccd4df); border-radius: 8px; font: inherit; background: var(--surface, #fff); color: inherit; }
+.mem-toolbar select { padding: 7px 10px; border: 1px solid var(--line-strong, #ccd4df); border-radius: 8px; font: inherit; background: var(--surface, #fff); color: inherit; }
+.mem-count { color: var(--muted, #8791a1); font-size: 12px; }
+.mem-list { display: grid; gap: 8px; }
+.mem-row { border: 1px solid var(--line, #e3e7ee); border-radius: 11px; background: var(--surface, #fff); overflow: hidden; }
+.mem-row[open] { border-color: var(--line-strong, #ccd4df); box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+.mem-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 11px 14px; cursor: pointer; list-style: none; }
+.mem-head::-webkit-details-marker { display: none; }
+.mem-head::before { content: "›"; color: var(--muted, #8791a1); font-size: 15px; line-height: 1; transition: transform .15s ease; display: inline-block; }
+.mem-row[open] > .mem-head::before { transform: rotate(90deg); }
+.mem-title { flex: 1; min-width: 160px; color: var(--text, #20242c); font-weight: 560; }
+.mem-tags { display: inline-flex; gap: 5px; }
+.mem-badge { padding: 1px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; line-height: 18px; white-space: nowrap; }
+.mem-type { background: rgba(52, 104, 246, .11); color: #3468f6; }
+.mem-private { background: rgba(0,0,0,.06); color: #5c6675; }
+.mem-public { background: rgba(35, 134, 83, .12); color: #238653; }
+.mem-secret { background: rgba(194, 63, 69, .12); color: #c23f45; }
+.mem-muted { background: rgba(0,0,0,.05); color: #8791a1; }
+.mem-meta { color: var(--muted, #8791a1); font-size: 11.5px; white-space: nowrap; }
+.mem-body { padding: 0 14px 13px 34px; }
+.mem-content { margin: 0 0 10px; white-space: pre-wrap; line-height: 1.65; color: var(--text, #20242c); }
+.mem-detail { display: grid; grid-template-columns: 44px 1fr; gap: 4px 10px; margin: 0 0 10px; font-size: 12px; color: var(--subtle, #5c6675); }
+.mem-detail dt { color: var(--muted, #8791a1); }
+.mem-detail dd { margin: 0; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.mem-detail code { font-size: 11px; word-break: break-all; }
+.mem-evidence { padding: 1px 7px; border-radius: 6px; background: rgba(0,0,0,.05); font-size: 11px; }
+.mem-file { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted, #8791a1); }
+.mem-pending { color: var(--muted, #8791a1); font-size: 11.5px; }
+.mem-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mem-btn { border: 1px solid var(--line-strong, #ccd4df); background: var(--surface, #fff); color: inherit; border-radius: 8px; padding: 5px 11px; font: inherit; font-size: 12px; cursor: pointer; }
+.mem-btn:hover { background: var(--surface-hover, #f1f4f9); }
+.mem-btn-primary { background: #20242c; border-color: #20242c; color: #fff; }
+.mem-btn-primary:hover { background: #2c323c; }
+.mem-editor { display: grid; gap: 8px; margin-bottom: 10px; }
+.mem-input, .mem-textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong, #ccd4df); border-radius: 8px; font: inherit; background: var(--surface, #fff); color: inherit; }
+.mem-textarea { resize: vertical; line-height: 1.6; }
+.mem-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mem-tools select { padding: 5px 8px; border: 1px solid var(--line-strong, #ccd4df); border-radius: 7px; font: inherit; font-size: 12px; background: var(--surface, #fff); color: inherit; }
+.mem-link { border: 0; background: none; padding: 0; color: #3468f6; font: inherit; font-size: 12px; cursor: pointer; text-decoration: underline; }
+.mem-empty { padding: 18px; border: 1px dashed var(--line-strong, #ccd4df); border-radius: 11px; color: var(--muted, #8791a1); text-align: center; font-size: 12.5px; }
+.mem-conflict { border-color: #e7c9a8; background: #fffaf3; }
