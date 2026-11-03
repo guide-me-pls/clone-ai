@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -110,6 +110,51 @@ test("a terminal turn is not overwritten by a later interruption report", async 
   });
   assert.equal(second.text, "第一条");
   assert.equal((await readMainAgentTurnRecords(dataDirectory)).length, 1);
+});
+
+test("a persisted Main Agent session is still visible after reopening", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const sessionDirectory = join(dataDirectory, "pi-sessions", "main-agent");
+  await mkdir(sessionDirectory, { recursive: true });
+  const entries = [
+    {
+      type: "message",
+      id: "history-user",
+      timestamp: "2026-11-03T08:00:00.000Z",
+      message: { role: "user", content: "整理今天需要推进的事情" },
+    },
+    {
+      type: "message",
+      id: "history-assistant",
+      timestamp: "2026-11-03T08:00:02.000Z",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "This private reasoning must not be shown." },
+          { type: "text", text: "这是重启后仍应存在的历史回复。" },
+        ],
+      },
+    },
+  ];
+  await writeFile(
+    join(sessionDirectory, "2026-11-03T08-00-00-000Z_session.jsonl"),
+    `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    "utf8",
+  );
+
+  const dashboard = await companionFetch(url, token, "/api/dashboard");
+  const dashboardBody = await dashboard.json() as { sessions: Array<{ id: string; title: string }> };
+  assert.ok(dashboardBody.sessions.some((session) => session.id === "main-agent-conversation"));
+
+  const conversation = await companionFetch(url, token, "/api/sessions/main-agent-conversation");
+  const conversationBody = await conversation.json() as {
+    query: string;
+    messages: Array<{ role: string; text: string }>;
+  };
+  assert.equal(conversationBody.query, "整理今天需要推进的事情");
+  assert.ok(conversationBody.messages.some((message) => message.role === "person" && message.text.includes("整理今天")));
+  assert.ok(conversationBody.messages.some((message) => message.role === "clone" && message.text.includes("历史回复")));
+  assert.equal(conversationBody.messages.some((message) => message.text.includes("private reasoning")), false);
 });
 
 test("a turn left running by a dead owner is reconciled as interrupted", async (t) => {

@@ -77,6 +77,8 @@ interface ParsedEntry {
   at: string;
   speaker: string;
   text: string;
+  /** Only user-visible text, excluding private reasoning. 仅用户可见正文，不含私有推理。 */
+  visibleText: string;
 }
 
 const MAIN_AGENT_SESSION_SUBPATH = ["pi-sessions", "main-agent"] as const;
@@ -157,10 +159,10 @@ export interface ConversationMessage {
 export async function readConversation(dataDirectory: string, limit = 200): Promise<ConversationMessage[]> {
   const { entries } = await loadEntries(dataDirectory);
   return entries
-    .filter((entry) => entry.type === "message" && (entry.speaker === "user" || entry.speaker === "assistant") && entry.text.trim().length > 0)
+    .filter((entry) => entry.type === "message" && (entry.speaker === "user" || entry.speaker === "assistant") && entry.visibleText.trim().length > 0)
     .sort((left, right) => left.at.localeCompare(right.at))
     .slice(-Math.max(1, limit))
-    .map((entry) => ({ session: entry.session, at: entry.at, speaker: entry.speaker as "user" | "assistant", text: entry.text.slice(0, MAX_TEXT_PER_ENTRY) }));
+    .map((entry) => ({ session: entry.session, at: entry.at, speaker: entry.speaker as "user" | "assistant", text: entry.visibleText.slice(0, MAX_TEXT_PER_ENTRY) }));
 }
 
 /** The shape of the history: how much exists, how much the model can still see. 历史的形状：有多少、模型还能看见多少。 */
@@ -280,6 +282,7 @@ async function loadEntries(dataDirectory: string): Promise<LoadedHistory> {
         at: timestampOf(raw),
         speaker: speakerOf(raw, type),
         text: extractText(raw).slice(0, MAX_TEXT_PER_ENTRY),
+        visibleText: extractVisibleText(raw).slice(0, MAX_TEXT_PER_ENTRY),
       });
     }
 
@@ -382,6 +385,32 @@ function extractText(raw: Record<string, unknown>): string {
     if (typeof record.name === "string" && record.type === "toolCall") parts.push(record.name);
   }
   return parts.filter((part) => part.length > 0).join("\n");
+}
+
+/**
+ * The Chat tab must show what the agent said, not its private reasoning.
+ * Search can still index the broader text; rendering uses only `text` parts.
+ *
+ * 对话页必须展示 Agent 说出的话，而不是私有推理。检索仍可索引更广的文本；
+ * 界面渲染只使用 `text` 片段。
+ */
+function extractVisibleText(raw: Record<string, unknown>): string {
+  if (raw.type !== "message") return "";
+  const message = raw.message;
+  if (typeof message !== "object" || message === null) return "";
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .flatMap((part) => {
+      if (typeof part === "string") return [part];
+      if (typeof part !== "object" || part === null) return [];
+      const record = part as Record<string, unknown>;
+      if (record.type !== "text" && record.type !== undefined) return [];
+      return typeof record.text === "string" ? [record.text] : [];
+    })
+    .filter((part) => part.length > 0)
+    .join("\n");
 }
 
 const PLUMBING_KEYS = new Set([

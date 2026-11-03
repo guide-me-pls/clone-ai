@@ -629,12 +629,7 @@ function welcomeMarkup() {
     <div class="welcome-copy">
       <span class="welcome-eyebrow">开始新任务</span>
       <h2>今天想推进什么？</h2>
-      <p>直接描述目标、贴一段上下文，或者从下面选一个起点。我会先拆解、准备和验证；会影响外部世界的动作会先停下来问你。</p>
-    </div>
-    <div class="starter-grid">
-      <button class="starter-card" type="button" data-suggestion="整理今天需要推进的事情"><span class="starter-index">01</span><b>理清今天的事</b><small>把零散事项整理成可执行顺序</small><span class="starter-arrow" aria-hidden="true">→</span></button>
-      <button class="starter-card" type="button" data-suggestion="为下周的产品发布准备计划"><span class="starter-index">02</span><b>起草一份计划</b><small>从目标拆到步骤、风险和验收标准</small><span class="starter-arrow" aria-hidden="true">→</span></button>
-      <button class="starter-card" type="button" data-suggestion="比较三个可执行方案并给我建议"><span class="starter-index">03</span><b>比较可选方案</b><small>把取舍讲清楚，再给出建议</small><span class="starter-arrow" aria-hidden="true">→</span></button>
+      <p>直接描述目标，或贴一段上下文。我会先拆解、准备和验证；会影响外部世界的动作会先停下来问你。</p>
     </div>
   </div>`;
 }

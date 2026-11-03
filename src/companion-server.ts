@@ -52,7 +52,7 @@ import { readConnectorSettings, writeConnectorSettings } from "./connectors/conn
 import { compileBriefing } from "./main-agent/situation-briefing.ts";
 import { buildFallbackPlan } from "./planning/fallback-planner.ts";
 import { reconcileCommitments } from "./state/commitment-reconciler.ts";
-import { describeHistory, mainAgentSessionDirectory, searchHistory } from "./main-agent/conversation-history.ts";
+import { describeHistory, mainAgentSessionDirectory, readConversation, searchHistory } from "./main-agent/conversation-history.ts";
 import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
 import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
 import { listPiModelIds, listPiModels, piModelReference } from "./main-agent/pi-model-catalog.ts";
@@ -1634,7 +1634,10 @@ async function handleRequest(
 
 async function buildDashboard(dataDirectory: string, sessions: SessionStore): Promise<DashboardView> {
   const { events, state, tasks, runs } = await loadRuntimeView(dataDirectory);
-  const turns = await readMainAgentTurnRecords(dataDirectory);
+  const [turns, ownerHistory] = await Promise.all([
+    readMainAgentTurnRecords(dataDirectory),
+    readConversation(dataDirectory, 200),
+  ]);
   const deletedRunIds = await sessions.deletedRunIds();
   const visibleRuns = runs.filter((run) => !deletedRunIds.has(run.id));
   const visibleRunIds = new Set(visibleRuns.map((run) => run.id));
@@ -1645,10 +1648,6 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
     list.push(event);
     eventsByRun.set(event.runId, list);
   }
-  const latestTurn = turns
-    .slice()
-    .sort((left, right) => Date.parse(left.completedAt ?? left.startedAt) - Date.parse(right.completedAt ?? right.startedAt))
-    .at(-1);
   // A conversational turn is not a task. The Main Agent proposes a one-step
   // direct_response plan for "hello", and showing that as its own session made
   // every message spawn another conversation box. Those runs stay in the
@@ -1657,12 +1656,13 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
   // 独立会话，就使每条消息都裂变出一个新的对话框。这些 Run 仍留在 Journal 与审计里，
   // 侧栏只显示任务。
   const taskRuns = visibleRuns.filter((run) => !isConversationalRun(state, run));
+  const conversationSummary = summarizeOwnerConversation(ownerHistory, turns);
   const allSessions = [
     ...taskRuns.map((run) => ({
       ...toSessionSummary(run, tasks, describeRunFailure(run, eventsByRun.get(run.id) ?? []).reason),
       updatedAtMs: Date.parse(run.updatedAt),
     })),
-    ...(latestTurn === undefined ? [] : [toMainAgentTurnSummary(latestTurn)]),
+    ...(conversationSummary === undefined ? [] : [conversationSummary]),
   ].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
   // Legacy builds created a fresh Run every time the owner accepted the same
   // failed-task card. Group those identical failures so the sidebar reflects
@@ -1761,6 +1761,50 @@ function groupDuplicateFailures(sessions: DashboardSession[]): DashboardSession[
 
 const MAIN_AGENT_SESSION_ID = "main-agent-conversation";
 
+type OwnerHistoryMessage = Awaited<ReturnType<typeof readConversation>>[number];
+
+function summarizeOwnerConversation(
+  history: OwnerHistoryMessage[],
+  turns: MainAgentTurnRecord[],
+): DashboardSession | undefined {
+  if (history.length === 0) {
+    const latestTurn = [...turns]
+      .sort((left, right) => Date.parse(left.completedAt ?? left.startedAt) - Date.parse(right.completedAt ?? right.startedAt))
+      .at(-1);
+    return latestTurn === undefined ? undefined : toMainAgentTurnSummary(latestTurn);
+  }
+  const ordered = [...history].sort((left, right) => left.at.localeCompare(right.at));
+  const latestUser = [...ordered].reverse().find((message) => message.speaker === "user");
+  const latestAssistant = [...ordered].reverse().find((message) => message.speaker === "assistant");
+  const latestAt = ordered.at(-1)?.at ?? new Date().toISOString();
+  const latestTurn = [...turns]
+    .sort((left, right) => Date.parse(left.completedAt ?? left.startedAt) - Date.parse(right.completedAt ?? right.startedAt))
+    .at(-1);
+  const terminalAfterReply = latestTurn !== undefined
+    && latestTurn.status !== "completed"
+    && Date.parse(latestTurn.startedAt) >= Date.parse(latestAssistant?.at ?? "1970-01-01T00:00:00.000Z");
+  const display = latestTurn !== undefined
+    ? describeFailureForOwner(latestTurn.error)
+    : undefined;
+  return {
+    id: MAIN_AGENT_SESSION_ID,
+    title: latestUser?.text.replace(/\s+/g, " ").trim().slice(0, 80) || "Main Agent 对话",
+    status: terminalAfterReply ? latestTurn.status === "started" ? "running" : "failed" : "completed",
+    updatedAt: latestTurn !== undefined && Date.parse(latestTurn.completedAt ?? latestTurn.startedAt) > Date.parse(latestAt)
+      ? latestTurn.completedAt ?? latestTurn.startedAt
+      : latestAt,
+    updatedAtMs: Math.max(
+      Date.parse(latestAt),
+      latestTurn === undefined ? 0 : Date.parse(latestTurn.completedAt ?? latestTurn.startedAt),
+    ),
+    preview: terminalAfterReply
+      ? latestTurn.status === "started"
+        ? "这轮对话仍在本地运行时中推进。"
+        : `异常中断：${display?.summary ?? "本轮没有完成"}`
+      : latestAssistant?.text.replace(/\s+/g, " ").trim().slice(0, 80) || "这轮对话没有返回文字",
+  };
+}
+
 function toMainAgentTurnSummary(turn: MainAgentTurnRecord): SessionSummary & { updatedAtMs: number } {
   const updatedAt = turn.completedAt ?? turn.startedAt;
   const display = turn.status === "failed" || turn.status === "interrupted"
@@ -1781,19 +1825,28 @@ function toMainAgentTurnSummary(turn: MainAgentTurnRecord): SessionSummary & { u
 }
 
 async function buildMainAgentConversation(dataDirectory: string): Promise<SessionView> {
-  const turns = (await readMainAgentTurnRecords(dataDirectory))
-    .slice()
-    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
-  const latest = turns.at(-1);
-  const messages: ConversationMessage[] = [];
+  const [history, turnRecords] = await Promise.all([
+    readConversation(dataDirectory, 500),
+    readMainAgentTurnRecords(dataDirectory),
+  ]);
+  const turns = [...turnRecords].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
+  const messages: ConversationMessage[] = history.map((message, index) => ({
+    id: `history-${index}-${message.session}-${message.at}`,
+    role: message.speaker === "user" ? "person" : "clone",
+    text: message.text,
+    occurredAt: message.at,
+  }));
   for (const turn of turns) {
-    messages.push({
-      id: `turn-user-${turn.id}`,
-      role: "person",
-      text: turn.text,
-      occurredAt: turn.startedAt,
-    });
     const at = turn.completedAt ?? turn.startedAt;
+    const started = Date.parse(turn.startedAt);
+    const ended = Date.parse(turn.completedAt ?? new Date().toISOString()) + 10_000;
+    const hasStoredAssistantReply = history.some((message) => (
+      message.speaker === "assistant"
+      && Date.parse(message.at) >= started
+      && Date.parse(message.at) <= ended
+      && message.text.trim().length > 0
+    ));
+    if (hasStoredAssistantReply) continue;
     if (turn.status === "failed" || turn.status === "interrupted") {
       const display = describeFailureForOwner(turn.error);
       messages.push({
@@ -1827,7 +1880,9 @@ async function buildMainAgentConversation(dataDirectory: string): Promise<Sessio
       });
     }
   }
-  const sessionSummary: SessionSummary = latest === undefined
+  messages.sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
+  const summary = summarizeOwnerConversation(history, turns);
+  const sessionSummary: SessionSummary = summary === undefined
     ? {
         id: MAIN_AGENT_SESSION_ID,
         title: "新的对话",
@@ -1836,12 +1891,13 @@ async function buildMainAgentConversation(dataDirectory: string): Promise<Sessio
         preview: "从一个清晰的意图开始",
       }
     : (() => {
-        const { updatedAtMs: _updatedAtMs, ...summary } = toMainAgentTurnSummary(latest);
-        return summary;
+        const { updatedAtMs: _updatedAtMs, duplicateCount: _duplicateCount, ...value } = summary;
+        return value;
       })();
+  const latestUser = [...history].reverse().find((message) => message.speaker === "user");
   return {
     ...sessionSummary,
-    query: latest?.text ?? "",
+    query: latestUser?.text ?? turns.at(-1)?.text ?? "",
     evidenceCount: 0,
     subagents: [],
     approvals: [],
