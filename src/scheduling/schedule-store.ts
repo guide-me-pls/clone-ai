@@ -103,7 +103,7 @@ export class ScheduleStore {
 
   async add(input: CreateScheduleInput): Promise<LocalSchedule> {
     const query = input.query.trim();
-    if (query.length < 3) throw new Error("A scheduled task needs at least three characters.");
+    if (query.length === 0) throw new Error("A scheduled task needs a request.");
     validateScheduleInput(input);
     const nowDate = new Date();
     const now = nowDate.toISOString();
