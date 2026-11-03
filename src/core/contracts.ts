@@ -5,6 +5,7 @@
  * Run 既可以由用户 Query 发起，也可以由受治理的非 Query 来源发起。Signal 只能请求规划，
  * 绝不会自行授予执行权限。
  */
+import type { Scope } from "../authority/scope.ts";
 import type { FailureReport, OutcomeCatalog } from "./failure-analysis.ts";
 
 export type TriggerKind = "query" | "schedule" | "signal" | "manual";
@@ -65,6 +66,14 @@ export interface PlanStep {
    * 由该步骤监督的工作单；可按依赖关系分批执行。
    */
   subagents?: SubagentWorkOrder[];
+  /**
+   * What the step wants to touch beyond its workspace: machine-wide scopes the
+   * Authority policy intersects with the owner's standing grants. Absent means
+   * the step stays inside the workspace and only the risk class applies.
+   * 步骤在工作空间之外想触碰的东西：整机范围的 Scope，由 Authority 策略与所有者的常设授权
+   * 求交。缺省表示步骤只在工作空间内，仅适用风险等级。
+   */
+  scopes?: Scope[];
 }
 
 export interface WorkOrderInput {
@@ -325,6 +334,9 @@ export type JournalEventType =
   | "state.commitment.archived"
   | "opportunity.proposed"
   | "opportunity.resolved"
+  // Owner edits to autonomy levels / standing policies; only the owner writes these.
+  // 所有者对自主档位 / 常设策略的编辑；只有所有者会写这类事件。
+  | "authority.changed"
   | "agent.installed"
   | "agent.install_failed"
   // Model turn cost/duration. Copied from session metadata when the SDK has
@@ -474,6 +486,10 @@ export interface AgentRegistry {
 export interface PolicyDecision {
   outcome: "allowed" | "approval_required" | "denied";
   reason: string;
+  /** Standing policies that justified an automatic allow, for audit. 促成自动放行的常设策略，供审计。 */
+  policyIds?: string[];
+  /** Per-scope verdicts behind the outcome, for audit. 结论背后的逐 Scope 判定，供审计。 */
+  scopeVerdicts?: Array<{ scope: Scope; outcome: "allowed" | "approval_required" | "denied"; reason: string }>;
 }
 
 export interface PolicyEngine {

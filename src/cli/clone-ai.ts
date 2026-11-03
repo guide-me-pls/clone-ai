@@ -25,6 +25,7 @@ import { OpportunityService } from "../opportunity/opportunity-service.ts";
 import { createJournalStore } from "../core/sqlite-journal.ts";
 import { WorkerRegistry } from "../workers/worker-registry.ts";
 import { MdMemoryStore } from "../memory/md-memory-store.ts";
+import { describeAuthority, StandingPolicyStore } from "../authority/standing-policy-store.ts";
 import { MemoryGovernance } from "../memory/memory-governance.ts";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -47,6 +48,10 @@ Usage:
   clone-ai reject <runId>        Reject a run waiting for confirmation
   clone-ai cancel <runId>        Cancel a queued, running, or waiting run
   clone-ai review <runId> [accept|reject]  Inspect or resolve criteria requiring review
+  clone-ai authority [list]      Show autonomy levels and standing policies
+  clone-ai authority level <domain> <observe|prepare|act_with_approval|act_auto>
+  clone-ai authority grant <files|shell|network> <read|write|exec> <resource> --max <level> [--label <text>] [--until <ISO date>]
+  clone-ai authority revoke <policyId>
   clone-ai bench [--provider p]  Run the reliability benchmark
   clone-ai doctor                Check the local setup
   clone-ai --help | --version
@@ -92,6 +97,7 @@ async function main(): Promise<number> {
     case "reject": return decideRun(paths.dataDirectory, argv[1], "reject");
     case "cancel": return decideRun(paths.dataDirectory, argv[1], "cancel");
     case "review": return reviewRun(paths.dataDirectory, argv[1], argv[2]);
+    case "authority": return authorityCommand(paths.dataDirectory, argv.slice(1));
     case "bench": return runBench(argv.slice(1));
     case "doctor": return doctor(paths.dataDirectory);
     default: return converse(paths.dataDirectory, argv.join(" ").trim());
@@ -346,6 +352,56 @@ async function showCases(dataDirectory: string): Promise<number> {
   const text = await new BadCaseLog({ dataDirectory }).readLog();
   console.log(text.trim().length === 0 ? "No bad cases recorded yet." : text);
   return 0;
+}
+
+/** Authority is owner-only: this is one of its two write paths (the other is the desktop app). 权限只归所有者：这是它的两条写入路径之一（另一条是桌面应用）。 */
+async function authorityCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const journal = createJournalStore(dataDirectory);
+  try {
+    const store = new StandingPolicyStore(dataDirectory, journal);
+    await store.load();
+    const [action = "list", ...rest] = args;
+    if (action === "list") {
+      console.log(describeAuthority(store.snapshot()));
+      return 0;
+    }
+    if (action === "level") {
+      const [domain, level] = rest;
+      await store.setDomainLevel(domain as never, level as never);
+      console.log(`${domain} is now ${level}.`);
+      return 0;
+    }
+    if (action === "grant") {
+      const [domain, access, resource] = rest;
+      const flag = (name: string): string | undefined => {
+        const index = rest.indexOf(name);
+        return index === -1 ? undefined : rest[index + 1];
+      };
+      const max = flag("--max");
+      if (max === undefined) throw new Error("grant needs --max <level>.");
+      const policy = await store.addPolicy({
+        label: flag("--label") ?? `${domain} ${access} ${resource}`,
+        scopes: [{ domain, access, resource }],
+        maxAutonomy: max as never,
+        ...(flag("--until") === undefined ? {} : { validUntil: flag("--until") as string }),
+      });
+      console.log(`Granted ${policy.id} (max ${policy.maxAutonomy}).`);
+      return 0;
+    }
+    if (action === "revoke") {
+      if (rest[0] === undefined) throw new Error("revoke needs a policy id.");
+      await store.revokePolicy(rest[0]);
+      console.log(`Revoked ${rest[0]}.`);
+      return 0;
+    }
+    console.error("Usage: clone-ai authority [list|level|grant|revoke]");
+    return 1;
+  } catch (error: unknown) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
 }
 
 async function showOpportunities(dataDirectory: string): Promise<number> {

@@ -48,6 +48,7 @@ import {
 } from "./isolated-workspace.ts";
 import { extractFileExpectations } from "./verification.ts";
 import { CLONE_DIRECTORY_NAME } from "../config/clone-home.ts";
+import { parseScope } from "../authority/scope.ts";
 
 export interface CloneRuntimeOptions {
   journal: JournalStore;
@@ -1575,6 +1576,10 @@ function assertPlanIsExecutable(steps: PlanStep[], knownAgentIds?: Set<string>):
     }
     if (!Array.isArray(step.acceptanceCriteria) || step.acceptanceCriteria.length === 0) {
       throw new Error(`Plan step ${step.id} needs one or more acceptance criteria.`);
+    }
+    if (step.scopes !== undefined) {
+      if (!Array.isArray(step.scopes)) throw new Error(`Plan step ${step.id} scopes must be an array.`);
+      step.scopes.forEach((scope, index) => parseScope(scope, `Plan step ${step.id} scopes[${index}]`));
     }
     if ((step.agentId === undefined) === (step.subagents === undefined)) {
       throw new Error(`Plan step ${step.id} must have exactly one executor or one subagent group.`);

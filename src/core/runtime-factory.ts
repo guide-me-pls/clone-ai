@@ -4,7 +4,8 @@ import { resolveClonePaths, prepareCloneHome, type ClonePathOptions, type CloneP
 import { loadOutcomeCatalog, type OutcomeCatalog } from "./failure-analysis.ts";
 import type { JournalStore } from "./journal.ts";
 import { createJournalStore } from "./sqlite-journal.ts";
-import { DefaultPolicyEngine } from "./policy.ts";
+import { AuthorityPolicyEngine } from "../authority/policy-engine.ts";
+import { StandingPolicyStore } from "../authority/standing-policy-store.ts";
 import { CloneRuntime } from "./runtime.ts";
 import { JsonWorkspaceCheckpointStore } from "./workspace-evidence.ts";
 import { createDefaultVerifier } from "./verification.ts";
@@ -19,6 +20,8 @@ export interface RuntimeAssembly {
   runtime: CloneRuntime;
   memory: MemoryPipeline;
   failureCatalog: OutcomeCatalog;
+  /** Owner-authored autonomy levels and standing policies. 所有者撰写的自主档位与常设策略。 */
+  authority: StandingPolicyStore;
   /** Re-reads which executors are enabled, for callers that change settings. 为修改设置的调用方重新读取已启用的执行者。 */
   refreshKnownAgents: () => Promise<void>;
   /**
@@ -41,6 +44,8 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
   await prepareCloneHome(paths);
   const journal = createJournalStore(paths.dataDirectory);
   const failureCatalog = await loadOutcomeCatalog(paths.dataDirectory);
+  const authority = new StandingPolicyStore(paths.dataDirectory, journal);
+  await authority.load();
 
   // The executors the Kernel will accept in a plan. Read once here and cached
   // in a mutable set that a settings change can refresh, so validation stays
@@ -77,7 +82,7 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
   );
   const runtime = new CloneRuntime({
     journal,
-    policy: new DefaultPolicyEngine(),
+    policy: new AuthorityPolicyEngine({ config: () => authority.snapshot() }),
     verifier: createDefaultVerifier({ workspacePath: paths.workspacePath }),
     memory,
     failureCatalog,
@@ -94,5 +99,5 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
   const close = (): void => {
     (journal as { close?: () => void }).close?.();
   };
-  return { paths, journal, runtime, memory, failureCatalog, refreshKnownAgents, close };
+  return { paths, journal, runtime, memory, failureCatalog, authority, refreshKnownAgents, close };
 }

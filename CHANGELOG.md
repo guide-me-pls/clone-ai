@@ -6,6 +6,16 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Machine-wide authority kernel (phase 1)
+
+Authority is now expressed as scopes (`files` / `shell` / `network`) and judged by `AuthorityPolicyEngine`: a per-domain autonomy ladder (`observe` < `prepare` < `act_with_approval` < `act_auto`) plus owner-authored standing policies in `policies.json`. Defaults are `observe`, so nothing is writable until the owner raises a domain. Protected locations (SSH/GPG/cloud keys, Keychains, browser profiles, Clone AI's own journal, token and policies) can never be opened by any policy or approval, including through symlinks. Steps may declare `scopes`; each verdict is journaled inside `policy.decided`, and every owner edit as `authority.changed`. Only the owner can edit authority (`clone-ai authority ...`, `/api/authority/*`); the Main Agent can only read it (`get_authority`).
+
+On macOS a provider can set `"sandbox": "seatbelt"` to run under an OS-enforced `sandbox-exec` profile built from the step's granted scopes: writes outside the granted roots, protected-location access, and (unless `sandboxNetwork` is set) network are blocked by the OS rather than by the prompt. Not yet done: desktop UI page for authority, per-policy usage budgets, strict read isolation by default, other platforms, calendar/mail/apps domains.
+
+整机权限内核（第一阶段）：权限以 Scope（`files` / `shell` / `network`）表达，由 `AuthorityPolicyEngine` 判定：按域的自主阶梯（`observe` < `prepare` < `act_with_approval` < `act_auto`）加所有者撰写的常设策略（`policies.json`）。默认均为 `observe`，所有者抬高某个域之前什么都不可写。受保护位置（SSH/GPG/云密钥、钥匙串、浏览器档案、Clone AI 自己的 Journal、token 与策略文件）任何策略或审批都无法开放，符号链接也绕不过。步骤可声明 `scopes`；每个判定写入 `policy.decided`，所有者的每次编辑写入 `authority.changed`。只有所有者能修改权限（`clone-ai authority ...`、`/api/authority/*`），Main Agent 只能读取（`get_authority`）。
+
+macOS 上 Provider 可设置 `"sandbox": "seatbelt"`，在由步骤已授权 Scope 生成的 OS 级 `sandbox-exec` profile 下运行：授权根之外的写入、受保护位置访问，以及（未设 `sandboxNetwork` 时）网络，都由操作系统而不是提示词拦截。尚未完成：权限桌面页面、策略用量额度、默认严格读隔离、其他平台、日历/邮件/应用域。
+
 ### Isolated work can return named files
 
 External and irreversible steps still run in a git worktree or a copied tree under clone home. After a successful step, files the plan actually named (for example `` `receipt.md` ``) are copied into the owner's live project **only when that path does not already exist with different contents**. Other writes stay in the sandbox. The journal records `workspace.isolation.applied` with copied / leftover paths and whether the sandbox was kept, so the owner can open that directory instead of guessing.
