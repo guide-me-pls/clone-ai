@@ -30,6 +30,24 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         installMenu()
         let webConfiguration = WKWebViewConfiguration()
         webConfiguration.userContentController.add(self, name: "cloneNavigation")
+        webConfiguration.userContentController.add(self, name: "cloneFolderPicker")
+        webConfiguration.userContentController.addUserScript(WKUserScript(
+            source: """
+            window.CloneNative = {
+              available: true,
+              chooseDirectory: (purpose = "workspace") => window.webkit.messageHandlers.cloneFolderPicker.postMessage({
+                action: "chooseDirectory",
+                purpose: purpose
+              }),
+              revealInFinder: (path) => window.webkit.messageHandlers.cloneFolderPicker.postMessage({
+                action: "reveal",
+                path: path
+              })
+            };
+            """,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
         webView = WKWebView(frame: .zero, configuration: webConfiguration)
         webView.navigationDelegate = self
         window = NSWindow(
@@ -191,6 +209,10 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "cloneFolderPicker" {
+            handleFolderPickerMessage(message)
+            return
+        }
         guard message.name == "cloneNavigation", let section = message.body as? String else { return }
         if section == "ready" {
             pageReady = true
@@ -221,6 +243,53 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         }
         selectedNavigationIndex = index
         navigationControl?.selectedSegment = index
+    }
+
+    private func handleFolderPickerMessage(_ message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any],
+              let action = body["action"] as? String else { return }
+        if action == "reveal", let path = body["path"] as? String, !path.isEmpty {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            return
+        }
+        guard action == "chooseDirectory" else { return }
+        let purpose = (body["purpose"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "workspace"
+        chooseDirectory(purpose: purpose)
+    }
+
+    private func chooseDirectory(purpose: String) {
+        let panel = NSOpenPanel()
+        if purpose == "connector" {
+            panel.title = "选择观察目录"
+            panel.message = "分身只会读取这个目录，不会获得执行权限。"
+        } else {
+            panel.title = "选择工作目录"
+            panel.message = "Clone AI 会在这个目录中读取和写入任务产物。"
+        }
+        panel.prompt = "选择"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.resolvesAliases = true
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            guard response == .OK, let url = panel.url else {
+                self.webView.evaluateJavaScript("window.CloneNative?.onDirectoryCancelled?.();")
+                return
+            }
+            let purposeLiteral = self.javaScriptStringLiteral(purpose)
+            let pathLiteral = self.javaScriptStringLiteral(url.path)
+            self.webView.evaluateJavaScript(
+                "window.CloneNative?.onDirectoryChosen?.(\(purposeLiteral), \(pathLiteral));"
+            )
+        }
+    }
+
+    private func javaScriptStringLiteral(_ value: String) -> String {
+        guard let data = try? JSONEncoder().encode(value),
+              let encoded = String(data: data, encoding: .utf8) else { return "\"\"" }
+        return encoded
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {

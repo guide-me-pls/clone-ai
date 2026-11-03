@@ -14,6 +14,12 @@ const state = {
   providers: [],
   gateways: [],
   gatewayLoading: false,
+  situation: null,
+  config: null,
+  connectors: [],
+  modelOptions: [],
+  modelOptionsLoaded: false,
+  modelOptionsLoading: false,
   memories: [],
   settingsSection: "agents",
   locale: "zh-CN",
@@ -296,21 +302,154 @@ async function clearGatewayModel() {
     announce(error.message, true);
   }
 }
-function renderSituation(situation, config) { state.situation = situation; state.config = config; const signature = JSON.stringify([situation, config]); if (state.signatures.situation === signature) { renderAgentPage(); return; } state.signatures.situation = signature; const overdue = situation.overdue || []; const dueSoon = situation.dueSoon || []; const goals = situation.activeGoals || []; const boundaries = situation.selfModel || []; const rows = []; if (overdue.length) rows.push(`<div class="settings-card"><h4>已逾期 (${overdue.length})</h4>${overdue.slice(0, 6).map((item) => `<p>${escape(item.title)} · 应于 ${escape(String(item.dueAt || "").slice(0, 10))}</p>`).join("")}</div>`); if (dueSoon.length) rows.push(`<div class="settings-card"><h4>即将到期 (${dueSoon.length})</h4>${dueSoon.slice(0, 6).map((item) => `<p>${escape(item.title)} · ${escape(String(item.dueAt || "").slice(0, 10))}</p>`).join("")}</div>`); if (goals.length) rows.push(`<div class="settings-card"><h4>进行中的目标 (${goals.length})</h4>${goals.slice(0, 6).map((item) => `<p>${escape(item.title)}</p>`).join("")}</div>`); if (boundaries.length) rows.push(`<div class="settings-card"><h4>你声明过的边界 (${boundaries.length})</h4>${boundaries.slice(0, 6).map((item) => `<p>${escape(item.statement)}</p>`).join("")}</div>`); const observed = (situation.observations || []); if (observed.length) rows.push(`<div class="settings-card"><h4>观察来源</h4>${observed.map((item) => `<p>${escape(item.connectorId)} · ${item.error ? `读取失败：${escape(item.error)}` : `${item.count} 条`}</p>`).join("")}</div>`); $("situation-overview").innerHTML = rows.length ? rows.join("") : `<div class="memory-empty">还没有记录任何目标、承诺或观察。分身只会依据你确认过的内容行动。</div>`; const paths = config.paths || {}; $("config-paths").innerHTML = `<h4>本地数据</h4><p>数据目录：${escape(paths.dataDirectory || "-")}</p><p>项目运行目录：${escape(paths.workspaceRuntimeDirectory || "-")}</p><p>Provider 配置：${escape(paths.providersFile || "-")}</p><p>记忆：${escape(paths.memoryDirectory || "-")}</p><span class="settings-value">仅本机</span>`; if (document.activeElement !== $("config-workspace")) $("config-workspace").value = config.config?.workspacePath || ""; const modelInput = $("config-main-agent-model"); if (modelInput && document.activeElement !== modelInput) modelInput.value = config.config?.mainAgentModel || ""; renderAgentPage(); }
+function renderSituation(situation, config) {
+  state.situation = situation;
+  state.config = config;
+  const signature = JSON.stringify([situation, config]);
+  if (state.signatures.situation === signature) {
+    renderAgentPage();
+    return;
+  }
+  state.signatures.situation = signature;
+  const overdue = situation.overdue || [];
+  const dueSoon = situation.dueSoon || [];
+  const goals = situation.activeGoals || [];
+  const boundaries = situation.selfModel || [];
+  const rows = [];
+  if (overdue.length) rows.push(`<div class="settings-card"><h4>已逾期 (${overdue.length})</h4>${overdue.slice(0, 6).map((item) => `<p>${escape(item.title)} · 应于 ${escape(String(item.dueAt || "").slice(0, 10))}</p>`).join("")}</div>`);
+  if (dueSoon.length) rows.push(`<div class="settings-card"><h4>即将到期 (${dueSoon.length})</h4>${dueSoon.slice(0, 6).map((item) => `<p>${escape(item.title)} · ${escape(String(item.dueAt || "").slice(0, 10))}</p>`).join("")}</div>`);
+  if (goals.length) rows.push(`<div class="settings-card"><h4>进行中的目标 (${goals.length})</h4>${goals.slice(0, 6).map((item) => `<p>${escape(item.title)}</p>`).join("")}</div>`);
+  if (boundaries.length) rows.push(`<div class="settings-card"><h4>你声明过的边界 (${boundaries.length})</h4>${boundaries.slice(0, 6).map((item) => `<p>${escape(item.statement)}</p>`).join("")}</div>`);
+  const observed = situation.observations || [];
+  if (observed.length) rows.push(`<div class="settings-card"><h4>观察来源</h4>${observed.map((item) => `<p>${escape(item.connectorId)} · ${item.error ? `读取失败：${escape(item.error)}` : `${item.count} 条`}</p>`).join("")}</div>`);
+  $("situation-overview").innerHTML = rows.length
+    ? rows.join("")
+    : `<div class="memory-empty">还没有记录任何目标、承诺或观察。分身只会依据你确认过的内容行动。</div>`;
+  const paths = config.paths || {};
+  $("config-paths").innerHTML = `<h4>本地数据</h4><p>数据目录：${escape(paths.dataDirectory || "-")}</p><p>项目运行目录：${escape(paths.workspaceRuntimeDirectory || "-")}</p><p>Provider 配置：${escape(paths.providersFile || "-")}</p><p>记忆：${escape(paths.memoryDirectory || "-")}</p><span class="settings-value">仅本机</span>`;
+  const workspacePath = config.config?.workspacePath || paths.workspacePath || "";
+  const workspace = $("config-workspace");
+  if (workspace) {
+    workspace.textContent = workspacePath || t("workspace-unset");
+    workspace.title = workspacePath;
+  }
+  renderModelOptions();
+  renderAgentPage();
+}
 
-function renderConnectors(connectors) { state.connectors = connectors; const signature = JSON.stringify(connectors); if (state.signatures.connectors === signature) return; state.signatures.connectors = signature; $("connector-list").innerHTML = connectors.length ? connectors.map((connector) => `<article class="agent-setting"><div><h3>${escape(connector.id)}</h3><p>${escape(connector.target || "（未设置目录）")}</p><small>只读观察，绝不获得执行权限</small></div><label class="agent-switch" title="${connector.enabled ? "停用此来源" : "启用此来源"}"><input type="checkbox" data-connector-toggle="${escape(connector.id)}" ${connector.enabled ? "checked" : ""}/><span></span></label><button class="schedule-toggle" type="button" data-connector-remove="${escape(connector.id)}">移除</button></article>`).join("") : `<div class="memory-empty">还没有观察来源。添加一个目录后，分身才能知道你没主动告诉它的事。</div>`; }
+function renderModelOptions() {
+  const select = $("config-main-agent-model");
+  if (!select) return;
+  const current = state.config?.config?.mainAgentModel || "";
+  const models = [];
+  const seen = new Set();
+  for (const model of state.modelOptions || []) {
+    if (!model?.reference || seen.has(model.reference)) continue;
+    seen.add(model.reference);
+    const label = String(model.label || model.id || model.reference);
+    const provider = String(model.provider || "");
+    models.push({
+      value: model.reference,
+      label: `${label}${provider && provider !== "magpie" && !label.includes(provider) ? ` · ${provider}` : ""}`,
+    });
+  }
+  if (current && !seen.has(current)) {
+    models.unshift({ value: current, label: `${current} · ${t("model-current")}` });
+  }
+  const signature = JSON.stringify([models, current]);
+  if (select.dataset.signature === signature) {
+    if (document.activeElement !== select) select.value = current;
+    return;
+  }
+  select.dataset.signature = signature;
+  select.innerHTML = `<option value="">${escape(t("model-default"))}</option>${models.map((model) => `<option value="${escape(model.value)}">${escape(model.label)}</option>`).join("")}`;
+  select.value = current;
+}
+
+async function loadModelOptions({ force = false } = {}) {
+  if ((!force && state.modelOptionsLoaded) || state.modelOptionsLoading) return;
+  state.modelOptionsLoading = true;
+  try {
+    const result = await api("/api/options");
+    state.modelOptions = Array.isArray(result.models) ? result.models : [];
+    state.modelOptionsLoaded = true;
+    renderModelOptions();
+  } catch {
+    // A catalog failure must not hide the rest of the settings surface.
+    // 目录读取失败不应遮住其余设置界面。
+    state.modelOptionsLoaded = true;
+  } finally {
+    state.modelOptionsLoading = false;
+  }
+}
+
+function renderConnectors(connectors) { state.connectors = connectors; const signature = JSON.stringify(connectors); if (state.signatures.connectors === signature) return; state.signatures.connectors = signature; $("connector-list").innerHTML = connectors.length ? connectors.map((connector) => `<article class="agent-setting"><div><h3>${escape(connector.id)}</h3><p>${escape(connector.target || "（未设置目录）")}</p><small>只读观察，绝不获得执行权限</small></div><label class="agent-switch" title="${connector.enabled ? "停用此来源" : "启用此来源"}"><input type="checkbox" data-connector-toggle="${escape(connector.id)}" ${connector.enabled ? "checked" : ""}/><span></span></label><button class="schedule-toggle" type="button" data-connector-remove="${escape(connector.id)}">移除</button></article>`).join("") : `<div class="memory-empty">还没有观察来源。选择目录后，分身才能知道你没主动告诉它的事。</div>`; }
 
 async function saveConnectors(connectors, message) { try { await api("/api/connectors", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ connectors }) }); await refresh(); announce(message); } catch (error) { announce(error.message, true); } }
 
-async function addConnector() { const target = window.prompt("要让分身观察哪个目录？（只读）"); if (!target || !target.trim()) return; const existing = state.connectors || []; const id = `files:${existing.length + 1}`; await saveConnectors([...existing, { id, enabled: true, target: target.trim() }], "已添加观察来源。"); }
+function chooseNativeDirectory(purpose, onChoose) {
+  if (window.CloneNative?.chooseDirectory) {
+    window.CloneNative.onDirectoryChosen = (selectedPurpose, path) => {
+      window.CloneNative.onDirectoryChosen = undefined;
+      window.CloneNative.onDirectoryCancelled = undefined;
+      if (selectedPurpose === purpose) void onChoose(path);
+    };
+    window.CloneNative.onDirectoryCancelled = () => {
+      window.CloneNative.onDirectoryChosen = undefined;
+      window.CloneNative.onDirectoryCancelled = undefined;
+    };
+    window.CloneNative.chooseDirectory(purpose);
+    return;
+  }
+  announce(t("directory-native-only"), true);
+}
+
+async function chooseWorkspace() {
+  chooseNativeDirectory("workspace", async (workspacePath) => {
+    try {
+      await api("/api/config", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspacePath }),
+      });
+      await refresh({ preserveScroll: true });
+      announce(t("workspace-saved"));
+    } catch (error) {
+      announce(error.message, true);
+    }
+  });
+}
+
+function revealWorkspace() {
+  const path = state.config?.config?.workspacePath || state.config?.paths?.workspacePath || "";
+  if (!path) {
+    announce(t("workspace-unset"), true);
+    return;
+  }
+  if (window.CloneNative?.revealInFinder) {
+    window.CloneNative.revealInFinder(path);
+    return;
+  }
+  announce(t("directory-native-only"), true);
+}
+
+async function addConnector() {
+  chooseNativeDirectory("connector", async (target) => {
+    const existing = state.connectors || [];
+    if (existing.some((connector) => connector.target === target)) {
+      announce(t("connector-duplicate"));
+      return;
+    }
+    const id = `files:${Date.now().toString(36)}`;
+    await saveConnectors([...existing, { id, enabled: true, target }], t("connector-added"));
+  });
+}
 
 async function setConnectorEnabled(id, enabled) { const next = (state.connectors || []).map((connector) => connector.id === id ? { ...connector, enabled } : connector); await saveConnectors(next, enabled ? "观察来源已启用。" : "观察来源已停用。"); }
 
 async function removeConnector(id) { await saveConnectors((state.connectors || []).filter((connector) => connector.id !== id), "观察来源已移除。"); }
 
-async function saveWorkspace() { const workspacePath = $("config-workspace").value.trim(); if (!workspacePath) { announce("请填写工作目录。", true); return; } try { await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspacePath }) }); await refresh(); announce("工作目录已保存。"); } catch (error) { announce(error.message, true); } }
-
-async function saveMainAgentModel() { try { await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ mainAgentModel: $("config-main-agent-model").value.trim() }) }); await refresh(); announce("Main Agent 模型已保存。"); } catch (error) { announce(error.message, true); } }
+async function saveMainAgentModel() { const select = $("config-main-agent-model"); if (!select) return; try { await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ mainAgentModel: select.value }) }); await refresh({ preserveScroll: true }); announce(t("model-saved")); } catch (error) { announce(error.message, true); } }
 
 async function saveLocale() {
   const locale = $("config-locale")?.value;
@@ -466,7 +605,7 @@ function renderContextSearch(excerpts) {
 }
 
 async function searchContextHistory(query) { try { renderContextSearch((await api(`/api/context/search?q=${encodeURIComponent(query)}`)).excerpts || []); } catch (error) { announce(error.message, true); } }
-function welcomeMarkup() { return `<div class="welcome"><div class="welcome-copy"><div class="welcome-mark">${icon("spark")}</div><h2>今天，想让我替你推进什么？</h2><p>我会先拆解、准备和验证；如果下一步会影响外部世界，我会停下来等你确认。</p><div class="suggestions"><button class="suggestion" data-suggestion="整理今天需要推进的事情">整理今天需要推进的事情</button><button class="suggestion" data-suggestion="为下周的产品发布准备计划">为下周的产品发布准备计划</button><button class="suggestion" data-suggestion="比较三个可执行方案并给我建议">比较三个可执行方案并给我建议</button></div></div></div>`; }
+function welcomeMarkup() { return `<div class="welcome"><div class="welcome-copy"><span class="welcome-eyebrow">clone-ai</span><h2>今天，想让我替你推进什么？</h2><p>把一个目标、一段上下文或一个还没收尾的任务交给我。我会先拆解、准备和验证；如果下一步会影响外部世界，我会停下来等你确认。</p><div class="suggestions"><button class="suggestion" data-suggestion="整理今天需要推进的事情">整理今天需要推进的事情</button><button class="suggestion" data-suggestion="为下周的产品发布准备计划">为下周的产品发布准备计划</button><button class="suggestion" data-suggestion="比较三个可执行方案并给我建议">比较三个可执行方案并给我建议</button></div></div></div>`; }
 function richText(value) {
   const blocks = [];
   const source = String(value ?? "").replace(/\r\n?/g, "\n")
@@ -490,7 +629,10 @@ function messageMarkup(message) {
   const tone = message.tone ? ` ${message.tone}` : "";
   const collapsible = clone && text.length > 480;
   const body = clone ? richText(text) : escape(text).replace(/\n/g, "<br>");
-  return `<article class="message ${clone ? "clone" : "person"}"><div class="avatar ${clone ? "clone" : ""}">${clone ? "C" : "你"}</div><div class="message-body"><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div>${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${body}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}</div>` : `<div class="message-copy">${body}</div>`}</div></article>`;
+  // The conversation reads like Codex: a flat transcript with a single small
+  // role label above each turn, not a chat bubble on every line.
+  // 对话按 Codex 的方式排成扁平记录：每轮上方只保留一个小角色标签，不再每行都套气泡。
+  return `<article class="message ${clone ? "clone" : "person"}"><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div><div class="message-body">${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${body}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}</div>` : `<div class="message-copy">${body}</div>`}</div></article>`;
 }
 function displayAgentTitle(agent) { return agent.title; }
 function displayAgentDetail(agent) { const provider = agent.providerId ? `${providerLabel(agent.providerId)} · ` : ""; return provider + (agent.status === "completed" ? "已提交可验证证据" : (agent.summary || "正在按任务边界推进")); }
@@ -559,7 +701,7 @@ function restoreDisclosureScrolls(id) {
 }
 function renderSession(session) { setTopbar(session); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false } = {}) { if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
-async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities")]); state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.selectedId || !sessions.some((session) => session.id === state.selectedId)) state.selectedId = sessions[0]?.id || null; renderSessions(sessions); if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
+async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities")]); state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.selectedId || !sessions.some((session) => session.id === state.selectedId)) state.selectedId = sessions[0]?.id || null; renderSessions(sessions); if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
 async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
   // The message and a live reply card appear before the request is sent. A model
   // call can take many seconds, and until now the composer kept the text and the
@@ -569,9 +711,9 @@ async function createSession(query) { const button = $("submit"); button.disable
   $("query").value = ""; resizeComposer();
   const inner = $("conversation-inner");
   const welcome = inner.querySelector(".welcome"); if (welcome) inner.innerHTML = "";
-  inner.insertAdjacentHTML("beforeend", `<div class="message you"><div class="avatar you">你</div><div class="message-body"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="you-bubble">${escape(query)}</div></div></div>`);
+  inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${escape(query)}</div></div></div>`);
   const card = document.createElement("div"); card.className = "message clone";
-  card.innerHTML = `<div class="avatar clone">C</div><div class="message-body"><div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="clone-text" data-streaming="1" hidden></div></div></div>`;
+  card.innerHTML = `<div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="clone-text" data-streaming="1" hidden></div></div>`;
   inner.appendChild(card);
   const target = card.querySelector(".clone-text");
   const pending = card.querySelector("[data-response-pending]");
@@ -699,7 +841,8 @@ $("session-list").addEventListener("click", (event) => { const remove = event.ta
 $("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
-$("config-workspace-save").addEventListener("click", () => void saveWorkspace());
+$("config-workspace-choose").addEventListener("click", () => void chooseWorkspace());
+$("config-workspace-reveal").addEventListener("click", revealWorkspace);
 $("config-main-agent-model-save").addEventListener("click", () => void saveMainAgentModel());
 $("config-locale")?.addEventListener("change", () => void saveLocale());
 $("connector-add").addEventListener("click", () => void addConnector());
@@ -711,7 +854,6 @@ $("schedule-modal").addEventListener("click", (event) => { if (event.target === 
 function setSidebarOpen(open) { document.body.classList.toggle("sidebar-open", open); }
 $("menu-open").addEventListener("click", () => setSidebarOpen(true));
 $("sidebar-backdrop").addEventListener("click", () => setSidebarOpen(false));
-$("settings-open").addEventListener("click", openSettings);
 $("settings-close").addEventListener("click", closeSettings);
 $("settings-modal").addEventListener("click", (event) => { if (event.target === $("settings-modal")) closeSettings(); });
 $("settings-modal").addEventListener("click", (event) => { const button = event.target.closest("[data-settings-section]"); if (button) selectSettingsSection(button.dataset.settingsSection); });

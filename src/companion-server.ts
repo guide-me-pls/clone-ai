@@ -52,7 +52,7 @@ import { reconcileCommitments } from "./state/commitment-reconciler.ts";
 import { describeHistory, mainAgentSessionDirectory, searchHistory } from "./main-agent/conversation-history.ts";
 import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
 import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
-import { listPiModelIds, piModelReference } from "./main-agent/pi-model-catalog.ts";
+import { listPiModelIds, listPiModels, piModelReference } from "./main-agent/pi-model-catalog.ts";
 import {
   listEffectiveProviderConfigs,
   readUserProviderConfigs,
@@ -458,6 +458,17 @@ async function handleRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/options") {
+    const current = await context.config.get();
+    const piModels = await listPiModels().catch(() => []);
+    sendJson(response, 200, {
+      workspacePath: current.workspacePath,
+      mainAgentModel: current.mainAgentModel,
+      models: piModels,
+    });
+    return;
+  }
+
   if (request.method === "PATCH" && url.pathname === "/api/config") {
     const body = await readJsonBody(request);
     const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string } = {};
@@ -493,7 +504,9 @@ async function handleRequest(
     // credential material and does not write Magpie's own configuration.
     // 这只是回环能力探测：刻意不返回任何凭据，也不改写 Magpie 自己的配置。
     const gateway = await inspectMagpieGateway();
-    const piModels = gateway.running ? new Set(await listPiModelIds("magpie").catch(() => [])) : new Set<string>();
+    const piModels = gateway.running
+      ? new Set((await listPiModels("magpie").catch(() => [])).map((model) => model.id))
+      : new Set<string>();
     sendJson(response, 200, {
       gateways: [{
         ...gateway,
