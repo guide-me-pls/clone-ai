@@ -22,6 +22,7 @@ import { compileBriefing } from "../situation-briefing.ts";
 import { describeHistory, searchHistory } from "../conversation-history.ts";
 import { PersonalStateStore } from "../../state/personal-state-store.ts";
 import { createJournalStore } from "../../core/sqlite-journal.ts";
+import { describeAuthority, StandingPolicyStore } from "../../authority/standing-policy-store.ts";
 
 export interface KernelToolsOptions {
   dataDirectory: string;
@@ -376,7 +377,10 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
       + "The Kernel validates it; when accepted, a Run and WorkPlan are journaled and you receive runId/planId. "
       + "Invalid proposals return a rejection with feedback so you can fix and re-propose. "
       + "Each step needs id, title, instructions, risk (read_only | reversible_write | external_side_effect | irreversible), "
-      + "acceptanceCriteria (string[]), and either agentId+requiredCapabilities or a subagents group.",
+      + "acceptanceCriteria (string[]), and either agentId+requiredCapabilities or a subagents group. "
+      + "A step that must touch anything outside the workspace declares scopes: "
+      + "[{domain: files|shell|network, resource, access: read|write|exec}] (files: absolute path; network: host). "
+      + "Call get_authority first to see what the owner has allowed; scopes that are protected or not allowed are denied by the Kernel.",
     parameters: Type.Object({
       summary: Type.String({ description: "One-sentence summary of the plan." }),
       steps: Type.Array(Type.Any(), {
@@ -430,6 +434,20 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     execute: async (_toolCallId, params) => {
       const text = await recallMemories(options.dataDirectory, params.query, params.runId);
       return { content: [{ type: "text", text }], details: {} };
+    },
+  });
+
+  pi.registerTool({
+    name: "get_authority",
+    label: "Get Authority",
+    description:
+      "Read the owner's autonomy level per domain and active standing policies. Read-only. You can only read it: "
+      + "authority is changed by the owner in the desktop app or CLI, never by you or a worker.",
+    parameters: Type.Object({}),
+    execute: async () => {
+      const store = new StandingPolicyStore(options.dataDirectory);
+      await store.load();
+      return { content: [{ type: "text", text: describeAuthority(store.snapshot()) }], details: {} };
     },
   });
 

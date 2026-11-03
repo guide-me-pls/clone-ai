@@ -76,6 +76,8 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
   if (record.promptVia !== undefined && record.promptVia !== "arg" && record.promptVia !== "stdin") throw new Error(`Provider ${id} promptVia must be arg or stdin.`);
   if (record.hostAccess !== undefined && record.hostAccess !== "unrestricted") throw new Error(`Provider ${id} hostAccess must be unrestricted or omitted.`);
   if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs < 1)) throw new Error(`Provider ${id} timeoutMs must be a positive integer.`);
+  if (record.sandbox !== undefined && record.sandbox !== "seatbelt") throw new Error(`Provider ${id} sandbox must be "seatbelt" or omitted.`);
+  if (record.sandboxWritePaths !== undefined && (!Array.isArray(record.sandboxWritePaths) || record.sandboxWritePaths.some((item) => typeof item !== "string" || item.trim().length === 0))) throw new Error(`Provider ${id} sandboxWritePaths must be non-empty strings.`);
   return {
     id,
     command,
@@ -88,6 +90,9 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
     ...(typeof record.roleRestrictionReason === "string" ? { roleRestrictionReason: record.roleRestrictionReason } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
     ...(record.hostAccess === "unrestricted" ? { hostAccess: "unrestricted" as const } : {}),
+    ...(record.sandbox === "seatbelt" ? { sandbox: "seatbelt" as const } : {}),
+    ...(record.sandboxNetwork === true ? { sandboxNetwork: true } : {}),
+    ...(Array.isArray(record.sandboxWritePaths) ? { sandboxWritePaths: record.sandboxWritePaths as string[] } : {}),
   };
 }
 
