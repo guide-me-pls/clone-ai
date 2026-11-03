@@ -357,3 +357,27 @@ test("a pointer to a conversation that never materialised falls back to real his
 
   assert.equal((await continueOwnerConversation(dataDirectory)).getSessionFile(), real);
 });
+
+test("a pure conversation is answered, not turned into a run", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-conversation-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const { runtime, close } = await createKernelRuntimeSession(directory);
+  t.after(() => close());
+  const proposal = await proposePlanToKernel(runtime, {
+    summary: "你好",
+    steps: [{
+      id: "reply",
+      title: "直接回答",
+      instructions: "直接回答",
+      risk: "read_only",
+      acceptanceCriteria: ["已回答"],
+      agentId: "direct-responder",
+      requiredCapabilities: ["direct_response"],
+    }],
+  });
+  // Refused before a Run exists: no session in the sidebar and no worker launch.
+  // 在创建 Run 之前就拒绝：侧栏不会有会话，也不会启动 Worker。
+  assert.equal(proposal.accepted, false);
+  assert.match(proposal.error ?? "", /conversation, not work/);
+  assert.equal(runtime.listRuns().length, 0);
+});

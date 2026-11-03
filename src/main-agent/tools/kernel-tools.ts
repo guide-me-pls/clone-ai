@@ -75,6 +75,14 @@ export async function createKernelRuntimeSession(
   return { runtime, close };
 }
 
+/** True for a proposal whose only step just answers. 只作答、没有可执行内容的提案。 */
+function isConversationalProposal(steps: unknown): boolean {
+  if (!Array.isArray(steps) || steps.length !== 1) return false;
+  const step = steps[0] as { requiredCapabilities?: unknown } | null;
+  const capabilities = step?.requiredCapabilities;
+  return Array.isArray(capabilities) && capabilities.includes("direct_response");
+}
+
 /**
  * The Kernel validation path shared by the tool and the tests: a proposal
  * creates a durable Run, then attachPlan() validates the steps. A rejected
@@ -88,6 +96,18 @@ export async function proposePlanToKernel(
   runtime: CloneRuntime,
   input: { summary: string; steps: unknown; servesCommitmentId?: string },
 ): Promise<PlanProposalResult> {
+  // A conversation is answered, not executed. A one-step direct_response plan
+  // still became a Run, a sidebar session and a real worker launch — for "hello".
+  // Refusing it here means the cost is one rejected tool call, not an executor.
+  // 对话要被回答，而不是被执行。单步 direct_response 计划过去仍会创建 Run、侧栏会话，
+  // 并真的启动一个 Worker——只为了一句"你好"。在这里拒绝，代价只是一次被拒绝的工具调用。
+  if (isConversationalProposal(input.steps)) {
+    return {
+      accepted: false,
+      error: "This is conversation, not work: answer the owner directly in your reply. "
+        + "Propose a plan only when files must change or an executor must run.",
+    };
+  }
   const { run } = await runtime.acceptTrigger({
     kind: "query",
     summary: input.summary,
