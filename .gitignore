@@ -1,8 +1,10 @@
 node_modules/
 .idea/
 .clone-ai/
+.clone/
 .omx/
 coverage/
+/dist/
 *.log
 server-log.txt
 apps/desktop/src-tauri/binaries/

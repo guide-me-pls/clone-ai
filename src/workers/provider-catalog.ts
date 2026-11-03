@@ -102,7 +102,7 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
     throw new Error(`Provider "${id}" must declare "args" as an array of strings.`);
   }
   const env = record.env;
-  if (env !== undefined && (!Array.isArray(env) || env.some((name) => typeof name !== "string" || name.trim().length === 0))) {
+  if (env !== undefined && (!Array.isArray(env) || env.some((name) => typeof name !== "string" || !/^[A-Z_][A-Z0-9_]*\*?$/i.test(name)))) {
     throw new Error(`Provider "${id}" must declare "env" as an array of variable names.`);
   }
   const promptVia = record.promptVia;
@@ -124,6 +124,9 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
   if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs < 1)) {
     throw new Error(`Provider "${id}" must declare a positive integer "timeoutMs".`);
   }
+  if (record.hostAccess !== undefined && record.hostAccess !== "unrestricted") {
+    throw new Error(`Provider "${id}" hostAccess must be unrestricted or omitted.`);
+  }
   return {
     id,
     command,
@@ -135,6 +138,7 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
     ...(Array.isArray(supportedRoles) ? { supportedRoles: supportedRoles as AgentRole[] } : {}),
     ...(typeof record.roleRestrictionReason === "string" ? { roleRestrictionReason: record.roleRestrictionReason } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
+    ...(record.hostAccess === "unrestricted" ? { hostAccess: "unrestricted" as const } : {}),
   };
 }
 

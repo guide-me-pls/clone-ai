@@ -18,6 +18,7 @@ function providerConfig(overrides: Partial<BlackBoxProviderConfig> = {}): BlackB
     command: process.execPath,
     args: [fakeAgent, "{{prompt}}"],
     env: ["FAKE_AGENT_MODE", "FAKE_AGENT_OUTPUT"],
+    hostAccess: "unrestricted",
     ...overrides,
   };
 }
@@ -91,6 +92,62 @@ test("a file the agent wrote becomes artifact evidence without the agent declari
   // The evidence is a fact about the filesystem, checkable independently.
   // 证据是关于文件系统的事实，可以独立复核。
   assert.match(await readFile(join(workspace, "out/report.md"), "utf8"), /# report/);
+});
+
+test("an unisolated provider is refused before it can write outside the workspace", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "clone-ai-worker-deny-"));
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  const outside = join(root, "outside.txt");
+  const adapter = new BlackBoxCliWorker({
+    agentId: "worker",
+    config: { id: "unsafe-probe", command: process.execPath, args: ["-e", `require('node:fs').writeFileSync(${JSON.stringify(outside)}, 'unexpected')`] },
+  });
+  const events: ExecutionEvent[] = [];
+  for await (const event of adapter.execute(assignment(workspace, false))) events.push(event);
+  await assert.rejects(readFile(outside), /ENOENT/);
+  assert.ok(events.some((event) => event.type === "failed" && /unrestricted/i.test(event.message)));
+  assert.ok(!events.some((event) => event.type === "completed"));
+});
+
+test("even an explicitly trusted host worker cannot receive an external-action work order", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "clone-ai-worker-external-"));
+  t.after(async () => rm(workspace, { recursive: true, force: true }));
+  const input = assignment(workspace, false);
+  input.step.risk = "external_side_effect";
+  input.workOrder!.risk = "external_side_effect";
+  const adapter = new BlackBoxCliWorker({ agentId: "worker", config: providerConfig() });
+  const events: ExecutionEvent[] = [];
+  for await (const event of adapter.execute(input)) events.push(event);
+  assert.ok(events.some((event) => event.type === "failed" && /external/i.test(event.message)));
+  await assert.rejects(readFile(join(workspace, "out", "report.md")), /ENOENT/);
+});
+
+test("cancelling a session before its process is spawned prevents the process from starting", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "clone-ai-cancel-before-spawn-"));
+  t.after(async () => rm(workspace, { recursive: true, force: true }));
+  const adapter = new BlackBoxCliWorker({ agentId: "worker", config: providerConfig() });
+  const iterator = adapter.execute(assignment(workspace))[Symbol.asyncIterator]();
+  const first = await iterator.next();
+  assert.equal(first.value?.type, "session_started");
+  if (first.value?.type !== "session_started") throw new Error("Expected a session.");
+  await adapter.cancel(first.value.sessionId);
+  while (!(await iterator.next()).done) { /* 消费到结束以检查是否启动了进程。 */ }
+  await assert.rejects(readFile(join(workspace, "out", "report.md")), /ENOENT/);
+});
+
+test("cancelling while the worker snapshots its workspace still prevents spawning", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "clone-ai-cancel-snapshot-"));
+  t.after(async () => rm(workspace, { recursive: true, force: true }));
+  const adapter = new BlackBoxCliWorker({ agentId: "worker", config: providerConfig() });
+  const iterator = adapter.execute(assignment(workspace))[Symbol.asyncIterator]();
+  const first = await iterator.next();
+  if (first.value?.type !== "session_started") throw new Error("Expected a session.");
+  const next = iterator.next();
+  await adapter.cancel(first.value.sessionId);
+  assert.equal((await next).done, true);
+  await assert.rejects(readFile(join(workspace, "out", "report.md")), /ENOENT/);
 });
 
 test("an agent that claims success but writes nothing fails the work order", async (t) => {

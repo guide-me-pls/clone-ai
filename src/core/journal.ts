@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import type { JournalEvent, NewJournalEvent } from "./contracts.ts";
+import type { JournalEvent, NewJournalEvent, RunStatus } from "./contracts.ts";
 
 /**
  * A lease granting one process the exclusive right to execute a Run.
@@ -17,6 +17,13 @@ export interface RunClaim {
 
 export interface JournalStore {
   append(event: NewJournalEvent): Promise<JournalEvent>;
+  appendBatch?(events: readonly NewJournalEvent[]): Promise<JournalEvent[]>;
+  appendClaimed?(event: NewJournalEvent, claim: { runId: string; ownerId: string }): Promise<JournalEvent>;
+  appendBatchClaimed?(events: readonly NewJournalEvent[], claim: { runId: string; ownerId: string }): Promise<JournalEvent[]>;
+  /** Appends only while the run still has the expected status. 仅在 Run 仍处于预期状态时追加。 */
+  appendBatchIfStatus?(events: readonly NewJournalEvent[], expected: { runId: string; status: RunStatus }): Promise<JournalEvent[]>;
+  /** Atomically records cancellation and revokes any executor lease. 原子记录取消并撤销执行租约。 */
+  cancelRun?(runId: string): Promise<void>;
   list(): Promise<JournalEvent[]>;
   /**
    * Atomically take exclusive ownership of a Run, or return undefined if
@@ -89,18 +96,24 @@ export class JsonlJournalStore implements JournalStore {
   }
 
   async append(event: NewJournalEvent): Promise<JournalEvent> {
+    return (await this.appendBatch([event]))[0]!;
+  }
+
+  async appendBatch(events: readonly NewJournalEvent[]): Promise<JournalEvent[]> {
     await this.#ready;
 
-    let stamped: JournalEvent | undefined;
+    let stamped: JournalEvent[] = [];
     const write = this.#writes.then(async () => {
-      stamped = {
+      stamped = events.map((event, index) => ({
         ...event,
         id: randomUUID(),
-        sequence: this.#nextSequence++,
+        sequence: this.#nextSequence + index,
         occurredAt: new Date().toISOString(),
-      };
-      await appendFile(this.#path, `${JSON.stringify(stamped)}\n`, "utf8");
-      this.#events.push(stamped);
+      }));
+      const payload = stamped.length === 0 ? "" : `${JSON.stringify(stamped.length === 1 ? stamped[0] : stamped)}\n`;
+      if (payload.length > 0) await appendFile(this.#path, payload, "utf8");
+      this.#nextSequence += stamped.length;
+      this.#events.push(...stamped);
     });
 
     this.#writes = write.then(
@@ -108,7 +121,7 @@ export class JsonlJournalStore implements JournalStore {
       () => undefined,
     );
     await write;
-    return stamped!;
+    return stamped;
   }
 
   async list(): Promise<JournalEvent[]> {
@@ -136,10 +149,7 @@ export class JsonlJournalStore implements JournalStore {
 
     try {
       const source = await readFile(this.#path, "utf8");
-      this.#events = source
-        .split("\n")
-        .filter((line) => line.trim().length > 0)
-        .map((line) => JSON.parse(line) as JournalEvent);
+      this.#events = parseJournalLines(source);
       this.#nextSequence = (this.#events.at(-1)?.sequence ?? 0) + 1;
     } catch (error: unknown) {
       if (isMissingFile(error)) {
@@ -148,6 +158,13 @@ export class JsonlJournalStore implements JournalStore {
       throw error;
     }
   }
+}
+
+export function parseJournalLines(source: string): JournalEvent[] {
+  return source.split("\n").filter((line) => line.trim().length > 0).flatMap((line) => {
+    const value = JSON.parse(line) as JournalEvent | JournalEvent[];
+    return Array.isArray(value) ? value : [value];
+  });
 }
 
 function isMissingFile(error: unknown): error is NodeJS.ErrnoException {

@@ -72,7 +72,8 @@ test("a real supervised run produces a journal with zero invariant violations", 
   assert.equal(firstAttempt.status, "waiting_approval");
   await runtime.grantApproval(run.id, "send");
   const secondAttempt = await runtime.execute(run.id, agents);
-  assert.equal(secondAttempt.status, "completed");
+  assert.equal(secondAttempt.status, "waiting_review");
+  assert.equal((await runtime.reviewVerification(run.id, "accept")).status, "completed");
 
   const violations = checkJournalInvariants(await journal.list());
   assert.deepEqual(violations, []);

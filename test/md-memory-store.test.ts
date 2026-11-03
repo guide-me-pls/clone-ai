@@ -90,6 +90,31 @@ test("recall ranks better matches first and records access counts", async (t) =>
   assert.equal((await store.get(hits[0]!.entry.id))?.accessCount, 1);
 });
 
+test("recall expands common local paraphrases without exposing archived or secret memories", async (t) => {
+  const { store } = await openStore(t);
+  const weekly = await store.commit({ summary: "每周五提交工作汇报", type: "commitment", confidence: "high" });
+  await store.commit({ summary: "每周五准备机密工作汇报", type: "fact", confidence: "high", sensitivity: "secret" });
+  const archived = await store.commit({ summary: "每周五复查旧工作汇报", type: "fact", confidence: "high" });
+  await store.archive(archived.id);
+  await store.commit({ summary: "每周末安排健身训练", type: "fact", confidence: "high" });
+  await store.commit({ summary: "每月提交工作汇报", type: "fact", confidence: "high" });
+  const matches = await store.recall("什么时候交周报？");
+  assert.deepEqual(matches.map((match) => match.entry.id), [weekly.id]);
+  assert.ok(matches[0]!.matchedTerms.some((term) => ["工作", "作汇", "汇报"].includes(term)));
+});
+
+test("unreturned memory candidates do not acquire usage boosts", async (t) => {
+  const { store } = await openStore(t);
+  const first = await store.commit({ summary: "项目发布前完成风险评审", type: "fact", confidence: "high" });
+  const second = await store.commit({ summary: "项目发布前完成风险记录", type: "fact", confidence: "high" });
+  const matches = await store.recall("项目发布风险", { maxResults: 1 });
+  assert.equal(matches.length, 1);
+  const returned = matches[0]!.entry.id;
+  const notReturned = returned === first.id ? second.id : first.id;
+  assert.equal((await store.get(returned))?.accessCount, 1);
+  assert.equal((await store.get(notReturned))?.accessCount, 0);
+});
+
 test("archived and expired memories are filtered from recall", async (t) => {
   const { store } = await openStore(t);
   const [release, preference] = await seed(store);

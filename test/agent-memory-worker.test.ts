@@ -37,6 +37,7 @@ function workerOptions(overrides: Record<string, string> = {}): ConstructorParam
       command: process.execPath,
       args: [fakeAgent, "{{prompt}}"],
       env: ["FAKE_AGENT_MODE", "FAKE_MEMORY_CANDIDATES_JSON"],
+      hostAccess: "unrestricted",
       timeoutMs: 30_000,
     },
     ...overrides,
@@ -137,14 +138,18 @@ test("markdown-fenced JSON is parsed", async (t) => {
   assert.equal(candidates[0]?.type, "decision");
 });
 
-test("a failed mining run returns no candidates instead of throwing", async (t) => {
-  const candidates = await mine(t, { mode: "memory-mine-fail", json: "[]" });
-  assert.deepEqual(candidates, []);
+test("a failed mining run is reported so the pipeline can retry it", async (t) => {
+  await assert.rejects(mine(t, { mode: "memory-mine-fail", json: "[]" }), /memory mining failed/i);
 });
 
-test("missing or malformed candidate files are ignored", async (t) => {
-  assert.deepEqual(await mine(t, { mode: "talks-but-writes-nothing" }), []);
-  assert.deepEqual(await mine(t, { json: "not json at all" }), []);
+test("missing or malformed candidate files are reported as extraction failures", async (t) => {
+  await assert.rejects(mine(t, { mode: "talks-but-writes-nothing" }), /memory mining failed|did not produce/i);
+  await assert.rejects(mine(t, { json: "not json at all" }), /invalid JSON/i);
+});
+
+test("the default miner refuses to run on the host without a separate opt-in", async () => {
+  const worker = new AgentMemoryWorker({ config: { id: "blocked-miner", command: process.execPath } });
+  await assert.rejects(worker.extract(miningJob()), /memory mining failed.*permission_denied/i);
 });
 
 test("candidates are capped per task", async (t) => {

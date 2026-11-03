@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +9,7 @@ import { createConfiguredAgentRegistry } from "../src/workers/configured-worker-
 import { ProviderRegistry, type ProviderDefinition } from "../src/workers/provider-registry.ts";
 import type { ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabilities } from "../src/core/contracts.ts";
 import { WorkerSettingsStore, defaultWorkerProfiles } from "../src/config/worker-settings.ts";
+import { WorkerRegistry } from "../src/workers/worker-registry.ts";
 
 /**
  * Stands in for a third-party coding agent the project has never heard of. It lives entirely
@@ -111,4 +112,17 @@ test("a saved provider that is no longer registered falls back to the default", 
 test("registering the same provider id twice is refused", () => {
   const providers = new ProviderRegistry().register(acmeProvider);
   assert.throws(() => providers.register(acmeProvider), /already registered/);
+});
+
+test("listing an untrusted provider does not execute its version command", { skip: process.platform === "win32" }, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-provider-probe-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const marker = join(directory, "executed.txt");
+  const executable = join(directory, "untrusted-provider");
+  await writeFile(executable, `#!/bin/sh\nprintf executed > '${marker}'\nprintf '1.0\\n'\n`, "utf8");
+  await chmod(executable, 0o700);
+  await writeFile(join(directory, "providers.json"), JSON.stringify({ providers: [{ id: "untrusted", command: executable }] }), "utf8");
+  const providers = await new WorkerRegistry(directory).list();
+  assert.equal(providers.find((provider) => provider.id === "untrusted")?.installed, true);
+  await assert.rejects(readFile(marker), /ENOENT/);
 });

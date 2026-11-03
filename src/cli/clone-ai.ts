@@ -17,13 +17,14 @@ import { dirname, join } from "node:path";
 
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
-import { createKernelRuntime } from "../main-agent/tools/kernel-tools.ts";
+import { createKernelRuntimeSession } from "../main-agent/tools/kernel-tools.ts";
 import { MainAgentBusyError, withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { BadCaseLog } from "../reporting/bad-case-log.ts";
 import { OpportunityService } from "../opportunity/opportunity-service.ts";
 import { createJournalStore } from "../core/sqlite-journal.ts";
 import { WorkerRegistry } from "../workers/worker-registry.ts";
 import { MdMemoryStore } from "../memory/md-memory-store.ts";
+import { MemoryGovernance } from "../memory/memory-governance.ts";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -45,6 +46,7 @@ Usage:
   clone-ai approve <runId>       Approve a run waiting for confirmation
   clone-ai reject <runId>        Reject a run waiting for confirmation
   clone-ai cancel <runId>        Cancel a queued, running, or waiting run
+  clone-ai review <runId> [accept|reject]  Inspect or resolve criteria requiring review
   clone-ai bench [--provider p]  Run the reliability benchmark
   clone-ai doctor                Check the local setup
   clone-ai --help | --version
@@ -87,6 +89,7 @@ async function main(): Promise<number> {
     case "approve": return decideRun(paths.dataDirectory, argv[1], "approve");
     case "reject": return decideRun(paths.dataDirectory, argv[1], "reject");
     case "cancel": return decideRun(paths.dataDirectory, argv[1], "cancel");
+    case "review": return reviewRun(paths.dataDirectory, argv[1], argv[2]);
     case "bench": return runBench(argv.slice(1));
     case "doctor": return doctor(paths.dataDirectory);
     default: return converse(paths.dataDirectory, argv.join(" ").trim());
@@ -257,13 +260,21 @@ function openBrowser(url: string): void {
 }
 
 async function showStatus(dataDirectory: string): Promise<number> {
-  const runtime = await createKernelRuntime(dataDirectory);
-  const runs = runtime.listRuns();
+  const { runtime, close } = await createKernelRuntimeSession(dataDirectory);
+  let runs: ReturnType<typeof runtime.listRuns>;
+  try { runs = runtime.listRuns(); } finally { close(); }
   const recent = runs.slice(-5).reverse();
   const workers = await new WorkerRegistry(dataDirectory).list();
   const store = new MdMemoryStore({ dataDirectory });
-  const memory = await store.stats();
-  store.close();
+  const journal = createJournalStore(dataDirectory);
+  const governance = new MemoryGovernance({ store, journal });
+  let memory;
+  try {
+    memory = await governance.stats();
+  } finally {
+    await governance.close();
+    (journal as { close?: () => void }).close?.();
+  }
   const cases = (await new BadCaseLog({ dataDirectory }).readLog()).split("\n").filter((line) => line.startsWith("- [seq")).length;
 
   console.log(`Runs: ${runs.length} total`);
@@ -331,19 +342,22 @@ async function resumeSession(dataDirectory: string, choice: string | undefined):
 
 async function showMemory(dataDirectory: string, query: string): Promise<number> {
   const store = new MdMemoryStore({ dataDirectory });
+  const journal = createJournalStore(dataDirectory);
+  const governance = new MemoryGovernance({ store, journal });
   try {
     if (query.length > 0) {
-      const matches = await store.recall(query);
+      const matches = await governance.recall(query);
       if (matches.length === 0) console.log("No matching memories.");
       for (const match of matches) console.log(`[${match.score.toFixed(2)}] ${match.entry.summary}`);
       return 0;
     }
-    const entries = await store.list({ status: "active" });
+    const entries = await governance.list({ status: "active" });
     if (entries.length === 0) console.log("No memories yet.");
     for (const entry of entries) console.log(`- (${entry.type}) ${entry.summary}`);
     return 0;
   } finally {
-    store.close();
+    await governance.close();
+    (journal as { close?: () => void }).close?.();
   }
 }
 
@@ -376,6 +390,32 @@ async function decideRun(dataDirectory: string, runId: string | undefined, actio
   const fn = action === "approve" ? approveQueryRun : action === "reject" ? rejectQueryRun : cancelQueryRun;
   const result = await fn(dataDirectory, runId.trim());
   console.log(`${action} ${result.runId.slice(0, 8)} → ${result.status}`);
+  return 0;
+}
+
+async function reviewRun(dataDirectory: string, runId: string | undefined, decision: string | undefined): Promise<number> {
+  if (runId === undefined || (decision !== undefined && decision !== "accept" && decision !== "reject")) {
+    console.error("Usage: clone-ai review <runId> [accept|reject]");
+    return 1;
+  }
+  if (decision === undefined) {
+    const journal = createJournalStore(dataDirectory);
+    try {
+      const verification = (await journal.list()).filter((event) => event.runId === runId && event.type === "verification.completed").at(-1)?.payload as { summary?: string; unverifiedCriteria?: string[] } | undefined;
+      if (verification === undefined) {
+        console.error("No verification result exists for this run.");
+        return 1;
+      }
+      console.log(verification.summary ?? "Review the result and its evidence.");
+      for (const criterion of verification.unverifiedCriteria ?? []) console.log(`- ${criterion}`);
+      return 0;
+    } finally {
+      (journal as { close?: () => void }).close?.();
+    }
+  }
+  const { reviewQueryRun } = await import("../application/run-query.ts");
+  const result = await reviewQueryRun(dataDirectory, runId, decision);
+  console.log(`review ${result.runId.slice(0, 8)} → ${result.status}`);
   return 0;
 }
 

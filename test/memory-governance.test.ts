@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { MemoryGovernance } from "../src/memory/memory-governance.ts";
-import { MdMemoryStore } from "../src/memory/md-memory-store.ts";
+import { GovernedMemorySource, MdMemoryStore } from "../src/memory/md-memory-store.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
+import type { JournalStore } from "../src/core/journal.ts";
 import type { Evidence, MemoryCandidate } from "../src/core/contracts.ts";
 
 async function setup(t: TestContext): Promise<{ governance: MemoryGovernance; store: MdMemoryStore; journal: JsonlJournalStore; directory: string }> {
@@ -179,4 +180,136 @@ test("stats reports active, archived, and pending counts", async (t) => {
   assert.equal(stats.archived, 0);
   assert.equal(stats.total, 1);
   assert.equal(stats.pending, 1);
+});
+
+test("a failed journal append never exposes a newly authored memory", async (t) => {
+  const { store, journal } = await setup(t);
+  const failing: JournalStore = {
+    list: () => journal.list(),
+    append: async () => { throw new Error("simulated journal failure"); },
+  };
+  const governance = new MemoryGovernance({ journal: failing, store });
+  await assert.rejects(governance.author({ summary: "每周五提交工作汇报" }), /simulated journal failure/);
+  assert.deepEqual(await store.list({ status: "active" }), []);
+  assert.deepEqual(await store.recall("提交工作汇报"), []);
+});
+
+test("a journaled memory whose file write failed is recovered exactly once", async (t) => {
+  const { governance, store, journal, directory } = await setup(t);
+  const blockingPath = join(directory, "memory");
+  await writeFile(blockingPath, "not a directory", "utf8");
+  await assert.rejects(governance.author({ summary: "应当在重启后恢复的记忆" }));
+  assert.equal((await journal.list()).filter((event) => event.type === "memory.authored").length, 1);
+  assert.deepEqual(await store.list({ status: "active" }), []);
+  await unlink(blockingPath);
+  const recovered = await governance.list({ status: "active" });
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0]?.summary, "应当在重启后恢复的记忆");
+  assert.equal((await governance.list({ status: "active" })).length, 1);
+  assert.equal((await journal.list()).filter((event) => event.type === "memory.authored").length, 1);
+});
+
+test("worker recall repairs a journaled but interrupted memory before reading", async (t) => {
+  const { governance, journal, directory } = await setup(t);
+  const blockingPath = join(directory, "memory");
+  await writeFile(blockingPath, "not a directory", "utf8");
+  await assert.rejects(governance.author({ summary: "待恢复的周报习惯" }));
+  await unlink(blockingPath);
+  const source = new GovernedMemorySource(directory, 4, journal);
+  const matches = await source.recall("待恢复的周报习惯", "run-2");
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0]?.memory.summary, "待恢复的周报习惯");
+});
+
+test("a failed journal append does not apply an update to an existing memory", async (t) => {
+  const { governance, store, journal } = await setup(t);
+  const entry = await governance.author({ summary: "用户原来的偏好" });
+  const failing: JournalStore = {
+    list: () => journal.list(),
+    append: async () => { throw new Error("simulated journal failure"); },
+  };
+  const blocked = new MemoryGovernance({ journal: failing, store });
+  await assert.rejects(blocked.update(entry.id, { summary: "未记入日志的修改" }), /simulated journal failure/);
+  assert.equal((await store.get(entry.id))?.summary, "用户原来的偏好");
+});
+
+test("recovery does not overwrite a file the owner edited after a recorded update", async (t) => {
+  const { governance, store, directory } = await setup(t);
+  const entry = await governance.author({ summary: "原始的个人偏好" });
+  const originalApply = store.applyMutation.bind(store);
+  store.applyMutation = async () => { throw new Error("simulated interruption"); };
+  await assert.rejects(governance.update(entry.id, { summary: "日志中的更新" }), /simulated interruption/);
+  store.applyMutation = originalApply;
+  const path = join(directory, "memory", `${entry.id}.md`);
+  const original = await readFile(path, "utf8");
+  await writeFile(path, original.replace("原始的个人偏好", "用户手动编辑的新内容"), "utf8");
+  await assert.rejects(governance.list(), /changed on disk during recovery/);
+  assert.match(await readFile(path, "utf8"), /用户手动编辑的新内容/);
+  const conflict = (await governance.inspectPending()).conflicts[0]!;
+  await governance.keepConflictingFile(conflict.id);
+  await governance.syncFromFiles();
+  assert.equal((await governance.list())[0]?.summary, "用户手动编辑的新内容");
+});
+
+test("concurrent promotions of the same candidate result in one governed memory", async (t) => {
+  const { governance, journal } = await setup(t);
+  await journalEvidence(journal, ["ev-1"]);
+  const proposed = candidate("c-concurrent");
+  await journal.append({ type: "memory.candidate.proposed", runId: "run-1", payload: proposed });
+  const results = await Promise.allSettled([governance.promote(proposed), governance.promote(proposed)]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+  assert.equal((await governance.list({ status: "active" })).length, 1);
+  assert.equal((await journal.list()).filter((event) => event.type === "memory.candidate.promoted").length, 1);
+});
+
+test("a candidate cannot be rejected after promotion or invented at the decision boundary", async (t) => {
+  const { governance, journal } = await setup(t);
+  await journalEvidence(journal, ["ev-1"]);
+  const proposed = candidate("c-decided");
+  await journal.append({ type: "memory.candidate.proposed", runId: "run-1", payload: proposed });
+  const entry = await governance.promote({ ...proposed, summary: "未经提案的伪造内容" });
+  assert.equal(entry.summary, proposed.summary);
+  await assert.rejects(governance.reject(proposed.id), /already decided|not pending/i);
+  await assert.rejects(governance.reject("never-proposed"), /not pending/i);
+  await assert.rejects(governance.promote(candidate("never-proposed")), /not pending/i);
+  assert.equal((await journal.list()).filter((event) => event.type === "memory.candidate.rejected").length, 0);
+});
+
+test("a candidate cannot cite evidence belonging to another run", async (t) => {
+  const { governance, journal } = await setup(t);
+  await journal.append({
+    type: "evidence.recorded", runId: "other-run",
+    payload: { id: "foreign", runId: "other-run", stepId: "s", producedBy: "worker", kind: "observation", summary: "foreign evidence", createdAt: new Date().toISOString() },
+  });
+  const proposed = candidate("c-foreign", { sourceEvidenceIds: ["foreign"] });
+  await journal.append({ type: "memory.candidate.proposed", runId: "run-1", payload: proposed });
+  await assert.rejects(governance.promote(proposed), /evidence.*run/i);
+});
+
+test("recovery honors a keep-file decision recorded just before interruption", async (t) => {
+  const { governance, store, journal, directory } = await setup(t);
+  const entry = await governance.author({ summary: "冲突前的记忆" });
+  const apply = store.applyMutation.bind(store);
+  store.applyMutation = async () => { throw new Error("simulated write interruption"); };
+  await assert.rejects(governance.update(entry.id, { summary: "待处理的更新" }), /simulated write interruption/);
+  store.applyMutation = apply;
+  const path = join(directory, "memory", `${entry.id}.md`);
+  await writeFile(path, (await readFile(path, "utf8")).replace("冲突前的记忆", "所有者保留的版本"), "utf8");
+  const conflict = (await governance.inspectPending()).conflicts[0]!;
+  const discard = store.discardMutation.bind(store);
+  store.discardMutation = () => { throw new Error("simulated crash after decision"); };
+  await assert.rejects(governance.keepConflictingFile(conflict.id), /simulated crash after decision/);
+  store.discardMutation = discard;
+  assert.equal((await journal.list()).filter((event) => event.type === "memory.mutation.discarded").length, 1);
+  await governance.syncFromFiles();
+  assert.equal((await governance.list())[0]?.summary, "所有者保留的版本");
+  assert.equal(store.pendingMutationIds().length, 0);
+});
+
+test("an empty memory body stays editable after it is normalized", async (t) => {
+  const { governance } = await setup(t);
+  const entry = await governance.author({ summary: "有摘要没有正文", content: "" });
+  const updated = await governance.update(entry.id, { summary: "更新后的摘要" });
+  assert.equal(updated.summary, "更新后的摘要");
 });

@@ -36,6 +36,7 @@ class SlowWorker implements RuntimeAdapter {
   async capabilities(): Promise<RuntimeCapabilities> {
     return {
       resume: false, cancellation: false, approvalCallback: false, parallelAssignments: true,
+      retrySafeAfterInterruption: true,
       work: ["drafting", "filesystem_read", "filesystem_write"],
       evidenceKinds: ["artifact", "tool_result", "test", "observation"],
     };

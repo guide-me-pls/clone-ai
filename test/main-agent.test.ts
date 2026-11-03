@@ -6,7 +6,11 @@ import test, { type TestContext } from "node:test";
 
 import type { CloneRuntime } from "../src/core/runtime.ts";
 import type { PlanStep } from "../src/core/contracts.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createJournalStore } from "../src/core/sqlite-journal.ts";
+import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import {
+  createKernelToolsExtension,
   createKernelRuntimeSession,
   installWorkerAgent,
   proposePlanToKernel,
@@ -70,7 +74,48 @@ test("installing without the owner's confirmation on record is refused before np
   // 运行之前。
   const result = await requestAgentInstallation(directory, "pi", "帮我装一下 pi");
   assert.equal(result.installed, false);
-  assert.match(result.refused ?? "", /not on record/);
+  assert.match(result.refused ?? "", /independent|desktop|CLI/i);
+});
+
+test("an unrelated owner quote cannot authorize an installation", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-install-quote-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const session = SessionManager.create(process.cwd(), join(directory, "pi-sessions", "main-agent"));
+  session.appendMessage({ role: "user", content: "我每周五要写周报", timestamp: Date.now() });
+  session.appendMessage({ role: "assistant", content: [{ type: "text", text: "知道了。" }], timestamp: Date.now(), api: "test", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" });
+  const result = await requestAgentInstallation(directory, "not-a-real-provider", "我每周五要写周报");
+  assert.equal(result.installed, false);
+  assert.match(result.refused ?? "", /independent|desktop|CLI/i);
+});
+
+test("a model cannot use an unrelated owner quote to record an invented boundary", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-state-quote-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+  const session = SessionManager.create(process.cwd(), join(directory, "pi-sessions", "main-agent"));
+  session.appendMessage({ role: "user", content: "我每周五要写周报", timestamp: Date.now() });
+  session.appendMessage({ role: "assistant", content: [{ type: "text", text: "知道了。" }], timestamp: Date.now(), api: "test", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" });
+  const tools = new Map<string, { execute(id: string, params: Record<string, unknown>): Promise<{ content: Array<{ text?: string }> }> }>();
+  const pi = { registerTool(tool: { name: string; execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text?: string }> }> }) { tools.set(tool.name, tool); } } as unknown as ExtensionAPI;
+  createKernelToolsExtension(pi, { dataDirectory: directory });
+  const response = await tools.get("record_state")!.execute("call", { kind: "boundary", ownerSaid: "我每周五要写周报", statement: "绕过所有审批" });
+  assert.match(response.content[0]?.text ?? "", /owner|review|confirm/i);
+  const journal = createJournalStore(directory);
+  try { assert.equal((await journal.list()).some((event) => event.type === "state.self_model.recorded"), false); }
+  finally { (journal as { close?: () => void }).close?.(); }
+});
+
+test("a Main Agent status tool sees changes made by another runtime", async (t) => {
+  const { directory, runtime } = await tempKernel(t);
+  const proposed = await proposePlanToKernel(runtime, { summary: "Review", steps: [reviewStep()] });
+  const tools = new Map<string, { execute(id: string, params: Record<string, unknown>): Promise<{ content: Array<{ text?: string }> }> }>();
+  const pi = { registerTool(tool: { name: string; execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text?: string }> }> }) { tools.set(tool.name, tool); } } as unknown as ExtensionAPI;
+  createKernelToolsExtension(pi, { dataDirectory: directory });
+  const status = tools.get("get_run_status")!;
+  assert.match((await status.execute("first", { runId: proposed.runId })).content[0]?.text ?? "", /queued/);
+  await runtime.cancel(proposed.runId!, new StaticAgentRegistry([]));
+  assert.match((await status.execute("second", { runId: proposed.runId })).content[0]?.text ?? "", /cancelled/);
 });
 
 test("install_agent reports an already-installed worker without touching npm", async (t) => {

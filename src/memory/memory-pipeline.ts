@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 
-import type { Evidence, JournalEvent, MemoryCandidate, Run, Task } from "../core/contracts.ts";
+import type { Evidence, JournalEvent, MemoryCandidate, NewJournalEvent, Run, Task } from "../core/contracts.ts";
 import type { JournalStore } from "../core/journal.ts";
+import { workspaceExecutionLock } from "../core/workspace-lock.ts";
 
 export interface PendingMemoryJob {
   run: Run;
@@ -24,15 +25,22 @@ export interface MemoryWorker {
 export class MemoryPipeline {
   readonly #journal: JournalStore;
   readonly #worker: MemoryWorker;
+  readonly #lockPath?: string;
   #pending: PendingMemoryJob[] = [];
 
-  constructor(journal: JournalStore, worker: MemoryWorker = new DeterministicMemoryWorker()) {
+  constructor(journal: JournalStore, worker: MemoryWorker = new DeterministicMemoryWorker(), options: { lockPath?: string } = {}) {
     this.#journal = journal;
     this.#worker = worker;
+    this.#lockPath = options.lockPath;
   }
 
   async request(run: Run, task: Task, evidence: Evidence[]): Promise<void> {
-    await this.#journal.append({
+    await this.#journal.append(this.requestEvent(run, task, evidence));
+    this.enqueue(run, task, evidence);
+  }
+
+  requestEvent(run: Run, task: Task, evidence: Evidence[]): NewJournalEvent {
+    return {
       type: "memory.candidate.requested",
       runId: run.id,
       taskId: task.id,
@@ -40,45 +48,72 @@ export class MemoryPipeline {
         taskObjective: task.objective,
         sourceEvidenceIds: evidence.map((item) => item.id),
       },
-    });
-    this.#pending.push({ run, task, evidence });
+    };
+  }
+
+  enqueue(run: Run, task: Task, evidence: Evidence[]): void {
+    if (!this.#pending.some((job) => job.run.id === run.id)) this.#pending.push({ run, task, evidence });
   }
 
   async rebuild(): Promise<void> {
     const events = await this.#journal.list();
-    const proposedRunIds = new Set(
-      events.filter((event) => event.type === "memory.candidate.proposed").map((event) => event.runId),
-    );
+    const processedRunIds = processedRuns(events);
 
     const requested = events.filter((event) => event.type === "memory.candidate.requested");
     for (const request of requested) {
-      if (request.runId === undefined || proposedRunIds.has(request.runId)) {
+      if (request.runId === undefined || processedRunIds.has(request.runId)) {
         continue;
       }
       const job = rehydrateJob(events, request);
       if (job !== undefined) {
-        this.#pending.push(job);
+        this.enqueue(job.run, job.task, job.evidence);
       }
     }
   }
 
-  async processNext(): Promise<MemoryCandidate[]> {
-    const job = this.#pending.shift();
+  async processNext(runId?: string): Promise<MemoryCandidate[]> {
+    const index = runId === undefined ? 0 : this.#pending.findIndex((job) => job.run.id === runId);
+    const job = index < 0 ? undefined : this.#pending.splice(index, 1)[0];
     if (job === undefined) {
       return [];
     }
 
-    const candidates = await this.#worker.extract(job);
-    for (const candidate of candidates) {
-      await this.#journal.append({
-        type: "memory.candidate.proposed",
-        runId: candidate.runId,
-        taskId: job.task.id,
-        payload: candidate,
-      });
+    try {
+      const process = async (): Promise<MemoryCandidate[]> => {
+        await this.#journal.reload?.();
+        if (processedRuns(await this.#journal.list()).has(job.run.id)) return [];
+        const candidates = await this.#worker.extract(job);
+        const evidence = new Set(job.evidence.map((item) => item.id));
+        if (candidates.some((candidate) => candidate.runId !== job.run.id || candidate.sourceEvidenceIds.length === 0
+          || candidate.sourceEvidenceIds.some((id) => !evidence.has(id)))) {
+          throw new Error("A memory candidate cites evidence outside its source run.");
+        }
+        if (this.#journal.appendBatch === undefined) throw new Error("The journal cannot atomically publish memory candidates.");
+        await this.#journal.appendBatch([
+          ...candidates.map((candidate): NewJournalEvent => ({
+            type: "memory.candidate.proposed", runId: job.run.id, taskId: job.task.id, payload: candidate,
+          })),
+          { type: "memory.candidate.extracted", runId: job.run.id, taskId: job.task.id, payload: { count: candidates.length } },
+        ]);
+        return candidates;
+      };
+      return this.#lockPath === undefined ? await process() : await workspaceExecutionLock.run(this.#lockPath, process);
+    } catch (error) {
+      this.enqueue(job.run, job.task, job.evidence);
+      throw error;
     }
-    return candidates;
   }
+
+  hasPending(): boolean {
+    return this.#pending.length > 0;
+  }
+}
+
+function processedRuns(events: readonly JournalEvent[]): Set<string> {
+  return new Set(events
+    .filter((event) => event.type === "memory.candidate.extracted" || event.type === "memory.candidate.proposed")
+    .map((event) => event.runId)
+    .filter((runId): runId is string => runId !== undefined));
 }
 
 export class DeterministicMemoryWorker implements MemoryWorker {

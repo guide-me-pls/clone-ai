@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
 
 import type { Evidence, PlanStep, Verifier, VerificationResult } from "./contracts.ts";
+import { verifiedWorkspacePath } from "./verified-workspace-path.ts";
 
 /**
  * A Verifier that only speaks when the step asked for something it can check.
@@ -22,33 +22,37 @@ export function silentPass(runId: string): VerificationResult {
 }
 
 /**
- * Runs a named test command in the owner's workspace when the plan asked for
- * it. The command is taken from the step, never invented. Recursion into this
- * repo's own `npm test` only happens if a plan targeting this workspace says
- * so — production workspaces are the owner's.
- * 当计划要求时，在所有者的 Workspace 里跑具名测试命令。命令来自步骤，绝不编造。
- * 只有当一份针对本仓库的计划这么写时，才会递归进本仓库自己的 `npm test`——生产
- * Workspace 是所有者的。
+ * Runs a named test command only if trusted code independently approved the
+ * exact arguments. Model-authored plan text alone cannot authorize execution.
+ * 只有可信代码独立批准了完全一致的参数，才会运行具名测试命令；模型计划本身不能授权执行。
  */
 export class TestCommandVerifier implements Verifier {
   readonly #workspacePath?: string;
   readonly #timeoutMs: number;
   readonly #runner: typeof runProcess;
+  readonly #approvedCommands: readonly (readonly string[])[];
 
-  constructor(options: { workspacePath?: string; timeoutMs?: number; runner?: typeof runProcess } = {}) {
+  constructor(options: { workspacePath?: string; timeoutMs?: number; runner?: typeof runProcess; approvedCommands?: readonly (readonly string[])[] } = {}) {
     this.#workspacePath = options.workspacePath;
     this.#timeoutMs = options.timeoutMs ?? 30_000;
     this.#runner = options.runner ?? runProcess;
+    this.#approvedCommands = options.approvedCommands ?? [];
   }
 
   async verify(input: Parameters<Verifier["verify"]>[0]): Promise<VerificationResult> {
     const failures: string[] = [];
+    const unverified: string[] = [];
     const checked: string[] = [];
     for (const step of input.plan.steps) {
       const command = extractTestCommand(step);
       if (command !== undefined) {
         if (this.#workspacePath === undefined) {
           failures.push(`${step.title}: named a test command but no workspace is configured`);
+          continue;
+        }
+        const approved = this.#approvedCommands.some((candidate) => candidate.length === command.length && candidate.every((part, index) => part === command[index]));
+        if (!approved) {
+          unverified.push(`${step.title}: test command is not independently authorized for execution`);
           continue;
         }
         const result = await this.#runner(command, this.#workspacePath, this.#timeoutMs);
@@ -67,15 +71,18 @@ export class TestCommandVerifier implements Verifier {
       checked.push(withLocator.id);
       const problem = await this.readTestOutput(withLocator);
       if (problem !== undefined) failures.push(`${step.title}: ${problem}`);
+      else unverified.push(`${step.title}: test output was supplied by a worker and needs review`);
     }
     if (failures.length === 0 && checked.length === 0 && !input.plan.steps.some((step) => extractTestCommand(step) !== undefined || mentionsTests(step))) {
       return silentPass(input.run.id);
     }
-    const passed = failures.length === 0;
+    const needsReview = failures.length === 0 && unverified.length > 0;
+    const passed = failures.length === 0 && !needsReview;
     return {
       runId: input.run.id,
       passed,
-      summary: passed ? "Test contract checked." : `Test verification failed. ${failures.join("; ")}.`,
+      ...(needsReview ? { needsReview: true, unverifiedCriteria: unverified } : {}),
+      summary: passed ? "Test contract checked." : needsReview ? unverified.join("; ") : `Test verification failed. ${failures.join("; ")}.`,
       checkedEvidenceIds: checked,
       createdAt: new Date().toISOString(),
     };
@@ -84,7 +91,7 @@ export class TestCommandVerifier implements Verifier {
   private async readTestOutput(evidence: Evidence): Promise<string | undefined> {
     const locator = evidence.locator;
     if (locator === undefined) return "test evidence has no locator";
-    const path = resolveLocator(locator, this.#workspacePath);
+    const path = await verifiedWorkspacePath(locator, this.#workspacePath);
     if (path === undefined) return `"${locator}" could not be resolved`;
     let contents: string;
     try {
@@ -128,7 +135,7 @@ export class DiffFileVerifier implements Verifier {
         continue;
       }
       checked.push(diffEvidence.id);
-      const path = resolveLocator(diffEvidence.locator, this.#workspacePath);
+      const path = await verifiedWorkspacePath(diffEvidence.locator, this.#workspacePath);
       if (path === undefined) {
         failures.push(`${step.title}: "${diffEvidence.locator}" could not be resolved`);
         continue;
@@ -190,13 +197,6 @@ function looksLikeDiffLocator(locator: string): boolean {
 
 function splitArgs(command: string): string[] {
   return command.trim().split(/\s+/).filter((part) => part.length > 0);
-}
-
-function resolveLocator(locator: string, workspacePath: string | undefined): string | undefined {
-  const cleaned = locator.replace(/^file:\/\//, "");
-  if (isAbsolute(cleaned)) return cleaned;
-  if (workspacePath === undefined) return undefined;
-  return resolve(workspacePath, cleaned);
 }
 
 export async function runProcess(

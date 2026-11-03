@@ -21,6 +21,9 @@ import test, { type TestContext } from "node:test";
 
 import { startCompanionServer, type RunningCompanionServer } from "../src/companion-server.ts";
 import { companionFetch } from "./helpers/companion-api.ts";
+import { createJournalStore } from "../src/core/sqlite-journal.ts";
+import { MdMemoryStore } from "../src/memory/md-memory-store.ts";
+import { MemoryGovernance } from "../src/memory/memory-governance.ts";
 
 interface LibraryMemory {
   id: string;
@@ -181,4 +184,37 @@ test("a memory rejected for being too short never reaches the folder", async (t)
   });
   assert.equal(response.status, 400);
   assert.equal((await library(url, token)).memories.length, 0);
+});
+
+test("a conflicting file remains accessible and the owner can keep it explicitly", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const created = await companionFetch(url, token, "/api/memory/governed", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ summary: "原始偏好内容" }),
+  });
+  const { memory } = await created.json() as { memory: LibraryMemory };
+  const store = new MdMemoryStore({ dataDirectory });
+  const journal = createJournalStore(dataDirectory);
+  const governance = new MemoryGovernance({ store, journal });
+  try {
+    const apply = store.applyMutation.bind(store);
+    store.applyMutation = async () => { throw new Error("simulated interruption"); };
+    await assert.rejects(governance.update(memory.id, { summary: "待处理的修改" }));
+    store.applyMutation = apply;
+  } finally {
+    await governance.close();
+    (journal as { close?: () => void }).close?.();
+  }
+  const path = join(dataDirectory, "memory", `${memory.id}.md`);
+  await writeFile(path, (await readFile(path, "utf8")).replace("原始偏好内容", "用户手改的偏好"), "utf8");
+  const response = await companionFetch(url, token, "/api/memory/governed");
+  assert.equal(response.status, 200);
+  const view = await response.json() as { syncError?: string; conflicts: Array<{ id: string }> };
+  assert.match(view.syncError ?? "", /changed on disk/);
+  assert.equal(view.conflicts.length, 1);
+  const endpoint = `/api/memory/governed/conflicts/${encodeURIComponent(view.conflicts[0]!.id)}/keep-file`;
+  const denied = await companionFetch(url, token, endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  assert.equal(denied.status, 400);
+  const kept = await companionFetch(url, token, endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirmDiscardPendingChange: true }) });
+  assert.equal(kept.status, 200);
+  assert.equal((await library(url, token)).memories.find((item) => item.id === memory.id)?.summary, "用户手改的偏好");
 });

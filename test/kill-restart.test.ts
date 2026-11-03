@@ -140,14 +140,15 @@ test("a killed executor's run is exclusive while it lives and completes exactly 
 
   assert.deepEqual(started, [runId], "the recovered run is executed by the successor");
   const run = assembly.runtime.getRun(runId);
-  assert.equal(run.status, "completed", `the stranded run must complete, not stay ${run.status}`);
+  assert.equal(run.status, "waiting_review", `the stranded run must reach review, not stay ${run.status}`);
+  assert.equal((await assembly.runtime.reviewVerification(runId, "accept")).status, "completed");
 
-  // ── Exactly once: one completion, one verification, and the successor's
-  //    file is the one on disk. The killed attempt contributed no verdict.
-  //    恰好一次：一次完成、一次验证、磁盘上是接替者的文件。被杀的那次没有留下结论。
+  // ── Exactly one completion, with an initial review request and the owner's
+  //    final verdict. The killed attempt contributed no verdict.
+  //    恰好一次完成，包含初次待核验结果和所有者最终结论；被杀的那次没有留下结论。
   const events = await assembly.journal.list();
   assert.equal(events.filter((event) => event.type === "run.status_changed" && (event.payload as { status?: string }).status === "completed").length, 1);
-  assert.equal(events.filter((event) => event.type === "verification.completed").length, 1);
+  assert.equal(events.filter((event) => event.type === "verification.completed").length, 2);
   const outcome = await readFile(join(workspacePath, "outcome.md"), "utf8");
   assert.match(outcome, /successor/);
 

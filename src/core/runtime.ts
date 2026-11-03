@@ -26,7 +26,7 @@ import type {
   WorkerMemorySource,
 } from "./contracts.ts";
 import type { JournalStore } from "./journal.ts";
-import { approvalKey, emptyProjection, reduceEvent, replay, subagentKey, type RuntimeProjection } from "./run-state.ts";
+import { approvalKey, assertTransition, emptyProjection, reduceEvent, replay, subagentKey, type RuntimeProjection } from "./run-state.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { CapabilityDispatcher } from "../workers/capability-dispatcher.ts";
 import { BUILT_IN_CATALOG, corroborateFailures, failureSignature, type FailureCategory, type FailureReport, type OutcomeCatalog } from "./failure-analysis.ts";
@@ -98,8 +98,13 @@ export interface CloneRuntimeOptions {
 
 export interface DispatchResult {
   run: Run;
-  status: "completed" | "waiting_approval" | "failed";
+  status: RunStatus;
   verification?: VerificationResult;
+}
+
+export interface ExecutionGuard {
+  ownerId?: string;
+  signal?: AbortSignal;
 }
 
 /**
@@ -134,6 +139,8 @@ export class CloneRuntime {
   readonly #knownAgentIds?: () => Set<string>;
   #state: RuntimeProjection = emptyProjection();
   #hydrated = false;
+  readonly #executionGuards = new Map<string, ExecutionGuard>();
+  readonly #cancellationControllers = new Map<string, AbortController>();
 
   constructor(options: CloneRuntimeOptions) {
     this.#journal = options.journal;
@@ -197,9 +204,9 @@ export class CloneRuntime {
    * live lease belongs to whoever holds it and is left alone. A run whose
    * lease is gone has no executor —
    *
-   *   - reversible work (read-only or reversible_write steps) goes back to the
-   *     queue: re-execution overwrites, it does not duplicate;
-   *   - external or irreversible work fails instead, because a retry cannot
+   *   - work with no started adapter or with an explicit trusted replay-safety
+   *     guarantee can return to the queue;
+   *   - unverified, external or irreversible work fails instead, because a retry cannot
    *     know whether the email was sent, and the honest outcome is a failed
    *     run the opportunity engine turns into a follow-up card for the owner;
    *   - a run orphaned mid-verification fails the same way: the work happened,
@@ -218,9 +225,8 @@ export class CloneRuntime {
    * 探针是领取，且只是领取：带着存活租约的执行中 Run 属于持有者，不去碰。租约已消失
    * 的 Run 没有执行者——
    *
-   *   - 可逆的工作（read-only 或 reversible_write 步骤）回到队列：重执行是覆盖，
-   *     不是复制；
-   *   - 外部或不可逆的工作改为失败，因为重试无法知道邮件是否已发出，而诚实的结局是
+   *   - 尚未启动 Adapter 或有可信重放安全保证的工作可以回到队列；
+   *   - 无法保证重放安全、外部或不可逆的工作改为失败，因为重试无法知道邮件是否已发出，而诚实的结局是
    *     一个失败的 Run，由机会引擎转成给所有者的跟进卡片；
    *   - 在验证中途被丢下的 Run 同样失败：工作发生了，结论没有，而无法重建的结论
    *     绝不能被编造。
@@ -229,47 +235,49 @@ export class CloneRuntime {
    */
   async recoverOrphanedRuns(): Promise<Array<{ runId: string; action: "requeued" | "failed"; reason: string }>> {
     await this.hydrate();
-    if (this.#journal.readClaim === undefined) return [];
+    if (this.#journal.readClaim === undefined || this.#journal.claimRun === undefined
+      || this.#journal.appendClaimed === undefined || this.#journal.releaseClaim === undefined) return [];
     const now = Date.now();
     const recovered: Array<{ runId: string; action: "requeued" | "failed"; reason: string }> = [];
 
-    for (const run of Object.values(this.#state.runs)) {
-      if (run.status !== "running" && run.status !== "verifying") continue;
-      const claim = await this.#journal.readClaim(run.id);
+    for (const candidate of Object.values(this.#state.runs)) {
+      if (candidate.status !== "running" && candidate.status !== "verifying") continue;
+      const claim = await this.#journal.readClaim(candidate.id);
       if (claim !== undefined && Date.parse(claim.leaseUntil) > now) continue;
-
-      const external = run.planId === undefined
-        ? false
-        : (this.#state.plans[run.planId]?.steps ?? []).some((step) => (
-          step.risk === "external_side_effect" || step.risk === "irreversible"
-          || step.subagents?.some((order) => order.risk === "external_side_effect" || order.risk === "irreversible")
-        ));
-
-      if (run.status === "verifying" || external) {
+      const ownerId = `recovery-${process.pid}-${randomUUID()}`;
+      const acquired = await this.#journal.claimRun({ runId: candidate.id, ownerId, leaseMs: 60_000 });
+      if (acquired === undefined) continue;
+      try {
+        await this.refresh();
+        const run = this.#state.runs[candidate.id];
+        if (run === undefined || (run.status !== "running" && run.status !== "verifying")) continue;
+        const external = run.planId === undefined
+          ? false
+          : (this.#state.plans[run.planId]?.steps ?? []).some((step) => (
+            step.risk === "external_side_effect" || step.risk === "irreversible"
+            || step.subagents?.some((order) => order.risk === "external_side_effect" || order.risk === "irreversible")
+          ));
+        const history = await this.#journal.list();
+        const dispatches = history.filter((event) => event.runId === run.id
+          && (event.type === "execution.started" || event.type === "subagent.dispatched" || event.type === "subagent.resumed"));
+        const unsafeReplay = dispatches.some((event) => (event.payload as { retrySafeAfterInterruption?: boolean }).retrySafeAfterInterruption !== true);
+        const failed = run.status === "verifying" || external || unsafeReplay;
         const reason = run.status === "verifying"
           ? "executor died while verifying; the verdict cannot be reconstructed"
-          : "executor died with external-effect steps; a retry could duplicate the side effect";
-        await this.record({
-          type: "run.status_changed",
-          taskId: run.taskId,
-          runId: run.id,
-          payload: { status: "failed", activeStepId: run.activeStepId, reason },
-        });
-        recovered.push({ runId: run.id, action: "failed", reason });
-        continue;
+          : external
+            ? "executor died with external-effect steps; a retry could duplicate the side effect"
+            : unsafeReplay
+              ? "executor died after a worker without a replay-safety guarantee started; inspect possible side effects before retrying"
+              : "executor died; lease expired, work returned to the queue";
+        const event = await this.#journal.appendClaimed({
+          type: "run.status_changed", taskId: run.taskId, runId: run.id,
+          payload: { status: failed ? "failed" : "queued", activeStepId: run.activeStepId, reason },
+        }, { runId: run.id, ownerId });
+        this.#state = reduceEvent(this.#state, event);
+        recovered.push({ runId: run.id, action: failed ? "failed" : "requeued", reason });
+      } finally {
+        await this.#journal.releaseClaim({ runId: candidate.id, ownerId }).catch(() => undefined);
       }
-
-      await this.record({
-        type: "run.status_changed",
-        taskId: run.taskId,
-        runId: run.id,
-        payload: {
-          status: "queued",
-          activeStepId: run.activeStepId,
-          reason: "executor died; lease expired, work returned to the queue",
-        },
-      });
-      recovered.push({ runId: run.id, action: "requeued", reason: "executor died; lease expired" });
     }
     return recovered;
   }
@@ -294,10 +302,12 @@ export class CloneRuntime {
       updatedAt: new Date().toISOString(),
     };
 
-    await this.record({ type: "trigger.received", payload: trigger });
-    await this.record({ type: "task.created", taskId: task.id, payload: task });
-    await this.record({ type: "run.created", taskId: task.id, runId: run.id, payload: run });
-    await this.changeStatus(run.id, "planning");
+    await this.recordBatch([
+      { type: "trigger.received", payload: trigger },
+      { type: "task.created", taskId: task.id, payload: task },
+      { type: "run.created", taskId: task.id, runId: run.id, payload: run },
+      { type: "run.status_changed", taskId: task.id, runId: run.id, payload: { status: "planning" } },
+    ]);
     return { task, run: this.requireRun(run.id) };
   }
 
@@ -310,8 +320,10 @@ export class CloneRuntime {
     assertPlanIsExecutable(input.steps, this.#knownAgentIds?.());
 
     const plan: WorkPlan = { ...input, id: randomUUID(), runId, createdAt: new Date().toISOString() };
-    await this.record({ type: "plan.created", taskId: run.taskId, runId, payload: plan });
-    await this.changeStatus(runId, "queued");
+    await this.recordIfStatus([
+      { type: "plan.created", taskId: run.taskId, runId, payload: plan },
+      { type: "run.status_changed", taskId: run.taskId, runId, payload: { status: "queued" } },
+    ], run.id, "planning");
     return plan;
   }
 
@@ -328,16 +340,21 @@ export class CloneRuntime {
     if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
       throw new Error(`Run ${runId} already reached terminal status ${run.status}.`);
     }
-    await this.record({
+    assertTransition(run.status, "failed");
+    await this.recordIfStatus([{
       type: "run.status_changed",
       taskId: run.taskId,
       runId,
       payload: { status: "failed", reason: redactAuditText(reason) },
-    });
+    }], run.id, run.status);
   }
 
-  async grantApproval(runId: string, stepId: string, note?: string): Promise<ApprovalGrant> {    await this.hydrate();
+  async grantApproval(runId: string, stepId: string, note?: string): Promise<ApprovalGrant> {
+    await this.hydrate();
     const run = this.requireRun(runId);
+    if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+      throw new Error(`Run ${runId} already reached terminal status ${run.status}.`);
+    }
     const plan = this.requirePlan(run);
     if (!plan.steps.some((step) => step.id === stepId)) {
       throw new Error(`Step ${stepId} is not part of run ${runId}.`);
@@ -351,11 +368,15 @@ export class CloneRuntime {
       grantedBy: "user",
       note,
     };
-    await this.record({ type: "approval.granted", taskId: run.taskId, runId, payload: approval });
+    await this.recordIfStatus([{ type: "approval.granted", taskId: run.taskId, runId, payload: approval }], run.id, run.status);
     return approval;
   }
 
-  async execute(runId: string, agents: AgentRegistry): Promise<DispatchResult> {
+  async execute(runId: string, agents: AgentRegistry, guard: ExecutionGuard = {}): Promise<DispatchResult> {
+    return this.withExecutionGuard(runId, guard, () => this.executeOwned(runId, agents));
+  }
+
+  private async executeOwned(runId: string, agents: AgentRegistry): Promise<DispatchResult> {
     await this.hydrate();
     let run = this.requireRun(runId);
     const task = this.requireTask(run.taskId);
@@ -406,16 +427,63 @@ export class CloneRuntime {
       plan,
       evidence: this.#state.evidenceByRun[run.id] ?? [],
     });
-    await this.record({ type: "verification.completed", taskId: task.id, runId: run.id, payload: verification });
+    const status: RunStatus = verification.needsReview ? "waiting_review" : verification.passed ? "completed" : "failed";
+    const evidence = this.#state.evidenceByRun[run.id] ?? [];
+    await this.recordBatch([
+      { type: "verification.completed", taskId: task.id, runId: run.id, payload: verification },
+      { type: "run.status_changed", taskId: task.id, runId: run.id, payload: { status } },
+      ...(status === "completed" ? [this.#memory.requestEvent(run, task, evidence)] : []),
+    ]);
+    if (status === "completed") this.#memory.enqueue(this.requireRun(run.id), task, evidence);
+    return { run: this.requireRun(run.id), status, verification };
+  }
 
-    if (!verification.passed) {
-      await this.changeStatus(run.id, "failed");
-      return { run: this.requireRun(run.id), status: "failed", verification };
+  async reviewVerification(runId: string, decision: "accept" | "reject", guard: ExecutionGuard = {}): Promise<DispatchResult> {
+    return this.withExecutionGuard(runId, guard, () => this.reviewVerificationOwned(runId, decision));
+  }
+
+  private async withExecutionGuard<T>(runId: string, guard: ExecutionGuard, operation: () => Promise<T>): Promise<T> {
+    if (this.#executionGuards.has(runId)) throw new Error(`Run ${runId} is already executing in this runtime.`);
+    const controller = new AbortController();
+    const abort = (): void => controller.abort();
+    guard.signal?.addEventListener("abort", abort, { once: true });
+    if (guard.signal?.aborted) controller.abort();
+    this.#executionGuards.set(runId, { ...guard, signal: controller.signal });
+    this.#cancellationControllers.set(runId, controller);
+    try {
+      return await operation();
+    } finally {
+      guard.signal?.removeEventListener("abort", abort);
+      this.#cancellationControllers.delete(runId);
+      this.#executionGuards.delete(runId);
     }
+  }
 
-    await this.changeStatus(run.id, "completed");
-    await this.#memory.request(this.requireRun(run.id), task, this.#state.evidenceByRun[run.id] ?? []);
-    return { run: this.requireRun(run.id), status: "completed", verification };
+  private async reviewVerificationOwned(runId: string, decision: "accept" | "reject"): Promise<DispatchResult> {
+    await this.hydrate();
+    const run = this.requireRun(runId);
+    const previous = this.#state.verificationByRun[runId];
+    if (run.status !== "waiting_review" || previous?.needsReview !== true || previous.passed) {
+      throw new Error(`Run ${runId} is not waiting for review.`);
+    }
+    const verification: VerificationResult = {
+      ...previous,
+      passed: decision === "accept",
+      needsReview: false,
+      reviewedBy: "owner",
+      summary: `${previous.summary} Owner ${decision === "accept" ? "accepted" : "rejected"} the unverified criteria.`,
+      createdAt: new Date().toISOString(),
+    };
+    const status: RunStatus = decision === "accept" ? "completed" : "failed";
+    const task = this.requireTask(run.taskId);
+    const evidence = this.#state.evidenceByRun[runId] ?? [];
+    await this.recordBatch([
+      { type: "verification.completed", taskId: run.taskId, runId, payload: verification },
+      { type: "run.status_changed", taskId: run.taskId, runId, payload: { status } },
+      ...(status === "completed" ? [this.#memory.requestEvent(run, task, evidence)] : []),
+    ]);
+    if (status === "completed") this.#memory.enqueue(this.requireRun(runId), task, evidence);
+    return { run: this.requireRun(runId), status, verification };
   }
 
   getRun(runId: string): Run {
@@ -442,34 +510,35 @@ export class CloneRuntime {
   async cancel(runId: string, agents: AgentRegistry): Promise<Run> {
     await this.hydrate();
     const run = this.requireRun(runId);
-    if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
-      throw new Error(`Run ${run.id} cannot be cancelled while ${run.status}.`);
-    }
-
-    for (const subagent of this.getSubagentsForRun(runId).filter((item) => item.status === "running")) {
-      if (subagent.sessionId !== undefined) {
-        const adapter = agents.get(subagent.agentId);
-        if (adapter === undefined) {
-          throw new Error(`Cannot cancel ${subagent.workOrderId}; adapter ${subagent.agentId} is not registered.`);
-        }
-        if (subagent.providerId !== undefined && subagent.providerId !== adapter.providerId) {
-          throw new Error(
-            `Cannot cancel ${subagent.workOrderId}; provider changed from ${subagent.providerId} to ${adapter.providerId}.`,
-          );
-        }
-        if (adapter.cancel === undefined) {
-          throw new Error(`Cannot cancel ${subagent.workOrderId}; adapter ${adapter.id} does not support cancellation.`);
-        }
-        await adapter.cancel(subagent.sessionId);
+    const running = this.getSubagentsForRun(runId).filter((item) => item.status === "running");
+    if (this.#journal.cancelRun !== undefined) {
+      await this.#journal.cancelRun(runId);
+      this.#cancellationControllers.get(runId)?.abort();
+      await this.refresh();
+    } else {
+      if (run.status === "completed" || run.status === "failed" || run.status === "cancelled") {
+        throw new Error(`Run ${run.id} cannot be cancelled while ${run.status}.`);
       }
-      await this.record({
-        type: "subagent.cancelled",
-        taskId: run.taskId,
-        runId,
-        payload: { workOrderId: subagent.workOrderId, message: "Cancelled by the supervisor." },
-      });
+      this.#cancellationControllers.get(runId)?.abort();
+      const events = [
+        ...running.map((subagent) => ({
+          type: "subagent.cancelled" as const, taskId: run.taskId, runId,
+          payload: { workOrderId: subagent.workOrderId, message: "Cancellation requested; worker shutdown is best effort." },
+        })),
+        { type: "run.status_changed" as const, taskId: run.taskId, runId, payload: { status: "cancelled", activeStepId: run.activeStepId } },
+      ];
+      const recorded = this.#journal.appendBatch === undefined
+        ? await Promise.all(events.map((event) => this.#journal.append(event)))
+        : await this.#journal.appendBatch(events);
+      for (const event of recorded) this.#state = reduceEvent(this.#state, event);
     }
-    await this.changeStatus(runId, "cancelled", run.activeStepId);
+    for (const subagent of running) {
+      const adapter = agents.get(subagent.agentId);
+      if (subagent.sessionId !== undefined && adapter?.cancel !== undefined
+        && (subagent.providerId === undefined || subagent.providerId === adapter.providerId)) {
+        await adapter.cancel(subagent.sessionId).catch(() => undefined);
+      }
+    }
     return this.requireRun(runId);
   }
 
@@ -534,6 +603,7 @@ export class CloneRuntime {
           stepId: input.step.id,
           adapterId: adapter.id,
           providerId: adapter.providerId,
+          retrySafeAfterInterruption: capabilities.retrySafeAfterInterruption === true,
           // The authorization snapshot makes the journal self-auditing: a later
           // replay can verify every recorded evidence kind against what this
           // adapter was actually allowed to record at dispatch time.
@@ -627,7 +697,9 @@ export class CloneRuntime {
       ...(memoryContext === undefined ? {} : { memoryContext }),
       failureCatalog: this.#failureCatalog,
     };
-    let allowedEvidenceKinds = evidenceAuthorization(await adapter.capabilities());
+    let adapterCapabilities = await adapter.capabilities();
+    let allowedEvidenceKinds = evidenceAuthorization(adapterCapabilities);
+    let retrySafe = adapterCapabilities.retrySafeAfterInterruption === true;
     const triedAdapterIds = new Set<string>();
     const failureReports: FailureReport[] = [];
 
@@ -648,6 +720,9 @@ export class CloneRuntime {
     // 进程重启后留下的 running/failed 记录不能直接变成盲目重跑许可；先用持久的派发前
     // 检查点裁决 Workspace 副作用。
     if (existing !== undefined && (existing.status === "running" || existing.status === "failed")) {
+      if (existing.retrySafeAfterInterruption !== true || !retrySafe) {
+        throw new Error(`Subagent ${input.workOrder.id} was interrupted without a replay-safety guarantee; inspect possible side effects.`);
+      }
       const recovery = await this.assessWorkspaceRecovery(input, existing, undefined, allowedEvidenceKinds);
       if (recovery !== undefined) {
         await this.recordRecoveryDecision(input, recovery);
@@ -681,6 +756,7 @@ export class CloneRuntime {
           status: "running",
           ...(workspaceCheckpoint === undefined ? {} : { workspaceCheckpoint }),
           ...(workspace.path === undefined ? {} : { workspacePath: workspace.path }),
+          retrySafeAfterInterruption: retrySafe,
           attempt,
           startedAt,
           updatedAt: startedAt,
@@ -701,13 +777,13 @@ export class CloneRuntime {
           type: "subagent.resumed",
           taskId: input.task.id,
           runId: input.run.id,
-          payload: { workOrderId: input.workOrder.id, sessionId, adapterId: adapter.id, attempt },
+          payload: { workOrderId: input.workOrder.id, sessionId, adapterId: adapter.id, attempt, retrySafeAfterInterruption: retrySafe },
         });
       }
 
       try {
         const stream = sessionId !== undefined && adapter.resume !== undefined
-          ? { execute: () => adapter.resume!(sessionId!, assignment) }
+          ? { execute: () => adapter.resume!(sessionId!, assignment), cancel: adapter.cancel?.bind(adapter) }
           : adapter;
         const completion = await this.consumeExecutionEvents(stream, assignment, allowedEvidenceKinds);
         if (completion === undefined) {
@@ -739,6 +815,10 @@ export class CloneRuntime {
           error instanceof Error ? error.message : "Unknown subagent failure.",
         );
         const report = error instanceof WorkerFailure ? error.report : undefined;
+        if (!retrySafe) {
+          await this.recordSubagentFailure(input, adapter, error, message, report);
+          throw error;
+        }
         const recovery = await this.assessWorkspaceRecovery(input, existing, report, allowedEvidenceKinds);
         if (recovery !== undefined) {
           await this.recordRecoveryDecision(input, recovery);
@@ -793,7 +873,9 @@ export class CloneRuntime {
         const alternative = await this.selectAlternativeAdapter(input, triedAdapterIds);
         if (alternative !== undefined) {
           adapter = alternative;
-          allowedEvidenceKinds = evidenceAuthorization(await adapter.capabilities());
+          adapterCapabilities = await adapter.capabilities();
+          allowedEvidenceKinds = evidenceAuthorization(adapterCapabilities);
+          retrySafe = adapterCapabilities.retrySafeAfterInterruption === true;
           sessionId = undefined;
         } else {
           sessionId = this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)]?.sessionId;
@@ -1264,19 +1346,34 @@ export class CloneRuntime {
   }
 
   private async consumeExecutionEvents(
-    adapter: { execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> },
+    adapter: { execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent>; cancel?(sessionId: string): Promise<void> },
     input: ExecutionAssignment,
     allowedEvidenceKinds: ReadonlySet<Evidence["kind"]>,
   ): Promise<string | undefined> {
     let completion: string | undefined;
-    for await (const event of adapter.execute(input)) {
-      if (event.type === "completed") {
-        completion = event.summary;
-        continue;
+    let sessionId: string | undefined;
+    const signal = this.#executionGuards.get(input.run.id)?.signal;
+    const cancel = (): void => {
+      if (sessionId !== undefined && adapter.cancel !== undefined) void adapter.cancel(sessionId).catch(() => undefined);
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      for await (const event of adapter.execute(input)) {
+        if (event.type === "session_started") {
+          sessionId = event.sessionId;
+          if (signal?.aborted) cancel();
+        }
+        if (signal?.aborted) throw new Error(`Run ${input.run.id} lost its execution claim.`);
+        if (event.type === "completed") {
+          completion = event.summary;
+          continue;
+        }
+        await this.recordExecutionEvent(input, event, allowedEvidenceKinds);
       }
-      await this.recordExecutionEvent(input, event, allowedEvidenceKinds);
+      return completion;
+    } finally {
+      signal?.removeEventListener("abort", cancel);
     }
-    return completion;
   }
 
   private async recordExecutionEvent(
@@ -1376,8 +1473,37 @@ export class CloneRuntime {
   }
 
   private async record(input: Parameters<JournalStore["append"]>[0]): Promise<void> {
-    const event = await this.#journal.append(input);
+    const guard = input.runId === undefined ? undefined : this.#executionGuards.get(input.runId);
+    if (guard?.signal?.aborted) throw new Error(`Run ${input.runId} lost its execution claim.`);
+    if (guard?.ownerId !== undefined && this.#journal.appendClaimed === undefined) throw new Error("The journal does not support fenced writes.");
+    const event = guard?.ownerId === undefined
+      ? await this.#journal.append(input)
+      : await this.#journal.appendClaimed!(input, { runId: input.runId!, ownerId: guard.ownerId });
     this.#state = reduceEvent(this.#state, event);
+  }
+
+  private async recordBatch(inputs: Parameters<JournalStore["append"]>[0][]): Promise<void> {
+    const runId = inputs[0]?.runId;
+    const guard = runId === undefined ? undefined : this.#executionGuards.get(runId);
+    if (guard?.signal?.aborted) throw new Error(`Run ${runId} lost its execution claim.`);
+    if (guard?.ownerId !== undefined && this.#journal.appendBatchClaimed === undefined) throw new Error("The journal does not support fenced writes.");
+    if (guard?.ownerId === undefined && this.#journal.appendBatch === undefined) throw new Error("The journal cannot atomically finalize a run.");
+    const events = guard?.ownerId === undefined
+      ? await this.#journal.appendBatch!(inputs)
+      : await this.#journal.appendBatchClaimed!(inputs, { runId: runId!, ownerId: guard.ownerId });
+    for (const event of events) this.#state = reduceEvent(this.#state, event);
+  }
+
+  private async recordIfStatus(inputs: Parameters<JournalStore["append"]>[0][], runId: string, status: RunStatus): Promise<void> {
+    if (this.#journal.appendBatchIfStatus === undefined) {
+      await this.refresh();
+      const current = this.requireRun(runId).status;
+      if (current !== status) throw new Error(`Run ${runId} status changed from ${status} to ${current}.`);
+      await this.recordBatch(inputs);
+      return;
+    }
+    const events = await this.#journal.appendBatchIfStatus(inputs, { runId, status });
+    for (const event of events) this.#state = reduceEvent(this.#state, event);
   }
 
   private requireRun(runId: string): Run {

@@ -151,9 +151,8 @@ export async function describeHistory(dataDirectory: string): Promise<HistoryDes
  *
  * This is the gate for recording personal state from conversation. The agent
  * proposing the record supplies a quote; the quote is checked against every
- * user-role message in the owner's history. An agent cannot record a boundary
- * the owner never stated, because a fabricated quote matches nothing — the rule
- * is enforced by the file system, not by the model's good behaviour.
+ * user-role message in the owner's history. This confirms only that the words
+ * appeared, not that arbitrary model-supplied fields or actions were approved.
  *
  * Comparison ignores all whitespace, so a quote survives the agent's own
  * re-wrapping of the owner's sentence; it does not survive paraphrase, which
@@ -162,8 +161,7 @@ export async function describeHistory(dataDirectory: string): Promise<HistoryDes
  * 所有者是否真的说过这些话。
  *
  * 这是从对话记录个人状态的门禁。提议记录的 Agent 必须提供引文；引文会与所有者历史中的
- * 每一条 user 消息比对。Agent 无法记录所有者从未说过的边界，因为编造的引文什么也匹配
- * 不上——这条规则由文件系统强制执行，而不是寄希望于模型的自觉。
+ * 每一条 user 消息比对。它只能证明这些字出现过，不能证明模型填写的其他字段或动作获得批准。
  *
  * 比对忽略所有空白字符，因此引文能在 Agent 重新断行的句子里存活；但无法挺过改写，
  * 而这正是本意。

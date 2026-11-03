@@ -46,6 +46,7 @@ export interface WorkerDescriptor {
   priority: number;
   enabled: boolean;
   installed: boolean;
+  executionBlocked?: boolean;
 }
 
 export interface DispatchDecision {
@@ -68,6 +69,7 @@ export type DispatchBlockedCode =
   | "REQUESTED_AGENT_NOT_FOUND"
   | "REQUESTED_AGENT_DISABLED"
   | "REQUESTED_AGENT_UNAVAILABLE"
+  | "REQUESTED_AGENT_UNISOLATED"
   | "CAPABILITY_MISMATCH";
 
 export interface DispatchBlocked {

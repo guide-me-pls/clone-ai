@@ -5,9 +5,7 @@
  * records pass/fail, duration, and artifact facts under benchmark/results/.
  *
  * Usage:
- *   npm run bench                 # all tasks, provider from --provider (default pi)
- *   npm run bench -- --tasks summarize,two-step-chain
- *   npm run bench -- --provider pi --tasks missing-input
+ *   npm run bench -- --unsafe-host --provider pi --tasks summarize
  *
  * Costs: each task is one or more real model calls (a few cents per task).
  * The "missing-input" task is intentionally expected to fail and verifies that
@@ -17,9 +15,7 @@
  * 把通过/失败、耗时和产物事实记录到 benchmark/results/ 下。
  *
  * 用法：
- *   npm run bench                 # 全部任务，Provider 由 --provider 指定（默认 pi）
- *   npm run bench -- --tasks summarize,two-step-chain
- *   npm run bench -- --provider pi --tasks missing-input
+ *   npm run bench -- --unsafe-host --provider pi --tasks summarize
  *
  * 成本：每个任务是一次或多次真实模型调用（每个任务几美分）。
  * missing-input 任务刻意期望失败，用来验证失败能被干净分类而不是挂死。
@@ -51,9 +47,10 @@ interface BenchRecord {
   durationMs: number;
   artifacts: Array<{ path: string; bytes: number }>;
   error?: string;
+  failureCategory?: string;
 }
 
-function parseArgs(): { provider: string; tasks: string[] } {
+function parseArgs(): { provider: string; tasks: string[]; unsafeHost: boolean } {
   const argv = process.argv.slice(2);
   const providerIndex = argv.indexOf("--provider");
   const tasksIndex = argv.indexOf("--tasks");
@@ -62,6 +59,7 @@ function parseArgs(): { provider: string; tasks: string[] } {
     tasks: tasksIndex >= 0 && argv[tasksIndex + 1] !== undefined
       ? argv[tasksIndex + 1]!.split(",").map((item) => item.trim()).filter(Boolean)
       : BENCH_TASKS.map((task) => task.id),
+    unsafeHost: argv.includes("--unsafe-host"),
   };
 }
 
@@ -78,7 +76,7 @@ const PROVIDERS: Record<string, Pick<BlackBoxProviderConfig, "command" | "args" 
   },
 };
 
-async function runTask(task: BenchTask, provider: string): Promise<BenchRecord> {
+async function runTask(task: BenchTask, provider: string, unsafeHost: boolean): Promise<BenchRecord> {
   const workspace = await mkdtemp(join(tmpdir(), `clone-ai-bench-${task.id}-`));
   const startedAt = Date.now();
   const record: BenchRecord = {
@@ -100,7 +98,7 @@ async function runTask(task: BenchTask, provider: string): Promise<BenchRecord> 
     }
     const adapter = new BlackBoxCliWorker({
       agentId: "bench-worker",
-      config: { ...recipe, id: provider, label: provider, timeoutMs: 420_000 },
+      config: { ...recipe, id: provider, label: provider, timeoutMs: 420_000, ...(unsafeHost ? { hostAccess: "unrestricted" as const } : {}) },
       workCapabilities: ["research", "drafting", "review", "implementation", "filesystem_read", "filesystem_write", "external_action"],
     });
     const journal = new JsonlJournalStore(join(workspace, ".clone-ai", "journal.jsonl"));
@@ -121,7 +119,7 @@ async function runTask(task: BenchTask, provider: string): Promise<BenchRecord> 
         title: step.title,
         instructions: step.instructions,
         risk: step.risk,
-        acceptanceCriteria: ["Benchmark acceptance"],
+        acceptanceCriteria: step.subagents.flatMap((order) => order.expectedArtifacts.filter((artifact) => artifact.required).map((artifact) => `file ${artifact.description} exists`)),
         subagents: step.subagents.map((order) => ({
           ...order,
           inputs: [],
@@ -133,7 +131,12 @@ async function runTask(task: BenchTask, provider: string): Promise<BenchRecord> 
     const result = await runtime.execute(run.id, new StaticAgentRegistry([adapter]));
     record.status = result.status;
     record.durationMs = Date.now() - startedAt;
-    record.passed = result.status === "completed" && result.verification?.passed === true;
+    const failures = (await journal.list()).filter((event) => event.type === "subagent.failed");
+    const category = (failures.at(-1)?.payload as { report?: { category?: string } } | undefined)?.report?.category;
+    if (category !== undefined) record.failureCategory = category;
+    record.passed = record.expectedFailure
+      ? result.status === "failed" && category === "no_artifact"
+      : result.status === "completed" && result.verification?.passed === true;
 
     const fs = await import("node:fs/promises");
     const walk = async (directory: string): Promise<string[]> => {
@@ -162,7 +165,11 @@ async function runTask(task: BenchTask, provider: string): Promise<BenchRecord> 
   }
 }
 
-const { provider, tasks } = parseArgs();
+const { provider, tasks, unsafeHost } = parseArgs();
+if (!unsafeHost) {
+  console.error("Benchmark workers have no enforced sandbox. Pass --unsafe-host only if you explicitly accept unrestricted host access.");
+  process.exit(2);
+}
 const selected = BENCH_TASKS.filter((task) => tasks.includes(task.id));
 if (selected.length === 0) {
   console.error(`No benchmark tasks match: ${tasks.join(", ")}.`);
@@ -173,18 +180,18 @@ await mkdir(resultsDirectory, { recursive: true });
 console.log(`Benchmark: provider=${provider} tasks=${selected.map((task) => task.id).join(",")}`);
 const records: BenchRecord[] = [];
 for (const task of selected) {
-  const record = await runTask(task, provider);
+  const record = await runTask(task, provider, unsafeHost);
   records.push(record);
   const expected = record.expectedFailure ? " (expected failure)" : "";
   console.log(
-    `  ${record.passed ? "PASS" : record.expectedFailure ? "EXPECTED-FAIL" : "FAIL"}  ${task.id.padEnd(20)} ${(record.durationMs / 1000).toFixed(1).padStart(6)}s${expected}`
+    `  ${record.passed ? (record.expectedFailure ? "EXPECTED-FAIL" : "PASS") : "FAIL"}  ${task.id.padEnd(20)} ${(record.durationMs / 1000).toFixed(1).padStart(6)}s${expected}`
       + (record.error === undefined ? "" : `  error: ${record.error.slice(0, 200)}`),
   );
 }
 
-const passedCount = records.filter((record) => record.passed || record.expectedFailure).length;
-const expectedFailed = records.filter((record) => record.expectedFailure && record.status === "failed").length;
-const failed = records.filter((record) => !record.expectedFailure && !record.passed).length;
+const passedCount = records.filter((record) => record.passed).length;
+const expectedFailed = records.filter((record) => record.expectedFailure && record.passed).length;
+const failed = records.filter((record) => !record.passed).length;
 const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
 const reportPath = join(resultsDirectory, `${provider}-${stamp}.json`);
 await writeFile(reportPath, `${JSON.stringify({ provider, ranAt: new Date().toISOString(), records }, null, 2)}\n`, "utf8");

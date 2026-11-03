@@ -29,6 +29,7 @@ const ROLE_KINDS: Readonly<Record<WorkerProfile["role"], readonly TaskIntentKind
 export interface WorkerAvailability {
   id: string;
   installed: boolean;
+  executionBlocked?: boolean;
 }
 
 export function describeWorkers(
@@ -40,8 +41,9 @@ export function describeWorkers(
   // accepted rather than forcing every caller into one shape.
   // 可用性可能以 Provider 为键（机器上装了什么），也可能以 Agent ID 为键（注入的 Registry
   // 实际能运行什么），因此两者都接受，而不是强迫所有调用方使用同一种形态。
-  const available = new Map(installed.map((status) => [status.id, status.installed]));
+  const available = new Map(installed.map((status) => [status.id, status]));
   return profiles.map((profile, index) => {
+    const status = available.get(profile.providerId) ?? available.get(profile.id);
     return {
       id: profile.id,
       providerId: profile.providerId,
@@ -55,7 +57,8 @@ export function describeWorkers(
       // Unknown means not installed: the router must never dispatch to a
       // command nobody confirmed exists.
       // 未知即未安装：路由器绝不能派发到一个没人确认存在的命令。
-      installed: available.get(profile.providerId) ?? available.get(profile.id) ?? false,
+      installed: status?.installed ?? false,
+      executionBlocked: status?.executionBlocked === true,
     };
   });
 }

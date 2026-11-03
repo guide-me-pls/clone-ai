@@ -7,7 +7,7 @@
  * 的话语，acceptedRuns 则从 Kernel Journal 读回——两者分开返回，因为话语不是证据。
  */
 import type { Run } from "../core/contracts.ts";
-import { createKernelRuntime } from "../main-agent/tools/kernel-tools.ts";
+import { createKernelRuntimeSession } from "../main-agent/tools/kernel-tools.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
@@ -35,7 +35,7 @@ export async function runMainAgentQuery(
   options: MainAgentQueryOptions = {},
 ): Promise<MainAgentQueryResult> {
   return withMainAgentLock(dataDirectory, async () => {
-    const before = new Set((await createKernelRuntime(dataDirectory)).listRuns().map((run) => run.id));
+    const before = new Set((await currentRuns(dataDirectory)).map((run) => run.id));
 
     const { session } = await createMainAgentSession({ dataDirectory });
     let reply = "";
@@ -68,13 +68,16 @@ export async function runMainAgentQuery(
       session.dispose();
     }
 
-    const runtime = await createKernelRuntime(dataDirectory);
-    const newRuns = runtime
-      .listRuns()
+    const newRuns = (await currentRuns(dataDirectory))
       .filter((run) => !before.has(run.id))
       .map((run) => ({ id: run.id, status: run.status, planId: run.planId }));
     return { reply: reply.trim(), newRuns };
   });
+}
+
+async function currentRuns(dataDirectory: string): Promise<Run[]> {
+  const { runtime, close } = await createKernelRuntimeSession(dataDirectory);
+  try { return runtime.listRuns(); } finally { close(); }
 }
 
 function readSessionStats(session: { getSessionStats(): { tokens: { input: number; output: number; total: number }; cost: number } }) {

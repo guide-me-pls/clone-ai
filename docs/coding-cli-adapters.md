@@ -7,6 +7,13 @@ scoped context, and a workspace, then judges the result by observation: process
 lifecycle and actual filesystem changes. It does not parse a provider's
 protocol, session database, tool stream, or completion claim.
 
+**Safe default:** Clone AI does not yet enforce an OS sandbox, so black-box workers are
+blocked by default. The desktop settings allow the owner to explicitly acknowledge
+`hostAccess: "unrestricted"`; this gives the process the user's file, network, and
+credential access. Kernel approval cannot mediate its internal tools. Declared external
+or irreversible actions are refused by black-box workers; a governed action connector
+has not been implemented.
+
 ```text
 WorkOrder -> policy + capability + approval
   -> BlackBoxCliWorker    prompt · budget · deadline · termination
@@ -62,9 +69,13 @@ the agent said. Receipts remain unavailable to a normal black-box provider.
 
 ## Recovery does not use provider memory
 
-The Kernel stores a durable JSON checkpoint for the Workspace before the first
-attempt. If a worker or supervisor dies, the Kernel compares the checkpoint
-with the current Workspace:
+An unrestricted black-box process can change things outside the Workspace, so
+an unchanged checkpoint does not establish that retrying is safe. Interrupted
+or failed black-box work is not automatically replayed; the owner must inspect
+the outcome. Older records without a replay-safety guarantee also fail closed.
+
+For a trusted adapter that explicitly guarantees replay safety, the Kernel
+compares its durable pre-dispatch checkpoint with the current Workspace:
 
 - no changes: rerun a new session;
 - enough added/modified required artifacts: reconcile observed artifacts and
@@ -72,17 +83,17 @@ with the current Workspace:
 - deletion, unexpected read-only writes, incomplete artifacts, or a missing
   checkpoint: emit a structured recovery failure and wait for the owner.
 
-This is why `--resume` is not a dependency for Claude Code, Pi, or any future
-provider. Provider resume can optimize a retry, but it cannot be the source of
-truth.
+Provider resume can optimize an authorized retry, but cannot be the source of
+truth or make an unisolated black-box process safe to replay.
 
 ## Workspace concurrency
 
 A Workspace uses an exclusive lease during a WorkOrder. It serializes readers
 with writers as well as writers with writers, preventing agents from
 overwriting each other or observing a half-written project. The lease combines
-an in-process queue with an atomic lock file and can reclaim a dead supervisor's
-lock using the owner PID.
+an in-process queue with a SQLite write lock that the OS releases when a
+process dies. Legacy PID lock files are checked during migration; stop older
+daemon versions before running the upgraded one.
 
 ## Failure JSON and corroboration
 

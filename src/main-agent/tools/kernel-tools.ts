@@ -100,7 +100,13 @@ export async function proposePlanToKernel(
     return { accepted: true, runId: run.id, planId: plan.id, runStatus: current.status };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    await runtime.failRun(run.id, `Plan proposal rejected: ${reason}`);
+    try {
+      await runtime.failRun(run.id, `Plan proposal rejected: ${reason}`);
+    } catch (failure: unknown) {
+      await runtime.refresh();
+      const status = runtime.getRun(run.id).status;
+      if (status !== "cancelled" && status !== "completed" && status !== "failed") throw failure;
+    }
     return {
       accepted: false,
       runId: run.id,
@@ -181,19 +187,16 @@ export type OwnerStateInput =
   | { kind: "boundary" | "preference"; ownerSaid: string; statement: string };
 
 /**
- * Records personal state the owner stated in conversation.
+ * Records independently confirmed personal state for a trusted caller.
  *
- * The agent is the scribe, never the author: the entry is attributed to the
- * owner, and it only exists if the owner's own words can be found in the
- * recorded conversation. The quote check is what turns "the agent may propose"
- * into a mechanical rule — an inferred preference the owner never voiced has
- * no quote to match and is refused here, not merely discouraged in a prompt.
+ * A matching quote is evidence that words appeared in the history, not proof
+ * that model-supplied fields or dates were approved. The Main Agent tool must
+ * not call this function until an independent confirmation path exists.
  *
- * 记录所有者在对话中说出的个人状态。
+ * 为可信调用方记录已独立确认的个人状态。
  *
- * Agent 是抄写员，永远不是作者：条目归于所有者，且只有当所有者本人的话能在已记录的
- * 对话中找到时，条目才存在。引文核验把“Agent 只能提案”从一句提示变成一条机械规则——
- * 所有者从未说过的推断偏好没有可匹配的引文，会在这里被拒绝，而不只是在提示词里被劝阻。
+ * 引文命中只能证明历史中出现过这些字，不能证明模型填写的字段或日期获得批准。
+ * 在实现独立确认通道之前，Main Agent 工具不得调用本函数。
  */
 export async function recordOwnerState(
   dataDirectory: string,
@@ -247,51 +250,30 @@ export async function recordOwnerState(
 }
 
 /**
- * The tool-facing gate for installing a worker: the owner's confirmation must
- * be on record before npm runs.
- *
- * "Only after the owner explicitly confirms" used to live in the charter
- * alone — a rule written in a prompt is a rule the model may forget. The
- * mechanism is the same one record_state uses: the agent quotes the owner's
- * confirming words, the quote is checked against the recorded conversation,
- * and a confirmation that was never said refuses the install. The GUI's
- * install button does not pass through here: a click IS the owner
- * confirming, in a channel where the owner is the only speaker.
- *
- * 安装 Worker 前面向工具的门禁：npm 运行之前，所有者的确认必须已记录在案。
- *
- * “仅在所有者明确确认后”原本只写在 charter 里——写在提示词里的规则是模型可能遗忘的
- * 规则。机制与 record_state 用的是同一个：Agent 引用所有者的确认原话，引文与已记录的
- * 对话比对，从未被说过的确认会拒绝安装。GUI 的安装按钮不经此处：点击本身就是所有者
- * 的确认，且在那个通道里所有者是唯一的说话者。
+ * A model-selected quote cannot authorize a system-level installation. Only
+ * an independent owner action through the desktop or CLI can do that.
+ * 模型选出的引文不能授权系统级安装；必须由所有者通过桌面或 CLI 独立操作。
  */
 export async function requestAgentInstallation(
   dataDirectory: string,
   agentId: string,
   ownerSaid: string,
 ): Promise<{ installed: boolean; version?: string; error?: string; refused?: string }> {
-  const { ownerStated } = await import("../conversation-history.ts");
-  if (!(await ownerStated(dataDirectory, ownerSaid))) {
-    return {
-      installed: false,
-      refused:
-        `The owner is not on record as confirming this installation. Ask them explicitly, then quote their exact `
-        + `confirming words in ownerSaid. Installation is a system-level side effect; a guessed confirmation is not one.`,
-    };
-  }
-  return installWorkerAgent(dataDirectory, agentId);
+  void dataDirectory;
+  void agentId;
+  void ownerSaid;
+  return {
+    installed: false,
+    refused: "A conversation quote is not an independent installation approval. Use the desktop installation control or the CLI directly.",
+  };
 }
 
 /**
- * Deterministic, journaled installation of a missing worker CLI. This is the
- * only way the Main Agent can "help install": the agent proposes, the owner
- * confirms in conversation, and the Kernel runs the known npm command and
- * records the outcome. A worker never installs another worker — installation
- * is environment management, not a task for an LLM.
+ * Deterministic, journaled installation for trusted callers. A model-selected
+ * quote is not an authorization, so the Main Agent's tool is refused above.
  *
- * 对缺失的 Worker CLI 做确定性、可审计的安装。这是 Main Agent 唯一能"帮忙安装"的
- * 方式：Agent 提议、所有者在对话中确认、Kernel 执行已知的 npm 命令并记录结果。
- * Worker 永远不会去安装另一个 Worker——安装是环境管理，不是交给 LLM 的任务。
+ * 为可信调用方提供确定性、可审计的 Worker CLI 安装。模型选出的引文不是授权，
+ * 因此上面的 Main Agent 工具会拒绝安装。
  */
 export async function installWorkerAgent(dataDirectory: string, agentId: string): Promise<{ installed: boolean; version?: string; error?: string }> {
   const registry = new WorkerRegistry(dataDirectory);
@@ -381,8 +363,10 @@ export async function describeExecutors(dataDirectory: string): Promise<{ text: 
 }
 
 export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelToolsOptions): void {
-  let runtimePromise: Promise<CloneRuntime> | undefined;
-  const kernel = (): Promise<CloneRuntime> => (runtimePromise ??= createKernelRuntime(options.dataDirectory));
+  const withKernel = async <T>(operation: (runtime: CloneRuntime) => Promise<T>): Promise<T> => {
+    const { runtime, close } = await createKernelRuntimeSession(options.dataDirectory);
+    try { return await operation(runtime); } finally { close(); }
+  };
 
   pi.registerTool({
     name: "propose_work_plan",
@@ -406,13 +390,12 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
       })),
     }),
     execute: async (_toolCallId, params) => {
-      const runtime = await kernel();
       const described = await describeExecutors(options.dataDirectory);
-      const result = await proposePlanToKernel(runtime, {
+      const result = await withKernel((runtime) => proposePlanToKernel(runtime, {
         summary: params.summary,
         steps: params.steps,
         ...(typeof params.servesCommitmentId === "string" ? { servesCommitmentId: params.servesCommitmentId } : {}),
-      });
+      }));
       // A rejection carries the valid executors, so the next attempt can be right.
       // 被拒绝时附上合法执行者，使下一次尝试能够正确。
       const payload = result.accepted ? result : { ...result, validExecutors: described.text };
@@ -430,8 +413,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
       runId: Type.String({ description: "Run id returned by propose_work_plan." }),
     }),
     execute: async (_toolCallId, params) => {
-      const runtime = await kernel();
-      const text = await requestApprovalInfo(runtime, params.runId);
+      const text = await withKernel((runtime) => requestApprovalInfo(runtime, params.runId));
       return { content: [{ type: "text", text }], details: {} };
     },
   });
@@ -460,8 +442,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
       runId: Type.String({ description: "Run id returned by propose_work_plan." }),
     }),
     execute: async (_toolCallId, params) => {
-      const runtime = await kernel();
-      const text = await runStatusInfo(runtime, params.runId);
+      const text = await withKernel((runtime) => runStatusInfo(runtime, params.runId));
       return { content: [{ type: "text", text }], details: {} };
     },
   });
@@ -549,12 +530,8 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     name: "record_state",
     label: "Record Owner State",
     description:
-      "Record something the owner just stated about themselves: a goal, a commitment, or a boundary/preference. "
-      + "Use it when the owner says things like 'remember that I write a weekly report every Friday' or 'never send email without asking me'. "
-      + "ownerSaid must quote the owner's exact words from this conversation — the quote is verified against the recorded history, "
-      + "so paraphrases and your own inferences are refused. If you believe something about the owner that they did not say, "
-      + "say it to them instead of recording it. For recurring commitments ('every Friday'), pass commitmentKind 'recurring' "
-      + "and everyDays 7, with dueAt set to the next occurrence.",
+      "Personal-state recording is disabled until an independent owner review is available. "
+      + "Do not claim that a proposed goal, commitment, boundary or preference has been recorded.",
     parameters: Type.Object({
       ownerSaid: Type.String({ description: "The owner's exact words, quoted verbatim from this conversation." }),
       kind: Type.Union([Type.Literal("goal"), Type.Literal("commitment"), Type.Literal("boundary"), Type.Literal("preference")]),
@@ -569,43 +546,8 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
       targetDate: Type.Optional(Type.String({ description: "ISO date the goal targets." })),
       goalId: Type.Optional(Type.String({ description: "Goal this commitment serves, when one exists." })),
     }),
-    execute: async (_toolCallId, params) => {
-      if (params.kind === "goal" && typeof params.title !== "string") {
-        return { content: [{ type: "text", text: "A goal needs a title." }], details: { recorded: false } };
-      }
-      if (params.kind === "commitment") {
-        if (typeof params.title !== "string" || typeof params.commitmentKind !== "string") {
-          return { content: [{ type: "text", text: "A commitment needs a title and commitmentKind." }], details: { recorded: false } };
-        }
-      }
-      if ((params.kind === "boundary" || params.kind === "preference") && typeof params.statement !== "string") {
-        return { content: [{ type: "text", text: `A ${params.kind} needs a statement.` }], details: { recorded: false } };
-      }
-      const input: OwnerStateInput = params.kind === "goal"
-        ? {
-          kind: "goal",
-          ownerSaid: params.ownerSaid,
-          title: params.title!,
-          ...(params.motivation === undefined ? {} : { motivation: params.motivation }),
-          ...(params.targetDate === undefined ? {} : { targetDate: params.targetDate }),
-        }
-        : params.kind === "commitment"
-          ? {
-            kind: "commitment",
-            ownerSaid: params.ownerSaid,
-            title: params.title!,
-            commitmentKind: params.commitmentKind as "deadline" | "appointment" | "recurring" | "promise",
-            ...(params.dueAt === undefined ? {} : { dueAt: params.dueAt }),
-            ...(params.everyDays === undefined ? {} : { everyDays: params.everyDays }),
-            ...(params.goalId === undefined ? {} : { goalId: params.goalId }),
-          }
-          : { kind: params.kind, ownerSaid: params.ownerSaid, statement: params.statement! };
-
-      const result = await recordOwnerState(options.dataDirectory, input);
-      const text = result.recorded
-        ? `Recorded: ${result.kind} "${result.title}" (${result.id}). It appears in every future situation briefing.`
-        : `Not recorded. ${result.reason}`;
-      return { content: [{ type: "text", text }], details: { recorded: result.recorded } };
+    execute: async () => {
+      return { content: [{ type: "text", text: "Not recorded. Model-proposed personal state requires independent owner review, which is not implemented yet." }], details: { recorded: false } };
     },
   });
 
@@ -613,11 +555,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     name: "install_agent",
     label: "Install Agent",
     description:
-      "Install a missing worker CLI through the Kernel's deterministic installer "
-      + "(npm global install for built-in workers). Call this ONLY after the owner explicitly asks to install "
-      + "the agent, and pass their exact confirming words in ownerSaid — the quote is verified against the recorded "
-      + "conversation, so an unconfirmed install is refused. Installation is a system-level side effect and every "
-      + "attempt is journaled.",
+      "Installation from model-selected quotes is disabled. The owner must use the desktop installation control or CLI directly.",
     parameters: Type.Object({
       agentId: Type.String({ description: "Worker id, e.g. codex-cli, claude-code, pi." }),
       ownerSaid: Type.String({ description: "The owner's exact words confirming this installation, quoted from this conversation." }),

@@ -142,7 +142,7 @@ test("capability routing records the concrete executor and retries through the p
   const adapter = new FlakyResumeAdapter();
   const result = await runtime.execute(run.id, new StaticAgentRegistry([adapter]));
 
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "waiting_review");
   assert.deepEqual(adapter.resumedSessionIds, ["pi-session-1"]);
   assert.equal(runtime.getSubagentsForRun(run.id)[0]?.attempt, 2);
   const evidenceEvent = (await journal.list()).find((event) => event.type === "evidence.recorded");
@@ -150,6 +150,24 @@ test("capability routing records the concrete executor and retries through the p
   const eventTypes = await runtime.getEventsForRun(run.id);
   assert.ok(eventTypes.includes("subagent.resumed"));
   assert.equal(eventTypes.includes("agent.message_delta"), false);
+});
+
+test("a worker without replay safety is not retried after a failure", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-no-unsafe-retry-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const { runtime, journal } = await createRuntime(directory);
+  const { run } = await runtime.acceptTrigger({ kind: "query", summary: "Research one fact.", payload: {} });
+  await runtime.attachPlan(run.id, {
+    summary: "Delegate one work order.",
+    steps: [{ id: "prepare", title: "Prepare", instructions: "Research.", risk: "read_only", acceptanceCriteria: ["Research evidence exists"], subagents: [workOrder({ id: "research", agentId: undefined })] }],
+  });
+  const adapter = new FlakyResumeAdapter();
+  const capabilities = adapter.capabilities.bind(adapter);
+  adapter.capabilities = async () => ({ ...await capabilities(), retrySafeAfterInterruption: false });
+  const result = await runtime.execute(run.id, new StaticAgentRegistry([adapter]));
+  assert.equal(result.status, "failed");
+  assert.deepEqual(adapter.resumedSessionIds, []);
+  assert.equal((await journal.list()).filter((event) => event.type === "subagent.resumed").length, 0);
 });
 
 test("journal recovery resumes the pinned adapter without consuming a new attempt", async (t) => {
@@ -190,6 +208,7 @@ test("journal recovery resumes the pinned adapter without consuming a new attemp
       role: order.role,
       title: order.title,
       status: "running",
+      retrySafeAfterInterruption: true,
       attempt: 1,
       startedAt,
       updatedAt: startedAt,
@@ -212,7 +231,7 @@ test("journal recovery resumes the pinned adapter without consuming a new attemp
   const other = new ScriptedExecutionAdapter("other-researcher", "demo", ["research", "filesystem_read"]);
   const result = await recovered.execute(run.id, new StaticAgentRegistry([other, adapter]));
 
-  assert.equal(result.status, "completed");
+  assert.equal(result.status, "waiting_review");
   assert.deepEqual(adapter.resumedSessionIds, ["pi-session-1"]);
   assert.equal(recovered.getSubagentsForRun(run.id)[0]?.attempt, 1);
 });
@@ -228,6 +247,7 @@ class FlakyResumeAdapter implements RuntimeAdapter {
       cancellation: true,
       approvalCallback: false,
       parallelAssignments: true,
+      retrySafeAfterInterruption: true,
       work: ["research", "filesystem_read"],
     };
   }

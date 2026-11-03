@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task } from "./core/contracts.ts";
 import { createJournalStore } from "./core/sqlite-journal.ts";
 import { replay } from "./core/run-state.ts";
-import { approveQueryRun, cancelQueryRun, rejectQueryRun, runQuery } from "./application/run-query.ts";
+import { approveQueryRun, cancelQueryRun, rejectQueryRun, reviewQueryRun, runQuery } from "./application/run-query.ts";
 import { LocalScheduler } from "./scheduling/local-scheduler.ts";
 import { describeSchedule, ScheduleStore, type LocalSchedule, type ScheduleKind } from "./scheduling/schedule-store.ts";
 import { SessionStore } from "./sessions/session-store.ts";
@@ -19,6 +19,7 @@ import {
   authorizeCompanionRequest,
   injectCompanionToken,
   issueCompanionToken,
+  normalizeCompanionHost,
   persistCompanionToken,
 } from "./companion-auth.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
@@ -79,7 +80,7 @@ export interface RunningCompanionServer {
  * 它绝不是托管 Web 服务。
  */
 export async function startCompanionServer(options: CompanionServerOptions = {}): Promise<RunningCompanionServer> {
-  const host = options.host ?? "127.0.0.1";
+  const host = normalizeCompanionHost(options.host ?? "127.0.0.1");
   const port = options.port ?? parsePort(process.env.CLONE_AI_PORT, 4317);
   // One resolver owns every persistent path, so the daemon, the CLI, and the
   // Main Agent cannot disagree about where the owner's data lives.
@@ -135,10 +136,16 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const config = new CloneConfigStore(paths);
   const scheduler = new LocalScheduler({
     store: schedules,
-    run: async (schedule) => {
-      await runQuery(dataDirectory, schedule.query, {
+    run: async (schedule, occurrence) => {
+      return await runQuery(dataDirectory, schedule.query, {
         kind: "schedule",
-        payload: { scheduleId: schedule.id, scheduleKind: schedule.kind, scheduleDescription: describeSchedule(schedule) },
+        payload: {
+          scheduleId: schedule.id,
+          occurrenceId: occurrence.id,
+          occurrenceKey: occurrence.runKey,
+          scheduleKind: schedule.kind,
+          scheduleDescription: describeSchedule(schedule),
+        },
       }, await agentSettings.get(), { workspacePath });
     },
   });
@@ -167,7 +174,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const badCaseLog = new BadCaseLog({ dataDirectory });
   await badCaseLog.appendNew(await journal.list()).catch(() => undefined);
   const reporting = await readJsonFile<DailyReportSettings>(join(dataDirectory, "reporting.json"));
-  const reportRunner = reporting === undefined || reporting.enabled !== true
+  const reportRunner = reporting === undefined
     ? undefined
     : new DailyReportRunner({
         journal,
@@ -175,11 +182,18 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         settings: reporting,
         opportunities: () => opportunityService.list(),
       });
-  if (reportRunner !== undefined) {
-    // Check hourly; the runner itself sends at most once per local day.
-    // 每小时检查一次；Runner 自身保证每个本地日最多发送一封。
-    const reportTimer = setInterval(() => {
-      void reportRunner.maybeSend().catch(() => undefined);
+  let reportInFlight: Promise<void> | undefined;
+  let reportTimer: NodeJS.Timeout | undefined;
+  if (reportRunner !== undefined && reporting?.enabled === true) {
+    reportTimer = setInterval(() => {
+      if (reportInFlight !== undefined) return;
+      reportInFlight = reportRunner.maybeSend().then((result) => {
+        if (result === "unknown") logJson("error", "A daily report has an unknown delivery outcome; review it before retrying");
+      }).catch((error: unknown) => {
+        logJson("error", "Daily report delivery failed; review its outcome before retrying", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }).finally(() => { reportInFlight = undefined; });
     }, 3_600_000);
     reportTimer.unref();
   }
@@ -214,18 +228,29 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     // 排空所有待处理候选：已完成的 Run 不应等到下一次 tick 才变成所有者可审核的东西。
     try {
       await assembly.memory.rebuild();
-      for (let drained = 0; drained < 50; drained += 1) {
-        const produced = await assembly.memory.processNext();
-        if (produced.length === 0) break;
+      for (let drained = 0; drained < 50 && assembly.memory.hasPending(); drained += 1) {
+        await assembly.memory.processNext();
       }
-    } catch {
-      // Memory mining must never take the daemon down. 记忆提炼绝不能弄崩 Daemon。
+    } catch (error: unknown) {
+      logJson("error", "Memory extraction failed; the job remains pending", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
     await opportunityService.scanAndRecord().catch(() => undefined);
     await badCaseLog.appendNew(await journal.list()).catch(() => undefined);
   };
-  await runMaintenance();
-  const maintenance = setInterval(() => void runMaintenance(), 5 * 60_000);
+  let maintenanceInFlight: Promise<void> | undefined;
+  const startMaintenance = (): Promise<void> => {
+    if (maintenanceInFlight !== undefined) return maintenanceInFlight;
+    maintenanceInFlight = runMaintenance().finally(() => { maintenanceInFlight = undefined; });
+    return maintenanceInFlight;
+  };
+  await startMaintenance();
+  const maintenance = setInterval(() => {
+    void startMaintenance().catch((error: unknown) => logJson("error", "Maintenance failed", {
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  }, 5 * 60_000);
   maintenance.unref();
 
   const bound = { port };
@@ -248,6 +273,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         agentSettings,
         agentRegistry,
         memoryGovernance,
+        reportRunner,
         opportunityService,
         badCaseLog,
         journal,
@@ -272,7 +298,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   if (address === null || typeof address === "string") {
     throw new Error("The local companion did not expose a TCP address.");
   }
-  const url = `http://${host}:${address.port}`;
+  const url = `http://${host === "::1" ? "[::1]" : host}:${address.port}`;
   bound.port = address.port;
   scheduler.start();
   return {
@@ -282,12 +308,15 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     // directory after close() resolves is a corrupted journal.
     // 关闭要等待队列：close() 返回后仍在往数据目录写入的消费者，意味着损坏的 Journal。
     close: async () => {
-      scheduler.stop();
       clearInterval(maintenance);
-      await runQueue.stop();
-      await new Promise<void>((resolve, reject) => {
+      if (reportTimer !== undefined) clearInterval(reportTimer);
+      const serverClosed = new Promise<void>((resolve, reject) => {
         server.close((error) => (error === undefined ? resolve() : reject(error)));
       });
+      await scheduler.stop();
+      await runQueue.stop();
+      await Promise.allSettled([maintenanceInFlight, reportInFlight]);
+      await serverClosed;
       await memoryGovernance.close();
       // Release the journal last: the queue and governance above may still be
       // finishing writes, and closing the database under them would lose those
@@ -319,6 +348,7 @@ async function handleRequest(
     agentSettings: WorkerSettingsStore;
     agentRegistry: WorkerRegistry;
     memoryGovernance: MemoryGovernance;
+    reportRunner?: DailyReportRunner;
     opportunityService: OpportunityService;
     badCaseLog: BadCaseLog;
     journal: JournalStore;
@@ -326,7 +356,7 @@ async function handleRequest(
     runQueue: RunQueueConsumer;
   },
 ): Promise<void> {
-  const url = new URL(request.url ?? "/", `http://${context.host}`);
+  const url = new URL(request.url ?? "/", `http://${context.host === "::1" ? "[::1]" : context.host}`);
   const method = request.method ?? "GET";
   const authorized = authorizeCompanionRequest({
     method,
@@ -442,6 +472,10 @@ async function handleRequest(
 
   if (request.method === "PUT" && url.pathname === "/api/settings/providers") {
     const body = await readJsonBody(request);
+    if (body.hostAccess === "unrestricted" && body.acknowledgeUnrestrictedHostAccess !== true) {
+      sendJson(response, 400, { error: "Unrestricted host access requires explicit acknowledgement; it is not a sandbox." });
+      return;
+    }
     try {
       // Validation lives in the store, so the GUI cannot write a declaration
       // the Runtime would later refuse to launch.
@@ -520,10 +554,15 @@ async function handleRequest(
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/agents/install-missing") {
+    const body = await readJsonBody(request);
+    if (body.acknowledgeGlobalInstall !== true) {
+      sendJson(response, 400, { error: "Confirm the global software installation before continuing." });
+      return;
+    }
     try {
       const providers = await context.agentRegistry.list();
       const installed = [];
-      for (const provider of providers.filter((provider) => !provider.installed)) {
+      for (const provider of providers.filter((provider) => !provider.installed && provider.installable)) {
         installed.push(await context.agentRegistry.install(provider.id));
       }
       sendJson(response, 200, { installed, providers: await context.agentRegistry.list() });
@@ -543,7 +582,7 @@ async function handleRequest(
       sendJson(response, 400, { error: "A recall test needs at least two characters." });
       return;
     }
-    const source = new GovernedMemorySource(context.dataDirectory);
+    const source = new GovernedMemorySource(context.dataDirectory, 4, context.journal);
     const matches = await source.recall(query, "recall-test");
     sendJson(response, 200, {
       query,
@@ -633,6 +672,11 @@ async function handleRequest(
     } catch (error: unknown) {
       syncError = error instanceof Error ? error.message : "The memory files could not be read.";
     }
+    if (syncError !== undefined) {
+      const snapshot = await context.memoryGovernance.inspectPending();
+      sendJson(response, 200, { ...snapshot, syncError });
+      return;
+    }
     const [memories, stats] = await Promise.all([
       context.memoryGovernance.list(),
       context.memoryGovernance.stats(),
@@ -665,6 +709,22 @@ async function handleRequest(
       sendJson(response, 201, { memory });
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "The memory could not be created." });
+    }
+    return;
+  }
+  const memoryConflictMatch = url.pathname.match(/^\/api\/memory\/governed\/conflicts\/([^/]+)\/keep-file$/);
+  if (request.method === "POST" && memoryConflictMatch?.[1] !== undefined) {
+    const body = await readJsonBody(request);
+    if (body.confirmDiscardPendingChange !== true) {
+      sendJson(response, 400, { error: "Confirm that the pending change will be discarded and the file kept." });
+      return;
+    }
+    try {
+      await context.memoryGovernance.keepConflictingFile(decodeURIComponent(memoryConflictMatch[1]));
+      await context.memoryGovernance.syncFromFiles();
+      sendJson(response, 200, { resolved: true });
+    } catch (error: unknown) {
+      sendJson(response, 409, { error: error instanceof Error ? error.message : "The memory conflict could not be resolved." });
     }
     return;
   }
@@ -721,14 +781,18 @@ async function handleRequest(
     const body = await readJsonBody(request);
     try {
       if (action === "promote") {
+        if ((body.type !== undefined && !isMemoryType(body.type)) || (body.sensitivity !== undefined && !isSensitivity(body.sensitivity))) {
+          sendJson(response, 400, { error: "Invalid memory type or sensitivity." });
+          return;
+        }
         const candidate = (await context.memoryGovernance.pendingCandidates()).find((item) => item.id === candidateId);
         if (candidate === undefined) {
           sendJson(response, 404, { error: "The requested memory candidate does not exist or was already decided." });
           return;
         }
         const memory = await context.memoryGovernance.promote(candidate, {
-          ...(typeof body.type === "string" ? { type: body.type as MemoryType } : {}),
-          ...(typeof body.sensitivity === "string" ? { sensitivity: body.sensitivity as MemorySensitivity } : {}),
+          ...(isMemoryType(body.type) ? { type: body.type } : {}),
+          ...(isSensitivity(body.sensitivity) ? { sensitivity: body.sensitivity } : {}),
         });
         sendJson(response, 201, { memory });
       } else {
@@ -741,7 +805,40 @@ async function handleRequest(
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/schedules") {
-    sendJson(response, 200, { schedules: (await context.schedules.list()).map(toScheduleView) });
+    const occurrences = (await context.schedules.listOccurrences()).filter((item) => item.status === "unknown");
+    let reportDeliveries: Awaited<ReturnType<DailyReportRunner["unknownDeliveries"]>> = [];
+    let reportError = false;
+    if (context.reportRunner !== undefined) {
+      try {
+        reportDeliveries = await context.reportRunner.unknownDeliveries();
+      } catch (error: unknown) {
+        reportError = true;
+        logJson("error", "Daily report delivery state could not be read", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    sendJson(response, 200, { schedules: (await context.schedules.list()).map(toScheduleView), occurrences, reportDeliveries, reportError });
+    return;
+  }
+  const reportDeliveryMatch = url.pathname.match(/^\/api\/reporting\/deliveries\/(\d{4}-\d{2}-\d{2})\/resolve$/);
+  if (request.method === "POST" && reportDeliveryMatch?.[1] !== undefined) {
+    if (context.reportRunner === undefined) {
+      sendJson(response, 404, { error: "Reporting is not configured." });
+      return;
+    }
+    const body = await readJsonBody(request);
+    if ((body.resolution !== "retry" && body.resolution !== "dismiss") || body.confirmChecked !== true) {
+      sendJson(response, 400, { error: "Confirm that you checked the email outcome before deciding." });
+      return;
+    }
+    try {
+      await context.reportRunner.resolveDelivery(reportDeliveryMatch[1], body.resolution);
+      const result = body.resolution === "retry" ? await context.reportRunner.maybeSend() : "dismissed";
+      sendJson(response, 200, { resolved: true, result });
+    } catch (error: unknown) {
+      sendJson(response, 409, { error: error instanceof Error ? error.message : "The report delivery could not be resolved." });
+    }
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/schedules") {
@@ -758,6 +855,22 @@ async function handleRequest(
       sendJson(response, 201, { schedule: toScheduleView(await context.schedules.add({ query, kind, time, weekdays, dayOfMonth, month, cron, intervalMinutes })) });
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "The schedule is invalid." });
+    }
+    return;
+  }
+
+  const occurrenceMatch = url.pathname.match(/^\/api\/schedules\/occurrences\/([^/]+)\/resolve$/);
+  if (request.method === "POST" && occurrenceMatch?.[1] !== undefined) {
+    const body = await readJsonBody(request);
+    if (body.resolution !== "retry" && body.resolution !== "dismiss") {
+      sendJson(response, 400, { error: "Choose retry or dismiss after checking the outcome." });
+      return;
+    }
+    try {
+      await context.schedules.resolveOccurrence(decodeURIComponent(occurrenceMatch[1]), body.resolution);
+      sendJson(response, 200, { resolved: true, resolution: body.resolution });
+    } catch (error: unknown) {
+      sendJson(response, 409, { error: error instanceof Error ? error.message : "The occurrence could not be resolved." });
     }
     return;
   }
@@ -905,6 +1018,11 @@ async function handleRequest(
       sendJson(response, 404, { error: "The requested local Agent is not supported." });
       return;
     }
+    const body = await readJsonBody(request);
+    if (body.acknowledgeGlobalInstall !== true) {
+      sendJson(response, 400, { error: "Confirm the global software installation before continuing." });
+      return;
+    }
     try {
       sendJson(response, 200, { provider: await context.agentRegistry.install(id) });
     } catch (error: unknown) {
@@ -951,6 +1069,21 @@ async function handleRequest(
       sendJson(response, 200, result);
     } catch (error: unknown) {
       sendJson(response, runActionStatus(error), { error: error instanceof Error ? error.message : "The run could not be rejected." });
+    }
+    return;
+  }
+  const reviewMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/review$/);
+  if (request.method === "POST" && reviewMatch?.[1] !== undefined) {
+    const body = await readJsonBody(request);
+    if (body.decision !== "accept" && body.decision !== "reject") {
+      sendJson(response, 400, { error: "Review requires an explicit accept or reject decision." });
+      return;
+    }
+    try {
+      const result = await reviewQueryRun(context.dataDirectory, decodeURIComponent(reviewMatch[1]), body.decision, { workspacePath: context.workspacePath });
+      sendJson(response, 200, result);
+    } catch (error: unknown) {
+      sendJson(response, runActionStatus(error), { error: error instanceof Error ? error.message : "The review could not be recorded." });
     }
     return;
   }
@@ -1092,6 +1225,7 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
       },
     subagents,
     approvals,
+    ...(state.verificationByRun[run.id] === undefined ? {} : { verification: state.verificationByRun[run.id] }),
     messages: buildConversation(run, query, subagents.length, evidenceCount, runEvents, recalledMemories.length),
     recalledMemories,
     activity: runEvents.slice(-16).reverse().map(toTimelineItem),
@@ -1167,11 +1301,21 @@ function buildConversation(
       occurredAt: run.updatedAt,
       tone: "approval",
     });
+  } else if (run.status === "waiting_review") {
+    messages.push({
+      id: `review-${run.id}`,
+      role: "clone",
+      text: "工作已执行，但部分验收标准无法自动验证。请检查证据后决定是否接受。",
+      occurredAt: run.updatedAt,
+      tone: "approval",
+    });
   } else if (run.status === "completed") {
+    const review = [...events].reverse().find((event) => event.type === "verification.completed");
+    const reviewedByOwner = asRecord(review?.payload).reviewedBy === "owner";
     messages.push({
       id: `complete-${run.id}`,
       role: "clone",
-      text: `已完成并验证结果${evidenceCount > 0 ? `，附有 ${evidenceCount} 条证据` : ""}。你可以在下方查看执行记录。`,
+      text: `${reviewedByOwner ? "你已核验并接受结果" : "已完成自动验证"}${evidenceCount > 0 ? `，附有 ${evidenceCount} 条证据` : ""}。你可以在下方查看执行记录。`,
       occurredAt: run.updatedAt,
       tone: "success",
     });
@@ -1196,6 +1340,7 @@ function buildConversation(
 
 function previewForStatus(status: Run["status"]): string {
   if (status === "waiting_approval") return "等待你的确认";
+  if (status === "waiting_review") return "等待你核验结果";
   if (status === "completed") return "已完成并验证";
   if (status === "failed" || status === "cancelled") return "需要处理";
   return "正在推进";
@@ -1322,7 +1467,7 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
     "agent.tool_completed": "Agent finished a tool",
     "evidence.recorded": "Recorded evidence",
     "workspace.isolation.applied": "Returned isolated files",
-    "verification.completed": "Verified the result",
+    "verification.completed": "Recorded verification result",
     "memory.candidate.requested": "Queued memory review",
     "memory.candidate.proposed": "Proposed memory candidate",
     "memory.recalled": "Recalled local memory",
@@ -1439,7 +1584,7 @@ function headerValue(value: string | string[] | undefined): string | undefined {
 function runActionStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : "";
   if (message.startsWith("Unknown run:")) return 404;
-  if (message.includes("is not waiting for an approval") || message.includes("cannot be cancelled")) return 409;
+  if (message.includes("is not waiting for an approval") || message.includes("is not waiting for review") || message.includes("cannot be cancelled")) return 409;
   return 500;
 }
 
@@ -1493,6 +1638,7 @@ interface SessionView extends SessionSummary {
   };
   subagents: Array<{ id: string; title: string; agentId: string; role: string; providerId: string; status: string; summary?: string; updatedAt: string }>;
   approvals: Array<{ runId: string; stepId: string; description: string }>;
+  verification?: import("./core/contracts.ts").VerificationResult;
   messages: ConversationMessage[];
   recalledMemories: Array<{ id: string; summary: string; score: number; matchedTerms: string[] }>;
   activity: Array<{ label: string; detail: string; occurredAt: string }>;

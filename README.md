@@ -10,6 +10,19 @@
 
 ---
 
+## Current Safety Boundary
+
+- Black-box CLI workers are **blocked by default**: Clone AI does not enforce an OS sandbox. In desktop settings the owner may explicitly allow unrestricted host execution for a provider; this is not a sandbox and its internal tools are not individually approved.
+- Black-box workers cannot be assigned declared external or irreversible actions. A governed external-action connector is not implemented yet.
+- Acceptance criteria that cannot be checked automatically enter `waiting_review` for the owner to inspect and accept or reject. Use `clone-ai review <runId>` to inspect them.
+- Scheduled occurrences live in `schedules.sqlite3`; an existing `schedules.json` is imported once and retained as a backup. Interrupted occurrences with unknown effects require review rather than automatic retry.
+- Memory and audit data remain in local Markdown/SQLite without application-layer encryption or complete erasure. Hiding a session or archiving memory is not deletion; remote model requests can send context to the model provider.
+- Optional CLI-based memory mining also needs `CLONE_AI_MEMORY_MINING=1` and a separate `CLONE_AI_MEMORY_MINING_UNRESTRICTED=1` host-access opt-in. This is not sandboxed; failed extraction stays pending instead of being treated as an empty result.
+- Cancellation fences later journal writes and asks the worker to stop, but process termination is best effort, not proof that an unisolated process made no external changes.
+- Interrupted or failed unrestricted black-box work is not automatically replayed, because an unchanged workspace cannot prove that no external action happened.
+- Optional SMTP daily reports use a durable delivery record; unknown outcomes require checking the mailbox before a retry or dismissal. SMTP acceptance is not proof of delivery. Remote SMTP requires TLS; credentials in `reporting.json` are still stored in plaintext.
+- The Main Agent cannot authorize software installation or directly save model-proposed goals, commitments, or boundaries from a quoted conversation. Independent owner review for those structured proposals is not implemented; reviewed memories can still be entered manually.
+
 ## Why clone-ai?
 
 Today's AI is capable, but it is mostly forgetful. Every new chat starts from a prompt;
@@ -127,6 +140,26 @@ Then double-click
 `apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/clone-ai-desktop.exe`.
 `npm run companion:debug` remains a developer-only browser preview for inspecting the
 daemon boundary. See the [desktop client](apps/desktop/README.md).
+
+### Run the desktop app (Apple Silicon macOS)
+
+On an Apple Silicon Mac with Xcode or Command Line Tools installed, build a
+self-contained application bundle:
+
+```bash
+npm run desktop:mac:build
+```
+
+Then double-click `dist/Clone AI.app`, or share `dist/Clone AI-macOS-arm64.dmg`
+(or the `.zip` archive).
+The app includes its own Node.js runtime and opens in a
+native WebKit window. The current artifact is ad-hoc signed rather than notarized, targets
+macOS 13.5 or later, and has only been built for Apple Silicon. The app starts with
+`~/Documents/Clone AI` as its default workspace; changing the workspace in Settings is
+persisted under `~/.clone`.
+
+Do not delete `dist/Clone AI.app` while the app is running. Close the app before replacing
+or moving that bundle.
 
 ## Safety commitments
 

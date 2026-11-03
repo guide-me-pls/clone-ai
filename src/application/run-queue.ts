@@ -45,10 +45,12 @@ export interface RunQueueOptions {
 export class RunQueueConsumer {
   readonly #options: RunQueueOptions;
   readonly #inFlight = new Set<string>();
+  readonly #tasks = new Set<Promise<void>>();
   readonly #ownerId: string;
   readonly #leaseMs: number;
   #timer?: NodeJS.Timeout;
   #ticking = false;
+  #stopping = false;
 
   constructor(options: RunQueueOptions) {
     this.#options = options;
@@ -62,8 +64,11 @@ export class RunQueueConsumer {
   }
 
   start(): void {
-    void this.tick();
-    this.#timer = setInterval(() => void this.tick(), this.#options.intervalMs ?? 2_000);
+    if (this.#timer !== undefined) return;
+    this.#stopping = false;
+    const tick = (): void => { void this.tick().catch((error) => this.#options.onError?.("queue", error)); };
+    tick();
+    this.#timer = setInterval(tick, this.#options.intervalMs ?? 2_000);
     this.#timer.unref();
   }
 
@@ -80,11 +85,13 @@ export class RunQueueConsumer {
    * 在关闭流程中这意味着损坏的 Journal，在测试中则是一个删不掉的目录。
    */
   async stop(): Promise<void> {
+    this.#stopping = true;
     if (this.#timer !== undefined) clearInterval(this.#timer);
     this.#timer = undefined;
-    for (let attempt = 0; attempt < 200 && (this.#inFlight.size > 0 || this.#ticking); attempt += 1) {
+    while (this.#ticking) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
+    await Promise.allSettled([...this.#tasks]);
   }
 
   /**
@@ -94,7 +101,7 @@ export class RunQueueConsumer {
    * 可以替他给出的东西。
    */
   async tick(): Promise<string[]> {
-    if (this.#ticking) return [];
+    if (this.#ticking || this.#stopping) return [];
     this.#ticking = true;
     const started: string[] = [];
     try {
@@ -103,11 +110,11 @@ export class RunQueueConsumer {
       // Run 由其他进程创建（Main Agent、CLI、调度器），因此必须先重放投影再找活干。
       await this.#options.runtime.refresh();
       // A dead executor's runs come back to life here — re-queued when the work
-      // is reversible, failed when a retry could duplicate an external effect —
+      // has a trusted replay-safety guarantee, failed when a retry could duplicate an effect —
       // so the filter below can pick them up in the same tick. Recovery is
       // claim-driven: a run with a live lease is somebody else's, in flight
       // right now, and is not touched.
-      // 死掉的执行者的 Run 在这里复活——可逆的工作回到队列，重试可能复制外部影响的
+      // 死掉的执行者的 Run 在这里恢复——有可信重放保证的工作回到队列，重试可能复制影响的
       // 工作转为失败——这样下面的过滤能在同一次 tick 里接走它们。恢复由领取驱动：
       // 带着存活租约的 Run 属于别人、正在飞行中，不会被碰。
       try {
@@ -128,9 +135,25 @@ export class RunQueueConsumer {
         // 先领取再派发：投影说它是 `queued`，但另一个消费者可能已经在处理同一次读数。
         const claimed = await this.#claim(run.id);
         if (!claimed) continue;
+        // The queued projection may predate another consumer's completed run.
+        // Re-read under the claim before dispatching anything.
+        // 排队投影可能早于其他消费者的完成；领取后必须重读。
+        try {
+          await this.#options.runtime.refresh();
+          if (this.#options.runtime.getRun(run.id).status !== "queued") {
+            await this.#options.journal?.releaseClaim?.({ runId: run.id, ownerId: this.#ownerId });
+            continue;
+          }
+        } catch (error: unknown) {
+          await this.#options.journal?.releaseClaim?.({ runId: run.id, ownerId: this.#ownerId })?.catch(() => undefined);
+          this.#options.onError?.(run.id, error);
+          continue;
+        }
         this.#inFlight.add(run.id);
         started.push(run.id);
-        void this.#execute(run.id);
+        const task = this.#execute(run.id);
+        this.#tasks.add(task);
+        void task.finally(() => this.#tasks.delete(task)).catch(() => undefined);
       }
       return started;
     } finally {
@@ -158,14 +181,21 @@ export class RunQueueConsumer {
   async #execute(runId: string): Promise<void> {
     // Renew while the worker runs so a slow but healthy run keeps its claim.
     // 工作期间续期，使慢但健康的 Run 保住领取。
+    const controller = new AbortController();
+    const journal = this.#options.journal;
     const renew = setInterval(() => {
-      void this.#options.journal?.renewClaim?.({ runId, ownerId: this.#ownerId, leaseMs: this.#leaseMs })
-        ?.catch(() => undefined);
-    }, Math.max(1_000, Math.floor(this.#leaseMs / 3)));
+      if (journal?.claimRun === undefined) return;
+      if (journal.renewClaim === undefined) { controller.abort(); return; }
+      void journal.renewClaim({ runId, ownerId: this.#ownerId, leaseMs: this.#leaseMs })
+        .then((renewed) => { if (!renewed) controller.abort(); }, () => controller.abort());
+    }, Math.max(250, Math.min(5_000, Math.floor(this.#leaseMs / 3))));
     renew.unref();
     try {
       const registry = await this.#options.registry();
-      await this.#options.runtime.execute(runId, registry);
+      await this.#options.runtime.execute(runId, registry, {
+        signal: controller.signal,
+        ...(journal?.claimRun === undefined ? {} : { ownerId: this.#ownerId }),
+      });
     } catch (error: unknown) {
       // The Kernel already journaled the failure; surfacing it here keeps the
       // daemon's log useful without turning a worker failure into a crash.

@@ -34,7 +34,8 @@ const allowedTransitions: Record<RunStatus, readonly RunStatus[]> = {
   // 原因，因此重放 Journal 时绝不会把恢复误认为调度决策。
   running: ["waiting_approval", "verifying", "failed", "cancelled", "queued"],
   waiting_approval: ["running", "failed", "cancelled"],
-  verifying: ["completed", "failed"],
+  verifying: ["completed", "waiting_review", "failed", "cancelled"],
+  waiting_review: ["completed", "failed", "cancelled"],
   completed: [],
   failed: [],
   cancelled: [],
@@ -115,11 +116,12 @@ export function reduceEvent(state: RuntimeProjection, event: JournalEvent): Runt
       return { ...state, subagents: { ...state.subagents, [subagentKey(subagent.runId, subagent.workOrderId)]: subagent } };
     }
     case "subagent.resumed": {
-      const payload = event.payload as { workOrderId: string; attempt: number };
+      const payload = event.payload as { workOrderId: string; attempt: number; retrySafeAfterInterruption?: boolean };
       return updateSubagent(state, event.runId, payload.workOrderId, (subagent) => ({
         ...subagent,
         status: "running",
         attempt: payload.attempt,
+        retrySafeAfterInterruption: payload.retrySafeAfterInterruption === true,
         updatedAt: event.occurredAt,
       }));
     }

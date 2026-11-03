@@ -9,8 +9,9 @@
  * candidate, and comes back as recall the following week. Kill the owner's
  * process mid-run and no step runs twice.
  *
- * Every seam here is the production seam: the same recordOwnerState the
- * record_state tool calls, the same OpportunityService the daemon's maintenance
+ * The test seeds a trusted, confirmed state via recordOwnerState. The Main
+ * Agent tool cannot currently perform that confirmation on its own. The rest
+ * uses the same OpportunityService the daemon's maintenance
  * loop runs, the same proposePlanToKernel the Main Agent's tool lands on, the
  * same RunQueueConsumer with journal claims the GUI daemon starts, the same
  * EvidenceVerifier attachPlan gates completion with.
@@ -22,8 +23,8 @@
  * Worker 执行、对着那个文件被验证、产生记忆候选、并在下一周作为召回回到对话。中途杀掉
  * 持有者的进程，没有任何一步会执行两次。
  *
- * 这里每一道接缝都是生产接缝：record_state 工具调用的同一个 recordOwnerState、Daemon
- * 维护循环跑的同一个 OpportunityService、Main Agent 工具落到的同一个 proposePlanToKernel、
+ * 测试通过 recordOwnerState 注入可信且已确认的状态；Main Agent 工具目前不能自行确认。
+ * 其余使用 Daemon 维护循环的同一个 OpportunityService、Main Agent 工具的同一个 proposePlanToKernel、
  * GUI Daemon 启动的同一个带 Journal 领取的 RunQueueConsumer、attachPlan 用来把关完成的
  * 同一个 EvidenceVerifier。
  */

@@ -70,10 +70,11 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
   const supportedRoles = record.supportedRoles;
   const timeoutMs = record.timeoutMs;
   if (args !== undefined && (!Array.isArray(args) || args.some((item) => typeof item !== "string"))) throw new Error(`Provider ${id} args must be strings.`);
-  if (env !== undefined && (!Array.isArray(env) || env.some((item) => typeof item !== "string" || !/^[A-Z_][A-Z0-9_]*$/i.test(item)))) throw new Error(`Provider ${id} env must contain variable names only.`);
+  if (env !== undefined && (!Array.isArray(env) || env.some((item) => typeof item !== "string" || !/^[A-Z_][A-Z0-9_]*\*?$/i.test(item)))) throw new Error(`Provider ${id} env must contain variable names only.`);
   if (work !== undefined && (!Array.isArray(work) || work.some((item) => typeof item !== "string" || item.trim().length === 0))) throw new Error(`Provider ${id} work must contain non-empty strings.`);
   if (supportedRoles !== undefined && (!Array.isArray(supportedRoles) || supportedRoles.some((role) => !isRole(role)))) throw new Error(`Provider ${id} has an invalid supportedRoles list.`);
   if (record.promptVia !== undefined && record.promptVia !== "arg" && record.promptVia !== "stdin") throw new Error(`Provider ${id} promptVia must be arg or stdin.`);
+  if (record.hostAccess !== undefined && record.hostAccess !== "unrestricted") throw new Error(`Provider ${id} hostAccess must be unrestricted or omitted.`);
   if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs < 1)) throw new Error(`Provider ${id} timeoutMs must be a positive integer.`);
   return {
     id,
@@ -86,6 +87,7 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
     ...(Array.isArray(supportedRoles) ? { supportedRoles: supportedRoles as BlackBoxProviderConfig["supportedRoles"] } : {}),
     ...(typeof record.roleRestrictionReason === "string" ? { roleRestrictionReason: record.roleRestrictionReason } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
+    ...(record.hostAccess === "unrestricted" ? { hostAccess: "unrestricted" as const } : {}),
   };
 }
 
