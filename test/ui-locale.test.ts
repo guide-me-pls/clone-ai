@@ -35,7 +35,7 @@ test("the desktop HTML marks chrome so config.locale can replace it", async () =
   assert.match(js, /pending-connect-title/);
   assert.match(js, /empty-model-reply/);
   assert.match(js, /classList\.toggle\("empty-conversation"/);
-  assert.match(js, /starter-grid/);
+  assert.match(js, /welcome-copy/);
   assert.match(js, /api\/main-agent\/interruptions/);
 });
 
