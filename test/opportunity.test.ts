@@ -53,7 +53,12 @@ test("a failed run produces a follow-up opportunity", async (t) => {
   });
 
   const cards = await service.scanAndRecord(new Date("2026-08-19T08:00:00.000Z"));
-  assert.ok(cards.some((card) => card.source === "failed_task"));
+  const failure = cards.find((card) => card.source === "failed_task");
+  assert.ok(failure);
+  // Raw English worker errors stay in the trace; the card must be readable.
+  // 原始英文 Worker 错误留在执行轨迹里；卡片必须让所有者读得懂。
+  assert.doesNotMatch(failure.title, /Worker exhausted/);
+  assert.match(failure.title, /重试预算/);
 });
 
 test("dismissed opportunities are recorded", async (t) => {
@@ -71,6 +76,33 @@ test("dismissed opportunities are recorded", async (t) => {
   const events = await journal.list();
   assert.ok(events.some((event) => event.type === "opportunity.resolved"));
   assert.equal((events.find((event) => event.type === "opportunity.resolved")?.payload as { status?: string }).status, "dismissed");
+});
+
+test("legacy failed-run cards are normalized into readable Chinese", async (t) => {
+  const { service, journal } = await setup(t);
+  await journal.append({
+    type: "opportunity.proposed",
+    payload: {
+      id: "opp-legacy-failure",
+      title: "任务需要跟进：Unrestricted host execution is disabled: this black-box worker has no enforced sandbox.",
+      source: "failed_task",
+      whyNow: "Run failed.",
+      observedBasis: [],
+      proposedResult: "Try again.",
+      expectedValue: "medium",
+      confidence: "medium",
+      risk: "read_only",
+      requiredAuthority: "owner_approval",
+      status: "proposed",
+      createdAt: "2026-08-19T00:00:00.000Z",
+    },
+  });
+
+  const cards = await service.list();
+  assert.equal(cards.length, 1);
+  assert.match(cards[0]?.title ?? "", /运行权限/);
+  assert.doesNotMatch(cards[0]?.title ?? "", /Unrestricted host execution/);
+  assert.match(cards[0]?.proposedResult ?? "", /设置.*Agent/);
 });
 
 test("scanOpportunities deduplicates cards serving the same entity", () => {

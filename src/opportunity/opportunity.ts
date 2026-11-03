@@ -13,6 +13,7 @@
  * 以及需要什么权限。机会与其他持久事实一样写入 Journal，"你为什么这么认为"永远有答案。
  */
 import type { RiskClass } from "../core/contracts.ts";
+import { describeFailureForOwner } from "../core/failure-display.ts";
 
 export type OpportunitySource = "deadline" | "failed_task" | "neglected_goal" | "observation";
 
@@ -103,17 +104,22 @@ export function scanOpportunities(input: OpportunityScanInput): OpportunityCard[
     if (event.type !== "run.status_changed") continue;
     const payload = event.payload;
     if (payload.status !== "failed" && payload.status !== "cancelled") continue;
+    const rawReason = typeof payload.reason === "string" ? payload.reason : undefined;
+    const display = describeFailureForOwner(rawReason);
+    const cancelled = payload.status === "cancelled";
+    const summary = cancelled ? "任务已取消" : display.summary;
     cards.push({
       id: `opp-${event.id}-failed`,
-      title: `任务需要跟进：${String(payload.reason ?? "执行失败")}`,
+      title: `任务需要跟进：${summary}`,
       source: "failed_task",
-      whyNow: `Run ${String(event.runId ?? "?")} 在 ${event.occurredAt} 失败/取消。`,
+      whyNow: `任务 ${String(event.runId ?? "?").slice(0, 12)} 在 ${event.occurredAt} ${cancelled ? "被取消" : "执行失败"}。${summary}`,
       observedBasis: [event.id],
-      proposedResult: "复核失败原因后决定重试、换 Agent 或放弃。",
+      proposedResult: cancelled ? "确认是否重新开始这项工作。" : display.guidance,
       expectedValue: "medium",
       confidence: "medium",
       risk: "read_only",
       requiredAuthority: "owner_approval",
+      ...(event.runId === undefined ? {} : { serves: { kind: "run" as const, id: event.runId, title: summary } }),
       status: "proposed",
       createdAt: now.toISOString(),
     });
