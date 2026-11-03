@@ -27,7 +27,7 @@ import {
   type WorkspaceChange,
 } from "../core/workspace-evidence.ts";
 import type { AgentRole } from "../config/worker-settings.ts";
-import { augmentedExecutablePath } from "./executable-resolver.ts";
+import { augmentedExecutablePath, resolveExecutable } from "./executable-resolver.ts";
 import { resolveGrants } from "../authority/path-gateway.ts";
 import { buildSeatbeltProfile, SANDBOX_EXEC, wrapWithSandbox } from "../authority/seatbelt.ts";
 import { expandHome } from "../authority/scope.ts";
@@ -65,6 +65,24 @@ export interface BlackBoxProviderConfig {
    * 无法按主机限制，所以这只有开或关。
    */
   sandboxNetwork?: boolean;
+  /**
+   * Replaces the `{{sandboxArgs}}` placeholder only when the worker really runs
+   * under our sandbox. Used to turn off a CLI's own sandbox (macOS forbids
+   * nesting them), since ours is the one doing the enforcing.
+   * 只有 worker 真的在我们的沙箱里运行时，才会替换 `{{sandboxArgs}}` 占位符。用来关掉 CLI 自带的
+   * 沙箱（macOS 不允许嵌套），因为真正执行约束的是我们的沙箱。
+   */
+  sandboxArgs?: string[];
+  /**
+   * The model this CLI should use, pinned by the owner. Without it each CLI
+   * inherits its own default, and a default that the gateway cannot serve
+   * correctly (e.g. a tool-call translation bug) fails every run the same way.
+   * 所有者为此 CLI 指定的模型。没有它，每个 CLI 沿用自己的默认值；一旦默认模型网关无法正确
+   * 服务（例如工具调用转换有缺陷），每次运行都会以同样方式失败。
+   */
+  model?: string;
+  /** Replaces `{{modelArgs}}` when `model` is set; `{{model}}` inside it is the model id. `model` 设置时替换 `{{modelArgs}}`，其中的 `{{model}}` 为模型 id。 */
+  modelArgs?: string[];
 }
 
 /** True when this config can run under a real sandbox on this machine. 此配置在本机能否在真实沙箱内运行。 */
@@ -189,7 +207,17 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
       // 在工作开始前观察；之后的差异就是证据。
       before = await snapshotWorkspace(workspace);
       if (preparation.cancelled) return;
-      const args = (config.args ?? []).map((argument) => argument
+      const sandboxed = sandboxAvailable(config) && config.hostAccess !== "unrestricted";
+      const args = (config.args ?? [])
+        .flatMap((argument) => {
+          if (argument === "{{sandboxArgs}}") return sandboxed ? config.sandboxArgs ?? [] : [];
+          if (argument === "{{modelArgs}}") {
+            const model = config.model;
+            return model === undefined ? [] : (config.modelArgs ?? []).map((item) => item.replaceAll("{{model}}", model));
+          }
+          return [argument];
+        })
+        .map((argument) => argument
         .replaceAll("{{prompt}}", usesStdin ? "" : prompt)
         .replaceAll("{{workspace}}", workspace));
       // Windows cannot spawn a .cmd shim without a shell, and spawning through a
@@ -200,7 +228,7 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
       const resolved = resolveWindowsCommand(config.command);
       const spawnArgs = usesStdin ? args : args.length > 0 ? args : [prompt];
       let launch = { command: resolved.command, args: [...resolved.prefixArgs, ...spawnArgs] };
-      if (sandboxAvailable(config) && config.hostAccess !== "unrestricted") {
+      if (sandboxed) {
         // The step's scopes were already authorised by the policy engine; the
         // gateway still re-checks them so a protected path can never reach the
         // profile. The sandbox, not the prompt, is what stops an overreach.
@@ -212,7 +240,11 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
           grants,
           extraWriteRoots: (config.sandboxWritePaths ?? []).map((path) => expandHome(path)),
         });
-        launch = wrapWithSandbox(profile, launch.command, launch.args);
+        // sandbox-exec execs the target itself, so a bare name must already be an
+        // absolute path (e.g. Codex lives inside an app bundle, not on PATH).
+        // sandbox-exec 自己 exec 目标命令，所以裸命令名必须先变成绝对路径（例如 Codex 在应用包里，不在 PATH 上）。
+        const absolute = launch.command.includes("/") ? launch.command : (resolveExecutable(launch.command).resolvedPath ?? launch.command);
+        launch = wrapWithSandbox(profile, absolute, launch.args);
         yield {
           type: "progress",
           message: `Sandbox: write ${grants.writeRoots.join(", ")}; network ${grants.network ? "on" : "off"}`

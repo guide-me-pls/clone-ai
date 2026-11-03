@@ -39,7 +39,10 @@ export async function removeUserProviderConfig(dataDirectory: string, id: string
 
 export async function listEffectiveProviderConfigs(dataDirectory: string): Promise<BlackBoxProviderConfig[]> {
   const byId = new Map(BUILT_IN_PROVIDER_CONFIGS.map((provider) => [provider.id, provider]));
-  for (const provider of await readUserProviderConfigs(dataDirectory)) byId.set(provider.id, provider);
+  // Field-wise over the built-in: an owner who only pins a model keeps receiving
+  // the built-in recipe's later fixes instead of freezing a stale full copy.
+  // 在内建配方之上按字段覆盖：只指定模型的所有者仍能得到内建配方之后的修复，而不是冻结一份过期的完整拷贝。
+  for (const provider of await readUserProviderConfigs(dataDirectory)) byId.set(provider.id, { ...byId.get(provider.id), ...provider });
   return [...byId.values()];
 }
 
@@ -91,6 +94,9 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
     ...(record.hostAccess === "unrestricted" ? { hostAccess: "unrestricted" as const } : {}),
     ...(record.sandbox === "seatbelt" ? { sandbox: "seatbelt" as const } : {}),
+    ...(typeof record.model === "string" && record.model.trim().length > 0 ? { model: record.model.trim() } : {}),
+    ...(Array.isArray(record.modelArgs) ? { modelArgs: record.modelArgs as string[] } : {}),
+    ...(Array.isArray(record.sandboxArgs) ? { sandboxArgs: record.sandboxArgs as string[] } : {}),
     ...(record.sandboxNetwork === true ? { sandboxNetwork: true } : {}),
     ...(Array.isArray(record.sandboxWritePaths) ? { sandboxWritePaths: record.sandboxWritePaths as string[] } : {}),
   };
