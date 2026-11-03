@@ -7,6 +7,7 @@
     <title>clone-ai · 本地数字分身</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23202720'/%3E%3Cpath d='M41 20a15 15 0 1 0 0 24M34 24l8 8-8 8' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./audit.css" />
     <link rel="stylesheet" href="./components.css" />
   </head>
   <body>
@@ -74,8 +75,8 @@
           </nav>
           <div class="settings-content">
             <section class="settings-panel" data-settings-panel="audit" hidden>
-              <h3 data-i18n="audit-title">审计与执行轨迹</h3><p data-i18n="audit-lead">每条会话都有可追溯的触发、计划、权限、Agent、证据和验证事件。选择一条会话可回到对话中查看完整记录。</p>
-              <div class="audit-session-list" id="audit-session-list"></div>
+              <div id="audit-root"></div>
+              <div class="audit-session-list" id="audit-session-list" hidden></div>
             </section>
             <section class="settings-panel" data-settings-panel="agents">
               <div id="agent-page" class="agent-page"></div>
@@ -143,5 +144,6 @@
       window.CloneNative = window.CloneNative || {};
     </script>
     <script src="./app.js"></script>
+    <script src="./audit.js"></script>
   </body>
 </html>

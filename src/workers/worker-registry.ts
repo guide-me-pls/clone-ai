@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { sandboxAvailable } from "./black-box-cli-worker.ts";
 import { listEffectiveProviderConfigs } from "../config/provider-config-store.ts";
 import type { ProviderId } from "../config/worker-settings.ts";
 import {
@@ -25,6 +26,7 @@ export interface WorkerProviderStatus {
   resolvedPath?: string;
   resolutionSource?: ExecutableResolutionSource;
   hostAccess?: "unrestricted";
+  sandbox?: "seatbelt";
   version?: string;
 }
 
@@ -90,10 +92,11 @@ function view(
     installed,
     installable: installers[config.id] !== undefined,
     userConfigured,
-    executionBlocked: config.hostAccess !== "unrestricted",
+    executionBlocked: config.hostAccess !== "unrestricted" && !sandboxAvailable(config),
     ...(resolution?.resolvedPath === undefined ? {} : { resolvedPath: resolution.resolvedPath }),
     ...(resolution?.source === undefined ? {} : { resolutionSource: resolution.source }),
     ...(config.hostAccess === "unrestricted" ? { hostAccess: "unrestricted" as const } : {}),
+    ...(config.sandbox === "seatbelt" ? { sandbox: "seatbelt" as const } : {}),
     ...(version === undefined ? {} : { version }),
   };
 }
