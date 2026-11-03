@@ -324,5 +324,28 @@ test("the streaming endpoint validates input before opening a stream", async (t)
   // 以 JSON 和客户端仍可读取的状态码拒绝；流一旦打开，状态码就无法再用来报告拒绝。
   assert.equal(response.status, 400);
   assert.match(response.headers.get("content-type") ?? "", /application\/json/);
-  assert.match((await response.json() as { error: string }).error, /at least three characters/);
+  assert.match((await response.json() as { error: string }).error, /enter a request/i);
+});
+
+test("a one-character main-agent request is not rejected as too short", async (t) => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-api-short-query-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "clone-api-short-query-ws-"));
+  let server: RunningCompanionServer | undefined;
+  t.after(async () => {
+    await server?.close();
+    await rm(dataDirectory, { recursive: true, force: true });
+    await rm(workspacePath, { recursive: true, force: true });
+  });
+  server = await startCompanionServer({ port: 0, dataDirectory, workspacePath });
+
+  // A model call would be slow and is covered by the gated live suite. The
+  // relevant contract here is that validation no longer rejects one character.
+  // 真实模型调用很慢且由门控实时测试覆盖；这里要验证的是校验层不再拒绝单个字符。
+  const response = await companionFetch(server.url, server.token, "/api/main-agent/query", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "?" }),
+  });
+
+  assert.notEqual(response.status, 400);
 });

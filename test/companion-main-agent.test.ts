@@ -30,5 +30,5 @@ test("the companion main-agent route rejects an empty request before any model c
   });
   assert.equal(rejected.status, 400);
   const body = await rejected.json() as { error?: string };
-  assert.match(body.error ?? "", /at least three characters/);
+  assert.match(body.error ?? "", /enter a request/i);
 });

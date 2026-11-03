@@ -468,12 +468,30 @@ function renderContextSearch(excerpts) {
 async function searchContextHistory(query) { try { renderContextSearch((await api(`/api/context/search?q=${encodeURIComponent(query)}`)).excerpts || []); } catch (error) { announce(error.message, true); } }
 function welcomeMarkup() { return `<div class="welcome"><div class="welcome-copy"><div class="welcome-mark">${icon("spark")}</div><h2>今天，想让我替你推进什么？</h2><p>我会先拆解、准备和验证；如果下一步会影响外部世界，我会停下来等你确认。</p><div class="suggestions"><button class="suggestion" data-suggestion="整理今天需要推进的事情">整理今天需要推进的事情</button><button class="suggestion" data-suggestion="为下周的产品发布准备计划">为下周的产品发布准备计划</button><button class="suggestion" data-suggestion="比较三个可执行方案并给我建议">比较三个可执行方案并给我建议</button></div></div></div>`; }
 function richText(value) {
-  return escape(value)
-    .replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => `<div class="md-code-wrap"><button class="md-copy" type="button" data-copy-code>复制</button><pre class="md-code"><code>${code.replace(/^\n+|\n+$/g, "")}</code></pre></div>`)
+  const blocks = [];
+  const source = String(value ?? "").replace(/\r\n?/g, "\n")
+    .replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+      const index = blocks.push(`<div class="md-code-wrap"><button class="md-copy" type="button" data-copy-code>复制</button><pre class="md-code"><code>${escape(code.replace(/^\n+|\n+$/g, ""))}</code></pre></div>`) - 1;
+      return `\n\u0000BLOCK${index}\u0000\n`;
+    });
+  return escape(source)
     .replace(/`([^`\n]+)`/g, '<code class="md-inline">$1</code>')
-    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
+    .replace(/^#{1,4}\s+(.+)$/gm, '<div class="md-heading">$1</div>')
+    .replace(/^\s*[-*]\s+(.+)$/gm, '<div class="md-list-line"><span aria-hidden="true">•</span><span>$1</span></div>')
+    .replace(/^\s*(\d+)[.)]\s+(.+)$/gm, '<div class="md-list-line md-list-line--ordered"><span>$1.</span><span>$2</span></div>')
+    .replace(/\n/g, "<br>")
+    .replace(/\u0000BLOCK(\d+)\u0000/g, (match, index) => blocks[Number(index)] ?? "");
 }
-function messageMarkup(message) { const clone = message.role === "clone"; const tone = message.tone ? ` ${message.tone}` : ""; const collapsible = clone && message.text.length > 480; return `<article class="message ${clone ? "clone" : "person"}"><div class="avatar ${clone ? "clone" : ""}">${clone ? "C" : "你"}</div><div class="message-body"><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div>${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${richText(message.text)}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}</div>` : `<div class="message-copy">${escape(message.text)}</div>`}</div></article>`; }
+function messageMarkup(message) {
+  const clone = message.role === "clone";
+  const text = String(message.text ?? "").trim();
+  if (!text) return "";
+  const tone = message.tone ? ` ${message.tone}` : "";
+  const collapsible = clone && text.length > 480;
+  const body = clone ? richText(text) : escape(text).replace(/\n/g, "<br>");
+  return `<article class="message ${clone ? "clone" : "person"}"><div class="avatar ${clone ? "clone" : ""}">${clone ? "C" : "你"}</div><div class="message-body"><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div>${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${body}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}</div>` : `<div class="message-copy">${body}</div>`}</div></article>`;
+}
 function displayAgentTitle(agent) { return agent.title; }
 function displayAgentDetail(agent) { const provider = agent.providerId ? `${providerLabel(agent.providerId)} · ` : ""; return provider + (agent.status === "completed" ? "已提交可验证证据" : (agent.summary || "正在按任务边界推进")); }
 function disclosureOpen(session, name, fallback = false) { return state.openDisclosures.get(session.id)?.get(name) ?? fallback; }
@@ -720,10 +738,10 @@ $("memory-candidates").addEventListener("click", (event) => { const promote = ev
 $("library-list").addEventListener("click", (event) => { const conflict = event.target.closest("[data-memory-conflict]"); if (conflict) { void keepMemoryFile(conflict.dataset.memoryConflict); return; } const save = event.target.closest("[data-save-library]"); if (save) { void saveLibraryMemory(save.dataset.saveLibrary); return; } const source = event.target.closest("[data-open-memory-source]"); if (source) { closeSettings(); void selectSession(source.dataset.openMemorySource); } });
 $("library-create").addEventListener("click", () => void createLibraryMemory());
 $("opportunity-strip").addEventListener("click", (event) => { const accept = event.target.closest("[data-accept-opportunity]"); if (accept) { void decideOpportunity(accept.dataset.acceptOpportunity, "accept"); return; } const dismiss = event.target.closest("[data-dismiss-opportunity]"); if (dismiss) void decideOpportunity(dismiss.dataset.dismissOpportunity, "dismiss"); });
-$("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length < 2) { announce("请输入至少两个字来搜索历史。", true); return; } void searchContextHistory(query); });
-$("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length < 2) { announce("请输入至少两个字来测试检索。", true); return; } void searchMemories(query); });
+$("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
+$("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
 $("new-session").addEventListener("click", () => { notifyDesktopNavigation("conversation"); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
-$("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length < 3) { announce("请再多描述一点你想推进的事情。", true); return; } void createSession(query); });
+$("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0) { announce("请输入你想推进的事情。", true); return; } void createSession(query); });
 $("query").addEventListener("input", resizeComposer);
 $("query").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); $("request-form").requestSubmit(); } });
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") { setSidebarOpen(false); closeSchedules(); closeSettings(); } });
@@ -743,5 +761,6 @@ window.openSchedules = openSchedules;
 window.openSettings = openSettings;
 window.selectSettingsSection = selectSettingsSection;
 window.setSidebarOpen = setSidebarOpen;
+window.cloneMarkdownForPreview = richText;
 notifyDesktopNavigation("ready");
 if (location.protocol === "http:" || location.protocol === "https:") { void refresh({ preserveScroll: false }); state.refreshTimer = setInterval(() => { if (!document.hidden) void refresh(); }, 3000); }

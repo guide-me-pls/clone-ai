@@ -660,8 +660,8 @@ async function handleRequest(
     // 所有者问"分身到底会从这句话里想起什么"的方式——对唯一的受治理库做召回，
     // 而不是某个只在面板里存在的副本。答案就是 Worker 派发会收到的东西。
     const query = url.searchParams.get("q")?.trim() ?? "";
-    if (query.length < 2) {
-      sendJson(response, 400, { error: "A recall test needs at least two characters." });
+    if (query.length === 0) {
+      sendJson(response, 400, { error: "A recall test needs a query." });
       return;
     }
     const source = new GovernedMemorySource(context.dataDirectory, 4, context.journal);
@@ -849,8 +849,8 @@ async function handleRequest(
   }
   if (request.method === "GET" && url.pathname === "/api/context/search") {
     const query = url.searchParams.get("q")?.trim() ?? "";
-    if (query.length < 2) {
-      sendJson(response, 400, { error: "A history search needs at least two characters." });
+    if (query.length === 0) {
+      sendJson(response, 400, { error: "A history search needs a query." });
       return;
     }
     sendJson(response, 200, { query, excerpts: await searchHistory(context.dataDirectory, query, { limit: 12 }) });
@@ -974,8 +974,8 @@ async function handleRequest(
   if (request.method === "POST" && url.pathname === "/api/main-agent/stream") {
     const body = await readJsonBody(request);
     const text = typeof body.text === "string" ? body.text.trim() : "";
-    if (text.length < 3) {
-      sendJson(response, 400, { error: "Please describe the request in at least three characters." });
+    if (text.length === 0) {
+      sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
     // Delay the SSE headers until the Main Agent lock is held. A busy session
@@ -1019,8 +1019,8 @@ async function handleRequest(
   if (request.method === "POST" && url.pathname === "/api/main-agent/query") {
     const body = await readJsonBody(request);
     const text = typeof body.text === "string" ? body.text.trim() : "";
-    if (text.length < 3) {
-      sendJson(response, 400, { error: "Please describe the request in at least three characters." });
+    if (text.length === 0) {
+      sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
     try {
@@ -1038,8 +1038,8 @@ async function handleRequest(
 
   if (request.method === "POST" && url.pathname === "/api/requests") {    const body = await readJsonBody(request);
     const query = typeof body.query === "string" ? body.query.trim() : "";
-    if (query.length < 3) {
-      sendJson(response, 400, { error: "Please describe the work in at least three characters." });
+    if (query.length === 0) {
+      sendJson(response, 400, { error: "Please enter work before sending." });
       return;
     }
     const result = await runQuery(

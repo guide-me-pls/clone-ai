@@ -349,6 +349,22 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
                     self?.webView.evaluateJavaScript(script)
                 }
             }
+            if ProcessInfo.processInfo.arguments.contains("--preview-markdown") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                    let script = """
+                    const rawText = Array.from({length: 10}, (_, index) =>
+                      '第 ' + (index + 1) + ' 项：这是用于验收的较长回复，包含需要换行展示的说明，以及**重点标记**和 `行内代码`。'
+                    ).join('\\n');
+                    const markdown = "## 今天的推进顺序\\n\\n" + rawText + "\\n\\n1. **先处理阻塞项**\\n2. 再确认等待他人的事项\\n3. 最后整理可延后任务\\n\\n```text\\n/Users/qihoo/.clone\\n```";
+                    const conversation = document.getElementById('conversation-inner');
+                    conversation.insertAdjacentHTML('beforeend', `
+                      <article class="message person"><div class="avatar">你</div><div class="message-body"><div class="message-heading"><b>你</b><time>现在</time></div><div class="message-copy">整理今天的事项</div></div></article>
+                      <article class="message clone"><div class="avatar clone">C</div><div class="message-body"><div class="message-heading"><b>clone-ai</b><time>现在</time></div><div class="clone-card"><div class="clone-text collapsible collapsed">${window.cloneMarkdownForPreview(markdown)}</div><button class="clone-expand" type="button" data-expand>展开全部</button></div></div></article>
+                    `);
+                    """
+                    self?.webView.evaluateJavaScript(script)
+                }
+            }
             if ProcessInfo.processInfo.arguments.contains("--test-close-window") {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                     guard let self else { return }

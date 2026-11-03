@@ -543,6 +543,25 @@ textarea:focus-visible {
 }
 .response-fallback { border: 1px solid #d4dfd6; color: var(--subtle); background: rgba(245, 249, 245, .82); }
 .response-error { border: 1px solid #e4beb8; color: #8f3e37; background: #fff5f3; }
+.clone-text { max-width: 720px; overflow-wrap: anywhere; }
+.clone-text .md-heading {
+  margin: 13px 0 5px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 720;
+  line-height: 1.4;
+}
+.clone-text .md-heading:first-child { margin-top: 0; }
+.clone-text br + br { display: none; }
+.clone-text .md-list-line {
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr);
+  gap: 4px;
+  margin: 2px 0;
+  padding-left: 2px;
+}
+.clone-text .md-list-line > span:first-child { color: var(--accent); font-weight: 700; }
+.clone-text .md-list-line--ordered > span:first-child { font-variant-numeric: tabular-nums; }
 @keyframes pending-dot {
   0%, 80%, 100% { opacity: .28; transform: translateY(0); }
   40% { opacity: 1; transform: translateY(-2px); }

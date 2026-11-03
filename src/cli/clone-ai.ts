@@ -100,7 +100,7 @@ async function main(): Promise<number> {
 
 /** Default path: a conversation turn with the Main Agent. 默认路径：与 Main Agent 的一轮对话。 */
 async function converse(dataDirectory: string, query: string, fresh = false): Promise<number> {
-  if (query.length < 2) {
+  if (query.trim().length === 0) {
     console.error('Please describe what you want. Example: clone-ai "整理今天要推进的事情"');
     return 1;
   }

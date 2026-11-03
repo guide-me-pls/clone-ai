@@ -20,6 +20,19 @@ test("a daily schedule is claimed once per local day", async (t) => {
   assert.equal((await store.claimDue(new Date(2026, 0, 3, 9, 30))).length, 1);
 });
 
+test("a one-character schedule query is accepted; only blank input is refused", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-schedule-short-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const store = new ScheduleStore(join(directory, "schedules.json"));
+
+  const schedule = await store.addDaily({ query: "跑", time: "09:30" });
+  assert.equal(schedule.query, "跑");
+  await assert.rejects(
+    store.addDaily({ query: "   ", time: "09:30" }),
+    /needs a request/,
+  );
+});
+
 test("the local scheduler dispatches claimed schedules through the supplied runtime boundary", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-scheduler-"));
   t.after(async () => rm(directory, { recursive: true, force: true }));
