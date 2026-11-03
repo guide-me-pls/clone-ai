@@ -72,7 +72,7 @@ const api = async (path, options = {}) => {
 const SIDEBAR_MIN = 220;
 const SIDEBAR_MAX = 520;
 let sidebarResizeActive = false;
-function applySidebarWidth(value, persist = true) { const max = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, window.innerWidth - 400)); const width = Math.round(Math.max(SIDEBAR_MIN, Math.min(max, value))); document.querySelector(".app-shell").style.setProperty("--sidebar-width", `${width}px`); const handle = $("sidebar-resizer"); handle.setAttribute("aria-valuenow", String(width)); if (persist) localStorage.setItem("clone-ai:sidebar-width", String(width)); }
+function applySidebarWidth(value, persist = true) { const max = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, window.innerWidth - 400)); const width = Math.round(Math.max(SIDEBAR_MIN, Math.min(max, value))); document.documentElement.style.setProperty("--sidebar-width", `${width}px`); document.querySelector(".app-shell").style.setProperty("--sidebar-width", `${width}px`); const handle = $("sidebar-resizer"); handle.setAttribute("aria-valuenow", String(width)); if (persist) localStorage.setItem("clone-ai:sidebar-width", String(width)); }
 function restoreSidebarWidth() { const saved = Number(localStorage.getItem("clone-ai:sidebar-width")); applySidebarWidth(Number.isFinite(saved) ? saved : 278, false); }
 const statusMeta = (status) => {
   if (status === "waiting_approval") return { label: t("status-waiting"), className: "waiting", dot: "waiting" };
@@ -332,6 +332,16 @@ function renderSituation(situation, config) {
   if (workspace) {
     workspace.textContent = workspacePath || t("workspace-unset");
     workspace.title = workspacePath;
+  }
+  const workspaceName = $("workspace-name");
+  if (workspaceName) {
+    const segments = workspacePath.split("/").filter(Boolean);
+    workspaceName.textContent = segments.at(-1) || "Clone AI";
+    const workspaceButton = $("workspace-open");
+    if (workspaceButton) {
+      workspaceButton.title = `${t("workspace-open-finder")}: ${workspacePath}`;
+      workspaceButton.setAttribute("aria-label", workspaceButton.title);
+    }
   }
   renderModelOptions();
   renderAgentPage();
@@ -605,7 +615,20 @@ function renderContextSearch(excerpts) {
 }
 
 async function searchContextHistory(query) { try { renderContextSearch((await api(`/api/context/search?q=${encodeURIComponent(query)}`)).excerpts || []); } catch (error) { announce(error.message, true); } }
-function welcomeMarkup() { return `<div class="welcome"><div class="welcome-copy"><span class="welcome-eyebrow">clone-ai</span><h2>今天，想让我替你推进什么？</h2><p>把一个目标、一段上下文或一个还没收尾的任务交给我。我会先拆解、准备和验证；如果下一步会影响外部世界，我会停下来等你确认。</p><div class="suggestions"><button class="suggestion" data-suggestion="整理今天需要推进的事情">整理今天需要推进的事情</button><button class="suggestion" data-suggestion="为下周的产品发布准备计划">为下周的产品发布准备计划</button><button class="suggestion" data-suggestion="比较三个可执行方案并给我建议">比较三个可执行方案并给我建议</button></div></div></div>`; }
+function welcomeMarkup() {
+  return `<div class="welcome">
+    <div class="welcome-copy">
+      <span class="welcome-eyebrow">开始新任务</span>
+      <h2>今天想推进什么？</h2>
+      <p>直接描述目标、贴一段上下文，或者从下面选一个起点。我会先拆解、准备和验证；会影响外部世界的动作会先停下来问你。</p>
+    </div>
+    <div class="starter-grid">
+      <button class="starter-card" type="button" data-suggestion="整理今天需要推进的事情"><span class="starter-index">01</span><b>理清今天的事</b><small>把零散事项整理成可执行顺序</small><span class="starter-arrow" aria-hidden="true">→</span></button>
+      <button class="starter-card" type="button" data-suggestion="为下周的产品发布准备计划"><span class="starter-index">02</span><b>起草一份计划</b><small>从目标拆到步骤、风险和验收标准</small><span class="starter-arrow" aria-hidden="true">→</span></button>
+      <button class="starter-card" type="button" data-suggestion="比较三个可执行方案并给我建议"><span class="starter-index">03</span><b>比较可选方案</b><small>把取舍讲清楚，再给出建议</small><span class="starter-arrow" aria-hidden="true">→</span></button>
+    </div>
+  </div>`;
+}
 function richText(value) {
   const blocks = [];
   const source = String(value ?? "").replace(/\r\n?/g, "\n")
@@ -629,9 +652,9 @@ function messageMarkup(message) {
   const tone = message.tone ? ` ${message.tone}` : "";
   const collapsible = clone && text.length > 480;
   const body = clone ? richText(text) : escape(text).replace(/\n/g, "<br>");
-  // The conversation reads like Codex: a flat transcript with a single small
-  // role label above each turn, not a chat bubble on every line.
-  // 对话按 Codex 的方式排成扁平记录：每轮上方只保留一个小角色标签，不再每行都套气泡。
+  // The conversation reads like Codex: the owner is a compact right-aligned
+  // instruction, while the agent's work stays in the main reading column.
+  // 对话按 Codex 的方式排版：所有者指令靠右且紧凑，Agent 工作留在主阅读栏。
   return `<article class="message ${clone ? "clone" : "person"}"><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div><div class="message-body">${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${body}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}</div>` : `<div class="message-copy">${body}</div>`}</div></article>`;
 }
 function displayAgentTitle(agent) { return agent.title; }
@@ -699,7 +722,7 @@ function restoreDisclosureScrolls(id) {
     });
   });
 }
-function renderSession(session) { setTopbar(session); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
+function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", session === null); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false } = {}) { if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
 async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities")]); state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.selectedId || !sessions.some((session) => session.id === state.selectedId)) state.selectedId = sessions[0]?.id || null; renderSessions(sessions); if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
 async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
@@ -709,6 +732,7 @@ async function createSession(query) { const button = $("submit"); button.disable
   // 消息与实时回复卡片在请求发出之前就出现。模型调用可能耗时数秒，而此前输入框保留原文、
   // 会话区毫无变化，应用看起来就像在思考中卡住了。
   $("query").value = ""; resizeComposer();
+  document.body.classList.remove("empty-conversation");
   const inner = $("conversation-inner");
   const welcome = inner.querySelector(".welcome"); if (welcome) inner.innerHTML = "";
   inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${escape(query)}</div></div></div>`);
@@ -820,10 +844,17 @@ async function reviewResult(id, decision) { const message = decision === "accept
 function resizeComposer() { const input = $("query"); input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 132)}px`; }
 function renderScheduleOptions() { const kind = $("schedule-kind").value; const options = $("schedule-options"); $("schedule-time").hidden = kind === "interval"; $("schedule-time").required = kind !== "interval"; if (kind === "interval") { options.innerHTML = `<label>每隔</label><input id="schedule-interval-value" type="number" min="1" max="10080" value="30" aria-label="间隔时长"/><select id="schedule-interval-unit" aria-label="间隔单位"><option value="1">分钟</option><option value="60">小时</option></select><span class="schedule-cron-help">按固定间隔触发，例如每隔 5 分钟；首次触发要等一个间隔，客户端关闭期间错过的不会补跑。</span>`; return; } if (kind === "weekly") { options.innerHTML = `<label>在这些日子执行：</label>${["日", "一", "二", "三", "四", "五", "六"].map((day, index) => `<label><input type="checkbox" name="schedule-weekday" value="${index}" ${index === 1 ? "checked" : ""}/>周${day}</label>`).join("")}`; return; } if (kind === "monthly") { options.innerHTML = `<label>每月 <input id="schedule-day" type="number" min="1" max="31" value="1"/> 日</label>`; return; } if (kind === "yearly") { options.innerHTML = `<label>每年 <select id="schedule-month">${Array.from({ length: 12 }, (_, index) => `<option value="${index + 1}">${index + 1} 月</option>`).join("")}</select><input id="schedule-day" type="number" min="1" max="31" value="1"/> 日</label>`; return; } options.innerHTML = `<span class="schedule-cron-help">每天在所选时间触发；如果客户端稍后启动，当天会补触发一次。</span>`; }
 function openSchedules() { notifyDesktopNavigation("schedules"); $("schedule-modal").setAttribute("aria-hidden", "false"); renderScheduleOptions(); $("schedule-query").focus(); }
-function closeSchedules() { $("schedule-modal").setAttribute("aria-hidden", "true"); notifyDesktopNavigation("conversation"); }
+function focusComposerIfVisible() {
+  setTimeout(() => {
+    const settingsOpen = $("settings-modal").getAttribute("aria-hidden") === "false";
+    const schedulesOpen = $("schedule-modal").getAttribute("aria-hidden") === "false";
+    if (!settingsOpen && !schedulesOpen && !document.body.classList.contains("sidebar-open")) $("query").focus();
+  }, 40);
+}
+function closeSchedules() { $("schedule-modal").setAttribute("aria-hidden", "true"); notifyDesktopNavigation("conversation"); focusComposerIfVisible(); }
 function selectSettingsSection(section) { state.settingsSection = section; document.querySelectorAll("[data-settings-section]").forEach((button) => button.setAttribute("aria-current", String(button.dataset.settingsSection === section))); document.querySelectorAll("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== section; }); notifyDesktopNavigation(section === "agents" ? "agents" : section === "memory" ? "memory" : "settings"); if (section === "agents" && !state.gatewayLoading) void refreshGateways(); }
 function openSettings() { selectSettingsSection(state.settingsSection); $("settings-modal").setAttribute("aria-hidden", "false"); }
-function closeSettings() { $("settings-modal").setAttribute("aria-hidden", "true"); notifyDesktopNavigation("conversation"); }
+function closeSettings() { $("settings-modal").setAttribute("aria-hidden", "true"); notifyDesktopNavigation("conversation"); focusComposerIfVisible(); }
 async function createSchedule(query) { const button = $("schedule-create"); const kind = $("schedule-kind").value; const body = { query, kind, time: $("schedule-time").value }; if (kind === "weekly") body.weekdays = [...document.querySelectorAll('input[name="schedule-weekday"]:checked')].map((input) => Number(input.value)); if (kind === "monthly" || kind === "yearly") body.dayOfMonth = Number($("schedule-day").value); if (kind === "yearly") body.month = Number($("schedule-month").value); if (kind === "interval") body.intervalMinutes = Math.max(1, Math.floor(Number($("schedule-interval-value").value) || 0)) * Number($("schedule-interval-unit").value); button.disabled = true; try { await api("/api/schedules", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); $("schedule-query").value = ""; await refresh(); announce("定时任务已保存到本地运行时。"); } catch (error) { announce(error.message, true); } finally { button.disabled = false; } }
 async function setScheduleEnabled(id, enabled) { try { await api(`/api/schedules/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }) }); await refresh(); announce(enabled ? "定时任务已启用。" : "定时任务已暂停。"); } catch (error) { announce(error.message, true); } }
 async function resolveScheduleOccurrence(id, resolution) { const message = resolution === "retry" ? t("schedule-retry-confirm") : t("schedule-dismiss-confirm"); if (!(await confirmDialog(message, t("confirm")))) return; try { await api(`/api/schedules/occurrences/${encodeURIComponent(id)}/resolve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resolution }) }); await refresh(); announce(t("schedule-resolved")); } catch (error) { announce(error.message, true); } }
@@ -837,7 +868,7 @@ async function installMissingProviders() { if (!(await confirmDialog(t("install-
 async function searchMemories(query) { try { const result = await api(`/api/memory/governed/recall?q=${encodeURIComponent(query)}`); renderMemorySearch(result.matches || []); } catch (error) { announce(error.message, true); } }
 function confirmDialog(message, okLabel) { return new Promise((resolve) => { const modal = $("confirm-modal"); $("confirm-message").textContent = message; const ok = $("confirm-ok"); ok.textContent = okLabel || "确认"; modal.setAttribute("aria-hidden", "false"); const done = (result) => { modal.setAttribute("aria-hidden", "true"); ok.onclick = $("confirm-cancel").onclick = modal.onclick = null; resolve(result); }; ok.onclick = () => done(true); $("confirm-cancel").onclick = () => done(false); modal.onclick = (event) => { if (event.target === modal) done(false); }; }); }
 async function deleteSession(id) { if (!(await confirmDialog("从会话列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。", "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
-$("session-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { setSidebarOpen(false); void selectSession(button.dataset.session); } });
+$("session-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
 $("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
@@ -850,12 +881,11 @@ $("connector-list").addEventListener("click", (event) => { const remove = event.
 $("connector-list").addEventListener("change", (event) => { const toggle = event.target.closest("[data-connector-toggle]"); if (toggle) void setConnectorEnabled(toggle.dataset.connectorToggle, toggle.checked); });
 $("schedule-open").addEventListener("click", openSchedules);
 $("schedule-close").addEventListener("click", closeSchedules);
-$("schedule-modal").addEventListener("click", (event) => { if (event.target === $("schedule-modal")) closeSchedules(); });
 function setSidebarOpen(open) { document.body.classList.toggle("sidebar-open", open); }
 $("menu-open").addEventListener("click", () => setSidebarOpen(true));
 $("sidebar-backdrop").addEventListener("click", () => setSidebarOpen(false));
+$("workspace-open").addEventListener("click", revealWorkspace);
 $("settings-close").addEventListener("click", closeSettings);
-$("settings-modal").addEventListener("click", (event) => { if (event.target === $("settings-modal")) closeSettings(); });
 $("settings-modal").addEventListener("click", (event) => { const button = event.target.closest("[data-settings-section]"); if (button) selectSettingsSection(button.dataset.settingsSection); });
 $("schedule-form").addEventListener("submit", (event) => { event.preventDefault(); void createSchedule($("schedule-query").value.trim()); });
 $("schedule-kind").addEventListener("change", renderScheduleOptions);
@@ -882,7 +912,7 @@ $("library-create").addEventListener("click", () => void createLibraryMemory());
 $("opportunity-strip").addEventListener("click", (event) => { const accept = event.target.closest("[data-accept-opportunity]"); if (accept) { void decideOpportunity(accept.dataset.acceptOpportunity, "accept"); return; } const dismiss = event.target.closest("[data-dismiss-opportunity]"); if (dismiss) void decideOpportunity(dismiss.dataset.dismissOpportunity, "dismiss"); });
 $("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
-$("new-session").addEventListener("click", () => { notifyDesktopNavigation("conversation"); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
+$("new-session").addEventListener("click", () => { notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
 $("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0) { announce("请输入你想推进的事情。", true); return; } void createSession(query); });
 $("query").addEventListener("input", resizeComposer);
 $("query").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); $("request-form").requestSubmit(); } });
