@@ -14,6 +14,8 @@ import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
 
 export interface MainAgentQueryResult {
   reply: string;
+  /** Why the model produced no visible reply, when it failed instead of finishing. 模型没有可见回复时的失败原因。 */
+  error?: string;
   /** Runs that appeared in the Kernel journal during this query. 本次查询期间出现在 Kernel Journal 中的 Run。 */
   newRuns: Array<Pick<Run, "id" | "status" | "planId">>;
 }
@@ -39,7 +41,22 @@ export async function runMainAgentQuery(
 
     const { session } = await createMainAgentSession({ dataDirectory });
     let reply = "";
+    // Declared before the subscription so the callback never touches a
+    // binding that is still in its temporal dead zone.
+    // 在订阅之前声明，避免回调触碰仍处于暂时性死区的绑定。
+    let lastError: string | undefined;
     session.subscribe((event) => {
+      if (event.type === "message_end" && event.message.role === "assistant") {
+        const assistant = event.message as {
+          stopReason?: string;
+          errorMessage?: string;
+        };
+        if (assistant.stopReason === "error") {
+          lastError = assistant.errorMessage?.trim() || "The model ended the turn with an error.";
+        } else if (assistant.stopReason === "aborted") {
+          lastError = "The model call was interrupted before it completed.";
+        }
+      }
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         const delta = event.assistantMessageEvent.delta;
         reply += delta;
@@ -71,7 +88,11 @@ export async function runMainAgentQuery(
     const newRuns = (await currentRuns(dataDirectory))
       .filter((run) => !before.has(run.id))
       .map((run) => ({ id: run.id, status: run.status, planId: run.planId }));
-    return { reply: reply.trim(), newRuns };
+    return {
+      reply: reply.trim(),
+      ...(reply.trim().length === 0 && lastError !== undefined ? { error: lastError } : {}),
+      newRuns,
+    };
   });
 }
 

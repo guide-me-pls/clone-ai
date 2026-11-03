@@ -542,6 +542,20 @@ textarea:focus-visible {
 }
 .response-fallback { border: 1px solid #d4dfd6; color: var(--subtle); background: rgba(245, 249, 245, .82); }
 .response-error { border: 1px solid #e4beb8; color: #8f3e37; background: #fff5f3; }
+.message-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.message-actions button {
+  min-height: 29px;
+  padding: 0 10px;
+  border: 1px solid #d8ded8;
+  border-radius: 7px;
+  color: #46524a;
+  background: #fff;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.message-actions button:hover { border-color: #aeb9b0; background: #f7f8f6; }
 .clone-text { max-width: 720px; overflow-wrap: anywhere; }
 .clone-text .md-heading {
   margin: 13px 0 5px;
@@ -877,14 +891,6 @@ body { color: #202020; }
 .schedule-button:hover { border-color: transparent; color: #202020; background: #f0f0f0; }
 .schedule-button svg { width: 15px; height: 15px; color: #888; }
 .schedule-button b { min-width: 17px; height: 17px; color: #777; background: #ededed; font-size: 9px; }
-.workspace-heading { display: flex; width: calc(100% - 8px); align-items: center; gap: 9px; margin: 12px 4px 5px; padding: 8px; border: 0; border-radius: 7px; color: #8e8e8e; background: transparent; cursor: pointer; text-align: left; }
-.workspace-heading:hover { color: #333; background: #f0f0f0; }
-.workspace-heading:focus-visible { outline: 2px solid #c8c8c8; outline-offset: 0; }
-.workspace-heading > svg { width: 15px; height: 15px; flex: 0 0 auto; color: #8e8e8e; }
-.workspace-copy { display: grid; min-width: 0; gap: 1px; }
-.workspace-copy small { color: #999; font-size: 9.5px; line-height: 1.2; }
-.workspace-copy b { overflow: hidden; color: #454545; font-size: 11.5px; font-weight: 560; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-open-icon { margin-left: auto; color: #a6a6a6; font-size: 12px; }
 .session-label { padding: 10px 9px 4px; color: #9c9c9c; font-size: 11px; font-weight: 520; letter-spacing: 0; text-transform: none; }
 .session-list { gap: 1px; padding: 0; }
 .session-group { margin: 8px 9px 3px; color: #b0b0b0; font-size: 10px; font-weight: 520; letter-spacing: 0; text-transform: none; }
@@ -901,10 +907,6 @@ body { color: #202020; }
 .empty-sessions { padding: 9px 8px; color: #999; font-size: 12px; }
 .session-delete { right: 3px; width: 22px; height: 22px; border-radius: 5px; color: #aaa; }
 .session-delete:hover { color: #a34a4a; background: #f6e8e8; }
-.sidebar-owner { margin-top: auto; padding: 13px 8px 3px; border-top: 1px solid #e9e9e9; }
-.avatar { width: 24px; height: 24px; color: #555; background: #e8e8e8; font-size: 10px; font-weight: 650; }
-.owner b { color: #555; font-size: 11.5px; font-weight: 580; }
-.owner span { color: #9b9b9b; font-size: 10.5px; line-height: 1.35; }
 .sidebar-resizer { width: 1px; }
 .sidebar-resizer::after { inset: 0; }
 .sidebar-resizer:hover::after, .sidebar-resizer:focus-visible::after, body.sidebar-resizing .sidebar-resizer::after { background: #bdbdbd; }

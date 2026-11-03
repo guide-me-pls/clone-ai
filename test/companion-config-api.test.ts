@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import {
   normalizeMainAgentRequestText,
+  readMainAgentTurnRecords,
+  reconcileInterruptedMainAgentTurns,
+  recordMainAgentClientInterruption,
   startCompanionServer,
   type RunningCompanionServer,
 } from "../src/companion-server.ts";
@@ -71,6 +74,61 @@ test("the model options endpoint exposes only credential-blind selectable refere
     assert.ok(model.label.length > 0);
   }
   assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
+});
+
+test("an interrupted Main Agent turn is persisted and survives a restart", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const response = await companionFetch(url, token, "/api/main-agent/interruptions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      turnId: "interrupted-turn-1",
+      text: "整理今天需要推进的事情",
+      error: "The local runtime stopped before this turn completed.",
+    }),
+  });
+  assert.equal(response.status, 202);
+  const records = await readMainAgentTurnRecords(dataDirectory);
+  assert.equal(records.length, 1);
+  assert.equal(records[0]?.status, "interrupted");
+  assert.equal(records[0]?.text, "整理今天需要推进的事情");
+  assert.match(records[0]?.error ?? "", /stopped/);
+});
+
+test("a terminal turn is not overwritten by a later interruption report", async (t) => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-api-turn-terminal-"));
+  t.after(async () => rm(dataDirectory, { recursive: true, force: true }));
+  await recordMainAgentClientInterruption(dataDirectory, {
+    turnId: "same-turn",
+    text: "第一条",
+    error: "连接中断",
+  });
+  const second = await recordMainAgentClientInterruption(dataDirectory, {
+    turnId: "same-turn",
+    text: "第二条",
+    error: "再次中断",
+  });
+  assert.equal(second.text, "第一条");
+  assert.equal((await readMainAgentTurnRecords(dataDirectory)).length, 1);
+});
+
+test("a turn left running by a dead owner is reconciled as interrupted", async (t) => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-api-turn-recover-"));
+  t.after(async () => rm(dataDirectory, { recursive: true, force: true }));
+  await writeFile(
+    join(dataDirectory, "main-agent-turns.jsonl"),
+    `${JSON.stringify({
+      id: "dead-owner-turn",
+      text: "继续整理",
+      status: "started",
+      startedAt: new Date().toISOString(),
+      ownerPid: 999_999,
+    })}\n`,
+    "utf8",
+  );
+  const records = await reconcileInterruptedMainAgentTurns(dataDirectory);
+  assert.equal(records[0]?.status, "interrupted");
+  assert.match(records[0]?.error ?? "", /stopped/);
 });
 
 test("the gateway inventory is loopback-only and carries no credentials", async (t) => {

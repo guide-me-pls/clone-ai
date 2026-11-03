@@ -333,16 +333,6 @@ function renderSituation(situation, config) {
     workspace.textContent = workspacePath || t("workspace-unset");
     workspace.title = workspacePath;
   }
-  const workspaceName = $("workspace-name");
-  if (workspaceName) {
-    const segments = workspacePath.split("/").filter(Boolean);
-    workspaceName.textContent = segments.at(-1) || "Clone AI";
-    const workspaceButton = $("workspace-open");
-    if (workspaceButton) {
-      workspaceButton.title = `${t("workspace-open-finder")}: ${workspacePath}`;
-      workspaceButton.setAttribute("aria-label", workspaceButton.title);
-    }
-  }
   renderModelOptions();
   renderAgentPage();
 }
@@ -492,6 +482,14 @@ function renderMemorySearch(results) { $("memory-search-results").innerHTML = re
  * 本来就在的地方看到它。接受会创建 Run（后端会规划并入队）；拒绝会移除卡片。
  * 两个决定都记入 Journal。
  */
+// A failure card's next action is diagnosis, not another blind run. Repeating
+// "accept" created a trail of identical failed sessions and never surfaced why.
+// 失败卡片的下一步是诊断，而不是再盲目跑一遍。重复“接受”只会堆出相同失败会话，
+// 却从不把原因告诉所有者。
+function isFailureCard(card) {
+  return card.source === "failed_task";
+}
+
 function renderOpportunities(cards) {
   state.opportunities = cards;
   const signature = JSON.stringify(cards);
@@ -505,7 +503,8 @@ function renderOpportunities(cards) {
     <p class="opportunity-why">${escape(card.whyNow)}</p>
     <p class="opportunity-proposal">${escape(card.proposedResult)}</p>
     <div class="opportunity-actions">
-      <button class="approve" type="button" data-accept-opportunity="${escape(card.id)}">接受并开始</button>
+      <button class="approve" type="button" data-accept-opportunity="${escape(card.id)}">${isFailureCard(card) ? "查看失败原因" : "接受并开始"}</button>
+      ${isFailureCard(card) ? `<button class="secondary" type="button" data-open-failure-settings>打开 Agent 设置</button>` : ""}
       <button class="secondary" type="button" data-dismiss-opportunity="${escape(card.id)}">不需要</button>
     </div>
   </article>`).join("");
@@ -515,6 +514,15 @@ function opportunitySourceLabel(source) { return { deadline: "临近承诺", fai
 
 async function decideOpportunity(id, action) {
   try {
+    const card = (state.opportunities || []).find((candidate) => candidate.id === id);
+    if (action === "accept" && card && isFailureCard(card)) {
+      const result = await api(`/api/opportunities/${encodeURIComponent(id)}/accept`, { method: "POST" });
+      state.signatures.opportunities = null;
+      await refresh({ scrollToBottom: false });
+      if (result.runId) void selectSession(result.runId);
+      announce(result.inspectOnly ? "已打开失败记录；请查看原因后再决定重试。" : "已记录这个决定。");
+      return;
+    }
     const result = await api(`/api/opportunities/${encodeURIComponent(id)}/${action}`, { method: "POST" });
     state.signatures.opportunities = null;
     await refresh({ scrollToBottom: false });
@@ -643,6 +651,12 @@ function richText(value) {
     .replace(/^\s*[-*]\s+(.+)$/gm, '<div class="md-list-line"><span aria-hidden="true">•</span><span>$1</span></div>')
     .replace(/^\s*(\d+)[.)]\s+(.+)$/gm, '<div class="md-list-line md-list-line--ordered"><span>$1.</span><span>$2</span></div>')
     .replace(/\n/g, "<br>")
+    // A block element already starts a new line, so a <br> next to it only adds an
+    // empty line: list items used to render double-spaced with the marker far from
+    // its text. 块级元素本身就会换行，紧邻的 <br> 只会多出一整行——列表项因此被拉开双倍行距，
+    // 圆点离正文很远。
+    .replace(/<br>(?=<div class="md-(?:heading|list-line))/g, "")
+    .replace(/(<\/div>)<br>/g, "$1")
     .replace(/\u0000BLOCK(\d+)\u0000/g, (match, index) => blocks[Number(index)] ?? "");
 }
 function messageMarkup(message) {
@@ -655,7 +669,19 @@ function messageMarkup(message) {
   // The conversation reads like Codex: the owner is a compact right-aligned
   // instruction, while the agent's work stays in the main reading column.
   // 对话按 Codex 的方式排版：所有者指令靠右且紧凑，Agent 工作留在主阅读栏。
-  return `<article class="message ${clone ? "clone" : "person"}"><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div><div class="message-body">${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${body}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}</div>` : `<div class="message-copy">${body}</div>`}</div></article>`;
+  const technical = message.tone === "warning"
+    && !text.includes("下一步：")
+    && /Unrestricted host execution|permission_denied|no enforced sandbox/i.test(text);
+  const displayed = technical
+    ? "这次任务没有执行：本机 Worker 默认禁止不受限访问。请到「设置 → Agent」为绑定的 Worker 明确开启运行权限，或改用一个已允许的 Worker。"
+    : text;
+  const displayedBody = clone && technical ? escape(displayed) : body;
+  const needsAgentSettings = clone && message.tone === "warning"
+    && /设置\s*→\s*Agent|Worker|Provider|permission_denied|no enforced sandbox|Unrestricted host execution/i.test(text);
+  const actions = needsAgentSettings
+    ? `<div class="message-actions"><button class="secondary" type="button" data-open-agent-settings>打开 Agent 设置</button></div>`
+    : "";
+  return `<article class="message ${clone ? "clone" : "person"}"><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div><div class="message-body">${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${displayedBody}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}${actions}</div>` : `<div class="message-copy">${body}</div>`}</div></article>`;
 }
 function displayAgentTitle(agent) { return agent.title; }
 function displayAgentDetail(agent) { const provider = agent.providerId ? `${providerLabel(agent.providerId)} · ` : ""; return provider + (agent.status === "completed" ? "已提交可验证证据" : (agent.summary || "正在按任务边界推进")); }
@@ -777,15 +803,30 @@ async function createSession(query) { const button = $("submit"); button.disable
   pendingTimer = window.setInterval(updatePending, 1000);
   $("conversation").scrollTop = $("conversation").scrollHeight;
 
-  let reply = ""; let result = null;
+  const turnId = globalThis.crypto?.randomUUID?.() || `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const turnStartedAt = new Date().toISOString();
+  let reply = ""; let result = null; let failed = false; let failure = "";
+  const controller = new AbortController();
+  let stallTimer = null;
+  const armStallTimer = () => {
+    if (stallTimer !== null) clearTimeout(stallTimer);
+    stallTimer = window.setTimeout(() => controller.abort(), 180_000);
+  };
+  armStallTimer();
   try {
     const headers = { "content-type": "application/json" };
     if (window.CLONE_AI_TOKEN) headers.Authorization = `Bearer ${window.CLONE_AI_TOKEN}`;
-    const response = await fetch("/api/main-agent/stream", { method: "POST", headers, body: JSON.stringify({ text: query }) });
+    const response = await fetch("/api/main-agent/stream", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ text: query, turnId }),
+      signal: controller.signal,
+    });
     if (!response.ok || !response.body) { const detail = await response.json().catch(() => ({})); throw new Error(detail.error || `请求失败：${response.status}`); }
     const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
     for (;;) {
       const { value, done } = await reader.read(); if (done) break;
+      armStallTimer();
       buffer += decoder.decode(value, { stream: true });
       // SSE frames are separated by a blank line; a partial frame stays buffered.
       // SSE 帧以空行分隔；不完整的帧留在缓冲区等待后续数据。
@@ -797,7 +838,7 @@ async function createSession(query) { const button = $("submit"); button.disable
         const payload = JSON.parse(data);
         if (event === "delta") { revealResponse(); reply += payload.delta; target.textContent = reply; $("conversation").scrollTop = $("conversation").scrollHeight; }
         else if (event === "done") { result = payload; }
-        else if (event === "failed") { throw new Error(payload.error); }
+        else if (event === "failed") { failure = payload.error || "Main Agent 调用失败。"; throw new Error(failure); }
       }
     }
     if (!result) throw new Error("连接在回复完成前中断。");
@@ -809,6 +850,11 @@ async function createSession(query) { const button = $("submit"); button.disable
     const firstRun = result.newRuns?.[0];
     revealResponse();
     target.classList.remove("is-streaming");
+    target.parentElement?.querySelector("[data-response-error]")?.remove();
+    // Add the settled card only after its state is known. A transient error
+    // or empty return must not leave a permanent composer inside the chat.
+    // 状态确定后才显示最终卡片；异常或空返回绝不会在聊天里留下永久占位。
+    target.hidden = false;
     target.innerHTML = reply.trim().length > 0
       ? richText(reply)
       : `<span class="response-fallback">${escape(t(firstRun ? "empty-model-reply-with-run" : "empty-model-reply"))}</span>`;
@@ -816,12 +862,18 @@ async function createSession(query) { const button = $("submit"); button.disable
     await refresh({ preserveScroll: true, scrollToBottom: true });
     announce(firstRun ? "Main Agent 已提交计划，正在推进。" : "Main Agent 已回复（未创建任务）。");
   } catch (error) {
+    failed = true;
+    failure = error instanceof Error && error.name === "AbortError"
+      ? "Main Agent 在 3 分钟内没有返回任何内容，已停止等待。"
+      : error instanceof Error ? error.message : String(error);
     // The typed text is restored so a failed send never loses what was written.
     // 恢复已输入的文本，使一次失败的发送绝不丢失所写内容。
     if (!reply) {
       revealResponse();
       target.classList.remove("is-streaming");
-      target.innerHTML = `<span class="response-error">${escape(t("response-failed-detail").replace("{message}", error.message))}</span>`;
+      target.hidden = true;
+      target.innerHTML = "";
+      target.insertAdjacentHTML("afterend", `<div class="response-error" data-response-error>${escape(t("response-interrupted-detail").replace("{message}", failure))}</div>`);
       $("query").value = query;
       resizeComposer();
     } else {
@@ -829,12 +881,21 @@ async function createSession(query) { const button = $("submit"); button.disable
       target.classList.remove("is-streaming");
       target.innerHTML = richText(reply);
     }
-    announce(error.message, true);
+    announce(failure, true);
   } finally {
+    if (stallTimer !== null) clearTimeout(stallTimer);
     if (pendingTimer !== null) clearInterval(pendingTimer);
     target.removeAttribute("data-streaming");
     target.classList.remove("is-streaming");
     button.disabled = false;
+  }
+  if (failed) {
+    await api("/api/main-agent/interruptions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ turnId, text: query, error: failure, startedAt: turnStartedAt }),
+    }).catch(() => undefined);
+    await refresh({ preserveScroll: true, scrollToBottom: true }).catch(() => undefined);
   }
 }
 
@@ -869,7 +930,7 @@ async function searchMemories(query) { try { const result = await api(`/api/memo
 function confirmDialog(message, okLabel) { return new Promise((resolve) => { const modal = $("confirm-modal"); $("confirm-message").textContent = message; const ok = $("confirm-ok"); ok.textContent = okLabel || "确认"; modal.setAttribute("aria-hidden", "false"); const done = (result) => { modal.setAttribute("aria-hidden", "true"); ok.onclick = $("confirm-cancel").onclick = modal.onclick = null; resolve(result); }; ok.onclick = () => done(true); $("confirm-cancel").onclick = () => done(false); modal.onclick = (event) => { if (event.target === modal) done(false); }; }); }
 async function deleteSession(id) { if (!(await confirmDialog("从会话列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。", "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
 $("session-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
-$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
+$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
 $("config-workspace-choose").addEventListener("click", () => void chooseWorkspace());
@@ -884,7 +945,6 @@ $("schedule-close").addEventListener("click", closeSchedules);
 function setSidebarOpen(open) { document.body.classList.toggle("sidebar-open", open); }
 $("menu-open").addEventListener("click", () => setSidebarOpen(true));
 $("sidebar-backdrop").addEventListener("click", () => setSidebarOpen(false));
-$("workspace-open").addEventListener("click", revealWorkspace);
 $("settings-close").addEventListener("click", closeSettings);
 $("settings-modal").addEventListener("click", (event) => { const button = event.target.closest("[data-settings-section]"); if (button) selectSettingsSection(button.dataset.settingsSection); });
 $("schedule-form").addEventListener("submit", (event) => { event.preventDefault(); void createSchedule($("schedule-query").value.trim()); });
@@ -909,7 +969,7 @@ $("audit-session-list").addEventListener("click", (event) => { const button = ev
 $("memory-candidates").addEventListener("click", (event) => { const promote = event.target.closest("[data-promote-candidate]"); if (promote) { void decideCandidate(promote.dataset.promoteCandidate, "promote"); return; } const reject = event.target.closest("[data-reject-candidate]"); if (reject) void decideCandidate(reject.dataset.rejectCandidate, "reject"); });
 $("library-list").addEventListener("click", (event) => { const conflict = event.target.closest("[data-memory-conflict]"); if (conflict) { void keepMemoryFile(conflict.dataset.memoryConflict); return; } const save = event.target.closest("[data-save-library]"); if (save) { void saveLibraryMemory(save.dataset.saveLibrary); return; } const source = event.target.closest("[data-open-memory-source]"); if (source) { closeSettings(); void selectSession(source.dataset.openMemorySource); } });
 $("library-create").addEventListener("click", () => void createLibraryMemory());
-$("opportunity-strip").addEventListener("click", (event) => { const accept = event.target.closest("[data-accept-opportunity]"); if (accept) { void decideOpportunity(accept.dataset.acceptOpportunity, "accept"); return; } const dismiss = event.target.closest("[data-dismiss-opportunity]"); if (dismiss) void decideOpportunity(dismiss.dataset.dismissOpportunity, "dismiss"); });
+$("opportunity-strip").addEventListener("click", (event) => { const settings = event.target.closest("[data-open-failure-settings]"); if (settings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const accept = event.target.closest("[data-accept-opportunity]"); if (accept) { void decideOpportunity(accept.dataset.acceptOpportunity, "accept"); return; } const dismiss = event.target.closest("[data-dismiss-opportunity]"); if (dismiss) void decideOpportunity(dismiss.dataset.dismissOpportunity, "dismiss"); });
 $("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
 $("new-session").addEventListener("click", () => { notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });

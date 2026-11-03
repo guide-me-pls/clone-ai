@@ -2,6 +2,7 @@
 
 /* 结构层：布局、尺寸与交互结构；颜色由下方主题层统一覆盖。 */
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0;

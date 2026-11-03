@@ -160,6 +160,10 @@ test("a single-agent step fails when the bound executor lacks the required capab
 
   assert.equal(result.status, "failed");
   assert.equal(runtime.getRun(run.id).status, "failed");
+  // A failed run must say why. "Needs attention" with no reason leaves the
+  // owner unable to choose between retrying, switching agents, or stopping.
+  // 失败的 Run 必须说明原因；只有“需要处理”会让所有者无法选择重试、换 Agent 或停止。
+  assert.match(runtime.getRun(run.id).failureReason ?? "", /capabilit/i);
 });
 
 test("the runtime refuses receipt evidence from an adapter without receipt authority", async (t) => {

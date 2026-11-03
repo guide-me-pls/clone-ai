@@ -1,9 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task } from "./core/contracts.ts";
+import { describeFailureForOwner } from "./core/failure-display.ts";
 import { createJournalStore } from "./core/sqlite-journal.ts";
 import { replay } from "./core/run-state.ts";
 import { approveQueryRun, cancelQueryRun, rejectQueryRun, reviewQueryRun, runQuery } from "./application/run-query.ts";
@@ -85,6 +87,196 @@ export function normalizeMainAgentRequestText(value: unknown): string {
 }
 
 /**
+ * The desktop Main Agent uses an append-only turn ledger so an interrupted
+ * model call is still visible after a restart instead of becoming a spinner
+ * that never resolves.
+ *
+ * 桌面 Main Agent 使用只追加的回合账本：即使模型调用异常中断，重启后仍能看到
+ * 这次失败，而不会留下一个永远转圈的占位卡片。
+ */
+export interface MainAgentTurnRecord {
+  id: string;
+  text: string;
+  status: "started" | "completed" | "failed" | "interrupted";
+  startedAt: string;
+  ownerPid?: number;
+  completedAt?: string;
+  reply?: string;
+  error?: string;
+}
+
+/**
+ * Mark a turn left in `started` by a dead daemon as interrupted. A PID-bearing
+ * owner file makes this precise: only a turn whose owning process is gone is
+ * rewritten, never one still streaming in another instance.
+ *
+ * 把崩溃 Daemon 留下的 `started` 回合标记为 interrupted。带 PID 的 owner
+ * 文件让判断精确：只改写其所属进程已消失的回合，绝不误改另一个实例中仍在流的回合。
+ */
+export async function reconcileInterruptedMainAgentTurns(dataDirectory: string): Promise<MainAgentTurnRecord[]> {
+  const records = await readMainAgentTurnRecords(dataDirectory);
+  const ownerFile = join(dataDirectory, "main-agent-turn-owner.json");
+  let ownerPid: number | undefined;
+  try {
+    const parsed = JSON.parse(await readFile(ownerFile, "utf8")) as { pid?: unknown };
+    if (typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0) ownerPid = parsed.pid;
+  } catch {
+    ownerPid = undefined;
+  }
+  if (ownerPid === process.pid) return records;
+  const result: MainAgentTurnRecord[] = [];
+  for (const record of records) {
+    if (record.status !== "started") {
+      result.push(record);
+      continue;
+    }
+    const recordOwnerPid = record.ownerPid ?? ownerPid;
+    if (recordOwnerPid !== undefined && !isProcessAlive(recordOwnerPid)) {
+      const interrupted: MainAgentTurnRecord = {
+        ...record,
+        status: "interrupted",
+        completedAt: new Date().toISOString(),
+        error: "The local runtime stopped before this turn completed.",
+      };
+      await appendMainAgentTurnRecord(dataDirectory, interrupted);
+      result.push(interrupted);
+    } else {
+      result.push(record);
+    }
+  }
+  return result;
+}
+
+/** Claim the desktop turn ledger for this daemon process. 由当前 Daemon 进程接管桌面回合账本。 */
+export async function claimMainAgentTurnOwner(dataDirectory: string): Promise<void> {
+  await mkdir(dataDirectory, { recursive: true });
+  await writeFile(
+    join(dataDirectory, "main-agent-turn-owner.json"),
+    `${JSON.stringify({ pid: process.pid, claimedAt: new Date().toISOString() })}\n`,
+    "utf8",
+  );
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
+  }
+}
+
+function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+export async function readMainAgentTurnRecords(dataDirectory: string): Promise<MainAgentTurnRecord[]> {
+  const file = join(dataDirectory, "main-agent-turns.jsonl");
+  let source: string;
+  try {
+    source = await readFile(file, "utf8");
+  } catch (error: unknown) {
+    if (isMissingFile(error)) return [];
+    throw error;
+  }
+  const byId = new Map<string, MainAgentTurnRecord>();
+  for (const line of source.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    try {
+      const record = JSON.parse(trimmed) as Partial<MainAgentTurnRecord>;
+      if (typeof record.id !== "string" || typeof record.text !== "string") continue;
+      if (record.status !== "started" && record.status !== "completed" && record.status !== "failed" && record.status !== "interrupted") continue;
+      if (typeof record.startedAt !== "string") continue;
+      byId.set(record.id, {
+        id: record.id,
+        text: record.text,
+        status: record.status,
+        startedAt: record.startedAt,
+        ...(typeof record.ownerPid === "number" ? { ownerPid: record.ownerPid } : {}),
+        ...(typeof record.completedAt === "string" ? { completedAt: record.completedAt } : {}),
+        ...(typeof record.reply === "string" ? { reply: record.reply } : {}),
+        ...(typeof record.error === "string" ? { error: record.error } : {}),
+      });
+    } catch {
+      continue;
+    }
+  }
+  return [...byId.values()];
+}
+
+async function appendMainAgentTurnRecord(dataDirectory: string, record: MainAgentTurnRecord): Promise<void> {
+  await mkdir(dataDirectory, { recursive: true });
+  await appendFile(join(dataDirectory, "main-agent-turns.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
+}
+
+export async function recordMainAgentClientInterruption(
+  dataDirectory: string,
+  input: { turnId: string; text: string; error: string; startedAt?: string },
+): Promise<MainAgentTurnRecord> {
+  const records = await readMainAgentTurnRecords(dataDirectory);
+  const existing = records.find((record) => record.id === input.turnId);
+  if (existing?.status === "completed" || existing?.status === "failed" || existing?.status === "interrupted") {
+    return existing;
+  }
+  const record: MainAgentTurnRecord = {
+    id: input.turnId,
+    text: input.text,
+    status: "interrupted",
+    startedAt: existing?.startedAt ?? input.startedAt ?? new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    error: input.error.slice(0, 2_000),
+    ...(existing?.ownerPid === undefined ? {} : { ownerPid: existing.ownerPid }),
+  };
+  await appendMainAgentTurnRecord(dataDirectory, record);
+  return record;
+}
+
+async function runRecordedMainAgentTurn(
+  dataDirectory: string,
+  text: string,
+  turnId: string,
+  options: Parameters<typeof runMainAgentQuery>[2] = {},
+): Promise<Awaited<ReturnType<typeof runMainAgentQuery>>> {
+  const startedAt = new Date().toISOString();
+  await appendMainAgentTurnRecord(dataDirectory, {
+    id: turnId,
+    text,
+    status: "started",
+    startedAt,
+    ownerPid: process.pid,
+  });
+  try {
+    const result = await runMainAgentQuery(dataDirectory, text, options);
+    if (result.error !== undefined) {
+      throw new Error(result.error);
+    }
+    await appendMainAgentTurnRecord(dataDirectory, {
+      id: turnId,
+      text,
+      status: "completed",
+      startedAt,
+      ownerPid: process.pid,
+      completedAt: new Date().toISOString(),
+      reply: result.reply,
+    });
+    return result;
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    await appendMainAgentTurnRecord(dataDirectory, {
+      id: turnId,
+      text,
+      status: "failed",
+      startedAt,
+      ownerPid: process.pid,
+      completedAt: new Date().toISOString(),
+      error: message,
+    });
+    throw error;
+  }
+}
+
+/**
  * Local-only daemon transport used by the desktop shell. The shipped Tauri
  * window opens this loopback URL; it is never a hosted web service.
  *
@@ -112,6 +304,11 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   });
   const dataDirectory = paths.dataDirectory;
   const workspacePath = paths.workspacePath;
+  // A previous desktop crash may have left a turn in `started`; record that
+  // outcome before a new daemon accepts more work.
+  // 上一次桌面崩溃可能留下 `started` 回合；新 Daemon 接活前先把这次结果记下来。
+  await reconcileInterruptedMainAgentTurns(dataDirectory);
+  await claimMainAgentTurnOwner(dataDirectory);
   // The GUI assets ship with the package, so they must be resolved relative to
   // this module — the desktop app runs from its bundle, not the owner's cwd.
   // GUI 资源随应用包发布，因此必须相对本模块解析——桌面应用从应用包运行，
@@ -715,7 +912,6 @@ async function handleRequest(
     const accepted = opportunityMatch[2] === "accept";
     try {
       const card = await context.opportunityService.find(cardId);
-      await context.opportunityService.resolve(cardId, accepted ? "accepted" : "dismissed");
       // Accepting must produce work, not just a resolved card. The trigger
       // alone leaves the run in `planning`, which no consumer ever picks up —
       // so the deterministic planner attaches a plan here and the run reaches
@@ -728,6 +924,21 @@ async function handleRequest(
       // Run 的按钮，比没有 Run 更糟：它看起来像一句承诺。
       let runId: string | undefined;
       if (accepted && card !== undefined) {
+        // A failed-task card is a diagnosis entry point, not a request to
+        // repeat the same failing run. Re-running it verbatim produced a wall
+        // of duplicate failures and hid the actual reason.
+        // 失败任务卡片是诊断入口，不是重复执行同一条失败任务的按钮。
+        // 原样重跑只会堆出一墙重复失败，并把真正原因藏起来。
+        if (card.source === "failed_task") {
+          const failedRunId = card.serves?.kind === "run" ? card.serves.id : undefined;
+          if (failedRunId === undefined) {
+            sendJson(response, 409, { error: "The failed run this card refers to is no longer available." });
+            return;
+          }
+          await context.opportunityService.resolve(cardId, "accepted");
+          sendJson(response, 200, { decided: cardId, runId: failedRunId, inspectOnly: true });
+          return;
+        }
         const { run } = await context.runtime.acceptTrigger({
           kind: "signal",
           summary: card.title,
@@ -748,6 +959,7 @@ async function handleRequest(
         });
         runId = run.id;
       }
+      await context.opportunityService.resolve(cardId, accepted ? "accepted" : "dismissed");
       sendJson(response, 200, { decided: cardId, ...(runId === undefined ? {} : { runId }) });
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "The opportunity could not be resolved." });
@@ -997,6 +1209,9 @@ async function handleRequest(
   if (request.method === "POST" && url.pathname === "/api/main-agent/stream") {
     const body = await readJsonBody(request);
     const text = normalizeMainAgentRequestText(body.text);
+    const turnId = typeof body.turnId === "string" && body.turnId.trim().length > 0
+      ? body.turnId.trim()
+      : randomUUID();
     if (text.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
@@ -1020,7 +1235,7 @@ async function handleRequest(
       response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     try {
-      const result = await runMainAgentQuery(context.dataDirectory, text, {
+      const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
         onDelta: (delta) => send("delta", { delta }),
       });
       send("done", result);
@@ -1042,12 +1257,15 @@ async function handleRequest(
   if (request.method === "POST" && url.pathname === "/api/main-agent/query") {
     const body = await readJsonBody(request);
     const text = normalizeMainAgentRequestText(body.text);
+    const turnId = typeof body.turnId === "string" && body.turnId.trim().length > 0
+      ? body.turnId.trim()
+      : randomUUID();
     if (text.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
     try {
-      const result = await runMainAgentQuery(context.dataDirectory, text);
+      const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId);
       sendJson(response, 200, result);
     } catch (error: unknown) {
       if (error instanceof MainAgentBusyError) {
@@ -1076,9 +1294,33 @@ async function handleRequest(
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/main-agent/interruptions") {
+    const body = await readJsonBody(request);
+    const turnId = typeof body.turnId === "string" ? body.turnId.trim() : "";
+    const text = normalizeMainAgentRequestText(body.text);
+    const error = typeof body.error === "string" ? body.error.trim() : "";
+    const startedAt = typeof body.startedAt === "string" ? body.startedAt : undefined;
+    if (turnId.length === 0 || text.length === 0 || error.length === 0) {
+      sendJson(response, 400, { error: "An interruption record needs turnId, text, and error." });
+      return;
+    }
+    const record = await recordMainAgentClientInterruption(context.dataDirectory, {
+      turnId,
+      text,
+      error,
+      ...(startedAt === undefined ? {} : { startedAt }),
+    });
+    sendJson(response, 202, { recorded: true, turn: record });
+    return;
+  }
+
   const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
   if (request.method === "GET" && sessionMatch?.[1] !== undefined) {
     const runId = decodeURIComponent(sessionMatch[1]);
+    if (runId === MAIN_AGENT_SESSION_ID) {
+      sendJson(response, 200, await buildMainAgentConversation(context.dataDirectory));
+      return;
+    }
     if (await context.sessions.isDeleted(runId)) {
       sendJson(response, 404, { error: "This session was removed from the local conversation list." });
       return;
@@ -1088,6 +1330,10 @@ async function handleRequest(
   }
   if (request.method === "DELETE" && sessionMatch?.[1] !== undefined) {
     const runId = decodeURIComponent(sessionMatch[1]);
+    if (runId === MAIN_AGENT_SESSION_ID) {
+      sendJson(response, 405, { error: "The Main Agent conversation cannot be hidden while it is the active chat." });
+      return;
+    }
     const { runs } = await loadRuntimeView(context.dataDirectory);
     if (!runs.some((run) => run.id === runId)) {
       sendJson(response, 404, { error: "The requested local session does not exist." });
@@ -1212,9 +1458,34 @@ async function handleRequest(
 
 async function buildDashboard(dataDirectory: string, sessions: SessionStore): Promise<DashboardView> {
   const { events, state, tasks, runs } = await loadRuntimeView(dataDirectory);
+  const turns = await readMainAgentTurnRecords(dataDirectory);
   const deletedRunIds = await sessions.deletedRunIds();
   const visibleRuns = runs.filter((run) => !deletedRunIds.has(run.id));
   const visibleRunIds = new Set(visibleRuns.map((run) => run.id));
+  const eventsByRun = new Map<string, JournalEvent[]>();
+  for (const event of events) {
+    if (event.runId === undefined) continue;
+    const list = eventsByRun.get(event.runId) ?? [];
+    list.push(event);
+    eventsByRun.set(event.runId, list);
+  }
+  const latestTurn = turns
+    .slice()
+    .sort((left, right) => Date.parse(left.completedAt ?? left.startedAt) - Date.parse(right.completedAt ?? right.startedAt))
+    .at(-1);
+  const allSessions = [
+    ...visibleRuns.map((run) => ({
+      ...toSessionSummary(run, tasks, describeRunFailure(run, eventsByRun.get(run.id) ?? []).reason),
+      updatedAtMs: Date.parse(run.updatedAt),
+    })),
+    ...(latestTurn === undefined ? [] : [toMainAgentTurnSummary(latestTurn)]),
+  ].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+  // Legacy builds created a fresh Run every time the owner accepted the same
+  // failed-task card. Group those identical failures so the sidebar reflects
+  // the one problem that still needs attention, not a wall of copies.
+  // 旧版本在所有者每次接受同一张失败任务卡时都会新建 Run。把相同失败聚合起来，
+  // 让侧栏显示真正需要处理的那个问题，而不是一墙副本。
+  const groupedSessions = groupDuplicateFailures(allSessions);
 
   const approvals = visibleRuns
     .filter((run) => run.status === "waiting_approval" && run.activeStepId !== undefined)
@@ -1265,8 +1536,127 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
     subagents,
     completed,
     memories,
-    sessions: visibleRuns.slice(0, 40).map((run) => toSessionSummary(run, tasks)),
+    sessions: groupedSessions.slice(0, 40).map(({ updatedAtMs: _updatedAtMs, duplicateCount: _duplicateCount, ...summary }) => summary),
     timeline: events.slice(-12).reverse().map(toTimelineItem),
+  };
+}
+
+type DashboardSession = SessionSummary & { updatedAtMs: number; duplicateCount?: number };
+
+function groupDuplicateFailures(sessions: DashboardSession[]): DashboardSession[] {
+  const groups = new Map<string, DashboardSession & { duplicateCount: number }>();
+  const result: DashboardSession[] = [];
+  for (const session of sessions) {
+    const isFailure = session.status === "failed" || session.status === "cancelled";
+    if (!isFailure) {
+      result.push(session);
+      continue;
+    }
+    const key = `${session.status}\u0000${session.title.replace(/\s+/g, " ").trim()}\u0000${session.preview.slice(0, 90)}`;
+    const existing = groups.get(key);
+    if (existing !== undefined) {
+      existing.duplicateCount += 1;
+      continue;
+    }
+    const first = { ...session, duplicateCount: 1 };
+    groups.set(key, first);
+    result.push(first);
+  }
+  return result.map((session) => (session.duplicateCount ?? 1) > 1
+    ? { ...session, preview: `${session.preview} · 同类失败 ${session.duplicateCount ?? 1} 次` }
+    : session);
+}
+
+const MAIN_AGENT_SESSION_ID = "main-agent-conversation";
+
+function toMainAgentTurnSummary(turn: MainAgentTurnRecord): SessionSummary & { updatedAtMs: number } {
+  const updatedAt = turn.completedAt ?? turn.startedAt;
+  const display = turn.status === "failed" || turn.status === "interrupted"
+    ? describeFailureForOwner(turn.error)
+    : undefined;
+  return {
+    id: MAIN_AGENT_SESSION_ID,
+    title: turn.text.replace(/\s+/g, " ").trim().slice(0, 80) || "Main Agent conversation",
+    status: turn.status === "completed" ? "completed" : turn.status === "started" ? "running" : "failed",
+    updatedAt,
+    updatedAtMs: Date.parse(updatedAt),
+    preview: turn.status === "failed" || turn.status === "interrupted"
+      ? `异常中断：${display?.summary ?? "本轮没有完成"}`
+      : turn.reply?.trim()
+        ? turn.reply.replace(/\s+/g, " ").slice(0, 80)
+        : "本轮没有返回文字",
+  };
+}
+
+async function buildMainAgentConversation(dataDirectory: string): Promise<SessionView> {
+  const turns = (await readMainAgentTurnRecords(dataDirectory))
+    .slice()
+    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
+  const latest = turns.at(-1);
+  const messages: ConversationMessage[] = [];
+  for (const turn of turns) {
+    messages.push({
+      id: `turn-user-${turn.id}`,
+      role: "person",
+      text: turn.text,
+      occurredAt: turn.startedAt,
+    });
+    const at = turn.completedAt ?? turn.startedAt;
+    if (turn.status === "failed" || turn.status === "interrupted") {
+      const display = describeFailureForOwner(turn.error);
+      messages.push({
+        id: `turn-failed-${turn.id}`,
+        role: "clone",
+        text: `本次对话异常中断：${display.summary}\n\n下一步：${display.guidance}`,
+        occurredAt: at,
+        tone: "warning",
+      });
+    } else if (turn.status === "started") {
+      messages.push({
+        id: `turn-running-${turn.id}`,
+        role: "clone",
+        text: "这轮对话仍在本地运行时中推进。",
+        occurredAt: at,
+      });
+    } else if (turn.reply !== undefined && turn.reply.trim().length > 0) {
+      messages.push({
+        id: `turn-reply-${turn.id}`,
+        role: "clone",
+        text: turn.reply,
+        occurredAt: at,
+      });
+    } else {
+      messages.push({
+        id: `turn-empty-${turn.id}`,
+        role: "clone",
+        text: "本轮模型没有返回文字说明。",
+        occurredAt: at,
+        tone: "warning",
+      });
+    }
+  }
+  const sessionSummary: SessionSummary = latest === undefined
+    ? {
+        id: MAIN_AGENT_SESSION_ID,
+        title: "新的对话",
+        status: "completed",
+        updatedAt: new Date().toISOString(),
+        preview: "从一个清晰的意图开始",
+      }
+    : (() => {
+        const { updatedAtMs: _updatedAtMs, ...summary } = toMainAgentTurnSummary(latest);
+        return summary;
+      })();
+  return {
+    ...sessionSummary,
+    query: latest?.text ?? "",
+    evidenceCount: 0,
+    subagents: [],
+    approvals: [],
+    messages,
+    recalledMemories: [],
+    activity: [],
+    trace: [],
   };
 }
 
@@ -1314,7 +1704,7 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
     });
 
   return {
-    ...toSessionSummary(run, tasks),
+    ...toSessionSummary(run, tasks, describeRunFailure(run, runEvents).reason),
     query,
     evidenceCount,
     plan: plan === undefined
@@ -1358,13 +1748,13 @@ async function loadRuntimeView(dataDirectory: string) {
   }
 }
 
-function toSessionSummary(run: Run, tasks: Record<string, Task>): SessionSummary {
+function toSessionSummary(run: Run, tasks: Record<string, Task>, failureReason?: string): SessionSummary {
   return {
     id: run.id,
     title: titleFor(run, tasks),
     status: run.status,
     updatedAt: run.updatedAt,
-    preview: previewForStatus(run.status),
+    preview: previewForStatus(run.status, failureReason ?? run.failureReason),
   };
 }
 
@@ -1425,10 +1815,11 @@ function buildConversation(
       tone: "success",
     });
   } else if (run.status === "failed" || run.status === "cancelled") {
+    const failure = describeRunFailure(run, events);
     messages.push({
       id: `blocked-${run.id}`,
       role: "clone",
-      text: "这条工作暂时没有安全地完成。我保留了当前进度和原因，等待你决定下一步。",
+      text: failure.message,
       occurredAt: run.updatedAt,
       tone: "warning",
     });
@@ -1443,12 +1834,68 @@ function buildConversation(
   return messages;
 }
 
-function previewForStatus(status: Run["status"]): string {
+function previewForStatus(status: Run["status"], failureReason?: string): string {
   if (status === "waiting_approval") return "等待你的确认";
   if (status === "waiting_review") return "等待你核验结果";
   if (status === "completed") return "已完成并验证";
-  if (status === "failed" || status === "cancelled") return "需要处理";
+  if (status === "failed" || status === "cancelled") {
+    return failureReason?.trim() ? failureReason.trim().slice(0, 90) : "需要处理：没有记录到失败原因";
+  }
   return "正在推进";
+}
+
+/**
+ * Turn a stored failure into something the owner can act on. Older journals
+ * only recorded `failed`, so when no reason exists we infer the worker from
+ * the dispatch event and give an explicit next step instead of a dead end.
+ *
+ * 把已保存的失败转换成所有者可以行动的信息。旧 Journal 只记录 `failed`；
+ * 没有原因时从派发事件推断 Worker，并给出明确下一步，而不是死胡同。
+ */
+function describeRunFailure(run: Run, events: JournalEvent[]): { reason?: string; message: string } {
+  if (run.status !== "failed" && run.status !== "cancelled") {
+    return { message: "这条工作已结束。" };
+  }
+  if (run.status === "cancelled") {
+    const reason = run.failureReason?.trim();
+    return {
+      reason,
+      message: reason === undefined || reason.length === 0
+        ? "这条工作已取消，没有继续执行。"
+        : `这条工作已取消。原因：${reason}`,
+    };
+  }
+
+  const failedEvent = [...events].reverse().find((event) => event.type === "execution.failed");
+  const failedPayload = asRecord(failedEvent?.payload);
+  const report = asRecord(failedPayload.report);
+  const recorded = run.failureReason?.trim()
+    || (typeof failedPayload.message === "string" ? failedPayload.message.trim() : "")
+    || (typeof report.detail === "string" ? report.detail.trim() : "");
+  const startedEvent = [...events].reverse().find((event) => event.type === "execution.started");
+  const providerId = typeof report.providerId === "string"
+    ? report.providerId
+    : typeof asRecord(startedEvent?.payload).providerId === "string"
+      ? String(asRecord(startedEvent?.payload).providerId)
+      : undefined;
+  const category = typeof report.category === "string" ? report.category : "";
+
+  if (recorded.length > 0) {
+    const display = describeFailureForOwner(recorded, {
+      ...(category.length === 0 ? {} : { category }),
+      ...(providerId === undefined ? {} : { providerId }),
+    });
+    return {
+      reason: display.summary,
+      message: `这条工作没有完成。原因：${display.summary}\n\n下一步：${display.guidance}`,
+    };
+  }
+
+  const providerHint = providerId === undefined
+    ? "旧版本没有记录具体失败原因。"
+    : `旧版本没有记录具体失败原因；最后一次派发使用的是 ${providerId} Worker。`;
+  const display = describeFailureForOwner(undefined, providerId === undefined ? {} : { providerId });
+  return { reason: display.summary, message: `${providerHint}\n\n下一步：${display.guidance}` };
 }
 
 function compactRun(run: Run, tasks: Record<string, Task>): { runId: string; title: string; status: string; updatedAt: string } {
@@ -1546,15 +1993,16 @@ function toTraceItem(event: JournalEvent): TraceItem {
 function toTimelineItem(event: JournalEvent): { label: string; detail: string; occurredAt: string } {
   const payload = asRecord(event.payload);
   const labels: Partial<Record<JournalEvent["type"], string>> = {
-    "trigger.received": "Received a trigger",
-    "task.created": "Created work",
-    "run.created": "Started a run",
-    "run.status_changed": "Updated run status",
-    "plan.created": "Prepared a plan",
-    "policy.decided": "Checked authority",
-    "approval.granted": "Recorded your approval",
-    "execution.started": "Started a step",
-    "execution.progress": "Execution progress",
+    "trigger.received": "收到请求",
+    "task.created": "创建任务",
+    "run.created": "创建任务运行",
+    "run.status_changed": "更新任务状态",
+    "plan.created": "生成执行计划",
+    "policy.decided": "检查执行权限",
+    "approval.granted": "记录你的确认",
+    "execution.started": "开始执行步骤",
+    "execution.failed": "执行失败",
+    "execution.progress": "执行进度",
     "subagent.dispatched": "Dispatched a child agent",
     "subagent.resumed": "Resumed a child agent",
     "subagent.session_started": "Child-agent session started",
@@ -1581,6 +2029,12 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
 }
 
 function detailFor(type: JournalEvent["type"], payload: Record<string, unknown>): string {
+  if (type === "execution.failed") {
+    const message = typeof payload.message === "string" ? payload.message : "Execution stopped without a reason.";
+    const report = asRecord(payload.report);
+    const category = typeof report.category === "string" ? `（${report.category}）` : "";
+    return `${message}${category}`;
+  }
   if ((type === "execution.progress" || type === "subagent.progress") && typeof payload.message === "string") {
     return payload.message;
   }
