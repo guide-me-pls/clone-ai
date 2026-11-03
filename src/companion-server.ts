@@ -1180,17 +1180,39 @@ async function handleRequest(
         sendJson(response, 404, { error: "This memory does not exist." });
         return;
       }
+      const events = await context.journal.list();
       const wanted = new Set(memory.sourceEvidenceIds);
-      const evidence = wanted.size === 0 ? [] : (await context.journal.list())
+      const evidence = wanted.size === 0 ? [] : events
         .filter((event) => event.type === "evidence.recorded" && wanted.has((event.payload as { id?: string }).id ?? ""))
         .map((event) => {
           const payload = event.payload as { id: string; kind: string; summary: string; locator?: string };
           return { id: payload.id, kind: payload.kind, summary: payload.summary, ...(payload.locator === undefined ? {} : { locator: payload.locator }) };
         });
+      // Which work actually pulled this memory in, newest first: the journal is the
+      // only place that records a recall against a run, so it is the honest answer
+      // to "where was this used?" — the access count alone cannot say.
+      // 这条记忆实际被哪次工作取用，最新在前：只有 Journal 把召回记录到具体 Run 上，
+      // 因此"它用在哪了"只能从 Journal 得到——单看使用次数说不出这句话。
+      const usage = events
+        .filter((event) => event.type === "memory.recalled")
+        .flatMap((event) => {
+          const payload = event.payload as { query?: unknown; memories?: Array<{ id?: string }> };
+          const mentioned = Array.isArray(payload.memories) && payload.memories.some((item) => item.id === memory.id);
+          return mentioned
+            ? [{
+                at: event.occurredAt,
+                ...(event.runId === undefined ? {} : { runId: event.runId }),
+                query: typeof payload.query === "string" ? payload.query.slice(0, 160) : "",
+              }]
+            : [];
+        })
+        .reverse()
+        .slice(0, 20);
       sendJson(response, 200, {
         memory,
         file: { path: context.memoryGovernance.filePathFor(memory) },
         evidence,
+        usage,
       });
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "The memory could not be read." });
