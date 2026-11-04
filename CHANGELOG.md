@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Tasks stay inside the conversation that spawned them
+
+A run the Main Agent proposed during a chat is now a **child task of that conversation**, not a second conversation beside it. The sidebar shows the relation (the chat says how many tasks it owns, each task says 子任务 and is indented under its parent), hiding the conversation hides its children in the same step with a confirmation that names the count, and a "已隐藏" row lets the owner restore the conversation together with exactly the tasks that went with it. Deleting a task on its own leaves the conversation alone.
+
+主 Agent 在对话中提案的 Run 现在是该对话的**子任务**，而不是旁边另一个对话。侧栏把这个关系画出来（对话显示自己有几个任务，任务标为"子任务"并缩进在父级之下），隐藏对话会在同一步连带隐藏子任务，确认框会说明数量；「已隐藏」一行可把对话连同当初一起隐藏的任务精确恢复。单独删除某个任务不影响对话。
+
 ### Effort, readable traces, and a daemon that reports back
 
 A model's reasoning effort can now be chosen per worker and for the Main Agent. The gateway reports the levels each model actually offers (`reasoning_levels`), worker providers declare the levels their CLI accepts, and the settings page offers only those: Claude Code gets `--effort`, Codex `-c model_reasoning_effort=…`, Pi `--thinking`. `clone-ai effort <worker> <level>` pins it from the CLI; `config.json` `mainAgentEffort` (or `CLONE_AI_MAIN_EFFORT`) sets it for the Main Agent. Verified against the real CLIs: Claude Code with `--effort high` and Pi with `--thinking medium` both completed; Codex accepts the config override.

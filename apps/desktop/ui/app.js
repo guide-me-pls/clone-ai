@@ -99,9 +99,34 @@ const statusMeta = (status) => {
   return { label: t("status-running"), className: "running", dot: "running" };
 };
 function announce(message, error = false) { const node = $("notice"); node.textContent = message; node.className = `notice visible${error ? " error" : ""}`; clearTimeout(node.timer); node.timer = setTimeout(() => node.className = "notice", 3200); }
-function sessionMarkup(session) { const status = statusMeta(session.status); return `<div class="session-item"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title">${escape(plainPreview(session.title))}</span><span class="session-meta">${escape(plainPreview(session.preview) || status.label)}</span></span></button><button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="隐藏会话">×</button></div>`; }
-function renderSessions(sessions) {
-  const signature = JSON.stringify([state.selectedId, sessions.map((session) => [session.id, session.title, session.preview, session.status, session.updatedAt])]);
+function sessionMarkup(session) {
+  const status = statusMeta(session.status);
+  const child = session.parentId !== undefined;
+  const metaText = plainPreview(session.preview) || status.label;
+  // The relation is shown, not implied: a task of the chat says so, and the chat
+  // says how many tasks it owns. Deleting the chat takes them with it.
+  // 关系要明示：属于对话的任务会标出来，对话则说明自己有几个任务。删除对话会一并带走它们。
+  const relation = child ? "子任务 · " : session.childCount ? `${session.childCount} 个子任务 · ` : "";
+  return `<div class="session-item${child ? " is-child" : ""}${session.kind === "conversation" ? " is-conversation" : ""}"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title">${escape(plainPreview(session.title))}</span><span class="session-meta">${escape(relation + metaText)}</span></span></button><button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="${child ? "隐藏这条子任务" : session.kind === "conversation" ? "隐藏对话及其子任务" : "隐藏会话"}">×</button></div>`;
+}
+function renderSessions(rawSessions) {
+  // A derived task sits under the conversation that spawned it, so one request
+  // never reads as two chats. 派生任务排在其所属对话之下，使一次请求不会读成两个对话。
+  const ids = new Set(rawSessions.map((session) => session.id));
+  const childrenOf = new Map();
+  for (const session of rawSessions) {
+    if (session.parentId === undefined || !ids.has(session.parentId)) continue;
+    const list = childrenOf.get(session.parentId) || [];
+    list.push(session);
+    childrenOf.set(session.parentId, list);
+  }
+  const sessions = [];
+  for (const session of rawSessions) {
+    if (session.parentId !== undefined && ids.has(session.parentId)) continue;
+    sessions.push(session);
+    for (const child of childrenOf.get(session.id) || []) sessions.push(child);
+  }
+  const signature = JSON.stringify([state.selectedId, sessions.map((session) => [session.id, session.title, session.preview, session.status, session.updatedAt, session.parentId, session.childCount]), state.dashboard?.deletedConversations]);
   if (state.signatures.sessions === signature) return;
   state.signatures.sessions = signature;
   $("session-count").textContent = String(sessions.length);
@@ -109,7 +134,9 @@ function renderSessions(sessions) {
   const todayKey = new Date().toDateString();
   const today = sessions.filter((session) => new Date(session.updatedAt).toDateString() === todayKey);
   const earlier = sessions.filter((session) => new Date(session.updatedAt).toDateString() !== todayKey);
-  $("session-list").innerHTML = `${today.length ? `<div class="session-group">${t("today")}</div>${today.map(sessionMarkup).join("")}` : ""}${earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map(sessionMarkup).join("")}` : ""}`;
+  const hidden = (state.dashboard?.deletedConversations || []).map((entry) => `<div class="session-item is-hidden-conversation"><span class="session-copy"><span class="session-title">${escape(entry.title)}${entry.childCount ? ` · ${entry.childCount} 个子任务` : ""}</span><span class="session-meta">已隐藏</span></span><button class="session-restore" type="button" data-restore-conversation="${escape(entry.id)}">恢复</button></div>`).join("");
+  const hiddenBlock = hidden ? `<div class="session-group">已隐藏</div>${hidden}` : "";
+  $("session-list").innerHTML = `${today.length ? `<div class="session-group">${t("today")}</div>${today.map(sessionMarkup).join("")}` : ""}${earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map(sessionMarkup).join("")}` : ""}${hiddenBlock}`;
 }
 function renderSchedules(schedules, occurrences = [], reportDeliveries = [], reportError = false) {
   state.schedules = schedules;
@@ -1018,8 +1045,16 @@ async function setProviderHostAccess(id, allow) { if (allow && !(await confirmDi
 async function installMissingProviders() { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector("[data-install-missing]"); if (button) { button.disabled = true; button.querySelector("span").textContent = t("installing"); } try { const result = await api("/api/agents/install-missing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); state.signatures.agentPage = ""; await refresh(); announce(result.installed.length ? `已自动安装 ${result.installed.length} 个 Provider。` : "没有可自动安装的缺失 Provider。"); } catch (error) { announce(error.message, true); await refresh(); } }
 async function searchMemories(query) { try { const result = await api(`/api/memory/governed/recall?q=${encodeURIComponent(query)}`); renderMemorySearch(result.matches || []); } catch (error) { announce(error.message, true); } }
 function confirmDialog(message, okLabel) { return new Promise((resolve) => { const modal = $("confirm-modal"); $("confirm-message").textContent = message; const ok = $("confirm-ok"); ok.textContent = okLabel || "确认"; modal.setAttribute("aria-hidden", "false"); const done = (result) => { modal.setAttribute("aria-hidden", "true"); ok.onclick = $("confirm-cancel").onclick = modal.onclick = null; resolve(result); }; ok.onclick = () => done(true); $("confirm-cancel").onclick = () => done(false); modal.onclick = (event) => { if (event.target === modal) done(false); }; }); }
-async function deleteSession(id) { if (!(await confirmDialog("从会话列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。", "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
-$("session-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
+async function restoreConversation(id) {
+  try {
+    await api(`/api/sessions/${encodeURIComponent(id)}/restore`, { method: "POST" });
+    await refresh({ preserveScroll: false });
+    announce("对话及其子任务已恢复。");
+  } catch (error) { announce(error.message, true); }
+}
+
+async function deleteSession(id) { const session = (state.dashboard?.sessions || []).find((item) => item.id === id); const message = id === "main-agent-conversation" ? `隐藏这个对话？它的 ${session?.childCount || 0} 个子任务会一起隐藏。审计日志、记忆和备份不受影响，随时可以恢复。` : session?.parentId ? "隐藏这条子任务？审计记录会保留。父对话不受影响。" : "从会话列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。"; if (!(await confirmDialog(message, "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
+$("session-list").addEventListener("click", (event) => { const restore = event.target.closest("[data-restore-conversation]"); if (restore) { void restoreConversation(restore.dataset.restoreConversation); return; } const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
 $("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
