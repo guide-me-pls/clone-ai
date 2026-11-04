@@ -54,6 +54,10 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
               revealInFinder: (path) => window.webkit.messageHandlers.cloneFolderPicker.postMessage({
                 action: "reveal",
                 path: path
+              }),
+              openURL: (url) => window.webkit.messageHandlers.cloneFolderPicker.postMessage({
+                action: "openURL",
+                url: url
               })
             };
             """,
@@ -274,6 +278,11 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
                 self?.executeNavigation(index: targetIndex)
             }
+            if ProcessInfo.processInfo.arguments.contains("--preview-mobile-binding") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+                    self?.webView.evaluateJavaScript("window.openMobileBinding?.();")
+                }
+            }
             return
         }
         let index: Int
@@ -293,6 +302,13 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
               let action = body["action"] as? String else { return }
         if action == "reveal", let path = body["path"] as? String, !path.isEmpty {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            return
+        }
+        if action == "openURL",
+           let raw = body["url"] as? String,
+           let url = URL(string: raw),
+           url.scheme == "https" || url.scheme == "http" {
+            NSWorkspace.shared.open(url)
             return
         }
         guard action == "chooseDirectory" else { return }
