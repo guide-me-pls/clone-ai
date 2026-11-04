@@ -43,6 +43,8 @@ export interface NativeToolCall {
 export interface NativeToolSpec {
   name: string;
   description: string;
+  /** JSON Schema for the tool input, sent to providers that use tool calling. 供使用 tool calling 的 Provider 使用的 JSON Schema。 */
+  parameters?: Record<string, unknown>;
   risk: NativeToolRisk;
   /** Path of a file the call reads or writes; checked against the step's grants. 调用读写文件的路径，与步骤的授权核对。 */
   pathOf?: (input: Record<string, unknown>) => string | undefined;
@@ -93,9 +95,15 @@ export function decideTool(input: {
     // Lexical, not canonical: a path that escapes through `..` or a symlink
     // must be refused, not silently resolved back inside.
     // 按字面而非 canonical：通过 `..` 或符号链接逃逸的路径必须被拒绝，而不是被静默解析回内部。
-    const target = canonical(resolve(input.workspace, input.path));
+    // Root first, then resolve: the workspace may itself sit behind a symlink
+    // (/tmp -> /private/tmp on macOS), and canonicalising the target but not the
+    // workspace would refuse every path inside it.
+    // 先规范化根再解析：工作区本身可能位于符号链接之后（macOS 上 /tmp -> /private/tmp），
+    // 只规范化目标而不规范化工作区，会把其中每条路径都拒掉。
+    const root = canonical(input.workspace);
+    const target = resolve(root, input.path);
     const roots = (input.risk === "write" ? [...input.grants.writeRoots, ...input.grants.readRoots] : [...input.grants.readRoots, ...input.grants.writeRoots])
-      .map(canonical);
+      .map((grantRoot) => canonical(resolve(canonical(input.workspace), grantRoot)));
     const inside = roots.some((root) => target === root || target.startsWith(`${root}/`));
     if (!inside) return { allowed: false, reason: `The path ${target} is outside the step's granted scopes.` };
   }
@@ -166,8 +174,15 @@ export class NativeAgentWorker implements RuntimeAdapter {
           }
           const decision = decideTool({ risk: tool.risk, grants, workspace, ...(tool.pathOf === undefined ? {} : { path: tool.pathOf(call.input) }) });
           if (!decision.allowed) return { output: `Refused: ${decision.reason}`, isError: true };
-          const outcome = await tool.run(call, { workspace });
-          return { output: outcome.output, isError: outcome.isError === true };
+          // A failing tool is reported to the model, not thrown: one bad call
+          // must not end the turn the way a crashing process would.
+          // 工具失败要报告给模型而不是抛出：一次坏调用不该像进程崩溃那样终结整轮。
+          try {
+            const outcome = await tool.run(call, { workspace });
+            return { output: outcome.output, isError: outcome.isError === true };
+          } catch (error: unknown) {
+            return { output: `Tool ${call.name} failed: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+          }
         },
       });
       if (lastText.length > 0) yield { type: "message_delta", text: lastText };
