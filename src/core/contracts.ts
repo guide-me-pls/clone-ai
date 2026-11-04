@@ -331,6 +331,11 @@ export type JournalEventType =
   | "memory.restored"
   | "memory.mutation.discarded"
   | "memory.recalled"
+  // The improvement loop: a suggestion derived from outcomes, and the owner's
+  // decision on it. 改进环路：由结局得出的建议，以及所有者对它的决定。
+  | "improvement.suggested"
+  | "improvement.applied"
+  | "improvement.dismissed"
   // Personal state is journal-projected like every other durable fact, so the
   // owner's model of themselves survives a deleted projection.
   // 个人状态与其他持久事实一样由 Journal 投影得出，因此即使投影被删除，所有者对自身的

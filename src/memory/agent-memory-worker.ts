@@ -125,13 +125,19 @@ export function miningPrompt(job: PendingMemoryJob): string {
     "Write the result as JSON to out/candidates.json: an array of at most 3 objects.",
     "Each object: { \"type\": \"fact|preference|procedure|decision|commitment\", \"summary\": string,",
     "  \"confidence\": \"low|medium|high\", \"sensitivity\": \"public|private|secret\",",
-    "  \"sourceEvidenceIds\": [ids you actually cite] }",
+    "  \"sourceEvidenceIds\": [ids you actually cite], \"expiresAt\": optional ISO-8601 date }",
     "",
     "Rules:",
     "- Summaries are one sentence, 5-60 words, in the user's language.",
     "- sourceEvidenceIds must be ids from the list below. Never invent an id.",
     "- Only durable knowledge: preferences, standing procedures, decisions, project facts.",
     "- Skip one-off details, credentials, and anything already implied by the task itself.",
+    "- Set expiresAt only for time-bound knowledge (a deadline, a temporary setting, a current-state fact);",
+    "  leave it out for stable preferences and standing procedures.",
+    ...(job.outcome === "failed" ? [
+      "- This task FAILED. Extract lessons instead: type \"procedure\", one sentence on what went wrong and what to do",
+      "  differently next time, grounded in the cited evidence. If the evidence shows no clear cause, return [].",
+    ] : []),
     "",
     `Parent task: ${job.task.objective}`,
     "Evidence:",
@@ -176,9 +182,17 @@ export function validateCandidates(source: string, job: PendingMemoryJob, maxCan
       createdAt: new Date().toISOString(),
       type,
       ...(isSensitivity(record.sensitivity) ? { sensitivity: record.sensitivity } : {}),
+      ...(futureIsoDate(record.expiresAt) === undefined ? {} : { expiresAt: futureIsoDate(record.expiresAt)! }),
     });
   }
   return candidates;
+}
+
+/** An unparseable or already-past expiry is dropped, never trusted. 无法解析或已过去的过期时间会被丢弃而不是信任。 */
+function futureIsoDate(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const time = Date.parse(value);
+  return Number.isNaN(time) || time <= Date.now() ? undefined : new Date(time).toISOString();
 }
 
 /** Tolerates markdown code fences around the JSON and trailing prose. 容忍 JSON 外围的 Markdown 代码块与尾部文字。 */
