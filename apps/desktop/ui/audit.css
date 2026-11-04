@@ -132,3 +132,23 @@ body.empty-conversation .welcome { padding-bottom: 0; }
 .session-item.is-hidden-conversation .session-copy { min-width: 0; }
 .session-restore { border: 0; background: none; color: var(--accent, #3468f6); font: inherit; font-size: 11.5px; cursor: pointer; padding: 2px 4px; }
 .session-restore:hover { text-decoration: underline; }
+
+/* AI self-review card: findings and the one-click configuration actions. AI 自我评审卡片：发现项与一键配置动作。 */
+.au-review { margin-bottom: 14px; }
+.au-review-head { display: flex; gap: 14px; align-items: flex-start; justify-content: space-between; }
+.au-review-head h4 { margin-bottom: 4px; }
+.au-review-summary { margin: 8px 0 4px; color: var(--text, #20242c); font-size: 13px; line-height: 1.6; }
+.au-findings { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.au-findings li { display: flex; gap: 8px; align-items: flex-start; }
+.au-findings b { display: block; font-size: 12.5px; }
+.au-findings span { display: block; color: var(--subtle, #5c6675); font-size: 12px; line-height: 1.55; }
+.au-findings small { display: block; color: var(--muted, #8791a1); font-size: 11px; margin-top: 2px; }
+.au-actions-list { display: grid; gap: 8px; }
+.au-action { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 9px 11px; border: 1px solid var(--line, #e3e7ee); border-radius: 9px; }
+.au-action.is-applied { border-color: color-mix(in srgb, var(--au-ok) 35%, transparent); background: color-mix(in srgb, var(--au-ok) 5%, transparent); }
+.au-action b { display: block; font-size: 12.5px; }
+.au-action span { display: block; color: var(--subtle, #5c6675); font-size: 11.5px; }
+.au-action small { display: block; color: var(--muted, #8791a1); font-size: 11px; margin-top: 2px; }
+.au-applied-mark { color: var(--au-ok); font-size: 11.5px; margin-right: 4px; }
+.au-btn-primary { background: #20242c; border-color: #20242c; color: #fff; }
+.au-btn-primary:hover:not(:disabled) { background: #2c323c; }
