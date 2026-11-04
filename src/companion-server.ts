@@ -593,6 +593,13 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         logJson("error", "Improvement sweep failed", { error: error instanceof Error ? error.message : String(error) });
       });
     }
+    if (assembly.conversationMemory !== undefined) {
+      await assembly.conversationMemory.processDue().catch((error: unknown) => {
+        logJson("error", "Conversation memory extraction failed; the batch remains pending", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     await memoryGovernance.archiveIdle().catch((error: unknown) => {
       logJson("error", "Memory idle sweep failed", { error: error instanceof Error ? error.message : String(error) });
     });

@@ -44,7 +44,7 @@
  *
  * Usage / 用法:
  *   node --experimental-strip-types benchmark/long-memory-eval.ts --data FILE
- *     [--sample N] [--granularity session|turn] [--max-results K] [--min-ratio R]
+ *     [--sample N] [--granularity session|turn] [--max-results K] [--min-ratio R] [--context]
  *
  * Data / 数据: https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned
  *   longmemeval_oracle.json    只含证据 session（~15 MB，检索近乎送分，可当冒烟测试）
@@ -57,6 +57,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { MdMemoryStore } from "../src/memory/md-memory-store.ts";
+import { buildMemoryContextFromCandidates } from "../src/main-agent/memory-context-builder.ts";
 
 export interface LongMemEvalTurn {
   role: string;
@@ -86,6 +87,35 @@ export interface MemoryEvalOptions {
   maxResults?: number;
   /** Match floor passed to recall; 0.2 is the product default. 传给 recall 的命中下限；0.2 是产品默认值。 */
   minRatio?: number;
+  /**
+   * Also judge each question at the context boundary the worker actually sees.
+   * Retrieval can succeed while the context compile drops the evidence for size
+   * or count; only the latter decides what the model can answer from.
+   * 同时在 Worker 实际看到的上下文边界评判每道题。检索可能成功，而上下文编译因长度或条数
+   * 丢掉了证据；只有后者决定模型能依据什么回答。
+   */
+  context?: boolean;
+}
+
+/**
+ * One instance judged at the context boundary rather than at retrieval: would
+ * the context the worker actually receives contain the evidence sentence?
+ * Retrieval success (the evidence memory surfaced) and context success (its
+ * summary fits under the character and item caps) can differ, and only the
+ * second determines what the model can answer from.
+ * 在上下文边界而非检索层评判一道题：Worker 实际收到的上下文是否包含证据句？
+ * 检索成功（证据记忆浮出）与上下文成功（其摘要挤进了字符与条数上限）可能不同，
+ * 而只有后者决定模型能依据什么来回答。
+ */
+export interface ContextMetrics {
+  questionId: string;
+  questionType: string;
+  /** Whether any evidence memory survived into the compiled context. 是否有证据记忆进入编译后的上下文。 */
+  contextHit: boolean;
+  /** Context characters used. 上下文用掉的字符数。 */
+  characters: number;
+  /** Memories admitted to the context. 进入上下文的记忆条数。 */
+  items: number;
 }
 
 export interface InstanceMetrics {
@@ -98,6 +128,10 @@ export interface InstanceMetrics {
   recallAll: Record<string, number>;
   ndcgAny: number;
   turnRecallAny: Record<string, number> | undefined;
+  /** Whether an evidence memory reached the compiled worker context. 是否有证据记忆进入了编译后的 Worker 上下文。 */
+  contextHit: boolean;
+  contextCharacters: number;
+  contextItems: number;
 }
 
 export interface TypeAggregate {
@@ -128,6 +162,11 @@ export interface MemoryEvalReport {
   };
   /** Average top score over non-abstention questions, for comparison. 非弃权题的平均最高分，供对照。 */
   nonAbstentionTopScore: number | undefined;
+  /** Present only with --context: the end-to-end context boundary. 仅在 --context 时存在：端到端上下文边界。 */
+  context?: {
+    hitRate: number;
+    byType: Record<string, { count: number; hitRate: number; averageCharacters: number; averageItems: number }>;
+  };
 }
 
 /**
@@ -243,6 +282,10 @@ async function evaluateInstance(
 ): Promise<InstanceMetrics> {
   const matches = await store.recall(instance.question, { maxResults, minRatio });
   const abstention = instance.question_id.endsWith("_abs");
+  const context = buildMemoryContextFromCandidates(
+    matches.map((match) => ({ id: match.entry.id, summary: match.entry.summary, score: match.score })),
+    { minScore: 0 },
+  );
 
   // Turn-level hits collapse back to sessions in rank order, mirroring the
   // benchmark's turn-to-session conversion: several recalled turns of one
@@ -295,8 +338,16 @@ async function evaluateInstance(
     recallAll,
     ndcgAny: ndcgAny(rankedSessions, correct, Math.min(10, maxResults)),
     turnRecallAny,
+    contextHit: context !== undefined && context.sourceMemoryIds.some((id) => {
+      const location = locations.get(id);
+      return location !== undefined && correct.has(location.sessionId);
+    }),
+    contextCharacters: context?.summary.length ?? 0,
+    contextItems: context?.sourceMemoryIds.length ?? 0,
   };
 }
+
+const mean = (values: number[]): number => (values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length);
 
 function aggregate(results: InstanceMetrics[]): TypeAggregate {
   const mean = (values: number[]): number => (values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length);
@@ -357,6 +408,10 @@ export async function runLongMemoryEval(options: MemoryEvalOptions): Promise<Mem
 
   const withMatches = abstentions.filter((result) => result.matchedCount > 0);
   const scoredWithMatches = scored.filter((result) => result.matchedCount > 0);
+  // The context boundary is judged only over scored questions with an evidence
+  // set; an abstention question has nothing that should surface.
+  // 上下文边界只对在计分且带证据集的问题评判；弃权题本就没有应当浮出的东西。
+  const contextResults = results.filter((result) => !result.abstention);
   return {
     dataPath: options.dataPath,
     granularity,
@@ -375,6 +430,22 @@ export async function runLongMemoryEval(options: MemoryEvalOptions): Promise<Mem
     nonAbstentionTopScore: scoredWithMatches.length === 0
       ? undefined
       : scoredWithMatches.reduce((total, result) => total + (result.topScore ?? 0), 0) / scoredWithMatches.length,
+    ...(options.context === true
+      ? {
+        context: {
+          hitRate: contextResults.length === 0 ? 0 : contextResults.filter((result) => result.contextHit).length / contextResults.length,
+          byType: Object.fromEntries([...new Set(contextResults.map((result) => result.questionType))].map((type) => {
+            const rows = contextResults.filter((result) => result.questionType === type);
+            return [type, {
+              count: rows.length,
+              hitRate: rows.length === 0 ? 0 : rows.filter((result) => result.contextHit).length / rows.length,
+              averageCharacters: mean(rows.map((result) => result.contextCharacters)),
+              averageItems: mean(rows.map((result) => result.contextItems)),
+            }];
+          })),
+        },
+      }
+      : {}),
   };
 }
 
@@ -410,6 +481,14 @@ export function printReport(report: MemoryEvalReport): void {
   console.log("abstention (excluded from retrieval scoring, as in the paper):");
   console.log(`  ${report.abstention.count} questions | avg recalled memories: ${report.abstention.averageMatches.toFixed(2)} | no-match rate: ${pct(report.abstention.noMatchRate)} | avg top score: ${report.abstention.averageTopScore?.toFixed(2) ?? "-"}`);
   console.log(`  non-abstention avg top score: ${report.nonAbstentionTopScore?.toFixed(2) ?? "-"} — the gap between the two is the calibration room for "I don't know"`);
+  if (report.context !== undefined) {
+    console.log();
+    console.log("context boundary (what the worker actually receives):");
+    console.log(`  overall: ${pct(report.context.hitRate)} of questions had an evidence memory in the compiled context`);
+    for (const [type, row] of Object.entries(report.context.byType)) {
+      console.log(`  ${type.padEnd(26)} ${pct(row.hitRate)}  avg ${row.averageCharacters.toFixed(0)} chars / ${row.averageItems.toFixed(1)} items`);
+    }
+  }
 }
 
 async function main(): Promise<void> {
@@ -420,7 +499,7 @@ async function main(): Promise<void> {
   };
   const dataPath = value("--data");
   if (dataPath === undefined) {
-    console.error("Usage: long-memory-eval --data FILE [--sample N] [--granularity session|turn] [--max-results K] [--min-ratio R]");
+    console.error("Usage: long-memory-eval --data FILE [--sample N] [--granularity session|turn] [--max-results K] [--min-ratio R] [--context]");
     console.error("Data: https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned");
     process.exit(2);
   }
@@ -431,6 +510,7 @@ async function main(): Promise<void> {
     granularity: value("--granularity") === "turn" ? "turn" : "session",
     maxResults: value("--max-results") === undefined ? 10 : Number(value("--max-results")),
     minRatio: value("--min-ratio") === undefined ? 0.2 : Number(value("--min-ratio")),
+    ...(process.argv.includes("--context") ? { context: true } : {}),
   });
   printReport(report);
 

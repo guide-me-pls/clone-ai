@@ -36,7 +36,7 @@ await migrateLegacyCloneHome({
   legacyDirectory: defaultLegacyDirectory(paths.workspacePath),
   targetDirectory: paths.dataDirectory,
 });
-const { session, prompt } = await createMainAgentSession({ dataDirectory: paths.dataDirectory });
+const { session, prompt } = await createMainAgentSession({ dataDirectory: paths.dataDirectory, query });
 
 // The turn's inputs are recorded before the model sees them, so a failed run
 // can be attributed to a prompt revision instead of guessed at.
