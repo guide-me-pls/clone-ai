@@ -78,6 +78,28 @@ auto-update.
 
 ---
 
+## 2026-11-04 — Background readers ask for the event types they need
+
+**Decided:** `SqliteJournalStore.listTypesSince(types, sequence)` (using the
+`(type, sequence)` index), and `src/core/journal-types.ts` with `readTypes`,
+`readForRun`, `readSince` fallbacks for stores without the fast paths. Memory
+governance, the memory pipeline, conversation mining, opportunity scan/list/
+resolve/find, the daily report and the commitment reconciler now use them.
+
+**Why it won.** Measured on a 100,000-event journal: `list()` takes 117 ms and
+`listSince(tail)` / `listForRun` take 0–3 ms. Every 2-second queue tick and
+every opportunity scan was paying the full-scan cost for a handful of rows.
+
+**What was given up.** Each consumer now declares the event types it depends
+on. A new event type that a consumer needs but does not list is silently
+invisible to it — the reconciler's `RECONCILE_TYPES` is the risk. That trade
+was accepted because the alternative (reading everything) is the cost this was
+meant to remove; the list is beside the reader it belongs to, and the fallback
+path keeps tests and the JSONL store correct.
+
+**Reversal condition.** If a consumer is found missing an event type in
+practice, the fix is to widen its list, not to drop the narrowing.
+
 ## 2026-11-04 — Journal reads are incremental, with a full-rebuild fallback
 
 **Decided:** `SqliteJournalStore` gained `listSince(sequence)` and
