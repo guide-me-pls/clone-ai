@@ -107,11 +107,14 @@ export interface WorkOrderBudget {
   maxDurationMs: number;
   maxAttempts: number;
   /**
-   * Advisory only. Black-box CLI workers do not expose model or tool counts,
-   * so the Kernel cannot enforce these ceilings. Duration and attempts are
-   * the budgets that actually stop work.
-   * 仅作声明。黑盒 CLI Worker 不暴露模型或工具调用次数，Kernel 无法执行这两个上限。
-   * 真正能停住工作的预算是时长与尝试次数。
+   * Enforced where the adapter reports model and tool activity: the Kernel
+   * counts `tool_started`/`tool_completed` and, when the adapter declares it,
+   * `model_call` events, and fails the step past the ceiling. A black-box CLI
+   * cannot count what it does not report, so for those workers the ceiling is
+   * still only a declaration — the duration budget is what stops them.
+   * 在 Adapter 报告模型与工具活动处执行：Kernel 统计 `tool_started`/`tool_completed`，并在
+   * Adapter 声明时统计 `model_call` 事件，超过上限即判该步骤失败。黑盒 CLI 无法报告自己
+   * 没暴露的东西，因此对它们这两个上限仍只是声明——真正能停住它们的是时长预算。
    */
   maxModelCalls?: number;
   maxToolCalls?: number;
@@ -452,6 +455,8 @@ export type ExecutionEvent =
   | { type: "session_started"; sessionId: string }
   | { type: "message_delta"; text: string }
   | { type: "tool_started"; toolCallId: string; tool: string; inputSummary?: string }
+  /** One model round trip. Adapters that can count them emit this. 一次模型往返。能计数的 Adapter 发出此事件。 */
+  | { type: "model_call" }
   | { type: "tool_completed"; toolCallId: string; tool: string; isError: boolean }
   | { type: "progress"; message: string }
   | { type: "evidence"; evidence: Omit<Evidence, "id" | "runId" | "stepId" | "createdAt"> }
