@@ -8,6 +8,8 @@ export interface MagpieGatewayModel {
   name: string;
   provider?: string;
   reasoning?: boolean;
+  /** Levels this model actually offers, from the gateway. 该模型实际提供的档位，来自网关。 */
+  reasoningLevels?: string[];
   input?: string[];
   compatible?: boolean;
 }
@@ -152,9 +154,24 @@ function parseModels(record: Record<string, unknown>): MagpieGatewayModel[] {
           : value.id,
       ...(typeof value.owned_by === "string" ? { provider: value.owned_by } : {}),
       ...(typeof value.reasoning === "boolean" ? { reasoning: value.reasoning } : {}),
+      ...(reasoningLevelsOf(value) === undefined ? {} : { reasoningLevels: reasoningLevelsOf(value)! }),
       ...(input.length === 0 ? {} : { input }),
     }];
   });
+}
+
+function reasoningLevelsOf(value: Record<string, unknown>): string[] | undefined {
+  if (Array.isArray(value.reasoning_levels)) {
+    const levels = value.reasoning_levels.filter((entry): entry is string => typeof entry === "string");
+    if (levels.length > 0) return levels;
+  }
+  if (Array.isArray(value.supported_reasoning_levels)) {
+    const levels = value.supported_reasoning_levels
+      .map((entry) => (typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>).effort : undefined))
+      .filter((entry): entry is string => typeof entry === "string");
+    if (levels.length > 0) return levels;
+  }
+  return undefined;
 }
 
 function stringArray(value: unknown): string[] {
