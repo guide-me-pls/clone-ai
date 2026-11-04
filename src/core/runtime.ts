@@ -7,6 +7,7 @@ import type {
   ApprovalGrant,
   Evidence,
   ExecutionAssignment,
+  JournalEvent,
   ExecutionEvent,
   MemoryContextPacket,
   PlanStep,
@@ -26,7 +27,7 @@ import type {
   WorkerMemorySource,
 } from "./contracts.ts";
 import type { JournalStore } from "./journal.ts";
-import { approvalKey, assertTransition, emptyProjection, reduceEvent, replay, subagentKey, type RuntimeProjection } from "./run-state.ts";
+import { approvalKey, assertTransition, emptyProjection, reduceEvent, subagentKey, type RuntimeProjection } from "./run-state.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { CapabilityDispatcher } from "../workers/capability-dispatcher.ts";
 import { BUILT_IN_CATALOG, corroborateFailures, failureSignature, type FailureCategory, type FailureReport, type OutcomeCatalog } from "./failure-analysis.ts";
@@ -132,6 +133,8 @@ export class CloneRuntime {
   readonly #policy: PolicyEngine;
   readonly #verifier: Verifier;
   readonly #memory: MemoryPipeline;
+  /** Highest journal sequence already folded into the projection. 已并入投影的最高 Journal 序号。 */
+  #appliedSequence = 0;
   readonly #memorySource?: WorkerMemorySource;
   readonly #failureCatalog: OutcomeCatalog;
   readonly #workspacePath?: string;
@@ -166,8 +169,7 @@ export class CloneRuntime {
     if (this.#hydrated) {
       return;
     }
-    this.#state = replay(await this.#journal.list());
-    await this.#memory.rebuild();
+    await this.#applySince(0, { rebuildMemoryQueue: true });
     this.#hydrated = true;
   }
 
@@ -188,8 +190,44 @@ export class CloneRuntime {
    */
   async refresh(): Promise<void> {
     await this.#journal.reload?.();
-    this.#state = replay(await this.#journal.list());
+    // Incremental when the journal supports it: another process's events are
+    // applied on top of the projection already here instead of replaying the
+    // whole history. One case cannot be done incrementally — a sequence at or
+    // below what was already applied means the journal was replaced, truncated
+    // or reordered, so the projection is rebuilt from zero.
+    // 支持时走增量：别处的进程写入的事件叠加在已有投影上，而不是重放整段历史。只有一种情况无法增量——
+    // 出现不大于已应用序号的事件，说明 Journal 被替换、截断或重排，此时从零重建投影。
+    const applied = this.#appliedSequence;
+    const incremental = applied > 0
+      && this.#journal.listSince !== undefined
+      && (await this.#journal.listSince(applied)).every((event) => event.sequence > applied);
+    // A refresh that finds nothing new must still notice work created by
+    // another process before the projection existed here: on a non-incremental
+    // store the applied sequence stays 0, and "0 events after 0" is not a
+    // reason to keep an empty projection.
+    // 没有新事件的刷新，仍必须发现"投影建立之前由别的进程创建的工作"：在非增量存储上已应用序号
+    // 始终为 0，而"0 之后有 0 个事件"并不能成为保留空投影的理由。
+    const emptyProjectionWithoutHistory = this.#journal.listSince === undefined && (await this.#journal.list()).length > 0;
+    this.#state = incremental && !emptyProjectionWithoutHistory ? this.#state : emptyProjection();
+    await this.#applySince(incremental ? applied : 0, { rebuildMemoryQueue: false });
     this.#hydrated = true;
+  }
+
+  /**
+   * Applies every event after `sequence` to the projection and remembers the
+   * last sequence applied. The memory queue is only rebuilt when asked: it
+   * rescans the journal itself, so refreshing it on every tick would undo the
+   * point of incremental replay.
+   * 把 `sequence` 之后的每个事件应用到投影，并记住最后应用的序号。只有在被要求时才重建记忆队列：
+   * 它自己会重新扫描 Journal，每次 tick 都重建会让增量重放失去意义。
+   */
+  async #applySince(sequence: number, options: { rebuildMemoryQueue: boolean }): Promise<void> {
+    const events = this.#journal.listSince === undefined
+      ? (await this.#journal.list()).filter((event) => event.sequence > sequence)
+      : await this.#journal.listSince(sequence);
+    for (const event of events) this.#applyEvent(event);
+    if (this.#appliedSequence < sequence) this.#appliedSequence = sequence;
+    if (options.rebuildMemoryQueue) await this.#memory.rebuild();
   }
 
   /**
@@ -258,7 +296,9 @@ export class CloneRuntime {
             step.risk === "external_side_effect" || step.risk === "irreversible"
             || step.subagents?.some((order) => order.risk === "external_side_effect" || order.risk === "irreversible")
           ));
-        const history = await this.#journal.list();
+        const history = this.#journal.listForRun === undefined
+          ? await this.#journal.list()
+          : await this.#journal.listForRun(run.id);
         const dispatches = history.filter((event) => event.runId === run.id
           && (event.type === "execution.started" || event.type === "subagent.dispatched" || event.type === "subagent.resumed"));
         const unsafeReplay = dispatches.some((event) => (event.payload as { retrySafeAfterInterruption?: boolean }).retrySafeAfterInterruption !== true);
@@ -274,7 +314,7 @@ export class CloneRuntime {
           type: "run.status_changed", taskId: run.taskId, runId: run.id,
           payload: { status: failed ? "failed" : "queued", activeStepId: run.activeStepId, reason },
         }, { runId: run.id, ownerId });
-        this.#state = reduceEvent(this.#state, event);
+        this.#applyEvent(event);
         recovered.push({ runId: run.id, action: failed ? "failed" : "requeued", reason });
       } finally {
         await this.#journal.releaseClaim({ runId: candidate.id, ownerId }).catch(() => undefined);
@@ -520,8 +560,17 @@ export class CloneRuntime {
       .sort((left, right) => left.startedAt.localeCompare(right.startedAt));
   }
 
-  getEventsForRun(runId: string): Promise<readonly string[]> {
-    return this.#journal.list().then((events) => events.filter((event) => event.runId === runId).map((event) => event.type));
+  /**
+   * Event types for one run. Served from the in-memory projection's journal
+   * position is not possible (the projection keeps state, not a per-run log),
+   * so this stays a journal read; it is scoped to callers diagnosing a single
+   * run, not to the dispatch loop.
+   * 单个 Run 的事件类型。投影保存的是状态而非逐 Run 日志，因此这里仍需读 Journal；它服务于诊断
+   * 单个 Run 的调用方，不在派发循环中。
+   */
+  async getEventsForRun(runId: string): Promise<readonly string[]> {
+    const events = this.#journal.listForRun === undefined ? await this.#journal.list() : await this.#journal.listForRun(runId);
+    return events.filter((event) => event.runId === runId).map((event) => event.type);
   }
 
   async cancel(runId: string, agents: AgentRegistry): Promise<Run> {
@@ -547,7 +596,7 @@ export class CloneRuntime {
       const recorded = this.#journal.appendBatch === undefined
         ? await Promise.all(events.map((event) => this.#journal.append(event)))
         : await this.#journal.appendBatch(events);
-      for (const event of recorded) this.#state = reduceEvent(this.#state, event);
+      for (const event of recorded) this.#applyEvent(event);
     }
     for (const subagent of running) {
       const adapter = agents.get(subagent.agentId);
@@ -1502,7 +1551,7 @@ export class CloneRuntime {
     const event = guard?.ownerId === undefined
       ? await this.#journal.append(input)
       : await this.#journal.appendClaimed!(input, { runId: input.runId!, ownerId: guard.ownerId });
-    this.#state = reduceEvent(this.#state, event);
+    this.#applyEvent(event);
   }
 
   private async recordBatch(inputs: Parameters<JournalStore["append"]>[0][]): Promise<void> {
@@ -1514,7 +1563,7 @@ export class CloneRuntime {
     const events = guard?.ownerId === undefined
       ? await this.#journal.appendBatch!(inputs)
       : await this.#journal.appendBatchClaimed!(inputs, { runId: runId!, ownerId: guard.ownerId });
-    for (const event of events) this.#state = reduceEvent(this.#state, event);
+    for (const event of events) this.#applyEvent(event);
   }
 
   private async recordIfStatus(inputs: Parameters<JournalStore["append"]>[0][], runId: string, status: RunStatus): Promise<void> {
@@ -1526,7 +1575,21 @@ export class CloneRuntime {
       return;
     }
     const events = await this.#journal.appendBatchIfStatus(inputs, { runId, status });
-    for (const event of events) this.#state = reduceEvent(this.#state, event);
+    for (const event of events) this.#applyEvent(event);
+  }
+
+  /**
+   * The only place an event reaches the projection. Advancing the applied
+   * sequence here — not only in the replay loop — is what keeps an incremental
+   * refresh correct: an event applied by any other path that did not advance it
+   * would be applied a second time on the next refresh, and a status event
+   * replayed twice is a transition the state machine rightly refuses.
+   * 事件进入投影的唯一入口。在这里（而不只是在重放循环里）推进已应用序号，正是增量刷新正确的前提：
+   * 任何其他路径应用了事件却没推进序号，下次刷新就会重复应用，而状态事件重放两次就是状态机理应拒绝的转移。
+   */
+  #applyEvent(event: JournalEvent): void {
+    this.#state = reduceEvent(this.#state, event);
+    if (event.sequence > this.#appliedSequence) this.#appliedSequence = event.sequence;
   }
 
   private requireRun(runId: string): Run {
