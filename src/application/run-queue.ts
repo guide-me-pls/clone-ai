@@ -29,6 +29,13 @@ export interface RunQueueOptions {
   intervalMs?: number;
   onError?: (runId: string, error: unknown) => void;
   /**
+   * Called once a run reaches a terminal state in this process. Used to tell
+   * the conversation what the background work produced, without making the
+   * owner poll the sidebar.
+   * 本进程中 Run 进入终态时调用。用来把后台工作产出的结果告诉对话，避免所有者去轮询侧栏。
+   */
+  onSettled?: (runId: string) => void | Promise<void>;
+  /**
    * The journal used to claim runs. Without it the consumer falls back to
    * in-process de-duplication only, which is safe for a single daemon but
    * cannot stop a second process from executing the same run.
@@ -221,6 +228,13 @@ export class RunQueueConsumer {
         if (this.#options.journal !== undefined) await reconcileCommitments(this.#options.journal);
       } catch {
         // The state plane must never take the consumer down. 状态平面绝不能弄垮消费者。
+      }
+      try {
+        await this.#options.onSettled?.(runId);
+      } catch (error: unknown) {
+        // A reporting failure must not turn a finished run into a failed consumer.
+        // 上报失败不能把一次已完成的工作变成消费者失败。
+        this.#options.onError?.(runId, error);
       }
     }
   }

@@ -20,6 +20,7 @@ import { createKernelToolsExtension } from "./tools/kernel-tools.ts";
 import { compileBriefing } from "./situation-briefing.ts";
 import { createJournalStore } from "../core/sqlite-journal.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
+import { isEffortLevel, type EffortLevel } from "../workers/effort.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
 
 export interface MainAgentSessionOptions {
@@ -108,6 +109,7 @@ export async function createMainAgentSession(options: MainAgentSessionOptions): 
   await resourceLoader.reload();
 
   const configured = await resolveMainAgentModel(options.dataDirectory);
+  const effort = await readMainAgentEffortPreference(options.dataDirectory);
   const { session } = await createAgentSession({
     resourceLoader,
     // noTools: "builtin" disables built-in tools while keeping extension tools active.
@@ -122,6 +124,12 @@ export async function createMainAgentSession(options: MainAgentSessionOptions): 
     // 过滤最近会话；若传真实 cwd，所有者每换一个目录跑 clone-ai 就会开一个空白对话。
     sessionManager: options.sessionManager ?? await continueOwnerConversation(options.dataDirectory),
   });
+  // Effort is a per-run choice, applied after construction because the SDK fixes
+  // it on the session rather than at creation. An unknown level is refused by the
+  // config store, so this cast only narrows the union.
+  // 强度是每次运行的选择，在构造后设置，因为 SDK 把它固定在会话上而不是创建参数里。
+  // 未知档位会在配置层被拒，因此这里只是收窄联合类型。
+  if (effort !== undefined) session.setThinkingLevel(effort as Parameters<typeof session.setThinkingLevel>[0]);
   return { session };
 }
 
@@ -131,6 +139,17 @@ export async function createMainAgentSession(options: MainAgentSessionOptions): 
  * 一次性运行以环境变量为准；否则用 `config.json` 的 `mainAgentModel`。
  * 未设置则交给 Pi SDK 默认——我们不编造模型 id。
  */
+export async function readMainAgentEffortPreference(
+  dataDirectory: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<EffortLevel | undefined> {
+  const fromEnv = environment.CLONE_AI_MAIN_EFFORT?.trim();
+  if (isEffortLevel(fromEnv)) return fromEnv;
+  const paths = resolveClonePaths({ dataDirectory });
+  const config = await new CloneConfigStore(paths).get();
+  return config.mainAgentEffort;
+}
+
 export async function readMainAgentModelPreference(
   dataDirectory: string,
   environment: NodeJS.ProcessEnv = process.env,

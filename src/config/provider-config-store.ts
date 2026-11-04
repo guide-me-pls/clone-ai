@@ -1,6 +1,7 @@
 import { readJsonFile, writeJsonAtomic } from "../config/json-file.ts";
 import { BUILT_IN_PROVIDER_CONFIGS } from "../workers/provider-catalog.ts";
 import type { BlackBoxProviderConfig } from "../workers/black-box-cli-worker.ts";
+import { EFFORT_LEVELS, effortChoices, isEffortLevel, type EffortLevel } from "../workers/effort.ts";
 
 /**
  * Read only the owner's overrides. Built-ins remain source-controlled defaults;
@@ -79,6 +80,9 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
   if (record.promptVia !== undefined && record.promptVia !== "arg" && record.promptVia !== "stdin") throw new Error(`Provider ${id} promptVia must be arg or stdin.`);
   if (record.hostAccess !== undefined && record.hostAccess !== "unrestricted") throw new Error(`Provider ${id} hostAccess must be unrestricted or omitted.`);
   if (timeoutMs !== undefined && (typeof timeoutMs !== "number" || !Number.isInteger(timeoutMs) || timeoutMs < 1)) throw new Error(`Provider ${id} timeoutMs must be a positive integer.`);
+  if (record.effort !== undefined && !isEffortLevel(record.effort)) throw new Error(`Provider ${id} effort must be one of ${EFFORT_LEVELS.join(", ")}.`);
+  if (record.efforts !== undefined && (!Array.isArray(record.efforts) || record.efforts.some((item) => !isEffortLevel(item)))) throw new Error(`Provider ${id} efforts must list valid levels.`);
+  if (record.effortArgs !== undefined && (!Array.isArray(record.effortArgs) || record.effortArgs.some((item) => typeof item !== "string"))) throw new Error(`Provider ${id} effortArgs must be strings.`);
   if (record.sandbox !== undefined && record.sandbox !== "seatbelt") throw new Error(`Provider ${id} sandbox must be "seatbelt" or omitted.`);
   if (record.sandboxWritePaths !== undefined && (!Array.isArray(record.sandboxWritePaths) || record.sandboxWritePaths.some((item) => typeof item !== "string" || item.trim().length === 0))) throw new Error(`Provider ${id} sandboxWritePaths must be non-empty strings.`);
   return {
@@ -96,6 +100,9 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
     ...(record.sandbox === "seatbelt" ? { sandbox: "seatbelt" as const } : {}),
     ...(typeof record.model === "string" && record.model.trim().length > 0 ? { model: record.model.trim() } : {}),
     ...(Array.isArray(record.modelArgs) ? { modelArgs: record.modelArgs as string[] } : {}),
+    ...(record.effort === undefined ? {} : { effort: record.effort as EffortLevel }),
+    ...(Array.isArray(record.efforts) ? { efforts: effortChoices(record.efforts) } : {}),
+    ...(Array.isArray(record.effortArgs) ? { effortArgs: record.effortArgs as string[] } : {}),
     ...(Array.isArray(record.sandboxArgs) ? { sandboxArgs: record.sandboxArgs as string[] } : {}),
     ...(record.sandboxNetwork === true ? { sandboxNetwork: true } : {}),
     ...(Array.isArray(record.sandboxWritePaths) ? { sandboxWritePaths: record.sandboxWritePaths as string[] } : {}),
