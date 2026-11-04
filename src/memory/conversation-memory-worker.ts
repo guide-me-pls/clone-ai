@@ -26,6 +26,8 @@ import {
   type AgentMemoryWorkerOptions,
 } from "./agent-memory-worker.ts";
 import type { MemoryWorker, PendingMemoryJob } from "./memory-pipeline.ts";
+import type { JournalStore } from "../core/journal.ts";
+import { readForRun } from "../core/journal-types.ts";
 
 export interface ConversationTurn {
   at: string;
@@ -68,7 +70,7 @@ export function conversationEvidence(turns: readonly ConversationTurn[], session
  * （已入账的会跳过，从而保持幂等）。
  */
 export async function recordConversationRequest(input: {
-  journal: { list(): Promise<JournalEvent[]>; appendBatch(events: readonly import("../core/contracts.ts").NewJournalEvent[]): Promise<JournalEvent[]> };
+  journal: { list(): Promise<JournalEvent[]>; appendBatch?(events: readonly import("../core/contracts.ts").NewJournalEvent[]): Promise<JournalEvent[]>; listForRun?(runId: string): Promise<JournalEvent[]> };
   runId: string;
   session: string;
   turns: readonly ConversationTurn[];
@@ -76,12 +78,13 @@ export async function recordConversationRequest(input: {
 }): Promise<string[]> {
   const evidence = conversationEvidence(input.turns, input.session);
   if (evidence.length === 0) return [];
-  const existing = new Set((await input.journal.list())
+  const existing = new Set((await readForRun(input.journal, input.runId))
     .filter((event) => event.type === "evidence.recorded" && event.runId === input.runId)
     .map((event) => (event.payload as { id?: unknown }).id));
   const fresh = evidence.filter((item) => !existing.has(item.id));
-  const already = (await input.journal.list()).some((event) => event.type === "memory.conversation.requested" && event.runId === input.runId);
+  const already = (await readForRun(input.journal, input.runId)).some((event) => event.type === "memory.conversation.requested" && event.runId === input.runId);
   if (already) return [];
+  if (input.journal.appendBatch === undefined) throw new Error("The journal cannot atomically record conversation evidence.");
   await input.journal.appendBatch([
     ...fresh.map((item) => ({
       type: "evidence.recorded" as const,

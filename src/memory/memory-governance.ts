@@ -18,6 +18,7 @@ import type { JournalStore } from "../core/journal.ts";
 import { MdMemoryStore, type MemoryEntry } from "./md-memory-store.ts";
 import type { MemoryType } from "../core/contracts.ts";
 import { workspaceExecutionLock } from "../core/workspace-lock.ts";
+import { readForRun, readTypes } from "../core/journal-types.ts";
 import { memoryFingerprint, redactMemoryPii } from "./memory-hygiene.ts";
 
 /**
@@ -29,6 +30,22 @@ import { memoryFingerprint, redactMemoryPii } from "./memory-hygiene.ts";
  */
 export const MEMORY_LIFETIME_DAYS = 90;
 const DAY_MS = 24 * 3600 * 1000;
+
+/**
+ * The only history memory governance needs: candidate proposals and decisions,
+ * and the mutation markers that make each write recoverable.
+ * 记忆治理唯一需要的历史：候选提案与决策，以及让每次写入可恢复的变更标记。
+ */
+const MEMORY_DECISION_TYPES = [
+  "memory.candidate.proposed",
+  "memory.candidate.promoted",
+  "memory.candidate.rejected",
+  "memory.authored",
+  "memory.updated",
+  "memory.archived",
+  "memory.restored",
+  "memory.mutation.discarded",
+] as const;
 
 export interface MemoryGovernanceOptions {
   journal: JournalStore;
@@ -49,8 +66,7 @@ export class MemoryGovernance {
    * 提炼 Worker 已提案、且尚未被提升或拒绝的候选。
    */
   async pendingCandidates(): Promise<MemoryCandidate[]> {
-    const events = await this.#journal.list();
-    return pendingFromEvents(events);
+    return pendingFromEvents(await readTypes(this.#journal, MEMORY_DECISION_TYPES));
   }
 
   /**
@@ -65,7 +81,7 @@ export class MemoryGovernance {
     return this.withLock(async () => {
       await this.recoverUnlocked();
       await this.#journal.reload?.();
-      const proposed = pendingFromEvents(await this.#journal.list()).find((item) => item.id === candidate.id);
+      const proposed = pendingFromEvents(await readTypes(this.#journal, MEMORY_DECISION_TYPES)).find((item) => item.id === candidate.id);
       if (proposed === undefined) throw new Error("This memory candidate is not pending or was already decided.");
       candidate = proposed;
       await this.assertEvidenceExists(candidate.sourceEvidenceIds, candidate.runId);
@@ -119,7 +135,7 @@ export class MemoryGovernance {
     await this.withLock(async () => {
       await this.recoverUnlocked();
       await this.#journal.reload?.();
-      if (!pendingFromEvents(await this.#journal.list()).some((candidate) => candidate.id === candidateId)) {
+      if (!pendingFromEvents(await readTypes(this.#journal, MEMORY_DECISION_TYPES)).some((candidate) => candidate.id === candidateId)) {
         throw new Error("This memory candidate is not pending or was already decided.");
       }
       await this.#journal.append({
@@ -341,7 +357,10 @@ export class MemoryGovernance {
   async inspectPending(): Promise<{ memories: MemoryEntry[]; stats: { active: number; archived: number; total: number; pending: number; contentDirectory: string }; conflicts: Array<{ id: string; memoryId: string; summary: string }> }> {
     return this.withLock(async () => {
       await this.#journal.reload?.();
-      const events = await this.#journal.list();
+      // Only candidate decisions and mutation markers are read here; a full scan
+      // of every run's history would grow with the journal and say nothing new.
+      // 这里只需候选决策与变更标记；扫描每个 Run 的历史只会随 Journal 增长而毫无新信息。
+      const events = await readTypes(this.#journal, MEMORY_DECISION_TYPES);
       const recorded = new Set(events.map((event) => (event.payload as { mutationId?: unknown } | null)?.mutationId).filter((id): id is string => typeof id === "string"));
       return {
         memories: await this.#store.list(),
@@ -354,7 +373,7 @@ export class MemoryGovernance {
   async keepConflictingFile(mutationId: string): Promise<void> {
     await this.withLock(async () => {
       await this.#journal.reload?.();
-      const events = await this.#journal.list();
+      const events = await readTypes(this.#journal, MEMORY_DECISION_TYPES);
       const pending = this.#store.pendingMutations().find((item) => item.id === mutationId);
       const recorded = events.some((event) => event.type !== "memory.mutation.discarded"
         && (event.payload as { mutationId?: unknown } | null)?.mutationId === mutationId);
@@ -375,7 +394,7 @@ export class MemoryGovernance {
     const pending = new Set(this.#store.pendingMutationIds());
     if (pending.size === 0) return;
     await this.#journal.reload?.();
-    const events = await this.#journal.list();
+    const events = await readTypes(this.#journal, MEMORY_DECISION_TYPES);
     const discarded = new Set(events.filter((event) => event.type === "memory.mutation.discarded")
       .map((event) => (event.payload as { mutationId?: unknown } | null)?.mutationId)
       .filter((id): id is string => typeof id === "string"));
@@ -410,7 +429,10 @@ export class MemoryGovernance {
     if (evidenceIds.length === 0) {
       throw new Error("A memory candidate must cite at least one evidence id.");
     }
-    const events = await this.#journal.list();
+    // Evidence belongs to one run, so this asks for that run only instead of
+    // scanning the whole journal for every promotion.
+    // 证据属于单个 Run，因此这里只取该 Run 的事件，而不是每次提升都扫描整本 Journal。
+    const events = await readForRun(this.#journal, runId);
     const known = new Set(
       events.filter((event) => event.type === "evidence.recorded" && event.runId === runId && (event.payload as Evidence).runId === runId)
         .map((event) => (event.payload as Evidence).id),
