@@ -1058,6 +1058,43 @@ async function handleRequest(
     return;
   }
 
+  if (url.pathname === "/api/audit/review" || url.pathname === "/api/audit/apply" || url.pathname === "/api/audit/revert") {
+    // AI self-review: read the stored proposal, generate a new one, or apply one
+    // configuration change. Applying is a single-field write the owner clicked.
+    // AI 自我评审：读取已存的提案、生成新的，或应用其中一项配置改动。应用是所有者点击后的单字段写入。
+    const { runSelfReview, loadReview } = await import("./audit/self-review.ts");
+    const { applyReviewAction, revertReviewAction } = await import("./audit/apply-review.ts");
+    try {
+      if (url.pathname === "/api/audit/review" && method === "GET") {
+        sendJson(response, 200, { review: (await loadReview(context.dataDirectory)) ?? null });
+        return;
+      }
+      if (url.pathname === "/api/audit/review" && method === "POST") {
+        sendJson(response, 200, { review: await runSelfReview(context.dataDirectory, context.journal) });
+        return;
+      }
+      const body = await readJsonBody(request);
+      const actionId = typeof body.actionId === "string" ? body.actionId : "";
+      if (actionId.length === 0) {
+        sendJson(response, 400, { error: "actionId is required." });
+        return;
+      }
+      if (url.pathname === "/api/audit/apply" && method === "POST") {
+        const applied = await applyReviewAction(context.dataDirectory, context.journal, actionId);
+        sendJson(response, 200, { applied, review: await loadReview(context.dataDirectory) });
+        return;
+      }
+      if (url.pathname === "/api/audit/revert" && method === "POST") {
+        const reverted = await revertReviewAction(context.dataDirectory, context.journal, actionId);
+        sendJson(response, 200, { reverted, review: await loadReview(context.dataDirectory) });
+        return;
+      }
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The review request failed." });
+      return;
+    }
+  }
+
   if (url.pathname.startsWith("/api/audit")) {
     // The audit is a projection of the journal. Deleting a session hides it from the
     // conversation list only; the record stays here, marked deleted, so an eval never
@@ -2653,6 +2690,7 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
     "main_agent.prompt_snapshot": "记录提示词快照",
     "audit.labeled": "人工判定",
     "authority.changed": "修改权限",
+    "recommendation.applied": "应用评审改动",
   };
   return { label: labels[event.type] ?? event.type, detail: detailFor(event.type, payload), occurredAt: event.occurredAt };
 }
@@ -2683,6 +2721,11 @@ function detailFor(type: JournalEvent["type"], payload: Record<string, unknown>)
   if (type === "subagent.failed" && typeof payload.message === "string") {
     const report = asRecord(payload.report);
     return `${payload.message}${typeof report.category === "string" ? `（${report.category}）` : ""}`;
+  }
+  if (type === "recommendation.applied") {
+    const from = payload.from === null || payload.from === undefined ? "默认" : String(payload.from);
+    const to = payload.to === null || payload.to === undefined ? "默认" : String(payload.to);
+    return `${payload.reverted === true ? "撤销" : "应用"} ${String(payload.kind ?? "")}${payload.target === undefined ? "" : ` · ${String(payload.target)}`}：${from} → ${to}`;
   }
   if (type === "trigger.received" && typeof payload.summary === "string") {
     return payload.summary.slice(0, 160);
