@@ -330,6 +330,13 @@ export type JournalEventType =
   | "memory.recalled"
   // The improvement loop: a suggestion derived from outcomes, and the owner's
   // decision on it. 改进环路：由结局得出的建议，以及所有者对它的决定。
+  // A conversation turn asked for memory mining, and that request was drained.
+  // Separate from the task request/extracted pair so a conversation request
+  // never marks its run as mined for a task.
+  // 一个对话回合请求了记忆提炼，以及该请求已被处理。与任务请求/提炼完成分开，使对话请求
+  // 不会把同一 Run 标记为任务已提炼。
+  | "memory.conversation.requested"
+  | "memory.conversation.extracted"
   | "improvement.suggested"
   | "improvement.applied"
   | "improvement.dismissed"

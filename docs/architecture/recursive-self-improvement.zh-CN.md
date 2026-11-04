@@ -145,3 +145,24 @@ src/improvement/improvement-service.ts
   或策略的路径。
 - **总开关：** `CLONE_AI_IMPROVEMENT=0` 停止扫描；已批准的记忆照常工作。
 - **未实现：** 桌面端建议界面（目前用 CLI 或 API）、重叠记忆的取代、自动化基准门禁。
+
+## 11. 首版环路落地之后新增的部分
+
+阶段 1（只读归因）已经实现，同时补上归因所依赖的三块：
+
+- **对话提炼**（`src/memory/conversation-memory-worker.ts`、`conversation-memory-pipeline.ts`）。
+  每个所有者回合写入一条 `memory.conversation.requested` 事件，并把所有者原文记为证据；
+  维护循环按从旧到新的顺序把它们排空成普通的待审候选。Assistant 的文字永不被引用。
+  与任务提炼一样需要 `CLONE_AI_MEMORY_MINING=1` 开启，因为每个回合会花一次模型调用。
+- **记忆推送**（`src/main-agent/memory-push.ts`）。与所有者消息匹配的已审核记忆被编译进
+  Main Agent 本回合的 System Prompt（边界与 Worker 派发相同：只给摘要、有上限、secret 不外露、
+  剥掉指令化文本），并以 run id `main-agent` 记为 `memory.recalled`，使 §4 的归因也能看到对话回合。
+- **上下文边界评测**（`benchmark/long-memory-eval.ts --context`）。检索成功与上下文成功分开度量：
+  后者问的是证据记忆是否在 `buildMemoryContextFromCandidates` 的字符与条数上限内留存下来。
+- **混合召回**（`MdMemoryStore.recall`）。每条记忆的稀疏词向量（存于 `memory_term_weights`，
+  IDF 在查询时计算）以余弦参与打分，与大 bigram 命中比例并列，并加一个很小的偏好先验。
+  余弦只能提升已经共享词项的记忆，不会引入无关记忆。
+
+**原生 Worker**（`src/workers/native-agent-worker.ts`）把工具边界移进循环：只提供步骤 Scope
+已授权风险等级的工具，并在每次调用发起的瞬间复核路径，把拒绝作为工具结果交还给模型而不是杀死 Run。
+模型客户端是注入的，因此放行逻辑无需网络即可测试；本次改动没有引入任何厂商 SDK。

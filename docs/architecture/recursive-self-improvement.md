@@ -181,3 +181,36 @@ Decisions and reasons:
 - **Kill switch:** `CLONE_AI_IMPROVEMENT=0` stops sweeps; approved memories still work.
 - **Not built:** a desktop UI for suggestions (use the CLI or API for now),
   supersession of overlapping memories, and the automated benchmark gate.
+
+## 11. What changed after the first loop shipped
+
+Phase 1 (read-only attribution) is now implemented, together with three pieces
+the analysis depends on:
+
+- **Conversation mining** (`src/memory/conversation-memory-worker.ts`,
+  `conversation-memory-pipeline.ts`). Each owner turn journals a
+  `memory.conversation.requested` event plus the owner's text as evidence; the
+  maintenance loop drains them oldest-first into ordinary review candidates.
+  Assistant text is never cited. Opt-in via `CLONE_AI_MEMORY_MINING=1`, like
+  task mining, because it costs a model call per turn.
+- **Memory push** (`src/main-agent/memory-push.ts`). Reviewed memories matching
+  the owner's message are compiled into the Main Agent's system prompt for that
+  turn (same boundary as worker dispatch: summaries only, bounded, secrets
+  withheld, instruction text stripped) and journaled as `memory.recalled` with
+  run id `main-agent`, so §4 attribution sees conversation turns too.
+- **Context-boundary evaluation** (`benchmark/long-memory-eval.ts --context`).
+  Retrieval success and context success are now measured separately: the
+  second asks whether an evidence memory survived the character and item caps
+  of `buildMemoryContextFromCandidates`.
+- **Hybrid recall** (`MdMemoryStore.recall`). A per-memory sparse term vector
+  (stored in `memory_term_weights`, IDF applied at query time) is scored by
+  cosine alongside the bigram ratio, plus a small preference prior. Cosine can
+  only promote a memory that already shared a term, so it cannot introduce an
+  unrelated one.
+
+A **native worker** (`src/workers/native-agent-worker.ts`) moves the tool
+boundary inside the loop: it offers only tools whose risk the step's scopes
+grant, and re-checks every call's path at the moment it is made, returning a
+refusal to the model instead of killing the run. The model client is injected,
+so the gating is testable without a network call; no vendor SDK ships in this
+change.
