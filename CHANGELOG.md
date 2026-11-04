@@ -10,9 +10,13 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 The owner can now text Clone AI from WhatsApp without SMS or a direct inbound port on the Mac. A separate loopback bridge verifies Meta's raw webhook signature, enforces an E.164 allowlist, stores messages in SQLite before returning `200`, deduplicates Meta retries by message id, and forwards visible replies through the Cloud API. Long replies are split below the 4096-character limit. If the desktop runtime is closed or busy, the message stays queued with backoff and the owner is told it was not executed; the same turn id prevents a completed request from running twice. `npm run mobile:install` creates an optional per-user LaunchAgent with its secrets in a `0600` env file. Apple provides no supported iMessage bot API, so WhatsApp is the implemented phone channel; Meta's current message pricing still applies.
 
+The Mac app now exposes a **Connect phone** entry in the sidebar and a **Phone channel** settings wizard. It writes the Cloud API credentials to a `0600` env file, starts or stops the bridge, verifies Meta credentials, installs `cloudflared` through Homebrew only after confirmation, starts/stops the HTTPS tunnel, copies the Webhook URL and Verify Token, and shows the live binding checklist. Access Token and App Secret are never returned to the UI.
+
 ### WhatsApp 手机通道
 
 所有者现在可以从 WhatsApp 给 Clone AI 发文字，不依赖短信，也不需要把 Mac 的端口直接暴露到公网。独立的回环桥会验证 Meta 原始 Webhook 签名、执行 E.164 白名单、先写入 SQLite 再返回 `200`、按 message id 去重，并通过 Cloud API 发送可见回复。长回复会按 4096 字符上限切分。桌面 Runtime 关闭或正忙时，消息会退避排队，并明确提示“尚未执行”；相同回合 id 保证已完成的请求不会再次调用模型。`npm run mobile:install` 可安装当前用户的 LaunchAgent，密钥保存在 `0600` 环境文件中。Apple 没有受支持的 iMessage 机器人 API，因此已实现的是 WhatsApp 通道；Meta 当前的商业消息计费规则仍然适用。
+
+Mac App 现在在侧栏提供 **连接手机** 入口，并在设置中提供 **手机通道** 向导：保存 Cloud API 凭据到 `0600` 文件、启动或停止手机桥、验证 Meta 凭据、在明确确认后通过 Homebrew 安装 `cloudflared`、启动或停止 HTTPS 隧道、复制 Webhook 地址和 Verify Token，并实时显示绑定清单。Access Token 与 App Secret 永远不会返回到 UI。
 
 ### Tasks stay inside the conversation that spawned them
 

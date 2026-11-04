@@ -60,6 +60,7 @@ import { describeHistory, mainAgentSessionDirectory, readConversation, searchHis
 import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
 import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
 import { listPiModelIds, listPiModels, piModelReference } from "./main-agent/pi-model-catalog.ts";
+import { WhatsAppBindingInputError, WhatsAppSetupService } from "./mobile/whatsapp-setup.ts";
 import {
   listEffectiveProviderConfigs,
   readUserProviderConfigs,
@@ -455,6 +456,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     store: new MdMemoryStore({ dataDirectory }),
   });
   const config = new CloneConfigStore(paths);
+  const whatsappSetup = new WhatsAppSetupService(dataDirectory);
   const scheduler = new LocalScheduler({
     store: schedules,
     run: async (schedule, occurrence) => {
@@ -608,6 +610,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         memoryGovernance,
         reportRunner,
         opportunityService,
+        whatsappSetup,
         badCaseLog,
         journal,
         runtime: queueRuntime,
@@ -635,6 +638,11 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const url = `http://${host === "::1" ? "[::1]" : host}:${address.port}`;
   const endpointStartedAt = new Date().toISOString();
   await persistCompanionEndpoint(dataDirectory, url, endpointStartedAt);
+  void whatsappSetup.initialize().catch((error: unknown) => {
+    logJson("error", "WhatsApp bridge initialization failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   bound.port = address.port;
   scheduler.start();
   return {
@@ -693,6 +701,7 @@ async function handleRequest(
     memoryGovernance: MemoryGovernance;
     reportRunner?: DailyReportRunner;
     opportunityService: OpportunityService;
+    whatsappSetup: WhatsAppSetupService;
     badCaseLog: BadCaseLog;
     journal: JournalStore;
     runtime: CloneRuntime;
@@ -810,6 +819,70 @@ async function handleRequest(
         outcomesDirectory: context.paths.outcomesDirectory,
         workspaceRuntimeDirectory: context.paths.workspaceRuntimeDirectory,
       },
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/mobile/whatsapp") {
+    sendJson(response, 200, { status: await context.whatsappSetup.status() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/binding") {
+    const body = await readJsonBody(request);
+    const input: Record<string, string> = {};
+    for (const key of ["accessToken", "phoneNumberId", "verifyToken", "appSecret", "allowedNumbers", "graphVersion"]) {
+      if (typeof body[key] === "string") input[key] = body[key];
+    }
+    try {
+      sendJson(response, 200, { status: await context.whatsappSetup.saveBinding(input) });
+    } catch (error: unknown) {
+      if (error instanceof WhatsAppBindingInputError) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/bridge/start") {
+    await context.whatsappSetup.startBridge();
+    sendJson(response, 200, { status: await context.whatsappSetup.status() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/bridge/stop") {
+    await context.whatsappSetup.stopBridge();
+    sendJson(response, 200, { status: await context.whatsappSetup.status() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/tunnel/start") {
+    sendJson(response, 200, { status: await context.whatsappSetup.startTunnel() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/tunnel/stop") {
+    sendJson(response, 200, { status: await context.whatsappSetup.stopTunnel() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/tunnel/install") {
+    const body = await readJsonBody(request);
+    if (body.acknowledgeInstall !== true) {
+      sendJson(response, 400, { error: "安装 cloudflared 需要明确确认。" });
+      return;
+    }
+    const result = await context.whatsappSetup.installCloudflared();
+    sendJson(response, 200, { ...result, status: await context.whatsappSetup.status() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/verify") {
+    sendJson(response, 200, {
+      profile: await context.whatsappSetup.verifyCloudCredentials(),
+      status: await context.whatsappSetup.status(),
     });
     return;
   }
