@@ -57,6 +57,10 @@ export interface NativeModelClient {
     instructions: string;
     tools: readonly NativeToolSpec[];
     workspace: string;
+    /** Called once per model round trip, for the step's model-call budget. 每次模型往返调用一次，用于步骤的模型调用预算。 */
+    onModelCall?: () => void;
+    /** Called around each tool call, for the step's tool-call budget. 每次工具调用前后调用，用于步骤的工具调用预算。 */
+    onToolCall?: (call: NativeToolCall, outcome: { isError: boolean }) => void;
     onText?: (text: string) => void;
     execute: (call: NativeToolCall) => Promise<{ output: string; isError: boolean }>;
     signal: AbortSignal;
@@ -157,14 +161,30 @@ export class NativeAgentWorker implements RuntimeAdapter {
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(new Error("Native worker timed out.")), this.#config.timeoutMs ?? (input.workOrder?.budget.maxDurationMs ?? 20 * 60_000));
+    // The provider loop runs while this generator is being consumed, so a
+    // budget refusal recorded here is checked by the Kernel between events
+    // rather than after the whole step has already run.
+    // Provider 循环在本生成器被消费期间运行，因此在这里记录的预算拒绝会被 Kernel 在事件之间检查，
+    // 而不是在整个步骤跑完之后才发现。
+    let refusal: Error | undefined;
+    const budget = input.workOrder?.budget;
+    let modelCalls = 0;
+    let toolCalls = 0;
     try {
       const result = await this.#config.createClient().run({
         instructions: buildInstructions(input, grants.dropped.map((item) => `${item.scope.domain}:${item.scope.resource} (${item.reason})`)),
         tools: offered,
         workspace,
         signal: controller.signal,
+        onModelCall: () => { modelCalls += 1; },
+        onToolCall: (toolCall, outcome) => { toolCalls += 1; },
         onText: (text) => { lastText = text; },
         execute: async (call) => {
+          if (budget?.maxToolCalls !== undefined && toolCalls >= budget.maxToolCalls) {
+            refusal = new Error(`Tool call budget exceeded: ${toolCalls} >= ${budget.maxToolCalls}.`);
+            controller.abort(refusal);
+            return { output: `Refused: ${refusal.message}`, isError: true };
+          }
           const tool = offered.find((item) => item.name === call.name);
           if (tool === undefined) {
             // A hallucinated or withdrawn tool is refused, and the loop continues:
@@ -176,7 +196,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
           if (!decision.allowed) return { output: `Refused: ${decision.reason}`, isError: true };
           // A failing tool is reported to the model, not thrown: one bad call
           // must not end the turn the way a crashing process would.
-          // 工具失败要报告给模型而不是抛出：一次坏调用不该像进程崩溃那样终结整轮。
+          // 工具失败要报告给模型而不是抛出：一次坏调用不该像崩溃进程那样终结整轮。
           try {
             const outcome = await tool.run(call, { workspace });
             return { output: outcome.output, isError: outcome.isError === true };
@@ -188,12 +208,12 @@ export class NativeAgentWorker implements RuntimeAdapter {
       if (lastText.length > 0) yield { type: "message_delta", text: lastText };
       yield { type: "completed", summary: result.summary };
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = refusal?.message ?? (error instanceof Error ? error.message : String(error));
       const report: FailureReport = {
         providerId: this.id,
         agentId: this.id,
-        category: controller.signal.aborted ? "timeout" : "unknown",
-        signature: controller.signal.aborted ? "native-worker-timeout" : "native-worker-error",
+        category: refusal !== undefined ? "budget_exceeded" : controller.signal.aborted ? "timeout" : "unknown",
+        signature: refusal !== undefined ? (refusal.message.includes("Tool call") ? "budget-tool-calls" : "budget-model-calls") : controller.signal.aborted ? "native-worker-timeout" : "native-worker-error",
         detail: message,
       };
       yield { type: "failed", message, report };
