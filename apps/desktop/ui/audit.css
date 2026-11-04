@@ -121,3 +121,14 @@ body.empty-conversation .welcome { padding-bottom: 0; }
 .au-trace-raw { grid-column: 2; }
 .au-trace-raw summary { color: var(--muted, #8791a1); font-size: 11px; cursor: pointer; }
 .au-trace-raw pre { max-height: 180px; }
+
+/* Derived tasks hang off their conversation with a visible rail, so one request
+ * cannot read as two chats. 派生任务以可见的连线挂在所属对话下，使一次请求不会读成两个对话。 */
+.session-item.is-child { position: relative; padding-left: 14px; }
+.session-item.is-child::before { content: ""; position: absolute; left: 6px; top: 4px; bottom: 4px; width: 1px; background: var(--line-strong, #ccd4df); }
+.session-item.is-child .session-title { font-size: 12.5px; }
+.session-item.is-conversation .session { box-shadow: inset 2px 0 0 var(--accent, #3468f6); }
+.session-item.is-hidden-conversation { display: flex; align-items: center; gap: 8px; padding: 5px 8px; color: var(--muted, #8791a1); opacity: .8; }
+.session-item.is-hidden-conversation .session-copy { min-width: 0; }
+.session-restore { border: 0; background: none; color: var(--accent, #3468f6); font: inherit; font-size: 11.5px; cursor: pointer; padding: 2px 4px; }
+.session-restore:hover { text-decoration: underline; }
