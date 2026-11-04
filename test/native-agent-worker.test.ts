@@ -86,3 +86,18 @@ test("a read-only step's instructions say what was refused", async (t) => {
   assert.match(text, /Acceptance criteria/);
   assert.match(text, /too broad/);
 });
+
+test("a realpath-mismatched workspace still admits paths inside it, and refuses escapes", async (t) => {
+  // The workspace root itself may be behind a symlink that the grants already
+  // canonicalised (/tmp -> /private/tmp on macOS). Resolving the target but not
+  // the workspace used to refuse every file inside it.
+  // 工作区根可能位于授权已规范化的符号链接之后（macOS 上 /tmp -> /private/tmp）。
+  // 只规范化目标而不规范化工作区，会把其中每个文件都拒掉。
+  const directory = await workspace(t);
+  const root = realpathSync(directory);
+  const grants = { readRoots: [root], writeRoots: [root], network: false };
+  // The workspace is named through its uncanonicalised path here.
+  // 这里用未规范化的路径指代工作区。
+  assert.equal(decideTool({ risk: "write", grants, workspace: directory, path: "out/hello.txt" }).allowed, true);
+  assert.equal(decideTool({ risk: "write", grants, workspace: directory, path: "../escape.md" }).allowed, false);
+});
