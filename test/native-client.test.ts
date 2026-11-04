@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { NativeAgentWorker, type NativeToolSpec } from "../src/workers/native-agent-worker.ts";
@@ -58,4 +61,37 @@ test("the system prompt names the offered tools and the boundary", () => {
   const prompt = systemPrompt("do it", tools);
   assert.match(prompt, /read_file, list_directory, write_file/);
   assert.match(prompt, /will be refused/);
+});
+
+test("the worker reports model and tool activity so the Kernel can count it", async () => {
+  const counts: { modelCalls: number; toolCalls: number; done?: number } = { modelCalls: 0, toolCalls: 0 };
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    createClient: () => ({
+      async run(input) {
+        input.onModelCall?.();
+        await input.execute({ name: "absent", input: {} });
+        input.onToolCall?.({ name: "absent", input: {} }, { isError: true });
+        input.onModelCall?.();
+        return { summary: "done" };
+      },
+    }),
+    tools: [],
+  });
+  const workspace = await mkdtemp(join(tmpdir(), "clone-ai-native-count-"));
+  const events: string[] = [];
+  for await (const event of worker.execute({
+    run: { id: "r", taskId: "t", status: "running", createdAt: "", updatedAt: "" },
+    task: { id: "t", triggerId: "x", title: "t", objective: "x", acceptanceCriteria: [], createdAt: "" },
+    step: { id: "s", title: "s", instructions: "x", risk: "read_only", acceptanceCriteria: [], scopes: [] },
+    executor: { agentId: "n", providerId: "n" },
+    workspacePath: workspace,
+  })) {
+    events.push(event.type);
+    if (event.type === "completed") counts.done = 1;
+  }
+  await rm(workspace, { recursive: true, force: true });
+  assert.equal(counts.done, 1);
+  assert.ok(events.includes("session_started"));
 });
