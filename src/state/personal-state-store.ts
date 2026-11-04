@@ -39,7 +39,20 @@ export class PersonalStateStore {
 
   async hydrate(force = false): Promise<PersonalStateProjection> {
     if (this.#hydrated && !force) return this.#state;
-    this.#state = projectPersonalState(await this.#journal.list());
+    // Incremental when the journal supports it: the projector already skips
+    // events it has applied and carries its own last sequence, so a refresh
+    // only needs to hand it the tail. A tail that starts at or below what was
+    // applied means the journal was replaced, and the projection restarts.
+    // 支持时走增量：投影器本身会跳过已应用的事件并自带最后序号，因此刷新只需把尾部交给它。
+    // 若尾部起点不高于已应用序号，说明 Journal 被替换，投影重新开始。
+    const applied = this.#state.lastAppliedSequence;
+    const events = applied > 0 && this.#journal.listSince !== undefined
+      ? await this.#journal.listSince(applied)
+      : applied > 0
+        ? (await this.#journal.list()).filter((event) => event.sequence > applied)
+        : await this.#journal.list();
+    const replaced = applied > 0 && events.some((event) => event.sequence <= applied);
+    this.#state = projectPersonalState(events, replaced ? undefined : this.#state);
     this.#hydrated = true;
     return this.#state;
   }
