@@ -63,9 +63,30 @@ export class AgentMemoryWorker implements MemoryWorker {
     this.#maxCandidates = options.maxCandidates ?? 3;
   }
 
+  /** The provider's raw output, before validation; used by workers that need their own prompt. 校验前的 Provider 原始输出；供需要自己 Prompt 的 Worker 使用。 */
+  async extractRaw(job: PendingMemoryJob): Promise<string | undefined> {
+    const workspace = await mkdtemp(join(tmpdir(), "clone-ai-memory-mine-"));
+    try {
+      return await this.runMiner(job, workspace);
+    } finally {
+      await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
   async extract(job: PendingMemoryJob): Promise<MemoryCandidate[]> {
     const workspace = await mkdtemp(join(tmpdir(), "clone-ai-memory-mine-"));
     try {
+      const source = await this.runMiner(job, workspace);
+      if (source === undefined) throw new Error("Memory mining did not produce a candidate file.");
+      if (parseJsonArray(source) === undefined) throw new Error("Memory mining produced invalid JSON.");
+      return validateCandidates(source, job, this.#maxCandidates);
+    } finally {
+      await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  private async runMiner(job: PendingMemoryJob, workspace: string): Promise<string | undefined> {
+    {
       const adapter = new BlackBoxCliWorker({
         agentId: "memory-miner",
         config: { ...this.#config, timeoutMs: this.#timeoutMs },
@@ -89,7 +110,7 @@ export class AgentMemoryWorker implements MemoryWorker {
           id: "mine-memory",
           role: "researcher",
           title: "Mine memory candidates",
-          objective: miningPrompt(job),
+          objective: job.promptOverride ?? miningPrompt(job),
           inputs: [],
           requiredCapabilities: ["research", "filesystem_read", "filesystem_write"],
           expectedArtifacts: [{ id: "candidates", kind: "artifact", description: "out/candidates.json", required: true }],
@@ -101,12 +122,7 @@ export class AgentMemoryWorker implements MemoryWorker {
       })) {
         if (event.type === "failed") throw new Error(`Memory mining failed: ${event.report?.category ?? event.message}`);
       }
-      const source = await readFile(join(workspace, "out", "candidates.json"), "utf8").catch(() => undefined);
-      if (source === undefined) throw new Error("Memory mining did not produce a candidate file.");
-      if (parseJsonArray(source) === undefined) throw new Error("Memory mining produced invalid JSON.");
-      return validateCandidates(source, job, this.#maxCandidates);
-    } finally {
-      await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
+      return await readFile(join(workspace, "out", "candidates.json"), "utf8").catch(() => undefined);
     }
   }
 }

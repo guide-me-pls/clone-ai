@@ -35,7 +35,7 @@ await migrateLegacyCloneHome({
   legacyDirectory: defaultLegacyDirectory(paths.workspacePath),
   targetDirectory: paths.dataDirectory,
 });
-const { session } = await createMainAgentSession({ dataDirectory: paths.dataDirectory });
+const { session } = await createMainAgentSession({ dataDirectory: paths.dataDirectory, query });
 
 session.subscribe((event) => {
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {

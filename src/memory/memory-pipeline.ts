@@ -14,6 +14,8 @@ export interface PendingMemoryJob {
    * Run 的结局。失败的 Run 被用来提炼教训（哪里出错、如何避免），而不是交付结果的事实。
    */
   outcome?: "completed" | "failed";
+  /** Replaces the built-in mining prompt, for workers with their own extraction rules. 替换内建提炼 Prompt，供有自己提炼规则的 Worker 使用。 */
+  promptOverride?: string;
 }
 
 export interface MemoryWorker {
@@ -101,10 +103,17 @@ export class MemoryPipeline {
   async processNext(runId?: string): Promise<MemoryCandidate[]> {
     const index = runId === undefined ? 0 : this.#pending.findIndex((job) => job.run.id === runId);
     const job = index < 0 ? undefined : this.#pending.splice(index, 1)[0];
-    if (job === undefined) {
-      return [];
-    }
+    return job === undefined ? [] : await this.processJob(job);
+  }
 
+  /**
+   * Runs one job built from the journal rather than the in-memory queue. Used
+   * by the conversation path, whose jobs accumulate in the journal and would
+   * otherwise never be drained after a restart.
+   * 处理一个从 Journal 构建、而非来自内存队列的任务。供对话路径使用：它的任务累积在
+   * Journal 中，否则重启后永远不会被处理。
+   */
+  async processJob(job: PendingMemoryJob): Promise<MemoryCandidate[]> {
     try {
       const process = async (): Promise<MemoryCandidate[]> => {
         await this.#journal.reload?.();

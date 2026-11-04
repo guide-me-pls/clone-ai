@@ -116,6 +116,9 @@ function expandedRecallTerms(query: string, direct: ReadonlySet<string>): string
   return [...terms].slice(0, 128);
 }
 
+/** A memory admitted on cosine alone (no bigram ratio) still needs this much. 只靠余弦（没有 bigram 比例）进入结果的记忆，仍需达到这个值。 */
+export const COSINE_ONLY_FLOOR = 0.45;
+
 export interface MemoryStoreOptions {
   dataDirectory: string;
   /** Name of the index database file. 索引数据库文件名。 */
@@ -158,6 +161,18 @@ export class MdMemoryStore {
         PRIMARY KEY (memory_id, term)
       );
       CREATE INDEX IF NOT EXISTS idx_terms ON memory_terms (term);
+      -- Sparse lexical vector per memory: term -> local weight, used for cosine.
+      -- Term rows answer "which memories contain this token" quickly; without the
+      -- weight an IDF-blind hit counts as much as a distinctive one.
+      -- 每条记忆的稀疏词法向量：term -> 局部权重，用于余弦相似度。term 行快速回答
+      -- "哪些记忆包含这个词"；没有权重时，一个毫无区分度的命中会与一个特征词等值。
+      CREATE TABLE IF NOT EXISTS memory_term_weights (
+        memory_id TEXT NOT NULL,
+        term TEXT NOT NULL,
+        weight REAL NOT NULL,
+        PRIMARY KEY (memory_id, term)
+      );
+      CREATE INDEX IF NOT EXISTS idx_term_weights ON memory_term_weights (term);
       CREATE INDEX IF NOT EXISTS idx_memories_status ON memories (status);
       CREATE TABLE IF NOT EXISTS memory_mutations (
         id TEXT PRIMARY KEY,
@@ -381,6 +396,9 @@ export class MdMemoryStore {
       set.add(row.term);
       byId.set(row.memory_id, set);
     }
+    const idf = this.termDocumentFrequency(searchTerms);
+    const queryVector = new Map<string, number>();
+    for (const term of searchTerms) queryVector.set(term, 1 / Math.sqrt(searchTerms.length));
 
     const matches: MemoryRecallMatch[] = [];
     for (const [memoryId, matched] of byId) {
@@ -388,24 +406,64 @@ export class MdMemoryStore {
       if (entry === undefined) continue;
       const directMatches = [...matched].filter((term) => direct.has(term)).length;
       let expandedMatches = matched.size - directMatches;
-      if (query.includes("周报") && !/(周报|每周|周[一二三四五六日天末]|星期[一二三四五六日天])/.test(`${entry.summary} ${entry.content}`)) {
+      if (query.includes("周报") && !/(周报|每周|周[一二三四五六日天末]|星期[一二三四五六日天末])/.test(`${entry.summary} ${entry.content}`)) {
         expandedMatches *= 0.5;
       }
       const ratio = Math.min(1, (directMatches + expandedMatches * 0.5) / terms.length);
-      if (ratio < (options.minRatio ?? 0.2)) continue;
+      // Hybrid: a cosine over IDF-weighted terms measures how much of the
+      // query this memory explains, which the plain hit ratio cannot: the ratio
+      // treats every matched term as equally informative. The cosine can only
+      // promote a memory that already shared a term, so it never brings in an
+      // unrelated one.
+      // 混合：对经 IDF 加权的词计算余弦，衡量这条记忆解释了查询的多大一部分，而纯命中比例做不到——
+      // 比例把每个命中词都当成同等有信息量。余弦只会提升已经共享词项的记忆，不会引入无关记忆。
+      const cosine = await this.cosine(memoryId, queryVector, idf);
+      const preferenceBoost = entry.type === "preference" ? 0.03 : 0;
+      if (ratio < (options.minRatio ?? 0.2) && cosine < COSINE_ONLY_FLOOR) continue;
       const recencyBoost = Math.min(1, Math.max(0, 1 - (Date.now() - Date.parse(entry.createdAt)) / (90 * 24 * 3600 * 1000)));
       const usageBoost = Math.min(0.1, entry.accessCount * 0.01);
       matches.push({
         entry,
-        score: Number((ratio + recencyBoost * 0.15 + usageBoost).toFixed(3)),
+        score: Number((ratio + cosine * 0.25 + recencyBoost * 0.15 + usageBoost + preferenceBoost).toFixed(3)),
         matchedTerms: [...matched],
       });
     }
-    matches.sort((left, right) => right.score - left.score);
+    matches.sort((left, right) => right.score - left.score || Number(right.entry.type === "preference") - Number(left.entry.type === "preference"));
     const limit = Math.max(0, Math.min(100, Math.floor(options.maxResults ?? 4)));
     const selected = matches.slice(0, limit);
     for (const match of selected) await this.touch(match.entry.id);
     return selected;
+  }
+
+  /**
+   * Cosine between the query's term vector and one memory's stored weights.
+   * The tiny floor keeps a repeated stopword from dominating a short query.
+   * 查询词向量与某条记忆存储权重之间的余弦。极小的下限防止重复的停用词主导短查询。
+   */
+  private async cosine(memoryId: string, queryVector: ReadonlyMap<string, number>, idf: ReadonlyMap<string, number>): Promise<number> {
+    const rows = this.#db.prepare("SELECT term, weight FROM memory_term_weights WHERE memory_id = ?").all(memoryId) as Array<{ term: string; weight: number }>;
+    if (rows.length === 0) return 0;
+    let intersection = 0;
+    let norm = 0;
+    for (const row of rows) {
+      const weight = (row.weight + 1e-3) * (idf.get(row.term) ?? 1);
+      norm += weight * weight;
+      const queryWeight = queryVector.get(row.term);
+      if (queryWeight !== undefined) intersection += weight * queryWeight;
+    }
+    const queryNorm = Math.sqrt([...queryVector.values()].reduce((sum, value) => sum + value * value, 0));
+    return norm === 0 || queryNorm === 0 ? 0 : intersection / (Math.sqrt(norm) * queryNorm);
+  }
+
+  /** Document frequency over the whole active library for the query's terms. 针对查询词，在整个活跃库上计算文档频率。 */
+  private termDocumentFrequency(terms: readonly string[]): Map<string, number> {
+    if (terms.length === 0) return new Map();
+    const placeholders = terms.map(() => "?").join(", ");
+    const total = (this.#db.prepare("SELECT COUNT(*) AS count FROM memories WHERE status = 'active'").get() as { count: number }).count;
+    const rows = this.#db.prepare(`SELECT term, COUNT(*) AS count FROM memory_terms WHERE term IN (${placeholders}) GROUP BY term`).all(...terms) as Array<{ term: string; count: number }>;
+    const idf = new Map<string, number>();
+    for (const row of rows) idf.set(row.term, Math.log(1 + total / Math.max(1, row.count)));
+    return idf;
   }
 
   async update(id: string, update: MemoryUpdate): Promise<MemoryEntry> {
@@ -536,6 +594,9 @@ export class MdMemoryStore {
       this.#db.prepare("DELETE FROM memory_terms WHERE memory_id = ?").run(entry.id);
       const insertTerm = this.#db.prepare("INSERT OR IGNORE INTO memory_terms (memory_id, term) VALUES (?, ?)");
       for (const term of terms) insertTerm.run(entry.id, term);
+      this.#db.prepare("DELETE FROM memory_term_weights WHERE memory_id = ?").run(entry.id);
+      const insertWeight = this.#db.prepare("INSERT INTO memory_term_weights (memory_id, term, weight) VALUES (?, ?, ?)");
+      for (const [term, weight] of termWeights(entry.summary, entry.content)) insertWeight.run(entry.id, term, weight);
 
       this.#db.prepare(`
         INSERT INTO memories (id, type, status, confidence, sensitivity, source_run_id, source_evidence_ids,
@@ -590,6 +651,21 @@ export class MdMemoryStore {
       ...(row.last_accessed_at == null ? {} : { lastAccessedAt: String(row.last_accessed_at) }),
     };
   }
+}
+
+/**
+ * Local term weights (sublinear tf over the memory's own text, plus the type as
+ * a prior). Document frequency is applied at query time over the whole library,
+ * so the index does not need to be rewritten when other memories change.
+ * 局部词权重（对记忆自身文本做次线性词频，并把类型作为先验）。文档频率在查询时对整个库计算，
+ * 因此其他记忆变化时不必重写索引。
+ */
+function termWeights(summary: string, content: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const term of tokenize(`${summary} ${summary} ${content}`)) counts.set(term, (counts.get(term) ?? 0) + 1);
+  const weights = new Map<string, number>();
+  for (const [term, count] of counts) weights.set(term, 1 + Math.log(count));
+  return weights;
 }
 
 function readOptionalFile(path: string): string | undefined {
