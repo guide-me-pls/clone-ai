@@ -54,6 +54,7 @@ Usage:
   clone-ai authority revoke <policyId>
   clone-ai audit [<runId>|export [--out file]]  Why runs failed, per run; export JSONL for evals
   clone-ai model <worker> [<model>|--clear]  Show, pin or clear the model a worker CLI uses
+  clone-ai effort <worker> [<level>|--clear]  Show, pin or clear the reasoning effort
   clone-ai bench [--provider p]  Run the reliability benchmark
   clone-ai doctor                Check the local setup
   clone-ai --help | --version
@@ -102,6 +103,7 @@ async function main(): Promise<number> {
     case "authority": return authorityCommand(paths.dataDirectory, argv.slice(1));
     case "audit": return auditCommand(paths.dataDirectory, argv.slice(1));
     case "model": return modelCommand(paths.dataDirectory, argv.slice(1));
+    case "effort": return effortCommand(paths.dataDirectory, argv.slice(1));
     case "bench": return runBench(argv.slice(1));
     case "doctor": return doctor(paths.dataDirectory);
     default: return converse(paths.dataDirectory, argv.join(" ").trim());
@@ -410,6 +412,29 @@ async function authorityCommand(dataDirectory: string, args: string[]): Promise<
 
 /** Pin the model a worker CLI uses, so it does not inherit a default the gateway cannot serve. 固定 worker CLI 使用的模型，避免它沿用网关无法正确服务的默认模型。 */
 /** Audit is a projection of the journal; nothing here writes. 审计是 Journal 的投影，这里不写任何东西。 */
+/** Pin the reasoning effort a worker CLI uses; the gateway says which levels its model supports. 固定 worker CLI 的推理强度；网关会说明其模型支持哪些档位。 */
+async function effortCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const { listEffectiveProviderConfigs, readUserProviderConfigs, upsertUserProviderConfig } = await import("../config/provider-config-store.ts");
+  const [providerId, value] = args;
+  const effective = await listEffectiveProviderConfigs(dataDirectory);
+  if (providerId === undefined) {
+    for (const provider of effective) console.log(`${provider.id}: ${provider.effort ?? "(CLI default)"}${provider.efforts ? ` · levels ${provider.efforts.join(", ")}` : ""}`);
+    return 0;
+  }
+  const provider = effective.find((candidate) => candidate.id === providerId);
+  if (provider === undefined) { console.error(`Unknown worker "${providerId}".`); return 1; }
+  if (value === undefined) { console.log(`${provider.id}: ${provider.effort ?? "(CLI default)"}${provider.efforts ? ` · levels ${provider.efforts.join(", ")}` : ""}`); return 0; }
+  if (value !== "--clear" && provider.efforts !== undefined && !provider.efforts.includes(value as never)) {
+    console.error(`${providerId} accepts: ${provider.efforts.join(", ")}.`);
+    return 1;
+  }
+  const existing = (await readUserProviderConfigs(dataDirectory)).find((candidate) => candidate.id === providerId) ?? { id: provider.id, command: provider.command };
+  const { effort: _drop, ...rest } = existing;
+  await upsertUserProviderConfig(dataDirectory, value === "--clear" ? rest : { ...rest, effort: value as never });
+  console.log(value === "--clear" ? `${providerId}: effort cleared.` : `${providerId}: effort pinned to ${value}.`);
+  return 0;
+}
+
 async function auditCommand(dataDirectory: string, args: string[]): Promise<number> {
   const { loadAudits, summarizeAudits, toJsonl } = await import("../audit/audit-service.ts");
   const { writeFile } = await import("node:fs/promises");

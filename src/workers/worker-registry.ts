@@ -27,6 +27,9 @@ export interface WorkerProviderStatus {
   resolutionSource?: ExecutableResolutionSource;
   hostAccess?: "unrestricted";
   sandbox?: "seatbelt";
+  model?: string;
+  effort?: string;
+  efforts?: string[];
   version?: string;
 }
 
@@ -97,6 +100,9 @@ function view(
     ...(resolution?.source === undefined ? {} : { resolutionSource: resolution.source }),
     ...(config.hostAccess === "unrestricted" ? { hostAccess: "unrestricted" as const } : {}),
     ...(config.sandbox === "seatbelt" ? { sandbox: "seatbelt" as const } : {}),
+    ...(config.model === undefined ? {} : { model: config.model }),
+    ...(config.effort === undefined ? {} : { effort: config.effort }),
+    ...(config.efforts === undefined ? {} : { efforts: config.efforts }),
     ...(version === undefined ? {} : { version }),
   };
 }

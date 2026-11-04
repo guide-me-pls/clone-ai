@@ -28,6 +28,7 @@ import {
 } from "../core/workspace-evidence.ts";
 import type { AgentRole } from "../config/worker-settings.ts";
 import { augmentedExecutablePath, resolveExecutable } from "./executable-resolver.ts";
+import type { EffortLevel } from "./effort.ts";
 import { resolveGrants } from "../authority/path-gateway.ts";
 import { buildSeatbeltProfile, SANDBOX_EXEC, wrapWithSandbox } from "../authority/seatbelt.ts";
 import { expandHome } from "../authority/scope.ts";
@@ -58,6 +59,16 @@ export interface BlackBoxProviderConfig {
   sandbox?: "seatbelt";
   /** State the CLI itself must write (e.g. `~/.claude`); everything else is read-only. CLI 自身必须写入的状态目录，其余一律只读。 */
   sandboxWritePaths?: string[];
+  /**
+   * Reasoning effort for this CLI. The gateway reports which levels a model
+   * supports, so this is chosen per model rather than assumed.
+   * 该 CLI 的推理强度。网关会报告模型支持哪些档位，因此这是按模型选择的，而不是假设的。
+   */
+  effort?: EffortLevel;
+  /** Levels this CLI actually accepts; the UI offers only these. 该 CLI 真正接受的档位；界面只列这些。 */
+  efforts?: EffortLevel[];
+  /** Replaces `{{effortArgs}}` when an effort is set; `{{effort}}` inside is the level. 设置了强度时替换 `{{effortArgs}}`；其中的 `{{effort}}` 是档位。 */
+  effortArgs?: string[];
   /**
    * Agent CLIs must reach their model API, so the provider (not the step) declares
    * it needs network. Seatbelt cannot restrict by host, so this is all-or-nothing.
@@ -211,6 +222,10 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
       const args = (config.args ?? [])
         .flatMap((argument) => {
           if (argument === "{{sandboxArgs}}") return sandboxed ? config.sandboxArgs ?? [] : [];
+          if (argument === "{{effortArgs}}") {
+            const effort = config.effort;
+            return effort === undefined ? [] : (config.effortArgs ?? []).map((item) => item.replaceAll("{{effort}}", effort));
+          }
           if (argument === "{{modelArgs}}") {
             const model = config.model;
             return model === undefined ? [] : (config.modelArgs ?? []).map((item) => item.replaceAll("{{model}}", model));
