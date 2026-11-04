@@ -214,3 +214,44 @@ grant, and re-checks every call's path at the moment it is made, returning a
 refusal to the model instead of killing the run. The model client is injected,
 so the gating is testable without a network call; no vendor SDK ships in this
 change.
+
+## 12. Measurement (LongMemEval-s, 470 scored questions)
+
+Retrieval at maxResults=10 on the full haystack, and the context boundary the
+worker actually receives:
+
+| slice | any@1 | any@5 | any@10 | all@5 | ndcg@10 |
+| --- | --- | --- | --- | --- | --- |
+| overall | 77.9% | 91.3% | 95.5% | 73.8% | 82.0% |
+| single-session-preference | 20.0% | 53.3% | 70.0% | 53.3% | 47.3% |
+
+Context boundary: 92.6% of questions had an evidence memory inside the compiled
+context (1200-character / 6-item caps); preference questions only 56.7%.
+
+Semantic-term ablation (same data, `CLONE_AI_RECALL_SEMANTIC=0` for the off run):
+any@1 77.9% on vs 76.6% off; context hit rate 92.6% on vs 92.8% off. The
+semantic term therefore does **not** demonstrably help on this benchmark —
+differences are within noise for n=470. It stays behind the switch rather than
+being called a win.
+
+What the numbers say about priorities: preference questions remain the weak
+spot (the correct evidence is a session where the owner mentions a tool, not a
+sentence sharing words with the question), and the context cap is a real second
+loss — 7.4% of questions retrieved the evidence but could not fit it.
+
+## 13. Native worker
+
+`src/workers/native-agent-worker.ts` (loop + gate), `openai-compatible-client.ts`
+(client speaking the OpenAI-compatible chat-completions protocol), and
+`native-worker-factory.ts` (configuration and filesystem tools). Opt in with:
+
+```
+CLONE_AI_NATIVE_MODEL=<model id as the endpoint names it>
+CLONE_AI_NATIVE_BASE_URL=<http://host:port>
+CLONE_AI_NATIVE_API_KEY=<optional>
+```
+
+With no model configured the factory returns nothing and the registry keeps
+using the sandboxed CLI workers. Verified end to end against a local
+OpenAI-compatible gateway: the worker listed the empty workspace, wrote
+`out/hello.txt`, read it back, and stopped — every call passing the scope gate.
