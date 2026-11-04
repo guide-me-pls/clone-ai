@@ -256,3 +256,50 @@ test("a run's full trace is ordered, readable, and keeps raw data one level down
     assembly.close();
   }
 });
+
+test("a derived task belongs to the conversation, and hiding the chat hides it too", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const assembly = await createRuntimeAssembly({ dataDirectory });
+  try {
+    const { run } = await assembly.runtime.acceptTrigger({ kind: "query", summary: "总结今天的工作", payload: { source: "main-agent" } });
+    await assembly.runtime.attachPlan(run.id, {
+      summary: "总结今天的工作",
+      steps: [{ id: "scan", title: "扫描", instructions: "扫描", risk: "read_only", acceptanceCriteria: ["完成"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+    });
+    // The chat summary is projected from the Main Agent's own turn ledger. 对话摘要来自主 Agent 的回合账本。
+    await writeFile(join(dataDirectory, "main-agent-turns.jsonl"), `${JSON.stringify({
+      id: "turn-1", text: "总结今天的工作", status: "completed",
+      startedAt: "2026-11-04T09:00:00.000Z", completedAt: "2026-11-04T09:00:05.000Z", reply: "已提交计划。",
+    })}\n`, "utf8");
+
+    const before = await (await companionFetch(url, token, "/api/dashboard")).json() as {
+      sessions: Array<{ id: string; parentId?: string; childCount?: number; kind?: string }>;
+      deletedConversations: unknown[];
+    };
+    const chat = before.sessions.find((session) => session.kind === "conversation");
+    assert.ok(chat, "the conversation is the parent");
+    assert.equal(chat.childCount, 1);
+    const child = before.sessions.find((session) => session.id === run.id);
+    assert.equal(child?.parentId, chat.id, "the run is a task of the conversation, not a sibling chat");
+    assert.deepEqual(before.deletedConversations, []);
+
+    const hidden = await companionFetch(url, token, "/api/sessions/main-agent-conversation", { method: "DELETE" });
+    assert.equal(hidden.status, 204);
+    const afterDelete = await (await companionFetch(url, token, "/api/dashboard")).json() as {
+      sessions: Array<{ id: string }>;
+      deletedConversations: Array<{ id: string; childCount: number }>;
+    };
+    assert.equal(afterDelete.sessions.some((session) => session.id === run.id), false, "the child is hidden with its chat");
+    assert.equal(afterDelete.deletedConversations.length, 1);
+    assert.equal(afterDelete.deletedConversations[0]?.childCount, 1);
+    const gone = await companionFetch(url, token, "/api/sessions/main-agent-conversation");
+    assert.equal(gone.status, 404);
+
+    const restored = await companionFetch(url, token, "/api/sessions/main-agent-conversation/restore", { method: "POST" });
+    assert.equal(restored.status, 204);
+    const afterRestore = await (await companionFetch(url, token, "/api/dashboard")).json() as { sessions: Array<{ id: string }> };
+    assert.ok(afterRestore.sessions.some((session) => session.id === run.id), "restoring the chat restores its task");
+  } finally {
+    assembly.close();
+  }
+});
