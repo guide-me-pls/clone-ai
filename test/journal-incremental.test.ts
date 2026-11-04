@@ -104,3 +104,17 @@ test("listForRun reads one run through the run index", async (t) => {
   assert.deepEqual(forRun.map((event) => (event.payload as { id: string }).id), ["a", "c"]);
   assert.deepEqual(await store.listForRun("missing"), []);
 });
+
+test("listTypesSince narrows to requested types and falls back cleanly", async (t) => {
+  const { dataDirectory } = await setup(t);
+  const store = new SqliteJournalStore(join(dataDirectory, "journal.sqlite3"));
+  t.after(() => store.close());
+  await store.append({ type: "evidence.recorded", runId: "r1", payload: { id: "a" } });
+  await store.append({ type: "opportunity.proposed", payload: { id: "card-1" } });
+  await store.append({ type: "evidence.recorded", runId: "r1", payload: { id: "b" } });
+  const only = await store.listTypesSince(["opportunity.proposed"], 0);
+  assert.deepEqual(only.map((event) => event.type), ["opportunity.proposed"]);
+  assert.deepEqual(await store.listTypesSince([], 100), []);
+  const none = await store.listTypesSince(["opportunity.resolved"], 0);
+  assert.deepEqual(none, []);
+});
