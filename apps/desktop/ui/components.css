@@ -1341,3 +1341,51 @@ body.empty-conversation .composer-wrap { padding-top: 0; padding-bottom: 24px; }
   .opportunity-actions { flex-wrap: wrap; }
   .topbar-title p { max-width: 56vw; }
 }
+
+/* Keep the composer as a light input surface: the focused textarea should not
+   draw a second dark outline inside the container. */
+/* 输入框保持轻量：聚焦时 textarea 不应在容器内部再画一圈深色描边。 */
+.composer-wrap {
+  padding: 0 30px 14px;
+  background: linear-gradient(180deg, rgba(251,251,249,0), #fbfbf9 24%);
+}
+.composer {
+  width: min(760px, 100%);
+  min-height: 44px;
+  padding: 5px 6px 5px 11px;
+  border: 1px solid #e8e8e3;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(31, 35, 31, .028);
+}
+.composer:focus-within {
+  border-color: #cecec8;
+  box-shadow: 0 0 0 2px rgba(32, 37, 33, .035), 0 2px 7px rgba(31, 35, 31, .035);
+}
+.composer textarea,
+.composer textarea:focus,
+.composer textarea:focus-visible {
+  min-height: 32px;
+  padding: 6px 4px;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+  background: transparent;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.composer .send {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #292d29;
+  box-shadow: none;
+}
+.composer .send:hover { background: #151815; }
+.composer .send svg { width: 15px; height: 15px; }
+.composer-hint {
+  margin-top: 5px;
+  color: #b1b4ae;
+  font-size: 9.5px;
+}
+body.empty-conversation .composer-wrap { padding-bottom: 18px; }
