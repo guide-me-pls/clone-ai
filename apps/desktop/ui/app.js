@@ -176,6 +176,10 @@ function renderAgentPage() {
   });
   const providerRows = providers.map((provider) => {
     const access = provider.executionBlocked ? t("worker-blocked") : t("worker-unrestricted");
+    const effortLevels = Array.isArray(provider.efforts) ? provider.efforts : [];
+    const effortSelect = effortLevels.length
+      ? `<select class="agent-effort-select" data-provider-effort="${escape(provider.id)}" aria-label="${escape(t("provider-effort"))} · ${escape(provider.title)}"><option value="">${escape(t("effort-default"))}</option>${effortLevels.map((level) => `<option value="${escape(level)}"${provider.effort === level ? " selected" : ""}>${escape(level)}</option>`).join("")}</select>`
+      : "";
     const action = provider.installed
       ? ui.button({
           label: provider.executionBlocked ? t("worker-allow") : t("worker-disable"),
@@ -209,7 +213,7 @@ function renderAgentPage() {
       title: provider.title,
       description: `${t("provider-purpose")} · ${provider.command}`,
       meta: `<span class="c-cluster">${meta}</span>${provider.resolvedPath ? `<code class="agent-provider-path" title="${escape(provider.resolvedPath)}">${escape(provider.resolvedPath)}</code>` : ""}`,
-      actions: action,
+      actions: `${effortSelect}${action}`,
       tone: provider.installed ? "default" : "warning",
     });
   }).join("");
@@ -335,6 +339,7 @@ function renderSituation(situation, config) {
     workspace.title = workspacePath;
   }
   renderModelOptions();
+  renderMainAgentEffort();
   renderAgentPage();
 }
 
@@ -450,6 +455,24 @@ async function setConnectorEnabled(id, enabled) { const next = (state.connectors
 
 async function removeConnector(id) { await saveConnectors((state.connectors || []).filter((connector) => connector.id !== id), "观察来源已移除。"); }
 
+function renderMainAgentEffort() {
+  const select = $("config-main-agent-effort");
+  if (!select) return;
+  const current = state.config?.config?.mainAgentEffort || "";
+  const model = String(state.config?.config?.mainAgentModel || "").replace(/^magpie\//, "");
+  // The gateway knows which levels this exact model offers; without it, fall back
+  // to the levels the CLIs understand so the choice is never invented.
+  // 网关知道这个模型具体支持哪些档位；拿不到时退回 CLI 通用档位，绝不凭空编造。
+  const fromGateway = (state.gateway?.models || []).find((entry) => entry.id === model)?.reasoningLevels;
+  const levels = Array.isArray(fromGateway) && fromGateway.length > 0 ? fromGateway : EFFORT_LEVELS;
+  const signature = JSON.stringify([levels, current]);
+  if (select.dataset.signature === signature) return;
+  select.dataset.signature = signature;
+  select.innerHTML = `<option value="">${escape(t("effort-default"))}</option>${levels.map((level) => `<option value="${escape(level)}"${current === level ? " selected" : ""}>${escape(level)}</option>`).join("")}`;
+}
+
+async function saveMainAgentEffort() { const select = $("config-main-agent-effort"); if (!select) return; try { await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ mainAgentEffort: select.value }) }); await refresh({ preserveScroll: true }); announce(t("effort-saved")); } catch (error) { announce(error.message, true); } }
+
 async function saveMainAgentModel() { const select = $("config-main-agent-model"); if (!select) return; try { await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ mainAgentModel: select.value }) }); await refresh({ preserveScroll: true }); announce(t("model-saved")); } catch (error) { announce(error.message, true); } }
 
 async function saveLocale() {
@@ -531,6 +554,7 @@ async function decideOpportunity(id, action) {
   } catch (error) { announce(error.message, true); }
 }
 
+const EFFORT_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const MEMORY_TYPES = [["preference", "偏好"], ["fact", "事实"], ["decision", "决定"], ["procedure", "流程"], ["commitment", "承诺"]];
 const MEMORY_SENSITIVITIES = [["private", "私有"], ["public", "公开"], ["secret", "机密"]];
 function options(pairs, selected) { return pairs.map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join(""); }
@@ -927,6 +951,20 @@ async function updateAgent(id, update, message) { try { await api(`/api/settings
 async function setAgentEnabled(id, enabled) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { enabled }, agent ? `${agent.title}${enabled ? "已启用" : "已关闭"}。` : "Agent 设置已更新。"); }
 async function setAgentProvider(id, providerId) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { providerId }, agent ? `${agent.title} 已绑定到 ${providerLabel(providerId)}。` : "Agent Provider 已更新。"); }
 async function installProvider(id) { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector(`[data-install-provider="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { await api(`/api/agents/${encodeURIComponent(id)}/install`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); await refresh(); announce(`${providerLabel(id)} 已安装并完成检测。`); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
+/** Pin the reasoning effort of one worker CLI; the gateway reports which levels its model offers. 固定某个 worker CLI 的推理强度；网关会报告其模型支持的档位。 */
+async function setProviderEffort(id, effort) {
+  try {
+    const current = await api("/api/settings/providers");
+    const provider = current.providers.find((item) => item.id === id);
+    if (!provider) throw new Error("Provider not found.");
+    const next = { ...provider };
+    if (effort) next.effort = effort; else delete next.effort;
+    await api("/api/settings/providers", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) });
+    await refresh({ preserveScroll: true });
+    announce(t("effort-saved"));
+  } catch (error) { announce(error.message, true); }
+}
+
 async function setProviderHostAccess(id, allow) { if (allow && !(await confirmDialog(t("worker-allow-warning"), t("worker-allow")))) return; try { const current = await api("/api/settings/providers"); const provider = current.providers.find((item) => item.id === id); if (!provider) throw new Error("Provider not found."); const next = { ...provider }; if (allow) { next.hostAccess = "unrestricted"; next.acknowledgeUnrestrictedHostAccess = true; } else delete next.hostAccess; await api("/api/settings/providers", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) }); await refresh(); announce(t("worker-access-saved")); } catch (error) { announce(error.message, true); } }
 async function installMissingProviders() { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector("[data-install-missing]"); if (button) { button.disabled = true; button.querySelector("span").textContent = t("installing"); } try { const result = await api("/api/agents/install-missing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); state.signatures.agentPage = ""; await refresh(); announce(result.installed.length ? `已自动安装 ${result.installed.length} 个 Provider。` : "没有可自动安装的缺失 Provider。"); } catch (error) { announce(error.message, true); await refresh(); } }
 async function searchMemories(query) { try { const result = await api(`/api/memory/governed/recall?q=${encodeURIComponent(query)}`); renderMemorySearch(result.matches || []); } catch (error) { announce(error.message, true); } }
@@ -939,6 +977,8 @@ $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, tru
 $("config-workspace-choose").addEventListener("click", () => void chooseWorkspace());
 $("config-workspace-reveal").addEventListener("click", revealWorkspace);
 $("config-main-agent-model-save").addEventListener("click", () => void saveMainAgentModel());
+$("config-main-agent-effort-save").addEventListener("click", () => void saveMainAgentEffort());
+document.addEventListener("change", (event) => { const select = event.target instanceof Element && event.target.closest("[data-provider-effort]"); if (select && select.value !== undefined) void setProviderEffort(select.dataset.providerEffort, select.value); });
 $("config-locale")?.addEventListener("change", () => void saveLocale());
 $("connector-add").addEventListener("click", () => void addConnector());
 $("connector-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-connector-remove]"); if (remove) void removeConnector(remove.dataset.connectorRemove); });
