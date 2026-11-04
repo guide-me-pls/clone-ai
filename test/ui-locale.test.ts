@@ -37,6 +37,8 @@ test("the desktop HTML marks chrome so config.locale can replace it", async () =
   assert.match(js, /classList\.toggle\("empty-conversation"/);
   assert.match(js, /welcome-copy/);
   assert.match(js, /api\/main-agent\/interruptions/);
+  assert.match(js, /function plainPreview/);
+  assert.doesNotMatch(js, /agent-auto-mode|data-agent-auto-mode/);
 });
 
 test("the shared component library exposes the primitives used by the UI", async () => {
