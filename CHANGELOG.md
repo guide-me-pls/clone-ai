@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### AI self-review with one-click, reversible configuration changes
+
+The evaluation tab can now have the system review its own audit: pass rate, failure stages and categories, gateway errors, durations, costs, and the owner's labels are compressed into one digest, and a review model returns findings plus a short list of configuration actions. Each action is validated against what this machine can actually do (a level the CLI declares, a model id that appears in the facts), applied only when the owner clicks, journaled as `recommendation.applied` with the previous and new value, and reversible from the same row. The surface is deliberately narrow — worker model/effort and Main Agent model/effort; code, prompts, policy and evidence rules are not reachable, and nothing runs on its own. When the model is unavailable the review degrades to measured facts rather than inventing advice.
+
+评估页现在可以让系统评审自己的审计：通过率、失败阶段与类别、网关错误、耗时、费用，以及所有者的判定被压成一份摘要，评审模型返回发现项与一小串配置动作。每个动作都会对照这台机器实际能做的事校验（CLI 声明的档位、事实里出现过的模型 id），只在所有者点击时应用，以 `recommendation.applied` 记录前后值，并可在同一行撤销。范围刻意很窄——worker 的模型/强度与主 Agent 的模型/强度；代码、提示词、策略与证据规则不可触及，且不会自行运行。模型不可用时，评审判为只给实测事实，而不是编造建议。
+
 ### WhatsApp phone bridge
 
 The owner can now text Clone AI from WhatsApp without SMS or a direct inbound port on the Mac. A separate loopback bridge verifies Meta's raw webhook signature, enforces an E.164 allowlist, stores messages in SQLite before returning `200`, deduplicates Meta retries by message id, and forwards visible replies through the Cloud API. Long replies are split below the 4096-character limit. If the desktop runtime is closed or busy, the message stays queued with backoff and the owner is told it was not executed; the same turn id prevents a completed request from running twice. `npm run mobile:install` creates an optional per-user LaunchAgent with its secrets in a `0600` env file. Apple provides no supported iMessage bot API, so WhatsApp is the implemented phone channel; Meta's current message pricing still applies.
