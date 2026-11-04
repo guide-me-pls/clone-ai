@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -43,7 +43,7 @@ test("the config endpoint reports where the owner's data lives", async (t) => {
   const response = await companionFetch(url, token, "/api/config");
   assert.equal(response.status, 200);
   const body = await response.json() as {
-    config: { workspacePath: string; locale: string };
+    config: { workspacePath: string; locale: string; agentMode: string };
     ui?: { locale: string; strings?: Record<string, string> };
     paths: Record<string, string>;
   };
@@ -51,6 +51,7 @@ test("the config endpoint reports where the owner's data lives", async (t) => {
   assert.equal(body.paths.dataDirectory, dataDirectory);
   assert.match(body.paths.providersFile, /providers\.json$/);
   assert.equal(body.config.locale, "zh-CN");
+  assert.equal(body.config.agentMode, "auto");
   assert.equal(body.ui?.locale, "zh-CN");
   assert.equal(body.ui?.strings?.["new-session"], "新建任务");
   // A settings payload must never become a place a credential could appear.
@@ -306,6 +307,26 @@ test("unrestricted worker execution requires an explicit API acknowledgement", a
   assert.equal(configured.providers.find((item) => item.id === "test-agent")?.hostAccess, "unrestricted");
   const agents = await (await companionFetch(url, token, "/api/agents")).json() as { providers: Array<{ id: string; executionBlocked: boolean }> };
   assert.equal(agents.providers.find((item) => item.id === "test-agent")?.executionBlocked, false);
+});
+
+test("auto mode enables trusted subagents without changing external action authority", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const response = await companionFetch(url, token, "/api/settings/agents/auto-mode", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as {
+    config: { agentMode: string };
+    settings: { agents: Array<{ required?: boolean; enabled: boolean }> };
+    providers: Array<{ installed: boolean; executionBlocked: boolean; hostAccess?: string }>;
+  };
+  assert.equal(body.config.agentMode, "auto");
+  assert.ok(body.settings.agents.every((agent) => agent.enabled));
+  assert.ok(body.providers.every((provider) => !provider.installed || !provider.executionBlocked || provider.hostAccess === "unrestricted"));
+  const persisted = JSON.parse(await readFile(join(dataDirectory, "config.json"), "utf8")) as { agentMode?: string };
+  assert.equal(persisted.agentMode, "auto");
 });
 
 test("a built-in provider with prefix wildcards can be explicitly authorized", async (t) => {
