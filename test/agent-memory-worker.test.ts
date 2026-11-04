@@ -171,3 +171,22 @@ test("parseJsonArray tolerates trailing prose and empty input", () => {
   assert.equal(parseJsonArray(""), undefined);
   assert.equal(parseJsonArray("{\"not\":\"array\"}"), undefined);
 });
+
+test("mining keeps a future expiresAt and drops a past or invalid one", () => {
+  const future = new Date(Date.now() + 86_400_000).toISOString();
+  const source = JSON.stringify([
+    { type: "fact", summary: "Release freeze lasts until the end of the month.", confidence: "medium", sourceEvidenceIds: ["ev-1"], expiresAt: future },
+    { type: "fact", summary: "The report template lives in docs/templates.", confidence: "medium", sourceEvidenceIds: ["ev-1"], expiresAt: "2020-01-01T00:00:00Z" },
+    { type: "fact", summary: "The staging URL is the shared preview host.", confidence: "medium", sourceEvidenceIds: ["ev-1"], expiresAt: "soon" },
+  ]);
+  const [first, second, third] = validateCandidates(source, miningJob(), 5);
+  assert.equal(first?.expiresAt, future);
+  assert.equal(second?.expiresAt, undefined);
+  assert.equal(third?.expiresAt, undefined);
+});
+
+test("a failed run is mined for lessons, a completed run is not", () => {
+  assert.match(miningPrompt({ ...miningJob(), outcome: "failed" }), /FAILED/);
+  assert.doesNotMatch(miningPrompt(miningJob()), /FAILED/);
+  assert.match(miningPrompt(miningJob()), /expiresAt/);
+});

@@ -28,6 +28,7 @@ import { WorkerRegistry } from "../workers/worker-registry.ts";
 import { MdMemoryStore } from "../memory/md-memory-store.ts";
 import { describeAuthority, StandingPolicyStore } from "../authority/standing-policy-store.ts";
 import { MemoryGovernance } from "../memory/memory-governance.ts";
+import { ImprovementService } from "../improvement/improvement-service.ts";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -43,6 +44,8 @@ Usage:
   clone-ai resume <n>            Continue conversation number <n> (see sessions)
   clone-ai new "<请求>"           Start a fresh conversation
   clone-ai memory [query]        List or search reviewed memories
+  clone-ai improve [list|stats|sweep|approve <id>|dismiss <id>]
+                                 Review what the improvement loop suggests
   clone-ai cases                 Print the local bad-case log
   clone-ai opportunities         List open opportunity cards
   clone-ai approve <runId>       Approve a run waiting for confirmation
@@ -96,6 +99,7 @@ async function main(): Promise<number> {
     case "resume": return resumeSession(paths.dataDirectory, argv[1]);
     case "new": return converse(paths.dataDirectory, argv.slice(1).join(" ").trim(), true);
     case "memory": return showMemory(paths.dataDirectory, argv.slice(1).join(" ").trim());
+    case "improve": return improveCommand(paths.dataDirectory, argv.slice(1));
     case "cases": return showCases(paths.dataDirectory);
     case "opportunities": return showOpportunities(paths.dataDirectory);
     case "approve": return decideRun(paths.dataDirectory, argv[1], "approve");
@@ -354,6 +358,45 @@ async function showMemory(dataDirectory: string, query: string): Promise<number>
     const entries = await governance.list({ status: "active" });
     if (entries.length === 0) console.log("No memories yet.");
     for (const entry of entries) console.log(`- (${entry.type}) ${entry.summary}`);
+    return 0;
+  } finally {
+    await governance.close();
+    (journal as { close?: () => void }).close?.();
+  }
+}
+
+/** The owner's console for the improvement loop. 所有者操作改进环路的控制台。 */
+async function improveCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const store = new MdMemoryStore({ dataDirectory });
+  const journal = createJournalStore(dataDirectory);
+  const governance = new MemoryGovernance({ store, journal });
+  const service = new ImprovementService({ journal, governance });
+  try {
+    const [action = "list", id] = args;
+    if (action === "stats") {
+      const { usage, runs } = await service.usage();
+      const summaries = new Map((await governance.list()).map((entry) => [entry.id, entry.summary]));
+      console.log(`${runs.good}/${runs.total} runs with a verdict ended well.`);
+      for (const item of usage) console.log(`${item.good}/${item.exposures} good  ${item.memoryId}  ${summaries.get(item.memoryId) ?? ""}`);
+      return 0;
+    }
+    if (action === "sweep") {
+      const { suggested } = await service.sweep();
+      console.log(`${suggested.length} new suggestion(s).`);
+      return 0;
+    }
+    if (action === "approve" || action === "dismiss") {
+      if (id === undefined) throw new Error(`${action} needs a suggestion id.`);
+      if (action === "approve") console.log((await service.approve(id)).applied);
+      else {
+        await service.dismiss(id);
+        console.log(`Dismissed ${id}.`);
+      }
+      return 0;
+    }
+    const pending = await service.pending();
+    if (pending.length === 0) console.log("No pending suggestions.");
+    for (const item of pending) console.log(`${item.id}\n  ${item.title}\n  ${item.rationale}${item.proposedSummary === undefined ? "" : `\n  Proposed: ${item.proposedSummary}`}`);
     return 0;
   } finally {
     await governance.close();

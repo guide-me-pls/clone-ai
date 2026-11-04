@@ -29,6 +29,7 @@ import {
   persistCompanionToken,
 } from "./companion-auth.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
+import { ImprovementService } from "./improvement/improvement-service.ts";
 import { scanMemoryPii } from "./memory/memory-hygiene.ts";
 import { describeAuthority, StandingPolicyStore } from "./authority/standing-policy-store.ts";
 import { OpportunityService } from "./opportunity/opportunity-service.ts";
@@ -467,6 +468,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     journal,
     store: new MdMemoryStore({ dataDirectory }),
   });
+  const improvement = new ImprovementService({ journal, governance: memoryGovernance, pipeline: assembly.memory });
   const config = new CloneConfigStore(paths);
   const whatsappSetup = new WhatsAppSetupService(dataDirectory, options.publicBaseUrl);
   const proxySecret = options.proxySecret?.trim();
@@ -581,6 +583,22 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    // Expired memories are already hidden from recall; archiving them makes the
+    // state honest and journals the reason. 过期记忆召回时已被隐藏；归档让状态与事实一致并记录原因。
+    // The improvement sweep runs before the idle sweep so a memory the loop is
+    // about to judge is not archived for idleness first.
+    // 改进扫描先于闲置扫描，使环路即将评判的记忆不会先因闲置被归档。
+    if (ImprovementService.enabled()) {
+      await improvement.sweep().catch((error: unknown) => {
+        logJson("error", "Improvement sweep failed", { error: error instanceof Error ? error.message : String(error) });
+      });
+    }
+    await memoryGovernance.archiveIdle().catch((error: unknown) => {
+      logJson("error", "Memory idle sweep failed", { error: error instanceof Error ? error.message : String(error) });
+    });
+    await memoryGovernance.expireDue().catch((error: unknown) => {
+      logJson("error", "Memory expiry sweep failed", { error: error instanceof Error ? error.message : String(error) });
+    });
     await opportunityService.scanAndRecord().catch(() => undefined);
     await badCaseLog.appendNew(await journal.list()).catch(() => undefined);
   };
@@ -626,6 +644,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         agentSettings,
         agentRegistry,
         memoryGovernance,
+        improvement,
         reportRunner,
         opportunityService,
         whatsappSetup,
@@ -720,6 +739,7 @@ async function handleRequest(
     agentSettings: WorkerSettingsStore;
     agentRegistry: WorkerRegistry;
     memoryGovernance: MemoryGovernance;
+    improvement: ImprovementService;
     reportRunner?: DailyReportRunner;
     opportunityService: OpportunityService;
     whatsappSetup: WhatsAppSetupService;
@@ -1365,6 +1385,24 @@ async function handleRequest(
       sendJson(response, 200, { decided: cardId, ...(runId === undefined ? {} : { runId }) });
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "The opportunity could not be resolved." });
+    }
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/improvement") {
+    sendJson(response, 200, { enabled: ImprovementService.enabled(), suggestions: await context.improvement.pending(), ...await context.improvement.usage() });
+    return;
+  }
+  const improvementDecision = url.pathname.match(/^\/api\/improvement\/suggestions\/([^/]+)\/(approve|dismiss)$/);
+  if (request.method === "POST" && improvementDecision?.[1] !== undefined && improvementDecision?.[2] !== undefined) {
+    const id = decodeURIComponent(improvementDecision[1]);
+    try {
+      if (improvementDecision[2] === "approve") sendJson(response, 200, await context.improvement.approve(id));
+      else {
+        await context.improvement.dismiss(id);
+        sendJson(response, 200, { dismissed: id });
+      }
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The decision could not be recorded." });
     }
     return;
   }

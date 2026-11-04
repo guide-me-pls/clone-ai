@@ -449,9 +449,9 @@ export class CloneRuntime {
     await this.recordBatch([
       { type: "verification.completed", taskId: task.id, runId: run.id, payload: verification },
       { type: "run.status_changed", taskId: task.id, runId: run.id, payload: { status } },
-      ...(status === "completed" ? [this.#memory.requestEvent(run, task, evidence)] : []),
+      ...(status === "completed" || status === "failed" ? [this.#memory.requestEvent(run, task, evidence, status)] : []),
     ]);
-    if (status === "completed") this.#memory.enqueue(this.requireRun(run.id), task, evidence);
+    if (status === "completed" || status === "failed") this.#memory.enqueue(this.requireRun(run.id), task, evidence, status);
     return { run: this.requireRun(run.id), status, verification };
   }
 
@@ -497,9 +497,9 @@ export class CloneRuntime {
     await this.recordBatch([
       { type: "verification.completed", taskId: run.taskId, runId, payload: verification },
       { type: "run.status_changed", taskId: run.taskId, runId, payload: { status } },
-      ...(status === "completed" ? [this.#memory.requestEvent(run, task, evidence)] : []),
+      ...[this.#memory.requestEvent(run, task, evidence, status)],
     ]);
-    if (status === "completed") this.#memory.enqueue(this.requireRun(runId), task, evidence);
+    this.#memory.enqueue(this.requireRun(runId), task, evidence, status);
     return { run: this.requireRun(runId), status, verification };
   }
 
