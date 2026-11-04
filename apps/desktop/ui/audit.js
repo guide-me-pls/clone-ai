@@ -15,7 +15,7 @@
   };
   const STAGE = { none: "无", planning: "规划", policy: "策略", execution: "执行", verification: "验证", cancelled: "取消", unknown: "未记录" };
   const OUTCOME = { allowed: ["允许", "ok"], approval_required: ["需审批", "warn"], denied: ["拒绝", "bad"] };
-  const state = { data: null, view: "overview", status: "all", provider: "all", query: "", showDeleted: true, selected: null, loading: false, error: null, raw: false, traces: new Map() };
+  const state = { data: null, view: "overview", status: "all", provider: "all", query: "", showDeleted: true, selected: null, loading: false, error: null, raw: false, traces: new Map(), review: null, reviewBusy: false, reviewError: null };
 
   const root = () => document.getElementById("audit-root");
   const pct = (value) => (value === null || value === undefined ? "—" : `${Math.round(value * 100)}%`);
@@ -35,6 +35,7 @@
     state.loading = true; state.error = null; render();
     try {
       state.data = await api("/api/audit");
+      state.review = (await api("/api/audit/review").catch(() => ({ review: null }))).review ?? null;
       if (state.selected && !state.data.records.some((r) => r.runId === state.selected)) state.selected = null;
     } catch (error) { state.error = error.message; }
     state.loading = false; render();
@@ -219,11 +220,38 @@
       ${state.raw ? `<pre class="au-raw">${esc(JSON.stringify(r, null, 2))}</pre>` : ""}`;
   }
 
+  function reviewBlock() {
+    const busy = state.reviewBusy ? "生成中…（读取最近运行，可能需要十几秒）" : "生成评审";
+    const review = state.review;
+    const error = state.reviewError ? `<div class="au-callout au-callout-bad"><b>评审失败</b><pre>${esc(state.reviewError)}</pre></div>` : "";
+    if (!review) {
+      return `<section class="au-card au-review"><div class="au-review-head"><div><h4>AI 自我评审</h4><p class="au-note">读取最近运行、失败原因、网关错误和你的判定，给出发现项与可一键应用的配置改动。只碰模型与推理强度，全部可撤销。</p></div><button type="button" class="au-btn au-btn-primary" data-au-review-run ${state.reviewBusy ? "disabled" : ""}>${busy}</button></div>${error}</section>`;
+    }
+    const findings = review.findings.length
+      ? `<ul class="au-findings">${review.findings.map((finding) => `<li>${badge({ high: "高", medium: "中", low: "低" }[finding.severity] ?? finding.severity, finding.severity === "high" ? "bad" : finding.severity === "medium" ? "warn" : "mute")}<div><b>${esc(finding.area || "发现")}</b><span>${esc(finding.recommendation)}</span>${finding.evidence ? `<small>依据：${esc(finding.evidence)}</small>` : ""}</div></li>`).join("")}</ul>`
+      : `<p class="au-empty">没有发现需要改动的地方。</p>`;
+    const actions = review.actions.length
+      ? `<div class="au-actions-list">${review.actions.map((action) => `<div class="au-action${action.appliedAt ? " is-applied" : ""}">
+          <div><b>${esc(action.title)}</b>${action.reason ? `<span>${esc(action.reason)}</span>` : ""}<small>${esc(action.kind)}${action.providerId ? ` · ${esc(action.providerId)}` : ""} · ${action.from === undefined ? "默认" : esc(action.from)} → <code>${esc(action.value)}</code></small></div>
+          <div class="au-actions">${action.appliedAt
+            ? `<span class="au-applied-mark">已应用</span><button type="button" class="au-btn" data-au-revert="${esc(action.id)}">撤销</button>`
+            : `<button type="button" class="au-btn au-btn-primary" data-au-apply="${esc(action.id)}">应用</button>`}</div>
+        </div>`).join("")}</div>`
+      : `<p class="au-empty">这次评审没有提出可以一键应用的配置改动。</p>`;
+    return `<section class="au-card au-review">
+      <div class="au-review-head"><div><h4>AI 自我评审</h4><p class="au-note">生成于 ${stamp(review.generatedAt)}${review.model ? ` · 评审模型 ${esc(review.model)}` : ""} · ${review.ai ? "模型参与生成" : "只有实测数据（模型未参与）"}</p></div><button type="button" class="au-btn" data-au-review-run ${state.reviewBusy ? "disabled" : ""}>${busy}</button></div>
+      ${error}
+      <p class="au-review-summary">${esc(review.summary)}</p>
+      <h5>发现</h5>${findings}
+      <h5>可一键应用的改动 <small class="au-hint">只改配置，写入前后值，可撤销</small></h5>${actions}
+    </section>`;
+  }
+
   function evaluation() {
     const e = state.data.summary.evaluation;
     const queue = records().filter((r) => !r.label && ["completed", "failed", "waiting_review"].includes(r.status)).slice(0, 12);
     const dis = records().filter((r) => r.label && ["completed", "failed"].includes(r.status) && (r.label.verdict === "pass") !== (r.status === "completed"));
-    return `<div class="au-stats">
+    return `${reviewBlock()}<div class="au-stats">
         ${stat("已人工判定", e.labeled, "评估的真值样本")}
         ${stat("与系统一致率", pct(e.agreement), "系统判定 vs 你的判定", e.agreement !== null && e.agreement < 0.8 ? "warn" : "")}
         ${stat("误判通过", e.falsePass, "系统说完成，你判不合格——最危险", e.falsePass ? "bad" : "")}
@@ -291,6 +319,27 @@
     if ((el = pick("[data-au-quick]"))) { await label(el.dataset.auRun, el.dataset.auQuick, ""); return; }
     if ((el = pick("[data-au-label]"))) { await label(el.dataset.auRun, el.dataset.auLabel, root().querySelector("[data-au-note]")?.value ?? ""); return; }
     if ((el = pick("[data-au-jump]"))) { state.view = "runs"; state.status = "all"; state.selected = el.dataset.auJump; render(); return; }
+    if (pick("[data-au-review-run]")) {
+      state.reviewBusy = true; state.reviewError = null; render();
+      try {
+        state.review = (await api("/api/audit/review", { method: "POST" })).review;
+      } catch (error) {
+        state.reviewError = error.message;
+      }
+      state.reviewBusy = false; render();
+      return;
+    }
+    if ((el = pick("[data-au-apply]")) || (el = pick("[data-au-revert]"))) {
+      const actionId = el.dataset.auApply ?? el.dataset.auRevert;
+      const path = el.dataset.auApply ? "/api/audit/apply" : "/api/audit/revert";
+      try {
+        const result = await api(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ actionId }) });
+        state.review = result.review ?? state.review;
+        announce(el.dataset.auApply ? "改动已应用，可在同一行撤销。" : "改动已撤销。");
+      } catch (error) { announce(error.message, true); }
+      render();
+      return;
+    }
     if ((el = pick("[data-au-trace]"))) {
       const runId = el.dataset.auTrace;
       state.traces.set(runId, null);

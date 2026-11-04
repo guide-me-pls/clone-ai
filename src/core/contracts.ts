@@ -286,6 +286,9 @@ export type JournalEventType =
   // An owner verdict on a finished run, the ground truth an eval compares the system's own verdict with.
   // 所有者对已结束 Run 的判定，是评估用来对照系统自身判定的真值。
   | "audit.labeled"
+  // An owner applied (or reverted) a configuration change proposed by AI self-review.
+  // 所有者应用（或撤销）了 AI 自我评审提出的配置改动。
+  | "recommendation.applied"
   // A routing decision is not a dispatch: it records which worker was chosen
   // and why, before any process exists to dispatch to.
   // 路由决策不是一次派发：它在任何可派发的进程存在之前，记录选了哪个 Worker、为什么。
