@@ -15,7 +15,7 @@
   };
   const STAGE = { none: "无", planning: "规划", policy: "策略", execution: "执行", verification: "验证", cancelled: "取消", unknown: "未记录" };
   const OUTCOME = { allowed: ["允许", "ok"], approval_required: ["需审批", "warn"], denied: ["拒绝", "bad"] };
-  const state = { data: null, view: "overview", status: "all", provider: "all", query: "", showDeleted: true, selected: null, loading: false, error: null, raw: false };
+  const state = { data: null, view: "overview", status: "all", provider: "all", query: "", showDeleted: true, selected: null, loading: false, error: null, raw: false, traces: new Map() };
 
   const root = () => document.getElementById("audit-root");
   const pct = (value) => (value === null || value === undefined ? "—" : `${Math.round(value * 100)}%`);
@@ -159,6 +159,19 @@
     }).join("");
   }
 
+  /** The run's whole journal trace, loaded on demand. 该 Run 的完整 Journal 轨迹，按需加载。 */
+  function traceBlock(r) {
+    const trace = state.traces.get(r.runId);
+    if (trace === undefined) return `<button type="button" class="au-btn" data-au-trace="${esc(r.runId)}">加载完整轨迹</button>`;
+    if (trace === null) return `<p class="au-empty">正在读取轨迹…</p>`;
+    if (trace.length === 0) return `<p class="au-empty">这条记录没有可显示的轨迹事件。</p>`;
+    return `<ol class="au-trace">${trace.map((item) => `<li class="au-trace-item">
+      <time>${stamp(item.at)}</time>
+      <div><b>${esc(item.label)}</b><span>${esc(item.detail)}</span></div>
+      <details class="au-trace-raw"><summary>原始数据</summary><pre>${esc(item.payload)}</pre></details>
+    </li>`).join("")}</ol>`;
+  }
+
   function policyBlock(r) {
     if (!r.policy.length) return `<p class="au-empty">没有策略判定记录。</p>`;
     return r.policy.map((p) => {
@@ -193,6 +206,7 @@
       <div class="au-facts"><span>创建 ${stamp(r.createdAt)}</span><span>耗时 ${ms(r.durationMs)}</span><span>触发 ${esc(r.triggerKind ?? "—")}</span><span>${r.basis.events} 条事件</span></div>
       ${stages(r)}${reason}
       <h5>执行时间线</h5>${timeline(r)}
+      <h5>完整轨迹 <small class="au-hint">按发生顺序，每条都可展开原始数据</small></h5>${traceBlock(r)}
       <h5>策略判定</h5>${policyBlock(r)}
       <h5>计划</h5><ul class="au-plain">${plan || `<li class="au-empty">无计划。</li>`}</ul>
       <h5>证据</h5><ul class="au-plain">${evidence}</ul>
@@ -277,6 +291,20 @@
     if ((el = pick("[data-au-quick]"))) { await label(el.dataset.auRun, el.dataset.auQuick, ""); return; }
     if ((el = pick("[data-au-label]"))) { await label(el.dataset.auRun, el.dataset.auLabel, root().querySelector("[data-au-note]")?.value ?? ""); return; }
     if ((el = pick("[data-au-jump]"))) { state.view = "runs"; state.status = "all"; state.selected = el.dataset.auJump; render(); return; }
+    if ((el = pick("[data-au-trace]"))) {
+      const runId = el.dataset.auTrace;
+      state.traces.set(runId, null);
+      render();
+      try {
+        const result = await api(`/api/runs/${encodeURIComponent(runId)}/trace`);
+        state.traces.set(runId, result.items ?? []);
+      } catch (error) {
+        state.traces.set(runId, []);
+        announce(`读取轨迹失败：${error.message}`, true);
+      }
+      render();
+      return;
+    }
     if ((el = pick("[data-au-open]"))) { closeSettings(); void selectSession(el.dataset.auOpen); return; }
     if ((el = pick("[data-au-delete]"))) {
       if (!(await confirmDialog("删除这个会话？它会从对话列表消失，但审计记录会保留并标为「已删除」，评估数据不会丢。之后可在这里恢复。", "删除"))) return;

@@ -6,6 +6,26 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Effort, readable traces, and a daemon that reports back
+
+A model's reasoning effort can now be chosen per worker and for the Main Agent. The gateway reports the levels each model actually offers (`reasoning_levels`), worker providers declare the levels their CLI accepts, and the settings page offers only those: Claude Code gets `--effort`, Codex `-c model_reasoning_effort=…`, Pi `--thinking`. `clone-ai effort <worker> <level>` pins it from the CLI; `config.json` `mainAgentEffort` (or `CLONE_AI_MAIN_EFFORT`) sets it for the Main Agent. Verified against the real CLIs: Claude Code with `--effort high` and Pi with `--thinking medium` both completed; Codex accepts the config override.
+
+Every run can be read end to end: `GET /api/runs/:id/trace` returns the run's whole journal in order with a plain-language label and detail for each event, and the audit view renders it (完整轨迹, raw payload one level down). Events that used to read "Recorded in the local journal." now say what happened (status, plan steps, which provider ran, evidence, verification, memory used).
+
+A guardian now reports background work back into the conversation: when a run settles, the daemon writes a one-line update that the chat shows as a message, and the Main Agent's briefing lists recently finished work with evidence counts — so the next turn starts from the result, not from a status colour.
+
+Sidebar previews are plain text and strictly one line with an ellipsis; markdown from the model no longer leaks into the list. The empty conversation dropped its three starter cards.
+
+### 强度、可读的轨迹，以及会回报的后台
+
+每个 worker 和 Main Agent 现在都可以选择推理强度。网关会报告每个模型实际支持的档位，worker provider 声明各自 CLI 接受的档位，设置页只列出这些：Claude Code 用 `--effort`，Codex 用 `-c model_reasoning_effort=…`，Pi 用 `--thinking`。CLI 用 `clone-ai effort <worker> <level>` 固定；`config.json` 的 `mainAgentEffort`（或 `CLONE_AI_MAIN_EFFORT`）设置主 Agent。已对真实 CLI 验证：Claude Code `--effort high` 与 Pi `--thinking medium` 均完成；Codex 接受该配置覆盖。
+
+每个 Run 都可端到端阅读：`GET /api/runs/:id/trace` 按顺序返回该 Run 的全部 Journal 事件，每条都有可读的标题与说明，审计页渲染成「完整轨迹」（原始数据在下一层）。过去显示 "Recorded in the local journal." 的事件，现在会说明发生了什么（状态、计划步骤、哪个 Provider 执行、证据、验证、用到的记忆）。
+
+新增守护：后台 Run 落定时，守护进程写一条更新，对话把它显示为消息；Main Agent 的简报会列出最近完成的工作及证据数——下一轮从结果开始，而不是从一个状态颜色开始。
+
+侧栏预览改为纯文本、严格单行省略号；模型输出的 Markdown 不再漏进列表。空对话去掉了三张起始卡片。
+
 ### Memory, classified and layered
 
 The memory page now groups by kind — commitments and boundaries, preferences, decisions, procedures, facts — with each group's size and total recalls on its header. Rows stay collapsed inside the group; opening one shows its body, provenance, and the runs that actually recalled it (from `memory.recalled` in the journal, with a link to the run and the query). Reading a memory counts as a use, and the detail endpoint now returns that usage list.

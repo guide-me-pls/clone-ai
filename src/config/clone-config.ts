@@ -1,4 +1,5 @@
 import { readJsonFile, writeJsonAtomic } from "./json-file.ts";
+import { isEffortLevel, type EffortLevel } from "../workers/effort.ts";
 import type { ClonePaths } from "./clone-home.ts";
 
 export interface CloneConfig {
@@ -13,6 +14,12 @@ export interface CloneConfig {
    * 默认（设置 / 第一个可用模型）。`CLONE_AI_MAIN_MODEL` 可覆盖本次运行。
    */
   mainAgentModel?: string;
+  /**
+   * Reasoning effort for the Main Agent, passed to the model provider (Pi's
+   * thinking level). Only levels the model offers should be chosen.
+   * 主 Agent 的推理强度，传给模型供应商（Pi 的 thinking level）。应只选择模型支持的档位。
+   */
+  mainAgentEffort?: EffortLevel;
 }
 
 export class CloneConfigStore {
@@ -30,7 +37,7 @@ export class CloneConfigStore {
     return normalizeConfig(value, this.#defaultWorkspace);
   }
 
-  async update(update: Partial<Pick<CloneConfig, "workspacePath" | "locale" | "mainAgentModel">>): Promise<CloneConfig> {
+  async update(update: Partial<Pick<CloneConfig, "workspacePath" | "locale" | "mainAgentModel" | "mainAgentEffort">>): Promise<CloneConfig> {
     const current = await this.get();
     const next = normalizeConfig({ ...current, ...update }, this.#defaultWorkspace);
     const write = this.#writes.then(() => writeJsonAtomic(this.#paths.configFile, next));
@@ -51,5 +58,6 @@ function normalizeConfig(value: Partial<CloneConfig> | undefined, defaultWorkspa
       : defaultWorkspace,
     locale: value?.locale === "en" ? "en" : "zh-CN",
     ...(mainAgentModel === undefined ? {} : { mainAgentModel }),
+    ...(isEffortLevel(value?.mainAgentEffort) ? { mainAgentEffort: value.mainAgentEffort } : {}),
   };
 }

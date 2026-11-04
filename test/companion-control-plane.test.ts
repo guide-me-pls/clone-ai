@@ -216,3 +216,43 @@ test("the sidebar shows tasks, not one session per conversational turn", async (
     assembly.close();
   }
 });
+
+test("sidebar previews are plain text, one line, never raw markdown", async () => {
+  const { plainText } = await import("../src/companion-server.ts");
+  const preview = plainText("**本周周报** 已完成：\n\n- 进展 ✅\n- 阻塞：`部署` 等确认\n\n## 下周\n1. 收尾");
+  assert.equal(preview.includes("**"), false);
+  assert.equal(preview.includes("`"), false);
+  assert.equal(preview.includes("#"), false);
+  assert.match(preview, /本周周报 已完成/);
+  assert.equal(plainText("----").length >= 0, true);
+  // Long text is cut by the caller, which slices to a sidebar width. 长文本由调用方按侧栏宽度截断。
+  assert.equal(plainText("  多   空格  "), "多 空格");
+});
+
+test("a run's full trace is ordered, readable, and keeps raw data one level down", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const assembly = await createRuntimeAssembly({ dataDirectory });
+  try {
+    const { run } = await assembly.runtime.acceptTrigger({ kind: "query", summary: "整理周报", payload: {} });
+    await assembly.runtime.attachPlan(run.id, {
+      summary: "整理周报",
+      steps: [{ id: "draft", title: "起草", instructions: "起草", risk: "reversible_write", acceptanceCriteria: ["草稿存在"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+    });
+    const response = await companionFetch(url, token, `/api/runs/${run.id}/trace`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as { items: Array<{ sequence: number; label: string; detail: string; payload: string }> };
+    assert.ok(body.items.length >= 4);
+    assert.deepEqual(body.items.map((item) => item.sequence), [...body.items.map((item) => item.sequence)].sort((a, b) => a - b));
+    const labels = body.items.map((item) => item.label);
+    assert.ok(labels.includes("收到请求"));
+    assert.ok(labels.includes("生成执行计划"));
+    const plan = body.items.find((item) => item.label === "生成执行计划")!;
+    assert.match(plan.detail, /1 个步骤：起草/);
+    assert.ok(body.items.every((item) => typeof item.payload === "string" && item.payload.length > 0));
+
+    const missing = await companionFetch(url, token, "/api/runs/nope/trace");
+    assert.equal(missing.status, 404);
+  } finally {
+    assembly.close();
+  }
+});
