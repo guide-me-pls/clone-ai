@@ -174,6 +174,38 @@ function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
 }
 
 /**
+ * Runs the Main Agent proposed during a conversation. They are tasks of that
+ * chat; listing them as sibling conversations is what made one request look like
+ * two chats.
+ * 主 Agent 在对话中提案的 Run。它们是该对话的任务；把它们列为同级对话，就使一次请求看起来
+ * 像两个对话。
+ */
+function derivedRunIds(events: readonly JournalEvent[]): Set<string> {
+  const triggerSource = new Map<string, string>();
+  for (const event of events) {
+    if (event.type !== "trigger.received") continue;
+    const trigger = asRecord(event.payload);
+    if (typeof trigger.id !== "string") continue;
+    // The Trigger's own payload carries the source; the event payload wraps it.
+    // Trigger 自己的 payload 携带来源；事件 payload 把它包了一层。
+    triggerSource.set(trigger.id, String(asRecord(trigger.payload).source ?? ""));
+  }
+  const taskTrigger = new Map<string, string>();
+  for (const event of events) {
+    if (event.type !== "task.created" || event.taskId === undefined) continue;
+    const payload = asRecord(event.payload);
+    if (typeof payload.triggerId === "string") taskTrigger.set(event.taskId, payload.triggerId);
+  }
+  const derived = new Set<string>();
+  for (const event of events) {
+    if (event.type !== "run.created" || event.runId === undefined || event.taskId === undefined) continue;
+    const trigger = taskTrigger.get(event.taskId);
+    if (trigger !== undefined && triggerSource.get(trigger) === "main-agent") derived.add(event.runId);
+  }
+  return derived;
+}
+
+/**
  * Derives the one-line update for a settled run from the journal, then stores it.
  * Everything here is read-only against the Kernel; the journal stays the truth
  * and this is a readable projection for the conversation.
@@ -1596,6 +1628,10 @@ async function handleRequest(
   if (request.method === "GET" && sessionMatch?.[1] !== undefined) {
     const runId = decodeURIComponent(sessionMatch[1]);
     if (runId === MAIN_AGENT_SESSION_ID) {
+      if (await context.sessions.isConversationDeleted(runId)) {
+        sendJson(response, 404, { error: "This conversation was hidden together with its tasks." });
+        return;
+      }
       sendJson(response, 200, await buildMainAgentConversation(context.dataDirectory));
       return;
     }
@@ -1609,7 +1645,11 @@ async function handleRequest(
   if (request.method === "DELETE" && sessionMatch?.[1] !== undefined) {
     const runId = decodeURIComponent(sessionMatch[1]);
     if (runId === MAIN_AGENT_SESSION_ID) {
-      sendJson(response, 405, { error: "The Main Agent conversation cannot be hidden while it is the active chat." });
+      // Hiding the conversation hides the tasks it spawned, in one step. 隐藏对话时一并隐藏它派生出的任务。
+      const view = await loadRuntimeView(context.dataDirectory);
+      const children = [...derivedRunIds(view.events)].filter((id) => view.runs.some((run) => run.id === id));
+      await context.sessions.deleteConversation(runId, children);
+      sendJson(response, 204, undefined);
       return;
     }
     const { runs } = await loadRuntimeView(context.dataDirectory);
@@ -1624,7 +1664,9 @@ async function handleRequest(
 
   const restoreMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/restore$/);
   if (request.method === "POST" && restoreMatch?.[1] !== undefined) {
-    await context.sessions.restore(decodeURIComponent(restoreMatch[1]));
+    const target = decodeURIComponent(restoreMatch[1]);
+    if (target === MAIN_AGENT_SESSION_ID) await context.sessions.restoreConversation(target);
+    else await context.sessions.restore(target);
     sendJson(response, 204, undefined);
     return;
   }
@@ -1789,6 +1831,7 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
     readConversation(dataDirectory, 200),
   ]);
   const deletedRunIds = await sessions.deletedRunIds();
+  const conversationDeleted = await sessions.isConversationDeleted(MAIN_AGENT_SESSION_ID);
   const visibleRuns = runs.filter((run) => !deletedRunIds.has(run.id));
   const visibleRunIds = new Set(visibleRuns.map((run) => run.id));
   const eventsByRun = new Map<string, JournalEvent[]>();
@@ -1806,11 +1849,24 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
   // 独立会话，就使每条消息都裂变出一个新的对话框。这些 Run 仍留在 Journal 与审计里，
   // 侧栏只显示任务。
   const taskRuns = visibleRuns.filter((run) => !isConversationalRun(state, run));
-  const conversationSummary = summarizeOwnerConversation(ownerHistory, turns);
+  // Runs the Main Agent proposed are tasks of the conversation, not sibling
+  // chats: one request must not read as two conversations in the sidebar.
+  // 主 Agent 提案的 Run 是对话的任务，而不是同级对话：一次请求不应在侧栏读成两个对话。
+  const derived = derivedRunIds(events);
+  const childCount = taskRuns.filter((run) => derived.has(run.id)).length;
+  const summary = conversationDeleted ? undefined : summarizeOwnerConversation(ownerHistory, turns);
+  const conversationSummary = summary === undefined
+    ? undefined
+    : {
+        ...summary,
+        kind: "conversation" as const,
+        ...(childCount === 0 ? {} : { childCount }),
+      };
   const allSessions = [
     ...taskRuns.map((run) => ({
       ...toSessionSummary(run, tasks, describeRunFailure(run, eventsByRun.get(run.id) ?? []).reason),
       updatedAtMs: Date.parse(run.updatedAt),
+      ...(derived.has(run.id) ? { parentId: MAIN_AGENT_SESSION_ID } : {}),
     })),
     ...(conversationSummary === undefined ? [] : [conversationSummary]),
   ].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
@@ -1871,6 +1927,13 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
     completed,
     memories,
     sessions: groupedSessions.slice(0, 40).map(({ updatedAtMs: _updatedAtMs, duplicateCount: _duplicateCount, ...summary }) => summary),
+    deletedConversations: (await sessions.deletedConversations())
+      .map((entry) => ({
+        id: entry.id,
+        title: "已隐藏的对话",
+        childCount: entry.childRunIds.length,
+        at: entry.at,
+      })),
     timeline: events.slice(-12).reverse().map(toTimelineItem),
   };
 }
@@ -2619,6 +2682,8 @@ interface DashboardView {
   completed: Array<{ runId: string; title: string; status: string; updatedAt: string; evidenceCount: number }>;
   memories: Array<{ summary: string; confidence: string }>;
   sessions: SessionSummary[];
+  /** Conversations hidden together with their tasks, offered back in the sidebar. 与其任务一起隐藏的对话，在侧栏提供恢复。 */
+  deletedConversations: Array<{ id: string; title: string; childCount: number; at: string }>;
   timeline: Array<{ label: string; detail: string; occurredAt: string }>;
 }
 
@@ -2628,6 +2693,11 @@ interface SessionSummary {
   status: string;
   updatedAt: string;
   preview: string;
+  /** Set for a run derived from a conversation: it is a task of that chat, not another chat. 由对话派生出的 Run 会带此字段：它是该对话的任务，而不是另一个对话。 */
+  parentId?: string;
+  /** On the conversation: how many task runs belong to it. 对话上：属于它的任务数。 */
+  childCount?: number;
+  kind?: "conversation";
 }
 
 interface ConversationMessage {
