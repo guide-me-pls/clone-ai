@@ -20,6 +20,16 @@ import type { MemoryType } from "../core/contracts.ts";
 import { workspaceExecutionLock } from "../core/workspace-lock.ts";
 import { memoryFingerprint, redactMemoryPii } from "./memory-hygiene.ts";
 
+/**
+ * Default lifetime of a mined memory and the idle window after which any active
+ * memory is archived. 90 days matches a project, a work cycle or a term; a
+ * memory nobody recalled or edited for that long is not earning its place.
+ * 提炼记忆的默认寿命，以及任何活跃记忆闲置多久后被归档。90 天对应一个项目、一个工作周期或
+ * 一个学期；这么久没人召回或编辑的记忆，没有保留的价值。
+ */
+export const MEMORY_LIFETIME_DAYS = 90;
+const DAY_MS = 24 * 3600 * 1000;
+
 export interface MemoryGovernanceOptions {
   journal: JournalStore;
   store: MdMemoryStore;
@@ -82,7 +92,9 @@ export class MemoryGovernance {
         sensitivity,
         sourceRunId: candidate.runId,
         sourceEvidenceIds: candidate.sourceEvidenceIds,
-        ...(candidate.expiresAt === undefined ? {} : { expiresAt: candidate.expiresAt }),
+        // A mined memory fades unless something keeps it alive; the miner's own
+        // expiry wins when it gave one. 提炼记忆除非有人维持否则淡出；提炼器给了过期时间则以它为准。
+        expiresAt: candidate.expiresAt ?? new Date(Date.now() + MEMORY_LIFETIME_DAYS * DAY_MS).toISOString(),
       });
       await this.applyRecorded(entry, {
         type: "memory.candidate.promoted",
@@ -187,7 +199,7 @@ export class MemoryGovernance {
   }
 
   /** Archives a memory with the reason recorded. 归档一条记忆并记录原因。 */
-  async archive(memoryId: string, reason: "manual" | "expired" | "deleted" = "manual"): Promise<MemoryEntry> {
+  async archive(memoryId: string, reason: "manual" | "expired" | "idle" | "retired" | "deleted" = "manual"): Promise<MemoryEntry> {
     return this.withLock(async () => {
       await this.recoverUnlocked();
       const entry = await this.#store.prepareUpdate(memoryId, { status: "archived" });
@@ -213,6 +225,31 @@ export class MemoryGovernance {
         });
       }
       return expired.map((entry) => entry.id);
+    });
+  }
+
+  /**
+   * Archives active memories that were neither recalled, read nor edited for
+   * `idleDays`. Archiving rather than deleting keeps the decision reversible
+   * through restore(); the journal records the reason as "idle".
+   * 归档闲置超过 `idleDays` 天（既未被召回、读取也未被编辑）的活跃记忆。归档而非删除，使该决定
+   * 可通过 restore() 撤销；Journal 把原因记为 "idle"。
+   */
+  async archiveIdle(idleDays = MEMORY_LIFETIME_DAYS): Promise<string[]> {
+    return this.withLock(async () => {
+      await this.recoverUnlocked();
+      const cutoff = new Date(Date.now() - idleDays * DAY_MS).toISOString();
+      const idle = (await this.#store.list({ status: "active" })).filter((entry) => (
+        [entry.createdAt, entry.updatedAt, entry.lastAccessedAt ?? ""].reduce((latest, value) => (value > latest ? value : latest)) < cutoff
+      ));
+      for (const memory of idle) {
+        const entry = await this.#store.prepareUpdate(memory.id, { status: "archived" });
+        await this.applyRecorded(entry, {
+          type: "memory.archived",
+          payload: { memoryId: memory.id, reason: "idle", idleDays, archivedAt: new Date().toISOString() },
+        });
+      }
+      return idle.map((entry) => entry.id);
     });
   }
 
