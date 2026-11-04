@@ -21,9 +21,11 @@ import { runMainAgentQuery } from "./application/run-main-query.ts";
 import { MainAgentBusyError } from "./main-agent/prompt-lock.ts";
 import {
   authorizeCompanionRequest,
+  clearCompanionEndpointIfOwned,
   injectCompanionToken,
   issueCompanionToken,
   normalizeCompanionHost,
+  persistCompanionEndpoint,
   persistCompanionToken,
 } from "./companion-auth.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
@@ -599,6 +601,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     throw new Error("The local companion did not expose a TCP address.");
   }
   const url = `http://${host === "::1" ? "[::1]" : host}:${address.port}`;
+  const endpointStartedAt = new Date().toISOString();
+  await persistCompanionEndpoint(dataDirectory, url, endpointStartedAt);
   bound.port = address.port;
   scheduler.start();
   return {
@@ -617,6 +621,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       await runQueue.stop();
       await Promise.allSettled([maintenanceInFlight, reportInFlight]);
       await serverClosed;
+      await clearCompanionEndpointIfOwned(dataDirectory, endpointStartedAt);
       await memoryGovernance.close();
       // Release the journal last: the queue and governance above may still be
       // finishing writes, and closing the database under them would lose those
@@ -1540,6 +1545,33 @@ async function handleRequest(
       : randomUUID();
     if (text.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
+      return;
+    }
+    // A remote channel can retry after its own timeout. Reusing a terminal
+    // turn id returns the original result instead of running the request again.
+    // 远程通道可能在自身超时后重试；终态回合复用原 id 时返回原结果，而不是再次执行。
+    const existingTurn = (await readMainAgentTurnRecords(context.dataDirectory))
+      .find((record) => record.id === turnId);
+    if (existingTurn?.status === "completed") {
+      sendJson(response, 200, {
+        reply: existingTurn.reply ?? "",
+        newRuns: [],
+        deduplicated: true,
+      });
+      return;
+    }
+    if (existingTurn?.status === "failed" || existingTurn?.status === "interrupted") {
+      sendJson(response, 409, {
+        error: existingTurn.error ?? "This turn already ended without a successful reply.",
+        deduplicated: true,
+      });
+      return;
+    }
+    if (existingTurn?.status === "started") {
+      sendJson(response, 409, {
+        error: "This turn is already running.",
+        deduplicated: true,
+      });
       return;
     }
     try {

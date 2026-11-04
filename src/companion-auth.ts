@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 /**
@@ -29,6 +29,64 @@ export async function persistCompanionToken(dataDirectory: string, token: string
     // Windows 不一定能 chmod 0600；文件仍然只在所有者主目录里。
   }
   return path;
+}
+
+export interface CompanionEndpoint {
+  url: string;
+  pid: number;
+  startedAt: string;
+}
+
+/** Publish the loopback endpoint so local channel bridges can find the live daemon. 发布回环地址，供本地消息通道找到正在运行的 Daemon。 */
+export async function persistCompanionEndpoint(
+  dataDirectory: string,
+  url: string,
+  startedAt = new Date().toISOString(),
+): Promise<string> {
+  const path = join(dataDirectory, "companion-endpoint.json");
+  await mkdir(dataDirectory, { recursive: true });
+  const parsed = new URL(url);
+  if (parsed.protocol !== "http:" || !isLoopbackHostname(parsed.hostname)) {
+    throw new Error("The companion endpoint must be an HTTP loopback URL.");
+  }
+  const endpoint: CompanionEndpoint = {
+    url: parsed.origin,
+    pid: process.pid,
+    startedAt,
+  };
+  await writeFile(path, `${JSON.stringify(endpoint)}\n`, { encoding: "utf8", mode: 0o600 });
+  try {
+    await chmod(path, 0o600);
+  } catch {
+    // Windows cannot always chmod 0600; the endpoint contains no bearer.
+    // Windows 不一定能 chmod 0600；地址文件本身不包含 bearer。
+  }
+  return path;
+}
+
+/** Read a previously published endpoint; validation rejects a non-loopback value. 读取已发布地址；校验会拒绝非回环地址。 */
+export async function readCompanionEndpoint(dataDirectory: string): Promise<CompanionEndpoint | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(join(dataDirectory, "companion-endpoint.json"), "utf8")) as Partial<CompanionEndpoint>;
+    if (typeof parsed.url !== "string" || typeof parsed.pid !== "number" || typeof parsed.startedAt !== "string") return undefined;
+    const url = new URL(parsed.url);
+    if (url.protocol !== "http:" || !isLoopbackHostname(url.hostname)) return undefined;
+    return { url: url.origin, pid: parsed.pid, startedAt: parsed.startedAt };
+  } catch {
+    return undefined;
+  }
+}
+
+export async function clearCompanionEndpoint(dataDirectory: string): Promise<void> {
+  await unlink(join(dataDirectory, "companion-endpoint.json")).catch(() => undefined);
+}
+
+/** Remove only a stale endpoint, never one republished by a newer daemon. 只删除陈旧地址，绝不删除新 Daemon 已重新发布的地址。 */
+export async function clearCompanionEndpointIfOwned(dataDirectory: string, startedAt: string): Promise<void> {
+  const current = await readCompanionEndpoint(dataDirectory);
+  if (current?.startedAt === startedAt && current.pid === process.pid) {
+    await clearCompanionEndpoint(dataDirectory);
+  }
 }
 
 export function loopbackHostname(hostHeader: string | undefined): string | undefined {

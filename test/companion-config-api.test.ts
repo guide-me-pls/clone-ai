@@ -95,6 +95,33 @@ test("an interrupted Main Agent turn is persisted and survives a restart", async
   assert.match(records[0]?.error ?? "", /stopped/);
 });
 
+test("a completed remote turn is returned without invoking the model again", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  await writeFile(join(dataDirectory, "main-agent-turns.jsonl"), [
+    JSON.stringify({
+      id: "whatsapp:wamid.123",
+      text: "整理今天需要推进的事情",
+      status: "completed",
+      startedAt: "2026-11-04T03:00:00.000Z",
+      completedAt: "2026-11-04T03:00:01.000Z",
+      reply: "原回复",
+    }),
+    "",
+  ].join("\n"));
+  const response = await companionFetch(url, token, "/api/main-agent/query", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      turnId: "whatsapp:wamid.123",
+      text: "一个不应执行的重复请求",
+    }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as { reply: string; deduplicated: boolean };
+  assert.equal(body.reply, "原回复");
+  assert.equal(body.deduplicated, true);
+});
+
 test("a terminal turn is not overwritten by a later interruption report", async (t) => {
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-api-turn-terminal-"));
   t.after(async () => rm(dataDirectory, { recursive: true, force: true }));
