@@ -123,6 +123,7 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
       const { SessionManager } = await import("@earendil-works/pi-coding-agent");
       const { session } = await createMainAgentSession({
         dataDirectory,
+        query,
         // A fresh conversation is explicit; the default continues the last one.
         // 新会话是显式选择；默认续上一次对话。
         ...(fresh ? { sessionManager: SessionManager.create(dataDirectory, join(dataDirectory, "pi-sessions", "main-agent")) } : {}),
