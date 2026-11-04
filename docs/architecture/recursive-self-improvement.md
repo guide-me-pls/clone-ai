@@ -206,7 +206,7 @@ the analysis depends on:
   (stored in `memory_term_weights`, IDF applied at query time) is scored by
   cosine alongside the bigram ratio, plus a small preference prior. Cosine can
   only promote a memory that already shared a term, so it cannot introduce an
-  unrelated one.
+  unrelated one. A semantic term was tried and removed; see the trade-off log.
 
 A **native worker** (`src/workers/native-agent-worker.ts`) moves the tool
 boundary inside the loop: it offers only tools whose risk the step's scopes
@@ -228,11 +228,12 @@ worker actually receives:
 Context boundary: 92.6% of questions had an evidence memory inside the compiled
 context (1200-character / 6-item caps); preference questions only 56.7%.
 
-Semantic-term ablation (same data, `CLONE_AI_RECALL_SEMANTIC=0` for the off run):
-any@1 77.9% on vs 76.6% off; context hit rate 92.6% on vs 92.8% off. The
-semantic term therefore does **not** demonstrably help on this benchmark —
-differences are within noise for n=470. It stays behind the switch rather than
-being called a win.
+A hashed-ngram semantic term was measured the same way (any@1 77.9% with it,
+76.6% without; context hit rate 92.6% vs 92.8%) and then **removed**, because
+the differences were inside noise for n=470. The reasoning is in
+[trade-offs.md](trade-offs.md#2026-11-04--removed-the-hashed-ngram-semantic-recall-term).
+Recall is lexical (bigram ratio + IDF-weighted cosine + preference prior); the
+weakness it leaves is recorded there too.
 
 What the numbers say about priorities: preference questions remain the weak
 spot (the correct evidence is a session where the owner mentions a tool, not a
