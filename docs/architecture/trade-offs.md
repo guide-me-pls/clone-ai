@@ -19,6 +19,40 @@ Rules for entries:
 
 ---
 
+## 2026-11-04 — Journal reads are incremental, with a full-rebuild fallback
+
+**Decided:** `SqliteJournalStore` gained `listSince(sequence)` and
+`listForRun(runId)` plus indexes on `(run_id, sequence)` and `(type,
+sequence)`. `CloneRuntime.refresh()` and `PersonalStateStore.hydrate()` apply
+only the tail and advance a remembered applied sequence.
+
+**Alternatives:** keep replaying the whole journal on every refresh; add a
+separate incremental event log alongside the journal; paginate the projection.
+
+**Why it won.** `list()` was an unindexed full scan and every refresh called it,
+so the cost of each queue tick grew with total history — a structural problem
+that gets worse the longer the twin lives, not a tuning issue.
+
+**What was given up.** A correctness case has to be handled explicitly: if an
+event arrives with a sequence at or below the applied one, the journal was
+replaced, truncated or reordered, and the projection is rebuilt from zero. The
+first implementation missed the second half of this — events applied by orphan
+recovery advanced the projection without advancing the applied sequence, so the
+next refresh replayed a `running -> queued` transition the state machine
+refuses. All event application now goes through one `#applyEvent`, and the
+kill-restart test caught it.
+
+**Reversal condition.** If projection rebuilds from a replaced journal become
+common (a migration that rewrites history, say), the applied sequence should be
+stored rather than held in memory, or `refresh` should verify a journal identity
+instead of inferring replacement from ordering.
+
+**Status:** the indexing and incremental path are covered by
+`test/journal-incremental.test.ts`; no timing benchmark was run, so the size of
+the win is inferred from the query shape, not measured.
+
+---
+
 ## 2026-11-04 — Removed the hashed-ngram "semantic" recall term
 
 **Decided:** remove it. `MdMemoryStore.recall` keeps the bigram ratio, the
