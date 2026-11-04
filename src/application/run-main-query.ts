@@ -6,7 +6,10 @@
  * 面向 companion 的一次 Main Agent 查询。会话即持久的 clone-main 对话；reply 是 Agent
  * 的话语，acceptedRuns 则从 Kernel Journal 读回——两者分开返回，因为话语不是证据。
  */
+import { basename, join } from "node:path";
+
 import type { Run } from "../core/contracts.ts";
+import type { ConversationMemoryPipeline } from "../memory/conversation-memory-pipeline.ts";
 import { createKernelRuntimeSession } from "../main-agent/tools/kernel-tools.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
 import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
@@ -46,7 +49,7 @@ export async function runMainAgentQuery(
   return withMainAgentLock(dataDirectory, async () => {
     const before = new Set((await currentRuns(dataDirectory)).map((run) => run.id));
 
-    const { session, prompt } = await createMainAgentSession({ dataDirectory });
+    const { session, prompt } = await createMainAgentSession({ dataDirectory, query: text });
     // Recorded before the prompt, not after: a crash mid-turn must still leave
     // the exact inputs behind, because those are what a later replay needs.
     // 在 prompt 之前记录而不是之后：中途崩溃也必须留下确切的输入，因为那正是日后回放所需的。
@@ -55,6 +58,24 @@ export async function runMainAgentQuery(
       prompt,
       options.turnId === undefined ? {} : { turnId: options.turnId },
     );
+    const sessionFile = session.sessionManager.getSessionFile();
+    let conversationMemory: ConversationMemoryPipeline | undefined;
+    try {
+      const { createJournalStore } = await import("../core/sqlite-journal.ts");
+      const { MemoryPipeline } = await import("../memory/memory-pipeline.ts");
+      const { AgentMemoryWorker } = await import("../memory/agent-memory-worker.ts");
+      const { ConversationMemoryPipeline } = await import("../memory/conversation-memory-pipeline.ts");
+      if (process.env.CLONE_AI_MEMORY_MINING === "1") {
+        const journal = createJournalStore(dataDirectory);
+        conversationMemory = new ConversationMemoryPipeline(
+          journal,
+          new MemoryPipeline(journal, new AgentMemoryWorker({}), { lockPath: join(dataDirectory, "memory-extraction-lock") }),
+        );
+      }
+    } catch {
+      // Mining is optional; a missing mining path must not fail the reply.
+      // 提炼是可选的；提炼路径缺失不能导致回复失败。
+    }
     let reply = "";
     // Declared before the subscription so the callback never touches a
     // binding that is still in its temporal dead zone.
@@ -98,6 +119,16 @@ export async function runMainAgentQuery(
         // 用量是遥测；丢掉它不能盖住回复或错误。
       }
       session.dispose();
+    }
+    // Mining runs after the reply: the owner's turn is already answered, and a
+    // slow or broken miner must never delay or alter it.
+    // 提炼在回复之后运行：所有者这一回合已经得到回答，慢或坏掉的提炼器绝不能推迟或改变它。
+    if (conversationMemory !== undefined) {
+      await conversationMemory.record({
+        session: basename(sessionFile ?? "main-agent"),
+        turns: [{ at: new Date().toISOString(), speaker: "user", text }],
+        objective: text,
+      }).catch(() => undefined);
     }
 
     const newRuns = (await currentRuns(dataDirectory))

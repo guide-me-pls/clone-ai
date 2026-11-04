@@ -11,6 +11,7 @@ import { JsonWorkspaceCheckpointStore } from "./workspace-evidence.ts";
 import { createDefaultVerifier } from "./verification.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { AgentMemoryWorker } from "../memory/agent-memory-worker.ts";
+import { ConversationMemoryPipeline } from "../memory/conversation-memory-pipeline.ts";
 import { GovernedMemorySource } from "../memory/md-memory-store.ts";
 import { WorkerSettingsStore } from "../config/worker-settings.ts";
 
@@ -19,6 +20,8 @@ export interface RuntimeAssembly {
   journal: JournalStore;
   runtime: CloneRuntime;
   memory: MemoryPipeline;
+  /** Present only when conversation mining is enabled. 仅在开启对话提炼时存在。 */
+  conversationMemory?: ConversationMemoryPipeline;
   failureCatalog: OutcomeCatalog;
   /** Owner-authored autonomy levels and standing policies. 所有者撰写的自主档位与常设策略。 */
   authority: StandingPolicyStore;
@@ -80,6 +83,12 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
       : undefined,
     { lockPath: join(paths.dataDirectory, "memory-extraction-lock") },
   );
+  // Conversation mining is opt-in for the same cost reason as task mining, and
+  // shares the pipeline's lock so the two never write candidates concurrently.
+  // 对话提炼与任务提炼同样因成本而显式开启，并共用流水线锁，使两者不会并发写候选。
+  const conversationMemory = process.env.CLONE_AI_MEMORY_MINING === "1"
+    ? new ConversationMemoryPipeline(journal, memory)
+    : undefined;
   const runtime = new CloneRuntime({
     journal,
     policy: new AuthorityPolicyEngine({ config: () => authority.snapshot() }),
@@ -99,5 +108,5 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
   const close = (): void => {
     (journal as { close?: () => void }).close?.();
   };
-  return { paths, journal, runtime, memory, failureCatalog, authority, refreshKnownAgents, close };
+  return { paths, journal, runtime, memory, ...(conversationMemory === undefined ? {} : { conversationMemory }), failureCatalog, authority, refreshKnownAgents, close };
 }
