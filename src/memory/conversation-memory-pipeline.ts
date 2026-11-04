@@ -9,9 +9,18 @@
 import { randomUUID } from "node:crypto";
 
 import type { JournalStore } from "../core/journal.ts";
+import { readTypes } from "../core/journal-types.ts";
 import type { Evidence, MemoryCandidate, NewJournalEvent } from "../core/contracts.ts";
 import { conversationJobsFromEvents, type ConversationTurn } from "./conversation-memory-worker.ts";
 import type { MemoryPipeline } from "./memory-pipeline.ts";
+
+const CONVERSATION_TYPES = [
+  "memory.conversation.requested",
+  "memory.conversation.extracted",
+  "evidence.recorded",
+  "memory.candidate.proposed",
+  "memory.candidate.extracted",
+] as const;
 
 export class ConversationMemoryPipeline {
   readonly #journal: JournalStore;
@@ -61,7 +70,10 @@ export class ConversationMemoryPipeline {
   /** Drains every un-mined conversation batch, oldest first. 按从旧到新的顺序排空每个尚未提炼的对话批次。 */
   async processDue(): Promise<MemoryCandidate[]> {
     const drained: MemoryCandidate[] = [];
-    for (const job of conversationJobsFromEvents(await this.#journal.list())) {
+    // Conversation mining reads only its own request/extraction markers and the
+    // evidence each request cites.
+    // 对话提炼只读自己的请求/提炼标记，以及每个请求引用的证据。
+    for (const job of conversationJobsFromEvents(await readTypes(this.#journal, CONVERSATION_TYPES))) {
       const candidates = await this.#pipeline.processJob(job);
       await this.#journal.append({
         type: "memory.conversation.extracted",
