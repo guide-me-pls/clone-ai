@@ -14,6 +14,7 @@ const documentPairs = [
   ["docs/runtime-architecture-and-route.md", "docs/runtime-architecture-and-route.zh-CN.md"],
   ["docs/work-orders-and-pi.md", "docs/work-orders-and-pi.zh-CN.md"],
   ["docs/architecture/agent-runtime-convergence.md", "docs/architecture/agent-runtime-convergence.zh-CN.md"],
+  ["docs/architecture/trade-offs.md", "docs/architecture/trade-offs.zh-CN.md"],
   ["docs/architecture/recursive-self-improvement.md", "docs/architecture/recursive-self-improvement.zh-CN.md"],
   ["benchmark/README.md", "benchmark/README.zh-CN.md"],
   ["apps/desktop/README.md", "apps/desktop/README.zh-CN.md"],
