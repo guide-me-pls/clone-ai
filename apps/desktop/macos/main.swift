@@ -4,6 +4,7 @@ import Foundation
 import WebKit
 
 final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, NSToolbarDelegate {
+    private static let showWindowNotification = Notification.Name("ai.clone.desktop.show-window")
     private var window: NSWindow!
     private var webView: WKWebView!
     private var navigationControl: NSSegmentedControl!
@@ -26,6 +27,17 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     private var pageReady = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if activateExistingInstance() {
+            DistributedNotificationCenter.default().post(name: Self.showWindowNotification, object: nil)
+            NSApp.terminate(nil)
+            return
+        }
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(showExistingWindow(_:)),
+            name: Self.showWindowNotification,
+            object: nil
+        )
         installSignalHandlers()
         installMenu()
         let webConfiguration = WKWebViewConfiguration()
@@ -67,6 +79,33 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         NSApp.activate(ignoringOtherApps: true)
         showMessage(title: "正在启动 Clone AI", detail: "正在启动本地运行时，请稍候。")
         startDaemon()
+    }
+
+    private func activateExistingInstance() -> Bool {
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let currentBundle = Bundle.main.bundleURL.standardizedFileURL
+        let existing = NSWorkspace.shared.runningApplications.first { application in
+            guard application.processIdentifier != currentPID,
+                  !application.isTerminated else { return false }
+            if let identifier = Bundle.main.bundleIdentifier,
+               application.bundleIdentifier == identifier {
+                return true
+            }
+            return application.bundleURL?.standardizedFileURL == currentBundle
+        }
+        guard let existing else { return false }
+        existing.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        return true
+    }
+
+    @objc private func showExistingWindow(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil else { return }
+            if !self.window.isVisible {
+                self.window.makeKeyAndOrderFront(nil)
+            }
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     // Closing the window hides the work surface, not the local runtime. The
