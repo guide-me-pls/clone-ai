@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { access, mkdir, open, readFile, stat, unlink } from "node:fs/promises";
+import { access, chmod, mkdir, open, readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { loadEnvFile } from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { resolveClonePaths } from "../config/clone-home.ts";
+import { readJsonFile, writeJsonAtomic } from "../config/json-file.ts";
 import {
   LocalMainAgentRemote,
   readWhatsAppCloudConfig,
@@ -13,6 +14,7 @@ import {
   WhatsAppCloudSender,
   WhatsAppInboxStore,
 } from "./whatsapp-bridge.ts";
+import { WHATSAPP_BRIDGE_STATE_FILE_NAME, WHATSAPP_ENV_FILE_NAME } from "./whatsapp-files.ts";
 
 /**
  * Standalone phone bridge entrypoint.
@@ -31,7 +33,7 @@ export async function runWhatsAppBridge(): Promise<number> {
   const paths = resolveClonePaths();
   const releaseLock = await acquireBridgeLock(paths.dataDirectory);
   const envFile = process.env.CLONE_AI_WHATSAPP_ENV_FILE?.trim()
-    || join(paths.dataDirectory, "whatsapp.env");
+    || join(paths.dataDirectory, WHATSAPP_ENV_FILE_NAME);
   if (await exists(envFile)) {
     const mode = (await stat(envFile)).mode & 0o777;
     if ((mode & 0o077) !== 0) {
@@ -52,15 +54,43 @@ export async function runWhatsAppBridge(): Promise<number> {
     return 1;
   }
   const store = new WhatsAppInboxStore(join(paths.dataDirectory, "whatsapp-inbox.sqlite3"));
+  const statusFile = join(paths.dataDirectory, WHATSAPP_BRIDGE_STATE_FILE_NAME);
+  const previousStatus = await readJsonFile<{
+    webhookVerifiedAt?: string;
+    lastMessageAt?: string;
+  }>(statusFile).catch(() => undefined);
+  const startedAt = new Date().toISOString();
+  let webhookVerifiedAt = previousStatus?.webhookVerifiedAt;
+  let lastMessageAt = previousStatus?.lastMessageAt;
+  const writeStatus = async (running: boolean): Promise<void> => {
+    await writeJsonAtomic(statusFile, {
+      pid: process.pid,
+      running,
+      buildId: process.env.CLONE_AI_WHATSAPP_BUILD_ID ?? "",
+      startedAt,
+      ...(webhookVerifiedAt === undefined ? {} : { webhookVerifiedAt }),
+      ...(lastMessageAt === undefined ? {} : { lastMessageAt }),
+    });
+    await chmod(statusFile, 0o600).catch(() => undefined);
+  };
   const bridge = new WhatsAppBridge({
     config,
     store,
     sender: new WhatsAppCloudSender(config),
     mainAgent: new LocalMainAgentRemote(paths.dataDirectory),
     log: (event) => console.log(JSON.stringify(event)),
+    onWebhookVerified: () => {
+      webhookVerifiedAt = new Date().toISOString();
+      void writeStatus(true);
+    },
+    onMessageAccepted: () => {
+      lastMessageAt = new Date().toISOString();
+      void writeStatus(true);
+    },
   });
   bridge.kick();
   const server = await startWhatsAppBridgeServer({ config, bridge });
+  await writeStatus(true);
   console.log(JSON.stringify({
     event: "whatsapp.bridge.ready",
     url: server.url,
@@ -69,6 +99,7 @@ export async function runWhatsAppBridge(): Promise<number> {
   const shutdown = async (): Promise<void> => {
     await server.close();
     store.close();
+    await writeStatus(false).catch(() => undefined);
     await releaseLock();
   };
   process.once("SIGINT", () => void shutdown().finally(() => process.exit(0)));
