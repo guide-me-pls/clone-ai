@@ -313,3 +313,37 @@ test("an empty memory body stays editable after it is normalized", async (t) => 
   const updated = await governance.update(entry.id, { summary: "更新后的摘要" });
   assert.equal(updated.summary, "更新后的摘要");
 });
+
+test("a promoted candidate without an expiry gets the 90 day default, the miner's own expiry wins", async (t) => {
+  const { governance, journal } = await setup(t);
+  await journalEvidence(journal, ["ev-1"]);
+  const soon = new Date(Date.now() + 5 * 86_400_000).toISOString();
+  await journal.append({ type: "memory.candidate.proposed", runId: "run-1", payload: candidate("c-1") });
+  await journal.append({ type: "memory.candidate.proposed", runId: "run-1", payload: candidate("c-2", { summary: "临时约定：本周五之前冻结发布分支", expiresAt: soon }) });
+  const [first, second] = await governance.pendingCandidates();
+  const defaulted = await governance.promote(first!);
+  const explicit = await governance.promote(second!);
+  const days = (Date.parse(defaulted.expiresAt!) - Date.now()) / 86_400_000;
+  assert.ok(days > 89.9 && days <= 90, `expected about 90 days, got ${days}`);
+  assert.equal(explicit.expiresAt, soon);
+});
+
+test("archiveIdle archives memories unused for 90 days and spares recalled ones", async (t) => {
+  const { governance, store, journal } = await setup(t);
+  await journalEvidence(journal, ["ev-1"]);
+  const idle = await governance.author({ summary: "闲置的旧偏好：周报使用蓝色模板" });
+  const used = await governance.author({ summary: "常用的偏好：周报每周五发送" });
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(60 * 86_400_000);
+  await store.recall("周报每周五发送");
+  t.mock.timers.tick(40 * 86_400_000);
+
+  assert.deepEqual(await governance.archiveIdle(), [idle.id]);
+  const archived = (await journal.list()).find((event) => event.type === "memory.archived");
+  assert.equal((archived?.payload as { reason?: string }).reason, "idle");
+  assert.equal((await governance.list({ status: "active" })).some((entry) => entry.id === used.id), true);
+  // A restored memory counts as touched, so it is not archived again at once.
+  // 被恢复的记忆视为刚被使用，不会立刻再次被归档。
+  await governance.restore(idle.id);
+  assert.deepEqual(await governance.archiveIdle(), []);
+});
