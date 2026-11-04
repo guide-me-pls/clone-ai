@@ -33,6 +33,19 @@ const icon = (name) => name === "spark"
   ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 1.8 7.2L21 11l-7.2 1.8L12 20l-1.8-7.2L3 11l7.2-1.8L12 2Z"/></svg>`
   : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>`;
 const escape = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
+function plainPreview(value) {
+  return String(value ?? "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/(\*\*|__)(.*?)\1/g, "$2")
+    .replace(/(\*|_)([^*_\n]+)\1/g, "$2")
+    .replace(/\*\*|__/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 const t = (key) => (state.strings && state.strings[key]) || key;
 function notifyDesktopNavigation(section) {
   try {
@@ -86,7 +99,7 @@ const statusMeta = (status) => {
   return { label: t("status-running"), className: "running", dot: "running" };
 };
 function announce(message, error = false) { const node = $("notice"); node.textContent = message; node.className = `notice visible${error ? " error" : ""}`; clearTimeout(node.timer); node.timer = setTimeout(() => node.className = "notice", 3200); }
-function sessionMarkup(session) { const status = statusMeta(session.status); return `<div class="session-item"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title">${escape(session.title)}</span><span class="session-meta">${escape(session.preview || status.label)}</span></span></button><button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="隐藏会话">×</button></div>`; }
+function sessionMarkup(session) { const status = statusMeta(session.status); return `<div class="session-item"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title">${escape(plainPreview(session.title))}</span><span class="session-meta">${escape(plainPreview(session.preview) || status.label)}</span></span></button><button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="隐藏会话">×</button></div>`; }
 function renderSessions(sessions) {
   const signature = JSON.stringify([state.selectedId, sessions.map((session) => [session.id, session.title, session.preview, session.status, session.updatedAt])]);
   if (state.signatures.sessions === signature) return;
@@ -127,8 +140,7 @@ function renderAgentPage() {
   const providers = state.providers || [];
   const gateway = state.gateways.find((candidate) => candidate.id === "magpie");
   const mainAgentModel = state.config?.config?.mainAgentModel || "";
-  const agentMode = state.config?.config?.agentMode === "manual" ? "manual" : "auto";
-  const signature = JSON.stringify([settings, providers, gateway, mainAgentModel, agentMode, state.gatewayLoading]);
+  const signature = JSON.stringify([settings, providers, gateway, mainAgentModel, state.gatewayLoading]);
   if (state.signatures.agentPage === signature) return;
   state.signatures.agentPage = signature;
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
@@ -179,11 +191,6 @@ function renderAgentPage() {
     actions: gatewayBadge,
     body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
   });
-  const autoModeCard = `<section class="agent-auto-mode${agentMode === "auto" ? " is-on" : ""}">
-    <div class="agent-auto-mode__mark" aria-hidden="true">${agentMode === "auto" ? "A" : "M"}</div>
-    <div class="agent-auto-mode__copy"><span class="agent-auto-mode__eyebrow">${agentMode === "auto" ? t("agent-auto-on") : t("agent-auto-off")}</span><h3>${t("agent-auto-title")}</h3><p>${t("agent-auto-body")}</p></div>
-    ${ui.switchControl({ checked: agentMode === "auto", label: t("agent-auto-title"), attributes: { "data-agent-auto-mode": "" } })}
-  </section>`;
   const providerRows = providers.map((provider) => {
     const unrestricted = provider.hostAccess === "unrestricted";
     const access = provider.executionBlocked
@@ -213,7 +220,7 @@ function renderAgentPage() {
               className: "c-button--compact",
               attributes: { "data-provider-access": provider.id, "data-allow": "false" },
             })
-          : ui.badge(t("worker-active"), "success", { dot: true })
+          : ui.badge(t("worker-default"), "success", { dot: true })
       : provider.installable
         ? ui.button({
             label: t("install"),
@@ -270,7 +277,6 @@ function renderAgentPage() {
       actions: `${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-settings-refresh": "" } })}${installButton}`,
     })}
     <div class="c-stat-grid agent-overview">${ui.stat({ label: t("stat-providers"), value: `${installed.length}/${providers.length}`, detail: t("stat-providers-detail"), tone: installed.length ? "success" : "warning" })}${ui.stat({ label: t("stat-roles"), value: `${enabledRoles}/${settings.agents.length}`, detail: t("stat-roles-detail") })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}` : t("gateway-subtitle"), tone: gateway?.running && exposedModels.length ? "success" : "warning" })}</div>
-    ${autoModeCard}
     ${gatewayCard}
     <div class="agent-section-head"><div><h3>${t("local-providers")}</h3><p>${t("providers-section-lead")}</p></div><div class="c-segmented" aria-label="${escape(t("providers-state"))}">${ui.badge(`${installed.length} ${t("connected")}`, "success", { dot: true })}${missing.length ? ui.badge(`${missing.length} ${t("installable")}`, "warning") : ""}</div></div>
     <div id="provider-registry" class="c-list agent-provider-list">${providerRows || ui.emptyState({ iconName: "terminal", title: t("empty-providers"), body: t("empty-providers-body") })}</div>
@@ -536,9 +542,9 @@ function renderOpportunities(cards) {
     return `<article class="opportunity-card${failed ? " is-failure" : ""}">
       <div class="opportunity-icon" aria-hidden="true">${failed ? "!" : "✦"}</div>
       <div class="opportunity-copy">
-        <div class="opportunity-head"><span class="opportunity-source">${escape(opportunitySourceLabel(card.source))}</span><b>${escape(card.title)}</b></div>
-        <p class="opportunity-why">${escape(card.whyNow)}</p>
-        <p class="opportunity-proposal">${escape(card.proposedResult)}</p>
+        <div class="opportunity-head"><span class="opportunity-source">${escape(opportunitySourceLabel(card.source))}</span><b>${escape(plainPreview(card.title))}</b></div>
+        <p class="opportunity-why">${escape(plainPreview(card.whyNow))}</p>
+        <p class="opportunity-proposal">${escape(plainPreview(card.proposedResult))}</p>
       </div>
       <div class="opportunity-actions">
         <button class="approve" type="button" data-accept-opportunity="${escape(card.id)}">${failed ? "查看原因" : "开始处理"}</button>
@@ -727,7 +733,7 @@ function reviewMarkup(session) { const verification = session.verification; if (
 function recalledMemoryMarkup(session) { const memories = session.recalledMemories || []; if (!memories.length) return ""; return `<details class="activity-card" data-disclosure="memory"><summary class="activity-summary">${icon("spark")}<b>本次任务使用的 Memory</b><span>${memories.length} 条</span></summary><div class="agent-list">${memories.map((memory) => `<div class="agent-row"><div><strong>${escape(memory.summary)}</strong><small>匹配：${escape((memory.matchedTerms || []).join("、") || "相关上下文")} · ${Math.round((memory.score || 0) * 100)}%</small></div></div>`).join("")}</div></details>`; }
 function evidenceMarkup(session) { return session.evidenceCount ? `<div class="evidence">${icon("check")}已记录 ${session.evidenceCount} 条可验证证据</div>` : ""; }
 function traceMarkup(session) { const trace = session.trace || session.activity || []; if (!trace.length) return ""; const open = disclosureOpen(session, "trace") ? " open" : ""; return `<details class="activity-card" data-disclosure="trace"${open}><summary class="activity-summary">${icon("check")}<b>本地执行轨迹</b><span>${trace.length} 条</span></summary><div class="trace" data-scroll-region="trace">${trace.map((item, index) => `<div class="trace-row"><b><span class="trace-sequence">#${item.sequence ?? index + 1}</span>${escape(item.label)}</b><p>${time(item.occurredAt)} · ${escape(item.detail)}</p></div>`).join("")}</div></details>`; }
-function setTopbar(session) { if (!session) { $("session-kind").textContent = "个人对话"; $("session-title").textContent = t("new-conversation"); $("session-subtitle").textContent = t("start-intent"); $("session-status").textContent = t("ready"); $("session-status").className = "status-pill"; return; } const status = statusMeta(session.status); $("session-kind").textContent = session.id === MAIN_CONVERSATION_ID ? "个人对话" : "任务记录"; $("session-title").textContent = session.title; $("session-subtitle").textContent = `${session.preview} · ${time(session.updatedAt)}`; $("session-status").textContent = session.id === MAIN_CONVERSATION_ID && session.status === "completed" ? "已保存" : status.label; $("session-status").className = `status-pill ${status.className}`; }
+function setTopbar(session) { if (!session) { $("session-kind").textContent = "个人对话"; $("session-title").textContent = t("new-conversation"); $("session-subtitle").textContent = t("start-intent"); $("session-status").textContent = t("ready"); $("session-status").className = "status-pill"; return; } const status = statusMeta(session.status); $("session-kind").textContent = session.id === MAIN_CONVERSATION_ID ? "个人对话" : "任务记录"; $("session-title").textContent = plainPreview(session.title); $("session-subtitle").textContent = `${plainPreview(session.preview)} · ${time(session.updatedAt)}`; $("session-status").textContent = session.id === MAIN_CONVERSATION_ID && session.status === "completed" ? "已保存" : status.label; $("session-status").className = `status-pill ${status.className}`; }
 const SCROLL_BOTTOM_THRESHOLD = 28;
 function rememberCurrentScroll() {
   if (!state.selectedId) return;
@@ -968,28 +974,6 @@ async function resolveReportDelivery(day, resolution) { const message = resoluti
 async function updateAgent(id, update, message) { try { await api(`/api/settings/agents/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(update) }); await refresh(); announce(message); } catch (error) { announce(error.message, true); await refresh(); } }
 async function setAgentEnabled(id, enabled) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { enabled }, agent ? `${agent.title}${enabled ? "已启用" : "已关闭"}。` : "Agent 设置已更新。"); }
 async function setAgentProvider(id, providerId) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { providerId }, agent ? `${agent.title} 已绑定到 ${providerLabel(providerId)}。` : "Agent Provider 已更新。"); }
-async function setAgentAutoMode(enabled) {
-  if (enabled && !(await confirmDialog(t("agent-auto-confirm"), t("agent-auto-enable")))) {
-    state.signatures.agentPage = "";
-    renderAgentPage();
-    return;
-  }
-  try {
-    const result = await api("/api/settings/agents/auto-mode", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enabled }),
-    });
-    if (state.config?.config) state.config.config.agentMode = result.config?.agentMode ?? (enabled ? "auto" : "manual");
-    state.signatures.agentPage = "";
-    await refresh({ preserveScroll: true });
-    announce(enabled ? t("agent-auto-enabled") : t("agent-auto-disabled"));
-  } catch (error) {
-    state.signatures.agentPage = "";
-    renderAgentPage();
-    announce(error.message, true);
-  }
-}
 async function installProvider(id) { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector(`[data-install-provider="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { await api(`/api/agents/${encodeURIComponent(id)}/install`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); await refresh(); announce(`${providerLabel(id)} 已安装并完成检测。`); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
 async function setProviderHostAccess(id, allow) { if (allow && !(await confirmDialog(t("worker-allow-warning"), t("worker-allow")))) return; try { const current = await api("/api/settings/providers"); const provider = current.providers.find((item) => item.id === id); if (!provider) throw new Error("Provider not found."); const next = { ...provider }; if (allow) { next.hostAccess = "unrestricted"; next.acknowledgeUnrestrictedHostAccess = true; } else delete next.hostAccess; await api("/api/settings/providers", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) }); await refresh(); announce(t("worker-access-saved")); } catch (error) { announce(error.message, true); } }
 async function installMissingProviders() { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector("[data-install-missing]"); if (button) { button.disabled = true; button.querySelector("span").textContent = t("installing"); } try { const result = await api("/api/agents/install-missing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); state.signatures.agentPage = ""; await refresh(); announce(result.installed.length ? `已自动安装 ${result.installed.length} 个 Provider。` : "没有可自动安装的缺失 Provider。"); } catch (error) { announce(error.message, true); await refresh(); } }
@@ -1017,7 +1001,7 @@ $("settings-modal").addEventListener("click", (event) => { const button = event.
 $("schedule-form").addEventListener("submit", (event) => { event.preventDefault(); void createSchedule($("schedule-query").value.trim()); });
 $("schedule-kind").addEventListener("change", renderScheduleOptions);
 $("schedule-list").addEventListener("click", (event) => { const report = event.target.closest("[data-report-day]"); if (report) { void resolveReportDelivery(report.dataset.reportDay, report.dataset.resolution); return; } const occurrence = event.target.closest("[data-schedule-occurrence]"); if (occurrence) { void resolveScheduleOccurrence(occurrence.dataset.scheduleOccurrence, occurrence.dataset.resolution); return; } const button = event.target.closest("[data-schedule-toggle]"); if (button) void setScheduleEnabled(button.dataset.scheduleToggle, button.dataset.scheduleEnabled === "true"); });
-$("agent-page").addEventListener("change", (event) => { const target = event.target; const autoMode = target.closest("[data-agent-auto-mode]"); if (autoMode) { void setAgentAutoMode(autoMode.checked); return; } const toggle = target.closest("[data-agent-toggle]"); if (toggle) { void setAgentEnabled(toggle.dataset.agentToggle, toggle.checked); return; } const provider = target.closest("[data-agent-provider]"); if (provider) void setAgentProvider(provider.dataset.agentProvider, provider.value); });
+$("agent-page").addEventListener("change", (event) => { const target = event.target; const toggle = target.closest("[data-agent-toggle]"); if (toggle) { void setAgentEnabled(toggle.dataset.agentToggle, toggle.checked); return; } const provider = target.closest("[data-agent-provider]"); if (provider) void setAgentProvider(provider.dataset.agentProvider, provider.value); });
 $("agent-page").addEventListener("click", (event) => {
   const refresh = event.target.closest("[data-settings-refresh], [data-gateway-refresh]");
   if (refresh) { void refreshGateways({ announceFailure: true }); return; }

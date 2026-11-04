@@ -6,12 +6,6 @@ export interface CloneConfig {
   workspacePath: string;
   locale: "zh-CN" | "en";
   /**
-   * Auto mode lets internal subagents run without per-role intervention.
-   * External side effects still pass through the Kernel approval boundary.
-   * 自动模式允许内部子 Agent 无需逐角色干预即可运行；外部副作用仍经过 Kernel 审批边界。
-   */
-  agentMode: "manual" | "auto";
-  /**
    * Pi model reference for the Main Agent, e.g. `anthropic/claude-sonnet-4-5`.
    * When omitted, the Pi SDK default (settings / first available) is used.
    * `CLONE_AI_MAIN_MODEL` overrides this for one-off runs.
@@ -36,7 +30,7 @@ export class CloneConfigStore {
     return normalizeConfig(value, this.#defaultWorkspace);
   }
 
-  async update(update: Partial<Pick<CloneConfig, "workspacePath" | "locale" | "mainAgentModel" | "agentMode">>): Promise<CloneConfig> {
+  async update(update: Partial<Pick<CloneConfig, "workspacePath" | "locale" | "mainAgentModel">>): Promise<CloneConfig> {
     const current = await this.get();
     const next = normalizeConfig({ ...current, ...update }, this.#defaultWorkspace);
     const write = this.#writes.then(() => writeJsonAtomic(this.#paths.configFile, next));
@@ -56,7 +50,6 @@ function normalizeConfig(value: Partial<CloneConfig> | undefined, defaultWorkspa
       ? value.workspacePath
       : defaultWorkspace,
     locale: value?.locale === "en" ? "en" : "zh-CN",
-    agentMode: value?.agentMode === "manual" ? "manual" : "auto",
     ...(mainAgentModel === undefined ? {} : { mainAgentModel }),
   };
 }
