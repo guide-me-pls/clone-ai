@@ -166,3 +166,35 @@ src/improvement/improvement-service.ts
 **原生 Worker**（`src/workers/native-agent-worker.ts`）把工具边界移进循环：只提供步骤 Scope
 已授权风险等级的工具，并在每次调用发起的瞬间复核路径，把拒绝作为工具结果交还给模型而不是杀死 Run。
 模型客户端是注入的，因此放行逻辑无需网络即可测试；本次改动没有引入任何厂商 SDK。
+
+## 12. 测量（LongMemEval-s，计分题 470 道）
+
+完整干草堆上 maxResults=10 的检索，以及 Worker 实际收到的上下文边界：
+
+| 切片 | any@1 | any@5 | any@10 | all@5 | ndcg@10 |
+| --- | --- | --- | --- | --- | --- |
+| 总体 | 77.9% | 91.3% | 95.5% | 73.8% | 82.0% |
+| single-session-preference | 20.0% | 53.3% | 70.0% | 53.3% | 47.3% |
+
+上下文边界：92.6% 的题在编译后的上下文（1200 字符 / 6 条上限）里含证据记忆；偏好题只有 56.7%。
+
+语义项消融（同一数据，关闭时 `CLONE_AI_RECALL_SEMANTIC=0`）：any@1 开启 77.9%、关闭 76.6%；
+上下文命中率开启 92.6%、关闭 92.8%。因此语义项在本基准上**没有可证明的收益**——n=470 时差异处于噪声范围。
+它保留在开关之后，而不被称为一项胜利。
+
+数字给出的优先级：偏好题仍是弱项（正确证据是所有者提到某工具的会话，而不是与问题共享词汇的句子），
+而上下文上限是真实的第二重损失——7.4% 的题检索到了证据却装不进上下文。
+
+## 13. 原生 Worker
+
+`src/workers/native-agent-worker.ts`（循环与闸门）、`openai-compatible-client.ts`
+（说 OpenAI 兼容 chat-completions 协议的客户端）、`native-worker-factory.ts`（配置与文件工具）。启用方式：
+
+```
+CLONE_AI_NATIVE_MODEL=<端点所列的模型 id>
+CLONE_AI_NATIVE_BASE_URL=<http://host:port>
+CLONE_AI_NATIVE_API_KEY=<可选>
+```
+
+未配置模型时工厂返回空，Registry 继续使用沙箱化的 CLI Worker。已针对本机 OpenAI 兼容网关做过端到端验证：
+Worker 列出空工作区、写入 `out/hello.txt`、读回确认后停止——每次调用都通过 Scope 闸门。
