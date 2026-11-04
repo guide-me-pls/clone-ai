@@ -118,6 +118,20 @@ export interface ExecutionGuard {
  * 约束的执行 Assignment 或子 WorkOrder，绝不能自行关闭 Run。
  */
 /** Carries a black-box worker's structured failure report up to the retry loop. 把黑盒 Worker 的结构化失败报告带到重试循环。 */
+/**
+ * A step stopped because it spent its declared budget. Separate from
+ * WorkerFailure because nothing misbehaved: the Kernel asked it to stop.
+ * 某步骤因用尽声明预算而停止。与 WorkerFailure 分开，因为并没有东西行为失常：是 Kernel 让它停的。
+ */
+export class BudgetExceeded extends Error {
+  readonly signature: string;
+  constructor(message: string, signature: string) {
+    super(message);
+    this.name = "BudgetExceeded";
+    this.signature = signature;
+  }
+}
+
 export class WorkerFailure extends Error {
   readonly report?: FailureReport;
 
@@ -135,6 +149,8 @@ export class CloneRuntime {
   readonly #memory: MemoryPipeline;
   /** Highest journal sequence already folded into the projection. 已并入投影的最高 Journal 序号。 */
   #appliedSequence = 0;
+  /** Per-execution-attempt call counts for the budget ceilings. 每次执行尝试的调用计数，用于预算上限。 */
+  #budget = { modelCalls: 0, toolCalls: 0 };
   readonly #memorySource?: WorkerMemorySource;
   readonly #failureCatalog: OutcomeCatalog;
   readonly #workspacePath?: string;
@@ -169,6 +185,12 @@ export class CloneRuntime {
     if (this.#hydrated) {
       return;
     }
+    // Always a full replay on a fresh process, by construction: the projection
+    // lives only in memory, so there is nothing to resume into. Persisting a
+    // watermark without the projection would let a restart skip events it has
+    // no state for — the mistake this deliberately does not make.
+    // 新进程按构造总是全量重放：投影只在内存里，没有可续接的对象。只存水位而不存投影，会让重启
+    // 跳过它没有状态的事件——这里刻意不犯这个错。
     await this.#applySince(0, { rebuildMemoryQueue: true });
     this.#hydrated = true;
   }
@@ -1419,6 +1441,10 @@ export class CloneRuntime {
   ): Promise<string | undefined> {
     let completion: string | undefined;
     let sessionId: string | undefined;
+    // Counts belong to this attempt: a retry opens a new stream with its own
+    // budget, and the attempt ceiling bounds the total.
+    // 计数属于本次尝试：重试开启新流、拥有自己的预算，而尝试次数上限约束总量。
+    this.#budget = { modelCalls: 0, toolCalls: 0 };
     const signal = this.#executionGuards.get(input.run.id)?.signal;
     const cancel = (): void => {
       if (sessionId !== undefined && adapter.cancel !== undefined) void adapter.cancel(sessionId).catch(() => undefined);
@@ -1435,11 +1461,36 @@ export class CloneRuntime {
           completion = event.summary;
           continue;
         }
+        this.assertWithinBudget(input, event);
         await this.recordExecutionEvent(input, event, allowedEvidenceKinds);
       }
       return completion;
     } finally {
       signal?.removeEventListener("abort", cancel);
+    }
+  }
+
+  /**
+   * Counts what the adapter reports and stops the step at the ceiling. Counts
+   * are per execution attempt, because a retry starts a new stream and its own
+   * counts; the attempt ceiling is what bounds the total.
+   * 统计 Adapter 报告的活动，并在到达上限时停止该步骤。计数按每次执行尝试计，因为重试开启新的流
+   * 与新的计数；尝试次数上限才是约束总量的东西。
+   */
+  private assertWithinBudget(input: ExecutionAssignment, event: ExecutionEvent): void {
+    if (event.type === "model_call") {
+      this.#budget.modelCalls += 1;
+      const ceiling = input.workOrder?.budget.maxModelCalls;
+      if (ceiling !== undefined && this.#budget.modelCalls > ceiling) {
+        throw new BudgetExceeded(`Model call budget exceeded: ${this.#budget.modelCalls} > ${ceiling}.`, "budget-model-calls");
+      }
+    }
+    if (event.type === "tool_started") {
+      this.#budget.toolCalls += 1;
+      const ceiling = input.workOrder?.budget.maxToolCalls;
+      if (ceiling !== undefined && this.#budget.toolCalls > ceiling) {
+        throw new BudgetExceeded(`Tool call budget exceeded: ${this.#budget.toolCalls} > ${ceiling}.`, "budget-tool-calls");
+      }
     }
   }
 
@@ -1511,11 +1562,24 @@ export class CloneRuntime {
       throw new WorkerFailure(`Agent execution failed: ${event.message}`, event.report);
     }
 
+    if (event.type === "model_call") {
+      // Counted by assertWithinBudget before this point; durable record so an
+      // audit can see how much of a budget a step spent.
+      // 在进入此处之前已由 assertWithinBudget 计数；持久化记录使审计能看到某步骤花掉了多少预算。
+      await this.record({
+        type: "execution.progress",
+        taskId: input.task.id,
+        runId: input.run.id,
+        payload: { stepId: input.step.id, ...(input.workOrder === undefined ? {} : { workOrderId: input.workOrder.id }), message: "Model call" },
+      });
+      return;
+    }
     // Evidence kinds are an authorization, not a claim: an adapter may only
     // record the kinds it declared, and "receipt" is never granted by default,
     // so no worker can self-certify that an external action really happened.
     // Evidence 类型是授权而非声明：Adapter 只能记录其声明过的类型，"receipt" 默认永不授予，
     // 因此任何 Worker 都无法自证外部动作确实发生。
+    if (event.type !== "evidence") return;
     if (!allowedEvidenceKinds.has(event.evidence.kind)) {
       throw new Error(
         `Adapter ${input.executor.agentId} is not authorized to record "${event.evidence.kind}" evidence.`,

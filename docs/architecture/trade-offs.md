@@ -78,6 +78,49 @@ auto-update.
 
 ---
 
+## 2026-11-04 — Attempted and reverted: a persisted replay watermark
+
+**Decided:** no watermark. A fresh process always replays the whole journal.
+
+**What was tried.** Store the last applied sequence in the journal so a
+restarted runtime resumes incrementally. Two tests failed immediately: a second,
+independent runtime over the same journal resumed from the *first* runtime's
+position and applied a mid-history `run.status_changed` for a run it had never
+seen, and the JSONL-backed kernel view lost a run the same way.
+
+**Why it cannot work as designed.** The projection lives only in memory. A
+watermark records where *some* projection stopped; a new process has no
+projection to continue, so the watermark can only tell it which events to skip —
+exactly the events it needs. Persisting the watermark without persisting the
+projection is the bug, not a shortcut.
+
+**What this costs.** A restart pays one full replay: measured at 117 ms for
+100,000 events. Acceptable, and it is the same order as the work the process is
+about to do anyway.
+
+**Reversal condition.** Persist the projection itself (a materialised snapshot
+with its sequence), not just the sequence. Then a restart can load the snapshot
+and apply the tail. Until then, this entry stands.
+
+## 2026-11-04 — Tool and model budgets are enforced when the adapter reports them
+
+**Decided:** the Kernel counts `tool_started` and a new `model_call` event per
+execution attempt and fails the step with category `budget_exceeded` past the
+work order's ceiling. The native worker also refuses further calls inside its
+own loop, and reports `model_call` and `tool_completed`.
+
+**What was given up.** For black-box CLI workers the ceilings remain
+declarations: a CLI that does not report its calls cannot be counted. The
+`sandbox` and duration budgets are what actually stop those. The contract
+comment now says so instead of implying enforcement everywhere.
+
+**Why not stricter.** Killing a CLI process on a call count the Kernel cannot
+observe would require parsing the CLI's output protocol, which the black-box
+adapter deliberately does not do.
+
+**Reversal condition.** If a CLI grows a structured event stream, wire its
+counts into the same counter; the Kernel side needs no change.
+
 ## 2026-11-04 — Background readers ask for the event types they need
 
 **Decided:** `SqliteJournalStore.listTypesSince(types, sequence)` (using the
