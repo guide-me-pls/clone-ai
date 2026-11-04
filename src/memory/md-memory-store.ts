@@ -118,8 +118,6 @@ function expandedRecallTerms(query: string, direct: ReadonlySet<string>): string
 
 /** A memory admitted on cosine alone (no bigram ratio) still needs this much. 只靠余弦（没有 bigram 比例）进入结果的记忆，仍需达到这个值。 */
 export const COSINE_ONLY_FLOOR = 0.45;
-/** A memory admitted on semantic similarity alone still needs this much. 只靠语义相似度进入结果的记忆，仍需达到这个值。 */
-export const SEMANTIC_ONLY_FLOOR = 0.5;
 
 /**
  * Latin function words carry no retrieval signal, and a single shared "the"
@@ -137,62 +135,6 @@ const LATIN_STOPWORDS = new Set([
   "they", "this", "to", "was", "we", "were", "what", "when", "where", "which", "who", "why", "will",
   "with", "would", "you", "your",
 ]);
-
-/**
- * Kill switch for the semantic term, so its contribution can be measured
- * rather than assumed: CLONE_AI_RECALL_SEMANTIC=0 turns it off.
- * 语义项的开关，使它的贡献可被测量而非假定：CLONE_AI_RECALL_SEMANTIC=0 关闭它。
- */
-export const SEMANTIC_RECALL_ENABLED = process.env.CLONE_AI_RECALL_SEMANTIC !== "0";
-
-export const SEMANTIC_BUCKETS = 2048;
-/** Character 3-grams are the smallest unit that survives a Chinese rewrite; Latin words are used whole. 字符 3-gram 是能挺过中文改写的最小单元；拉丁词整词使用。 */
-const SEMANTIC_NGRAM = 3;
-
-/**
- * A deterministic sparse semantic vector: hashed character 3-grams for CJK and
- * whole lowercased Latin words, weighted by sublinear frequency. Two paraphrases
- * that share no surface bigram still share many 3-grams ("提交工作汇报" and
- * "交周报" share none, but "每周五" contexts do), and synonyms with no shared
- * substring are not covered — this is deliberately dependency-free, not a
- * replacement for a model embedding when one is available.
- * 确定性稀疏语义向量：中文用哈希字符 3-gram，拉丁用整词小写，按次线性词频加权。两个改写后
- * 不再共享任何表面 bigram 的句子仍会共享不少 3-gram；完全不含相同子串的同义词不在覆盖范围内——
- * 这是刻意做到零依赖的近似，而不是在能拿到模型 embedding 时替代它。
- */
-export function semanticVector(text: string): Map<number, number> {
-  const counts = new Map<string, number>();
-  for (const run of text.match(/[\u3400-\u9fff]+/g) ?? []) {
-    const padded = `\u0002${run}\u0003`;
-    for (let i = 0; i + SEMANTIC_NGRAM <= padded.length; i += 1) {
-      const gram = padded.slice(i, i + SEMANTIC_NGRAM);
-      counts.set(gram, (counts.get(gram) ?? 0) + 1);
-    }
-  }
-  for (const word of text.toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u)) {
-    if (word.length > 0 && /[a-z0-9]/.test(word)) counts.set(`w:${word}`, (counts.get(`w:${word}`) ?? 0) + 1);
-  }
-  const vector = new Map<number, number>();
-  let norm = 0;
-  for (const [gram, count] of counts) {
-    const weight = 1 + Math.log(count);
-    norm += weight * weight;
-    vector.set(hashBucket(gram), (vector.get(hashBucket(gram)) ?? 0) + weight);
-  }
-  const length = Math.sqrt(norm) || 1;
-  for (const [bucket, weight] of vector) vector.set(bucket, weight / length);
-  return vector;
-}
-
-/** FNV-1a over the gram, folded into a bucket. 对 gram 做 FNV-1a 并折进 bucket。 */
-function hashBucket(gram: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < gram.length; i += 1) {
-    hash ^= gram.charCodeAt(i);
-    hash = Math.imul(hash, 16777619) >>> 0;
-  }
-  return hash % SEMANTIC_BUCKETS;
-}
 
 export interface MemoryStoreOptions {
   dataDirectory: string;
@@ -249,21 +191,6 @@ export class MdMemoryStore {
       );
       CREATE INDEX IF NOT EXISTS idx_term_weights ON memory_term_weights (term);
       CREATE INDEX IF NOT EXISTS idx_memories_status ON memories (status);
-      -- Semantic recall: a hashed-character-ngram projection of summary and
-      -- content, stored as a sparse map keyed by bucket. It is a similarity
-      -- signal, not a language model: it survives paraphrase that shares no
-      -- exact term ("周五交周报" vs "每周五提交工作汇报") without a network call,
-      -- and it is deterministic, so the same text always yields the same vector.
-      -- 语义召回：对摘要与正文做哈希字符 n-gram 投影，以 bucket 为键存为稀疏向量。它是相似度
-      -- 信号而非语言模型：无需联网就能挺过不共享任何精确词项的改写（"周五交周报" 对
-      -- "每周五提交工作汇报"），且是确定性的，同一文本永远得到同一个向量。
-      CREATE TABLE IF NOT EXISTS memory_vectors (
-        memory_id TEXT NOT NULL,
-        bucket INTEGER NOT NULL,
-        weight REAL NOT NULL,
-        PRIMARY KEY (memory_id, bucket)
-      );
-      CREATE INDEX IF NOT EXISTS idx_vectors ON memory_vectors (bucket);
       CREATE TABLE IF NOT EXISTS memory_mutations (
         id TEXT PRIMARY KEY,
         entry TEXT NOT NULL
@@ -487,7 +414,6 @@ export class MdMemoryStore {
       byId.set(row.memory_id, set);
     }
     const idf = this.termDocumentFrequency(searchTerms);
-    const querySemantic = semanticVector(query);
     const queryVector = new Map<string, number>();
     for (const term of searchTerms) queryVector.set(term, 1 / Math.sqrt(searchTerms.length));
 
@@ -513,20 +439,16 @@ export class MdMemoryStore {
       // 混合：对经 IDF 加权的词计算余弦，衡量这条记忆解释了查询的多大一部分，而纯命中比例做不到——
       // 比例把每个命中词都当成同等有信息量。余弦只会提升已经共享词项的记忆，不会引入无关记忆。
       const cosine = await this.cosine(memoryId, queryVector, idf);
-      // Semantic similarity admits a paraphrase that shares no exact term; it is
-      // capped so it can never outrank a memory that literally matches.
-      // 语义相似度允许改写（不共享精确词项）进入结果；它被限制上限，绝不会压过字面命中。
-      const semantic = SEMANTIC_RECALL_ENABLED ? await this.semanticSimilarity(memoryId, querySemantic) : 0;
       const preferenceBoost = entry.type === "preference" ? 0.03 : 0;
       // A memory that shares only function words was never a match, whatever the ratio says.
       // 只共享虚词的记忆从来就不是匹配，无论比例算出多少。
       if (substantive === 0) continue;
-      if (ratio < (options.minRatio ?? 0.2) && cosine < COSINE_ONLY_FLOOR && semantic < SEMANTIC_ONLY_FLOOR) continue;
+      if (ratio < (options.minRatio ?? 0.2) && cosine < COSINE_ONLY_FLOOR) continue;
       const recencyBoost = Math.min(1, Math.max(0, 1 - (Date.now() - Date.parse(entry.createdAt)) / (90 * 24 * 3600 * 1000)));
       const usageBoost = Math.min(0.1, entry.accessCount * 0.01);
       matches.push({
         entry,
-        score: Number((ratio + cosine * 0.25 + semantic * 0.2 + recencyBoost * 0.15 + usageBoost + preferenceBoost).toFixed(3)),
+        score: Number((ratio + cosine * 0.25 + recencyBoost * 0.15 + usageBoost + preferenceBoost).toFixed(3)),
         matchedTerms: [...matched],
       });
     }
@@ -555,22 +477,6 @@ export class MdMemoryStore {
     }
     const queryNorm = Math.sqrt([...queryVector.values()].reduce((sum, value) => sum + value * value, 0));
     return norm === 0 || queryNorm === 0 ? 0 : intersection / (Math.sqrt(norm) * queryNorm);
-  }
-
-  /**
-   * Cosine against the stored semantic vector, fetched only through the query's
-   * buckets so an unrelated memory costs a single absence check.
-   * 与存储的语义向量计算余弦；只按查询的 bucket 取数，无关记忆只需一次缺失检查。
-   */
-  private async semanticSimilarity(memoryId: string, queryVector: ReadonlyMap<number, number>): Promise<number> {
-    if (queryVector.size === 0) return 0;
-    const buckets = [...queryVector.keys()];
-    const placeholders = buckets.map(() => "?").join(", ");
-    const rows = this.#db.prepare(`SELECT bucket, weight FROM memory_vectors WHERE memory_id = ? AND bucket IN (${placeholders})`)
-      .all(memoryId, ...buckets) as Array<{ bucket: number; weight: number }>;
-    let similarity = 0;
-    for (const row of rows) similarity += row.weight * (queryVector.get(row.bucket) ?? 0);
-    return Math.min(1, similarity);
   }
 
   /** Document frequency over the whole active library for the query's terms. 针对查询词，在整个活跃库上计算文档频率。 */
@@ -712,9 +618,6 @@ export class MdMemoryStore {
       this.#db.prepare("DELETE FROM memory_terms WHERE memory_id = ?").run(entry.id);
       const insertTerm = this.#db.prepare("INSERT OR IGNORE INTO memory_terms (memory_id, term) VALUES (?, ?)");
       for (const term of terms) insertTerm.run(entry.id, term);
-      this.#db.prepare("DELETE FROM memory_vectors WHERE memory_id = ?").run(entry.id);
-      const insertVector = this.#db.prepare("INSERT INTO memory_vectors (memory_id, bucket, weight) VALUES (?, ?, ?)");
-      for (const [bucket, weight] of semanticVector(`${entry.summary} ${entry.content}`)) insertVector.run(entry.id, bucket, weight);
       this.#db.prepare("DELETE FROM memory_term_weights WHERE memory_id = ?").run(entry.id);
       const insertWeight = this.#db.prepare("INSERT INTO memory_term_weights (memory_id, term, weight) VALUES (?, ?, ?)");
       for (const [term, weight] of termWeights(entry.summary, entry.content)) insertWeight.run(entry.id, term, weight);
