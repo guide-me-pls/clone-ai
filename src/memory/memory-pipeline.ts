@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Evidence, JournalEvent, MemoryCandidate, NewJournalEvent, Run, Task } from "../core/contracts.ts";
 import type { JournalStore } from "../core/journal.ts";
 import { workspaceExecutionLock } from "../core/workspace-lock.ts";
+import { readForRun, readTypes } from "../core/journal-types.ts";
 
 export interface PendingMemoryJob {
   run: Run;
@@ -67,13 +68,21 @@ export class MemoryPipeline {
    * 为已在 Journal 中的 Run 请求提炼，例如所有者事后标为失败的 Run。Run 无法重建或该结局已请求过时返回 false。
    */
   async requestFromJournal(runId: string, outcome: "completed" | "failed"): Promise<boolean> {
-    const events = await this.#journal.list();
+    // Only this run can answer whether it was already requested, so the read is
+    // scoped to it instead of the whole journal.
+    // 只有这个 Run 能回答"是否已被请求过"，因此读取范围限定在它上面。
+    const events = await readForRun(this.#journal, runId);
     const already = events.some((event) => event.type === "memory.candidate.requested" && event.runId === runId
       && ((event.payload as { outcome?: unknown } | null)?.outcome === "failed" ? "failed" : "completed") === outcome);
     if (already) return false;
     const taskId = events.find((event) => event.type === "run.created" && event.runId === runId)?.taskId;
     if (taskId === undefined) return false;
-    const job = rehydrateJob(events, { runId, taskId, payload: { outcome } } as JournalEvent);
+    // The task event is indexed by task, not by run, so the run-scoped read above
+    // cannot contain it. Fetch just the task marker rather than the whole journal.
+    // 任务事件按 Task 而非 Run 索引，因此上面按 Run 的读取不会包含它。只取那条任务标记，
+    // 而不是整本 Journal。
+    const task = (await readTypes(this.#journal, ["task.created"])).find((event) => event.taskId === taskId);
+    const job = rehydrateJob(task === undefined ? events : [...events, task], { runId, taskId, payload: { outcome } } as JournalEvent);
     if (job === undefined) return false;
     await this.request(job.run, job.task, job.evidence, outcome);
     return true;
@@ -84,7 +93,10 @@ export class MemoryPipeline {
   }
 
   async rebuild(): Promise<void> {
-    const events = await this.#journal.list();
+    // Only mining markers matter here; reading them by type keeps a rebuild from
+    // walking the whole history.
+    // 这里只关心提炼标记；按类型读取使重建不必走完整段历史。
+    const events = await readTypes(this.#journal, ["memory.candidate.requested", "memory.candidate.extracted", "memory.candidate.proposed", "run.created", "task.created", "evidence.recorded"]);
     const processedRunIds = processedRuns(events);
 
     const requested = events.filter((event) => event.type === "memory.candidate.requested");
@@ -117,7 +129,7 @@ export class MemoryPipeline {
     try {
       const process = async (): Promise<MemoryCandidate[]> => {
         await this.#journal.reload?.();
-        if (processedRuns(await this.#journal.list()).has(`${job.run.id}:${job.outcome ?? "completed"}`)) return [];
+        if (processedRuns(await readForRun(this.#journal, job.run.id)).has(`${job.run.id}:${job.outcome ?? "completed"}`)) return [];
         const candidates = await this.#worker.extract(job);
         const evidence = new Set(job.evidence.map((item) => item.id));
         if (candidates.some((candidate) => candidate.runId !== job.run.id || candidate.sourceEvidenceIds.length === 0
