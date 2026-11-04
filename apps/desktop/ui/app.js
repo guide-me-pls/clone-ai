@@ -127,7 +127,8 @@ function renderAgentPage() {
   const providers = state.providers || [];
   const gateway = state.gateways.find((candidate) => candidate.id === "magpie");
   const mainAgentModel = state.config?.config?.mainAgentModel || "";
-  const signature = JSON.stringify([settings, providers, gateway, mainAgentModel, state.gatewayLoading]);
+  const agentMode = state.config?.config?.agentMode === "manual" ? "manual" : "auto";
+  const signature = JSON.stringify([settings, providers, gateway, mainAgentModel, agentMode, state.gatewayLoading]);
   if (state.signatures.agentPage === signature) return;
   state.signatures.agentPage = signature;
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
@@ -178,15 +179,41 @@ function renderAgentPage() {
     actions: gatewayBadge,
     body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
   });
+  const autoModeCard = `<section class="agent-auto-mode${agentMode === "auto" ? " is-on" : ""}">
+    <div class="agent-auto-mode__mark" aria-hidden="true">${agentMode === "auto" ? "A" : "M"}</div>
+    <div class="agent-auto-mode__copy"><span class="agent-auto-mode__eyebrow">${agentMode === "auto" ? t("agent-auto-on") : t("agent-auto-off")}</span><h3>${t("agent-auto-title")}</h3><p>${t("agent-auto-body")}</p></div>
+    ${ui.switchControl({ checked: agentMode === "auto", label: t("agent-auto-title"), attributes: { "data-agent-auto-mode": "" } })}
+  </section>`;
   const providerRows = providers.map((provider) => {
-    const access = provider.executionBlocked ? t("worker-blocked") : t("worker-unrestricted");
+    const unrestricted = provider.hostAccess === "unrestricted";
+    const access = provider.executionBlocked
+      ? t("worker-blocked")
+      : unrestricted
+        ? t("worker-unrestricted")
+        : provider.sandbox === "seatbelt"
+          ? t("worker-sandboxed")
+          : t("worker-runnable");
+    const accessBadge = provider.executionBlocked
+      ? ui.badge(access, "warning")
+      : unrestricted
+        ? ui.badge(access, "warning")
+        : ui.badge(access, "success", { dot: true });
     const action = provider.installed
-      ? ui.button({
-          label: provider.executionBlocked ? t("worker-allow") : t("worker-disable"),
-          variant: provider.executionBlocked ? "secondary" : "ghost",
-          className: "c-button--compact",
-          attributes: { "data-provider-access": provider.id, "data-allow": String(provider.executionBlocked) },
-        })
+      ? provider.executionBlocked
+        ? ui.button({
+            label: t("worker-allow"),
+            variant: "secondary",
+            className: "c-button--compact",
+            attributes: { "data-provider-access": provider.id, "data-allow": "true" },
+          })
+        : unrestricted
+          ? ui.button({
+              label: t("worker-disable"),
+              variant: "secondary",
+              className: "c-button--compact",
+              attributes: { "data-provider-access": provider.id, "data-allow": "false" },
+            })
+          : ui.badge(t("worker-active"), "success", { dot: true })
       : provider.installable
         ? ui.button({
             label: t("install"),
@@ -207,7 +234,7 @@ function renderAgentPage() {
         : provider.resolutionSource === "absolute"
           ? t("resolution-explicit")
           : "";
-    const meta = `${status}${provider.userConfigured ? ui.badge(t("user-config"), "accent") : ""}<span>${escape(provider.command)}</span><span>${escape(access)}</span>${source ? `<span>${escape(source)}</span>` : ""}`;
+    const meta = `${status}${provider.userConfigured ? ui.badge(t("user-config"), "accent") : ""}<span>${escape(provider.command)}</span>${accessBadge}${source ? `<span>${escape(source)}</span>` : ""}`;
     return ui.listRow({
       leading: ui.providerMark(provider.title, provider.id),
       title: provider.title,
@@ -243,6 +270,7 @@ function renderAgentPage() {
       actions: `${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-settings-refresh": "" } })}${installButton}`,
     })}
     <div class="c-stat-grid agent-overview">${ui.stat({ label: t("stat-providers"), value: `${installed.length}/${providers.length}`, detail: t("stat-providers-detail"), tone: installed.length ? "success" : "warning" })}${ui.stat({ label: t("stat-roles"), value: `${enabledRoles}/${settings.agents.length}`, detail: t("stat-roles-detail") })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}` : t("gateway-subtitle"), tone: gateway?.running && exposedModels.length ? "success" : "warning" })}</div>
+    ${autoModeCard}
     ${gatewayCard}
     <div class="agent-section-head"><div><h3>${t("local-providers")}</h3><p>${t("providers-section-lead")}</p></div><div class="c-segmented" aria-label="${escape(t("providers-state"))}">${ui.badge(`${installed.length} ${t("connected")}`, "success", { dot: true })}${missing.length ? ui.badge(`${missing.length} ${t("installable")}`, "warning") : ""}</div></div>
     <div id="provider-registry" class="c-list agent-provider-list">${providerRows || ui.emptyState({ iconName: "terminal", title: t("empty-providers"), body: t("empty-providers-body") })}</div>
@@ -940,6 +968,28 @@ async function resolveReportDelivery(day, resolution) { const message = resoluti
 async function updateAgent(id, update, message) { try { await api(`/api/settings/agents/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(update) }); await refresh(); announce(message); } catch (error) { announce(error.message, true); await refresh(); } }
 async function setAgentEnabled(id, enabled) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { enabled }, agent ? `${agent.title}${enabled ? "已启用" : "已关闭"}。` : "Agent 设置已更新。"); }
 async function setAgentProvider(id, providerId) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { providerId }, agent ? `${agent.title} 已绑定到 ${providerLabel(providerId)}。` : "Agent Provider 已更新。"); }
+async function setAgentAutoMode(enabled) {
+  if (enabled && !(await confirmDialog(t("agent-auto-confirm"), t("agent-auto-enable")))) {
+    state.signatures.agentPage = "";
+    renderAgentPage();
+    return;
+  }
+  try {
+    const result = await api("/api/settings/agents/auto-mode", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (state.config?.config) state.config.config.agentMode = result.config?.agentMode ?? (enabled ? "auto" : "manual");
+    state.signatures.agentPage = "";
+    await refresh({ preserveScroll: true });
+    announce(enabled ? t("agent-auto-enabled") : t("agent-auto-disabled"));
+  } catch (error) {
+    state.signatures.agentPage = "";
+    renderAgentPage();
+    announce(error.message, true);
+  }
+}
 async function installProvider(id) { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector(`[data-install-provider="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { await api(`/api/agents/${encodeURIComponent(id)}/install`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); await refresh(); announce(`${providerLabel(id)} 已安装并完成检测。`); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
 async function setProviderHostAccess(id, allow) { if (allow && !(await confirmDialog(t("worker-allow-warning"), t("worker-allow")))) return; try { const current = await api("/api/settings/providers"); const provider = current.providers.find((item) => item.id === id); if (!provider) throw new Error("Provider not found."); const next = { ...provider }; if (allow) { next.hostAccess = "unrestricted"; next.acknowledgeUnrestrictedHostAccess = true; } else delete next.hostAccess; await api("/api/settings/providers", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) }); await refresh(); announce(t("worker-access-saved")); } catch (error) { announce(error.message, true); } }
 async function installMissingProviders() { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector("[data-install-missing]"); if (button) { button.disabled = true; button.querySelector("span").textContent = t("installing"); } try { const result = await api("/api/agents/install-missing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); state.signatures.agentPage = ""; await refresh(); announce(result.installed.length ? `已自动安装 ${result.installed.length} 个 Provider。` : "没有可自动安装的缺失 Provider。"); } catch (error) { announce(error.message, true); await refresh(); } }
@@ -967,7 +1017,7 @@ $("settings-modal").addEventListener("click", (event) => { const button = event.
 $("schedule-form").addEventListener("submit", (event) => { event.preventDefault(); void createSchedule($("schedule-query").value.trim()); });
 $("schedule-kind").addEventListener("change", renderScheduleOptions);
 $("schedule-list").addEventListener("click", (event) => { const report = event.target.closest("[data-report-day]"); if (report) { void resolveReportDelivery(report.dataset.reportDay, report.dataset.resolution); return; } const occurrence = event.target.closest("[data-schedule-occurrence]"); if (occurrence) { void resolveScheduleOccurrence(occurrence.dataset.scheduleOccurrence, occurrence.dataset.resolution); return; } const button = event.target.closest("[data-schedule-toggle]"); if (button) void setScheduleEnabled(button.dataset.scheduleToggle, button.dataset.scheduleEnabled === "true"); });
-$("agent-page").addEventListener("change", (event) => { const target = event.target; const toggle = target.closest("[data-agent-toggle]"); if (toggle) { void setAgentEnabled(toggle.dataset.agentToggle, toggle.checked); return; } const provider = target.closest("[data-agent-provider]"); if (provider) void setAgentProvider(provider.dataset.agentProvider, provider.value); });
+$("agent-page").addEventListener("change", (event) => { const target = event.target; const autoMode = target.closest("[data-agent-auto-mode]"); if (autoMode) { void setAgentAutoMode(autoMode.checked); return; } const toggle = target.closest("[data-agent-toggle]"); if (toggle) { void setAgentEnabled(toggle.dataset.agentToggle, toggle.checked); return; } const provider = target.closest("[data-agent-provider]"); if (provider) void setAgentProvider(provider.dataset.agentProvider, provider.value); });
 $("agent-page").addEventListener("click", (event) => {
   const refresh = event.target.closest("[data-settings-refresh], [data-gateway-refresh]");
   if (refresh) { void refreshGateways({ announceFailure: true }); return; }

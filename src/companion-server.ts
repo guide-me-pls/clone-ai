@@ -713,11 +713,12 @@ async function handleRequest(
 
   if (request.method === "PATCH" && url.pathname === "/api/config") {
     const body = await readJsonBody(request);
-    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string } = {};
+    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string; agentMode?: "manual" | "auto" } = {};
     if (typeof body.workspacePath === "string" && body.workspacePath.trim().length > 0) {
       update.workspacePath = body.workspacePath.trim();
     }
     if (body.locale === "zh-CN" || body.locale === "en") update.locale = body.locale;
+    if (body.agentMode === "auto" || body.agentMode === "manual") update.agentMode = body.agentMode;
     if ("mainAgentModel" in body) {
       if (typeof body.mainAgentModel !== "string") {
         sendJson(response, 400, { error: "mainAgentModel must be a string (empty clears it)." });
@@ -738,6 +739,45 @@ async function handleRequest(
       providers: await listEffectiveProviderConfigs(context.dataDirectory),
       userDefined: await readUserProviderConfigs(context.dataDirectory),
     });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/settings/agents/auto-mode") {
+    const body = await readJsonBody(request);
+    if (typeof body.enabled !== "boolean") {
+      sendJson(response, 400, { error: "Auto mode needs an enabled boolean." });
+      return;
+    }
+    try {
+      const config = await context.config.update({ agentMode: body.enabled ? "auto" : "manual" });
+      if (body.enabled) {
+        // Auto mode means the owner trusts internal subagents to run without
+        // per-role intervention. External side effects remain Kernel-gated.
+        // 自动模式表示所有者信任内部子 Agent 自主运行；外部副作用仍由 Kernel 审核。
+        const current = await context.agentSettings.get();
+        for (const agent of current.agents) {
+          if (!agent.enabled) await context.agentSettings.updateAgent(agent.id, { enabled: true });
+        }
+        const statuses = await context.agentRegistry.list();
+        const effective = await listEffectiveProviderConfigs(context.dataDirectory);
+        for (const provider of statuses) {
+          if (!provider.installed || !provider.executionBlocked) continue;
+          const declaration = effective.find((candidate) => candidate.id === provider.id);
+          if (declaration === undefined) continue;
+          await upsertUserProviderConfig(context.dataDirectory, {
+            ...declaration,
+            hostAccess: "unrestricted",
+          });
+        }
+      }
+      sendJson(response, 200, {
+        config,
+        settings: await context.agentSettings.get(),
+        providers: await context.agentRegistry.list(),
+      });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Auto mode could not be updated." });
+    }
     return;
   }
 
