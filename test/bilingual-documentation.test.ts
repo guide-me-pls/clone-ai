@@ -17,6 +17,7 @@ const documentPairs = [
   ["docs/usage/server-deployment.md", "docs/usage/server-deployment.zh-CN.md"],
   ["docs/architecture/agent-runtime-convergence.md", "docs/architecture/agent-runtime-convergence.zh-CN.md"],
   ["docs/engineering/optimizations.md", "docs/engineering/optimizations.zh-CN.md"],
+  ["docs/architecture/trade-offs.md", "docs/architecture/trade-offs.zh-CN.md"],
   ["docs/architecture/recursive-self-improvement.md", "docs/architecture/recursive-self-improvement.zh-CN.md"],
   ["benchmark/README.md", "benchmark/README.zh-CN.md"],
   ["apps/desktop/README.md", "apps/desktop/README.zh-CN.md"],
