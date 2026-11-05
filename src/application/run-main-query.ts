@@ -25,6 +25,8 @@ export interface MainAgentQueryResult {
 }
 
 export interface MainAgentQueryOptions {
+  /** Images the owner attached to this turn. 所有者在本回合附带的图片。 */
+  images?: Array<{ type: "image"; data: string; mimeType: string }>;
   /**
    * Called for each token as the agent produces it. The deltas exist either
    * way; without a sink they are merely accumulated and delivered at the end,
@@ -96,7 +98,7 @@ export async function runMainAgentQuery(
     const started = Date.now();
     const beforeStats = readSessionStats(session);
     try {
-      await session.prompt(text);
+      await session.prompt(text.length === 0 ? "(see attached image)" : text, options.images === undefined || options.images.length === 0 ? undefined : { images: options.images });
     } finally {
       try {
         await recordUsage(dataDirectory, collectSessionUsage(session, Date.now() - started, beforeStats));
