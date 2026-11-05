@@ -118,6 +118,8 @@ function expandedRecallTerms(query: string, direct: ReadonlySet<string>): string
 
 /** A memory admitted on cosine alone (no bigram ratio) still needs this much. 只靠余弦（没有 bigram 比例）进入结果的记忆，仍需达到这个值。 */
 export const COSINE_ONLY_FLOOR = 0.45;
+/** The match floor applied to preference memories instead of the product default. 偏好记忆使用、替代产品默认值的命中下限。 */
+export const PREFERENCE_MIN_RATIO = 0.08;
 
 /**
  * Latin function words carry no retrieval signal, and a single shared "the"
@@ -128,6 +130,22 @@ export const COSINE_ONLY_FLOOR = 0.45;
  * 0.2 下限）。LongMemEval 的英文问题让这一点暴露出来。中文 bigram 不需要词表：二字的虚词本身
  * 已足够罕见，仍具信息量。
  */
+/**
+ * Chinese function bigrams. The Latin list exists because a shared "the" was
+ * enough to admit an unrelated memory; the same is true of 必须, 应该 and 时候,
+ * which appear in almost any sentence. Excluding them from the "substantive"
+ * gate is what lets the preference floor be lowered without turning common
+ * phrasing into matches.
+ * 中文虚词 bigram。拉丁词表的存在是因为共享一个 "the" 就足以放进无关记忆；必须、应该、时候同理，
+ * 它们几乎出现在任何句子里。把它们排除在"实词"判定之外，正是让偏好下限可以调低、而不会把常见措辞变成
+ * 匹配的前提。
+ */
+const CJK_FUNCTION_WORDS = new Set([
+  "我们", "你们", "他们", "这个", "那个", "已经", "因为", "所以", "但是", "如果",
+  "就是", "不是", "没有", "必须", "需要", "可以", "应该", "什么", "怎么", "为什",
+  "时候", "现在", "今天", "明天", "一个", "一些", "自己",
+]);
+
 const LATIN_STOPWORDS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "can", "did", "do", "does", "for",
   "from", "had", "has", "have", "he", "her", "his", "how", "i", "if", "in", "is", "it", "its", "me",
@@ -413,7 +431,7 @@ export class MdMemoryStore {
       set.add(row.term);
       byId.set(row.memory_id, set);
     }
-    const idf = this.termDocumentFrequency(searchTerms);
+    const { idf, df, total } = this.termDocumentFrequency(searchTerms);
     const queryVector = new Map<string, number>();
     for (const term of searchTerms) queryVector.set(term, 1 / Math.sqrt(searchTerms.length));
 
@@ -425,7 +443,8 @@ export class MdMemoryStore {
       // Alias-expanded terms count as substantive too: they were derived from a
       // phrase the query did contain ("周报" -> "汇报"), not matched by accident.
       // 别名展开的词也算实词：它们由查询里确实出现的短语推导而来（"周报" -> "汇报"），不是偶然命中。
-      const substantive = [...matched].filter((term) => (direct.has(term) || expanded.has(term)) && !LATIN_STOPWORDS.has(term)).length;
+      const substantive = [...matched].filter((term) => (direct.has(term) || expanded.has(term))
+        && !LATIN_STOPWORDS.has(term) && !CJK_FUNCTION_WORDS.has(term)).length;
       let expandedMatches = matched.size - directMatches;
       if (query.includes("周报") && !/(周报|每周|周[一二三四五六日天末]|星期[一二三四五六日天末])/.test(`${entry.summary} ${entry.content}`)) {
         expandedMatches *= 0.5;
@@ -443,7 +462,28 @@ export class MdMemoryStore {
       // A memory that shares only function words was never a match, whatever the ratio says.
       // 只共享虚词的记忆从来就不是匹配，无论比例算出多少。
       if (substantive === 0) continue;
-      if (ratio < (options.minRatio ?? 0.2) && cosine < COSINE_ONLY_FLOOR) continue;
+      // A stated preference may be recalled on a lower floor. It is rare, it is
+      // the owner's own words, and it is the class a long natural-language
+      // question most easily buries: "这周的周报应该怎么写" shares one bigram with
+      // "我偏好周报用简洁的要点列表", a 0.1 ratio that the 0.2 product floor drops.
+      // Measured: at 0.08 it is recalled; unrelated queries ("今天天气怎么样",
+      // "帮我订一张去上海的机票") still return nothing at that floor.
+      // 所有者声明的偏好可用更低的下限召回。它罕见、出自所有者本人，也正是长自然语言问题最容易埋没的
+      // 一类："这周的周报应该怎么写"与"我偏好周报用简洁的要点列表"只共享一个 bigram，比例 0.1，会被
+      // 0.2 的产品下限丢弃。实测：0.08 时可召回；无关查询在该下限下仍返回空。
+      // The lower floor is only for a *distinctive* match: a term shared by a
+      // quarter of the library says as little as a function word, and letting it
+      // through made idle memories look used. A rare term is what a buried
+      // preference is actually recognised by.
+      // 更低的下限只给"有区分度"的命中：一个被库中四分之一记忆共享的词，信息量与虚词无异，放它进来
+      // 会让闲置记忆显得被用过。真正让被埋没的偏好被认出的，是稀有的词。
+      const distinctive = [...matched].some((term) => direct.has(term)
+        && !LATIN_STOPWORDS.has(term) && !CJK_FUNCTION_WORDS.has(term)
+        && (df.get(term) ?? total) <= Math.max(1, Math.floor(total * 0.25)));
+      const floor = entry.type === "preference" && distinctive
+        ? Math.min(options.minRatio ?? 0.2, PREFERENCE_MIN_RATIO)
+        : (options.minRatio ?? 0.2);
+      if (ratio < floor && cosine < COSINE_ONLY_FLOOR) continue;
       const recencyBoost = Math.min(1, Math.max(0, 1 - (Date.now() - Date.parse(entry.createdAt)) / (90 * 24 * 3600 * 1000)));
       const usageBoost = Math.min(0.1, entry.accessCount * 0.01);
       matches.push({
@@ -480,14 +520,18 @@ export class MdMemoryStore {
   }
 
   /** Document frequency over the whole active library for the query's terms. 针对查询词，在整个活跃库上计算文档频率。 */
-  private termDocumentFrequency(terms: readonly string[]): Map<string, number> {
-    if (terms.length === 0) return new Map();
+  private termDocumentFrequency(terms: readonly string[]): { idf: Map<string, number>; df: Map<string, number>; total: number } {
+    if (terms.length === 0) return { idf: new Map(), df: new Map(), total: 0 };
     const placeholders = terms.map(() => "?").join(", ");
     const total = (this.#db.prepare("SELECT COUNT(*) AS count FROM memories WHERE status = 'active'").get() as { count: number }).count;
     const rows = this.#db.prepare(`SELECT term, COUNT(*) AS count FROM memory_terms WHERE term IN (${placeholders}) GROUP BY term`).all(...terms) as Array<{ term: string; count: number }>;
     const idf = new Map<string, number>();
-    for (const row of rows) idf.set(row.term, Math.log(1 + total / Math.max(1, row.count)));
-    return idf;
+    const df = new Map<string, number>();
+    for (const row of rows) {
+      idf.set(row.term, Math.log(1 + total / Math.max(1, row.count)));
+      df.set(row.term, row.count);
+    }
+    return { idf, df, total };
   }
 
   async update(id: string, update: MemoryUpdate): Promise<MemoryEntry> {
