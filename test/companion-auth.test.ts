@@ -93,6 +93,25 @@ test("health and the GUI assets stay reachable without a bearer", () => {
   }
 });
 
+test("server mode permits a public Host only when explicitly enabled", () => {
+  const publicRequest = {
+    method: "GET",
+    pathname: "/api/config",
+    hostHeader: "agent.example.com",
+    originHeader: "https://agent.example.com",
+    authorization: "Bearer secret",
+    token: "secret",
+    listenPort: 4317,
+  } as const;
+  assert.equal(authorizeCompanionRequest(publicRequest).ok, false);
+  assert.equal(authorizeCompanionRequest({ ...publicRequest, allowRemoteHost: true }).ok, true);
+  assert.equal(authorizeCompanionRequest({
+    ...publicRequest,
+    allowRemoteHost: true,
+    authorization: undefined,
+  }).ok, false);
+});
+
 test("the served HTML receives the companion token", () => {
   const html = injectCompanionToken("<html><head></head><body></body></html>", "tok");
   assert.match(html, /window\.CLONE_AI_TOKEN="tok"/);

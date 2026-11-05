@@ -8,6 +8,8 @@
 
 `状态：初始 Runtime 骨架` · `许可证：MIT` · `核心：TypeScript + Node.js + Python`
 
+部署：[Mac App](apps/desktop/README.zh-CN.md) · [Linux 服务器](docs/usage/server-deployment.zh-CN.md) · [WhatsApp 手机通道](docs/usage/mobile-whatsapp.zh-CN.md)
+
 ---
 
 ## 当前安全边界

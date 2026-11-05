@@ -83,7 +83,7 @@ function applyChrome(locale, strings) {
 }
 const api = async (path, options = {}) => {
   const headers = new Headers(options.headers);
-  if (window.CLONE_AI_TOKEN) headers.set("Authorization", `Bearer ${window.CLONE_AI_TOKEN}`);
+  if (window.CLONE_AI_TOKEN) headers.set("x-clone-ai-token", window.CLONE_AI_TOKEN);
   const response = await fetch(path, { ...options, headers });
   const body = response.status === 204 ? {} : await response.json();
   if (!response.ok) throw new Error(body.error || t("local-request-failed"));
@@ -419,12 +419,13 @@ function renderWhatsApp(status) {
   const configured = status.configured === true;
   const bridgeRunning = status.bridge?.running === true;
   const tunnelRunning = status.tunnel?.running === true;
+  const managedTunnel = status.tunnel?.managed === true;
   const tunnelUrl = status.tunnel?.webhookUrl || "";
   const verified = Boolean(status.bridge?.webhookVerifiedAt);
   const phone = status.phoneNumberId ? `Phone Number ID ${status.phoneNumberId}` : "还没有保存 Phone Number ID";
   if ($("mobile-state")) $("mobile-state").textContent = status.ready ? "已连接" : configured ? (bridgeRunning ? "待验证" : "已停止") : "未绑定";
   if ($("whatsapp-credential-state")) $("whatsapp-credential-state").textContent = configured ? "已保存" : "未配置";
-  if ($("whatsapp-tunnel-state")) $("whatsapp-tunnel-state").textContent = tunnelRunning ? "运行中" : "未启动";
+  if ($("whatsapp-tunnel-state")) $("whatsapp-tunnel-state").textContent = managedTunnel ? "服务器入口" : tunnelRunning ? "运行中" : "未启动";
   if ($("whatsapp-ready-state")) $("whatsapp-ready-state").textContent = status.ready ? "已接通" : "等待配置";
   const allowed = Array.isArray(status.allowedNumbers) ? status.allowedNumbers : [];
   if (!state.whatsappDirty && $("whatsapp-allowed-numbers") && document.activeElement !== $("whatsapp-allowed-numbers")) {
@@ -438,7 +439,9 @@ function renderWhatsApp(status) {
   }
   if ($("whatsapp-webhook-url")) $("whatsapp-webhook-url").textContent = tunnelUrl || "还没有公网地址";
   const install = $("whatsapp-install-cloudflared");
-  if (install) install.hidden = status.tunnel?.cloudflaredInstalled === true;
+  if (install) install.hidden = managedTunnel || status.tunnel?.cloudflaredInstalled === true;
+  if ($("whatsapp-start-tunnel")) $("whatsapp-start-tunnel").hidden = managedTunnel;
+  if ($("whatsapp-stop-tunnel")) $("whatsapp-stop-tunnel").hidden = managedTunnel;
   if ($("whatsapp-start-tunnel")) $("whatsapp-start-tunnel").disabled = !configured || status.tunnel?.cloudflaredInstalled !== true || tunnelRunning;
   if ($("whatsapp-stop-tunnel")) $("whatsapp-stop-tunnel").disabled = !tunnelRunning;
   if ($("whatsapp-copy-webhook")) $("whatsapp-copy-webhook").disabled = !tunnelUrl;
@@ -448,7 +451,7 @@ function renderWhatsApp(status) {
     $("whatsapp-tunnel-hint").textContent = status.tunnel?.error
       || (status.bridge?.stale
         ? "检测到旧版本手机桥仍在运行；点击“保存并启动手机桥”会安全地替换它。"
-        : tunnelRunning ? "复制这个 HTTPS 地址 + /webhook 到 Meta；隧道地址通常会在重启后变化。" : status.tunnel?.cloudflaredInstalled ? "点击启动免费隧道，生成 Meta 可访问的地址。" : "还没有 cloudflared；可以在这里一键安装。");
+        : managedTunnel ? "服务器已经提供固定 HTTPS 入口；不需要在本机安装隧道工具。" : tunnelRunning ? "复制这个 HTTPS 地址 + /webhook 到 Meta；隧道地址通常会在重启后变化。" : status.tunnel?.cloudflaredInstalled ? "点击启动免费隧道，生成 Meta 可访问的地址。" : "还没有 cloudflared；可以在这里一键安装。");
   }
   if ($("whatsapp-verify-result")) $("whatsapp-verify-result").textContent = configured ? phone : "先填写四项凭据和一个手机号。";
   const overview = $("whatsapp-overview");
@@ -1127,7 +1130,7 @@ async function createSession(query) { const button = $("submit"); button.disable
   armStallTimer();
   try {
     const headers = { "content-type": "application/json" };
-    if (window.CLONE_AI_TOKEN) headers.Authorization = `Bearer ${window.CLONE_AI_TOKEN}`;
+    if (window.CLONE_AI_TOKEN) headers["x-clone-ai-token"] = window.CLONE_AI_TOKEN;
     const response = await fetch("/api/main-agent/stream", {
       method: "POST",
       headers,
