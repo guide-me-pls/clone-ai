@@ -29,7 +29,7 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
-import type { ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabilities } from "../core/contracts.ts";
+import type { ExecutionAssignment, ExecutionEvent, ModelUsage, RuntimeAdapter, RuntimeCapabilities } from "../core/contracts.ts";
 import type { FailureReport } from "../core/failure-analysis.ts";
 import { resolveGrants } from "../authority/path-gateway.ts";
 
@@ -64,17 +64,23 @@ export interface NativeModelClient {
     onText?: (text: string) => void;
     execute: (call: NativeToolCall) => Promise<{ output: string; isError: boolean }>;
     signal: AbortSignal;
-  }): Promise<{ summary: string }>;
+  }): Promise<{ summary: string; usage?: ModelUsage }>;
 }
 
 export interface NativeAgentWorkerConfig {
   id: string;
   label: string;
+  /** Provider id recorded on executions; defaults to `id`. 执行记录中的 Provider id；缺省等于 `id`。 */
+  providerId?: string;
+  /** Routing vocabulary for the agent role. External actions are always removed. Agent 角色的路由词汇；外部动作始终被移除。 */
+  workCapabilities?: readonly string[];
   /** Builds the provider client lazily so an unused provider never loads an SDK. 延迟构建 Provider 客户端，未使用的 Provider 不会加载 SDK。 */
   createClient: () => NativeModelClient;
   tools: readonly NativeToolSpec[];
   timeoutMs?: number;
 }
+
+const DEFAULT_NATIVE_WORK = ["research", "filesystem_read", "filesystem_write"] as const;
 
 export type ToolDecision = { allowed: true } | { allowed: false; reason: string };
 
@@ -131,12 +137,11 @@ export class NativeAgentWorker implements RuntimeAdapter {
   readonly id: string;
   readonly label: string;
   readonly providerId: string;
-  readonly #capabilities: RuntimeCapabilities = {
+  readonly #capabilities: Omit<RuntimeCapabilities, "work"> = {
     resume: false,
     cancellation: true,
     approvalCallback: false,
     parallelAssignments: false,
-    work: ["research", "filesystem_read", "filesystem_write"],
   };
   readonly #config: NativeAgentWorkerConfig;
 
@@ -144,11 +149,14 @@ export class NativeAgentWorker implements RuntimeAdapter {
     this.#config = config;
     this.id = config.id;
     this.label = config.label;
-    this.providerId = config.id;
+    this.providerId = config.providerId ?? config.id;
   }
 
   capabilities(): Promise<RuntimeCapabilities> {
-    return Promise.resolve(this.#capabilities);
+    return Promise.resolve({
+      ...this.#capabilities,
+      work: [...(this.#config.workCapabilities ?? DEFAULT_NATIVE_WORK)].filter((capability) => capability !== "external_action"),
+    });
   }
 
   async *execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
@@ -170,6 +178,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
     const budget = input.workOrder?.budget;
     let modelCalls = 0;
     let toolCalls = 0;
+    const startedAt = Date.now();
     try {
       const result = await this.#config.createClient().run({
         instructions: buildInstructions(input, grants.dropped.map((item) => `${item.scope.domain}:${item.scope.resource} (${item.reason})`)),
@@ -206,7 +215,11 @@ export class NativeAgentWorker implements RuntimeAdapter {
         },
       });
       if (lastText.length > 0) yield { type: "message_delta", text: lastText };
-      yield { type: "completed", summary: result.summary };
+      yield {
+        type: "completed",
+        summary: result.summary,
+        ...(result.usage === undefined ? {} : { usage: { ...result.usage, durationMs: Math.max(0, Date.now() - startedAt) } }),
+      };
     } catch (error: unknown) {
       const message = refusal?.message ?? (error instanceof Error ? error.message : String(error));
       const report: FailureReport = {

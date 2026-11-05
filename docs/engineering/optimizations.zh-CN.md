@@ -102,6 +102,27 @@
 - **优点：** 同一段代码在所有入口写回合，台账与 Journal 不会漂移；工具调用与用量终于可
   归因到回合；脱敏与截断限制了 Journal 体积。
 - **缺点 / 下次：** 黑盒 CLI Worker 的内部工具调用仍不可见（结构性边界）；原生 Worker 的
-  模型用量仍没有 usage 记录；`scripts/run-pi-task.mjs` 与 `nightly-rsi` 仍在 Journal
-  之外；回合事件尚未并入单 Run 轨迹视图。
+  模型用量当时未被记录（由下面的原生 Provider 条目取代）；`scripts/run-pi-task.mjs` 与
+  `nightly-rsi` 仍在 Journal 之外；回合事件尚未并入单 Run 轨迹视图。
+- **推翻条件：** 见取舍条目。
+
+## 2026-11-05 — 原生 Worker 成为一等 Provider，并记录精确用量
+
+- **目标 / 假设：** 让所有者像选择任何 CLI 一样按 Agent 选择进程内 Worker，并让它的模型用量
+  精确、可归因，使 CLI 与原生 Worker 的对比有数据而不是印象。
+- **取舍：** [原生 Provider](../architecture/trade-offs.zh-CN.md#2026-11-05--原生-worker-成为可选-provider并记录精确用量)。
+- **变更：** `native` 注册进 Provider 目录，带 Agent 身份与角色能力；原生 Adapter 报告用量；
+  OpenAI 兼容客户端解析两种 usage 形状；Runtime 以带 runId/stepId 的 `usage.recorded` 记入
+  Journal；审计为每次执行展示精确用量；审计 UI 在网关估算旁显示它。
+- **Eval：** `test/native-client.test.ts`（两种 usage 形状、没有 usage 时只计数不定价、
+  Provider 身份与角色）、`test/native-agent-worker.test.ts`（completed 事件携带用量）、
+  `test/audit.test.ts`（Runtime 记录用量且审计投影出来）。全量：549 个测试 / 546 通过 /
+  3 跳过；`npm run typecheck` 与 `npm run gate` 通过。
+- **执行链路：** 先写取舍；按 Provider、客户端、Worker、Runtime、审计、UI 的顺序实现；
+  每层补测试；最后跑全量与门禁。没有运行真实的原生 vs CLI benchmark——本会话没有端点或
+  凭据——因此那项对比标记为**假设**，是下一步的测量。
+- **优点：** 原生 Worker 可按 Agent 选择与识别；精确 token 可归因到单个步骤；不返回 usage 的
+  Provider 只被计数、不被定价，而不是看起来免费。
+- **缺点 / 下次：** 没有真实端点测试；原生 Worker 仍只有文件工具；默认 Agent 仍指向 CLI；
+  未配置两个环境变量时选择 `native` 会在构建 Registry 时以清晰错误失败。
 - **推翻条件：** 见取舍条目。
