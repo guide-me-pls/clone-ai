@@ -2030,6 +2030,17 @@ async function handleRequest(
     return;
   }
 
+  const progressMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/progress$/);
+  if (request.method === "GET" && progressMatch?.[1] !== undefined) {
+    const runId = decodeURIComponent(progressMatch[1]);
+    try {
+      sendJson(response, 200, context.runtime.getRunProgress(runId));
+    } catch (error: unknown) {
+      sendJson(response, 404, { error: error instanceof Error ? error.message : "Unknown run." });
+    }
+    return;
+  }
+
   const approvalMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/approve$/);
   if (request.method === "POST" && approvalMatch?.[1] !== undefined) {
     try {
