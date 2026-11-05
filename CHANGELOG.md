@@ -6,6 +6,16 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Self-check and push command
+
+`npm run selfcheck:push` refuses a dirty worktree, runs the full deterministic
+suite, typecheck and regression gate, fetches `origin/main`, refuses to push
+when the branch is behind, and otherwise pushes the current `main`. It never
+commits or force-pushes.
+
+`npm run selfcheck:push` 会拒绝脏工作区，依次运行完整确定性测试、类型检查与回归门禁，
+拉取 `origin/main`，落后时拒绝推送，否则推送当前 `main`。它不会自动提交，也不会强推。
+
 ### Shared audit for every Agent invocation
 
 Every call into the Main Agent now writes a shared invocation record under
