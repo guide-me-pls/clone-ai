@@ -48,6 +48,19 @@ CLONE_AI_NATIVE_MODEL=<model-id> CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url
 - `artifacts`：Agent 在工作区留下的全部文件（不含 `.clone-ai`）及大小。
 - 运行器在任何意外失败时以非零退出码结束，可挂进 CI 或升级前检查。
 
+## 主 Agent 对比（`npm run bench:main`）
+
+用同一模型与每个任务独立的 clone home，把三条固定 Prompt 分别跑过 Pi 运行时与原生循环：
+直接回答、读取权限、提案计划。报告记录耗时、tokens、工具调用、产生的 Run、回合状态，
+以及任务预期是否成立。
+
+```bash
+CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main
+```
+
+原生端点来自 `CLONE_AI_NATIVE_BASE_URL`（默认 `http://127.0.0.1:3425`）。这是每格只跑
+一次的对比，不是统计基准；模型本身在运行之间会波动。
+
 ## 回归门禁（`npm run gate`）
 
 离线门禁在 CI 中随每次提交运行，零成本：它针对 `benchmark/gate/` 下的 held-out
