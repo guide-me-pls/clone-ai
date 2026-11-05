@@ -213,5 +213,33 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   the turn instead of inventing content; decide whether a verification-stage
   missing artifact should count as `no_artifact` in the benchmark (it is the
   same event in substance). Until both are decided, treat the native worker as
-  equal on solvable tasks but weaker on missing-input honesty.
+  equal on solvable tasks but weaker on missing-input honesty. (Fixed in the
+  entry below.)
+- **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — A missing named input fails the native worker
+
+- **Goal / hypothesis:** stop the native worker from inventing content when a
+  file named in its work order or step instructions is missing; the benchmark
+  showed it completing with a fabricated artifact.
+- **Trade-off:** [missing input](../architecture/trade-offs.md#2026-11-05--a-missing-named-input-fails-the-native-worker-instead-of-allowing-invention).
+- **Change:** a failed read of a path named in the work-order objective or step
+  instructions ends the turn as `no_artifact` / `native-missing-input`; the
+  prompt tells the model not to invent missing inputs; usage from a failed
+  adapter is now journaled too.
+- **Eval:** `test/native-agent-worker.test.ts` — a missing named input fails
+  with the category and signature, an unnamed failed read still completes, and
+  failed usage is carried. Benchmark: the native set is 5/5
+  (`native-2026-11-05T08-07-23-864Z.json`); the final code re-ran `missing-input`
+  as an expected failure with 1,397 tokens
+  (`native-2026-11-05T08-10-22-910Z.json`). Full suite: 552 tests / 549 pass /
+  3 skipped; typecheck, gate and bilingual docs pass.
+- **Execution chain:** finding from the benchmark; trade-off; guard and prompt;
+  tests; benchmark re-run; then usage-on-failure so failed runs are not silent.
+- **Pros:** fabrication after a declared missing input is no longer accepted;
+  failed runs now report tokens.
+- **Cons / next time:** a legitimately optional path named in the instructions
+  now fails; the benchmark's Claude `missing-input` still counts as unexpected
+  because it fails at verification, not execution. Decide the `no_artifact`
+  classification separately.
 - **Reversal condition:** see the trade-off entry.
