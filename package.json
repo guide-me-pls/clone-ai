@@ -17,6 +17,7 @@
     "mobile:whatsapp": "node --experimental-strip-types src/mobile/whatsapp-main.ts",
     "mobile:install": "node scripts/install-whatsapp-bridge.mjs",
     "bench": "node --experimental-strip-types benchmark/run.ts",
+    "bench:main": "node --experimental-strip-types benchmark/main-agent.ts",
     "bench:memory": "node --experimental-strip-types benchmark/long-memory-eval.ts",
     "gate": "node --experimental-strip-types benchmark/gate.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",

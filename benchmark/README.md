@@ -55,6 +55,21 @@ and status.
 - The runner exits non-zero when any unexpected failure occurs, so CI or a
   pre-upgrade check can gate on it.
 
+## Main Agent comparison (`npm run bench:main`)
+
+Runs three fixed prompts through the Pi runtime and the native loop with the
+same model and an isolated clone home per task: a direct answer, an authority
+read, and a plan proposal. The report records duration, tokens, tool calls,
+created runs, turn status and whether the expectation held.
+
+```bash
+CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main
+```
+
+The native endpoint comes from `CLONE_AI_NATIVE_BASE_URL` (default
+`http://127.0.0.1:3425`). This is a one-run-per-cell comparison, not a
+statistical benchmark; the model itself varies between runs.
+
 ## Regression gate (`npm run gate`)
 
 The offline gate runs on every commit in CI and costs nothing: it re-runs the

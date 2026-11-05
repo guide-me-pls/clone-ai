@@ -277,6 +277,34 @@
 - **优点：** 原生路径写入相同的审计与用量记录；工具表从 Pi 扩展捕获，两个运行时不会
   各自漂移；共享调用账本能识别调用者。
 - **缺点 / 下次：** 非流式；无压缩；拒绝图片；`search_history` 检索回合台账而非 Pi 会话
-  文件；原生回合不能作为 Pi 会话续跑；尚无原生主 Agent 与 Pi 的 benchmark 对比——实机
-  冒烟只是一轮，不是基准。
+  文件；原生回合不能作为 Pi 会话续跑。Pi 与原生对比见下。
+- **推翻条件：** 见取舍条目。
+
+## 2026-11-05 — 原生 vs Pi 主 Agent 对比
+
+- **目标 / 假设：** 在改变任何默认之前，检查原生循环能否在相同的 Main Agent 任务上匹敌
+  Pi——直接回答、读取权限、提案计划。
+- **取舍：** [原生主 Agent](../architecture/trade-offs.zh-CN.md#2026-11-05--原生主-agent-循环放在开关后而不是一次性切换)。
+- **变更：** 新增 `benchmark/main-agent.ts` 与 `npm run bench:main`：三条固定 Prompt、
+  每个任务独立的 clone home、两个运行时相同的模型与端点，报告耗时、tokens、工具调用、
+  产生的 Run、回合状态与预期是否成立。
+- **Benchmark 运行 — 失败尝试：** 命令
+  `CLONE_AI_BENCH_MAIN_MODEL=360/google/gemini-4-argon npm run bench:main`；两个运行时
+  的所有任务都因 Magpie 上游返回 400（could not connect to stream）而失败。问题在端点，
+  不在 harness（`main-agent-2026-11-05T09-01-57-162Z.json`）。
+- **Benchmark 运行 — 有效：** 命令
+  `CLONE_AI_BENCH_MAIN_MODEL=360/anthropic/claude-sonnet-5-5 npm run bench:main`；
+  模型：`360/anthropic/claude-sonnet-5-5`，经 Magpie `http://127.0.0.1:3425`；任务：
+  direct-answer、authority-read、plan-proposal；每个运行时每任务一次；隔离 clone home；
+  结果文件 `benchmark/results/main-agent-2026-11-05T09-06-13-005Z.json`。**两边均 3/3**：
+  - direct-answer：Pi 3.3s / 3,865 tokens，原生 5.9s / 3,795；无工具、无 Run。
+  - authority-read：Pi 7.6s / 8,197，原生 9.5s / 7,958；两边各调用一次
+    `get_authority`；无 Run。
+  - plan-proposal：Pi 12.1s / 9,452，原生 9.5s / 9,407；两边各调用一次
+    `propose_work_plan`，各产生一个 Run。
+- **数字说明：** 任务结果、工具选择与 Run 创建都相同。tokens 几乎一致（Pi 21,514；原生
+  21,160，约少 1.6%）。总耗时 Pi 略快（23.0s vs 24.9s），但 plan-proposal 上原生更快
+  （9.5s vs 12.1s）。每格只跑一次；把它当作一致性检查，而不是统计基准。
+- **发现 / 下一步：** 在这些任务上原生循环行为可比。它仍缺流式与压缩，下一次对比应加入
+  长对话与多轮工具任务——那才是最可能出现差异的地方。
 - **推翻条件：** 见取舍条目。
