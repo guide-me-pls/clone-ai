@@ -82,22 +82,48 @@ async function videoFrame(file) {
 }
 
 async function addAttachmentFiles(files) {
+  let added = 0;
   for (const file of files) {
     if (state.attachments.length >= MAX_ATTACHMENTS) { announce(`最多添加 ${MAX_ATTACHMENTS} 个图片或视频。`, true); break; }
     try {
       if (file.type.startsWith("video/")) {
         state.attachments.push(await videoFrame(file));
+        added += 1;
         continue;
       }
       if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { announce("只支持 PNG、JPEG、GIF、WebP 图片或视频。", true); continue; }
       if (file.size > MAX_ATTACHMENT_BYTES) { announce(`${file.name} 超过 5MB。`, true); continue; }
       const previewUrl = await readDataUrl(file);
       state.attachments.push({ name: file.name, mimeType: file.type, data: previewUrl.split(",")[1], previewUrl });
+      added += 1;
     } catch (error) {
       announce(error.message || "附件读取失败。", true);
     }
   }
   renderAttachments();
+  return added;
+}
+
+function clipboardAttachmentFiles(clipboardData) {
+  if (!clipboardData) return [];
+  const files = [];
+  const add = (file) => {
+    if (!file || !/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return;
+    const extension = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
+    // Clipboard images often have a generic name. Give each paste a visible,
+    // stable name without rewriting the bytes.
+    // 剪贴板图片通常只有通用文件名；给每次粘贴一个可见、稳定的名称，但不改写图片内容。
+    files.push(new File([file], `剪贴板截图-${files.length + 1}.${extension}`, { type: file.type }));
+  };
+
+  for (let index = 0; index < (clipboardData.items?.length || 0); index += 1) {
+    const item = clipboardData.items[index];
+    if (item?.kind === "file" && item.type.startsWith("image/")) add(item.getAsFile());
+  }
+  if (files.length === 0) {
+    for (let index = 0; index < (clipboardData.files?.length || 0); index += 1) add(clipboardData.files[index]);
+  }
+  return files;
 }
 const icon = (name) => name === "spark"
   ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 1.8 7.2L21 11l-7.2 1.8L12 20l-1.8-7.2L3 11l7.2-1.8L12 2Z"/></svg>`
@@ -1407,6 +1433,16 @@ $("memory-search-form").addEventListener("submit", (event) => { event.preventDef
 $("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
 $("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0 && state.attachments.length === 0) { announce("请输入你想推进的事情，或添加图片/视频。", true); return; } void createSession(query); });
 $("query").addEventListener("input", resizeComposer);
+$("query").addEventListener("paste", async (event) => {
+  const files = clipboardAttachmentFiles(event.clipboardData);
+  if (files.length === 0) return;
+  event.preventDefault();
+  const added = await addAttachmentFiles(files);
+  if (added > 0) {
+    announce(`已从剪贴板添加 ${added} 张图片。`);
+    $("query").focus();
+  }
+});
 $("attach").addEventListener("click", () => $("attachments").click());
 $("attachments").addEventListener("change", async (event) => { const input = event.target; await addAttachmentFiles(input.files || []); input.value = ""; });
 $("attachment-preview").addEventListener("click", (event) => { const remove = event.target.closest("[data-remove-attachment]"); if (!remove) return; state.attachments.splice(Number(remove.dataset.removeAttachment), 1); renderAttachments(); });
