@@ -180,22 +180,32 @@ async function runQueryWithin(
   // LLM Planner 是显式开启的。没有凭据时，确定性的本地策略仍会产出计划，
   // 并明确说明它为何选择当前任务图。
   let plan;
-  if (planner === undefined) {
-    plan = buildFallbackPlan(query, new Set(routableAgents.map((agent) => agent.id)), recalledMemories);
-  } else {
-    const started = Date.now();
-    try {
-      plan = await planner.plan({
-        query,
-        recalledMemories,
-        availableAgents: planningAgents(routableAgents),
-      });
-    } finally {
-      await recordUsage(dataDirectory, planner.takeUsage?.() ?? {
-        source: "planner",
-        durationMs: Math.max(0, Date.now() - started),
-      });
+  try {
+    if (planner === undefined) {
+      plan = buildFallbackPlan(query, new Set(routableAgents.map((agent) => agent.id)), recalledMemories);
+    } else {
+      const started = Date.now();
+      try {
+        plan = await planner.plan({
+          query,
+          recalledMemories,
+          availableAgents: planningAgents(routableAgents),
+        });
+      } finally {
+        await recordUsage(dataDirectory, planner.takeUsage?.() ?? {
+          source: "planner",
+          durationMs: Math.max(0, Date.now() - started),
+        });
+      }
     }
+  } catch (error: unknown) {
+    // A planner that throws would otherwise leave the Run in `planning` with
+    // nothing to pick it up: the queue only claims `queued`, and the owner
+    // would see a frozen task forever. Close it honestly instead.
+    // Planner 抛错时若不处理，Run 会永远留在 `planning` 且无人接手：队列只认 `queued`，
+    // 所有者会看到一个永久冻结的任务。这里诚实地关闭它。
+    await runtime.failRun(run.id, `planning failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
   }
   const workerDescriptors = describeWorkers(agents, workerStatuses);
   const routedPlan = assignWorkersPerStep(plan, routed.decision, workerDescriptors);
