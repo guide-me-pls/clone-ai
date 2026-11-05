@@ -747,7 +747,7 @@ textarea:focus-visible {
 .schedule-create { border-radius: 9px; background: var(--accent); }
 .schedule-row { border-bottom-color: var(--line); }
 .schedule-row b { color: var(--text); }
-.scroll-bottom { bottom: 140px; border-color: var(--line); color: var(--accent); background: var(--surface-raised); }
+.scroll-bottom { bottom: 108px; border-color: var(--line); color: var(--accent); background: var(--surface-raised); }
 .startup-screen { background: var(--canvas); }
 .startup-mark { color: #fff; background: #202720; box-shadow: 0 8px 22px rgba(32, 39, 33, .16); }
 .startup-card b { color: var(--text); }
@@ -922,7 +922,7 @@ body { color: #202020; }
 .status-pill.completed { border-color: #d9e8de; color: #4b795c; background: #f3f8f4; }
 .status-pill.needs-attention { border-color: #ecdada; color: #a35454; background: #fbf5f5; }
 
-.conversation { padding: 28px 34px 132px; background: #fff; scrollbar-color: #ccc transparent; scroll-padding-bottom: 128px; }
+.conversation { padding: 28px 34px 24px; background: #fff; scrollbar-color: #ccc transparent; scroll-padding-bottom: 24px; }
 .conversation-inner { display: block; width: min(760px, 100%); }
 .day-divider { margin-bottom: 23px; color: #aaa; font-size: 10px; }
 .day-divider::before, .day-divider::after { background: #ededed; }
@@ -1079,7 +1079,7 @@ body.empty-conversation #session-subtitle, body.empty-conversation #session-stat
 @media (max-width: 760px) {
   .app-shell { grid-template-columns: 1fr; }
   .topbar { min-height: 52px; padding: 0 16px; }
-  .conversation { padding: 22px 16px 132px; }
+  .conversation { padding: 22px 16px 16px; }
   .composer-wrap { padding: 0 16px 14px; }
   body.empty-conversation .conversation { padding: 18px 16px 0; }
   .starter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
