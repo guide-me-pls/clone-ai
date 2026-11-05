@@ -256,3 +256,28 @@ With no model configured the factory returns nothing and the registry keeps
 using the sandboxed CLI workers. Verified end to end against a local
 OpenAI-compatible gateway: the worker listed the empty workspace, wrote
 `out/hello.txt`, read it back, and stopped — every call passing the scope gate.
+
+## 14. Personal-agent surface (2026-11-05)
+
+- **Context budget by class** — preferences 50%, task outcomes 25%, facts 20%,
+  agent outcomes 5% of what remains; unused capacity rolls forward.
+- **Conflict review** — `src/memory/conflict.ts` proposes retiring a restated
+  memory (`findConflicts`) and drops restatements from the recalled set
+  (`dedupeContext`). Token overlap does not catch changed values; the trade-off
+  log records that limit.
+- **Conversation learning on by default** — `CLONE_AI_MEMORY_MINING`: unset =
+  mine turns carrying a durable-statement signal, `off` = silence both paths,
+  `all` = every turn.
+- **Connectors** — calendar (ICS file or https URL) and email (IMAP, read-only),
+  both reporting why they cannot run instead of appearing empty.
+- **Chat attachments** — images validated by signature, passed to the session
+  prompt, never written to the workspace.
+- **Attention list** — `GET /api/attention` composes commitments, review items,
+  suggestions, opportunities and observations into one urgency-ordered list;
+  each item points at the service that owns it.
+- **Export** — `clone-ai export [dir]` writes a readable tree with a manifest
+  that states the archive is not encrypted.
+- **Step-level progress** — `getRunProgress`, `get_run_status` and
+  `GET /api/runs/:id/progress` report per-step completion and last message.
+- **Benchmark** — `npm run bench:journal` records append/list/replay/refresh
+  timings; 30k events: list 32 ms, replay 77 ms, warm refresh 0 ms.
