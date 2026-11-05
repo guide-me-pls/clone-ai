@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { buildInstructions, decideTool, NativeAgentWorker, type NativeModelClient, type NativeToolCall } from "../src/workers/native-agent-worker.ts";
+import { fileTools } from "../src/workers/native-worker-factory.ts";
 import type { ExecutionAssignment, ExecutionEvent } from "../src/core/contracts.ts";
 import { resolveGrants } from "../src/authority/path-gateway.ts";
 
@@ -100,4 +101,103 @@ test("a realpath-mismatched workspace still admits paths inside it, and refuses 
   // 这里用未规范化的路径指代工作区。
   assert.equal(decideTool({ risk: "write", grants, workspace: directory, path: "out/hello.txt" }).allowed, true);
   assert.equal(decideTool({ risk: "write", grants, workspace: directory, path: "../escape.md" }).allowed, false);
+});
+
+test("exact usage from the model client reaches the completed event", async (t) => {
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "agent-1",
+    label: "A",
+    providerId: "native",
+    workCapabilities: ["drafting", "external_action"],
+    tools: [],
+    createClient: () => ({
+      async run() {
+        return { summary: "done", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, modelCalls: 2 } };
+      },
+    }),
+  });
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute(assignment(directory))) events.push(event);
+  const completed = events.find((event) => event.type === "completed");
+  assert.ok(completed !== undefined && completed.type === "completed");
+  const usage = completed.usage;
+  assert.ok(usage !== undefined);
+  assert.equal(usage.inputTokens, 10);
+  assert.equal(usage.outputTokens, 5);
+  assert.equal(usage.totalTokens, 15);
+  assert.equal(usage.modelCalls, 2);
+  assert.equal(typeof usage.durationMs, "number");
+
+  const capabilities = await worker.capabilities();
+  assert.equal(worker.id, "agent-1");
+  assert.equal(worker.providerId, "native");
+  assert.deepEqual(capabilities.work, ["drafting"]);
+});
+
+test("successful writes become artifact evidence the verifier can check", async (t) => {
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: fileTools(),
+    createClient: () => ({
+      async run(input) {
+        await input.execute({ name: "write_file", input: { path: "out/note.md", content: "hi" } });
+        return { summary: "wrote it" };
+      },
+    }),
+  });
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute(assignment(directory))) events.push(event);
+  const evidence = events.filter((event) => event.type === "evidence");
+  assert.ok(evidence.some((event) => event.type === "evidence" && event.evidence.kind === "artifact" && event.evidence.locator === "out/note.md"));
+  assert.equal(await readFile(join(directory, "out/note.md"), "utf8"), "hi");
+});
+
+test("a missing input named in the instructions fails instead of allowing invention", async (t) => {
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: fileTools(),
+    createClient: () => ({
+      async run(input) {
+        await input.execute({ name: "read_file", input: { path: "docs/absent.md" } });
+        await input.execute({ name: "write_file", input: { path: "out/summary.md", content: "invented" } });
+        return { summary: "done", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, modelCalls: 1 } };
+      },
+    }),
+  });
+  const base = assignment(directory);
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute({
+    ...base,
+    step: { ...base.step, instructions: "Read docs/absent.md and write out/summary.md." },
+  })) events.push(event);
+  const failed = events.find((event) => event.type === "failed");
+  assert.ok(failed !== undefined && failed.type === "failed");
+  assert.equal(failed.report?.category, "no_artifact");
+  assert.equal(failed.report?.signature, "native-missing-input");
+  assert.equal(failed.usage?.totalTokens, 15);
+  assert.equal(events.some((event) => event.type === "completed"), false);
+});
+
+test("a failed read the instructions do not name is returned to the model, not fatal", async (t) => {
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: fileTools(),
+    createClient: () => ({
+      async run(input) {
+        const outcome = await input.execute({ name: "read_file", input: { path: "wrong/guess.md" } });
+        assert.equal(outcome.isError, true);
+        return { summary: "recovered" };
+      },
+    }),
+  });
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute(assignment(directory))) events.push(event);
+  assert.equal(events.some((event) => event.type === "completed"), true);
 });

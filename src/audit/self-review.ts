@@ -24,6 +24,7 @@ import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager 
 
 import { loadAudits, summarizeAudits } from "./audit-service.ts";
 import type { RunAuditRecord } from "./run-audit.ts";
+import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
 import { listEffectiveProviderConfigs } from "../config/provider-config-store.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
@@ -172,9 +173,19 @@ async function askModel(system: string, prompt: string, dataDirectory: string): 
       reply += event.assistantMessageEvent.delta;
     }
   });
+  const started = Date.now();
+  const beforeStats = (() => {
+    try { return session.getSessionStats(); } catch { return undefined; }
+  })();
   try {
     await session.prompt(prompt);
   } finally {
+    // The reviewer is a model call like any other; the ledger must say so.
+    // 评审也是一次模型调用；账本必须如实记录。
+    await recordUsage(dataDirectory, {
+      ...collectSessionUsage(session, Date.now() - started, beforeStats),
+      source: "self-review",
+    }).catch(() => undefined);
     session.dispose();
   }
   if (reply.trim().length === 0 && failure !== undefined) throw new Error(failure);

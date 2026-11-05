@@ -79,6 +79,7 @@ Agent。clone-ai 负责个人连续性、策略、记忆、规划和验证；被
 | **Codex** | 编码、审查、仓库操作与产物生成。 | 黑盒启动配方 |
 | **Pi** | 拥有自身 Skill 与 MCP 的可替换终端 Agent。 | 黑盒启动配方 |
 | **opencode** | 可选的替代 Coding Agent。 | 黑盒启动配方 |
+| **原生 Worker** | 进程内循环，每次工具调用按 Scope 放行；仅文件工具，报告精确 token 用量。 | 内建；需设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` |
 | **自定义 Runtime** | 用户或组织专属的命令与本地工具。 | 增加一条 `providers.json` 配方 |
 | **Python Worker** | 信息提取、排序、预测、评估和本地 ML 提案。 | 未来的黑盒配方 |
 

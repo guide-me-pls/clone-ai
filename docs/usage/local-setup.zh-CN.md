@@ -77,6 +77,28 @@ Clone AI 自己不实现 Coding Agent，它监督你已有的那些。
 注意：桌面应用（Claude Code Desktop、opencode Desktop）不能作为 Worker——Clone AI
 需要的是能用「一个 Prompt + 一个工作目录」运行的无头 CLI。
 
+Clone AI 还自带进程内的 `native` 执行 Provider：把某个 Agent 的 Provider 设为
+`native`，并设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`。它不需要
+CLI，且每次工具调用都按步骤 Scope 校验。
+
+### 原生主 Agent（实验性）
+
+Pi 仍是默认的主 Agent 运行时。要让主 Agent 在进程内对接 OpenAI 兼容端点：
+
+```bash
+export CLONE_AI_MAIN_RUNTIME=native
+export CLONE_AI_NATIVE_MODEL=<model-id>
+export CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url>
+export CLONE_AI_NATIVE_API_KEY=<key>   # 可选
+clone-ai "你好"
+```
+
+原生循环写入相同的 `main_agent.turn_*`、`agent.tool_*` 与 `usage.recorded` 事件，
+以回合台账作为对话记录，并从台账检索 `search_history`。它会随 token 到达流式输出，
+并对长对话做确定性压缩：最新轮次在 12,000 字符预算内保留原文，较早轮次变成有界摘要，
+全文仍留在回合台账中。图片附件以 OpenAI 风格 data URL 随当前消息发送；它们是逐回合的，
+不存入台账。取消 `CLONE_AI_MAIN_RUNTIME` 即回到 Pi。
+
 ## 5. 数据都在哪里
 
 | 项目 | 位置 |

@@ -20,6 +20,20 @@ Each task costs a few cents of real model calls and takes roughly 20-60
 seconds. Results are recorded as JSON under `benchmark/results/<provider>-<timestamp>.json`
 so successive upgrades can be compared.
 
+## Native provider
+
+The in-process worker runs the same task set without a CLI:
+
+```bash
+CLONE_AI_NATIVE_MODEL=<model-id> CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url> \
+  npm run bench -- --provider native --tasks summarize
+```
+
+It does not need `--unsafe-host`: every tool call is checked against the step's
+scopes before it runs. The report records exact `usage` (tokens and model calls),
+`verification`, and `failureReason`; CLI providers usually report only duration
+and status.
+
 ## Task set (`benchmark/tasks.ts`)
 
 | id | What it proves |
@@ -40,6 +54,35 @@ so successive upgrades can be compared.
   `.clone-ai`), with sizes.
 - The runner exits non-zero when any unexpected failure occurs, so CI or a
   pre-upgrade check can gate on it.
+
+## Main Agent comparison (`npm run bench:main`)
+
+Runs three fixed prompts through the Pi runtime and the native loop with the
+same model and an isolated clone home per task: a direct answer, an authority
+read, and a plan proposal. The report records duration, tokens, tool calls,
+created runs, turn status and whether the expectation held.
+
+```bash
+CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main
+```
+
+The native endpoint comes from `CLONE_AI_NATIVE_BASE_URL` (default
+`http://127.0.0.1:3425`). This is a one-run-per-cell comparison, not a
+statistical benchmark; the model itself varies between runs.
+
+## Long-context validation (`npm run bench:long`)
+
+Seeds 24 completed turns with a needle in the oldest, runs one real native turn
+with `historyChars=4000`, captures the outgoing request, and checks: the summary
+is present, the needle is in it, the newest turn stayed verbatim, the reply
+contains the needle, and there was no error. The report lands under
+`benchmark/results/`.
+
+## Image validation (`npm run bench:images`)
+
+Generates a solid red PNG, sends it as a data URL through the native Main Agent,
+and checks that the image part reached the endpoint and the model answered red.
+The report lands under `benchmark/results/`.
 
 ## Regression gate (`npm run gate`)
 

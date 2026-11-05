@@ -17,6 +17,7 @@ import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
 import { beginInvocation, type InvocationCaller, type InvocationSurface } from "../audit/invocation-ledger.ts";
+import type { MainAgentTurnSource } from "../main-agent/turn-audit.ts";
 
 export interface MainAgentQueryResult {
   reply: string;
@@ -29,6 +30,8 @@ export interface MainAgentQueryResult {
 export interface MainAgentQueryOptions {
   /** Which surface asked for this turn; recorded in the shared invocation ledger. 本回合的调用界面；写入共享调用账本。 */
   surface?: InvocationSurface;
+  /** Recorded in the Main Agent turn ledger; the surface label. 写入主 Agent 回合台账的来源标签。 */
+  source?: MainAgentTurnSource;
   /** Explicit caller identity, when the transport knows it. 传输层已知时的显式调用者身份。 */
   caller?: Partial<Omit<InvocationCaller, "pid" | "ppid">>;
   /** Workspace shown in the invocation ledger. 调用账本中展示的工作区。 */

@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 const ui = join(process.cwd(), "apps", "desktop", "ui");
 const read = (name: string): Promise<string> => readFile(join(ui, name), "utf8");
@@ -73,4 +74,77 @@ test("interactive views style their own truncation, so long text cannot stretch 
   assert.match(css, /\.au-trace-item span[^{]*\{[^}]*overflow-wrap:\s*anywhere/);
   // A hidden panel must actually hide even when its layout sets display. 布局设了 display 的隐藏面板也必须真的隐藏。
   assert.match(css, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+});
+
+test("composer Enter respects IME composition and the 100 ms grace period", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("const IME_ENTER_GRACE_MS = 100;");
+  const end = app.indexOf('document.addEventListener("keydown"', start);
+  assert.ok(start >= 0 && end > start, "composer IME handlers must exist");
+  const handlers: Record<string, (event: { key: string; shiftKey: boolean; isComposing: boolean; keyCode: number; preventDefault: () => void }) => void> = {};
+  let now = 1000;
+  let submits = 0;
+  runInNewContext(app.slice(start, end), {
+    Date: { now: () => now },
+    $: (id: string) => id === "query"
+      ? { addEventListener: (name: string, handler: typeof handlers[string]) => { handlers[name] = handler; } }
+      : { requestSubmit: () => { submits += 1; } },
+  });
+  const enter = (options: Partial<{ key: string; shiftKey: boolean; isComposing: boolean; keyCode: number }> = {}) => {
+    let prevented = false;
+    handlers.keydown!({ key: "Enter", shiftKey: false, isComposing: false, keyCode: 13, ...options, preventDefault: () => { prevented = true; } });
+    return prevented;
+  };
+  const compositionEvent = { key: "", shiftKey: false, isComposing: false, keyCode: 0, preventDefault: () => {} };
+  handlers.compositionstart!(compositionEvent);
+  assert.equal(enter(), true);
+  handlers.compositionend!(compositionEvent);
+  now += 99;
+  assert.equal(enter(), true);
+  assert.equal(submits, 0);
+  now += 1;
+  assert.equal(enter({ isComposing: true }), true);
+  assert.equal(enter({ keyCode: 229 }), true);
+  assert.equal(submits, 0);
+  assert.equal(enter({ shiftKey: true }), false);
+  assert.equal(enter({ key: "a" }), false);
+  assert.equal(enter(), true);
+  assert.equal(submits, 1);
+});
+
+test("populated conversations stay vertical and empty-state flex requires no messages", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("function renderSession(session)");
+  const end = app.indexOf("async function selectSession", start);
+  assert.ok(start >= 0 && end > start, "renderSession must exist");
+  let empty = false;
+  const content = { innerHTML: "" };
+  const renderSession = runInNewContext(`${app.slice(start, end)}; renderSession`, {
+    setTopbar: () => {},
+    document: { body: { classList: { toggle: (_name: string, value: boolean) => { empty = value; } } } },
+    state: { signatures: {} },
+    $: (id: string) => id === "conversation-inner" ? content : { scrollTop: 0 },
+    welcomeMarkup: () => "welcome",
+    day: () => "today",
+    messageMarkup: () => '<div class="message"></div>',
+    recalledMemoryMarkup: () => "", planMarkup: () => "", agentsMarkup: () => "",
+    evidenceMarkup: () => "", approvalMarkup: () => "", reviewMarkup: () => "", traceMarkup: () => "",
+    restoreDisclosureScrolls: () => {}, requestAnimationFrame: () => {}, updateScrollBottom: () => {},
+  });
+  renderSession(null);
+  assert.equal(empty, true);
+  renderSession({ id: "test", updatedAt: "today", messages: [] });
+  assert.equal(empty, true);
+  renderSession({ id: "test", updatedAt: "today", messages: [{ text: "one" }, { text: "two" }] });
+  assert.equal(empty, false);
+  assert.equal((content.innerHTML.match(/class="message"/g) || []).length, 2);
+
+  const css = (await read("style.css")) + (await read("audit.css")) + (await read("memory.css")) + (await read("components.css"));
+  const rules = [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+  const flexContainers = rules.filter(([, selector, declarations]) => selector!.includes(".conversation-inner") && /display:\s*(?:inline-)?flex\b/.test(declarations!));
+  assert.ok(flexContainers.length > 0, "empty conversation needs its flex layout");
+  for (const [, selector] of flexContainers) assert.match(selector!, /\.conversation-inner:not\(:has\(\.message\)\)/);
+  assert.match(css, /\.conversation-inner\s*\{[^}]*display:\s*block/);
+  assert.match(css, /\.message\s*\{[^}]*display:\s*block[^}]*width:\s*100%/);
+  assert.match(css, /\.message\.person\s*\{[^}]*width:\s*100%/);
 });

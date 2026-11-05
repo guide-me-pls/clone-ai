@@ -383,7 +383,14 @@ export type JournalEventType =
   // cannot be compared with the baseline it replaced.
   // 主 Agent 回答前收到的输入：charter、简报与工具表的哈希，以及读取它们的模型。
   // 没有它，失败无法归因到某一版提示词，"改进"也无法与它所替换的基线比较。
-  | "main_agent.prompt_snapshot";
+  | "main_agent.prompt_snapshot"
+  // One Main Agent turn from any entry point: the input before the model sees
+  // it, and the reply/tool calls/usage after. Without these a CLI or WhatsApp
+  // task left no auditable trace of what was asked or done.
+  // 来自任意入口的一次主 Agent 回合：模型看到之前的输入，以及之后的回复/工具调用/用量。
+  // 没有它们，CLI 或 WhatsApp 的任务不会留下"问过什么、做过什么"的可审计轨迹。
+  | "main_agent.turn_started"
+  | "main_agent.turn_completed";
 
 export interface JournalEvent {
   id: string;
@@ -467,6 +474,23 @@ export interface WorkerMemorySource {
   }>>;
 }
 
+/**
+ * What an adapter can say about the model calls behind one execution.
+ * Optional fields stay absent rather than being invented when a provider
+ * omits its usage block.
+ * Adapter 对一次执行背后的模型调用能诚实说出的内容。Provider 不返回 usage 时，
+ * 可选字段保持缺省，而不是编造为 0。
+ */
+export interface ModelUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cachedInputTokens?: number;
+  /** Model round trips, when the adapter can count them. 模型往返次数（Adapter 能计数时）。 */
+  modelCalls?: number;
+  durationMs?: number;
+}
+
 export type ExecutionEvent =
   | { type: "session_started"; sessionId: string }
   | { type: "message_delta"; text: string }
@@ -476,8 +500,8 @@ export type ExecutionEvent =
   | { type: "tool_completed"; toolCallId: string; tool: string; isError: boolean }
   | { type: "progress"; message: string }
   | { type: "evidence"; evidence: Omit<Evidence, "id" | "runId" | "stepId" | "createdAt"> }
-  | { type: "completed"; summary: string }
-  | { type: "failed"; message: string; report?: FailureReport };
+  | { type: "completed"; summary: string; usage?: ModelUsage }
+  | { type: "failed"; message: string; report?: FailureReport; usage?: ModelUsage };
 
 export interface RuntimeCapabilities {
   resume: boolean;
