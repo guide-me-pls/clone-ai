@@ -34,6 +34,29 @@ retried three or more times, a run the owner cancelled, a run labelled
 隐性失败也会记录，因为没有任何错误码会命名它们：同一步骤重试三次以上、所有者取消的 Run、
 被判为"不合格"的 Run，或者运行结束后十分钟内出现的"不对，重来"。
 
+## Consumed traces / 已消费的轨迹
+
+The job stores successful trace outcomes in `REPORT_DIR/consumed-traces.json`
+(default `~/.clone/rsi/consumed-traces.json`, or `<CLONE_AI_DATA_DIR>/rsi/consumed-traces.json`).
+Each entry is keyed by runId and contains the runId, SHA-256 fingerprint of the
+exact trace file bytes, `consumedAt`, `branch`, and `prUrl` when available.
+Only `fixed`, `pr-created`, and `patch-only` outcomes consume traces;
+failed or aborted repairs remain eligible. An unchanged runId and fingerprint
+is skipped; changed file content for the same runId is processed again. A
+missing, corrupt, or invalid state file is treated as empty. State is written
+once after a successful batch by same-directory atomic replacement; a write
+failure is logged and the nightly run continues, but later runs may retry.
+A dry run does not consume traces.
+
+任务在 `REPORT_DIR/consumed-traces.json` 中保存成功轨迹的状态（默认路径为
+`~/.clone/rsi/consumed-traces.json`；设置 `CLONE_AI_DATA_DIR` 时位于其下的
+`rsi/consumed-traces.json`）。每条记录以 runId 为键，包含 runId、轨迹文件原始字节的
+SHA-256 指纹、`consumedAt`、`branch` 和存在时的 `prUrl`。只有 `fixed`、
+`pr-created`、`patch-only` 会消费轨迹；失败或中止的修复仍可重试。runId 和指纹
+都相同才跳过；同一 runId 的文件内容改变后会再次处理。状态文件缺失、损坏或格式无效时按空
+状态处理。成功批次结束后通过同目录原子替换写入一次；写入失败只记录警告并继续夜间任务，
+之后可能重试。dry run 不会消费轨迹。
+
 ## The five gates / 五道闸门
 
 1. **Isolated worktree** — `git worktree add` on `main`; the serving checkout is

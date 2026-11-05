@@ -23,6 +23,31 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+## 2026-11-05 — 记住夜间修复已消费的轨迹
+
+- **目标 / 假设：** 成功修复后不再重复处理未改变的轨迹；同一 runId 的文件内容
+  改变后仍可修复。
+- **取舍：** [runId 和文件指纹](../architecture/trade-offs.zh-CN.md#2026-11-05--按-runid-和文件指纹消费已修复轨迹)。
+- **变更：** `scripts/nightly-rsi-state.mjs` 用原子替换保存指纹与结果信息；
+  `scripts/nightly-rsi.mjs` 筛选批次并仅在成功结果后记录。配套声明、
+  `test/nightly-rsi-state.test.ts`、`docs/nightly-rsi.md` 和双语 CHANGELOG
+  说明并覆盖该契约。
+- **Eval：** 变更前代码检查显示没有消费状态；运行 `node --experimental-strip-types
+  --test test/nightly-rsi-state.test.ts` 因新模块不存在而失败，因此没有旧行为的实测
+  基线。变更后同一命令的 6 个确定性测试通过；`node --check
+  scripts/nightly-rsi-state.mjs`、`node --check scripts/nightly-rsi.mjs` 与
+  `npm run typecheck` 均通过。
+- **执行链路：** Main Agent 使用 DeepSeek V4.1 Flash、`high` 强度提出单步计划，
+  `draft-maker`/`codex-cli` 实现状态模块、接线、测试和文档。Runtime 随后把该步骤
+  判为失败，因为文件验证器把 `fs.rename`、`os.tmpdir`、`consumed-traces.json` 等
+  引号内标识符误当成工作区必须存在的文件。监工独立运行目标测试和 typecheck，均通过；
+  这个假失败作为独立验证器缺陷继续修复。耗时约 3.5 分钟；使用了实时模型调用，费用未测量。
+- **优点：** 结果判定与脚本共用；离线覆盖损坏状态、替换失败清理和内容改变后的重试。
+- **缺点 / 下次：** 本任务没有端到端运行修复或 dry run，完整的模型依赖行为仍属假设；
+  `npm test` 和 `npm run gate` 明确不在允许的命令范围内。
+- **推翻条件：** 需要跨机器持久共享账本，或文件字节变化但有效证据不变导致反复修复时，
+  替换这一文件方案。
+
 ## 2026-11-05 — 保守恢复规划阶段孤儿
 
 - **目标 / 假设：** 关闭已放弃的规划 Run，同时不回收新建、已领取或已有计划的工作。

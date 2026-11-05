@@ -6,6 +6,16 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Avoid repeating successfully repaired traces
+
+Nightly RSI records each successfully handled trace's runId and exact-file SHA-256 in
+`rsi/consumed-traces.json`. Unchanged traces are skipped; changed content and failed
+repairs remain eligible. Corrupt state is treated as empty and write failures only warn.
+
+夜间 RSI 在 `rsi/consumed-traces.json` 中记录成功处理的轨迹 runId 与文件 SHA-256；
+内容未变的轨迹会跳过，内容改变或修复失败的轨迹仍可处理。状态损坏时按空状态处理，写入失败只警告。
+
+
 ### Conservative recovery for orphaned planning
 
 An unplanned Run left in planning for more than 15 minutes is marked failed

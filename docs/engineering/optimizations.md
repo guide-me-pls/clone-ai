@@ -26,6 +26,40 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+## 2026-11-05 — Remember consumed nightly repair traces
+
+- **Goal / hypothesis:** avoid repeating successful repairs for unchanged failed
+  trace files while allowing new bytes for the same runId to be repaired.
+- **Trade-off:** [runId and file fingerprint](../architecture/trade-offs.md#2026-11-05--consume-repaired-traces-by-runid-and-file-fingerprint).
+- **Change:** `scripts/nightly-rsi-state.mjs` stores fingerprints and outcome
+  metadata with atomic replacement; `scripts/nightly-rsi.mjs` filters the batch
+  and records only successful outcomes. The matching declaration,
+  `test/nightly-rsi-state.test.ts`, `docs/nightly-rsi.md`, and the bilingual
+  changelog document and cover the contract.
+- **Eval:** Before: source inspection showed no consumption state; running
+  `node --experimental-strip-types --test test/nightly-rsi-state.test.ts`
+  failed on the missing new module, so there was no behavioral baseline run.
+  After: the same command passed 6/6 deterministic tests; both
+  `node --check scripts/nightly-rsi-state.mjs` and
+  `node --check scripts/nightly-rsi.mjs` passed; `npm run typecheck` passed.
+- **Execution chain:** the Main Agent ran on DeepSeek V4.1 Flash at `high`
+  effort, proposed one coding step, and `draft-maker`/`codex-cli` implemented
+  the state module, wiring, tests, and documentation. The Runtime then reported
+  the step failed because the file verifier treated quoted identifiers such as
+  `fs.rename`, `os.tmpdir`, and `consumed-traces.json` as files that must exist
+  in the workspace. The supervisor independently ran the targeted tests and
+  typecheck; they passed. This false-negative is tracked as a separate verifier
+  defect. Approximate elapsed time: 3.5 minutes; live model calls were used and
+  their cost was not measured.
+- **Pros:** the result decision is shared with the runner; invalid state,
+  failed replacement cleanup, and changed-content retry are covered offline.
+- **Cons / next time:** no end-to-end repair or dry-run process was executed
+  under this work order; the complete model-dependent behavior remains assumed.
+  `npm test` and `npm run gate` were explicitly outside the allowed commands.
+- **Reversal condition:** replace the file scheme if a durable shared ledger is
+  required across machines, or byte changes without actionable evidence
+  repeatedly trigger repairs.
+
 ## 2026-11-05 — Conservative recovery for orphaned planning
 
 - **Goal / hypothesis:** close abandoned planning Runs without reclaiming fresh,
