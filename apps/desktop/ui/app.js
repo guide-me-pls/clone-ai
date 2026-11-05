@@ -31,7 +31,74 @@ const state = {
   settingsSection: "agents",
   locale: "zh-CN",
   strings: {},
+  attachments: [],
 };
+const MAX_ATTACHMENTS = 4;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+
+function renderAttachments() {
+  const host = $("attachment-preview");
+  if (!host) return;
+  host.hidden = state.attachments.length === 0;
+  host.innerHTML = state.attachments.map((item, index) => `<div class="attachment-chip" title="${escape(item.name)}"><img src="${item.previewUrl}" alt="${escape(item.name)}" /><button type="button" data-remove-attachment="${index}" aria-label="移除附件">×</button></div>`).join("");
+}
+
+function readDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("读取附件失败。"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function videoFrame(file) {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.src = url;
+  try {
+    await new Promise((resolve, reject) => {
+      video.onloadeddata = resolve;
+      video.onerror = () => reject(new Error("无法读取视频。"));
+      video.load();
+    });
+    video.currentTime = Math.min(1, Math.max(0.05, (video.duration || 1) / 3));
+    await new Promise((resolve, reject) => {
+      video.onseeked = resolve;
+      video.onerror = () => reject(new Error("无法提取视频画面。"));
+    });
+    const scale = Math.min(1, 1280 / Math.max(1, video.videoWidth));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    const previewUrl = canvas.toDataURL("image/jpeg", 0.86);
+    return { name: `${file.name}（视频帧）`, mimeType: "image/jpeg", data: previewUrl.split(",")[1], previewUrl };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function addAttachmentFiles(files) {
+  for (const file of files) {
+    if (state.attachments.length >= MAX_ATTACHMENTS) { announce(`最多添加 ${MAX_ATTACHMENTS} 个图片或视频。`, true); break; }
+    try {
+      if (file.type.startsWith("video/")) {
+        state.attachments.push(await videoFrame(file));
+        continue;
+      }
+      if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { announce("只支持 PNG、JPEG、GIF、WebP 图片或视频。", true); continue; }
+      if (file.size > MAX_ATTACHMENT_BYTES) { announce(`${file.name} 超过 5MB。`, true); continue; }
+      const previewUrl = await readDataUrl(file);
+      state.attachments.push({ name: file.name, mimeType: file.type, data: previewUrl.split(",")[1], previewUrl });
+    } catch (error) {
+      announce(error.message || "附件读取失败。", true);
+    }
+  }
+  renderAttachments();
+}
 const icon = (name) => name === "spark"
   ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 1.8 7.2L21 11l-7.2 1.8L12 20l-1.8-7.2L3 11l7.2-1.8L12 2Z"/></svg>`
   : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>`;
@@ -1072,11 +1139,15 @@ async function createSession(query) { const button = $("submit"); button.disable
   // conversation showed nothing, so the app looked frozen mid-thought.
   // 消息与实时回复卡片在请求发出之前就出现。模型调用可能耗时数秒，而此前输入框保留原文、
   // 会话区毫无变化，应用看起来就像在思考中卡住了。
+  const outgoingAttachments = [...state.attachments];
+  state.attachments = [];
+  renderAttachments();
   $("query").value = ""; resizeComposer();
   document.body.classList.remove("empty-conversation");
   const inner = $("conversation-inner");
   const welcome = inner.querySelector(".welcome"); if (welcome) inner.innerHTML = "";
-  inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${escape(query)}</div></div></div>`);
+  const attachmentMarkup = outgoingAttachments.map((item) => `<img src="${item.previewUrl}" alt="${escape(item.name)}" />`).join("");
+  inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${escape(query || "（已发送图片/视频）")}</div>${attachmentMarkup ? `<div class="message-attachments">${attachmentMarkup}</div>` : ""}</div></div>`);
   const card = document.createElement("div"); card.className = "message clone";
   card.innerHTML = `<div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="clone-text" data-streaming="1" hidden></div></div>`;
   inner.appendChild(card);
@@ -1134,7 +1205,7 @@ async function createSession(query) { const button = $("submit"); button.disable
     const response = await fetch("/api/main-agent/stream", {
       method: "POST",
       headers,
-      body: JSON.stringify({ text: query, turnId }),
+      body: JSON.stringify({ text: query, turnId, ...(outgoingAttachments.length === 0 ? {} : { attachments: outgoingAttachments.map(({ mimeType, data }) => ({ mimeType, data })) }) }),
       signal: controller.signal,
     });
     if (!response.ok || !response.body) { const detail = await response.json().catch(() => ({})); throw new Error(detail.error || `请求失败：${response.status}`); }
@@ -1334,8 +1405,11 @@ $("opportunity-strip").addEventListener("click", (event) => { const settings = e
 $("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
 $("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
-$("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0) { announce("请输入你想推进的事情。", true); return; } void createSession(query); });
+$("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0 && state.attachments.length === 0) { announce("请输入你想推进的事情，或添加图片/视频。", true); return; } void createSession(query); });
 $("query").addEventListener("input", resizeComposer);
+$("attach").addEventListener("click", () => $("attachments").click());
+$("attachments").addEventListener("change", async (event) => { const input = event.target; await addAttachmentFiles(input.files || []); input.value = ""; });
+$("attachment-preview").addEventListener("click", (event) => { const remove = event.target.closest("[data-remove-attachment]"); if (!remove) return; state.attachments.splice(Number(remove.dataset.removeAttachment), 1); renderAttachments(); });
 // macOS may deliver candidate-confirming Enter just after compositionend.
 // macOS 可能在 compositionend 之后才派发确认候选词的回车。
 const IME_ENTER_GRACE_MS = 100;

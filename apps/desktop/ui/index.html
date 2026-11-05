@@ -39,9 +39,12 @@
 
         <div class="composer-wrap">
           <form class="composer" id="request-form">
+            <button class="attach" id="attach" type="button" aria-label="添加图片或视频"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.4 11.6-8.9 8.9a6 6 0 0 1-8.5-8.5l8.9-8.9a4 4 0 0 1 5.7 5.7l-8.9 8.9a2 2 0 0 1-2.8-2.8l8.2-8.2"/></svg></button>
+            <input id="attachments" type="file" accept="image/png,image/jpeg,image/gif,image/webp,video/*" multiple hidden />
             <textarea id="query" rows="1" autocomplete="off" placeholder="告诉 clone-ai 你想推进什么…" aria-label="输入你的任务" data-i18n="query-placeholder" data-i18n-attr="placeholder"></textarea>
             <button class="send" id="submit" type="submit" aria-label="发送" data-i18n="send" data-i18n-attr="aria-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m5 12 14-7-5 14-2.7-5.3L5 12Z"/><path d="m11.3 13.7 3-3"/></svg></button>
           </form>
+          <div class="attachment-preview" id="attachment-preview" hidden></div>
           <div class="composer-hint" data-i18n="composer-hint">Enter 发送 · Shift + Enter 换行 · 计划中的外部动作需要确认</div>
         </div>
       </main>
