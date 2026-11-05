@@ -102,9 +102,11 @@ clone-ai "你好"
 
 The native loop writes the same `main_agent.turn_*`, `agent.tool_*` and
 `usage.recorded` events, uses the turn ledger as its transcript, and answers
-`search_history` from that ledger. It is non-streaming, keeps the last 12 turns
-without compaction, and refuses image attachments in this version. Unset
-`CLONE_AI_MAIN_RUNTIME` to return to Pi.
+`search_history` from that ledger. It streams tokens as they arrive and compacts
+a long transcript deterministically: the newest turns stay verbatim within a
+12,000-character budget, older turns become a bounded summary, and the full text
+stays in the turn ledger. Image attachments are still refused in this version.
+Unset `CLONE_AI_MAIN_RUNTIME` to return to Pi.
 
 ## 5. Where your data lives
 
