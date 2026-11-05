@@ -2042,6 +2042,65 @@ async function handleRequest(
   }
 
 
+  if (request.method === "GET" && url.pathname === "/api/approvals/pending") {
+    // What the phone bridge needs to ask about: runs paused on a decision, with
+    // enough context to be answerable from a notification.
+    // 手机桥需要询问的对象：停在决定上的 Run，附带足以在通知里作答的上下文。
+    const view = await loadRuntimeView(context.dataDirectory);
+    const pending = view.runs
+      .filter((run) => run.status === "waiting_approval" && run.activeStepId !== undefined)
+      .map((run) => ({
+        runId: run.id,
+        stepId: run.activeStepId!,
+        title: view.tasks[run.taskId]?.title ?? "未命名任务",
+        ...(run.planId === undefined ? {} : { planId: run.planId }),
+        updatedAt: run.updatedAt,
+      }));
+    sendJson(response, 200, { approvals: pending });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/approvals/requested") {
+    const body = await readJsonBody(request);
+    const runId = typeof body.runId === "string" ? body.runId : "";
+    const stepId = typeof body.stepId === "string" ? body.stepId : "";
+    if (runId.length === 0 || stepId.length === 0) {
+      sendJson(response, 400, { error: "runId and stepId are required." });
+      return;
+    }
+    try {
+      // Read the journal rather than the daemon's in-memory projection: the run
+      // may have been created by another process a moment ago.
+      // 读 Journal 而不是守护进程的内存投影：这个 Run 可能刚刚由另一个进程创建。
+      const view = await loadRuntimeView(context.dataDirectory);
+      const run = view.runs.find((candidate) => candidate.id === runId);
+      if (run === undefined) {
+        sendJson(response, 404, { error: "Unknown run." });
+        return;
+      }
+      if (run.status !== "waiting_approval") {
+        sendJson(response, 409, { error: "The run is not waiting for approval." });
+        return;
+      }
+      await context.journal.append({
+        type: "approval.requested",
+        taskId: run.taskId,
+        runId,
+        payload: {
+          stepId,
+          channel: "whatsapp",
+          ...(typeof body.codeId === "string" ? { codeId: body.codeId } : {}),
+          ...(typeof body.expiresAt === "string" ? { expiresAt: body.expiresAt } : {}),
+          requestedAt: new Date().toISOString(),
+        },
+      });
+      sendJson(response, 200, { recorded: true });
+    } catch (error: unknown) {
+      sendJson(response, 404, { error: error instanceof Error ? error.message : "Unknown run." });
+    }
+    return;
+  }
+
   const approvalMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/approve$/);
   if (request.method === "POST" && approvalMatch?.[1] !== undefined) {
     try {
@@ -2783,6 +2842,7 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
     "audit.labeled": "人工判定",
     "authority.changed": "修改权限",
     "recommendation.applied": "应用评审改动",
+    "approval.requested": "请求审批",
   };
   return { label: labels[event.type] ?? event.type, detail: detailFor(event.type, payload), occurredAt: event.occurredAt };
 }
