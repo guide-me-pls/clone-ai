@@ -6,6 +6,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Headless server deployment
+
+Clone AI can now run without a Mac on a small Linux host. `npm run server` starts the same Runtime and UI in explicit server mode with a stable bearer token and a proxy-only secret; the `Dockerfile` and `compose.server.yml` pair it with Caddy, HTTPS, owner authentication, persistent data/workspace volumes, and a public `/webhook` route for WhatsApp. The web UI uses a custom token header so Caddy Basic Auth can remain in the standard `Authorization` header. Server mode refuses direct app-port access that does not come through the trusted proxy. A 1 vCPU / 2 GB host is documented for remote models, scheduling, memory, audit, and WhatsApp only; local LLM execution and child-agent CLI installation are explicitly out of scope for the base image.
+
+### 无界面服务器部署
+
+Clone AI 现在不依赖 Mac，也可以运行在小型 Linux 服务器上。`npm run server` 以显式服务器模式启动同一套 Runtime 和 UI，使用稳定 Bearer Token 和仅由反向代理注入的密钥；`Dockerfile` 与 `compose.server.yml` 组合 Caddy、HTTPS、所有者认证、持久化数据/Workspace 卷以及 WhatsApp 的公开 `/webhook` 路由。Web UI 改用自定义 Token Header，因此 Caddy Basic Auth 可以继续占用标准 `Authorization` 头。服务器模式会拒绝不经过可信代理的 App 端口直连。文档明确 1 核 2G 只用于远程模型、调度、记忆、审计和 WhatsApp；基础镜像不承担本地大模型和子 Agent CLI 安装。
+
 ### WhatsApp phone bridge
 
 The owner can now text Clone AI from WhatsApp without SMS or a direct inbound port on the Mac. A separate loopback bridge verifies Meta's raw webhook signature, enforces an E.164 allowlist, stores messages in SQLite before returning `200`, deduplicates Meta retries by message id, and forwards visible replies through the Cloud API. Long replies are split below the 4096-character limit. If the desktop runtime is closed or busy, the message stays queued with backoff and the owner is told it was not executed; the same turn id prevents a completed request from running twice. `npm run mobile:install` creates an optional per-user LaunchAgent with its secrets in a `0600` env file. Apple provides no supported iMessage bot API, so WhatsApp is the implemented phone channel; Meta's current message pricing still applies.

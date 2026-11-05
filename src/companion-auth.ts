@@ -104,10 +104,11 @@ export function isLoopbackHostname(hostname: string | undefined): boolean {
   return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
 }
 
-export function normalizeCompanionHost(host: string): string {
+export function normalizeCompanionHost(host: string, allowServerBind = false): string {
   const normalized = normalizeHostname(host.trim());
   if (normalized === "localhost") return "127.0.0.1";
   if (normalized === "127.0.0.1" || normalized === "::1") return normalized;
+  if (allowServerBind && (normalized === "0.0.0.0" || normalized === "::")) return normalized;
   throw new Error("The companion daemon must bind to a literal loopback address.");
 }
 
@@ -169,13 +170,17 @@ export function authorizeCompanionRequest(input: {
   authorization: string | undefined;
   token: string;
   listenPort: number;
+  /** Explicit server mode skips loopback checks; the reverse proxy and token gate are still required. 服务器模式跳过回环检查，但仍必须由反向代理和令牌保护。 */
+  allowRemoteHost?: boolean;
 }): { ok: true } | { ok: false; status: 401 | 403; error: string } {
-  const hostname = loopbackHostname(input.hostHeader);
-  if (!isLoopbackHostname(hostname)) {
-    return { ok: false, status: 403, error: "Companion APIs are loopback-only." };
-  }
-  if (!originIsLoopback(input.originHeader, input.listenPort)) {
-    return { ok: false, status: 403, error: "Companion APIs reject a non-loopback Origin." };
+  if (input.allowRemoteHost !== true) {
+    const hostname = loopbackHostname(input.hostHeader);
+    if (!isLoopbackHostname(hostname)) {
+      return { ok: false, status: 403, error: "Companion APIs are loopback-only." };
+    }
+    if (!originIsLoopback(input.originHeader, input.listenPort)) {
+      return { ok: false, status: 403, error: "Companion APIs reject a non-loopback Origin." };
+    }
   }
   if (isUnauthenticatedCompanionPath(input.method, input.pathname)) return { ok: true };
   if (!tokensMatch(input.token, readBearerToken(input.authorization))) {

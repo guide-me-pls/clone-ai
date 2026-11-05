@@ -13,6 +13,7 @@
     "desktop:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-desktop.ps1",
     "desktop:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1",
     "main": "node --experimental-strip-types src/main-agent/clone-main.ts",
+    "server": "node --experimental-strip-types src/server-main.ts",
     "mobile:whatsapp": "node --experimental-strip-types src/mobile/whatsapp-main.ts",
     "mobile:install": "node scripts/install-whatsapp-bridge.mjs",
     "bench": "node --experimental-strip-types benchmark/run.ts",
