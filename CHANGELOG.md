@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Benchmark runs the native provider
+
+`npm run bench -- --provider native` runs the same fixed task set in-process without `--unsafe-host`, and the report records exact usage, verification and failure reason. The verifier now receives the benchmark workspace, fixing relative artifact checks that made even `summarize` fail. First comparison on 2026-11-05: native 4/5 and Claude 4/5 on the four solvable tasks; both miss the missing-input expectation for opposite reasons — native invents the artifact, Claude fails cleanly at verification.
+
+`npm run bench -- --provider native` 现在不用 CLI、也不需要 `--unsafe-host`，跑同一组固定任务；报告记录精确用量、验证结果与失败原因。验证器现在会拿到基准工作区，修复了此前让 summarize 都失败的相对产物检查。2026-11-05 的首次对比：四个可解任务上原生 4/5、Claude 4/5；missing-input 两边都不符合预期，原因相反——原生伪造产物，Claude 在验证阶段干净失败。
+
 ### Native worker is a first-class provider with exact usage
 
 `native` is now registered in the provider catalog, so the owner can select it per agent like any CLI: the adapter id is the configured agent id, role capabilities drive routing, and external roles are refused because there is no governed action connector. Its model client reports exact token usage per call (both OpenAI and Anthropic-style usage blocks), the Kernel journals `usage.recorded` with runId and stepId, and the audit shows the exact numbers next to the gateway's time-window estimate. It still requires `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`; defaults are unchanged.

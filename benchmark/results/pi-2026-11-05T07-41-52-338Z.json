@@ -1,0 +1,26 @@
+{
+  "provider": "pi",
+  "ranAt": "2026-11-05T07:41:52.338Z",
+  "records": [
+    {
+      "taskId": "summarize",
+      "title": "Read-only summary",
+      "passed": false,
+      "expectedFailure": false,
+      "status": "failed",
+      "durationMs": 180042,
+      "artifacts": [
+        {
+          "path": ".clone/workspace-execution.sqlite3",
+          "bytes": 0
+        },
+        {
+          "path": "README.md",
+          "bytes": 236
+        }
+      ],
+      "failureCategory": "timeout",
+      "failureReason": "Agent execution failed: timeout: exceeded the WorkOrder duration budget. "
+    }
+  ]
+}
