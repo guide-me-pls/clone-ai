@@ -23,6 +23,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 CLI, `npm run main`, the desktop/server companion, and WhatsApp now write the same two journal events per turn — `main_agent.turn_started` and `main_agent.turn_completed` — plus `agent.tool_started` / `agent.tool_completed` for every Main Agent tool call. Each turn carries the input and reply (PII-redacted and capped), model, provider, reasoning effort, token usage, prompt material hash, spawned run ids, and tool calls with redacted argument summaries. The audit page gains a **Main Agent turns** tab, `clone-ai audit turns` prints the same, and `GET /api/audit/turns` serves it. The existing `main-agent-turns.jsonl` ledger is written by the same module, so the conversation view and the journal cannot disagree.
 
 CLI、`npm run main`、桌面/服务器 companion 与 WhatsApp 现在为每个回合写同样两条 Journal 事件——`main_agent.turn_started` 与 `main_agent.turn_completed`——并为每次主 Agent 工具调用写 `agent.tool_started` / `agent.tool_completed`。每个回合携带输入与回复（PII 脱敏并截断）、模型、Provider、推理强度、token 用量、提示词材料哈希、产生的 Run id，以及带脱敏参数摘要的工具调用。审计页新增 **主 Agent 回合** 标签页，`clone-ai audit turns` 打印同样的内容，`GET /api/audit/turns` 提供数据。既有的 `main-agent-turns.jsonl` 台账由同一模块写入，因此对话视图与 Journal 不会互相矛盾。
+### Conservative recovery for orphaned planning
+
+An unplanned Run left in planning for more than 15 minutes is marked failed
+only when it has no live claim. A conditional fenced write protects concurrent
+plans and cancellations; stores without that capability leave the Run alone.
+
+没有计划的 Run 若在规划阶段超过 15 分钟未更新，只有在没有存活领取时才会被标记为失败。
+带条件的围栏写入保护并发生成的计划和取消操作；不支持该能力的存储不会处理这类 Run。
 
 ### An offline regression gate
 
