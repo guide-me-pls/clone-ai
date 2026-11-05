@@ -18,6 +18,14 @@ export interface RuntimeProjection {
   approvals: Record<string, ApprovalGrant>;
   evidenceByRun: Record<string, Evidence[]>;
   subagents: Record<string, SubagentRun>;
+  /**
+   * The last thing each step reported, so an interface can say "step 2 of 3,
+   * reading files" instead of showing `running` for ten minutes. The journal
+   * already carried progress events; nothing projected them per step.
+   * 每个步骤最后报告的内容，使界面能说"第 2 步，共 3 步，正在读取文件"，而不是十分钟都显示 `running`。
+   * Journal 里本来就有进度事件；此前没有任何东西把它们按步骤投影出来。
+   */
+  stepActivity: Record<string, { stepId: string; message: string; at: string }>;
   subagentVerificationByKey: Record<string, SubagentVerificationResult>;
   verificationByRun: Record<string, VerificationResult>;
 }
@@ -49,6 +57,7 @@ export function emptyProjection(): RuntimeProjection {
     approvals: {},
     evidenceByRun: {},
     subagents: {},
+    stepActivity: {},
     subagentVerificationByKey: {},
     verificationByRun: {},
   };
@@ -134,9 +143,31 @@ export function reduceEvent(state: RuntimeProjection, event: JournalEvent): Runt
         updatedAt: event.occurredAt,
       }));
     }
+    case "execution.progress":
     case "subagent.progress": {
-      const payload = event.payload as { workOrderId: string };
-      return updateSubagent(state, event.runId, payload.workOrderId, (subagent) => ({
+      const payload = event.payload as { stepId?: unknown; message?: unknown; workOrderId?: unknown };
+      if (event.runId === undefined || typeof payload.stepId !== "string" || typeof payload.message !== "string") return state;
+      const key = payload.workOrderId === undefined ? `${event.runId}:${payload.stepId}` : `${event.runId}:${payload.stepId}:${String(payload.workOrderId)}`;
+      return {
+        ...state,
+        stepActivity: {
+          ...state.stepActivity,
+          [key]: { stepId: payload.stepId, message: payload.message, at: event.occurredAt },
+        },
+      };
+    }
+    case "subagent.progress": {
+      const payload = event.payload as { workOrderId: string; stepId?: unknown; message?: unknown };
+      const withActivity = typeof payload.stepId === "string" && typeof payload.message === "string" && event.runId !== undefined
+        ? {
+          ...state,
+          stepActivity: {
+            ...state.stepActivity,
+            [`${event.runId}:${payload.stepId}:${payload.workOrderId}`]: { stepId: payload.stepId, message: payload.message, at: event.occurredAt },
+          },
+        }
+        : state;
+      return updateSubagent(withActivity, event.runId, payload.workOrderId, (subagent) => ({
         ...subagent,
         updatedAt: event.occurredAt,
       }));
