@@ -8,9 +8,9 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ### Native Main Agent streams and compacts
 
-The flag-gated native Main Agent now streams SSE tokens to the interface, assembles streamed tool-call fragments, parses the final usage chunk, and compacts long transcripts deterministically: the newest turns stay verbatim within `historyChars` (12,000), older turns become a bounded summary, and the full text remains in the turn ledger for `search_history`. The Pi-versus-native comparison still passes 3/3 on both after the change.
+The flag-gated native Main Agent now streams SSE tokens to the interface, assembles streamed tool-call fragments, parses the final usage chunk, and compacts long transcripts deterministically: the newest turns stay verbatim within `historyChars` (12,000), older turns become a bounded summary, and the full text remains in the turn ledger for `search_history`. The Pi-versus-native comparison still passes 3/3 on both after the change. A live long-context validation (24 seeded turns, 4,000-char budget) confirmed the endpoint accepts the summary and a fact from the oldest turn survives it.
 
-开关后的原生主 Agent 现在会向界面流式输出 SSE token、组装分片的工具调用、解析最后的 usage 块，并对长对话做确定性压缩：最新轮次在 `historyChars`（12,000）内保留原文，较早轮次变成有界摘要，全文仍留在回合台账中供 `search_history` 检索。改动后 Pi 与原生对比两边仍为 3/3。
+开关后的原生主 Agent 现在会向界面流式输出 SSE token、组装分片的工具调用、解析最后的 usage 块，并对长对话做确定性压缩：最新轮次在 `historyChars`（12,000）内保留原文，较早轮次变成有界摘要，全文仍留在回合台账中供 `search_history` 检索。改动后 Pi 与原生对比两边仍为 3/3。一次实机长对话验证（24 条种子轮次、4,000 字符预算）确认端点接受摘要，且最老一轮中的事实能够保留。
 
 ### Main Agent comparison benchmark
 
