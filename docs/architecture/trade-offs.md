@@ -19,6 +19,27 @@ made fresh audit and IME fixes invisible.
 macOS build toolchain. If development moves to a live-reload runtime, remove
 the bundle rebuild from this path.
 
+## 2026-11-05 — Native worker is the default for eligible roles when configured
+
+**Decision.** When `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are
+set, the default agent catalog uses `providerId: "native"` for direct, research,
+draft and review. `external` keeps the CLI default because the native worker has
+no governed action connector. Without the endpoint, the CLI defaults remain. A
+provider id the owner has saved in settings always wins over the default.
+
+**Evidence.** The native worker passed the 5/5 reliability benchmark (including
+the expected `no_artifact` failure), enforces scopes at each tool call and
+reports exact usage. The default catalog is used only when no settings file
+exists or for agents the owner has not changed; saved choices are preserved.
+
+**What it costs.** Default agents now depend on the native endpoint being up;
+the native worker has file tools only (no network or external actions); an owner
+who relied on the implicit Claude/Codex/Pi default for these roles will see a
+different worker unless they save a choice.
+
+**Reversal condition.** If the native worker regresses on the benchmark, or a
+role needs a tool it does not have, restore the CLI default for that role.
+
 ## 2026-11-05 — Native Main Agent is the default when configured
 
 **Decision.** With `CLONE_AI_MAIN_RUNTIME` unset, the Main Agent uses the native

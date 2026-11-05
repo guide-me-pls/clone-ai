@@ -85,7 +85,11 @@ workers. Clone AI needs a headless CLI it can run with a prompt and a workspace.
 
 Clone AI also ships an in-process `native` execution provider: select `native`
 for an agent and set `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`.
-It needs no CLI and checks every tool call against the step's scopes.
+It needs no CLI and checks every tool call against the step's scopes. With those
+two variables set, the default agents for `direct`, `research`, `draft` and
+`review` already use it; `external` stays on the CLI path because the native
+worker has no governed action connector. A provider you save in settings always
+wins over the default.
 
 ### Main Agent runtime
 
