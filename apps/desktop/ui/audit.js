@@ -42,6 +42,7 @@
       state.data = await api("/api/audit");
       state.invocations = (await api("/api/invocations").catch(() => ({ records: [] }))).records ?? [];
       state.review = (await api("/api/audit/review").catch(() => ({ review: null }))).review ?? null;
+      state.selfcheck = (await api("/api/audit/selfcheck").catch(() => ({ rounds: [] }))).rounds ?? [];
       if (state.selected && !state.data.records.some((r) => r.runId === state.selected)) state.selected = null;
     } catch (error) { state.error = error.message; }
     state.loading = false; render();
@@ -253,11 +254,28 @@
     </section>`;
   }
 
+  function selfCheckBlock() {
+    const rounds = state.selfcheck || [];
+    const latest = rounds[0];
+    const history = rounds.slice(1, 6).map((round) => `<li><time>${stamp(round.generatedAt)}</time>${round.verdict === "green" ? badge("绿色", "ok") : badge("红色", "bad")}<span>探针 ${round.probes.passed}/${round.probes.total} · gate ${round.gate.status === 0 ? "通过" : `exit ${round.gate.status}`}</span></li>`).join("");
+    const failures = latest === undefined ? "" : latest.probes.probes.filter((probe) => !probe.passed)
+      .map((probe) => `<li>${badge("红", "bad")}<div><b>${esc(probe.boundary)}</b><span>${esc(probe.attack)}</span><small>${esc(probe.detail ?? "")}</small></div></li>`).join("");
+    return `<section class="au-card au-selfcheck">
+      <div class="au-review-head"><div><h4>自检回路</h4><p class="au-note">对抗性探针攻击本机的边界，门禁重跑确定性行为；每一轮写入 Journal。探针变红时导出失败轨迹，交给夜间修复通道——回路自己不改代码。</p></div>
+        <div class="au-actions"><label class="au-check"><input type="checkbox" data-au-selfcheck-full ${state.selfcheckFull ? "checked" : ""}/> 含全量测试</label><button type="button" class="au-btn au-btn-primary" data-au-selfcheck-run ${state.selfcheckBusy ? "disabled" : ""}>${state.selfcheckBusy ? "运行中…" : "运行一轮"}</button></div></div>
+      ${latest === undefined ? `<p class="au-empty">还没有运行过自检。</p>` : `
+        <p class="au-review-summary">${latest.verdict === "green" ? badge("绿色", "ok") : badge("红色", "bad")} · ${latest.probes.passed}/${latest.probes.total} 个探针通过 · gate ${latest.gate.status === 0 ? "通过" : `失败（exit ${latest.gate.status}）`}${latest.tests === undefined ? "" : ` · 全量测试 ${latest.tests.status === 0 ? "通过" : `失败（exit ${latest.tests.status}）`}`}${latest.traceExport ? ` · 已导出 ${latest.traceExport.written.length} 条轨迹` : ""}</p>
+        ${failures ? `<ul class="au-findings">${failures}</ul>` : ""}
+        ${latest.gate.status !== 0 ? `<pre class="au-raw">${esc(latest.gate.tail)}</pre>` : ""}
+        ${history ? `<h5>历史</h5><ul class="au-history">${history}</ul>` : ""}`}
+    </section>`;
+  }
+
   function evaluation() {
     const e = state.data.summary.evaluation;
     const queue = records().filter((r) => !r.label && ["completed", "failed", "waiting_review"].includes(r.status)).slice(0, 12);
     const dis = records().filter((r) => r.label && ["completed", "failed"].includes(r.status) && (r.label.verdict === "pass") !== (r.status === "completed"));
-    return `${reviewBlock()}<div class="au-stats">
+    return `${selfCheckBlock()}${reviewBlock()}<div class="au-stats">
         ${stat("已人工判定", e.labeled, "评估的真值样本")}
         ${stat("与系统一致率", pct(e.agreement), "系统判定 vs 你的判定", e.agreement !== null && e.agreement < 0.8 ? "warn" : "")}
         ${stat("误判通过", e.falsePass, "系统说完成，你判不合格——最危险", e.falsePass ? "bad" : "")}
@@ -362,6 +380,16 @@
     if ((el = pick("[data-au-quick]"))) { await label(el.dataset.auRun, el.dataset.auQuick, ""); return; }
     if ((el = pick("[data-au-label]"))) { await label(el.dataset.auRun, el.dataset.auLabel, root().querySelector("[data-au-note]")?.value ?? ""); return; }
     if ((el = pick("[data-au-jump]"))) { state.view = "runs"; state.status = "all"; state.selected = el.dataset.auJump; render(); return; }
+    if (pick("[data-au-selfcheck-run]")) {
+      state.selfcheckBusy = true; render();
+      try {
+        const result = await api("/api/audit/selfcheck", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fullTests: state.selfcheckFull }) });
+        state.selfcheck = [result.round, ...(state.selfcheck || [])].slice(0, 10);
+        announce(result.round.verdict === "green" ? "自检通过。" : "自检发现红色探针，已导出轨迹。", result.round.verdict !== "green");
+      } catch (error) { announce(error.message, true); }
+      state.selfcheckBusy = false; render();
+      return;
+    }
     if (pick("[data-au-review-run]")) {
       state.reviewBusy = true; state.reviewError = null; render();
       try {
@@ -417,6 +445,7 @@
     const t = event.target;
     if (t instanceof HTMLSelectElement && t.matches("[data-au-provider]")) { state.provider = t.value; render(); }
     if (t instanceof HTMLInputElement && t.matches("[data-au-deleted]")) { state.showDeleted = t.checked; render(); }
+    if (t instanceof HTMLInputElement && t.matches("[data-au-selfcheck-full]")) { state.selfcheckFull = t.checked; }
   });
 
   // Load whenever the audit section opens. 每次打开审计分区时加载。

@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The agent attacks its own boundaries and records every round
+
+`clone-ai selfcheck` runs 15 deterministic adversarial probes (untrusted WhatsApp wrapping, forwarded approval refusal, approval replay/expiry/re-issue, sender rate limit, protected paths, symlink escape, worker-env credentials, trace redaction, digest tampering, trace assembly), the deterministic gate, and optionally the full suite. Each round is journaled as `selfcheck.completed` and saved under `~/.clone/selfcheck/`; the evaluation tab shows the latest round, the red probes with the attack, the gate tail, and recent history. A red round exports its failures as traces; `--repair` hands them to the gated repair lane, which still produces a draft PR only.
+
+`clone-ai selfcheck` 运行 15 个确定性对抗探针（WhatsApp 非授信包裹、转发审批拒绝、审批重放/过期/重发、发送者限流、受保护路径、符号链接逃逸、Worker 环境凭据、轨迹脱敏、摘要篡改、轨迹组装）、确定性门禁，以及可选的完整测试。每一轮以 `selfcheck.completed` 写入 Journal 并保存在 `~/.clone/selfcheck/`；评估页显示最近一轮、失败探针及其攻击方式、门禁尾巴与历史。红色的一轮会导出失败轨迹；`--repair` 把它们交给带闸门的修复通道，仍然只产出草稿 PR。
+
 ### Self-check and push command
 
 `npm run selfcheck:push` refuses a dirty worktree, runs the full deterministic

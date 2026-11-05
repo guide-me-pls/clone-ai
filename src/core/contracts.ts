@@ -283,6 +283,9 @@ export type JournalEventType =
   // An approval code was sent to the owner's phone; the request itself is auditable.
   // 审批码已发送到所有者手机；请求本身可审计。
   | "approval.requested"
+  // One round of the agent's own adversarial suite and gate; recorded so the loop itself is auditable.
+  // Agent 自己的一轮对抗套件与门禁；记录下来，使回路本身可审计。
+  | "selfcheck.completed"
   | "execution.started"
   | "execution.failed"
   | "execution.progress"
