@@ -184,6 +184,11 @@ export class NativeAgentWorker implements RuntimeAdapter {
     // Worker 实际触碰的产物，作为证据上报。没有它，即使文件已落盘，验证器也会认为
     // 这次运行"什么都没做"。
     const produced = new Map<string, { kind: "artifact" | "observation"; summary: string; locator: string }>();
+    // Paths the task explicitly names. A failed read of one is a missing input,
+    // not a guess the model should work around.
+    // 任务明确点名的路径。读取它们失败意味着输入缺失，而不是模型应当绕过的猜测。
+    const requiredText = [input.workOrder?.objective ?? "", input.step.instructions, ...input.step.acceptanceCriteria].join("\n");
+    const missingInputs = new Set<string>();
     try {
       const result = await this.#config.createClient().run({
         instructions: buildInstructions(input, grants.dropped.map((item) => `${item.scope.domain}:${item.scope.resource} (${item.reason})`)),
@@ -223,12 +228,33 @@ export class NativeAgentWorker implements RuntimeAdapter {
                 });
               }
             }
+            if (outcome.isError === true && tool.risk === "read" && tool.pathOf !== undefined) {
+              const failedPath = tool.pathOf(call.input);
+              if (failedPath !== undefined && requiredText.includes(failedPath)) missingInputs.add(failedPath);
+            }
             return { output: outcome.output, isError: outcome.isError === true };
           } catch (error: unknown) {
             return { output: `Tool ${call.name} failed: ${error instanceof Error ? error.message : String(error)}`, isError: true };
           }
         },
       });
+      if (missingInputs.size > 0) {
+        const detail = `Required input missing: ${[...missingInputs].join(", ")}`;
+        const report: FailureReport = {
+          providerId: this.providerId,
+          agentId: this.id,
+          category: "no_artifact",
+          signature: "native-missing-input",
+          detail,
+        };
+        yield {
+          type: "failed",
+          message: detail,
+          report,
+          ...(result.usage === undefined ? {} : { usage: { ...result.usage, durationMs: Math.max(0, Date.now() - startedAt) } }),
+        };
+        return;
+      }
       if (lastText.length > 0) yield { type: "message_delta", text: lastText };
       for (const item of [...produced.values()].slice(0, 20)) {
         yield { type: "evidence", evidence: item };
@@ -260,6 +286,7 @@ export function buildInstructions(input: ExecutionAssignment, dropped: readonly 
     input.workOrder?.objective ?? input.step.instructions,
     "",
     "You may call only the tools provided. Any path outside the workspace or the granted scopes is refused.",
+    "If a file named in these instructions is missing or unreadable, stop and report it. Do not invent its contents.",
   ];
   if (dropped.length > 0) lines.push(`Scopes the Kernel refused: ${dropped.join("; ")}.`);
   const criteria = input.step.acceptanceCriteria;

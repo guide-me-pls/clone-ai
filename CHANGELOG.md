@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A missing named input fails the native worker
+
+When a read fails on a path named in the work order or step instructions, the native worker now ends the turn as `no_artifact` (`native-missing-input`) instead of accepting an invented artifact. The prompt says not to invent missing inputs, usage from failed runs is journaled, and the missing-input benchmark now behaves as expected (native set: 5/5).
+
+当读取 WorkOrder 或步骤指令点名的路径失败时，原生 Worker 现在以 `no_artifact`（`native-missing-input`）结束回合，而不是接受编造的产物。Prompt 要求不编造缺失输入，失败运行的用量也会写入 Journal，missing-input benchmark 现在按预期失败（原生套件 5/5）。
+
 ### Benchmark runs the native provider
 
 `npm run bench -- --provider native` runs the same fixed task set in-process without `--unsafe-host`, and the report records exact usage, verification and failure reason. The verifier now receives the benchmark workspace, fixing relative artifact checks that made even `summarize` fail. First comparison on 2026-11-05: native 4/5 and Claude 4/5 on the four solvable tasks; both miss the missing-input expectation for opposite reasons — native invents the artifact, Claude fails cleanly at verification.
