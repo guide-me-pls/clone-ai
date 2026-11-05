@@ -54,3 +54,50 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   PR/branch ceremony added two permission blocks and a conflict; the standing
   rule is now to merge to `main` directly and summarize the merge.
 - **Reversal condition:** see the two trade-off entries above.
+
+## 2026-11-04 — AI self-review with reversible configuration actions
+
+- **Goal / hypothesis:** turn the audit digest into a small, safe improvement
+  loop — findings plus configuration actions the owner can apply and undo —
+  without giving the model authority over code, prompts, or policy.
+- **Trade-off:** [self-review is configuration-only](../architecture/trade-offs.md#2026-11-04--self-review-may-change-configuration-never-the-rules).
+- **Change:** `src/audit/self-review.ts`, `src/audit/apply-review.ts`, the audit
+  tab's review surface, and the `recommendation.applied` journal event.
+- **Eval:** `test/self-review.test.ts` — 4 tests covering action validation,
+  facts-only degradation when the model is unavailable, and apply/revert for a
+  worker effort and for the Main Agent effort. Integration verification:
+  `npm test` 540 tests / 537 pass / 3 skipped, `npm run typecheck` pass.
+- **Execution chain:** implemented in the `dreamy-ritchie-b0f526` worktree. This
+  entry records the shipped state and the integration verification; the original
+  session's internal steps are not available here. No model calls were made
+  during integration.
+- **Pros:** the surface is deliberately narrow, and every application journals
+  the previous value first, so the owner can always undo and the journal can
+  answer who changed what and from which review.
+- **Cons / next time:** the review cannot fix a code or prompt defect, only tune
+  model and effort. The original chain was not captured while it ran — the gap
+  this log now closes.
+- **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — Failed traces, gated nightly repair, and the worker credential boundary
+
+- **Goal / hypothesis:** give the repair loop honest material — redacted failure
+  documents, including implicit failures — and a process that cannot merge or
+  touch the rules, while removing tool credentials from the worker environment.
+- **Trade-off:** [gated draft-PR lane](../architecture/trade-offs.md#2026-11-04--failed-traces-and-repair-run-only-in-a-gated-draft-pr-lane),
+  [worker credentials](../architecture/trade-offs.md#2026-11-05--workers-inherit-model-credentials-only-never-tool-credentials).
+- **Change:** `src/audit/failed-traces.ts`, `src/workers/worker-env.ts`,
+  `scripts/nightly-rsi.mjs`, the launchd example, and the `traces` CLI command.
+- **Eval:** four test files, 16 tests: failed traces (3), nightly gates (7),
+  self-review (4), worker env (2). Integration verification: `npm test` 540
+  tests / 537 pass / 3 skipped; `npm run typecheck` and `npm run gate` pass.
+- **Execution chain:** implemented in the `dreamy-ritchie-b0f526` worktree; this
+  entry records the shipped state and the integration verification. The nightly
+  job itself was not run end to end during integration — it needs a real failing
+  trace and a headless model — so that path is marked **assumed**.
+- **Pros:** each of the five gates maps to a known failure mode; traces are
+  redacted before a model can read them; credential refusal happens before spawn.
+- **Cons / next time:** the end-to-end repair run is not exercised in CI (cost
+  and a model dependency), and it produces draft PRs, a deliberate exception to
+  the direct-to-main rule for routine work. The original chain was not captured.
+- **Reversal condition:** see both trade-off entries.
