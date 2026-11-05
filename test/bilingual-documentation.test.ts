@@ -16,6 +16,7 @@ const documentPairs = [
   ["docs/usage/mobile-whatsapp.md", "docs/usage/mobile-whatsapp.zh-CN.md"],
   ["docs/usage/server-deployment.md", "docs/usage/server-deployment.zh-CN.md"],
   ["docs/architecture/agent-runtime-convergence.md", "docs/architecture/agent-runtime-convergence.zh-CN.md"],
+  ["docs/engineering/optimizations.md", "docs/engineering/optimizations.zh-CN.md"],
   ["benchmark/README.md", "benchmark/README.zh-CN.md"],
   ["apps/desktop/README.md", "apps/desktop/README.zh-CN.md"],
 ] as const;
