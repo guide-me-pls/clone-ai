@@ -761,6 +761,8 @@ export class LocalMainAgentRemote implements MainAgentRemote {
         headers: {
           authorization: `Bearer ${token}`,
           "content-type": "application/json",
+          "x-clone-caller": "whatsapp",
+          "x-clone-caller-session": turnId,
         },
         body: JSON.stringify({ text, turnId }),
         signal: AbortSignal.timeout(15 * 60_000),

@@ -6,6 +6,26 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-05 — Every Agent invocation is audited outside CLONE_HOME
+
+**Decision.** Every Main Agent invocation writes a shared append-only record
+under `~/.clone/audit/invocations.jsonl`, independent of the invocation's
+`CLONE_HOME`. The record carries caller, surface, visible request and reply,
+error, workspace, data directory, model, effort, session file, Run ids and
+duration. An explicit `CLONE_AI_AUDIT_HOME` can relocate it for controlled
+deployments and tests.
+
+**Evidence.** Self-fix runs used a temporary `CLONE_HOME`; their journals were
+correct but invisible to the desktop audit, which reads the owner's normal
+home. After this change, a real DeepSeek V4.1 Flash `high` turn launched with
+an isolated home appeared in the shared default ledger with caller `codex` and
+reply `OK` (invocation `7cb576ee`).
+
+**Cost and reversal condition.** This is a second storage location and the
+visible reply is sensitive data; it is PII/token-redacted, truncated, and
+excludes private reasoning. Replace it with an encrypted owner-scoped store if
+the plaintext JSONL no longer meets the threat model.
+
 ## 2026-11-05 — Require explicit intent for root-level file names
 
 **Decision.** Keep extracting ordinary paths with directory separators, but
@@ -19,8 +39,9 @@ requiring intent words for paths that already have directory separators.
 verifier interpreted `fs.rename`, `os.tmpdir`, `consumed-traces.json`, and
 `REPORT_DIR/consumed-traces.json` as required workspace files. Source
 inspection shows the previous extractor accepted dotted tokens without those
-distinctions. The proposed coverage is a hypothesis pending the targeted
-offline tests; no before-change eval was run under this work order.
+distinctions. The targeted offline regression tests pass after the change;
+broader coverage remains a hypothesis. No before-change eval was run under
+this work order.
 
 **Cost and reversal condition.** Real root-level deliverables without an intent
 word in the same sentence or assertion, or with an unlisted extension, will be

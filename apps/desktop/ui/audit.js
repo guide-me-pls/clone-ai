@@ -15,7 +15,12 @@
   };
   const STAGE = { none: "无", planning: "规划", policy: "策略", execution: "执行", verification: "验证", cancelled: "取消", unknown: "未记录" };
   const OUTCOME = { allowed: ["允许", "ok"], approval_required: ["需审批", "warn"], denied: ["拒绝", "bad"] };
-  const state = { data: null, view: "overview", status: "all", provider: "all", query: "", showDeleted: true, selected: null, loading: false, error: null, raw: false, traces: new Map(), review: null, reviewBusy: false, reviewError: null };
+  const state = {
+    data: null, view: "overview", status: "all", provider: "all", query: "", showDeleted: true,
+    selected: null, loading: false, error: null, raw: false, traces: new Map(),
+    review: null, reviewBusy: false, reviewError: null,
+    invocations: [], invocationSelected: null, invocationDetail: null,
+  };
 
   const root = () => document.getElementById("audit-root");
   const pct = (value) => (value === null || value === undefined ? "—" : `${Math.round(value * 100)}%`);
@@ -35,6 +40,7 @@
     state.loading = true; state.error = null; render();
     try {
       state.data = await api("/api/audit");
+      state.invocations = (await api("/api/invocations").catch(() => ({ records: [] }))).records ?? [];
       state.review = (await api("/api/audit/review").catch(() => ({ review: null }))).review ?? null;
       if (state.selected && !state.data.records.some((r) => r.runId === state.selected)) state.selected = null;
     } catch (error) { state.error = error.message; }
@@ -265,18 +271,43 @@
       </div>`;
   }
 
+  function invocationsView() {
+    const list = state.invocations;
+    const selected = list.find((record) => record.id === state.invocationSelected);
+    const detail = state.invocationDetail;
+    const rows = list.map((record) => `<button type="button" class="au-row${record.id === state.invocationSelected ? " is-selected" : ""}" data-au-invocation="${esc(record.id)}">
+      <span class="au-row-main"><b>${esc(record.caller?.kind ?? "unknown")} · ${esc(record.surface)}</b>
+      <small class="au-why">${esc((record.prompt ?? "").replace(/\s+/g, " ").slice(0, 160) || "(no prompt)")}</small></span>
+      <span class="au-row-meta">${badge(record.status === "completed" ? "已完成" : record.status === "failed" ? "失败" : "运行中", record.status === "completed" ? "ok" : record.status === "failed" ? "bad" : "info")}<small>${stamp(record.startedAt)} · ${ms(record.durationMs)}</small></span>
+    </button>`).join("");
+    const body = selected === undefined
+      ? `<aside class="au-detail"><p class="au-empty">选择左侧一次 Agent 调用，查看调用者、请求、回复、错误、模型和 Run。</p></aside>`
+      : `<aside class="au-detail">
+          <div class="au-detail-head"><div><small>${esc(selected.caller?.kind ?? "unknown")} · ${esc(selected.surface)}</small><h4>${esc(selected.prompt.slice(0, 120) || "Agent 调用")}</h4></div>${badge(selected.status === "completed" ? "完成" : selected.status === "failed" ? "失败" : "运行中", selected.status === "completed" ? "ok" : selected.status === "failed" ? "bad" : "info")}</div>
+          <div class="au-chips"><span>${stamp(selected.startedAt)}</span><span>${ms(selected.durationMs)}</span><span>${esc(selected.workspacePath)}</span>${selected.modelId ? `<span>${esc(selected.modelId)}${selected.effort ? ` · ${esc(selected.effort)}` : ""}</span>` : ""}</div>
+          <h5>请求</h5><pre class="au-pre">${esc(selected.prompt)}</pre>
+          ${detail === null ? `<p class="au-empty">正在读取调用详情…</p>` : detail === undefined ? `<p class="au-empty">无法读取调用详情。</p>` : `
+            ${detail.reply ? `<h5>回复</h5><pre class="au-pre">${esc(detail.reply)}</pre>` : ""}
+            ${detail.error ? `<div class="au-callout au-callout-bad"><b>错误</b><pre>${esc(detail.error)}</pre></div>` : ""}
+            ${detail.newRuns?.length ? `<h5>产生的 Run</h5><div class="au-chips">${detail.newRuns.map((run) => `<button type="button" class="au-btn" data-au-jump="${esc(run.id)}">${esc(run.id.slice(0, 8))} · ${esc(run.status)}</button>`).join("")}</div>` : ""}
+            <h5>运行位置</h5><p class="au-note"><code>${esc(detail.dataDirectory)}</code>${detail.sessionFile ? `<br/><code>${esc(detail.sessionFile)}</code>` : ""}</p>`}
+        </aside>`;
+    return `<p class="au-note">这是所有 Agent 调用 Clone AI 的共享账本。即使调用方使用临时数据目录，记录也会写到这里；它记录可见请求与回复，不记录模型私有推理。</p>
+      <div class="au-split"><div class="au-list" role="list">${rows || `<p class="au-empty">还没有 Agent 调用记录。下一次 CLI、桌面或 WhatsApp 调用会出现在这里。</p>`}</div>${body}</div>`;
+  }
+
   function render() {
     const host = root();
     if (!host) return;
     const keep = host.querySelector(".au-list")?.scrollTop ?? 0;
     const keepDetail = host.querySelector(".au-detail")?.scrollTop ?? 0;
-    const tabs = [["overview", "总览"], ["runs", "运行记录"], ["eval", "评估"]]
+    const tabs = [["overview", "总览"], ["runs", "运行记录"], ["invocations", "Agent 调用"], ["eval", "评估"]]
       .map(([v, l]) => `<button type="button" class="au-tab${state.view === v ? " is-on" : ""}" data-au-view="${v}">${l}</button>`).join("");
     let body = "";
     if (state.error) body = `<div class="au-callout au-callout-bad"><b>读取审计失败</b><pre>${esc(state.error)}</pre></div>`;
     else if (!state.data) body = `<p class="au-empty">${state.loading ? "正在读取…" : "尚未加载。"}</p>`;
-    else if (!state.data.records.length) body = `<p class="au-empty">还没有任何运行记录。发起一个任务后，这里会出现它的完整轨迹。</p>`;
-    else body = state.view === "overview" ? overview() : state.view === "runs" ? runs() : evaluation();
+    else if (!state.data.records.length && state.view !== "invocations") body = `<p class="au-empty">还没有任何运行记录。发起一个任务后，这里会出现它的完整轨迹。</p>`;
+    else body = state.view === "overview" ? overview() : state.view === "runs" ? runs() : state.view === "invocations" ? invocationsView() : evaluation();
     host.innerHTML = `<div class="au-head"><div><h3>审计与评估</h3><p>每个 Run 的轨迹都从 Journal 投影而来：为什么成功或失败、哪个工具、花了多久和多少钱，一目了然。</p></div>
         <div class="au-actions"><button type="button" class="au-btn" data-au-refresh>${state.loading ? "刷新中…" : "刷新"}</button><button type="button" class="au-btn" data-au-export>导出 JSONL</button></div></div>
       <div class="au-tabs" role="tablist">${tabs}</div>${body}`;
@@ -311,6 +342,18 @@
     const pick = (selector) => t.closest(selector);
     let el;
     if ((el = pick("[data-au-view]"))) { state.view = el.dataset.auView; render(); return; }
+    if ((el = pick("[data-au-invocation]"))) {
+      state.invocationSelected = el.dataset.auInvocation;
+      state.invocationDetail = null;
+      render();
+      try {
+        state.invocationDetail = (await api(`/api/invocations/${encodeURIComponent(state.invocationSelected)}`)).record;
+      } catch {
+        state.invocationDetail = undefined;
+      }
+      render();
+      return;
+    }
     if ((el = pick("[data-au-status]"))) { state.status = el.dataset.auStatus; render(); return; }
     if (pick("[data-au-refresh]")) { await load(); return; }
     if (pick("[data-au-export]")) { await exportJsonl(); return; }

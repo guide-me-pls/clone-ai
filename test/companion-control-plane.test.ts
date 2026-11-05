@@ -12,6 +12,7 @@ import { createRuntimeAssembly } from "../src/core/runtime-factory.ts";
 import { createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import { companionFetch } from "./helpers/companion-api.ts";
+import { beginInvocation } from "../src/audit/invocation-ledger.ts";
 
 async function companion(t: TestContext): Promise<{ url: string; token: string; dataDirectory: string }> {
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-control-"));
@@ -50,6 +51,32 @@ test("health is public; approve without a bearer is 401", async (t) => {
   const page = await fetch(`${url}/`);
   assert.equal(page.status, 200);
   assert.match(await page.text(), new RegExp(`CLONE_AI_TOKEN="${token}"`));
+});
+
+test("the audit API exposes shared Agent invocations and their visible output", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const handle = await beginInvocation({
+    prompt: "审计一次 Agent 调用",
+    surface: "cli",
+    workspacePath: dataDirectory,
+    dataDirectory,
+    auditHome: dataDirectory,
+    caller: { kind: "codex", sessionId: "thread-audit" },
+    environment: { HOME: dataDirectory },
+  });
+  handle.note({ modelId: "deepseek-v4.1", effort: "high" });
+  await handle.complete({ reply: "这是可见输出。", newRuns: [{ id: "run-visible", status: "completed" }] });
+
+  const listed = await companionFetch(url, token, "/api/invocations");
+  const body = await listed.json() as { records: Array<{ id: string; caller: { kind: string }; status: string; reply?: string }> };
+  assert.equal(body.records[0]?.id, handle.id);
+  assert.equal(body.records[0]?.caller.kind, "codex");
+  assert.equal(body.records[0]?.status, "completed");
+  assert.equal(body.records[0]?.reply, "这是可见输出。");
+
+  const detail = await companionFetch(url, token, `/api/invocations/${handle.id}`);
+  assert.equal(detail.status, 200);
+  assert.equal((await detail.json() as { record: { newRuns: unknown[] } }).record.newRuns.length, 1);
 });
 
 test("a non-loopback Origin is refused even with a valid bearer", async (t) => {

@@ -16,6 +16,7 @@ import { createMainAgentSession } from "../main-agent/session.ts";
 import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
+import { beginInvocation, type InvocationCaller, type InvocationSurface } from "../audit/invocation-ledger.ts";
 
 export interface MainAgentQueryResult {
   reply: string;
@@ -26,6 +27,14 @@ export interface MainAgentQueryResult {
 }
 
 export interface MainAgentQueryOptions {
+  /** Which surface asked for this turn; recorded in the shared invocation ledger. 本回合的调用界面；写入共享调用账本。 */
+  surface?: InvocationSurface;
+  /** Explicit caller identity, when the transport knows it. 传输层已知时的显式调用者身份。 */
+  caller?: Partial<Omit<InvocationCaller, "pid" | "ppid">>;
+  /** Workspace shown in the invocation ledger. 调用账本中展示的工作区。 */
+  workspacePath?: string;
+  /** Test seam for the shared ledger location. 共享账本位置的测试切口。 */
+  auditHome?: string;
   /** Images the owner attached to this turn. 所有者在本回合附带的图片。 */
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   /**
@@ -49,7 +58,17 @@ export async function runMainAgentQuery(
   text: string,
   options: MainAgentQueryOptions = {},
 ): Promise<MainAgentQueryResult> {
-  return withMainAgentLock(dataDirectory, async () => {
+  const audit = await beginInvocation({
+    prompt: text.length === 0 ? "(see attached image)" : text,
+    surface: options.surface ?? "desktop",
+    workspacePath: options.workspacePath ?? process.cwd(),
+    dataDirectory,
+    ...(options.caller === undefined ? {} : { caller: options.caller }),
+    ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
+    ...(options.auditHome === undefined ? {} : { auditHome: options.auditHome }),
+  });
+  try {
+    const result = await withMainAgentLock(dataDirectory, async () => {
     const before = new Set((await currentRuns(dataDirectory)).map((run) => run.id));
 
     const { session, prompt } = await createMainAgentSession({ dataDirectory, query: text });
@@ -62,6 +81,12 @@ export async function runMainAgentQuery(
       options.turnId === undefined ? {} : { turnId: options.turnId },
     );
     const sessionFile = session.sessionManager.getSessionFile();
+    audit.note({
+      ...(sessionFile === undefined ? {} : { sessionFile }),
+      ...(prompt.modelId === undefined ? {} : { modelId: prompt.modelId }),
+      ...(prompt.provider === undefined ? {} : { provider: prompt.provider }),
+      ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
+    });
     let conversationMemory: ConversationMemoryPipeline | undefined;
     try {
       const { createJournalStore } = await import("../core/sqlite-journal.ts");
@@ -142,7 +167,17 @@ export async function runMainAgentQuery(
       ...(reply.trim().length === 0 && lastError !== undefined ? { error: lastError } : {}),
       newRuns,
     };
-  });
+    });
+    if (result.error === undefined) {
+      await audit.complete(result);
+    } else {
+      await audit.fail(new Error(result.error));
+    }
+    return result;
+  } catch (error: unknown) {
+    await audit.fail(error);
+    throw error;
+  }
 }
 
 async function currentRuns(dataDirectory: string): Promise<Run[]> {
