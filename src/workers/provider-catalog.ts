@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { BlackBoxCliWorker, type BlackBoxProviderConfig } from "./black-box-cli-worker.ts";
 import { resolveExecutable } from "./executable-resolver.ts";
 import { EFFORT_LEVELS, effortChoices, isEffortLevel, type EffortLevel } from "./effort.ts";
+import { assertWorkerEnvName } from "./worker-env.ts";
 import { ProviderRegistry, type ProviderDefinition } from "./provider-registry.ts";
 import type { AgentRole } from "../config/worker-settings.ts";
 
@@ -110,6 +111,7 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
   }
   const env = record.env;
   if (env !== undefined && (!Array.isArray(env) || env.some((name) => typeof name !== "string" || !/^[A-Z_][A-Z0-9_]*\*?$/i.test(name)))) {
+  for (const name of Array.isArray(env) ? env : []) assertWorkerEnvName(name);
     throw new Error(`Provider "${id}" must declare "env" as an array of variable names.`);
   }
   const promptVia = record.promptVia;
