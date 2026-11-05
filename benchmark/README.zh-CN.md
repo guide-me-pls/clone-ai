@@ -18,6 +18,19 @@ npm run bench -- --unsafe-host --provider pi --tasks summarize
 每个任务只花几美分的真实模型调用，耗时约 20-60 秒。结果以 JSON 记录在
 `benchmark/results/<provider>-<时间戳>.json`，供升级前后对比。
 
+## 原生 Provider
+
+进程内 Worker 不需要 CLI，也能跑同一组任务：
+
+```bash
+CLONE_AI_NATIVE_MODEL=<model-id> CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url> \
+  npm run bench -- --provider native --tasks summarize
+```
+
+它不需要 `--unsafe-host`：每次工具调用都在运行前按步骤 Scope 校验。报告会记录精确的
+`usage`（tokens 与模型调用次数）、`verification` 与 `failureReason`；CLI Provider 通常
+只报告耗时与状态。
+
 ## 任务集（`benchmark/tasks.ts`）
 
 | id | 它证明什么 |

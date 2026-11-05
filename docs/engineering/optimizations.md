@@ -154,12 +154,64 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   `npm run typecheck` and `npm run gate` pass.
 - **Execution chain:** trade-off first; provider, client, worker, runtime, audit
   and UI in that order; tests after each layer; full suite and gate at the end.
-  A live native-versus-CLI benchmark was not run — no endpoint or credentials in
-  this session — so that comparison is **assumed** and is the next measurement.
+  A live native-versus-CLI benchmark was not run in that change; it ran later —
+  see the benchmark entry below.
 - **Pros:** the native worker is selectable and identifiable per agent; exact
   tokens are attributable to one step; a provider that omits usage is counted but
   not priced instead of looking free.
 - **Cons / next time:** no live endpoint test; the native worker still has only
   filesystem tools; the default agents still point at CLIs; selecting `native`
   without the two env vars fails at registry build with a clear message.
+- **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — Native vs Claude on the reliability task set
+
+- **Goal / hypothesis:** measure whether the in-process worker completes the
+  same fixed tasks as the Claude Code CLI, with exact usage, and find where they
+  differ.
+- **Trade-off:** [native provider](../architecture/trade-offs.md#2026-11-05--the-native-worker-becomes-a-provider-with-exact-usage-still-opt-in).
+- **Change:** `benchmark/run.ts` accepts `--provider native` (no
+  `--unsafe-host` needed), records verification, failure reason and exact usage,
+  and gives the verifier the benchmark workspace. The missing workspace was a
+  real harness bug: every relative artifact looked absent, so even `summarize`
+  failed on the first run (`native-2026-11-05T07-23-30-609Z.json` keeps that
+  evidence).
+- **Benchmark run — native:** command
+  `CLONE_AI_NATIVE_MODEL=360/moonshotai/kimi-k3.1-pro CLONE_AI_NATIVE_BASE_URL=http://127.0.0.1:3425 npm run bench -- --provider native --tasks summarize,two-step-chain,three-step-pipeline,code-tool,missing-input`;
+  provider/model: `native` via the local Magpie gateway, model
+  `360/moonshotai/kimi-k3.1-pro`; dataset: the five tasks in `benchmark/tasks.ts`;
+  parameters: native `maxRounds` 12, work-order budget 12 model calls / 20 tool
+  calls, per-task duration from `tasks.ts`; environment: macOS, Magpie at
+  `127.0.0.1:3425`, no API key; result file
+  `benchmark/results/native-2026-11-05T07-36-54-051Z.json`. **4/5**:
+  summarize 15.9s / 2,112 tokens; two-step-chain 55.1s / 5,022;
+  three-step-pipeline 131.1s / 10,973; code-tool 45.6s / 4,891;
+  missing-input 20.5s / 2,002 — **completed with an invented `out/summary.md`**,
+  so the expected failure did not behave. Total: 25,000 tokens.
+- **Benchmark run — Claude:** command
+  `npm run bench -- --unsafe-host --provider claude --tasks summarize,two-step-chain,three-step-pipeline,code-tool,missing-input`;
+  provider/model: `claude` with its configured default model; same dataset and
+  parameters; result file
+  `benchmark/results/claude-2026-11-05T07-48-06-889Z.json`. **4/5**:
+  summarize 15.7s; two-step-chain 30.6s; three-step-pipeline 82.2s;
+  code-tool 60.8s; missing-input 58.6s — **failed at verification** because
+  `out/summary.md` was absent, but the benchmark's expected-failure check
+  requires execution-stage `no_artifact`, so it counts as unexpected. The CLI
+  reports no token usage to the runner.
+- **Benchmark run — Pi:** command
+  `npm run bench -- --unsafe-host --provider pi --tasks summarize`;
+  result file `benchmark/results/pi-2026-11-05T07-41-52-338Z.json`; the simplest
+  task hit the 180s work-order timeout. A real reliability data point, not a
+  model comparison.
+- **What the numbers say:** on the four solvable tasks both workers pass. Native
+  is faster on code-tool (45.6s vs 60.8s) and slower on the two chained tasks
+  (55.1s vs 30.6s; 131.1s vs 82.2s). Native reports exact usage (~25k tokens
+  total); the CLIs report none to the runner. Neither meets the `missing-input`
+  expectation, for opposite reasons: native invents the artifact, Claude fails
+  cleanly at verification.
+- **Findings / next:** harden the native prompt so a missing required input stops
+  the turn instead of inventing content; decide whether a verification-stage
+  missing artifact should count as `no_artifact` in the benchmark (it is the
+  same event in substance). Until both are decided, treat the native worker as
+  equal on solvable tasks but weaker on missing-input honesty.
 - **Reversal condition:** see the trade-off entry.

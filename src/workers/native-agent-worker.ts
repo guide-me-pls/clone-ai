@@ -179,6 +179,11 @@ export class NativeAgentWorker implements RuntimeAdapter {
     let modelCalls = 0;
     let toolCalls = 0;
     const startedAt = Date.now();
+    // Artifacts the worker actually touched, reported as evidence. Without this
+    // the verifier sees a run that "did nothing", even when files landed.
+    // Worker 实际触碰的产物，作为证据上报。没有它，即使文件已落盘，验证器也会认为
+    // 这次运行"什么都没做"。
+    const produced = new Map<string, { kind: "artifact" | "observation"; summary: string; locator: string }>();
     try {
       const result = await this.#config.createClient().run({
         instructions: buildInstructions(input, grants.dropped.map((item) => `${item.scope.domain}:${item.scope.resource} (${item.reason})`)),
@@ -208,6 +213,16 @@ export class NativeAgentWorker implements RuntimeAdapter {
           // 工具失败要报告给模型而不是抛出：一次坏调用不该像崩溃进程那样终结整轮。
           try {
             const outcome = await tool.run(call, { workspace });
+            if (outcome.isError !== true && tool.pathOf !== undefined) {
+              const path = tool.pathOf(call.input);
+              if (path !== undefined && !produced.has(path)) {
+                produced.set(path, {
+                  kind: tool.risk === "write" ? "artifact" : "observation",
+                  summary: tool.risk === "write" ? `${tool.name} wrote ${path}` : `${tool.name} read ${path}`,
+                  locator: path,
+                });
+              }
+            }
             return { output: outcome.output, isError: outcome.isError === true };
           } catch (error: unknown) {
             return { output: `Tool ${call.name} failed: ${error instanceof Error ? error.message : String(error)}`, isError: true };
@@ -215,6 +230,9 @@ export class NativeAgentWorker implements RuntimeAdapter {
         },
       });
       if (lastText.length > 0) yield { type: "message_delta", text: lastText };
+      for (const item of [...produced.values()].slice(0, 20)) {
+        yield { type: "evidence", evidence: item };
+      }
       yield {
         type: "completed",
         summary: result.summary,
