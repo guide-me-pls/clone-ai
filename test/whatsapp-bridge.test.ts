@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -22,6 +22,11 @@ import {
   type WhatsAppCloudConfig,
   type WhatsAppTextSender,
 } from "../src/mobile/whatsapp-bridge.ts";
+import {
+  parseWhatsAppEnv,
+  WhatsAppBindingInputError,
+  WhatsAppSetupService,
+} from "../src/mobile/whatsapp-setup.ts";
 import { persistCompanionEndpoint } from "../src/companion-auth.ts";
 
 const secret = "test-app-secret";
@@ -346,4 +351,53 @@ test("a missing desktop runtime is a retryable state, not a completed turn", asy
     new LocalMainAgentRemote(directory).ask("你好", "whatsapp:wamid.offline"),
     MainAgentRetryableError,
   );
+});
+
+test("WhatsApp env parsing preserves values without exposing unrelated shell data", () => {
+  const parsed = parseWhatsAppEnv([
+    "# private",
+    "WHATSAPP_PHONE_NUMBER_ID=123",
+    "WHATSAPP_VERIFY_TOKEN='quoted-token'",
+    "INVALID-KEY=ignored",
+    "",
+  ].join("\n"));
+  assert.deepEqual(parsed, {
+    WHATSAPP_PHONE_NUMBER_ID: "123",
+    WHATSAPP_VERIFY_TOKEN: "quoted-token",
+  });
+});
+
+test("the binding UI can save secrets without ever reading them back", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-whatsapp-setup-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const service = new WhatsAppSetupService(directory);
+  const status = await service.saveBinding({
+    accessToken: "access-token",
+    phoneNumberId: "phone-id",
+    verifyToken: "verify-token",
+    appSecret: "app-secret",
+    allowedNumbers: "+86 138 0000 0000",
+  });
+  assert.equal(status.configured, true);
+  assert.equal(status.phoneNumberId, "phone-id");
+  assert.equal(status.verifyToken, "verify-token");
+  assert.deepEqual(status.allowedNumbers, ["+86 138 0000 0000"]);
+  const serialized = JSON.stringify(status);
+  assert.doesNotMatch(serialized, /access-token|app-secret/);
+  await service.stopBridge();
+  const env = await readFile(join(directory, "whatsapp.env"), "utf8");
+  assert.match(env, /WHATSAPP_ACCESS_TOKEN=access-token/);
+  assert.match(env, /WHATSAPP_APP_SECRET=app-secret/);
+  assert.equal((await stat(join(directory, "whatsapp.env"))).mode & 0o777, 0o600);
+});
+
+test("saving an incomplete binding is an input error, not a partial file", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-whatsapp-incomplete-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const service = new WhatsAppSetupService(directory);
+  await assert.rejects(
+    service.saveBinding({ allowedNumbers: "+8613800000000" }),
+    WhatsAppBindingInputError,
+  );
+  await assert.rejects(readFile(join(directory, "whatsapp.env"), "utf8"), /ENOENT/);
 });

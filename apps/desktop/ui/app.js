@@ -21,6 +21,9 @@ const state = {
   situation: null,
   config: null,
   connectors: [],
+  whatsapp: null,
+  whatsappLoading: false,
+  whatsappDirty: false,
   modelOptions: [],
   modelOptionsLoaded: false,
   modelOptionsLoading: false,
@@ -407,6 +410,222 @@ function renderSituation(situation, config) {
   renderModelOptions();
   renderMainAgentEffort();
   renderAgentPage();
+}
+
+/** Render the owner-facing phone binding state; secrets are deliberately never rendered. 渲染面向所有者的手机绑定状态；这里刻意不渲染任何秘密值。 */
+function renderWhatsApp(status) {
+  if (!status) return;
+  state.whatsapp = status;
+  const configured = status.configured === true;
+  const bridgeRunning = status.bridge?.running === true;
+  const tunnelRunning = status.tunnel?.running === true;
+  const tunnelUrl = status.tunnel?.webhookUrl || "";
+  const verified = Boolean(status.bridge?.webhookVerifiedAt);
+  const phone = status.phoneNumberId ? `Phone Number ID ${status.phoneNumberId}` : "还没有保存 Phone Number ID";
+  if ($("mobile-state")) $("mobile-state").textContent = status.ready ? "已连接" : configured ? (bridgeRunning ? "待验证" : "已停止") : "未绑定";
+  if ($("whatsapp-credential-state")) $("whatsapp-credential-state").textContent = configured ? "已保存" : "未配置";
+  if ($("whatsapp-tunnel-state")) $("whatsapp-tunnel-state").textContent = tunnelRunning ? "运行中" : "未启动";
+  if ($("whatsapp-ready-state")) $("whatsapp-ready-state").textContent = status.ready ? "已接通" : "等待配置";
+  const allowed = Array.isArray(status.allowedNumbers) ? status.allowedNumbers : [];
+  if (!state.whatsappDirty && $("whatsapp-allowed-numbers") && document.activeElement !== $("whatsapp-allowed-numbers")) {
+    $("whatsapp-allowed-numbers").value = allowed.join(", ");
+  }
+  if (!state.whatsappDirty && $("whatsapp-phone-number-id") && document.activeElement !== $("whatsapp-phone-number-id")) {
+    $("whatsapp-phone-number-id").value = status.phoneNumberId || "";
+  }
+  if (!state.whatsappDirty && $("whatsapp-verify-token") && document.activeElement !== $("whatsapp-verify-token")) {
+    $("whatsapp-verify-token").value = status.verifyToken || "";
+  }
+  if ($("whatsapp-webhook-url")) $("whatsapp-webhook-url").textContent = tunnelUrl || "还没有公网地址";
+  const install = $("whatsapp-install-cloudflared");
+  if (install) install.hidden = status.tunnel?.cloudflaredInstalled === true;
+  if ($("whatsapp-start-tunnel")) $("whatsapp-start-tunnel").disabled = !configured || status.tunnel?.cloudflaredInstalled !== true || tunnelRunning;
+  if ($("whatsapp-stop-tunnel")) $("whatsapp-stop-tunnel").disabled = !tunnelRunning;
+  if ($("whatsapp-copy-webhook")) $("whatsapp-copy-webhook").disabled = !tunnelUrl;
+  if ($("whatsapp-verify")) $("whatsapp-verify").disabled = !configured;
+  if ($("whatsapp-stop-bridge")) $("whatsapp-stop-bridge").disabled = !bridgeRunning;
+  if ($("whatsapp-tunnel-hint")) {
+    $("whatsapp-tunnel-hint").textContent = status.tunnel?.error
+      || (status.bridge?.stale
+        ? "检测到旧版本手机桥仍在运行；点击“保存并启动手机桥”会安全地替换它。"
+        : tunnelRunning ? "复制这个 HTTPS 地址 + /webhook 到 Meta；隧道地址通常会在重启后变化。" : status.tunnel?.cloudflaredInstalled ? "点击启动免费隧道，生成 Meta 可访问的地址。" : "还没有 cloudflared；可以在这里一键安装。");
+  }
+  if ($("whatsapp-verify-result")) $("whatsapp-verify-result").textContent = configured ? phone : "先填写四项凭据和一个手机号。";
+  const overview = $("whatsapp-overview");
+  if (overview) {
+    overview.innerHTML = `<div class="mobile-status-card ${configured ? "is-ready" : ""}"><b>${configured ? "本机已保存绑定" : "还没有绑定手机"}</b><span>${escape(phone)}</span><span>${bridgeRunning ? "手机桥在线" : "手机桥未启动"} · ${tunnelRunning ? "公网入口在线" : "公网入口未启动"}</span>${status.bridge?.error ? `<span class="mobile-status-error">${escape(status.bridge.error)}</span>` : ""}</div>`;
+  }
+  const checklist = $("whatsapp-checklist");
+  if (checklist) {
+    const rows = [
+      [configured, "填写 Cloud API 凭据和白名单号码"],
+      [bridgeRunning, "手机桥在本机运行"],
+      [tunnelRunning, "HTTPS Webhook 地址已生成"],
+      [verified, "Meta 已成功验证 Webhook"],
+      [Boolean(status.bridge?.lastMessageAt), status.bridge?.lastMessageAt ? `收到手机消息（${time(status.bridge.lastMessageAt)}）` : "从手机发一条 WhatsApp 做最终测试"],
+    ];
+    checklist.innerHTML = rows.map(([done, text]) => `<li class="${done ? "is-done" : ""}"><span>${done ? "✓" : "○"}</span>${escape(String(text))}</li>`).join("");
+  }
+}
+
+async function refreshWhatsApp() {
+  if (state.whatsappLoading) return;
+  state.whatsappLoading = true;
+  try {
+    const result = await api("/api/mobile/whatsapp");
+    renderWhatsApp(result.status);
+  } catch (error) {
+    announce(error.message, true);
+  } finally {
+    state.whatsappLoading = false;
+  }
+}
+
+async function saveWhatsAppBinding() {
+  const button = $("whatsapp-save");
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/mobile/whatsapp/binding", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        allowedNumbers: $("whatsapp-allowed-numbers").value,
+        phoneNumberId: $("whatsapp-phone-number-id").value,
+        accessToken: $("whatsapp-access-token").value,
+        appSecret: $("whatsapp-app-secret").value,
+        verifyToken: $("whatsapp-verify-token").value,
+      }),
+    });
+    $("whatsapp-access-token").value = "";
+    $("whatsapp-app-secret").value = "";
+    state.whatsappDirty = false;
+    renderWhatsApp(result.status);
+    announce("手机绑定已保存，手机桥已启动。");
+  } catch (error) {
+    announce(error.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function verifyWhatsAppBinding() {
+  const button = $("whatsapp-verify");
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/mobile/whatsapp/verify", { method: "POST" });
+    renderWhatsApp(result.status);
+    const name = result.profile?.verifiedName || "Meta 号码";
+    const phone = result.profile?.displayPhoneNumber || "";
+    $("whatsapp-verify-result").textContent = `${name}${phone ? ` · ${phone}` : ""} 已验证`;
+    announce("Meta 凭据验证通过。");
+  } catch (error) {
+    if ($("whatsapp-verify-result")) $("whatsapp-verify-result").textContent = error.message;
+    announce(error.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function startWhatsAppTunnel() {
+  const button = $("whatsapp-start-tunnel");
+  if (button) { button.disabled = true; button.textContent = "正在启动…"; }
+  try {
+    const result = await api("/api/mobile/whatsapp/tunnel/start", { method: "POST" });
+    renderWhatsApp(result.status);
+    announce("公网 Webhook 地址已生成。");
+  } catch (error) {
+    announce(error.message, true);
+    await refreshWhatsApp();
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "启动免费隧道"; }
+  }
+}
+
+async function installCloudflared() {
+  if (!(await confirmDialog("这会用 Homebrew 安装 cloudflared。安装不会触碰 WhatsApp 凭据。继续吗？", "安装"))) return;
+  const button = $("whatsapp-install-cloudflared");
+  if (button) { button.disabled = true; button.textContent = "正在安装…"; }
+  try {
+    const result = await api("/api/mobile/whatsapp/tunnel/install", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ acknowledgeInstall: true }),
+    });
+    renderWhatsApp(result.status);
+    announce(result.installed ? "cloudflared 已安装。" : "安装命令结束，但仍未找到 cloudflared；请查看安装输出。");
+  } catch (error) {
+    announce(error.message, true);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "安装 cloudflared"; }
+  }
+}
+
+async function stopWhatsAppTunnel() {
+  try {
+    const result = await api("/api/mobile/whatsapp/tunnel/stop", { method: "POST" });
+    renderWhatsApp(result.status);
+    announce("公网隧道已停止。");
+  } catch (error) {
+    announce(error.message, true);
+  }
+}
+
+async function stopWhatsAppBridge() {
+  const button = $("whatsapp-stop-bridge");
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/mobile/whatsapp/bridge/stop", { method: "POST" });
+    renderWhatsApp(result.status);
+    announce("手机桥已停止；保存的凭据仍然保留。");
+  } catch (error) {
+    announce(error.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function generateWhatsAppVerifyToken() {
+  const bytes = new Uint8Array(18);
+  crypto.getRandomValues(bytes);
+  const token = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  const input = $("whatsapp-verify-token");
+  if (input) {
+    input.value = token;
+    state.whatsappDirty = true;
+    input.focus();
+    input.select();
+  }
+}
+
+async function copyText(value, successMessage) {
+  if (!value) {
+    announce("还没有可复制的内容。", true);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+    announce(successMessage);
+  } catch {
+    announce("复制失败，请手动选中文本复制。", true);
+  }
+}
+
+function openMobileBinding() {
+  closeSchedules();
+  setSidebarOpen(false);
+  state.settingsSection = "mobile";
+  notifyDesktopNavigation("settings");
+  openSettings();
+  selectSettingsSection("mobile", true);
+  void refreshWhatsApp();
+}
+
+function openMetaDeveloperConsole() {
+  if (window.CloneNative?.openURL) {
+    window.CloneNative.openURL("https://developers.facebook.com/apps/");
+    return;
+  }
+  announce("当前窗口无法打开外部链接，请手动访问 developers.facebook.com/apps。", true);
 }
 
 function renderModelOptions() {
@@ -842,7 +1061,7 @@ function restoreDisclosureScrolls(id) {
 }
 function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", session === null); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
-async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (state.streaming) return; const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.composingNew && (!state.selectedId || !sessions.some((session) => session.id === state.selectedId))) state.selectedId = sessions.find((session) => session.id === MAIN_CONVERSATION_ID)?.id ?? sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
+async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (state.streaming) return; const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.composingNew && (!state.selectedId || !sessions.some((session) => session.id === state.selectedId))) state.selectedId = sessions.find((session) => session.id === MAIN_CONVERSATION_ID)?.id ?? sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
 async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
   state.streaming = true;
   // The message and a live reply card appear before the request is sent. A model
@@ -1016,7 +1235,7 @@ function focusComposerIfVisible() {
   }, 40);
 }
 function closeSchedules() { $("schedule-modal").setAttribute("aria-hidden", "true"); notifyDesktopNavigation("conversation"); focusComposerIfVisible(); }
-function selectSettingsSection(section) { state.settingsSection = section; document.querySelectorAll("[data-settings-section]").forEach((button) => button.setAttribute("aria-current", String(button.dataset.settingsSection === section))); document.querySelectorAll("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== section; }); notifyDesktopNavigation(section === "agents" ? "agents" : section === "memory" ? "memory" : "settings"); if (section === "agents" && !state.gatewayLoading) void refreshGateways(); }
+function selectSettingsSection(section, forceReset = false) { const changed = forceReset || state.settingsSection !== section; state.settingsSection = section; document.querySelectorAll("[data-settings-section]").forEach((button) => button.setAttribute("aria-current", String(button.dataset.settingsSection === section))); document.querySelectorAll("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== section; }); if (changed) { const content = document.querySelector(".settings-content"); if (content) content.scrollTop = 0; } notifyDesktopNavigation(section === "agents" ? "agents" : section === "memory" ? "memory" : "settings"); if (section === "agents" && !state.gatewayLoading) void refreshGateways(); }
 function openSettings() { selectSettingsSection(state.settingsSection); $("settings-modal").setAttribute("aria-hidden", "false"); }
 function closeSettings() { $("settings-modal").setAttribute("aria-hidden", "true"); notifyDesktopNavigation("conversation"); focusComposerIfVisible(); }
 async function createSchedule(query) { const button = $("schedule-create"); const kind = $("schedule-kind").value; const body = { query, kind, time: $("schedule-time").value }; if (kind === "weekly") body.weekdays = [...document.querySelectorAll('input[name="schedule-weekday"]:checked')].map((input) => Number(input.value)); if (kind === "monthly" || kind === "yearly") body.dayOfMonth = Number($("schedule-day").value); if (kind === "yearly") body.month = Number($("schedule-month").value); if (kind === "interval") body.intervalMinutes = Math.max(1, Math.floor(Number($("schedule-interval-value").value) || 0)) * Number($("schedule-interval-unit").value); button.disabled = true; try { await api("/api/schedules", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); $("schedule-query").value = ""; await refresh(); announce("定时任务已保存到本地运行时。"); } catch (error) { announce(error.message, true); } finally { button.disabled = false; } }
@@ -1068,12 +1287,24 @@ $("connector-add").addEventListener("click", () => void addConnector());
 $("connector-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-connector-remove]"); if (remove) void removeConnector(remove.dataset.connectorRemove); });
 $("connector-list").addEventListener("change", (event) => { const toggle = event.target.closest("[data-connector-toggle]"); if (toggle) void setConnectorEnabled(toggle.dataset.connectorToggle, toggle.checked); });
 $("schedule-open").addEventListener("click", openSchedules);
+$("mobile-open").addEventListener("click", openMobileBinding);
 $("schedule-close").addEventListener("click", closeSchedules);
 function setSidebarOpen(open) { document.body.classList.toggle("sidebar-open", open); }
 $("menu-open").addEventListener("click", () => setSidebarOpen(true));
 $("sidebar-backdrop").addEventListener("click", () => setSidebarOpen(false));
 $("settings-close").addEventListener("click", closeSettings);
 $("settings-modal").addEventListener("click", (event) => { const button = event.target.closest("[data-settings-section]"); if (button) selectSettingsSection(button.dataset.settingsSection); });
+$("whatsapp-binding-form").addEventListener("submit", (event) => { event.preventDefault(); void saveWhatsAppBinding(); });
+$("whatsapp-binding-form").addEventListener("input", () => { state.whatsappDirty = true; });
+$("whatsapp-verify").addEventListener("click", () => void verifyWhatsAppBinding());
+$("whatsapp-stop-bridge").addEventListener("click", () => void stopWhatsAppBridge());
+$("whatsapp-generate-token").addEventListener("click", generateWhatsAppVerifyToken);
+$("whatsapp-copy-token").addEventListener("click", () => void copyText($("whatsapp-verify-token").value, "Verify Token 已复制。"));
+$("whatsapp-start-tunnel").addEventListener("click", () => void startWhatsAppTunnel());
+$("whatsapp-stop-tunnel").addEventListener("click", () => void stopWhatsAppTunnel());
+$("whatsapp-install-cloudflared").addEventListener("click", () => void installCloudflared());
+$("whatsapp-copy-webhook").addEventListener("click", () => void copyText(state.whatsapp?.tunnel?.webhookUrl || "", "Webhook 地址已复制。"));
+$("whatsapp-open-meta").addEventListener("click", openMetaDeveloperConsole);
 $("schedule-form").addEventListener("submit", (event) => { event.preventDefault(); void createSchedule($("schedule-query").value.trim()); });
 $("schedule-kind").addEventListener("change", renderScheduleOptions);
 $("schedule-list").addEventListener("click", (event) => { const report = event.target.closest("[data-report-day]"); if (report) { void resolveReportDelivery(report.dataset.reportDay, report.dataset.resolution); return; } const occurrence = event.target.closest("[data-schedule-occurrence]"); if (occurrence) { void resolveScheduleOccurrence(occurrence.dataset.scheduleOccurrence, occurrence.dataset.resolution); return; } const button = event.target.closest("[data-schedule-toggle]"); if (button) void setScheduleEnabled(button.dataset.scheduleToggle, button.dataset.scheduleEnabled === "true"); });
@@ -1118,6 +1349,7 @@ window.closeSchedules = closeSchedules;
 window.closeSettings = closeSettings;
 window.openSchedules = openSchedules;
 window.openSettings = openSettings;
+window.openMobileBinding = openMobileBinding;
 window.selectSettingsSection = selectSettingsSection;
 window.setSidebarOpen = setSidebarOpen;
 window.cloneMarkdownForPreview = richText;

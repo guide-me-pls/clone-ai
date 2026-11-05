@@ -238,6 +238,8 @@ export interface WhatsAppBridgeOptions {
   sender: WhatsAppTextSender;
   mainAgent: MainAgentRemote;
   log?: (event: Record<string, unknown>) => void;
+  onWebhookVerified?: () => void;
+  onMessageAccepted?: (messageId: string) => void;
 }
 
 /**
@@ -258,6 +260,8 @@ export class WhatsAppBridge {
   readonly #sender: WhatsAppTextSender;
   readonly #mainAgent: MainAgentRemote;
   readonly #log: (event: Record<string, unknown>) => void;
+  readonly #onWebhookVerified: (() => void) | undefined;
+  readonly #onMessageAccepted: ((messageId: string) => void) | undefined;
   #running: Promise<void> | undefined;
   #kickRequested = false;
   #retryTimer: NodeJS.Timeout | undefined;
@@ -269,10 +273,14 @@ export class WhatsAppBridge {
     this.#sender = options.sender;
     this.#mainAgent = options.mainAgent;
     this.#log = options.log ?? (() => undefined);
+    this.#onWebhookVerified = options.onWebhookVerified;
+    this.#onMessageAccepted = options.onMessageAccepted;
   }
 
   verifyChallenge(searchParams: URLSearchParams): { status: number; body: string } {
-    return whatsAppChallengeResponse(searchParams, this.#config.verifyToken);
+    const result = whatsAppChallengeResponse(searchParams, this.#config.verifyToken);
+    if (result.status === 200) this.#onWebhookVerified?.();
+    return result;
   }
 
   receiveWebhook(rawBody: string, signatureHeader: string | undefined): { status: number; body: string } {
@@ -299,8 +307,12 @@ export class WhatsAppBridge {
         blocked += 1;
         continue;
       }
-      if (this.#store.insert(message)) accepted += 1;
-      else duplicate += 1;
+      if (this.#store.insert(message)) {
+        accepted += 1;
+        this.#onMessageAccepted?.(message.id);
+      } else {
+        duplicate += 1;
+      }
     }
     this.#log({ event: "whatsapp.webhook.accepted", accepted, duplicate, blocked, ignored: batch.ignored });
     if (accepted > 0) this.kick();
