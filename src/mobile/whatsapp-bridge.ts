@@ -23,6 +23,7 @@ export interface WhatsAppCloudConfig {
   appSecret: string;
   allowedNumbers: ReadonlySet<string>;
   graphVersion: string;
+  host: string;
   port: number;
   /** Per-sender messages allowed per minute; defaults to 20. 每个发送者每分钟允许的消息数，默认 20。 */
   maxMessagesPerMinute?: number;
@@ -68,6 +69,7 @@ export function readWhatsAppCloudConfig(env: NodeJS.ProcessEnv): {
       appSecret,
       allowedNumbers: allowedWhatsAppNumbers(numbers),
       graphVersion: env.WHATSAPP_GRAPH_VERSION?.trim() || "v23.0",
+      host: env.CLONE_AI_WHATSAPP_HOST?.trim() || "127.0.0.1",
       port: parsePort(env.CLONE_AI_WHATSAPP_PORT, 4318),
     },
   };
@@ -491,7 +493,7 @@ export async function startWhatsAppBridgeServer(input: {
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(input.config.port, "127.0.0.1", () => {
+    server.listen(input.config.port, input.config.host, () => {
       server.off("error", reject);
       resolve();
     });

@@ -3,11 +3,20 @@ import { randomUUID } from "node:crypto";
 import type { Evidence, JournalEvent, MemoryCandidate, NewJournalEvent, Run, Task } from "../core/contracts.ts";
 import type { JournalStore } from "../core/journal.ts";
 import { workspaceExecutionLock } from "../core/workspace-lock.ts";
+import { readForRun, readTypes } from "../core/journal-types.ts";
 
 export interface PendingMemoryJob {
   run: Run;
   task: Task;
   evidence: Evidence[];
+  /**
+   * How the run ended. A failed run is mined for lessons (what went wrong and
+   * how to avoid it) rather than for facts about a delivered result.
+   * Run 的结局。失败的 Run 被用来提炼教训（哪里出错、如何避免），而不是交付结果的事实。
+   */
+  outcome?: "completed" | "failed";
+  /** Replaces the built-in mining prompt, for workers with their own extraction rules. 替换内建提炼 Prompt，供有自己提炼规则的 Worker 使用。 */
+  promptOverride?: string;
 }
 
 export interface MemoryWorker {
@@ -34,12 +43,12 @@ export class MemoryPipeline {
     this.#lockPath = options.lockPath;
   }
 
-  async request(run: Run, task: Task, evidence: Evidence[]): Promise<void> {
-    await this.#journal.append(this.requestEvent(run, task, evidence));
-    this.enqueue(run, task, evidence);
+  async request(run: Run, task: Task, evidence: Evidence[], outcome: "completed" | "failed" = "completed"): Promise<void> {
+    await this.#journal.append(this.requestEvent(run, task, evidence, outcome));
+    this.enqueue(run, task, evidence, outcome);
   }
 
-  requestEvent(run: Run, task: Task, evidence: Evidence[]): NewJournalEvent {
+  requestEvent(run: Run, task: Task, evidence: Evidence[], outcome: "completed" | "failed" = "completed"): NewJournalEvent {
     return {
       type: "memory.candidate.requested",
       runId: run.id,
@@ -47,26 +56,58 @@ export class MemoryPipeline {
       payload: {
         taskObjective: task.objective,
         sourceEvidenceIds: evidence.map((item) => item.id),
+        outcome,
       },
     };
   }
 
-  enqueue(run: Run, task: Task, evidence: Evidence[]): void {
-    if (!this.#pending.some((job) => job.run.id === run.id)) this.#pending.push({ run, task, evidence });
+  /**
+   * Requests mining for a run that is already in the journal, e.g. one the owner
+   * later labeled a failure. Returns false when the run cannot be rebuilt or was
+   * already requested for this outcome.
+   * 为已在 Journal 中的 Run 请求提炼，例如所有者事后标为失败的 Run。Run 无法重建或该结局已请求过时返回 false。
+   */
+  async requestFromJournal(runId: string, outcome: "completed" | "failed"): Promise<boolean> {
+    // Only this run can answer whether it was already requested, so the read is
+    // scoped to it instead of the whole journal.
+    // 只有这个 Run 能回答"是否已被请求过"，因此读取范围限定在它上面。
+    const events = await readForRun(this.#journal, runId);
+    const already = events.some((event) => event.type === "memory.candidate.requested" && event.runId === runId
+      && ((event.payload as { outcome?: unknown } | null)?.outcome === "failed" ? "failed" : "completed") === outcome);
+    if (already) return false;
+    const taskId = events.find((event) => event.type === "run.created" && event.runId === runId)?.taskId;
+    if (taskId === undefined) return false;
+    // The task event is indexed by task, not by run, so the run-scoped read above
+    // cannot contain it. Fetch just the task marker rather than the whole journal.
+    // 任务事件按 Task 而非 Run 索引，因此上面按 Run 的读取不会包含它。只取那条任务标记，
+    // 而不是整本 Journal。
+    const task = (await readTypes(this.#journal, ["task.created"])).find((event) => event.taskId === taskId);
+    const job = rehydrateJob(task === undefined ? events : [...events, task], { runId, taskId, payload: { outcome } } as JournalEvent);
+    if (job === undefined) return false;
+    await this.request(job.run, job.task, job.evidence, outcome);
+    return true;
+  }
+
+  enqueue(run: Run, task: Task, evidence: Evidence[], outcome: "completed" | "failed" = "completed"): void {
+    if (!this.#pending.some((job) => job.run.id === run.id && (job.outcome ?? "completed") === outcome)) this.#pending.push({ run, task, evidence, outcome });
   }
 
   async rebuild(): Promise<void> {
-    const events = await this.#journal.list();
+    // Only mining markers matter here; reading them by type keeps a rebuild from
+    // walking the whole history.
+    // 这里只关心提炼标记；按类型读取使重建不必走完整段历史。
+    const events = await readTypes(this.#journal, ["memory.candidate.requested", "memory.candidate.extracted", "memory.candidate.proposed", "run.created", "task.created", "evidence.recorded"]);
     const processedRunIds = processedRuns(events);
 
     const requested = events.filter((event) => event.type === "memory.candidate.requested");
     for (const request of requested) {
-      if (request.runId === undefined || processedRunIds.has(request.runId)) {
+      const requestOutcome = (request.payload as { outcome?: unknown } | null)?.outcome === "failed" ? "failed" : "completed";
+      if (request.runId === undefined || processedRunIds.has(`${request.runId}:${requestOutcome}`)) {
         continue;
       }
       const job = rehydrateJob(events, request);
       if (job !== undefined) {
-        this.enqueue(job.run, job.task, job.evidence);
+        this.enqueue(job.run, job.task, job.evidence, job.outcome);
       }
     }
   }
@@ -74,14 +115,21 @@ export class MemoryPipeline {
   async processNext(runId?: string): Promise<MemoryCandidate[]> {
     const index = runId === undefined ? 0 : this.#pending.findIndex((job) => job.run.id === runId);
     const job = index < 0 ? undefined : this.#pending.splice(index, 1)[0];
-    if (job === undefined) {
-      return [];
-    }
+    return job === undefined ? [] : await this.processJob(job);
+  }
 
+  /**
+   * Runs one job built from the journal rather than the in-memory queue. Used
+   * by the conversation path, whose jobs accumulate in the journal and would
+   * otherwise never be drained after a restart.
+   * 处理一个从 Journal 构建、而非来自内存队列的任务。供对话路径使用：它的任务累积在
+   * Journal 中，否则重启后永远不会被处理。
+   */
+  async processJob(job: PendingMemoryJob): Promise<MemoryCandidate[]> {
     try {
       const process = async (): Promise<MemoryCandidate[]> => {
         await this.#journal.reload?.();
-        if (processedRuns(await this.#journal.list()).has(job.run.id)) return [];
+        if (processedRuns(await readForRun(this.#journal, job.run.id)).has(`${job.run.id}:${job.outcome ?? "completed"}`)) return [];
         const candidates = await this.#worker.extract(job);
         const evidence = new Set(job.evidence.map((item) => item.id));
         if (candidates.some((candidate) => candidate.runId !== job.run.id || candidate.sourceEvidenceIds.length === 0
@@ -93,13 +141,13 @@ export class MemoryPipeline {
           ...candidates.map((candidate): NewJournalEvent => ({
             type: "memory.candidate.proposed", runId: job.run.id, taskId: job.task.id, payload: candidate,
           })),
-          { type: "memory.candidate.extracted", runId: job.run.id, taskId: job.task.id, payload: { count: candidates.length } },
+          { type: "memory.candidate.extracted", runId: job.run.id, taskId: job.task.id, payload: { count: candidates.length, outcome: job.outcome ?? "completed" } },
         ]);
         return candidates;
       };
       return this.#lockPath === undefined ? await process() : await workspaceExecutionLock.run(this.#lockPath, process);
     } catch (error) {
-      this.enqueue(job.run, job.task, job.evidence);
+      this.enqueue(job.run, job.task, job.evidence, job.outcome);
       throw error;
     }
   }
@@ -109,16 +157,34 @@ export class MemoryPipeline {
   }
 }
 
+/**
+ * Keys are `runId:outcome`, so a run mined as completed can still be mined again
+ * for lessons after the owner labels it a failure. Legacy events carry no
+ * outcome and count as completed.
+ * 键为 `runId:outcome`，因此按“完成”提炼过的 Run，在所有者把它标为失败后仍可再按教训提炼。
+ * 旧事件没有 outcome，按“完成”计。
+ */
 function processedRuns(events: readonly JournalEvent[]): Set<string> {
-  return new Set(events
-    .filter((event) => event.type === "memory.candidate.extracted" || event.type === "memory.candidate.proposed")
-    .map((event) => event.runId)
-    .filter((runId): runId is string => runId !== undefined));
+  const keys = new Set<string>();
+  const extracted = new Set<string>();
+  for (const event of events) {
+    if (event.runId === undefined || event.type !== "memory.candidate.extracted") continue;
+    extracted.add(event.runId);
+    keys.add(`${event.runId}:${(event.payload as { outcome?: unknown } | null)?.outcome === "failed" ? "failed" : "completed"}`);
+  }
+  // A proposal with no extraction marker is a legacy batch.
+  // 没有提炼完成标记的提案属于旧批次。
+  for (const event of events) {
+    if (event.runId !== undefined && event.type === "memory.candidate.proposed" && !extracted.has(event.runId)) keys.add(`${event.runId}:completed`);
+  }
+  return keys;
 }
 
 export class DeterministicMemoryWorker implements MemoryWorker {
   async extract(job: PendingMemoryJob): Promise<MemoryCandidate[]> {
-    if (job.evidence.length === 0) {
+    // Without a model there is no lesson to extract from a failure.
+    // 没有模型就无法从失败中提炼教训。
+    if (job.evidence.length === 0 || job.outcome === "failed") {
       return [];
     }
 
@@ -150,5 +216,6 @@ function rehydrateJob(events: JournalEvent[], request: JournalEvent): PendingMem
   const evidence = events
     .filter((event) => event.type === "evidence.recorded" && event.runId === request.runId)
     .map((event) => event.payload as Evidence);
-  return { run, task, evidence };
+  const outcome = (request.payload as { outcome?: unknown } | null)?.outcome === "failed" ? "failed" : "completed";
+  return { run, task, evidence, outcome };
 }

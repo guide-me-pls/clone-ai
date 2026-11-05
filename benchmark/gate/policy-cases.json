@@ -1,0 +1,285 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "local-read-allowed",
+      "title": "A local read-only step needs no approval",
+      "step": {
+        "id": "read",
+        "title": "Read the workspace",
+        "instructions": "Read the workspace.",
+        "risk": "read_only",
+        "acceptanceCriteria": []
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "expectedOutcome": "allowed"
+    },
+    {
+      "id": "local-write-allowed",
+      "title": "A reversible local write needs no approval",
+      "step": {
+        "id": "write",
+        "title": "Write inside the workspace",
+        "instructions": "Write a file inside the workspace.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": []
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "expectedOutcome": "allowed"
+    },
+    {
+      "id": "external-needs-approval",
+      "title": "An external side effect needs owner approval",
+      "step": {
+        "id": "send",
+        "title": "Send an email",
+        "instructions": "Send an email.",
+        "risk": "external_side_effect",
+        "acceptanceCriteria": []
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "expectedOutcome": "approval_required"
+    },
+    {
+      "id": "external-approved",
+      "title": "An explicit approval lifts an external step",
+      "step": {
+        "id": "send",
+        "title": "Send an email",
+        "instructions": "Send an email.",
+        "risk": "external_side_effect",
+        "acceptanceCriteria": []
+      },
+      "approved": true,
+      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "expectedOutcome": "allowed"
+    },
+    {
+      "id": "irreversible-needs-approval",
+      "title": "An irreversible step needs owner approval",
+      "step": {
+        "id": "delete",
+        "title": "Delete archived data",
+        "instructions": "Delete archived data.",
+        "risk": "irreversible",
+        "acceptanceCriteria": []
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "expectedOutcome": "approval_required"
+    },
+    {
+      "id": "files-write-observe-denied",
+      "title": "A files write is denied while the domain is observe-only",
+      "step": {
+        "id": "write-outside",
+        "title": "Write outside the workspace",
+        "instructions": "Write to the projects directory.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects/report.md", "access": "write" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "expectedOutcome": "denied",
+      "note": "Absence of authority is denial, not permission."
+    },
+    {
+      "id": "files-write-act-auto-allowed",
+      "title": "An act_auto policy within the domain allows the write",
+      "step": {
+        "id": "write-outside",
+        "title": "Write outside the workspace",
+        "instructions": "Write to the projects directory.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects/report.md", "access": "write" }]
+      },
+      "approved": false,
+      "authority": {
+        "version": 1,
+        "domains": { "files": "act_auto" },
+        "policies": [
+          {
+            "id": "projects-write",
+            "label": "Writes under projects are routine",
+            "scopes": [{ "domain": "files", "resource": "~/projects", "access": "write" }],
+            "maxAutonomy": "act_auto",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "expectedOutcome": "allowed"
+    },
+    {
+      "id": "files-read-no-policy-needs-approval",
+      "title": "A scoped read without a covering policy needs approval",
+      "step": {
+        "id": "read-outside",
+        "title": "Read outside the workspace",
+        "instructions": "Read the projects directory.",
+        "risk": "read_only",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects", "access": "read" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "expectedOutcome": "approval_required"
+    },
+    {
+      "id": "files-read-covered-allowed",
+      "title": "A read covered by a standing policy is allowed",
+      "step": {
+        "id": "read-outside",
+        "title": "Read outside the workspace",
+        "instructions": "Read the projects directory.",
+        "risk": "read_only",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects/notes.md", "access": "read" }]
+      },
+      "approved": false,
+      "authority": {
+        "version": 1,
+        "domains": {},
+        "policies": [
+          {
+            "id": "projects-read",
+            "label": "Reading projects is routine",
+            "scopes": [{ "domain": "files", "resource": "~/projects", "access": "read" }],
+            "maxAutonomy": "observe",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "expectedOutcome": "allowed"
+    },
+    {
+      "id": "protected-path-denied",
+      "title": "A protected path is denied even with a broad policy",
+      "step": {
+        "id": "write-ssh",
+        "title": "Write an SSH config",
+        "instructions": "Write the SSH config.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/.ssh/config", "access": "write" }]
+      },
+      "approved": false,
+      "authority": {
+        "version": 1,
+        "domains": { "files": "act_auto" },
+        "policies": [
+          {
+            "id": "whole-home",
+            "label": "A deliberately over-broad grant",
+            "scopes": [{ "domain": "files", "resource": "~/", "access": "write" }],
+            "maxAutonomy": "act_auto",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "expectedOutcome": "denied",
+      "note": "The forbidden-root check runs before any grant is consulted."
+    },
+    {
+      "id": "approval-does-not-open-protected",
+      "title": "An approval cannot open a protected path",
+      "step": {
+        "id": "write-ssh",
+        "title": "Write an SSH config",
+        "instructions": "Write the SSH config.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/.ssh/config", "access": "write" }]
+      },
+      "approved": true,
+      "authority": {
+        "version": 1,
+        "domains": { "files": "act_auto" },
+        "policies": [
+          {
+            "id": "whole-home",
+            "label": "A deliberately over-broad grant",
+            "scopes": [{ "domain": "files", "resource": "~/", "access": "write" }],
+            "maxAutonomy": "act_auto",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "expectedOutcome": "denied"
+    },
+    {
+      "id": "shell-exec-observe-denied",
+      "title": "Shell execution is denied while the domain is observe-only",
+      "step": {
+        "id": "run-git",
+        "title": "Run git",
+        "instructions": "Run git status.",
+        "risk": "read_only",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "shell", "resource": "git", "access": "exec" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "expectedOutcome": "denied"
+    },
+    {
+      "id": "shell-exec-act-auto-allowed",
+      "title": "An act_auto shell policy allows a named command",
+      "step": {
+        "id": "run-git",
+        "title": "Run git",
+        "instructions": "Run git status.",
+        "risk": "read_only",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "shell", "resource": "git", "access": "exec" }]
+      },
+      "approved": false,
+      "authority": {
+        "version": 1,
+        "domains": { "shell": "act_auto" },
+        "policies": [
+          {
+            "id": "git-routine",
+            "label": "Git inspection is routine",
+            "scopes": [{ "domain": "shell", "resource": "git", "access": "exec" }],
+            "maxAutonomy": "act_auto",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "expectedOutcome": "allowed"
+    },
+    {
+      "id": "unenforced-domain-denied",
+      "title": "A domain without enforcement cannot be granted",
+      "step": {
+        "id": "read-calendar",
+        "title": "Read the calendar",
+        "instructions": "Read today's calendar.",
+        "risk": "read_only",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "calendar", "resource": "primary", "access": "read" }]
+      },
+      "approved": false,
+      "authority": {
+        "version": 1,
+        "domains": { "calendar": "act_auto" },
+        "policies": [
+          {
+            "id": "calendar-read",
+            "label": "A grant for a domain that is not enforced yet",
+            "scopes": [{ "domain": "calendar", "resource": "primary", "access": "read" }],
+            "maxAutonomy": "act_auto",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "expectedOutcome": "denied",
+      "note": "Reserved domains fail closed until their enforcement exists."
+    }
+  ]
+}
