@@ -76,6 +76,76 @@ and its rationale.
 suite or add an explicit per-case intent note; do not switch to silent
 auto-update.
 
+## 2026-11-05 — Workers inherit model credentials only, never tool credentials
+
+**Decision.** A provider declaration may name the credentials its model client
+needs. Any tool credential (`GITHUB_TOKEN`, `AWS_*`,
+`GOOGLE_APPLICATION_CREDENTIALS`, `*_SECRET`, …) is refused before launch, with
+an error that points at the credential broker.
+
+**Evidence.** A black-box worker with a shell and a token can do anything that
+token allows; the model needs its API key to answer, but it does not need the
+owner's source-host or cloud credentials. The check runs at build time, before a
+process exists, so a bad declaration cannot leak into a running worker
+(`test/worker-env.test.ts`).
+
+**What it costs.** A worker that genuinely needs a tool credential cannot be
+configured by inheritance; it must go through the broker.
+
+**Reversal condition.** If a trusted, narrowly scoped operation needs a tool
+credential, add per-call broker injection after Kernel authorization; do not
+re-enable inheritance.
+
+## 2026-11-04 — Failed traces and repair run only in a gated, draft-PR lane
+
+**Decision.** Failed and cancelled runs become redacted, self-contained trace
+documents, including implicit failures no error code records: a step retried
+three or more times, a cancel, an "不合格" label, or an owner correction within
+ten minutes. The nightly repair job runs in a fresh worktree, requires a
+regression test that the script verifies is red before the fix, hashes the test
+files across phases, blocks protected paths from the diff, and produces a draft
+PR (or a patch file) only. It never merges, deploys, restarts, or edits its own
+schedule.
+
+**Evidence.** Unattended code generation is the highest-risk action in the
+system. Each gate closes a specific failure mode: writing in the serving
+checkout; a "fix" without a reproduction; a model making the suite green by
+rewriting the test; a fix that edits the rules that judge it; and an automatic
+merge. `scripts/nightly-rsi.mjs` implements all five, and its report states that
+merging remains the owner's decision.
+
+**What it costs.** Tests plus a diff check bound the damage but cannot prove a
+fix is safe; a human must read the PR. No traces means no run, and a failure
+keeps the worktree for inspection.
+
+**Reversal condition.** Do not relax the draft-PR gate for a general fix. If a
+sandboxed runner can prove the fix against the full suite and enforce the
+protected-path rule mechanically, a separate trade-off may allow auto-merge for a
+named allowlist of paths — never for broad changes.
+
+## 2026-11-04 — Self-review may change configuration, never the rules
+
+**Decision.** A review reads the audit digest and may propose at most four
+actions, restricted to a worker's or the Main Agent's model and reasoning
+effort. Each action is validated against what the machine declares it can do,
+applied only on the owner's click, journaled as `recommendation.applied` with
+the previous and new value, and reversible from the same row. Code, prompts,
+policy, and evidence rules are not reachable, and nothing runs on its own.
+
+**Evidence.** An agent that can widen its own authority is a risk, not an
+improvement loop; authority and completion belong to the Kernel. The digest is
+already a projection of the journal (`loadAudits` / `summarizeAudits`), so the
+reviewer needs no new data path, and the model-failure path degrades to measured
+facts (`test/self-review.test.ts`).
+
+**What it costs.** The narrow surface cannot fix a code or prompt defect; the
+review can only tune model and effort. That is deliberate.
+
+**Reversal condition.** If the configuration surface proves unable to address a
+real failure class, add a new action kind only through its own trade-off with
+validation and rollback — never by widening this one to code, prompts, policy,
+or evidence rules.
+
 ---
 
 ## 2026-11-04 — Attempted and reverted: a persisted replay watermark
