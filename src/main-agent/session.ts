@@ -103,6 +103,9 @@ export async function createMainAgentSession(options: MainAgentSessionOptions): 
     });
     const { describeExecutors } = await import("./tools/kernel-tools.ts");
     const executors = await describeExecutors(options.dataDirectory);
+    // Both halves are kept: the briefing is recorded for the prompt snapshot,
+    // and memories matching this turn are appended to the prompt the model sees.
+    // 两半都保留：简报记入 Prompt 快照，与本回合匹配的记忆追加到模型实际看到的 Prompt。
     briefing = compiled.text;
     const query = options.query?.trim();
     const pushed = query === undefined || query.length === 0

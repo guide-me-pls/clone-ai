@@ -6,6 +6,28 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-05 — Require explicit intent for root-level file names
+
+**Decision.** Keep extracting ordinary paths with directory separators, but
+exclude URLs, code expressions, and paths with constant-like uppercase directory
+segments. Extract a root-level filename only when the same sentence or
+assertion contains an explicit file-intent word and its extension belongs to a
+conservative allowlist. Reject treating every dotted token as a file and reject
+requiring intent words for paths that already have directory separators.
+
+**Evidence.** The nightly repair trace reported a false failure when the
+verifier interpreted `fs.rename`, `os.tmpdir`, `consumed-traces.json`, and
+`REPORT_DIR/consumed-traces.json` as required workspace files. Source
+inspection shows the previous extractor accepted dotted tokens without those
+distinctions. The proposed coverage is a hypothesis pending the targeted
+offline tests; no before-change eval was run under this work order.
+
+**Cost and reversal condition.** Real root-level deliverables without an intent
+word in the same sentence or assertion, or with an unlisted extension, will be
+missed. Revisit the rule when representative real deliverables show those
+misses matter, and only widen the vocabulary or allowlist with regression cases
+that also preserve the exclusions.
+
 ## 2026-11-05 — Recover planning orphans only after a conservative grace period
 
 **Decision.** Fail a planning Run only if it has no plan, no live claim, and
