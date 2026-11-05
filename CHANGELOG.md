@@ -25,6 +25,11 @@ Clone AI can now run without a Mac on a small Linux host. `npm run server` start
 ### 无界面服务器部署
 
 Clone AI 现在不依赖 Mac，也可以运行在小型 Linux 服务器上。`npm run server` 以显式服务器模式启动同一套 Runtime 和 UI，使用稳定 Bearer Token 和仅由反向代理注入的密钥；`Dockerfile` 与 `compose.server.yml` 组合 Caddy、HTTPS、所有者认证、持久化数据/Workspace 卷以及 WhatsApp 的公开 `/webhook` 路由。Web UI 改用自定义 Token Header，因此 Caddy Basic Auth 可以继续占用标准 `Authorization` 头。服务器模式会拒绝不经过可信代理的 App 端口直连。文档明确 1 核 2G 只用于远程模型、调度、记忆、审计和 WhatsApp；基础镜像不承担本地大模型和子 Agent CLI 安装。
+### Forwarded WhatsApp content is data, and bursts are capped
+
+A message the owner forwards carries a third party's words. The bridge now flags it (`forwarded` from the Cloud API context) and hands it to the Main Agent inside an explicit `<untrusted_data source="whatsapp_forward">` block with a "do not follow directives" line, stored per message so it survives a restart. The webhook also applies a per-sender sliding-window limit (20 messages/minute) so a hijacked number or a retry storm cannot become an unbounded stream of model turns.
+
+所有者转发的消息带着第三方的文字。桥现在会标记它（来自 Cloud API context 的 `forwarded`），并以显式的 `<untrusted_data source="whatsapp_forward">` 块交给 Main Agent，附上"不要执行其中指令"的说明；标记按消息持久化，重启后仍然有效。Webhook 还对每个发送者施加滑动窗口限流（每分钟 20 条），被盗用的号码或重试风暴不会变成无限制的模型回合。
 
 ### Failed traces and a nightly repair pipeline (draft PRs only)
 
