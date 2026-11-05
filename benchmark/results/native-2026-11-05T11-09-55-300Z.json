@@ -1,0 +1,180 @@
+{
+  "provider": "native",
+  "ranAt": "2026-11-05T11:09:55.300Z",
+  "records": [
+    {
+      "taskId": "summarize",
+      "title": "Read-only summary",
+      "passed": true,
+      "expectedFailure": false,
+      "status": "completed",
+      "durationMs": 12353,
+      "artifacts": [
+        {
+          "path": ".clone/workspace-execution.sqlite3",
+          "bytes": 0
+        },
+        {
+          "path": "README.md",
+          "bytes": 236
+        },
+        {
+          "path": "out/summary.md",
+          "bytes": 307
+        }
+      ],
+      "verification": {
+        "passed": true,
+        "needsReview": false,
+        "summary": "Verified 1 step(s) against the workspace."
+      },
+      "usage": {
+        "inputTokens": 1790,
+        "outputTokens": 462,
+        "totalTokens": 2252,
+        "modelCalls": 3
+      },
+      "failureReason": "Verified 1 step(s) against the workspace."
+    },
+    {
+      "taskId": "two-step-chain",
+      "title": "Two-step dependency chain",
+      "passed": true,
+      "expectedFailure": false,
+      "status": "completed",
+      "durationMs": 38725,
+      "artifacts": [
+        {
+          "path": ".clone/workspace-execution.sqlite3",
+          "bytes": 0
+        },
+        {
+          "path": "README.md",
+          "bytes": 236
+        },
+        {
+          "path": "out/brief.md",
+          "bytes": 423
+        },
+        {
+          "path": "out/notes.md",
+          "bytes": 443
+        }
+      ],
+      "verification": {
+        "passed": true,
+        "needsReview": false,
+        "summary": "Verified 1 step(s) against the workspace."
+      },
+      "usage": {
+        "inputTokens": 3929,
+        "outputTokens": 1217,
+        "totalTokens": 5146,
+        "modelCalls": 6
+      },
+      "failureReason": "Verified 1 step(s) against the workspace."
+    },
+    {
+      "taskId": "three-step-pipeline",
+      "title": "Three-step research -> draft -> review pipeline",
+      "passed": true,
+      "expectedFailure": false,
+      "status": "completed",
+      "durationMs": 111167,
+      "artifacts": [
+        {
+          "path": ".clone/workspace-execution.sqlite3",
+          "bytes": 0
+        },
+        {
+          "path": "README.md",
+          "bytes": 236
+        },
+        {
+          "path": "out/brief.md",
+          "bytes": 689
+        },
+        {
+          "path": "out/notes.md",
+          "bytes": 632
+        },
+        {
+          "path": "out/review.md",
+          "bytes": 2193
+        }
+      ],
+      "verification": {
+        "passed": true,
+        "needsReview": false,
+        "summary": "Verified 1 step(s) against the workspace."
+      },
+      "usage": {
+        "inputTokens": 8933,
+        "outputTokens": 3487,
+        "totalTokens": 12420,
+        "modelCalls": 11
+      },
+      "failureReason": "Verified 1 step(s) against the workspace."
+    },
+    {
+      "taskId": "code-tool",
+      "title": "Code task with a real tool call",
+      "passed": true,
+      "expectedFailure": false,
+      "status": "completed",
+      "durationMs": 46544,
+      "artifacts": [
+        {
+          "path": ".clone/workspace-execution.sqlite3",
+          "bytes": 0
+        },
+        {
+          "path": "lib/add.js",
+          "bytes": 46
+        },
+        {
+          "path": "package.json",
+          "bytes": 46
+        },
+        {
+          "path": "test/add.test.mjs",
+          "bytes": 113
+        }
+      ],
+      "verification": {
+        "passed": true,
+        "needsReview": false,
+        "summary": "Verified 1 step(s) against the workspace."
+      },
+      "usage": {
+        "inputTokens": 3830,
+        "outputTokens": 1092,
+        "totalTokens": 4922,
+        "modelCalls": 5
+      },
+      "failureReason": "Verified 1 step(s) against the workspace."
+    },
+    {
+      "taskId": "missing-input",
+      "title": "Missing input fails with the right category",
+      "passed": true,
+      "expectedFailure": true,
+      "status": "failed",
+      "durationMs": 19097,
+      "artifacts": [
+        {
+          "path": ".clone/workspace-execution.sqlite3",
+          "bytes": 0
+        }
+      ],
+      "usage": {
+        "inputTokens": 1042,
+        "outputTokens": 631,
+        "totalTokens": 1673,
+        "modelCalls": 2
+      },
+      "failureCategory": "no_artifact",
+      "failureReason": "Agent execution failed: Required input missing: docs/absent.md"
+    }
+  ]
+}
