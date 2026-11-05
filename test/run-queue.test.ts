@@ -181,3 +181,23 @@ test("work created by another process is picked up after a refresh", async (t) =
   }
   assert.equal(worker.calls, 1);
 });
+
+test("a settled run is reported once, so the conversation hears about background work", async (t) => {
+  const { runtime } = await kernel(t);
+  const { run } = await runtime.acceptTrigger({ kind: "query", summary: "Do the work", payload: {} });
+  await runtime.attachPlan(run.id, {
+    summary: "One step",
+    steps: [{ id: "s1", title: "Work", instructions: "Do it", risk: "read_only", acceptanceCriteria: ["done"], agentId: "worker", requiredCapabilities: ["research"] }],
+  });
+  const settled: string[] = [];
+  const consumer = new RunQueueConsumer({
+    runtime,
+    registry: async () => new StaticAgentRegistry([new ScriptedWorker()]),
+    onSettled: (runId) => { settled.push(runId); },
+  });
+  await consumer.tick();
+  for (let attempt = 0; attempt < 50 && settled.length === 0; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.deepEqual(settled, [run.id]);
+});

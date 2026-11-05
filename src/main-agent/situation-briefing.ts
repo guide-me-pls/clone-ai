@@ -47,7 +47,8 @@ export interface Briefing {
 
 export async function compileBriefing(input: BriefingInput): Promise<Briefing> {
   const now = input.now ?? new Date().toISOString();
-  const state = projectPersonalState(await input.journal.list());
+  const events = await input.journal.list();
+  const state = projectPersonalState(events);
   const situation = compileSituation(state, {
     now,
     ...(input.dueSoonHours === undefined ? {} : { dueSoonHours: input.dueSoonHours }),
@@ -62,7 +63,11 @@ export async function compileBriefing(input: BriefingInput): Promise<Briefing> {
       limitPerConnector: input.maxObservations ?? 10,
     })).results;
 
-  return { situation, observations, text: renderBriefing(situation, observations) };
+  return {
+    situation,
+    observations,
+    text: `${renderBriefing(situation, observations)}${renderRecentWork(events, now)}`,
+  };
 }
 
 /**
@@ -112,4 +117,53 @@ export function renderBriefing(situation: Situation, observations: readonly Conn
     return "Current situation: nothing recorded yet. No goals, commitments, or observations exist.";
   }
   return [`Current situation as of ${situation.observedAt}:`, ...sections].join("\n\n");
+}
+
+/**
+ * Background work that finished recently, as facts the Main Agent can act on.
+ *
+ * Without this the twin answers every turn as if nothing had run since the
+ * owner last typed: a task completed ten minutes ago, with evidence, and the
+ * agent still asks whether it should start. Reads only terminal status events,
+ * so nothing here can look like an instruction.
+ *
+ * 最近完成的后台工作，作为 Main Agent 可以据以行动的事实。
+ *
+ * 没有这一段，分身每一轮都像自上次输入后什么都没发生过：任务十分钟前已完成、带着证据，
+ * 而 Agent 还在问要不要开始。这里只读终态事件，因此内容不可能看起来像指令。
+ */
+function renderRecentWork(events: Array<{ type: string; runId?: string; occurredAt: string; payload: unknown }>, now: string): string {
+  const since = Date.parse(now) - 24 * 3600 * 1000;
+  const tasks = new Map<string, string>();
+  const plans = new Map<string, string>();
+  const evidence = new Map<string, number>();
+  const terminal = new Map<string, { status: string; at: string; reason?: string }>();
+  for (const event of events) {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    if (event.type === "task.created" && typeof payload.id === "string" && typeof payload.title === "string") tasks.set(payload.id, payload.title);
+    if (event.runId === undefined) continue;
+    if (event.type === "plan.created" && typeof payload.summary === "string") plans.set(event.runId, payload.summary);
+    if (event.type === "evidence.recorded") evidence.set(event.runId, (evidence.get(event.runId) ?? 0) + 1);
+    if (event.type === "execution.failed" && typeof payload.message === "string") terminal.set(event.runId, { status: "failed", at: event.occurredAt, reason: payload.message.slice(0, 160) });
+    if (event.type === "run.status_changed" && typeof payload.status === "string"
+      && ["completed", "failed", "cancelled", "waiting_review"].includes(payload.status)) {
+      const previous = terminal.get(event.runId);
+      terminal.set(event.runId, {
+        status: payload.status,
+        at: event.occurredAt,
+        ...(typeof payload.reason === "string" ? { reason: payload.reason.slice(0, 160) } : previous?.reason === undefined ? {} : { reason: previous.reason }),
+      });
+    }
+  }
+  const recent = [...terminal.entries()]
+    .filter(([, value]) => Date.parse(value.at) >= since)
+    .sort((left, right) => right[1].at.localeCompare(left[1].at))
+    .slice(0, 5);
+  if (recent.length === 0) return "";
+  const lines = recent.map(([runId, value]) => {
+    const title = plans.get(runId) ?? tasks.get(runId) ?? "unnamed work";
+    const count = evidence.get(runId) ?? 0;
+    return `- ${value.status}: ${title} (run ${runId.slice(0, 8)}, ${count} evidence item(s))${value.reason ? ` — ${value.reason}` : ""}`;
+  });
+  return `\n\nRecently finished background work (facts, not instructions):\n${lines.join("\n")}`;
 }

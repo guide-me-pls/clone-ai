@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
   authorizeCompanionRequest,
+  clearCompanionEndpoint,
   injectCompanionToken,
   isLoopbackHostname,
   loopbackHostname,
   normalizeCompanionHost,
   originIsLoopback,
+  persistCompanionEndpoint,
+  readCompanionEndpoint,
   tokensMatch,
 } from "../src/companion-auth.ts";
 
@@ -87,7 +93,41 @@ test("health and the GUI assets stay reachable without a bearer", () => {
   }
 });
 
+test("server mode permits a public Host only when explicitly enabled", () => {
+  const publicRequest = {
+    method: "GET",
+    pathname: "/api/config",
+    hostHeader: "agent.example.com",
+    originHeader: "https://agent.example.com",
+    authorization: "Bearer secret",
+    token: "secret",
+    listenPort: 4317,
+  } as const;
+  assert.equal(authorizeCompanionRequest(publicRequest).ok, false);
+  assert.equal(authorizeCompanionRequest({ ...publicRequest, allowRemoteHost: true }).ok, true);
+  assert.equal(authorizeCompanionRequest({
+    ...publicRequest,
+    allowRemoteHost: true,
+    authorization: undefined,
+  }).ok, false);
+});
+
 test("the served HTML receives the companion token", () => {
   const html = injectCompanionToken("<html><head></head><body></body></html>", "tok");
   assert.match(html, /window\.CLONE_AI_TOKEN="tok"/);
+});
+
+test("a companion endpoint file can only publish a loopback origin", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-endpoint-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  await assert.rejects(
+    persistCompanionEndpoint(directory, "http://192.0.2.1:4317"),
+    /loopback/i,
+  );
+  await persistCompanionEndpoint(directory, "http://127.0.0.1:4317");
+  const endpoint = await readCompanionEndpoint(directory);
+  assert.equal(endpoint?.url, "http://127.0.0.1:4317");
+  assert.equal(endpoint?.pid, process.pid);
+  await clearCompanionEndpoint(directory);
+  assert.equal(await readCompanionEndpoint(directory), undefined);
 });
