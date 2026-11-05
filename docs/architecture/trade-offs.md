@@ -58,6 +58,25 @@ event. Tool arguments are stored as a redacted summary, not verbatim.
 content-addressed turn file (the prompt-snapshot pattern) and keep only its hash
 and locator in the event. If redaction proves insufficient for tool arguments,
 store the tool name and a hash only.
+## 2026-11-05 — Recover planning orphans only after a conservative grace period
+
+**Decision.** Fail a planning Run only if it has no plan, no live claim, and
+its last update is more than 15 minutes old. Acquire a recovery claim and
+atomically reject the failure if the Run changed since the refreshed projection.
+Leave stores that cannot make that conditional fenced write untouched. Do not
+change recovery of running or verifying Runs.
+
+**Evidence.** Recovery currently scans only `running` and `verifying`; a
+planner that dies before producing a plan can leave a Run in `planning`
+indefinitely. Assuming 15 minutes is sufficient for ordinary unclaimed
+planning is conservative but not measured; an active planner without a lease
+can still exceed it. Immediate failure or age alone would endanger fresh or
+claimed work. Rechecking only in memory would allow a concurrent plan or
+cancellation to be overwritten before the failure is written.
+
+**Reversal condition.** If observed legitimate unclaimed planning takes more
+than 15 minutes, replace the timeout with a reliable planner lease or adjust
+the threshold based on measured durations before enabling this recovery.
 
 ## 2026-11-05 — Prompt provenance is a content-addressed file plus a journal event
 

@@ -26,6 +26,39 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+## 2026-11-05 — Conservative recovery for orphaned planning
+
+- **Goal / hypothesis:** close abandoned planning Runs without reclaiming fresh,
+  claimed, or already planned work. A 15-minute grace period is an unmeasured
+  assumption, not a guarantee that an unclaimed planner has stopped.
+- **Trade-off:** [planning orphan grace period](../architecture/trade-offs.md#2026-11-05--recover-planning-orphans-only-after-a-conservative-grace-period).
+- **Change:** `src/core/runtime.ts` checks the grace period and claims; the
+  journal contract and SQLite store add a conditional fenced write that refuses
+  concurrent Run changes. `test/claim-fencing.test.ts` covers the lifecycle,
+  threshold, competing claims, concurrent plan, and unsupported stores.
+- **Eval:** Before implementation, the targeted orphan-recovery cases were red.
+  Afterward, `node --experimental-strip-types --test
+  test/claim-fencing.test.ts` passed all 15 tests, `npm run typecheck` passed,
+  and `npm run gate` passed. With live-model tests disabled, the full suite
+  passed 545 tests with 3 skips and 0 failures. The first full run failed only
+  because a leaked WhatsApp bridge process held port 4318; after clearing it,
+  the suite was clean.
+- **Execution chain:** the Main Agent ran on the user-authorized Magpie
+  DeepSeek V4.1 Flash endpoint at `high` effort, proposed the plan,
+  `claude-code` investigated, and `codex-cli` implemented and documented it.
+  The self-run took about 17 minutes. Its verification step incorrectly ran
+  the full suite with live tests enabled and hung; the supervisor cancelled
+  that run, kept the completed edits, and independently ran the targeted and
+  full deterministic suites. Model cost was not measured.
+- **Pros:** the failure is reproduced before the fix; the transaction protects
+  against a plan arriving after the snapshot, and the tests need no live model.
+- **Cons / next time:** the timeout does not establish planner liveness, and
+  the full suite could not pass in this environment. Use planner leases and
+  duration measurements, and isolate the workspace and ports before testing.
+- **Reversal condition:** if legitimate unclaimed planning exceeds 15 minutes,
+  replace the timeout with a reliable planner lease or adjust it using measured
+  durations before enabling this recovery.
+
 ## 2026-11-05 — Prompt provenance and offline regression gate
 
 - **Goal / hypothesis:** make a Main Agent turn attributable to the prompt it
