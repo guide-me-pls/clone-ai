@@ -215,8 +215,14 @@ test("a preference is not crowded out by a busy week of task memories", async ()
 test("an empty high-priority class passes its capacity to the rest", async () => {
   // Distinct wording, so the near-duplicate filter has nothing to merge.
   // 措辞彼此不同，使近似去重没有可合并的对象。
-  const topics = ["release checklist", "rollback drill", "on-call rota", "vendor contract", "billing cadence", "staging hostname"];
-  const facts = topics.map((topic, index) => ({ id: `f${index}`, summary: `Project fact about the ${topic}`, score: 0.8, type: "fact" }));
+  const facts = [
+    "Release checklist lives in docs/release.md",
+    "Rollback drill runs on the first Thursday",
+    "On-call rota is published monthly",
+    "Vendor contract renews in March",
+    "Billing cadence is quarterly",
+    "Staging hostname is preview.example.test",
+  ].map((summary, index) => ({ id: `f${index}`, summary, score: 0.8, type: "fact" }));
   const context = buildMemoryContextFromCandidates(facts, { maxItems: 6, maxCharacters: 1200 });
   assert.ok(context !== undefined);
   assert.ok(context.sourceMemoryIds.length >= 4, `expected most facts admitted, got ${context.sourceMemoryIds.length}`);
