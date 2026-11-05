@@ -16,6 +16,9 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 - **Trade-off:** link to the entry in `docs/architecture/trade-offs.md`.
 - **Change:** one paragraph plus the main files or areas.
 - **Eval:** command, dataset or case ids, result before and after.
+- **Benchmark run:** command, provider/model, dataset or task ids, scoring
+  parameters, and result file. Required whenever a benchmark was run; omit only
+  for a deterministic test-only eval.
 - **Execution chain:** steps, workers or tools, duration and cost, failures and
   retries.
 - **Pros:** what the chain did well.
