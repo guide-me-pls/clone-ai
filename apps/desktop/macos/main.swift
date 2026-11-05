@@ -1,9 +1,10 @@
 import AppKit
 import Darwin
 import Foundation
+import UniformTypeIdentifiers
 import WebKit
 
-final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, NSToolbarDelegate {
+final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, NSToolbarDelegate {
     private static let showWindowNotification = Notification.Name("ai.clone.desktop.show-window")
     private var window: NSWindow!
     private var webView: WKWebView!
@@ -66,6 +67,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         ))
         webView = WKWebView(frame: .zero, configuration: webConfiguration)
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1240, height: 820),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -349,6 +351,34 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         guard let data = try? JSONEncoder().encode(value),
               let encoded = String(data: data, encoding: .utf8) else { return "\"\"" }
         return encoded
+    }
+
+    // WKWebView only raises a real file chooser when the UI delegate answers
+    // this callback; without it the composer's attach button silently does
+    // nothing. 只有实现这个 UI 委托回调，WKWebView 才会弹出真正的文件选择面板；
+    // 缺失时输入框的附件按钮会毫无反应。
+    func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.title = "添加图片或视频"
+        panel.message = "选择要发送给 Clone AI 的图片或视频。"
+        panel.prompt = "添加"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.resolvesAliases = true
+        panel.allowedContentTypes = [.image, .movie]
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, !panel.urls.isEmpty else {
+                completionHandler(nil)
+                return
+            }
+            completionHandler(panel.urls)
+        }
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
