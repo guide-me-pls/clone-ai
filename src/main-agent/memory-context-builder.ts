@@ -1,5 +1,6 @@
 import type { MemoryEntry, MemoryRecallMatch } from "../memory/md-memory-store.ts";
 import type { MemoryContext, MemoryEvidence, TaskIntent } from "./dispatch-contracts.ts";
+import { applySupersedes, dedupeContext } from "../memory/conflict.ts";
 
 /**
  * Compiles the only memory a worker is ever allowed to see.
@@ -32,6 +33,31 @@ export interface MemoryContextOptions {
   /** Minimum retrieval score; below this a memory is treated as unrelated. 最低检索分，低于此视为不相关。 */
   minScore?: number;
 }
+
+/**
+ * How much of the budget each class of memory may claim, in fill order.
+ *
+ * A flat cap treats a stated preference and a log of a finished task as equally
+ * worth the limited context, so a busy week of task memories crowds out the one
+ * preference that would have changed the answer — measured as a 56.7% context
+ * hit rate on preference questions versus 92-99% elsewhere. The weights here
+ * are priorities, not guarantees: unused capacity rolls forward, so a message
+ * with no preferences to offer still spends its budget on facts.
+ *
+ * 每类记忆可占用的预算比例，按填充顺序排列。
+ *
+ * 统一上限把"所有者声明的偏好"与"一个已完成任务的日志"当作同等值得占用有限上下文，于是一周的
+ * 繁忙任务记忆会挤掉那条本会改变回答的偏好——实测正是偏好题的上下文命中率 56.7%、其他类型
+ * 92–99%。这里的权重是优先级而不是保证：用不完的额度向后顺延，因此一条没有偏好可提供的消息
+ * 仍会把预算花在事实上。
+ */
+const BUDGET_WEIGHTS: Record<MemoryEvidence["kind"], number> = {
+  user_preference: 0.5,
+  task_outcome: 0.25,
+  project_fact: 0.2,
+  agent_outcome: 0.05,
+};
+const CLASS_ORDER: readonly MemoryEvidence["kind"][] = ["user_preference", "task_outcome", "project_fact", "agent_outcome"];
 
 const DEFAULT_MAX_CHARACTERS = 1_200;
 const DEFAULT_MAX_ITEMS = 6;
@@ -69,6 +95,8 @@ export interface MemoryCandidateInput {
   status?: string;
   sensitivity?: string;
   type?: string;
+  /** When the remembered thing happened; used to order statements that replace each other. 事情发生的时间；用于排序互相取代的陈述。 */
+  createdAt?: string;
 }
 
 /**
@@ -86,37 +114,71 @@ export function buildMemoryContextFromCandidates(
   const maxCharacters = options.maxCharacters ?? DEFAULT_MAX_CHARACTERS;
   const minScore = options.minScore ?? DEFAULT_MIN_SCORE;
 
-  const relevant = candidates
+  // A reworded restatement of a memory already admitted is dropped: two
+  // versions of one fact in the same context only invite the model to pick the
+  // wrong one.
+  // 与已收录记忆只是改写关系的重复项会被丢弃：同一个事实的两个版本同时在场，只会让模型选错。
+  const relevant = dedupeContext(applySupersedes(candidates
     .filter((candidate) => candidate.score >= minScore)
     .filter((candidate) => candidate.status === undefined || candidate.status === "active")
     .filter((candidate) => candidate.sensitivity !== "secret")
-    .slice(0, maxItems);
+    .map((candidate) => ({ ...candidate, summary: sanitize(candidate.summary) }))));
   if (relevant.length === 0) return undefined;
 
+  // Fill class by class, each capped at its share of what is left, so the
+  // highest-priority class cannot be starved and cannot starve the rest.
+  // 按类别依次填充，每类上限是"剩余额度"的相应比例：既保证高优先级类不被饿死，也保证它不饿死别人。
+  const byKind = new Map<MemoryEvidence["kind"], MemoryCandidateInput[]>([[("user_preference" as MemoryEvidence["kind"]), []], [("task_outcome" as MemoryEvidence["kind"]), []], [("project_fact" as MemoryEvidence["kind"]), []], [("agent_outcome" as MemoryEvidence["kind"]), []]]);
+  for (const candidate of relevant) byKind.get(classifyCandidate(candidate))!.push(candidate);
   const evidence: MemoryEvidence[] = [];
   const lines: string[] = [];
+  const admitted = new Set<string>();
   let used = 0;
-  for (const candidate of relevant) {
-    // Only the one-line summary crosses the boundary; full content stays home.
-    // 只有一行摘要越界；完整正文留在本地。
-    const line = `- ${sanitize(candidate.summary)}`;
-    if (used + line.length > maxCharacters) break;
-    used += line.length + 1;
-    lines.push(line);
-    evidence.push({
-      id: candidate.id,
-      kind: classifyCandidate(candidate),
-      summary: candidate.summary,
-      relevanceScore: Number(candidate.score.toFixed(3)),
-    });
+  for (const kind of CLASS_ORDER) {
+    const pool = byKind.get(kind)!;
+    const share = Math.floor((maxCharacters - used) * (BUDGET_WEIGHTS[kind] / sumOfRemainingWeights(CLASS_ORDER.indexOf(kind))));
+    let classUsed = 0;
+    for (const candidate of pool) {
+      if (evidence.length >= maxItems) break;
+      // Only the one-line summary crosses the boundary; full content stays home.
+      // 只有一行摘要越界；完整正文留在本地。
+      const line = `- ${sanitize(candidate.summary)}`;
+      if (classUsed + line.length > share || used + line.length > maxCharacters) continue;
+      classUsed += line.length + 1;
+      used += line.length + 1;
+      admitted.add(candidate.id);
+      lines.push(line);
+      evidence.push({
+        id: candidate.id,
+        kind: classifyCandidate(candidate),
+        summary: candidate.summary,
+        relevanceScore: Number(candidate.score.toFixed(3)),
+      });
+    }
   }
-  if (lines.length === 0) return undefined;
+  if (lines.length === 0) {
+    // Every class was capped below the first line's length; the single best
+    // candidate still crosses, because an empty context is worse than a
+    // slightly over-share one.
+    // 每类上限都小于第一行长度时，仍放行最佳的一条：空上下文的代价比略微超配更大。
+    const best = relevant.slice().sort((left, right) => right.score - left.score)[0];
+    if (best === undefined) return undefined;
+    evidence.push({ id: best.id, kind: classifyCandidate(best), summary: best.summary, relevanceScore: Number(best.score.toFixed(3)) });
+    lines.push(`- ${sanitize(best.summary)}`);
+  }
 
   return {
     summary: [MEMORY_CONTEXT_HEADER, ...lines].join("\n"),
     sourceMemoryIds: evidence.map((item) => item.id),
     evidence,
   };
+}
+
+/** Weights of the classes not yet filled, so each class's share is relative to what remains. 尚未填充类别的权重之和，使每类的份额相对于剩余额度。 */
+function sumOfRemainingWeights(index: number): number {
+  let total = 0;
+  for (const kind of CLASS_ORDER.slice(index)) total += BUDGET_WEIGHTS[kind];
+  return total || 1;
 }
 
 function classifyCandidate(candidate: MemoryCandidateInput): MemoryEvidence["kind"] {

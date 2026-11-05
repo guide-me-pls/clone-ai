@@ -73,6 +73,7 @@ export interface WhatsAppSetupStatus {
   tunnel: {
     cloudflaredInstalled: boolean;
     running: boolean;
+    managed: boolean;
     url?: string;
     webhookUrl?: string;
     installCommand: string;
@@ -95,6 +96,7 @@ export interface WhatsAppSetupStatus {
  */
 export class WhatsAppSetupService {
   readonly #dataDirectory: string;
+  readonly #publicBaseUrl: string | undefined;
   readonly #envFile: string;
   readonly #bridgeStateFile: string;
   readonly #tunnelStateFile: string;
@@ -102,8 +104,9 @@ export class WhatsAppSetupService {
   #bridgeError: string | undefined;
   #tunnelError: string | undefined;
 
-  constructor(dataDirectory: string) {
+  constructor(dataDirectory: string, publicBaseUrl?: string) {
     this.#dataDirectory = dataDirectory;
+    this.#publicBaseUrl = publicBaseUrl?.replace(/\/+$/, "") || undefined;
     this.#envFile = join(dataDirectory, WHATSAPP_ENV_FILE_NAME);
     this.#bridgeStateFile = join(dataDirectory, WHATSAPP_BRIDGE_STATE_FILE_NAME);
     this.#tunnelStateFile = join(dataDirectory, WHATSAPP_TUNNEL_STATE_FILE_NAME);
@@ -133,6 +136,7 @@ export class WhatsAppSetupService {
     const tunnelState = await readJsonFile<TunnelState>(this.#tunnelStateFile).catch(() => undefined);
     const tunnelProcessRunning = tunnelState !== undefined && await isManagedProcess(tunnelState.pid, "cloudflared");
     const tunnelUrl = tunnelProcessRunning ? tunnelState?.url : undefined;
+    const managedBaseUrl = this.#publicBaseUrl;
     const cloudflared = resolveExecutable("cloudflared");
     const brew = resolveExecutable("brew");
     const missing = parsed.missing;
@@ -156,12 +160,15 @@ export class WhatsAppSetupService {
         ...(bridgeProcessAlive && !bridgeRunning ? { stale: true } : {}),
       },
       tunnel: {
-        cloudflaredInstalled: cloudflared.resolvedPath !== undefined,
-        running: tunnelProcessRunning,
-        ...(tunnelUrl === undefined ? {} : {
-          url: tunnelUrl,
-          webhookUrl: `${tunnelUrl}/webhook`,
-        }),
+        cloudflaredInstalled: managedBaseUrl !== undefined || cloudflared.resolvedPath !== undefined,
+        running: managedBaseUrl !== undefined || tunnelProcessRunning,
+        managed: managedBaseUrl !== undefined,
+        ...(managedBaseUrl !== undefined
+          ? { url: managedBaseUrl, webhookUrl: `${managedBaseUrl}/webhook` }
+          : tunnelUrl === undefined ? {} : {
+              url: tunnelUrl,
+              webhookUrl: `${tunnelUrl}/webhook`,
+            }),
         installCommand: brew.resolvedPath !== undefined
           ? "brew install cloudflared"
           : "安装 Homebrew，然后运行：brew install cloudflared",
@@ -170,7 +177,7 @@ export class WhatsAppSetupService {
       ready: missing.length === 0
         && bindingEnabled
         && bridgeRunning
-        && tunnelProcessRunning
+        && (managedBaseUrl !== undefined || tunnelProcessRunning)
         && bridgeState?.webhookVerifiedAt !== undefined
     };
   }
@@ -230,6 +237,8 @@ export class WhatsAppSetupService {
         LANG: process.env.LANG ?? "",
         CLONE_HOME: this.#dataDirectory,
         CLONE_AI_WHATSAPP_ENV_FILE: this.#envFile,
+        CLONE_AI_WHATSAPP_HOST: process.env.CLONE_AI_WHATSAPP_HOST ?? "127.0.0.1",
+        CLONE_AI_WHATSAPP_PORT: process.env.CLONE_AI_WHATSAPP_PORT ?? "4318",
         CLONE_AI_WHATSAPP_BUILD_ID: buildId,
       },
     });
@@ -259,6 +268,7 @@ export class WhatsAppSetupService {
   }
 
   async startTunnel(): Promise<WhatsAppSetupStatus> {
+    if (this.#publicBaseUrl !== undefined) return this.status();
     const cloudflared = resolveExecutable("cloudflared");
     if (cloudflared.resolvedPath === undefined) {
       throw new Error("没有找到 cloudflared。先点击安装，或运行：brew install cloudflared");
@@ -305,6 +315,7 @@ export class WhatsAppSetupService {
   }
 
   async stopTunnel(): Promise<WhatsAppSetupStatus> {
+    if (this.#publicBaseUrl !== undefined) return this.status();
     const current = await readJsonFile<TunnelState>(this.#tunnelStateFile).catch(() => undefined);
     if (current !== undefined) await stopPid(current.pid, "cloudflared");
     await unlink(this.#tunnelStateFile).catch(() => undefined);
@@ -313,6 +324,9 @@ export class WhatsAppSetupService {
   }
 
   async installCloudflared(): Promise<{ installed: boolean; output: string }> {
+    if (this.#publicBaseUrl !== undefined) {
+      throw new Error("服务器部署已有固定 HTTPS 入口，不需要安装 cloudflared。");
+    }
     if (process.platform !== "darwin") throw new Error("一键安装目前只支持 macOS。");
     const brew = resolveExecutable("brew");
     if (brew.resolvedPath === undefined) throw new Error("没有找到 Homebrew，无法自动安装 cloudflared。");

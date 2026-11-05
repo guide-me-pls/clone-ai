@@ -129,3 +129,19 @@ test("turn-granularity eval finds the evidence turn itself", async (t) => {
   // 折回 session 后，证据 session 仍被找到。
   assert.equal(q1.recallAny["1"], 1);
 });
+
+test("the context boundary is judged separately from retrieval", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-memory-eval-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const dataPath = join(directory, "fixture.json");
+  await writeFile(dataPath, JSON.stringify(fixture()), "utf8");
+
+  const withContext = await runLongMemoryEval({ dataPath, granularity: "session", maxResults: 10, context: true });
+  const q1 = withContext.instanceDetails.find((detail) => detail.questionId === "q1")!;
+  assert.equal(q1.contextHit, true);
+  assert.ok(q1.contextItems >= 1 && q1.contextCharacters > 0);
+  assert.equal(withContext.context?.byType["single-session-user"]?.count, 1);
+
+  const without = await runLongMemoryEval({ dataPath, granularity: "session", maxResults: 10 });
+  assert.equal(without.context, undefined);
+});

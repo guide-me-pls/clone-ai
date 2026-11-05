@@ -17,6 +17,7 @@
  */
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { createMainAgentSession } from "./session.ts";
+import { recordPromptSnapshot } from "./prompt-snapshot.ts";
 import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
 
 const query = process.argv.slice(2).join(" ").trim();
@@ -35,7 +36,14 @@ await migrateLegacyCloneHome({
   legacyDirectory: defaultLegacyDirectory(paths.workspacePath),
   targetDirectory: paths.dataDirectory,
 });
-const { session } = await createMainAgentSession({ dataDirectory: paths.dataDirectory });
+const { session, prompt } = await createMainAgentSession({ dataDirectory: paths.dataDirectory, query });
+
+// The turn's inputs are recorded before the model sees them, so a failed run
+// can be attributed to a prompt revision instead of guessed at. Passing the
+// query means the snapshot includes the memories pushed for this turn.
+// 本回合的输入在模型看到之前就被记录，因此失败的运行可以归因到某一版提示词，而不是靠猜。
+// 传入 query 使快照包含本回合推送的记忆。
+await recordPromptSnapshot(paths.dataDirectory, prompt);
 
 session.subscribe((event) => {
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {

@@ -9,8 +9,9 @@
  */
 import { join } from "node:path";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import type { TSchema } from "typebox";
 
 import type { PlanStep } from "../../core/contracts.ts";
 import type { CloneRuntime } from "../../core/runtime.ts";
@@ -19,15 +20,24 @@ import { resolveClonePaths } from "../../config/clone-home.ts";
 import { GovernedMemorySource } from "../../memory/md-memory-store.ts";
 import { WorkerRegistry } from "../../workers/worker-registry.ts";
 import { compileBriefing } from "../situation-briefing.ts";
+import { pushRelevantMemories } from "../memory-push.ts";
 import { describeHistory, searchHistory } from "../conversation-history.ts";
 import { PersonalStateStore } from "../../state/personal-state-store.ts";
 import { createJournalStore } from "../../core/sqlite-journal.ts";
 import { describeAuthority, StandingPolicyStore } from "../../authority/standing-policy-store.ts";
 import { MdMemoryStore } from "../../memory/md-memory-store.ts";
 import { MemoryGovernance } from "../../memory/memory-governance.ts";
+import type { RegisteredToolSnapshot } from "../prompt-snapshot.ts";
 
 export interface KernelToolsOptions {
   dataDirectory: string;
+  /**
+   * Called once for every tool as it is registered, so prompt provenance hashes
+   * the table the model actually received instead of a hand-maintained copy.
+   * 每个工具注册时调用一次，使提示词溯源哈希的是模型真正收到的工具表，
+   * 而不是一份手工维护的副本。
+   */
+  onRegister?: (tool: RegisteredToolSnapshot) => void;
 }
 
 export interface PlanProposalResult {
@@ -231,7 +241,30 @@ export async function runStatusInfo(runtime: CloneRuntime, runId: string): Promi
     ...(run.planId === undefined ? [] : [`Plan: ${run.planId}`]),
     ...(run.activeStepId === undefined ? [] : [`Active step: ${run.activeStepId}`]),
     `Subagents: ${completed}/${subagents.length} completed`,
+    ...stepProgressLines(runtime, runId),
   ].join("\n");
+}
+
+/**
+ * Where the plan actually is. "Step 2 of 3, last said: reading files" is the
+ * difference between an answer the owner can use and one they have to ask a
+ * follow-up question for.
+ * 计划究竟走到哪。"第 2 步，共 3 步，最后报告：正在读取文件"——这正是所有者可以直接使用的回答与
+ * 需要再追问一次的回答之间的区别。
+ */
+function stepProgressLines(runtime: CloneRuntime, runId: string): string[] {
+  const progress = runtime.getRunProgress(runId);
+  if (progress.steps.length === 0) return [];
+  const done = progress.steps.filter((step) => step.completed).length;
+  return [
+    `Steps: ${done}/${progress.steps.length} complete`,
+    ...progress.steps.map((step, index) => {
+      const position = `${index + 1}/${progress.steps.length}`;
+      if (step.completed) return `  ${position} ${step.stepId}: done`;
+      if (step.stepId === progress.activeStepId) return `  ${position} ${step.stepId}: in progress${step.lastMessage === undefined ? "" : ` — ${step.lastMessage}`}`;
+      return `  ${position} ${step.stepId}: pending`;
+    }),
+  ];
 }
 
 export type OwnerStateInput =
@@ -424,12 +457,54 @@ export async function describeExecutors(dataDirectory: string): Promise<{ text: 
 }
 
 export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelToolsOptions): void {
+  // Per-turn memory push. before_agent_start fires on every user turn of a long
+  // desktop conversation, not once per session, so a memory approved five turns
+  // ago can reach the model on the turn it becomes relevant. The base prompt is
+  // the one already compiled at session start (charter + situation); this only
+  // appends, and never accumulates, so the prompt cannot grow turn after turn.
+  // 逐回合记忆推送。before_agent_start 在长桌面会话的每个用户回合触发，而不是每个会话一次，
+  // 因此在五回合前获批的记忆，能在它变得相关的那一回合到达模型。基础 Prompt 是会话启动时已编译
+  // 的那份（守则 + 现场简报）；这里只追加、从不累积，Prompt 不会逐回合变大。
+  pi.on?.("before_agent_start", async (event) => {
+    const query = event.prompt.trim();
+    if (query.length === 0) return undefined;
+    try {
+      const journal = createJournalStore(options.dataDirectory);
+      try {
+        const pushed = await pushRelevantMemories({ dataDirectory: options.dataDirectory, query, journal });
+        if (pushed === undefined) return undefined;
+        return { systemPrompt: `${event.systemPrompt}\n\n${pushed.text}` };
+      } finally {
+        (journal as { close?: () => void }).close?.();
+      }
+    } catch {
+      // Recall is an enhancement; a broken index must not silence the agent.
+      // 召回是增强项；索引损坏不能让 Agent 失声。
+      return undefined;
+    }
+  });
+
+  // One choke point for registration: provenance sees every tool, including
+  // ones added later, without a second list to keep in sync.
+  // 注册的唯一入口：溯源能看到每一个工具（包括以后新增的），不需要维护第二份清单。
+  const register = <TParams extends TSchema, TDetails = unknown, TState = any>(
+    tool: ToolDefinition<TParams, TDetails, TState>,
+  ): void => {
+    options.onRegister?.({
+      name: tool.name,
+      label: tool.label,
+      description: tool.description,
+      parameters: tool.parameters,
+    });
+    pi.registerTool(tool);
+  };
+
   const withKernel = async <T>(operation: (runtime: CloneRuntime) => Promise<T>): Promise<T> => {
     const { runtime, close } = await createKernelRuntimeSession(options.dataDirectory);
     try { return await operation(runtime); } finally { close(); }
   };
 
-  pi.registerTool({
+  register({
     name: "propose_work_plan",
     label: "Propose Work Plan",
     description:
@@ -467,7 +542,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "request_approval",
     label: "Request Approval",
     description:
@@ -482,7 +557,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "recall_memory",
     label: "Recall Memory",
     description:
@@ -497,7 +572,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "read_memory",
     label: "Read Memory",
     description:
@@ -512,7 +587,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "get_authority",
     label: "Get Authority",
     description:
@@ -526,7 +601,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "get_run_status",
     label: "Get Run Status",
     description:
@@ -540,7 +615,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "get_situation",
     label: "Get Situation",
     description:
@@ -576,7 +651,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "search_history",
     label: "Search History",
     description:
@@ -619,7 +694,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "record_state",
     label: "Record Owner State",
     description:
@@ -644,7 +719,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "install_agent",
     label: "Install Agent",
     description:

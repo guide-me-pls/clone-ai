@@ -107,11 +107,14 @@ export interface WorkOrderBudget {
   maxDurationMs: number;
   maxAttempts: number;
   /**
-   * Advisory only. Black-box CLI workers do not expose model or tool counts,
-   * so the Kernel cannot enforce these ceilings. Duration and attempts are
-   * the budgets that actually stop work.
-   * 仅作声明。黑盒 CLI Worker 不暴露模型或工具调用次数，Kernel 无法执行这两个上限。
-   * 真正能停住工作的预算是时长与尝试次数。
+   * Enforced where the adapter reports model and tool activity: the Kernel
+   * counts `tool_started`/`tool_completed` and, when the adapter declares it,
+   * `model_call` events, and fails the step past the ceiling. A black-box CLI
+   * cannot count what it does not report, so for those workers the ceiling is
+   * still only a declaration — the duration budget is what stops them.
+   * 在 Adapter 报告模型与工具活动处执行：Kernel 统计 `tool_started`/`tool_completed`，并在
+   * Adapter 声明时统计 `model_call` 事件，超过上限即判该步骤失败。黑盒 CLI 无法报告自己
+   * 没暴露的东西，因此对它们这两个上限仍只是声明——真正能停住它们的是时长预算。
    */
   maxModelCalls?: number;
   maxToolCalls?: number;
@@ -331,6 +334,18 @@ export type JournalEventType =
   | "memory.restored"
   | "memory.mutation.discarded"
   | "memory.recalled"
+  // The improvement loop: a suggestion derived from outcomes, and the owner's
+  // decision on it. 改进环路：由结局得出的建议，以及所有者对它的决定。
+  // A conversation turn asked for memory mining, and that request was drained.
+  // Separate from the task request/extracted pair so a conversation request
+  // never marks its run as mined for a task.
+  // 一个对话回合请求了记忆提炼，以及该请求已被处理。与任务请求/提炼完成分开，使对话请求
+  // 不会把同一 Run 标记为任务已提炼。
+  | "memory.conversation.requested"
+  | "memory.conversation.extracted"
+  | "improvement.suggested"
+  | "improvement.applied"
+  | "improvement.dismissed"
   // Personal state is journal-projected like every other durable fact, so the
   // owner's model of themselves survives a deleted projection.
   // 个人状态与其他持久事实一样由 Journal 投影得出，因此即使投影被删除，所有者对自身的
@@ -355,7 +370,14 @@ export type JournalEventType =
   // tokens; otherwise duration and model id still land so the ledger is not empty.
   // 模型回合的费用/时长。SDK 有 token 时从会话元数据抄来；否则仍记下时长与模型 id，
   // 账本不会是空的。
-  | "usage.recorded";
+  | "usage.recorded"
+  // What the Main Agent was told before it answered: hashes of the charter,
+  // briefing, and tool table plus the model that read them. Without this a
+  // failure cannot be attributed to a prompt revision, and an "improvement"
+  // cannot be compared with the baseline it replaced.
+  // 主 Agent 回答前收到的输入：charter、简报与工具表的哈希，以及读取它们的模型。
+  // 没有它，失败无法归因到某一版提示词，"改进"也无法与它所替换的基线比较。
+  | "main_agent.prompt_snapshot";
 
 export interface JournalEvent {
   id: string;
@@ -443,6 +465,8 @@ export type ExecutionEvent =
   | { type: "session_started"; sessionId: string }
   | { type: "message_delta"; text: string }
   | { type: "tool_started"; toolCallId: string; tool: string; inputSummary?: string }
+  /** One model round trip. Adapters that can count them emit this. 一次模型往返。能计数的 Adapter 发出此事件。 */
+  | { type: "model_call" }
   | { type: "tool_completed"; toolCallId: string; tool: string; isError: boolean }
   | { type: "progress"; message: string }
   | { type: "evidence"; evidence: Omit<Evidence, "id" | "runId" | "stepId" | "createdAt"> }

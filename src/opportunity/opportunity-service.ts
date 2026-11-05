@@ -17,11 +17,15 @@ import { randomUUID } from "node:crypto";
 import type { JournalStore } from "../core/journal.ts";
 import type { Commitment, Goal } from "../state/personal-state.ts";
 import { projectPersonalState } from "../state/state-projector.ts";
+import { emptyPersonalState } from "../state/personal-state.ts";
+import { readSince, readTypes } from "../core/journal-types.ts";
 import { dedupeOpportunities, scanOpportunities, type OpportunityCard } from "./opportunity.ts";
 import { describeFailureForOwner } from "../core/failure-display.ts";
 
 export class OpportunityService {
   readonly #journal: JournalStore;
+  #state = emptyPersonalState();
+  #stateSequence = 0;
 
   constructor(journal: JournalStore) {
     this.#journal = journal;
@@ -35,8 +39,13 @@ export class OpportunityService {
    * 因此再次扫描会收敛而不是重复。
    */
   async scanAndRecord(now = new Date()): Promise<OpportunityCard[]> {
-    const events = await this.#journal.list();
-    const state = projectPersonalState(events);
+    // The state projection is here the expensive part; it is read incrementally
+    // where the store allows, so a scan does not replay all history per tick.
+    // 这里的开销大头是状态投影；存储允许时增量读取，使每次扫描不必重放整段历史。
+    const events = await readSince(this.#journal, this.#stateSequence);
+    const state = projectPersonalState(events, this.#stateSequence > 0 ? this.#state : undefined);
+    this.#state = state;
+    this.#stateSequence = state.lastAppliedSequence;
     const existing = new Set(
       events
         .filter((event) => event.type === "opportunity.proposed")
@@ -103,7 +112,7 @@ export class OpportunityService {
    * 当前所有未处置的卡片，新的在前。已处置的卡片被排除：所有者已接受或已拒绝的卡片
    * 不再是需要他做的决定，重复展示会让分身显得健忘。 */
   async list(): Promise<OpportunityCard[]> {
-    const events = await this.#journal.list();
+    const events = await readTypes(this.#journal, ["opportunity.proposed", "opportunity.resolved"]);
     const resolved = new Set(
       events
         .filter((event) => event.type === "opportunity.resolved")
@@ -131,7 +140,7 @@ export class OpportunityService {
 
   /** A card the owner accepted or dismissed, for audit and for tests. 已被所有者处置的卡片。 */
   async resolvedIds(): Promise<string[]> {
-    const events = await this.#journal.list();
+    const events = await readTypes(this.#journal, ["opportunity.resolved"]);
     return events
       .filter((event) => event.type === "opportunity.resolved")
       .map((event) => String((event.payload as { id?: unknown }).id ?? ""))
@@ -140,7 +149,7 @@ export class OpportunityService {
 
   /** Finds a proposed card by id, resolved or not. 按 id 查找已提出的卡片。 */
   async find(cardId: string): Promise<OpportunityCard | undefined> {
-    const events = await this.#journal.list();
+    const events = await readTypes(this.#journal, ["opportunity.proposed"]);
     return events
       .filter((event) => event.type === "opportunity.proposed")
       .map((event) => event.payload as OpportunityCard)

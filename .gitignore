@@ -7,6 +7,7 @@ coverage/
 /dist/
 *.log
 server-log.txt
+deploy/server.env
 apps/desktop/src-tauri/binaries/
 apps/desktop/src-tauri/target/
 apps/desktop/.build/
