@@ -362,7 +362,7 @@ async function runRecordedMainAgentTurn(
     ownerPid: process.pid,
   });
   try {
-    const result = await runMainAgentQuery(dataDirectory, text, options);
+    const result = await runMainAgentQuery(dataDirectory, text, { ...options, turnId });
     if (result.error !== undefined) {
       throw new Error(result.error);
     }
@@ -1721,6 +1721,24 @@ async function handleRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/main-agent/prompt-snapshots") {
+    // Recent prompt provenance, newest first. The full material lives in the
+    // content-addressed file named by `locator`; this listing carries hashes,
+    // model, and effort so a change can be spotted without opening it.
+    // 最近的提示词溯源，新的在前。完整材料在 `locator` 指向的内容寻址文件里；此列表
+    // 只带哈希、模型与强度，不打开文件就能看出变化。
+    const requested = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
+    const take = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 100) : 20;
+    const events = await context.journal.list();
+    const snapshots = events
+      .filter((event) => event.type === "main_agent.prompt_snapshot")
+      .slice(-take)
+      .reverse()
+      .map((event) => ({ sequence: event.sequence, occurredAt: event.occurredAt, ...asRecord(event.payload) }));
+    sendJson(response, 200, { snapshots });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/requests") {    const body = await readJsonBody(request);
     const query = typeof body.query === "string" ? body.query.trim() : "";
     if (query.length === 0) {
@@ -2632,6 +2650,7 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
     "memory.candidate.proposed": "提出记忆候选",
     "memory.recalled": "召回本地记忆",
     "usage.recorded": "记录用量",
+    "main_agent.prompt_snapshot": "记录提示词快照",
     "audit.labeled": "人工判定",
     "authority.changed": "修改权限",
   };
@@ -2742,6 +2761,13 @@ function detailFor(type: JournalEvent["type"], payload: Record<string, unknown>)
   }
   if (type === "agent.install_failed") {
     return `安装 ${String(payload.agentId ?? "Worker")} 失败：${String(payload.message ?? "")}`;
+  }
+  if (type === "main_agent.prompt_snapshot") {
+    const model = typeof payload.modelId === "string" ? payload.modelId : "默认模型";
+    const effort = typeof payload.effort === "string" ? ` · 强度 ${payload.effort}` : "";
+    const tools = Array.isArray(payload.toolNames) ? payload.toolNames.length : 0;
+    const hash = typeof payload.promptHash === "string" ? payload.promptHash.slice(0, 8) : "?";
+    return `${model}${effort} · ${tools} 个工具 · 提示词 ${hash}`;
   }
   if (typeof payload.summary === "string") {
     return payload.summary;
