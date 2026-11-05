@@ -216,6 +216,10 @@ export class SqliteJournalStore implements JournalStore {
     return this.appendTransactional([event], claim)[0]!;
   }
 
+  async appendClaimedIfUnchanged(event: NewJournalEvent, claim: { runId: string; ownerId: string }, lastSequence: number): Promise<JournalEvent | undefined> {
+    return this.appendTransactional([event], claim, undefined, lastSequence)[0];
+  }
+
   async appendBatchClaimed(events: readonly NewJournalEvent[], claim: { runId: string; ownerId: string }): Promise<JournalEvent[]> {
     return this.appendTransactional(events, claim);
   }
@@ -228,6 +232,7 @@ export class SqliteJournalStore implements JournalStore {
     events: readonly NewJournalEvent[],
     claim?: { runId: string; ownerId: string },
     expected?: { runId: string; status: RunStatus },
+    lastSequence?: number,
   ): JournalEvent[] {
     this.#db.exec("BEGIN IMMEDIATE");
     try {
@@ -245,6 +250,14 @@ export class SqliteJournalStore implements JournalStore {
         const deadline = current === undefined ? NaN : Date.parse(current.lease_until);
         if (current === undefined || current.owner_id !== claim.ownerId || !Number.isFinite(deadline) || deadline <= Date.now()) {
           throw new Error(`Run claim lost for ${claim.runId}; refusing a stale executor's journal write.`);
+        }
+        if (lastSequence !== undefined) {
+          const latest = this.#db.prepare("SELECT sequence FROM journal_events WHERE run_id = ? ORDER BY sequence DESC LIMIT 1")
+            .get(claim.runId) as { sequence: number | bigint } | undefined;
+          if (latest === undefined || Number(latest.sequence) !== lastSequence) {
+            this.#db.exec("ROLLBACK");
+            return [];
+          }
         }
       }
       const insert = this.#db.prepare("INSERT INTO journal_events (id, type, occurred_at, task_id, run_id, payload) VALUES (?, ?, ?, ?, ?, ?)");

@@ -19,6 +19,30 @@ When a read fails on a path named in the work order or step instructions, the na
 `npm run bench -- --provider native` 现在不用 CLI、也不需要 `--unsafe-host`，跑同一组固定任务；报告记录精确用量、验证结果与失败原因。验证器现在会拿到基准工作区，修复了此前让 summarize 都失败的相对产物检查。2026-11-05 的首次对比：四个可解任务上原生 4/5、Claude 4/5；missing-input 两边都不符合预期，原因相反——原生伪造产物，Claude 在验证阶段干净失败。
 
 ### Native worker is a first-class provider with exact usage
+### Self-check and push command
+
+`npm run selfcheck:push` refuses a dirty worktree, runs the full deterministic
+suite, typecheck and regression gate, fetches `origin/main`, refuses to push
+when the branch is behind, and otherwise pushes the current `main`. It never
+commits or force-pushes.
+
+`npm run selfcheck:push` 会拒绝脏工作区，依次运行完整确定性测试、类型检查与回归门禁，
+拉取 `origin/main`，落后时拒绝推送，否则推送当前 `main`。它不会自动提交，也不会强推。
+
+### Shared audit for every Agent invocation
+
+Every call into the Main Agent now writes a shared invocation record under
+`~/.clone/audit/invocations.jsonl`, independent of `CLONE_HOME`. The audit view
+has an **Agent invocations** tab showing caller, request, visible reply, error,
+model, effort, Run ids and duration. CLI, desktop and WhatsApp callers are
+labelled; secrets are redacted and private reasoning is never stored.
+
+每次 Main Agent 调用现在都会写入 `~/.clone/audit/invocations.jsonl` 下的共享调用记录，
+不受 `CLONE_HOME` 影响。审计页新增 **Agent 调用** 页签，显示调用者、请求、可见回复、
+错误、模型、强度、Run id 与耗时。CLI、桌面与 WhatsApp 调用都会标明来源；密钥会脱敏，
+模型私有推理不会保存。
+
+### Avoid false file expectations
 
 `native` is now registered in the provider catalog, so the owner can select it per agent like any CLI: the adapter id is the configured agent id, role capabilities drive routing, and external roles are refused because there is no governed action connector. Its model client reports exact token usage per call (both OpenAI and Anthropic-style usage blocks), the Kernel journals `usage.recorded` with runId and stepId, and the audit shows the exact numbers next to the gateway's time-window estimate. It still requires `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`; defaults are unchanged.
 
@@ -29,6 +53,24 @@ When a read fails on a path named in the work order or step instructions, the na
 CLI, `npm run main`, the desktop/server companion, and WhatsApp now write the same two journal events per turn — `main_agent.turn_started` and `main_agent.turn_completed` — plus `agent.tool_started` / `agent.tool_completed` for every Main Agent tool call. Each turn carries the input and reply (PII-redacted and capped), model, provider, reasoning effort, token usage, prompt material hash, spawned run ids, and tool calls with redacted argument summaries. The audit page gains a **Main Agent turns** tab, `clone-ai audit turns` prints the same, and `GET /api/audit/turns` serves it. The existing `main-agent-turns.jsonl` ledger is written by the same module, so the conversation view and the journal cannot disagree.
 
 CLI、`npm run main`、桌面/服务器 companion 与 WhatsApp 现在为每个回合写同样两条 Journal 事件——`main_agent.turn_started` 与 `main_agent.turn_completed`——并为每次主 Agent 工具调用写 `agent.tool_started` / `agent.tool_completed`。每个回合携带输入与回复（PII 脱敏并截断）、模型、Provider、推理强度、token 用量、提示词材料哈希、产生的 Run id，以及带脱敏参数摘要的工具调用。审计页新增 **主 Agent 回合** 标签页，`clone-ai audit turns` 打印同样的内容，`GET /api/audit/turns` 提供数据。既有的 `main-agent-turns.jsonl` 台账由同一模块写入，因此对话视图与 Journal 不会互相矛盾。
+### Avoid repeating successfully repaired traces
+
+Nightly RSI records each successfully handled trace's runId and exact-file SHA-256 in
+`rsi/consumed-traces.json`. Unchanged traces are skipped; changed content and failed
+repairs remain eligible. Corrupt state is treated as empty and write failures only warn.
+
+夜间 RSI 在 `rsi/consumed-traces.json` 中记录成功处理的轨迹 runId 与文件 SHA-256；
+内容未变的轨迹会跳过，内容改变或修复失败的轨迹仍可处理。状态损坏时按空状态处理，写入失败只警告。
+
+
+### Conservative recovery for orphaned planning
+
+An unplanned Run left in planning for more than 15 minutes is marked failed
+only when it has no live claim. A conditional fenced write protects concurrent
+plans and cancellations; stores without that capability leave the Run alone.
+
+没有计划的 Run 若在规划阶段超过 15 分钟未更新，只有在没有存活领取时才会被标记为失败。
+带条件的围栏写入保护并发生成的计划和取消操作；不支持该能力的存储不会处理这类 Run。
 
 ### An offline regression gate
 

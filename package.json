@@ -20,6 +20,7 @@
     "bench:memory": "node --experimental-strip-types benchmark/long-memory-eval.ts",
     "gate": "node --experimental-strip-types benchmark/gate.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
+    "selfcheck:push": "node scripts/selfcheck-push.mjs",
     "typecheck": "tsc --noEmit",
     "cli": "node src/cli/clone-ai.ts",
     "bench:journal": "node --experimental-strip-types benchmark/journal-stress.ts",
