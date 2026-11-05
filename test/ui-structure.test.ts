@@ -112,6 +112,34 @@ test("composer Enter respects IME composition and the 100 ms grace period", asyn
   assert.equal(submits, 1);
 });
 
+test("screenshots pasted from the macOS clipboard become visible attachments", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("function clipboardAttachmentFiles");
+  const end = app.indexOf("const icon", start);
+  assert.ok(start >= 0 && end > start, "clipboard attachment extraction must exist");
+  assert.match(app, /\$\("query"\)\.addEventListener\("paste"/, "the composer must handle paste events");
+
+  const extract = new Function("File", `${app.slice(start, end)}\nreturn clipboardAttachmentFiles;`)(File) as (data: unknown) => File[];
+  const png = new File([new Uint8Array([137, 80, 78, 71])], "image.png", { type: "image/png" });
+  const jpeg = new File([new Uint8Array([255, 216, 255])], "photo.jpg", { type: "image/jpeg" });
+
+  const items = extract({
+    items: [
+      { kind: "file", type: "image/png", getAsFile: () => png },
+      { kind: "string", type: "text/plain", getAsFile: () => null },
+    ],
+    files: [],
+  });
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.name, "剪贴板截图-1.png");
+  assert.equal(items[0]!.type, "image/png");
+
+  const fallback = extract({ items: [], files: [jpeg] });
+  assert.equal(fallback.length, 1);
+  assert.equal(fallback[0]!.name, "剪贴板截图-1.jpg");
+  assert.deepEqual(extract({ items: [], files: [{ type: "image/tiff" }] }), []);
+});
+
 test("populated conversations stay vertical and empty-state flex requires no messages", async () => {
   const app = await read("app.js");
   const start = app.indexOf("function renderSession(session)");
