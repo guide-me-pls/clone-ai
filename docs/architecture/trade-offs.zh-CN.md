@@ -114,6 +114,22 @@ Journal 追加一条 `main_agent.prompt_snapshot` 事件，携带各项哈希、
 
 **可推翻条件。** 若每回合延迟变得明显，或 Prompt 缓存节省的收益压过推送准确度。
 
+## 2026-11-05 —— 日历与邮件以只读 Connector 接入
+
+**决定：** `CalendarConnector` 从文件或 https URL 读取 ICS；`EmailConnector` 读取 IMAP 的 INBOX。
+两者都不能写入、不能接受邀请、不能发信。凭据只以变量名出现（`env`），在构建时从进程环境读取；
+变量缺失时该 Connector 保持禁用并说明原因。
+
+**为什么用 ICS 与 IMAP 而不是厂商 API。** 一个读取器就能覆盖 Apple、Google、Outlook、Nextcloud 的
+导出，无需 OAuth、厂商 SDK，也不存 token 刷新流程。IMAP 是每个邮箱都支持的协议。
+
+**放弃了什么。** 没有推送：两者都在维护扫描中轮询，日历变化要等一个间隔，而非即时。邮件只取摘要而非
+完整正文，也没有附件。邮件只读，所以"替我回复"仍是一个需要所有者批准的独立工作单——这是刻意的，
+但也意味着分身还不能端到端地回复一封邮件。
+
+**可推翻条件。** 若回复成为产品需求，应新增带 Receipt 的动作 Connector，而不是给这个观察 Connector
+加写入方法。
+
 ## 2026-11-05 —— 取代上一条：对话提炼默认走廉价本地过滤
 
 **决定：** `CLONE_AI_MEMORY_MINING` 现在是三档开关。未设置 = `filtered`：回合里含"持久陈述信号"时
