@@ -19,5 +19,9 @@ test("the native app is the only desktop UI entry", async () => {
   assert.match(macShell, /NSSegmentedControl/);
   assert.match(macShell, /NSMenu\(title: "视图"\)/);
   assert.match(macShell, /navigationTitles = \["对话", "定时任务", "Agent", "记忆", "设置"\]/);
+  assert.match(macShell, /WKUIDelegate/);
+  assert.match(macShell, /webView\.uiDelegate = self/);
+  assert.match(macShell, /runOpenPanelWith parameters: WKOpenPanelParameters/);
+  assert.match(macShell, /panel\.allowedContentTypes = \[\.image, \.movie\]/);
   assert.doesNotMatch(macShell, /loadHTMLString/);
 });
