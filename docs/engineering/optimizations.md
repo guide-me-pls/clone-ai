@@ -585,3 +585,35 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   file tools only, so a role that later needs network or external actions must
   change provider.
 - **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — Re-run after the defaults changed
+
+- **Goal / hypothesis:** confirm the default switch did not break the real
+  pipeline (routing, tools, audit), and re-measure with the new defaults.
+- **Trade-off:** [worker defaults](../architecture/trade-offs.md#2026-11-05--native-worker-is-the-default-for-eligible-roles-when-configured)
+  and [main agent default](../architecture/trade-offs.md#2026-11-05--native-main-agent-is-the-default-when-configured).
+- **Benchmark run — worker set:** command
+  `CLONE_AI_NATIVE_MODEL=360/moonshotai/kimi-k3.1-pro CLONE_AI_NATIVE_BASE_URL=http://127.0.0.1:3425 npm run bench -- --provider native --tasks summarize,two-step-chain,three-step-pipeline,code-tool,missing-input`;
+  model `360/moonshotai/kimi-k3.1-pro` via Magpie; result
+  `benchmark/results/native-2026-11-05T11-09-55-300Z.json`. **5/5**: summarize
+  12.4s / 2,252 tok / 3 calls; two-step-chain 38.7s / 5,146 / 6; three-step
+  pipeline 111.2s / 12,420 / 11; code-tool 46.5s / 4,922 / 5; missing-input
+  19.1s / 1,673 / 2, an expected failure.
+- **Benchmark run — Main Agent, two passes:** command
+  `CLONE_AI_BENCH_MAIN_MODEL=360/anthropic/claude-sonnet-5-5 npm run bench:main`;
+  result files `main-agent-2026-11-05T11-05-57-652Z.json` and
+  `main-agent-2026-11-05T11-12-52-700Z.json`. **Both passes 3/3 for both
+  runtimes.**
+- **Variance, not regression:** the two passes disagree on which runtime is
+  faster, which is the useful finding. Pass 1: direct Pi 3.0s vs native 2.2s;
+  authority 15.9s vs 11.7s; plan 6.6s vs 45.2s (one native outlier).
+  Pass 2: direct 2.9s vs 1.2s; authority 5.9s vs 8.4s; plan 10.4s vs 11.1s
+  (Pi called `get_authority` before proposing in this pass, so its plan tokens
+  rose to 13,174). Tokens stay close (native 3,795–3,796 vs Pi 3,864 on direct).
+- **What this run changed:** nothing in code. It confirmed the defaults work
+  end to end — tools were called, exactly one run was created per plan task, and
+  every turn completed — and it showed that a one-run-per-cell comparison cannot
+  rank the runtimes on latency.
+- **Next:** to compare latency meaningfully, run each cell N times and report the
+  median; the current script runs once by design and says so.
+- **Reversal condition:** see both trade-off entries.

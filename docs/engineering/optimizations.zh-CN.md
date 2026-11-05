@@ -410,3 +410,29 @@
 - **优点 / 缺点：** 配置了端点的部署不再取决于恰好装了哪个 CLI；`external` 仍走受治理的
   CLI 路径。原生 Worker 只有文件工具，因此日后需要网络或外部动作的角色必须更换 Provider。
 - **推翻条件：** 见取舍条目。
+
+## 2026-11-05 — 默认切换后的重跑
+
+- **目标 / 假设：** 确认默认切换没有破坏真实链路（路由、工具、审计），并用新默认重新测量。
+- **取舍：** [Worker 默认](../architecture/trade-offs.zh-CN.md#2026-11-05--配置了端点的原生-worker-成为可承担角色的默认)
+  与[主 Agent 默认](../architecture/trade-offs.zh-CN.md#2026-11-05--配置了端点的原生主-agent-成为默认)。
+- **Benchmark 运行 — Worker 套件：** 命令
+  `CLONE_AI_NATIVE_MODEL=360/moonshotai/kimi-k3.1-pro CLONE_AI_NATIVE_BASE_URL=http://127.0.0.1:3425 npm run bench -- --provider native --tasks summarize,two-step-chain,three-step-pipeline,code-tool,missing-input`；
+  模型 `360/moonshotai/kimi-k3.1-pro` 经 Magpie；结果
+  `benchmark/results/native-2026-11-05T11-09-55-300Z.json`。**5/5**：summarize
+  12.4s / 2,252 tok / 3 次调用；two-step-chain 38.7s / 5,146 / 6；three-step
+  pipeline 111.2s / 12,420 / 11；code-tool 46.5s / 4,922 / 5；missing-input
+  19.1s / 1,673 / 2，为预期失败。
+- **Benchmark 运行 — 主 Agent，两轮：** 命令
+  `CLONE_AI_BENCH_MAIN_MODEL=360/anthropic/claude-sonnet-5-5 npm run bench:main`；
+  结果文件 `main-agent-2026-11-05T11-05-57-652Z.json` 与
+  `main-agent-2026-11-05T11-12-52-700Z.json`。**两轮中两个运行时都是 3/3。**
+- **是波动，不是回退：** 两轮对"谁更快"给出了相反结论，这才是关键发现。第一轮：direct
+  Pi 3.0s vs 原生 2.2s；authority 15.9s vs 11.7s；plan 6.6s vs 45.2s（原生一次离群）。
+  第二轮：direct 2.9s vs 1.2s；authority 5.9s vs 8.4s；plan 10.4s vs 11.1s（这一轮 Pi
+  在提案前先调用了 `get_authority`，其 plan tokens 升到 13,174）。tokens 保持接近
+  （direct 上原生 3,795–3,796 vs Pi 3,864）。
+- **这次运行改变了什么：** 代码没有变化。它确认默认值端到端可用——工具被调用、每个计划
+  任务恰好创建一个 Run、每个回合都完成——并说明每格只跑一次无法对延迟排序。
+- **下一步：** 要比较延迟，每格跑 N 次并报告中位数；当前脚本刻意只跑一次，并已说明。
+- **推翻条件：** 见两条取舍条目。
