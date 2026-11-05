@@ -70,6 +70,14 @@ The native endpoint comes from `CLONE_AI_NATIVE_BASE_URL` (default
 `http://127.0.0.1:3425`). This is a one-run-per-cell comparison, not a
 statistical benchmark; the model itself varies between runs.
 
+## Long-context validation (`npm run bench:long`)
+
+Seeds 24 completed turns with a needle in the oldest, runs one real native turn
+with `historyChars=4000`, captures the outgoing request, and checks: the summary
+is present, the needle is in it, the newest turn stayed verbatim, the reply
+contains the needle, and there was no error. The report lands under
+`benchmark/results/`.
+
 ## Regression gate (`npm run gate`)
 
 The offline gate runs on every commit in CI and costs nothing: it re-runs the
