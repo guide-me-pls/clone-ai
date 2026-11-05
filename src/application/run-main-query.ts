@@ -10,6 +10,7 @@ import { basename, join } from "node:path";
 
 import type { Run } from "../core/contracts.ts";
 import type { ConversationMemoryPipeline } from "../memory/conversation-memory-pipeline.ts";
+import { shouldMine } from "../memory/mining-policy.ts";
 import { createKernelRuntimeSession } from "../main-agent/tools/kernel-tools.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
 import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
@@ -65,7 +66,7 @@ export async function runMainAgentQuery(
       const { MemoryPipeline } = await import("../memory/memory-pipeline.ts");
       const { AgentMemoryWorker } = await import("../memory/agent-memory-worker.ts");
       const { ConversationMemoryPipeline } = await import("../memory/conversation-memory-pipeline.ts");
-      if (process.env.CLONE_AI_MEMORY_MINING === "1") {
+      if (shouldMine(text)) {
         const journal = createJournalStore(dataDirectory);
         conversationMemory = new ConversationMemoryPipeline(
           journal,

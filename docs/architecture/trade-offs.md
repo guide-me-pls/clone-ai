@@ -249,6 +249,26 @@ the system prompt changes between turns, which weakens prompt caching.
 **Reversal condition.** If per-turn latency becomes visible, or if prompt
 caching savings outweigh push accuracy.
 
+## 2026-11-05 — Supersedes: conversation mining defaults to a cheap local filter
+
+**Decided:** `CLONE_AI_MEMORY_MINING` is now a three-way switch.
+Unset = `filtered`: a turn is mined when it contains a durable-statement
+signal (`src/memory/mining-policy.ts`), `off` silences both conversation and
+task mining, `all` mines every turn. Task mining keeps the deterministic worker
+unless the mode is `all`.
+
+**Why the earlier entry changed.** "Opt-in" meant the feature a personal agent
+needs most — learning without being asked — was off out of the box. The filter
+is local, has no model call, and errs toward mining: a missed statement is a
+memory never learned, an extra call is a few cents.
+
+**What was given up.** Turns without a signal are never mined, so a fact stated
+plainly but without any of the matched patterns ("杭州今天下雨" followed later by
+a request) can be missed. `all` is the escape hatch.
+
+**Reversal condition.** If the filter's miss rate is visible in practice, widen
+the signal list or make `all` the default.
+
 ## 2026-11-04 — Conversation mining is opt-in (`CLONE_AI_MEMORY_MINING=1`)
 
 **Decided:** off by default, same as task mining.
