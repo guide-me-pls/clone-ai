@@ -17,6 +17,7 @@ import type {
   RunStatus,
   RuntimeAdapter,
   RuntimeCapabilities,
+  ModelUsage,
   SubagentRun,
   SubagentWorkOrder,
   Task,
@@ -1520,6 +1521,7 @@ export class CloneRuntime {
         if (signal?.aborted) throw new Error(`Run ${input.run.id} lost its execution claim.`);
         if (event.type === "completed") {
           completion = event.summary;
+          if (event.usage !== undefined) await this.recordExecutionUsage(input, event.usage);
           continue;
         }
         this.assertWithinBudget(input, event);
@@ -1555,11 +1557,41 @@ export class CloneRuntime {
     }
   }
 
+  /**
+   * Exact usage from an adapter that counted its own model calls. Unlike the
+   * gateway's time-window inference, this is attributable to one step.
+   * 来自能自行计数的 Adapter 的精确用量。与网关按时间窗口的推断不同，它可以归因到单个步骤。
+   */
+  private async recordExecutionUsage(input: ExecutionAssignment, usage: ModelUsage): Promise<void> {
+    await this.record({
+      type: "usage.recorded",
+      taskId: input.task.id,
+      runId: input.run.id,
+      payload: {
+        source: "native-worker",
+        runId: input.run.id,
+        stepId: input.step.id,
+        ...(input.workOrder === undefined ? {} : { workOrderId: input.workOrder.id }),
+        durationMs: usage.durationMs ?? 0,
+        ...(usage.modelCalls === undefined ? {} : { modelCalls: usage.modelCalls }),
+        ...(usage.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
+        ...(usage.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
+        ...(usage.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
+        ...(usage.cachedInputTokens === undefined ? {} : { cachedInputTokens: usage.cachedInputTokens }),
+      },
+    });
+  }
+
   private async recordExecutionEvent(
     input: ExecutionAssignment,
     event: Exclude<ExecutionEvent, { type: "completed" }>,
     allowedEvidenceKinds: ReadonlySet<Evidence["kind"]>,
   ): Promise<void> {
+    // A failed adapter still spent model calls; record them before the failure.
+    // 失败的 Adapter 同样消耗了模型调用；在失败之前先记录用量。
+    if (event.type === "failed" && event.usage !== undefined) {
+      await this.recordExecutionUsage(input, event.usage);
+    }
     if (event.type === "session_started") {
       await this.record({
         type: input.workOrder === undefined ? "execution.progress" : "subagent.session_started",

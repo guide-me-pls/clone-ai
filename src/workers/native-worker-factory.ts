@@ -88,12 +88,18 @@ export function fileTools(): NativeToolSpec[] {
 }
 
 /** A native worker when configured, otherwise undefined. 已配置时返回原生 Worker，否则 undefined。 */
-export function createConfiguredNativeWorker(environment: NodeJS.ProcessEnv = process.env, workspace = process.cwd()): NativeAgentWorker | undefined {
+export function createConfiguredNativeWorker(
+  environment: NodeJS.ProcessEnv = process.env,
+  workspace = process.cwd(),
+  options: { id?: string; label?: string; workCapabilities?: readonly string[] } = {},
+): NativeAgentWorker | undefined {
   const config = readNativeWorkerEnvironment(environment, workspace);
   if (config.model === undefined || config.baseUrl === undefined) return undefined;
   return new NativeAgentWorker({
-    id: "native",
-    label: "Native worker",
+    id: options.id ?? "native",
+    label: options.label ?? "Native worker (OpenAI-compatible)",
+    providerId: "native",
+    ...(options.workCapabilities === undefined ? {} : { workCapabilities: options.workCapabilities }),
     tools: fileTools(),
     createClient: () => new OpenAiCompatibleClient({
       baseUrl: config.baseUrl!,

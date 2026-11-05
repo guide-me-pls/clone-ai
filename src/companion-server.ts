@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,6 +18,11 @@ import { loadProviderRegistry } from "./workers/provider-catalog.ts";
 import { WorkerSettingsStore } from "./config/worker-settings.ts";
 import { WorkerRegistry } from "./workers/worker-registry.ts";
 import { runMainAgentQuery } from "./application/run-main-query.ts";
+import {
+  readMainAgentTurnRecords,
+  recordMainAgentTurnInterrupted,
+  type MainAgentTurnRecord,
+} from "./main-agent/turn-audit.ts";
 import { MainAgentBusyError } from "./main-agent/prompt-lock.ts";
 import {
   authorizeCompanionRequest,
@@ -109,21 +114,15 @@ export function normalizeMainAgentRequestText(value: unknown): string {
 /**
  * The desktop Main Agent uses an append-only turn ledger so an interrupted
  * model call is still visible after a restart instead of becoming a spinner
- * that never resolves.
+ * that never resolves. The record type and its readers live in the shared
+ * turn-audit module, so CLI turns and desktop turns use the same shape.
  *
  * 桌面 Main Agent 使用只追加的回合账本：即使模型调用异常中断，重启后仍能看到
- * 这次失败，而不会留下一个永远转圈的占位卡片。
+ * 这次失败，而不会留下一个永远转圈的占位卡片。记录类型与读取函数位于共享的
+ * turn-audit 模块，因此 CLI 回合与桌面回合形状一致。
  */
-export interface MainAgentTurnRecord {
-  id: string;
-  text: string;
-  status: "started" | "completed" | "failed" | "interrupted";
-  startedAt: string;
-  ownerPid?: number;
-  completedAt?: string;
-  reply?: string;
-  error?: string;
-}
+export { readMainAgentTurnRecords };
+export { recordMainAgentTurnInterrupted as recordMainAgentClientInterruption };
 
 /**
  * Mark a turn left in `started` by a dead daemon as interrupted. A PID-bearing
@@ -152,13 +151,12 @@ export async function reconcileInterruptedMainAgentTurns(dataDirectory: string):
     }
     const recordOwnerPid = record.ownerPid ?? ownerPid;
     if (recordOwnerPid !== undefined && !isProcessAlive(recordOwnerPid)) {
-      const interrupted: MainAgentTurnRecord = {
-        ...record,
-        status: "interrupted",
-        completedAt: new Date().toISOString(),
+      const interrupted = await recordMainAgentTurnInterrupted(dataDirectory, {
+        turnId: record.id,
+        text: record.text,
         error: "The local runtime stopped before this turn completed.",
-      };
-      await appendMainAgentTurnRecord(dataDirectory, interrupted);
+        startedAt: record.startedAt,
+      });
       result.push(interrupted);
     } else {
       result.push(record);
@@ -189,6 +187,7 @@ function isProcessAlive(pid: number): boolean {
 function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
+
 
 /**
  * Runs the Main Agent proposed during a conversation. They are tasks of that
@@ -291,110 +290,18 @@ export function plainText(value: string): string {
     .trim();
 }
 
-export async function readMainAgentTurnRecords(dataDirectory: string): Promise<MainAgentTurnRecord[]> {
-  const file = join(dataDirectory, "main-agent-turns.jsonl");
-  let source: string;
-  try {
-    source = await readFile(file, "utf8");
-  } catch (error: unknown) {
-    if (isMissingFile(error)) return [];
-    throw error;
-  }
-  const byId = new Map<string, MainAgentTurnRecord>();
-  for (const line of source.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
-    try {
-      const record = JSON.parse(trimmed) as Partial<MainAgentTurnRecord>;
-      if (typeof record.id !== "string" || typeof record.text !== "string") continue;
-      if (record.status !== "started" && record.status !== "completed" && record.status !== "failed" && record.status !== "interrupted") continue;
-      if (typeof record.startedAt !== "string") continue;
-      byId.set(record.id, {
-        id: record.id,
-        text: record.text,
-        status: record.status,
-        startedAt: record.startedAt,
-        ...(typeof record.ownerPid === "number" ? { ownerPid: record.ownerPid } : {}),
-        ...(typeof record.completedAt === "string" ? { completedAt: record.completedAt } : {}),
-        ...(typeof record.reply === "string" ? { reply: record.reply } : {}),
-        ...(typeof record.error === "string" ? { error: record.error } : {}),
-      });
-    } catch {
-      continue;
-    }
-  }
-  return [...byId.values()];
-}
-
-async function appendMainAgentTurnRecord(dataDirectory: string, record: MainAgentTurnRecord): Promise<void> {
-  await mkdir(dataDirectory, { recursive: true });
-  await appendFile(join(dataDirectory, "main-agent-turns.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
-}
-
-export async function recordMainAgentClientInterruption(
-  dataDirectory: string,
-  input: { turnId: string; text: string; error: string; startedAt?: string },
-): Promise<MainAgentTurnRecord> {
-  const records = await readMainAgentTurnRecords(dataDirectory);
-  const existing = records.find((record) => record.id === input.turnId);
-  if (existing?.status === "completed" || existing?.status === "failed" || existing?.status === "interrupted") {
-    return existing;
-  }
-  const record: MainAgentTurnRecord = {
-    id: input.turnId,
-    text: input.text,
-    status: "interrupted",
-    startedAt: existing?.startedAt ?? input.startedAt ?? new Date().toISOString(),
-    completedAt: new Date().toISOString(),
-    error: input.error.slice(0, 2_000),
-    ...(existing?.ownerPid === undefined ? {} : { ownerPid: existing.ownerPid }),
-  };
-  await appendMainAgentTurnRecord(dataDirectory, record);
-  return record;
-}
-
 async function runRecordedMainAgentTurn(
   dataDirectory: string,
   text: string,
   turnId: string,
   options: Parameters<typeof runMainAgentQuery>[2] = {},
 ): Promise<Awaited<ReturnType<typeof runMainAgentQuery>>> {
-  const startedAt = new Date().toISOString();
-  await appendMainAgentTurnRecord(dataDirectory, {
-    id: turnId,
-    text,
-    status: "started",
-    startedAt,
-    ownerPid: process.pid,
-  });
-  try {
-    const result = await runMainAgentQuery(dataDirectory, text, { ...options, turnId });
-    if (result.error !== undefined) {
-      throw new Error(result.error);
-    }
-    await appendMainAgentTurnRecord(dataDirectory, {
-      id: turnId,
-      text,
-      status: "completed",
-      startedAt,
-      ownerPid: process.pid,
-      completedAt: new Date().toISOString(),
-      reply: result.reply,
-    });
-    return result;
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    await appendMainAgentTurnRecord(dataDirectory, {
-      id: turnId,
-      text,
-      status: "failed",
-      startedAt,
-      ownerPid: process.pid,
-      completedAt: new Date().toISOString(),
-      error: message,
-    });
-    throw error;
-  }
+  // The shared turn recorder writes both the journal events and the ledger
+  // rows; this wrapper only maps a model failure to an HTTP error.
+  // 共享的回合记录器同时写 Journal 事件与台账行；这层只把模型失败映射为 HTTP 错误。
+  const result = await runMainAgentQuery(dataDirectory, text, { ...options, turnId, source: "companion" });
+  if (result.error !== undefined) throw new Error(result.error);
+  return result;
 }
 
 /**
@@ -1194,6 +1101,15 @@ async function handleRequest(
     try {
       const deletedRunIds = await context.sessions.deletedRunIds();
       const gateway = url.searchParams.get("gateway") !== "0";
+      if (method === "GET" && url.pathname === "/api/audit/turns") {
+        const turnAudit = await import("./audit/turn-audit.ts");
+        const requested = Number.parseInt(url.searchParams.get("limit") ?? "100", 10);
+        const turns = await turnAudit.loadTurnAudits(context.journal, {
+          limit: Number.isFinite(requested) ? requested : 100,
+        });
+        sendJson(response, 200, { turns });
+        return;
+      }
       if (method === "GET" && url.pathname === "/api/audit/export") {
         const records = await audit.loadAudits(context.journal, { gateway, deletedRunIds });
         response.writeHead(200, {
@@ -1965,7 +1881,7 @@ async function handleRequest(
       sendJson(response, 400, { error: "An interruption record needs turnId, text, and error." });
       return;
     }
-    const record = await recordMainAgentClientInterruption(context.dataDirectory, {
+    const record = await recordMainAgentTurnInterrupted(context.dataDirectory, {
       turnId,
       text,
       error,
@@ -2921,6 +2837,8 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
     "memory.recalled": "召回本地记忆",
     "usage.recorded": "记录用量",
     "main_agent.prompt_snapshot": "记录提示词快照",
+    "main_agent.turn_started": "主 Agent 回合开始",
+    "main_agent.turn_completed": "主 Agent 回合结束",
     "audit.labeled": "人工判定",
     "authority.changed": "修改权限",
     "recommendation.applied": "应用评审改动",
@@ -3039,6 +2957,17 @@ function detailFor(type: JournalEvent["type"], payload: Record<string, unknown>)
   }
   if (type === "agent.install_failed") {
     return `安装 ${String(payload.agentId ?? "Worker")} 失败：${String(payload.message ?? "")}`;
+  }
+  if (type === "main_agent.turn_started") {
+    const input = typeof payload.input === "string" ? payload.input.slice(0, 120) : "";
+    const model = typeof payload.modelId === "string" ? ` · ${payload.modelId}` : "";
+    return `${input}${model}`;
+  }
+  if (type === "main_agent.turn_completed") {
+    const status = typeof payload.status === "string" ? payload.status : "";
+    const tools = Array.isArray(payload.toolCalls) ? payload.toolCalls.length : 0;
+    const reply = typeof payload.reply === "string" ? payload.reply.slice(0, 100) : "";
+    return `${status} · ${tools} 个工具${reply ? ` · ${reply}` : ""}`;
   }
   if (type === "main_agent.prompt_snapshot") {
     const model = typeof payload.modelId === "string" ? payload.modelId : "默认模型";

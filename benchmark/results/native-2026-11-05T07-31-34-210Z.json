@@ -1,0 +1,40 @@
+{
+  "provider": "native",
+  "ranAt": "2026-11-05T07:31:34.210Z",
+  "records": [
+    {
+      "taskId": "summarize",
+      "title": "Read-only summary",
+      "passed": true,
+      "expectedFailure": false,
+      "status": "completed",
+      "durationMs": 15192,
+      "artifacts": [
+        {
+          "path": ".clone/workspace-execution.sqlite3",
+          "bytes": 0
+        },
+        {
+          "path": "README.md",
+          "bytes": 236
+        },
+        {
+          "path": "out/summary.md",
+          "bytes": 406
+        }
+      ],
+      "verification": {
+        "passed": true,
+        "needsReview": false,
+        "summary": "Verified 1 step(s) against the workspace."
+      },
+      "usage": {
+        "inputTokens": 1681,
+        "outputTokens": 423,
+        "totalTokens": 2104,
+        "modelCalls": 3
+      },
+      "failureReason": "Verified 1 step(s) against the workspace."
+    }
+  ]
+}

@@ -6,6 +6,11 @@
  *
  * Usage:
  *   npm run bench -- --unsafe-host --provider pi --tasks summarize
+ *   npm run bench -- --provider native --tasks summarize
+ *
+ * The native provider runs in-process with per-call scope checks, so it does
+ * not need --unsafe-host; it requires CLONE_AI_NATIVE_MODEL and
+ * CLONE_AI_NATIVE_BASE_URL, and records exact token usage in the report.
  *
  * Costs: each task is one or more real model calls (a few cents per task).
  * The "missing-input" task is intentionally expected to fail and verifies that
@@ -16,6 +21,10 @@
  *
  * 用法：
  *   npm run bench -- --unsafe-host --provider pi --tasks summarize
+ *   npm run bench -- --provider native --tasks summarize
+ *
+ * 原生 Provider 在进程内运行、每次调用做 Scope 校验，因此不需要 --unsafe-host；
+ * 它需要 CLONE_AI_NATIVE_MODEL 与 CLONE_AI_NATIVE_BASE_URL，并在报告中记录精确 token 用量。
  *
  * 成本：每个任务是一次或多次真实模型调用（每个任务几美分）。
  * missing-input 任务刻意期望失败，用来验证失败能被干净分类而不是挂死。
@@ -26,6 +35,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { BlackBoxCliWorker, type BlackBoxProviderConfig } from "../src/workers/black-box-cli-worker.ts";
+import { createConfiguredNativeWorker } from "../src/workers/native-worker-factory.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { DefaultPolicyEngine } from "../src/core/policy.ts";
@@ -48,6 +58,10 @@ interface BenchRecord {
   artifacts: Array<{ path: string; bytes: number }>;
   error?: string;
   failureCategory?: string;
+  failureReason?: string;
+  verification?: { passed: boolean; needsReview: boolean; summary: string };
+  /** Exact usage when the adapter reports it (the native worker does). Adapter 报告时的精确用量（原生 Worker 会）。 */
+  usage?: { inputTokens: number; outputTokens: number; totalTokens: number; modelCalls: number };
 }
 
 function parseArgs(): { provider: string; tasks: string[]; unsafeHost: boolean } {
@@ -92,21 +106,32 @@ async function runTask(task: BenchTask, provider: string, unsafeHost: boolean): 
     for (const [path, content] of Object.entries(task.seedFiles)) {
       await writeFile(join(workspace, path), content, "utf8");
     }
-    const recipe = PROVIDERS[provider];
-    if (recipe === undefined) {
-      throw new Error(`Unknown provider "${provider}". Known providers: ${Object.keys(PROVIDERS).join(", ")}.`);
+    const workCapabilities = ["research", "drafting", "review", "implementation", "filesystem_read", "filesystem_write", "external_action"];
+    const adapter = provider === "native"
+      ? createConfiguredNativeWorker(process.env, workspace, { id: "bench-worker", workCapabilities })
+      : (() => {
+        const recipe = PROVIDERS[provider];
+        if (recipe === undefined) {
+          throw new Error(`Unknown provider "${provider}". Known providers: native, ${Object.keys(PROVIDERS).join(", ")}.`);
+        }
+        return new BlackBoxCliWorker({
+          agentId: "bench-worker",
+          config: { ...recipe, id: provider, label: provider, timeoutMs: 420_000, ...(unsafeHost ? { hostAccess: "unrestricted" as const } : {}) },
+          workCapabilities,
+        });
+      })();
+    if (adapter === undefined) {
+      throw new Error("Native worker needs CLONE_AI_NATIVE_MODEL and CLONE_AI_NATIVE_BASE_URL.");
     }
-    const adapter = new BlackBoxCliWorker({
-      agentId: "bench-worker",
-      config: { ...recipe, id: provider, label: provider, timeoutMs: 420_000, ...(unsafeHost ? { hostAccess: "unrestricted" as const } : {}) },
-      workCapabilities: ["research", "drafting", "review", "implementation", "filesystem_read", "filesystem_write", "external_action"],
-    });
     const journal = new JsonlJournalStore(join(workspace, ".clone-ai", "journal.jsonl"));
     const memory = new MemoryPipeline(journal);
     const runtime = new CloneRuntime({
       journal,
       policy: new DefaultPolicyEngine(),
-      verifier: new EvidenceVerifier(),
+      // The verifier must know the benchmark workspace, or every promised
+      // relative path falls through to "does not exist on disk".
+      // 验证器必须知道基准工作区，否则每个承诺的相对路径都会落到"磁盘上不存在"。
+      verifier: new EvidenceVerifier({ workspacePath: workspace }),
       memory,
       workspacePath: workspace,
       workspaceCheckpointStore: new JsonWorkspaceCheckpointStore(join(workspace, ".clone-ai", "checkpoints")),
@@ -131,9 +156,34 @@ async function runTask(task: BenchTask, provider: string, unsafeHost: boolean): 
     const result = await runtime.execute(run.id, new StaticAgentRegistry([adapter]));
     record.status = result.status;
     record.durationMs = Date.now() - startedAt;
-    const failures = (await journal.list()).filter((event) => event.type === "subagent.failed");
+    if (result.verification !== undefined) {
+      record.verification = {
+        passed: result.verification.passed === true,
+        needsReview: result.verification.needsReview === true,
+        summary: result.verification.summary,
+      };
+    }
+    const events = await journal.list();
+    const usageEvents = events.filter((event) => event.type === "usage.recorded");
+    if (usageEvents.length > 0) {
+      const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, modelCalls: 0 };
+      for (const event of usageEvents) {
+        const payload = event.payload as Record<string, unknown>;
+        for (const key of ["inputTokens", "outputTokens", "totalTokens", "modelCalls"] as const) {
+          if (typeof payload[key] === "number") usage[key] += payload[key] as number;
+        }
+      }
+      record.usage = usage;
+    }
+    const failures = events.filter((event) => event.type === "subagent.failed");
     const category = (failures.at(-1)?.payload as { report?: { category?: string } } | undefined)?.report?.category;
     if (category !== undefined) record.failureCategory = category;
+    const lastSignal = [...events].reverse().find((event) => event.type === "verification.completed" || event.type === "execution.failed");
+    if (lastSignal !== undefined) {
+      const payload = lastSignal.payload as Record<string, unknown>;
+      const reason = typeof payload.summary === "string" ? payload.summary : typeof payload.message === "string" ? payload.message : undefined;
+      if (reason !== undefined) record.failureReason = reason;
+    }
     record.passed = record.expectedFailure
       ? result.status === "failed" && category === "no_artifact"
       : result.status === "completed" && result.verification?.passed === true;
@@ -166,8 +216,8 @@ async function runTask(task: BenchTask, provider: string, unsafeHost: boolean): 
 }
 
 const { provider, tasks, unsafeHost } = parseArgs();
-if (!unsafeHost) {
-  console.error("Benchmark workers have no enforced sandbox. Pass --unsafe-host only if you explicitly accept unrestricted host access.");
+if (!unsafeHost && provider !== "native") {
+  console.error("Black-box benchmark workers have no enforced sandbox. Pass --unsafe-host only if you explicitly accept unrestricted host access. The native provider enforces scopes and does not need this flag.");
   process.exit(2);
 }
 const selected = BENCH_TASKS.filter((task) => tasks.includes(task.id));
@@ -185,6 +235,7 @@ for (const task of selected) {
   const expected = record.expectedFailure ? " (expected failure)" : "";
   console.log(
     `  ${record.passed ? (record.expectedFailure ? "EXPECTED-FAIL" : "PASS") : "FAIL"}  ${task.id.padEnd(20)} ${(record.durationMs / 1000).toFixed(1).padStart(6)}s${expected}`
+      + (record.usage === undefined ? "" : `  ${record.usage.totalTokens} tokens`)
       + (record.error === undefined ? "" : `  error: ${record.error.slice(0, 200)}`),
   );
 }

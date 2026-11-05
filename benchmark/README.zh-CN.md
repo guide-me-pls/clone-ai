@@ -18,6 +18,19 @@ npm run bench -- --unsafe-host --provider pi --tasks summarize
 每个任务只花几美分的真实模型调用，耗时约 20-60 秒。结果以 JSON 记录在
 `benchmark/results/<provider>-<时间戳>.json`，供升级前后对比。
 
+## 原生 Provider
+
+进程内 Worker 不需要 CLI，也能跑同一组任务：
+
+```bash
+CLONE_AI_NATIVE_MODEL=<model-id> CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url> \
+  npm run bench -- --provider native --tasks summarize
+```
+
+它不需要 `--unsafe-host`：每次工具调用都在运行前按步骤 Scope 校验。报告会记录精确的
+`usage`（tokens 与模型调用次数）、`verification` 与 `failureReason`；CLI Provider 通常
+只报告耗时与状态。
+
 ## 任务集（`benchmark/tasks.ts`）
 
 | id | 它证明什么 |
@@ -34,6 +47,30 @@ npm run bench -- --unsafe-host --provider pi --tasks summarize
 - `expectedFailure` 任务（`missing-input`）只在失败类别为 `no_artifact` 时为绿；权限拒绝或启动失败不能冒充预期失败。
 - `artifacts`：Agent 在工作区留下的全部文件（不含 `.clone-ai`）及大小。
 - 运行器在任何意外失败时以非零退出码结束，可挂进 CI 或升级前检查。
+
+## 主 Agent 对比（`npm run bench:main`）
+
+用同一模型与每个任务独立的 clone home，把三条固定 Prompt 分别跑过 Pi 运行时与原生循环：
+直接回答、读取权限、提案计划。报告记录耗时、tokens、工具调用、产生的 Run、回合状态，
+以及任务预期是否成立。
+
+```bash
+CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main
+```
+
+原生端点来自 `CLONE_AI_NATIVE_BASE_URL`（默认 `http://127.0.0.1:3425`）。这是每格只跑
+一次的对比，不是统计基准；模型本身在运行之间会波动。
+
+## 长对话验证（`npm run bench:long`）
+
+写入 24 条已完成轮次并把针放在最老一轮，用 `historyChars=4000` 跑一次真实原生回合，
+捕获发出的请求，并检查：摘要存在、摘要含针、最新轮次保持原文、回复含针、没有错误。
+报告位于 `benchmark/results/`。
+
+## 图片验证（`npm run bench:images`）
+
+生成一张纯红 PNG，以 data URL 经原生主 Agent 发送，检查图片部分到达端点且模型回答红色。
+报告位于 `benchmark/results/`。
 
 ## 回归门禁（`npm run gate`）
 
