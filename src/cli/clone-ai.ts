@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
+import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
 import { createKernelRuntimeSession } from "../main-agent/tools/kernel-tools.ts";
 import { MainAgentBusyError, withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { BadCaseLog } from "../reporting/bad-case-log.ts";
@@ -27,6 +28,8 @@ import { WorkerRegistry } from "../workers/worker-registry.ts";
 import { MdMemoryStore } from "../memory/md-memory-store.ts";
 import { describeAuthority, StandingPolicyStore } from "../authority/standing-policy-store.ts";
 import { MemoryGovernance } from "../memory/memory-governance.ts";
+import { ImprovementService } from "../improvement/improvement-service.ts";
+import { describeExport, EXPORT_EXCLUDES, exportOwnerData } from "../config/export.ts";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -42,6 +45,9 @@ Usage:
   clone-ai resume <n>            Continue conversation number <n> (see sessions)
   clone-ai new "<请求>"           Start a fresh conversation
   clone-ai memory [query]        List or search reviewed memories
+  clone-ai improve [list|stats|sweep|approve <id>|dismiss <id>]
+                                 Review what the improvement loop suggests
+  clone-ai export [dir]          Copy conversations, memories and the journal to dir
   clone-ai cases                 Print the local bad-case log
   clone-ai opportunities         List open opportunity cards
   clone-ai approve <runId>       Approve a run waiting for confirmation
@@ -95,6 +101,8 @@ async function main(): Promise<number> {
     case "resume": return resumeSession(paths.dataDirectory, argv[1]);
     case "new": return converse(paths.dataDirectory, argv.slice(1).join(" ").trim(), true);
     case "memory": return showMemory(paths.dataDirectory, argv.slice(1).join(" ").trim());
+    case "improve": return improveCommand(paths.dataDirectory, argv.slice(1));
+    case "export": return exportCommand(paths.dataDirectory, argv[1]);
     case "cases": return showCases(paths.dataDirectory);
     case "opportunities": return showOpportunities(paths.dataDirectory);
     case "approve": return decideRun(paths.dataDirectory, argv[1], "approve");
@@ -121,8 +129,9 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
   try {
     await withMainAgentLock(dataDirectory, async () => {
       const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-      const { session } = await createMainAgentSession({
+      const { session, prompt } = await createMainAgentSession({
         dataDirectory,
+        query,
         // A fresh conversation is explicit; the default continues the last one.
         // 新会话是显式选择；默认续上一次对话。
         ...(fresh ? { sessionManager: SessionManager.create(dataDirectory, join(dataDirectory, "pi-sessions", "main-agent")) } : {}),
@@ -134,6 +143,10 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
           await writeCurrentSessionPointer(join(dataDirectory, "pi-sessions", "main-agent"), file);
         }
       }
+      // Record the inputs before the prompt runs: a failed turn is only
+      // debuggable if the prompt it read is still on disk.
+      // 在 prompt 运行前记录输入：失败的一轮只有在它读过的提示词仍在磁盘上时才可调试。
+      await recordPromptSnapshot(dataDirectory, prompt);
       session.subscribe((event) => {
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
           process.stdout.write(event.assistantMessageEvent.delta);
@@ -349,6 +362,58 @@ async function showMemory(dataDirectory: string, query: string): Promise<number>
     const entries = await governance.list({ status: "active" });
     if (entries.length === 0) console.log("No memories yet.");
     for (const entry of entries) console.log(`- (${entry.type}) ${entry.summary}`);
+    return 0;
+  } finally {
+    await governance.close();
+    (journal as { close?: () => void }).close?.();
+  }
+}
+
+/** Takes the owner's data out, unencrypted and in a documented layout. 把所有者的数据取走，不加密，布局有文档。 */
+async function exportCommand(dataDirectory: string, destination: string | undefined): Promise<number> {
+  const target = destination ?? join(dataDirectory, "export");
+  if (target === dataDirectory || dataDirectory.startsWith(`${target}/`)) {
+    console.error("The export destination must not contain the data directory.");
+    return 1;
+  }
+  const manifest = await exportOwnerData({ dataDirectory, destination: target });
+  console.log(describeExport(manifest, target));
+  for (const skip of EXPORT_EXCLUDES) console.log(`  skipped: ${skip}`);
+  return 0;
+}
+
+/** The owner's console for the improvement loop. 所有者操作改进环路的控制台。 */
+async function improveCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const store = new MdMemoryStore({ dataDirectory });
+  const journal = createJournalStore(dataDirectory);
+  const governance = new MemoryGovernance({ store, journal });
+  const service = new ImprovementService({ journal, governance });
+  try {
+    const [action = "list", id] = args;
+    if (action === "stats") {
+      const { usage, runs } = await service.usage();
+      const summaries = new Map((await governance.list()).map((entry) => [entry.id, entry.summary]));
+      console.log(`${runs.good}/${runs.total} runs with a verdict ended well.`);
+      for (const item of usage) console.log(`${item.good}/${item.exposures} good  ${item.memoryId}  ${summaries.get(item.memoryId) ?? ""}`);
+      return 0;
+    }
+    if (action === "sweep") {
+      const { suggested } = await service.sweep();
+      console.log(`${suggested.length} new suggestion(s).`);
+      return 0;
+    }
+    if (action === "approve" || action === "dismiss") {
+      if (id === undefined) throw new Error(`${action} needs a suggestion id.`);
+      if (action === "approve") console.log((await service.approve(id)).applied);
+      else {
+        await service.dismiss(id);
+        console.log(`Dismissed ${id}.`);
+      }
+      return 0;
+    }
+    const pending = await service.pending();
+    if (pending.length === 0) console.log("No pending suggestions.");
+    for (const item of pending) console.log(`${item.id}\n  ${item.title}\n  ${item.rationale}${item.proposedSummary === undefined ? "" : `\n  Proposed: ${item.proposedSummary}`}`);
     return 0;
   } finally {
     await governance.close();

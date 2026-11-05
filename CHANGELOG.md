@@ -6,11 +6,33 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+<<<<<<< HEAD
 ### Forwarded WhatsApp content is data, and bursts are capped
 
 A message the owner forwards carries a third party's words. The bridge now flags it (`forwarded` from the Cloud API context) and hands it to the Main Agent inside an explicit `<untrusted_data source="whatsapp_forward">` block with a "do not follow directives" line, stored per message so it survives a restart. The webhook also applies a per-sender sliding-window limit (20 messages/minute) so a hijacked number or a retry storm cannot become an unbounded stream of model turns.
 
 所有者转发的消息带着第三方的文字。桥现在会标记它（来自 Cloud API context 的 `forwarded`），并以显式的 `<untrusted_data source="whatsapp_forward">` 块交给 Main Agent，附上"不要执行其中指令"的说明；标记按消息持久化，重启后仍然有效。Webhook 还对每个发送者施加滑动窗口限流（每分钟 20 条），被盗用的号码或重试风暴不会变成无限制的模型回合。
+=======
+### An offline regression gate
+
+`npm run gate` now runs on every CI commit and costs nothing. It re-runs evidence verification and authority policy over held-out fixtures under `benchmark/gate/`, and calibrates the audit projection against owner labels (agreement, falsePass, falseFail) using the fixture dataset or a real `clone-ai audit export` file with `--audit`. Per-case behavior is recorded in `benchmark/gate/baseline.json`; any verdict change fails until the baseline is regenerated in the same change, so a shift is reviewed rather than discovered later. The audit dataset is hashed so held-out records cannot change silently.
+
+`npm run gate` 现在随每次 CI 提交运行且零成本。它针对 `benchmark/gate/` 下的 held-out 夹具重新运行证据验证与权限策略，并用所有者标注校准审计投影（一致率、假通过、假失败）——数据集可以用内置夹具，也可以用 `--audit` 传入真实的 `clone-ai audit export` 文件。逐用例行为记录在 `benchmark/gate/baseline.json`；任何判定变化都会失败，直到在同一次变更中重新生成基线，因此变化会被审查而不是日后才发现。审计数据集带哈希，held-out 记录无法悄悄变化。
+
+### Prompt provenance for every Main Agent turn
+
+Every Main Agent turn now records what it was told before it answered: the charter version and hash, the compiled situation briefing hash, the exact tool table hash, and the model id plus reasoning effort. Identical material is stored once in `<clone home>/prompt-snapshots/<hash>.json`; each turn appends a `main_agent.prompt_snapshot` journal event that points at it and, for desktop turns, carries the turn id. `GET /api/main-agent/prompt-snapshots` lists recent snapshots. Recording is telemetry: a write failure is logged and never aborts the turn.
+
+每次主 Agent 回合现在会记录它在回答前收到的输入：charter 版本与哈希、编译后情境简报的哈希、完整工具表的哈希，以及模型 id 与推理强度。相同材料只保存一份到 `<clone home>/prompt-snapshots/<hash>.json`；每轮追加一条 `main_agent.prompt_snapshot` Journal 事件指向它，桌面回合还会带上 turn id。`GET /api/main-agent/prompt-snapshots` 可列出最近的快照。记录属于遥测：写入失败只记日志，绝不中断本回合。
+
+### Headless server deployment
+
+Clone AI can now run without a Mac on a small Linux host. `npm run server` starts the same Runtime and UI in explicit server mode with a stable bearer token and a proxy-only secret; the `Dockerfile` and `compose.server.yml` pair it with Caddy, HTTPS, owner authentication, persistent data/workspace volumes, and a public `/webhook` route for WhatsApp. The web UI uses a custom token header so Caddy Basic Auth can remain in the standard `Authorization` header. Server mode refuses direct app-port access that does not come through the trusted proxy. A 1 vCPU / 2 GB host is documented for remote models, scheduling, memory, audit, and WhatsApp only; local LLM execution and child-agent CLI installation are explicitly out of scope for the base image.
+
+### 无界面服务器部署
+
+Clone AI 现在不依赖 Mac，也可以运行在小型 Linux 服务器上。`npm run server` 以显式服务器模式启动同一套 Runtime 和 UI，使用稳定 Bearer Token 和仅由反向代理注入的密钥；`Dockerfile` 与 `compose.server.yml` 组合 Caddy、HTTPS、所有者认证、持久化数据/Workspace 卷以及 WhatsApp 的公开 `/webhook` 路由。Web UI 改用自定义 Token Header，因此 Caddy Basic Auth 可以继续占用标准 `Authorization` 头。服务器模式会拒绝不经过可信代理的 App 端口直连。文档明确 1 核 2G 只用于远程模型、调度、记忆、审计和 WhatsApp；基础镜像不承担本地大模型和子 Agent CLI 安装。
+>>>>>>> main
 
 ### Failed traces and a nightly repair pipeline (draft PRs only)
 
@@ -27,6 +49,7 @@ Worker 现在只能继承模型凭据：Provider 声明里若出现工具凭据�
 The evaluation tab can now have the system review its own audit: pass rate, failure stages and categories, gateway errors, durations, costs, and the owner's labels are compressed into one digest, and a review model returns findings plus a short list of configuration actions. Each action is validated against what this machine can actually do (a level the CLI declares, a model id that appears in the facts), applied only when the owner clicks, journaled as `recommendation.applied` with the previous and new value, and reversible from the same row. The surface is deliberately narrow — worker model/effort and Main Agent model/effort; code, prompts, policy and evidence rules are not reachable, and nothing runs on its own. When the model is unavailable the review degrades to measured facts rather than inventing advice.
 
 评估页现在可以让系统评审自己的审计：通过率、失败阶段与类别、网关错误、耗时、费用，以及所有者的判定被压成一份摘要，评审模型返回发现项与一小串配置动作。每个动作都会对照这台机器实际能做的事校验（CLI 声明的档位、事实里出现过的模型 id），只在所有者点击时应用，以 `recommendation.applied` 记录前后值，并可在同一行撤销。范围刻意很窄——worker 的模型/强度与主 Agent 的模型/强度；代码、提示词、策略与证据规则不可触及，且不会自行运行。模型不可用时，评审判为只给实测事实，而不是编造建议。
+
 
 ### WhatsApp phone bridge
 

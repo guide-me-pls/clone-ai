@@ -18,7 +18,34 @@ import type { JournalStore } from "../core/journal.ts";
 import { MdMemoryStore, type MemoryEntry } from "./md-memory-store.ts";
 import type { MemoryType } from "../core/contracts.ts";
 import { workspaceExecutionLock } from "../core/workspace-lock.ts";
+import { readForRun, readTypes } from "../core/journal-types.ts";
 import { memoryFingerprint, redactMemoryPii } from "./memory-hygiene.ts";
+
+/**
+ * Default lifetime of a mined memory and the idle window after which any active
+ * memory is archived. 90 days matches a project, a work cycle or a term; a
+ * memory nobody recalled or edited for that long is not earning its place.
+ * 提炼记忆的默认寿命，以及任何活跃记忆闲置多久后被归档。90 天对应一个项目、一个工作周期或
+ * 一个学期；这么久没人召回或编辑的记忆，没有保留的价值。
+ */
+export const MEMORY_LIFETIME_DAYS = 90;
+const DAY_MS = 24 * 3600 * 1000;
+
+/**
+ * The only history memory governance needs: candidate proposals and decisions,
+ * and the mutation markers that make each write recoverable.
+ * 记忆治理唯一需要的历史：候选提案与决策，以及让每次写入可恢复的变更标记。
+ */
+const MEMORY_DECISION_TYPES = [
+  "memory.candidate.proposed",
+  "memory.candidate.promoted",
+  "memory.candidate.rejected",
+  "memory.authored",
+  "memory.updated",
+  "memory.archived",
+  "memory.restored",
+  "memory.mutation.discarded",
+] as const;
 
 export interface MemoryGovernanceOptions {
   journal: JournalStore;
@@ -39,8 +66,7 @@ export class MemoryGovernance {
    * 提炼 Worker 已提案、且尚未被提升或拒绝的候选。
    */
   async pendingCandidates(): Promise<MemoryCandidate[]> {
-    const events = await this.#journal.list();
-    return pendingFromEvents(events);
+    return pendingFromEvents(await readTypes(this.#journal, MEMORY_DECISION_TYPES));
   }
 
   /**
@@ -55,7 +81,7 @@ export class MemoryGovernance {
     return this.withLock(async () => {
       await this.recoverUnlocked();
       await this.#journal.reload?.();
-      const proposed = pendingFromEvents(await this.#journal.list()).find((item) => item.id === candidate.id);
+      const proposed = pendingFromEvents(await readTypes(this.#journal, MEMORY_DECISION_TYPES)).find((item) => item.id === candidate.id);
       if (proposed === undefined) throw new Error("This memory candidate is not pending or was already decided.");
       candidate = proposed;
       await this.assertEvidenceExists(candidate.sourceEvidenceIds, candidate.runId);
@@ -82,7 +108,9 @@ export class MemoryGovernance {
         sensitivity,
         sourceRunId: candidate.runId,
         sourceEvidenceIds: candidate.sourceEvidenceIds,
-        ...(candidate.expiresAt === undefined ? {} : { expiresAt: candidate.expiresAt }),
+        // A mined memory fades unless something keeps it alive; the miner's own
+        // expiry wins when it gave one. 提炼记忆除非有人维持否则淡出；提炼器给了过期时间则以它为准。
+        expiresAt: candidate.expiresAt ?? new Date(Date.now() + MEMORY_LIFETIME_DAYS * DAY_MS).toISOString(),
       });
       await this.applyRecorded(entry, {
         type: "memory.candidate.promoted",
@@ -107,7 +135,7 @@ export class MemoryGovernance {
     await this.withLock(async () => {
       await this.recoverUnlocked();
       await this.#journal.reload?.();
-      if (!pendingFromEvents(await this.#journal.list()).some((candidate) => candidate.id === candidateId)) {
+      if (!pendingFromEvents(await readTypes(this.#journal, MEMORY_DECISION_TYPES)).some((candidate) => candidate.id === candidateId)) {
         throw new Error("This memory candidate is not pending or was already decided.");
       }
       await this.#journal.append({
@@ -187,7 +215,7 @@ export class MemoryGovernance {
   }
 
   /** Archives a memory with the reason recorded. 归档一条记忆并记录原因。 */
-  async archive(memoryId: string, reason: "manual" | "expired" | "deleted" = "manual"): Promise<MemoryEntry> {
+  async archive(memoryId: string, reason: "manual" | "expired" | "idle" | "retired" | "deleted" = "manual"): Promise<MemoryEntry> {
     return this.withLock(async () => {
       await this.recoverUnlocked();
       const entry = await this.#store.prepareUpdate(memoryId, { status: "archived" });
@@ -213,6 +241,31 @@ export class MemoryGovernance {
         });
       }
       return expired.map((entry) => entry.id);
+    });
+  }
+
+  /**
+   * Archives active memories that were neither recalled, read nor edited for
+   * `idleDays`. Archiving rather than deleting keeps the decision reversible
+   * through restore(); the journal records the reason as "idle".
+   * 归档闲置超过 `idleDays` 天（既未被召回、读取也未被编辑）的活跃记忆。归档而非删除，使该决定
+   * 可通过 restore() 撤销；Journal 把原因记为 "idle"。
+   */
+  async archiveIdle(idleDays = MEMORY_LIFETIME_DAYS): Promise<string[]> {
+    return this.withLock(async () => {
+      await this.recoverUnlocked();
+      const cutoff = new Date(Date.now() - idleDays * DAY_MS).toISOString();
+      const idle = (await this.#store.list({ status: "active" })).filter((entry) => (
+        [entry.createdAt, entry.updatedAt, entry.lastAccessedAt ?? ""].reduce((latest, value) => (value > latest ? value : latest)) < cutoff
+      ));
+      for (const memory of idle) {
+        const entry = await this.#store.prepareUpdate(memory.id, { status: "archived" });
+        await this.applyRecorded(entry, {
+          type: "memory.archived",
+          payload: { memoryId: memory.id, reason: "idle", idleDays, archivedAt: new Date().toISOString() },
+        });
+      }
+      return idle.map((entry) => entry.id);
     });
   }
 
@@ -304,7 +357,10 @@ export class MemoryGovernance {
   async inspectPending(): Promise<{ memories: MemoryEntry[]; stats: { active: number; archived: number; total: number; pending: number; contentDirectory: string }; conflicts: Array<{ id: string; memoryId: string; summary: string }> }> {
     return this.withLock(async () => {
       await this.#journal.reload?.();
-      const events = await this.#journal.list();
+      // Only candidate decisions and mutation markers are read here; a full scan
+      // of every run's history would grow with the journal and say nothing new.
+      // 这里只需候选决策与变更标记；扫描每个 Run 的历史只会随 Journal 增长而毫无新信息。
+      const events = await readTypes(this.#journal, MEMORY_DECISION_TYPES);
       const recorded = new Set(events.map((event) => (event.payload as { mutationId?: unknown } | null)?.mutationId).filter((id): id is string => typeof id === "string"));
       return {
         memories: await this.#store.list(),
@@ -317,7 +373,7 @@ export class MemoryGovernance {
   async keepConflictingFile(mutationId: string): Promise<void> {
     await this.withLock(async () => {
       await this.#journal.reload?.();
-      const events = await this.#journal.list();
+      const events = await readTypes(this.#journal, MEMORY_DECISION_TYPES);
       const pending = this.#store.pendingMutations().find((item) => item.id === mutationId);
       const recorded = events.some((event) => event.type !== "memory.mutation.discarded"
         && (event.payload as { mutationId?: unknown } | null)?.mutationId === mutationId);
@@ -338,7 +394,7 @@ export class MemoryGovernance {
     const pending = new Set(this.#store.pendingMutationIds());
     if (pending.size === 0) return;
     await this.#journal.reload?.();
-    const events = await this.#journal.list();
+    const events = await readTypes(this.#journal, MEMORY_DECISION_TYPES);
     const discarded = new Set(events.filter((event) => event.type === "memory.mutation.discarded")
       .map((event) => (event.payload as { mutationId?: unknown } | null)?.mutationId)
       .filter((id): id is string => typeof id === "string"));
@@ -373,7 +429,10 @@ export class MemoryGovernance {
     if (evidenceIds.length === 0) {
       throw new Error("A memory candidate must cite at least one evidence id.");
     }
-    const events = await this.#journal.list();
+    // Evidence belongs to one run, so this asks for that run only instead of
+    // scanning the whole journal for every promotion.
+    // 证据属于单个 Run，因此这里只取该 Run 的事件，而不是每次提升都扫描整本 Journal。
+    const events = await readForRun(this.#journal, runId);
     const known = new Set(
       events.filter((event) => event.type === "evidence.recorded" && event.runId === runId && (event.payload as Evidence).runId === runId)
         .map((event) => (event.payload as Evidence).id),

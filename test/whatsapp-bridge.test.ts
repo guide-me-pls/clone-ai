@@ -69,6 +69,7 @@ function config(overrides: Partial<WhatsAppCloudConfig> = {}): WhatsAppCloudConf
     appSecret: secret,
     allowedNumbers: allowedWhatsAppNumbers(["+86 138 0000 0000"]),
     graphVersion: "v23.0",
+    host: "127.0.0.1",
     port: 4318,
     ...overrides,
   };
@@ -424,4 +425,14 @@ test("a forwarded message is flagged as untrusted data, and bursts are rate limi
   for (let index = 0; index < 20; index += 1) assert.equal(withinRateLimit(bucket, "8613800000000", now + index), true);
   assert.equal(withinRateLimit(bucket, "8613800000000", now + 21), false);
   assert.equal(withinRateLimit(bucket, "8613800000000", now + 61_000), true);
+});
+
+test("server deployment exposes a fixed webhook without requiring cloudflared", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-whatsapp-server-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const status = await new WhatsAppSetupService(directory, "https://agent.example.com").status();
+  assert.equal(status.tunnel.managed, true);
+  assert.equal(status.tunnel.running, true);
+  assert.equal(status.tunnel.webhookUrl, "https://agent.example.com/webhook");
+
 });

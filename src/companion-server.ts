@@ -29,6 +29,11 @@ import {
   persistCompanionToken,
 } from "./companion-auth.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
+import { ImprovementService } from "./improvement/improvement-service.ts";
+import { parseAttachments } from "./main-agent/attachments.ts";
+import { buildAttention } from "./opportunity/attention.ts";
+import { PersonalStateStore } from "./state/personal-state-store.ts";
+import { sweepConnectors } from "./connectors/connector-registry.ts";
 import { scanMemoryPii } from "./memory/memory-hygiene.ts";
 import { describeAuthority, StandingPolicyStore } from "./authority/standing-policy-store.ts";
 import { OpportunityService } from "./opportunity/opportunity-service.ts";
@@ -74,6 +79,14 @@ export interface CompanionServerOptions {
   dataDirectory?: string;
   workspacePath?: string;
   clientPath?: string;
+  /** Explicit server deployment mode; never enabled by the desktop app. 显式服务器部署模式；桌面 App 不会启用。 */
+  serverMode?: boolean;
+  /** Stable public origin used by the server deployment and its documentation. 服务器部署使用的稳定公网来源。 */
+  publicBaseUrl?: string;
+  /** Stable companion token for a server deployment. 服务器部署使用的稳定 Companion 令牌。 */
+  token?: string;
+  /** Secret injected by the trusted reverse proxy; it keeps the app port private. 由可信反向代理注入的密钥，用于确保应用端口不直接暴露。 */
+  proxySecret?: string;
 }
 
 export interface RunningCompanionServer {
@@ -354,7 +367,7 @@ async function runRecordedMainAgentTurn(
     ownerPid: process.pid,
   });
   try {
-    const result = await runMainAgentQuery(dataDirectory, text, options);
+    const result = await runMainAgentQuery(dataDirectory, text, { ...options, turnId });
     if (result.error !== undefined) {
       throw new Error(result.error);
     }
@@ -391,7 +404,8 @@ async function runRecordedMainAgentTurn(
  * 它绝不是托管 Web 服务。
  */
 export async function startCompanionServer(options: CompanionServerOptions = {}): Promise<RunningCompanionServer> {
-  const host = normalizeCompanionHost(options.host ?? "127.0.0.1");
+  const serverMode = options.serverMode === true;
+  const host = normalizeCompanionHost(options.host ?? (serverMode ? "0.0.0.0" : "127.0.0.1"), serverMode);
   const port = options.port ?? parsePort(process.env.CLONE_AI_PORT, 4317);
   // One resolver owns every persistent path, so the daemon, the CLI, and the
   // Main Agent cannot disagree about where the owner's data lives.
@@ -434,7 +448,10 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     readFile(join(clientDirectory, "memory.css"), "utf8"),
     readFile(join(clientDirectory, "memory.js"), "utf8"),
   ]);
-  const token = issueCompanionToken();
+  const token = options.token?.trim() || issueCompanionToken();
+  if (serverMode && token.length < 32) {
+    throw new Error("Server deployment requires CLONE_AI_COMPANION_TOKEN with at least 32 characters.");
+  }
   await persistCompanionToken(paths.dataDirectory, token);
   const clientHtml = injectCompanionToken(client, token);
   const startedAt = Date.now();
@@ -455,8 +472,13 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     journal,
     store: new MdMemoryStore({ dataDirectory }),
   });
+  const improvement = new ImprovementService({ journal, governance: memoryGovernance, pipeline: assembly.memory });
   const config = new CloneConfigStore(paths);
-  const whatsappSetup = new WhatsAppSetupService(dataDirectory);
+  const whatsappSetup = new WhatsAppSetupService(dataDirectory, options.publicBaseUrl);
+  const proxySecret = options.proxySecret?.trim();
+  if (serverMode && (proxySecret === undefined || proxySecret.length < 32)) {
+    throw new Error("Server deployment requires a proxy secret with at least 32 characters.");
+  }
   const scheduler = new LocalScheduler({
     store: schedules,
     run: async (schedule, occurrence) => {
@@ -565,6 +587,29 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    // Expired memories are already hidden from recall; archiving them makes the
+    // state honest and journals the reason. 过期记忆召回时已被隐藏；归档让状态与事实一致并记录原因。
+    // The improvement sweep runs before the idle sweep so a memory the loop is
+    // about to judge is not archived for idleness first.
+    // 改进扫描先于闲置扫描，使环路即将评判的记忆不会先因闲置被归档。
+    if (ImprovementService.enabled()) {
+      await improvement.sweep().catch((error: unknown) => {
+        logJson("error", "Improvement sweep failed", { error: error instanceof Error ? error.message : String(error) });
+      });
+    }
+    if (assembly.conversationMemory !== undefined) {
+      await assembly.conversationMemory.processDue().catch((error: unknown) => {
+        logJson("error", "Conversation memory extraction failed; the batch remains pending", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    await memoryGovernance.archiveIdle().catch((error: unknown) => {
+      logJson("error", "Memory idle sweep failed", { error: error instanceof Error ? error.message : String(error) });
+    });
+    await memoryGovernance.expireDue().catch((error: unknown) => {
+      logJson("error", "Memory expiry sweep failed", { error: error instanceof Error ? error.message : String(error) });
+    });
     await opportunityService.scanAndRecord().catch(() => undefined);
     await badCaseLog.appendNew(await journal.list()).catch(() => undefined);
   };
@@ -588,6 +633,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       await handleRequest(request, response, {
         host,
         listenPort: bound.port,
+        allowRemoteHost: serverMode,
+        proxySecret,
         token,
         startedAt,
         dataDirectory,
@@ -608,6 +655,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         agentSettings,
         agentRegistry,
         memoryGovernance,
+        improvement,
         reportRunner,
         opportunityService,
         whatsappSetup,
@@ -635,7 +683,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   if (address === null || typeof address === "string") {
     throw new Error("The local companion did not expose a TCP address.");
   }
-  const url = `http://${host === "::1" ? "[::1]" : host}:${address.port}`;
+  const localHost = host === "0.0.0.0" ? "127.0.0.1" : host === "::" ? "::1" : host;
+  const url = `http://${localHost === "::1" ? "[::1]" : localHost}:${address.port}`;
   const endpointStartedAt = new Date().toISOString();
   await persistCompanionEndpoint(dataDirectory, url, endpointStartedAt);
   void whatsappSetup.initialize().catch((error: unknown) => {
@@ -679,6 +728,8 @@ async function handleRequest(
   context: {
     host: string;
     listenPort: number;
+    allowRemoteHost: boolean;
+    proxySecret?: string;
     token: string;
     startedAt: number;
     dataDirectory: string;
@@ -699,6 +750,7 @@ async function handleRequest(
     agentSettings: WorkerSettingsStore;
     agentRegistry: WorkerRegistry;
     memoryGovernance: MemoryGovernance;
+    improvement: ImprovementService;
     reportRunner?: DailyReportRunner;
     opportunityService: OpportunityService;
     whatsappSetup: WhatsAppSetupService;
@@ -711,14 +763,22 @@ async function handleRequest(
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host === "::1" ? "[::1]" : context.host}`);
   const method = request.method ?? "GET";
+  if (context.proxySecret !== undefined
+    && headerValue(request.headers["x-clone-proxy-secret"]) !== context.proxySecret) {
+    sendJson(response, 403, { error: "A trusted reverse proxy is required." });
+    return;
+  }
   const authorized = authorizeCompanionRequest({
     method,
     pathname: url.pathname,
     hostHeader: headerValue(request.headers.host),
     originHeader: headerValue(request.headers.origin),
-    authorization: headerValue(request.headers.authorization),
+    authorization: headerValue(request.headers["x-clone-ai-token"]) !== undefined
+      ? `Bearer ${headerValue(request.headers["x-clone-ai-token"])}`
+      : headerValue(request.headers.authorization),
     token: context.token,
     listenPort: context.listenPort,
+    allowRemoteHost: context.allowRemoteHost,
   });
   if (!authorized.ok) {
     sendJson(response, authorized.status, { error: authorized.error });
@@ -1274,6 +1334,24 @@ async function handleRequest(
     sendJson(response, 200, { text });
     return;
   }
+  if (request.method === "GET" && url.pathname === "/api/attention") {
+    // One list of what needs the owner, composed from the services that own
+    // each item. Read-only: acting on an item goes through its service.
+    // 一份"需要所有者处理"的列表，由拥有每一项的服务合成。只读：对某项采取行动要走它所属的服务。
+    const state = await new PersonalStateStore(context.journal).refresh();
+    const sweep = await sweepConnectors({ dataDirectory: context.dataDirectory, workspacePath: context.workspacePath, limitPerConnector: 5 });
+    sendJson(response, 200, {
+      items: buildAttention({
+        commitments: Object.values(state.commitments),
+        goals: Object.values(state.goals),
+        observations: sweep.observations.map((observation, index) => ({ ...observation, connectorId: sweep.results[index]?.connectorId })),
+        candidates: await context.memoryGovernance.pendingCandidates(),
+        suggestions: await context.improvement.pending(),
+        opportunities: await context.opportunityService.list(),
+      }),
+    });
+    return;
+  }
   if (request.method === "GET" && url.pathname === "/api/opportunities") {
     const opportunities = await context.opportunityService.list();
     sendJson(response, 200, { opportunities });
@@ -1336,6 +1414,24 @@ async function handleRequest(
       sendJson(response, 200, { decided: cardId, ...(runId === undefined ? {} : { runId }) });
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "The opportunity could not be resolved." });
+    }
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/improvement") {
+    sendJson(response, 200, { enabled: ImprovementService.enabled(), suggestions: await context.improvement.pending(), ...await context.improvement.usage() });
+    return;
+  }
+  const improvementDecision = url.pathname.match(/^\/api\/improvement\/suggestions\/([^/]+)\/(approve|dismiss)$/);
+  if (request.method === "POST" && improvementDecision?.[1] !== undefined && improvementDecision?.[2] !== undefined) {
+    const id = decodeURIComponent(improvementDecision[1]);
+    try {
+      if (improvementDecision[2] === "approve") sendJson(response, 200, await context.improvement.approve(id));
+      else {
+        await context.improvement.dismiss(id);
+        sendJson(response, 200, { dismissed: id });
+      }
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The decision could not be recorded." });
     }
     return;
   }
@@ -1633,11 +1729,16 @@ async function handleRequest(
   }
   if (request.method === "POST" && url.pathname === "/api/main-agent/stream") {
     const body = await readJsonBody(request);
+    const attachments = parseAttachments(body.attachments);
+    if (!attachments.ok) {
+      sendJson(response, 400, { error: attachments.error });
+      return;
+    }
     const text = normalizeMainAgentRequestText(body.text);
     const turnId = typeof body.turnId === "string" && body.turnId.trim().length > 0
       ? body.turnId.trim()
       : randomUUID();
-    if (text.length === 0) {
+    if (text.length === 0 && attachments.images.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
@@ -1662,6 +1763,7 @@ async function handleRequest(
     try {
       const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
         onDelta: (delta) => send("delta", { delta }),
+        ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
       });
       send("done", result);
     } catch (error: unknown) {
@@ -1681,11 +1783,16 @@ async function handleRequest(
 
   if (request.method === "POST" && url.pathname === "/api/main-agent/query") {
     const body = await readJsonBody(request);
+    const attachments = parseAttachments(body.attachments);
+    if (!attachments.ok) {
+      sendJson(response, 400, { error: attachments.error });
+      return;
+    }
     const text = normalizeMainAgentRequestText(body.text);
     const turnId = typeof body.turnId === "string" && body.turnId.trim().length > 0
       ? body.turnId.trim()
       : randomUUID();
-    if (text.length === 0) {
+    if (text.length === 0 && attachments.images.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
@@ -1717,7 +1824,9 @@ async function handleRequest(
       return;
     }
     try {
-      const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId);
+      const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
+        ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
+      });
       sendJson(response, 200, result);
     } catch (error: unknown) {
       if (error instanceof MainAgentBusyError) {
@@ -1726,6 +1835,24 @@ async function handleRequest(
       }
       throw error;
     }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/main-agent/prompt-snapshots") {
+    // Recent prompt provenance, newest first. The full material lives in the
+    // content-addressed file named by `locator`; this listing carries hashes,
+    // model, and effort so a change can be spotted without opening it.
+    // 最近的提示词溯源，新的在前。完整材料在 `locator` 指向的内容寻址文件里；此列表
+    // 只带哈希、模型与强度，不打开文件就能看出变化。
+    const requested = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
+    const take = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 100) : 20;
+    const events = await context.journal.list();
+    const snapshots = events
+      .filter((event) => event.type === "main_agent.prompt_snapshot")
+      .slice(-take)
+      .reverse()
+      .map((event) => ({ sequence: event.sequence, occurredAt: event.occurredAt, ...asRecord(event.payload) }));
+    sendJson(response, 200, { snapshots });
     return;
   }
 
@@ -1859,6 +1986,17 @@ async function handleRequest(
     // 随 legacy 记忆存储一同退役：召回由记忆库本身治理，第二个设置界面描述的是一套
     // 已不存在的系统。保留显式 410，使旧客户端能知道原因，而不是把 404 当成"路径错了"。
     sendJson(response, 410, { error: "The legacy memory store was retired; use the governed memory library." });
+    return;
+  }
+
+  const progressMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/progress$/);
+  if (request.method === "GET" && progressMatch?.[1] !== undefined) {
+    const runId = decodeURIComponent(progressMatch[1]);
+    try {
+      sendJson(response, 200, context.runtime.getRunProgress(runId));
+    } catch (error: unknown) {
+      sendJson(response, 404, { error: error instanceof Error ? error.message : "Unknown run." });
+    }
     return;
   }
 
@@ -2640,6 +2778,7 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
     "memory.candidate.proposed": "提出记忆候选",
     "memory.recalled": "召回本地记忆",
     "usage.recorded": "记录用量",
+    "main_agent.prompt_snapshot": "记录提示词快照",
     "audit.labeled": "人工判定",
     "authority.changed": "修改权限",
     "recommendation.applied": "应用评审改动",
@@ -2756,6 +2895,13 @@ function detailFor(type: JournalEvent["type"], payload: Record<string, unknown>)
   }
   if (type === "agent.install_failed") {
     return `安装 ${String(payload.agentId ?? "Worker")} 失败：${String(payload.message ?? "")}`;
+  }
+  if (type === "main_agent.prompt_snapshot") {
+    const model = typeof payload.modelId === "string" ? payload.modelId : "默认模型";
+    const effort = typeof payload.effort === "string" ? ` · 强度 ${payload.effort}` : "";
+    const tools = Array.isArray(payload.toolNames) ? payload.toolNames.length : 0;
+    const hash = typeof payload.promptHash === "string" ? payload.promptHash.slice(0, 8) : "?";
+    return `${model}${effort} · ${tools} 个工具 · 提示词 ${hash}`;
   }
   if (typeof payload.summary === "string") {
     return payload.summary;
