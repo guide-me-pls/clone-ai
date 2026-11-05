@@ -79,15 +79,13 @@ export async function runMainAgentQuery(
   try {
     const result = await withMainAgentLock(dataDirectory, async () => {
     if (isNativeMainAgentSelected()) {
-      if (options.images !== undefined && options.images.length > 0) {
-        return { reply: "", error: "The native Main Agent runtime does not support image attachments yet.", newRuns: [] };
-      }
       return runNativeMainAgentTurn({
         dataDirectory,
         text,
         source: options.source ?? "companion",
         ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
         ...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
+        ...(options.images === undefined ? {} : { images: options.images }),
         onMetadata: (metadata) => audit.note(metadata),
       });
     }

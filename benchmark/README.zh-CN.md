@@ -67,6 +67,11 @@ CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main
 捕获发出的请求，并检查：摘要存在、摘要含针、最新轮次保持原文、回复含针、没有错误。
 报告位于 `benchmark/results/`。
 
+## 图片验证（`npm run bench:images`）
+
+生成一张纯红 PNG，以 data URL 经原生主 Agent 发送，检查图片部分到达端点且模型回答红色。
+报告位于 `benchmark/results/`。
+
 ## 回归门禁（`npm run gate`）
 
 离线门禁在 CI 中随每次提交运行，零成本：它针对 `benchmark/gate/` 下的 held-out
