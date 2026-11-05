@@ -63,6 +63,7 @@ Usage:
   clone-ai audit [<runId>|export [--out file]]  Why runs failed, per run; export JSONL for evals
   clone-ai invocations [list|show <id>]  Every Agent call, its prompt, reply and Run ids
   clone-ai traces [list|export|show <runId>|clear --yes]  Failed traces for the nightly repair job
+  clone-ai selfcheck [--full] [--repair]   Adversarial suite + gate; --repair hands a red round to the repair lane
   clone-ai model <worker> [<model>|--clear]  Show, pin or clear the model a worker CLI uses
   clone-ai effort <worker> [<level>|--clear]  Show, pin or clear the reasoning effort
   clone-ai bench [--provider p]  Run the reliability benchmark
@@ -116,6 +117,7 @@ async function main(): Promise<number> {
     case "audit": return auditCommand(paths.dataDirectory, argv.slice(1));
     case "invocations": return invocationsCommand(paths.dataDirectory, argv.slice(1));
     case "traces": return tracesCommand(paths.dataDirectory, argv.slice(1));
+    case "selfcheck": return selfCheckCommand(paths.dataDirectory, argv.slice(1));
     case "model": return modelCommand(paths.dataDirectory, argv.slice(1));
     case "effort": return effortCommand(paths.dataDirectory, argv.slice(1));
     case "bench": return runBench(argv.slice(1));
@@ -524,6 +526,49 @@ async function authorityCommand(dataDirectory: string, args: string[]): Promise<
  * 供修复流水线使用的失败轨迹：列出磁盘上的、从 Journal 导出新的、查看单条、或清空。
  * 导出在写入前完成脱敏。
  */
+/**
+ * One self-check round: adversarial probes, the deterministic gate, optionally
+ * the full suite. The result is journaled, so the loop is auditable even when
+ * nobody is watching.
+ * 一轮自检：对抗探针、确定性门禁，可选全量测试。结果写入 Journal，即使没人看着，回路也可审计。
+ */
+async function selfCheckCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const { runSelfCheckRound, readSelfCheckRounds } = await import("../eval/self-check.ts");
+  const [first] = args;
+  if (first === "list") {
+    const rounds = await readSelfCheckRounds(dataDirectory);
+    if (rounds.length === 0) { console.log("No self-check rounds yet."); return 0; }
+    for (const round of rounds) console.log(`${round.generatedAt.slice(0, 19).replace("T", " ")}  ${round.verdict === "green" ? "绿色" : "红色"}  probes ${round.probes.passed}/${round.probes.total}  gate ${round.gate.status === 0 ? "ok" : `exit ${round.gate.status}`}`);
+    return 0;
+  }
+  const journal = createJournalStore(dataDirectory);
+  try {
+    const round = await runSelfCheckRound({ dataDirectory, journal, fullTests: args.includes("--full") });
+    let repairExit: number | undefined;
+    if (round.verdict !== "green" && args.includes("--repair")) {
+      // The loop does not edit code: a red round becomes traces, and the gated
+      // repair lane turns those into a draft PR the owner reviews.
+      // 回路不改代码：红色的一轮变成轨迹，由带闸门的修复通道产出草稿 PR 交给所有者审查。
+      console.log("\n红色探针已导出为轨迹，交给修复通道运行（只产出草稿 PR）…");
+      const { spawn } = await import("node:child_process");
+      repairExit = await new Promise((resolve) => {
+        const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "nightly-rsi.mjs"), "--max-traces", "5"], { stdio: "inherit" });
+        child.on("close", (code) => resolve(code ?? 1));
+        child.on("error", () => resolve(1));
+      });
+      console.log(`修复通道退出码：${repairExit}`);
+    }
+    console.log(`
+${round.verdict === "green" ? "绿色" : "红色"} · 探针 ${round.probes.passed}/${round.probes.total} · gate ${round.gate.status === 0 ? "ok" : `exit ${round.gate.status}`}${round.tests === undefined ? "" : ` · tests ${round.tests.status === 0 ? "ok" : `exit ${round.tests.status}`}`}`);
+    for (const probe of round.probes.probes.filter((item) => !item.passed)) console.log(`  ✗ ${probe.boundary} · ${probe.attack}：${probe.detail ?? ""}`);
+    if (round.traceExport !== undefined && repairExit === undefined) console.log(`已导出 ${round.traceExport.written.length} 条轨迹到 ${round.traceExport.directory}，可交给夜间修复（或加 --repair）。`);
+    if (round.reportPath !== undefined) console.log(`报告：${round.reportPath}`);
+    return round.verdict === "green" ? 0 : 1;
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
+}
+
 async function tracesCommand(dataDirectory: string, args: string[]): Promise<number> {
   const { exportFailedTraces, listFailedTraces, tracesDirectory } = await import("../audit/failed-traces.ts");
   const journal = createJournalStore(dataDirectory);

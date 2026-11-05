@@ -7,6 +7,18 @@ written before the change; this entry is completed after it ships. The point is
 to make the *work* auditable: not only what changed, but how it was done, what
 it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 
+### 2026-11-05 — Self-check loop: adversarial probes, gate, recorded rounds
+
+- **Goal / hypothesis:** the agent should attack its own boundaries on a schedule, record every round, and hand a red round to the repair lane — instead of waiting for the owner to notice a regression.
+- **Trade-off:** [2026-11-05 — The agent runs its own adversarial suite and repair loop](../architecture/trade-offs.md).
+- **Change:** `src/eval/adversarial-probes.ts` (15 deterministic probes: untrusted wrapping, forwarded approval refusal, approval replay/expiry/re-issue, rate limit, protected paths, symlink escape, worker env credentials, trace redaction, digest tamper, trace assembly, path containment, probe isolation); `src/eval/self-check.ts` (runs probes + `npm run gate` + optional `npm test`, journals `selfcheck.completed`, writes a round report, exports traces when red); `clone-ai selfcheck [--full] [--repair] [list]`; `GET/POST /api/audit/selfcheck`; audit → 评估 shows the round, failures, gate tail, and history.
+- **Eval:** `node --experimental-strip-types --test test/self-check.test.ts` (3 cases: all probes green, green round journaled and saved, red gate makes the round red and attempts export) and `test/adversarial-probes` coverage inside the same file. `clone-ai selfcheck` against `/tmp/audit-demo3`: `绿色 · 探针 15/15 · gate ok`, round `round-20261105T081911`.
+- **Benchmark run:** none — this is a deterministic, offline eval; no provider, model, dataset, or scoring parameters are involved.
+- **Execution chain:** read the current gate and test harness; wrote probes against shipped modules; added the round runner, CLI, API and UI; ran the suite twice (one red on a missing bilingual comment, fixed); ran `npm test` (568 pass) and `npm run typecheck`; ran one real round through the CLI against the demo home (~2 s, CPU only, 0 model tokens).
+- **Pros:** cheap enough to run on every round; every probe names the boundary and the attack; the loop's output is a first-class audit object and its repair hand-off reuses the existing gated lane.
+- **Cons / next time:** the probes are deterministic and therefore repeatable but not creative — a model-driven red team (schema-constrained, budget-capped) is the next layer, and the suite must grow whenever an incident reveals a class it missed.
+- **Reversal condition:** see the trade-off entry — extend the suite rather than loosen it.
+
 ## Template
 
 ```markdown

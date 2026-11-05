@@ -6,6 +6,18 @@
 它的目的是让**工作本身**可审计：不仅改了什么，还包括怎么做的、花了多少、链路哪里弱。
 规则见 [`AGENTS.md`](../../AGENTS.md)。
 
+### 2026-11-05 — 自检回路：对抗探针、门禁、记录每一轮
+
+- **目标 / 假设：** Agent 应定时攻击自己的边界、记录每一轮，并把红色的一轮交给修复通道，而不是等所有者发现回归。
+- **取舍：** [2026-11-05 — Agent 自己运行对抗性测试与修复回路](../architecture/trade-offs.zh-CN.md)。
+- **变更：** `src/eval/adversarial-probes.ts`（15 个确定性探针：非授信包裹、转发审批拒绝、审批重放/过期/重发、限流、受保护路径、符号链接逃逸、Worker 环境凭据、轨迹脱敏、摘要篡改、轨迹组装、路径包含、探针隔离）；`src/eval/self-check.ts`（跑探针 + `npm run gate` + 可选 `npm test`，写 `selfcheck.completed`、轮次报告，红色时导出轨迹）；`clone-ai selfcheck [--full] [--repair] [list]`；`GET/POST /api/audit/selfcheck`；审计→评估页显示本轮、失败项、门禁尾巴与历史。
+- **Eval：** `node --experimental-strip-types --test test/self-check.test.ts`（三个用例：全部探针绿、绿色轮次写入 Journal 与磁盘、门禁红使本轮变红并尝试导出）。对 `/tmp/audit-demo3` 运行 `clone-ai selfcheck`：`绿色 · 探针 15/15 · gate ok`，轮次 `round-20261105T081911`。
+- **Benchmark run：** 无——这是确定性离线评估，不涉及 Provider、模型、数据集或评分参数。
+- **执行链路：** 读现有门禁与测试骨架；针对已发布模块写探针；加轮次运行器、CLI、API 与界面；套件跑了两次（一次因中文注释缺失变红并修复）；跑 `npm test`（568 通过）与 `npm run typecheck`；用 CLI 对演示 home 跑了一轮真实自检（约 2 秒，纯 CPU，0 token）。
+- **优点：** 便宜到可以每轮跑；每个探针都写明边界与攻击方式；回路产出是一等审计对象，修复交接复用既有带闸门通道。
+- **缺点 / 下次：** 探针确定性、可复现，但不具创造性——下一层是受 schema 约束、有预算上限的模型红队；真实事故暴露新类别时，应扩展套件。
+- **推翻条件：** 见取舍条目——扩展套件，而不是放宽。
+
 ## 模板
 
 ```markdown

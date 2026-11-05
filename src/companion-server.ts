@@ -1090,6 +1090,38 @@ async function handleRequest(
     return;
   }
 
+  if (url.pathname === "/api/audit/selfcheck" || url.pathname.startsWith("/api/audit/selfcheck/")) {
+    // The loop is a first-class audit object: list its rounds or run one now.
+    // 回路本身是一等审计对象：列出各轮，或立即运行一轮。
+    const { runSelfCheckRound, readSelfCheckRounds } = await import("./eval/self-check.ts");
+    try {
+      if (method === "GET" && url.pathname === "/api/audit/selfcheck") {
+        sendJson(response, 200, { rounds: await readSelfCheckRounds(context.dataDirectory) });
+        return;
+      }
+      if (method === "POST" && url.pathname === "/api/audit/selfcheck") {
+        const body = await readJsonBody(request).catch(() => ({}) as Record<string, unknown>);
+        const round = await runSelfCheckRound({
+          dataDirectory: context.dataDirectory,
+          journal: context.journal,
+          fullTests: (body as Record<string, unknown>).fullTests === true,
+        });
+        sendJson(response, 200, { round });
+        return;
+      }
+      const one = /^\/api\/audit\/selfcheck\/([^/]+)$/.exec(url.pathname);
+      if (method === "GET" && one !== null) {
+        const round = (await readSelfCheckRounds(context.dataDirectory, 50)).find((candidate) => candidate.id === decodeURIComponent(one[1]!));
+        if (round === undefined) sendJson(response, 404, { error: "Unknown self-check round." });
+        else sendJson(response, 200, { round });
+        return;
+      }
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The self-check round failed." });
+      return;
+    }
+  }
+
   if (url.pathname === "/api/audit/review" || url.pathname === "/api/audit/apply" || url.pathname === "/api/audit/revert") {
     // AI self-review: read the stored proposal, generate a new one, or apply one
     // configuration change. Applying is a single-field write the owner clicked.
@@ -2893,6 +2925,7 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
     "authority.changed": "修改权限",
     "recommendation.applied": "应用评审改动",
     "approval.requested": "请求审批",
+    "selfcheck.completed": "自检回路一轮",
   };
   return { label: labels[event.type] ?? event.type, detail: detailFor(event.type, payload), occurredAt: event.occurredAt };
 }
