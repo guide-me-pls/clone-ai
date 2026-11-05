@@ -12,6 +12,7 @@ import { createDefaultVerifier } from "./verification.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { AgentMemoryWorker } from "../memory/agent-memory-worker.ts";
 import { ConversationMemoryPipeline } from "../memory/conversation-memory-pipeline.ts";
+import { miningModeFromEnvironment as miningMode } from "../memory/mining-policy.ts";
 import { GovernedMemorySource } from "../memory/md-memory-store.ts";
 import { WorkerSettingsStore } from "../config/worker-settings.ts";
 
@@ -74,19 +75,23 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
 
   const memory = new MemoryPipeline(
     journal,
-    // Memory mining by a background agent is opt-in: it costs one real model
-    // call per completed task, so the deterministic worker stays the default.
-    // 后台 Agent 提炼记忆是显式开启的：每完成一个任务会花一次真实模型调用，因此
-    // 默认仍使用确定性 Worker。
-    process.env.CLONE_AI_MEMORY_MINING === "1"
+    // Task mining stays on the deterministic worker unless the owner asks for a
+    // real miner: every completed task would otherwise cost a model call, and a
+    // miner that is not installed must not turn a finished task into an error.
+    // Conversation mining (below) is the one that defaults to a real miner,
+    // because learning from what the owner says is the point of the feature.
+    // 任务提炼默认仍用确定性 Worker，除非所有者明确要求真实提炼器：否则每个完成的任务都要多花一次
+    // 模型调用，而且没装好的提炼器不该把已完成的任务变成错误。下面默认用真实提炼器的是对话提炼，
+    // 因为"从所有者说的话里学习"正是这个功能的意义。
+    miningMode() === "all"
       ? new AgentMemoryWorker({ allowUnrestrictedHost: process.env.CLONE_AI_MEMORY_MINING_UNRESTRICTED === "1" })
       : undefined,
     { lockPath: join(paths.dataDirectory, "memory-extraction-lock") },
   );
-  // Conversation mining is opt-in for the same cost reason as task mining, and
-  // shares the pipeline's lock so the two never write candidates concurrently.
-  // 对话提炼与任务提炼同样因成本而显式开启，并共用流水线锁，使两者不会并发写候选。
-  const conversationMemory = process.env.CLONE_AI_MEMORY_MINING === "1"
+  // Conversation mining shares the pipeline's lock, so the two paths never
+  // write candidates concurrently.
+  // 对话提炼共用流水线锁，使两条路径不会并发写候选。
+  const conversationMemory = miningMode() !== "off"
     ? new ConversationMemoryPipeline(journal, memory)
     : undefined;
   const runtime = new CloneRuntime({
