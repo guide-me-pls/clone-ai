@@ -255,3 +255,28 @@
   `missing-input` 仍被计为意外失败，因为它在验证阶段而非执行阶段失败。`no_artifact` 的
   口径需要另行决定。
 - **推翻条件：** 见取舍条目。
+
+## 2026-11-05 — 开关后的原生主 Agent 循环
+
+- **目标 / 假设：** 在不改变行为的前提下，把 Pi 从主 Agent 的关键路径上移除：用进程内
+  OpenAI 兼容循环运行相同的 Prompt、工具与审计。
+- **取舍：** [原生主 Agent](../architecture/trade-offs.zh-CN.md#2026-11-05--原生主-agent-循环放在开关后而不是一次性切换)。
+- **变更：** `src/main-agent/prompt.ts`（不依赖 SDK 的 Prompt 编译）、
+  `src/main-agent/native-runtime.ts`（chat 循环、工具执行、台账对话记录、台账版
+  `search_history`）、kernel-tools 的 `kernelToolDefinitions`，以及
+  `run-main-query`、CLI、`npm run main` 的开关分支。Pi 仍是默认。
+- **Eval：** `test/native-main-agent.test.ts` 3 个用例：脚本化工具调用 + 最终回答
+  （回复、工具消息，以及 turn/tool/usage/snapshot Journal 事件）、从台账加载历史轮次、
+  显式开关与端点处理。全量：576 个测试 / 573 通过 / 3 跳过；typecheck、gate 与双语
+  文档通过。
+- **实机冒烟：** `CLONE_AI_MAIN_RUNTIME=native
+  CLONE_AI_NATIVE_MODEL=360/moonshotai/kimi-k3.1-pro
+  CLONE_AI_NATIVE_BASE_URL=http://127.0.0.1:3425 clone-ai "请只回复：native 主 Agent 已就绪"`
+  返回了该回复；`clone-ai audit turns` 显示完成的回合与 3,393 tokens；
+  `clone-ai invocations` 显示 caller `claude-code:<session>`、surface `cli`。
+- **优点：** 原生路径写入相同的审计与用量记录；工具表从 Pi 扩展捕获，两个运行时不会
+  各自漂移；共享调用账本能识别调用者。
+- **缺点 / 下次：** 非流式；无压缩；拒绝图片；`search_history` 检索回合台账而非 Pi 会话
+  文件；原生回合不能作为 Pi 会话续跑；尚无原生主 Agent 与 Pi 的 benchmark 对比——实机
+  冒烟只是一轮，不是基准。
+- **推翻条件：** 见取舍条目。

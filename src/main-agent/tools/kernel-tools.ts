@@ -734,3 +734,29 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 }
+
+export interface PlainKernelTool {
+  name: string;
+  label: string;
+  description: string;
+  parameters: unknown;
+  execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }>; details?: unknown }>;
+}
+
+/**
+ * The same tool table as a plain array, with no Pi runtime involved. The
+ * extension is invoked with a capturing stub, so the native Main Agent and the
+ * Pi session cannot drift apart.
+ * 同一张工具表，以普通数组返回，不涉及 Pi 运行时。用捕获桩调用扩展，因此原生主 Agent
+ * 与 Pi 会话不会各自漂移。
+ */
+export function kernelToolDefinitions(options: KernelToolsOptions): PlainKernelTool[] {
+  const tools: PlainKernelTool[] = [];
+  const capture = {
+    registerTool(tool: PlainKernelTool): void {
+      tools.push(tool);
+    },
+  } as unknown as ExtensionAPI;
+  createKernelToolsExtension(capture, options);
+  return tools;
+}

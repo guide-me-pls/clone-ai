@@ -383,3 +383,34 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   because it fails at verification, not execution. Decide the `no_artifact`
   classification separately.
 - **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — Native Main Agent loop behind a flag
+
+- **Goal / hypothesis:** remove Pi from the Main Agent's critical path without
+  changing behavior, by running the same prompt, tools and audit through an
+  in-process OpenAI-compatible loop.
+- **Trade-off:** [native main](../architecture/trade-offs.md#2026-11-05--a-native-main-agent-loop-behind-a-flag-not-a-flag-day).
+- **Change:** `src/main-agent/prompt.ts` (SDK-free prompt compiler),
+  `src/main-agent/native-runtime.ts` (chat loop, tool execution, ledger
+  transcript, `search_history` over the ledger), `kernelToolDefinitions` in
+  kernel-tools, and flag branches in `run-main-query`, the CLI and
+  `npm run main`. Pi remains the default.
+- **Eval:** `test/native-main-agent.test.ts` — 3 tests: a scripted tool call plus
+  a final answer (reply, tool messages, and the turn/tool/usage/snapshot journal
+  events), prior turns from the ledger, and explicit flag/endpoint handling.
+  Full suite: 576 tests / 573 pass / 3 skipped; typecheck, gate and bilingual
+  docs pass.
+- **Live smoke:** `CLONE_AI_MAIN_RUNTIME=native
+  CLONE_AI_NATIVE_MODEL=360/moonshotai/kimi-k3.1-pro
+  CLONE_AI_NATIVE_BASE_URL=http://127.0.0.1:3425 clone-ai "请只回复：native 主 Agent 已就绪"`
+  returned that exact reply; `clone-ai audit turns` shows the completed turn with
+  3,393 tokens; `clone-ai invocations` shows caller `claude-code:<session>`,
+  surface `cli`.
+- **Pros:** the native path writes the same audit and usage records; the tool
+  table is captured from the Pi extension so the two runtimes cannot drift; the
+  shared invocation ledger identifies the caller.
+- **Cons / next time:** non-streaming; no compaction; images refused;
+  `search_history` searches the turn ledger, not Pi session files; native turns
+  are not resumable as Pi sessions; no benchmark comparison of the native Main
+  Agent against Pi yet — the live smoke is one turn, not a benchmark.
+- **Reversal condition:** see the trade-off entry.

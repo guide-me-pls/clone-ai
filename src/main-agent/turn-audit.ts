@@ -254,6 +254,64 @@ export function observeMainAgentSession(
 }
 
 /**
+ * Records a tool start for a runtime that drives its own loop instead of Pi.
+ * It writes the same events and fills the same `toolCalls` list, so both
+ * runtimes produce one audit shape.
+ * 为自行驱动循环、而非 Pi 的运行时记录一次工具开始。它写入相同事件并填充相同的
+ * `toolCalls` 列表，使两个运行时产出一致的审计形状。
+ */
+export async function recordNativeToolStarted(
+  context: MainAgentTurnContext,
+  input: { toolCallId: string; tool: string; inputSummary?: string },
+): Promise<void> {
+  context.toolCalls.push({
+    toolCallId: input.toolCallId,
+    name: input.tool,
+    ...(input.inputSummary === undefined ? {} : { inputSummary: input.inputSummary }),
+  });
+  context.pending = context.pending.then(() => appendSafely(context.journal, context.turnId, {
+    type: "agent.tool_started",
+    payload: {
+      turnId: context.turnId,
+      toolCallId: input.toolCallId,
+      tool: input.tool,
+      ...(input.inputSummary === undefined ? {} : { inputSummary: input.inputSummary }),
+    },
+  }));
+  await context.pending;
+}
+
+/** Records the matching tool completion. 记录对应的工具完成。 */
+export async function recordNativeToolCompleted(
+  context: MainAgentTurnContext,
+  input: { toolCallId: string; tool: string; isError: boolean; durationMs?: number },
+): Promise<void> {
+  const existing = context.toolCalls.find((call) => call.toolCallId === input.toolCallId);
+  if (existing === undefined) {
+    context.toolCalls.push({
+      toolCallId: input.toolCallId,
+      name: input.tool,
+      isError: input.isError,
+      ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+    });
+  } else {
+    existing.isError = input.isError;
+    if (input.durationMs !== undefined) existing.durationMs = input.durationMs;
+  }
+  context.pending = context.pending.then(() => appendSafely(context.journal, context.turnId, {
+    type: "agent.tool_completed",
+    payload: {
+      turnId: context.turnId,
+      toolCallId: input.toolCallId,
+      tool: input.tool,
+      isError: input.isError,
+      ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+    },
+  }));
+  await context.pending;
+}
+
+/**
  * Closes a turn: journals the reply, error, usage and tool calls, updates the
  * ledger, and releases the journal handle. Safe to call twice.
  * 结束一个回合：写入回复、错误、用量与工具调用，更新台账，并释放 Journal 句柄。可重复调用。

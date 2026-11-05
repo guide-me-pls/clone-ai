@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A native Main Agent loop behind a flag
+
+`CLONE_AI_MAIN_RUNTIME=native` runs the Main Agent in-process against an OpenAI-compatible endpoint (`CLONE_AI_NATIVE_*`): the same charter/briefing/memory-push prompt, the same Kernel tools captured from the Pi extension, the turn ledger as transcript, and the same prompt-snapshot/turn/tool/usage audit. Pi remains the default and fallback. The first native loop is non-streaming, keeps the last 12 turns without compaction, refuses image attachments, and answers `search_history` from the turn ledger.
+
+`CLONE_AI_MAIN_RUNTIME=native` 让主 Agent 在进程内运行，对接 OpenAI 兼容端点（`CLONE_AI_NATIVE_*`）：相同的 charter/简报/记忆推送 Prompt、从 Pi 扩展捕获的同一组 Kernel 工具、以回合台账作为对话记录，以及相同的提示词快照/回合/工具/用量审计。Pi 仍是默认与回退。第一版原生循环非流式、保留最近 12 轮且不做压缩、拒绝图片附件，`search_history` 从回合台账检索。
+
 ### A missing named input fails the native worker
 
 When a read fails on a path named in the work order or step instructions, the native worker now ends the turn as `no_artifact` (`native-missing-input`) instead of accepting an invented artifact. The prompt says not to invent missing inputs, usage from failed runs is journaled, and the missing-input benchmark now behaves as expected (native set: 5/5).

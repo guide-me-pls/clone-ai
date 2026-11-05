@@ -6,6 +6,32 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-05 — A native Main Agent loop behind a flag, not a flag day
+
+**Decision.** Add an in-process Main Agent runtime selected by
+`CLONE_AI_MAIN_RUNTIME=native`. It compiles the same charter, situation
+briefing, executor list and memory push; offers the same Kernel tools through a
+plain descriptor list; talks to an OpenAI-compatible endpoint named by
+`CLONE_AI_NATIVE_*`; uses the turn ledger as its transcript; and writes the same
+prompt snapshot, turn events, tool events and usage records. Pi remains the
+default and the fallback. The first native loop is non-streaming and keeps the
+last N turns without compaction.
+
+**Evidence.** Pi is the Main Agent's last hard SDK dependency: it owns the loop,
+the session file, compaction and `search_history`, while the Kernel already owns
+tools, policy and completion. The native worker proved the same in-process,
+per-call scope model works. A flag lets the two runtimes be compared on the
+benchmark and through the turn records before any default changes.
+
+**What it costs.** No streaming or compaction in the first phase; images are
+refused under the native flag; the transcript is the turn ledger, so
+`search_history` searches the ledger instead of Pi session files; the model must
+be an OpenAI-compatible endpoint; native turns are not resumable as Pi sessions.
+
+**Reversal condition.** If the native loop cannot match Pi on the benchmark and
+the turn audit, keep Pi as the default and remove the native path. If streaming
+or compaction is the blocker, add it before flipping the default.
+
 ## 2026-11-05 — A missing named input fails the native worker instead of allowing invention
 
 **Decision.** If a read tool fails on a path named in the work order's objective
