@@ -18,6 +18,13 @@ export interface WhatsAppTextMessage {
   text: string;
   timestamp?: string;
   group: boolean;
+  /**
+   * The sender forwarded this from somewhere else, so the text may be written by
+   * a third party. It is still the owner's message, but its content is data, not
+   * a command. 发送者转发了这条内容，因此正文可能出自第三方。它仍是所有者的消息，但内容
+   * 是数据，不是命令。
+   */
+  forwarded: boolean;
 }
 
 export interface WhatsAppMessageBatch {
@@ -103,6 +110,8 @@ export function extractWhatsAppTextMessages(payload: unknown): WhatsAppMessageBa
         const text = type === "text" ? asRecord(message?.text) : undefined;
         const body = typeof text?.body === "string" ? text.body : "";
         const group = typeof message?.group_id === "string" || value?.chat_type === "group";
+        const context = asRecord(message?.context);
+        const forwarded = context?.forwarded === true || context?.frequently_forwarded === true;
         if (id.length === 0 || from.length === 0 || body.trim().length === 0 || group) {
           ignored += 1;
           continue;
@@ -112,6 +121,7 @@ export function extractWhatsAppTextMessages(payload: unknown): WhatsAppMessageBa
           from,
           text: body,
           group,
+          forwarded,
           ...(typeof message?.timestamp === "string" ? { timestamp: message.timestamp } : {}),
         });
       }
