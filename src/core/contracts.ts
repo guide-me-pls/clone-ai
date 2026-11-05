@@ -280,6 +280,9 @@ export type JournalEventType =
   | "plan.created"
   | "policy.decided"
   | "approval.granted"
+  // An approval code was sent to the owner's phone; the request itself is auditable.
+  // 审批码已发送到所有者手机；请求本身可审计。
+  | "approval.requested"
   | "execution.started"
   | "execution.failed"
   | "execution.progress"

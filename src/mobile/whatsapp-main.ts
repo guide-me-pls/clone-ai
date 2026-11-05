@@ -78,6 +78,7 @@ export async function runWhatsAppBridge(): Promise<number> {
     store,
     sender: new WhatsAppCloudSender(config),
     mainAgent: new LocalMainAgentRemote(paths.dataDirectory),
+    approvalDirectory: paths.dataDirectory,
     log: (event) => console.log(JSON.stringify(event)),
     onWebhookVerified: () => {
       webhookVerifiedAt = new Date().toISOString();
@@ -88,6 +89,7 @@ export async function runWhatsAppBridge(): Promise<number> {
       void writeStatus(true);
     },
   });
+  bridge.startApprovals();
   bridge.kick();
   const server = await startWhatsAppBridgeServer({ config, bridge });
   await writeStatus(true);
@@ -97,6 +99,7 @@ export async function runWhatsAppBridge(): Promise<number> {
     inbox: store.counts(),
   }));
   const shutdown = async (): Promise<void> => {
+    bridge.stop();
     await server.close();
     store.close();
     await writeStatus(false).catch(() => undefined);

@@ -10,6 +10,7 @@ import { ScheduleStore } from "../src/scheduling/schedule-store.ts";
 import { localDayKey } from "../src/reporting/daily-report-runner.ts";
 import { createRuntimeAssembly } from "../src/core/runtime-factory.ts";
 import { createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
+import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import { companionFetch } from "./helpers/companion-api.ts";
 
 async function companion(t: TestContext): Promise<{ url: string; token: string; dataDirectory: string }> {
@@ -299,6 +300,47 @@ test("a derived task belongs to the conversation, and hiding the chat hides it t
     assert.equal(restored.status, 204);
     const afterRestore = await (await companionFetch(url, token, "/api/dashboard")).json() as { sessions: Array<{ id: string }> };
     assert.ok(afterRestore.sessions.some((session) => session.id === run.id), "restoring the chat restores its task");
+  } finally {
+    assembly.close();
+  }
+});
+
+test("a paused run is offered for phone approval and the request is journaled", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const assembly = await createRuntimeAssembly({ dataDirectory });
+  try {
+    const { run } = await assembly.runtime.acceptTrigger({ kind: "query", summary: "发送周报", payload: {} });
+    await assembly.runtime.attachPlan(run.id, {
+      summary: "发送周报",
+      steps: [{ id: "send", title: "发送", instructions: "发送到外部", risk: "external_side_effect", acceptanceCriteria: ["receipt"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+    });
+    const executed = await assembly.runtime.execute(run.id, new StaticAgentRegistry([]));
+    assert.equal(executed.status, "waiting_approval");
+
+    const pending = await (await companionFetch(url, token, "/api/approvals/pending")).json() as {
+      approvals: Array<{ runId: string; stepId: string; title: string }>;
+    };
+    const match = pending.approvals.find((approval) => approval.runId === run.id);
+    assert.ok(match, "the paused run must be offered");
+    assert.equal(match.stepId, "send");
+    assert.equal(match.title, "发送周报");
+
+    const recorded = await companionFetch(url, token, "/api/approvals/requested", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runId: run.id, stepId: "send", codeId: "code-1", expiresAt: "2026-11-05T10:10:00.000Z" }),
+    });
+    assert.equal(recorded.status, 200);
+    const event = (await assembly.journal.list()).find((item) => item.type === "approval.requested");
+    assert.equal((event?.payload as { channel: string }).channel, "whatsapp");
+    assert.equal((event?.payload as { stepId: string }).stepId, "send");
+
+    const missing = await companionFetch(url, token, "/api/approvals/requested", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runId: "nope", stepId: "send" }),
+    });
+    assert.equal(missing.status, 404);
   } finally {
     assembly.close();
   }

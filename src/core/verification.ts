@@ -27,33 +27,52 @@ export interface FileExpectation {
  * Recognises the file contract hidden in a plan step.
  *
  * Plans are written in prose by a model, so the contract has to be read out of
- * the words the owner and the agent actually use. A quoted or bare path with a
- * file extension is treated as a promise that the file will exist; `包含` /
- * `contains` phrases become required substrings.
+ * the words the owner and the agent actually use. Ordinary paths with directory
+ * separators are extracted, except for URLs, code expressions and uppercase
+ * constant directories. A root-level filename also needs an allowed extension
+ * and an explicit file-intent word in the same sentence or assertion.
+ * `包含` / `contains` phrases become required substrings.
  *
  * 识别隐藏在计划步骤里的文件契约。
  *
  * 计划是模型用自然语言写的，因此契约必须从所有者与 Agent 实际使用的措辞中读出来。
- * 带扩展名的路径（引号包裹或裸写）被视为"该文件必须存在"的承诺；`包含` / `contains`
+ * 带目录分隔符的普通路径可被提取，但排除 URL、代码表达式和全大写常量目录。根级文件名
+ * 还必须使用允许的扩展名，且同一句或同一条标准中有明确文件意图词；`包含` / `contains`
  * 之类的表述则变成必须出现的子串。
  */
 export function extractFileExpectations(step: PlanStep): FileExpectation[] {
-  const text = [step.instructions, ...step.acceptanceCriteria].join("\n");
   const found = new Map<string, FileExpectation>();
+  const rootExtensions = new Set([
+    "md", "markdown", "txt", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs",
+    "json", "jsonl", "yaml", "yml", "toml", "sh", "py", "go", "rs", "java", "kt",
+    "sql", "html", "css", "csv", "xml", "lock",
+  ]);
+  const fileIntent = /\b(?:file|exists|exist|create|write|save|output|update|add)\b|文件|存在|创建|写入|保存|生成|产出|更新/i;
 
-  // Quoted paths first: `weekly-report.md`, "docs/plan.md", 'a/b.txt'.
-  // 先取被引号包裹的路径。
-  const quoted = /[`"'"']([^`"'"'\s]+\.[A-Za-z0-9]{1,8})[`"'"']/g;
-  // Then bare paths that still look like files rather than sentences.
-  // 再取仍然像文件而不像句子的裸写路径。
-  const bare = /(?:^|[\s(（])([A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8})(?=[\s)）,，。;；:：]|$)/gm;
-
-  for (const pattern of [quoted, bare]) {
-    for (const match of text.matchAll(pattern)) {
-      const candidate = match[1];
-      if (candidate === undefined) continue;
-      if (candidate.startsWith("..")) continue;
-      if (!found.has(candidate)) found.set(candidate, { path: candidate, mustContain: [] });
+  for (const assertion of [step.instructions, ...step.acceptanceCriteria]) {
+    // A period inside a filename is not a sentence boundary.
+    // 文件名中的点不是句子边界。
+    for (const sentence of assertion.split(/\n|(?<=[。！？；])|(?<=[.!?;])(?=\s|$)/)) {
+      const quoted = /[`"'"']([^`"'"'\s]+)[`"'"']/g;
+      const bare = /(?:^|[\s(（])([A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8})(?=[\s)）,，。;；:：]|$)/g;
+      for (const pattern of [quoted, bare]) {
+        for (const match of sentence.matchAll(pattern)) {
+          const candidate = match[1];
+          if (candidate === undefined || candidate.startsWith("..")) continue;
+          if (!/^[A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8}$/.test(candidate)) continue;
+          const prefix = sentence.slice(0, match.index).replace(/[`"'"']$/, "");
+          const suffix = sentence.slice(match.index + match[0].length);
+          if (/[A-Za-z_$][\w.$]*\s*\($/.test(prefix) || /^\s*\(/.test(suffix)) continue;
+          const segments = candidate.split(/[/\\]/);
+          if (segments.length > 1) {
+            if (segments.slice(0, -1).some((segment) => /^(?=.*[A-Z])[A-Z0-9_]+$/.test(segment))) continue;
+          } else {
+            const extension = candidate.slice(candidate.lastIndexOf(".") + 1).toLowerCase();
+            if (!rootExtensions.has(extension) || !fileIntent.test(sentence)) continue;
+          }
+          if (!found.has(candidate)) found.set(candidate, { path: candidate, mustContain: [] });
+        }
+      }
     }
   }
 

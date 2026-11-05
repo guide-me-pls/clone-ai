@@ -6,6 +6,15 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Avoid false file expectations
+
+The verifier excludes code identifiers, URLs and constant-directory paths from
+file expectations. Root-level filenames now require an explicit file-intent
+word in the same sentence and an allowed extension.
+
+验证器不再把代码标识符、URL 和常量目录路径当作必需文件。根级文件名现在要求同一句
+中有明确文件意图词，且扩展名在允许列表中。
+
 ### Avoid repeating successfully repaired traces
 
 Nightly RSI records each successfully handled trace's runId and exact-file SHA-256 in
@@ -24,6 +33,13 @@ plans and cancellations; stores without that capability leave the Run alone.
 
 没有计划的 Run 若在规划阶段超过 15 分钟未更新，只有在没有存活领取时才会被标记为失败。
 带条件的围栏写入保护并发生成的计划和取消操作；不支持该能力的存储不会处理这类 Run。
+
+### Approve external actions from WhatsApp
+
+A run paused on `external_side_effect` or `irreversible` can now be answered from the phone. The bridge polls paused runs, issues an eight-character code bound to one run and step, sends it to the allowlisted number, and handles `APPROVE <code>` / `REJECT <code>` itself — never as a Main Agent turn. Codes expire in ten minutes, are stored only as a salted hash, are replaced when a new one is issued, and a forwarded message can never approve anything. The request is journaled as `approval.requested`; the decision stays `approval.granted`.
+
+停在 `external_side_effect` 或 `irreversible` 上的 Run 现在可以在手机上作答。桥会轮询暂停的 Run，签发绑定唯一 Run 与步骤的八位编号并发到白名单号码，并自己处理 `APPROVE <编号>` / `REJECT <编号>`——不会变成 Main Agent 的一轮。编号十分钟过期、只保存加盐哈希、签发新编号使旧编号失效，转发消息永远不能批准任何事。请求记为 `approval.requested`，决定仍是 `approval.granted`。
+
 
 ### An offline regression gate
 

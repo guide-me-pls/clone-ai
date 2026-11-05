@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import type { Evidence, PlanStep, Run, WorkPlan } from "../src/core/contracts.ts";
-import { CompositeVerifier, createDefaultVerifier, EvidenceVerifier } from "../src/core/verification.ts";
+import { CompositeVerifier, createDefaultVerifier, EvidenceVerifier, extractFileExpectations } from "../src/core/verification.ts";
 import { DiffFileVerifier, TestCommandVerifier } from "../src/core/verifier-plugins.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { DefaultPolicyEngine } from "../src/core/policy.ts";
@@ -33,6 +33,41 @@ function planFor(steps: PlanStep[]): WorkPlan {
 function run(): Run {
   return { id: "run-1", taskId: "task-1", status: "verifying", createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:01.000Z" };
 }
+
+test("implementation identifiers do not become missing file expectations", async (t) => {
+  const directory = await tempDir(t, "clone-ai-verifier-identifiers-");
+  const criterion = "Use `fs.rename`, `os.tmpdir`, `consumed-traces.json`, and `REPORT_DIR/consumed-traces.json` as implementation identifiers.";
+  const step: PlanStep = { id: "repair", title: "Repair", instructions: "Implement the repair.", risk: "reversible_write", acceptanceCriteria: [criterion] };
+  assert.deepEqual(extractFileExpectations(step), []);
+  const result = await new EvidenceVerifier({ workspacePath: directory }).verify({
+    run: run(), plan: planFor([step]),
+    evidence: [{ id: "ev", runId: "run-1", stepId: "repair", kind: "observation", summary: "Implemented.", createdAt: new Date().toISOString() }],
+  });
+  assert.equal(result.passed, false);
+  assert.equal(result.needsReview, true);
+  assert.deepEqual(result.unverifiedCriteria, [`Repair: ${criterion}`]);
+  assert.doesNotMatch(result.summary, /does not exist on disk|could not be located/);
+});
+
+test("file expectations distinguish paths and explicit root-level deliverables from code", () => {
+  const step: PlanStep = {
+    id: "files", title: "Files", risk: "reversible_write",
+    instructions: "Review docs/nightly-rsi.md, test/foo.test.ts and src/core/runtime.ts. Inspect consumed-traces.json.",
+    acceptanceCriteria: [
+      "文件 weekly-report.md 存在",
+      "Create README.md",
+      "Use REPORT_DIR/consumed-traces.json and __DIR__/state.json.",
+      "Use `https://example.com/docs/reference.md`, `foo(docs/call.ts)`, `fs.rename`, `os.tmpdir` and `${REPORT_DIR}/state.json`.",
+      "Create output.bin and call `foo(docs/argument.ts)`.",
+      "File creation is described. consumed-traces.json is an implementation reference.",
+      "Inspect lib\\runtime.ts.",
+    ],
+  };
+  assert.deepEqual(extractFileExpectations(step).map((item) => item.path), [
+    "docs/nightly-rsi.md", "test/foo.test.ts", "src/core/runtime.ts",
+    "weekly-report.md", "README.md", "lib\\runtime.ts",
+  ]);
+});
 
 test("an external_side_effect step without a receipt locator cannot pass", async () => {
   const verifier = new EvidenceVerifier();
@@ -135,7 +170,7 @@ test("a failed mechanical check cannot be accepted as an unverified result", asy
   const { run: created } = await runtime.acceptTrigger({ kind: "query", summary: "生成报告", payload: {} });
   await runtime.attachPlan(created.id, {
     summary: "生成报告",
-    steps: [{ id: "briefing", title: "报告", instructions: "写 `missing.md`", risk: "read_only", acceptanceCriteria: ["内容准确"], agentId: "reviewer", requiredCapabilities: ["review"] }],
+    steps: [{ id: "briefing", title: "报告", instructions: "写入 `missing.md`", risk: "read_only", acceptanceCriteria: ["内容准确"], agentId: "reviewer", requiredCapabilities: ["review"] }],
   });
   const result = await runtime.execute(created.id, new StaticAgentRegistry([new ObservationAdapter()]));
   assert.equal(result.status, "failed");
