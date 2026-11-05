@@ -61,11 +61,53 @@ must be able to see why the chain was chosen and where it was weak.
 explain what the optimization process did, what it cost, or which shortcuts it
 took.
 
+## 4. Bug fixes are produced by Clone AI and checked by the working agent
+
+A bug in this agent is fixed through this agent's own repair lane, not by a
+person or another agent hand-writing the fix:
+
+1. export the failed trace with `clone-ai traces export`;
+2. run the gated repair (`scripts/nightly-rsi.mjs`, or the equivalent isolated
+   worktree run) so the patch comes from the repair model;
+3. the working agent — the one supervising the change — checks the result for
+   **functional correctness only**: reproduce the original failure, run the new
+   regression test, and exercise the affected feature. It does not rewrite the
+   patch. If the repair lane fails, record that failure and stop.
+
+Style, naming, and architecture are outside this review. The repair lane's own
+safety gates — protected paths, test hashes, draft PR only — still apply; a draft
+PR from this lane is the one intentional exception to "merge directly to main".
+
+**Why:** the project is meant to improve itself. If a human writes the fix by
+hand, the loop produces no evidence about whether the loop works.
+
+## 5. Every benchmark run is written down
+
+A score without its invocation cannot be reproduced or compared. Every benchmark
+run records:
+
+- the exact command, including flags;
+- provider and model (and effort), or "no provider";
+- task ids, dataset name and version, split, and seed;
+- scoring parameters (`maxResults`, temperature, sample size, …);
+- machine or runtime notes that could change the result;
+- the result file path and the metrics;
+- the before/after comparison when the run gates a change.
+
+Put this in the `Benchmark run` block of the optimization log entry. A number
+without that block is an anecdote, not evidence.
+
+**Why:** the project's decisions are supposed to rest on measurements; a
+measurement nobody can rerun is indistinguishable from a guess.
+
 ## Checklist
 
 - [ ] Trade-off entry written before implementation.
 - [ ] Eval added or updated; before/after recorded.
 - [ ] Optimization log entry completed after the change.
+- [ ] Bug fix came from the repair lane and was functionally verified by the
+  working agent.
+- [ ] Every benchmark run records command, inputs, parameters, and result path.
 - [ ] `npm test`, `npm run typecheck`, `npm run gate` pass.
 - [ ] CHANGELOG updated (bilingual).
 
@@ -124,10 +166,44 @@ took.
 **为什么：** Journal 与运行轨迹解释运行时做了什么，却解释不了优化过程做了什么、
 花了多少、走了哪些捷径。
 
+## 4. Bug 由 Clone AI 自己修，由工作的 Agent 检查
+
+这个 Agent 的 bug 通过它自己的修复通道来修，而不是由人或另一个 Agent 手写补丁：
+
+1. 用 `clone-ai traces export` 导出失败轨迹；
+2. 运行带闸门的修复（`scripts/nightly-rsi.mjs`，或等价的隔离 worktree 运行），让补丁由
+   修复模型产出；
+3. 工作的 Agent——监督本次变更的那一个——只做**功能正确性检查**：复现原失败、运行新的
+   回归测试、走一遍受影响的 feature。它不重写补丁；修复通道失败时，记录失败并停止。
+
+风格、命名与架构不在这次检查范围内。修复通道自带的安全闸门——受保护路径、测试哈希、
+只出草稿 PR——仍然生效；该通道产出的草稿 PR 是"直接合 main"唯一的有意例外。
+
+**为什么：** 这个项目要能改进自己。人若手写补丁，回路就产不出任何关于"回路是否有效"的
+证据。
+
+## 5. 每次 benchmark 都要写清怎么跑的
+
+没有调用方式的分数无法复现、也无法比较。每次 benchmark 运行都要记录：
+
+- 完整命令（含参数）；
+- Provider 与模型（及强度），或"无 Provider"；
+- 任务 id、数据集名称与版本、切分、种子；
+- 影响分数的参数（`maxResults`、temperature、样本量等）；
+- 可能改变结果的机器或运行时备注；
+- 结果文件路径与指标；
+- 作为变更门禁时，还要记录前后对比。
+
+写进优化日志条目的 `Benchmark run` 块。没有这个块的数字只是轶事，不是证据。
+
+**为什么：** 项目的决定应当建立在测量之上；没人能重跑的测量与猜测无法区分。
+
 ## 检查清单
 
 - [ ] 实现之前已写取舍条目。
 - [ ] 已新增或更新 eval，并记录前后结果。
 - [ ] 变更完成后已补全优化日志。
+- [ ] Bug 修复由修复通道产出，并由工作的 Agent 做功能验证。
+- [ ] 每次 benchmark 都记录了命令、输入、参数与结果路径。
 - [ ] `npm test`、`npm run typecheck`、`npm run gate` 通过。
 - [ ] CHANGELOG 已更新（双语）。
