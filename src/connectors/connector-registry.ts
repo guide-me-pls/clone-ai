@@ -2,6 +2,8 @@ import { readJsonFile, writeJsonAtomic } from "../config/json-file.ts";
 import type { JournalStore } from "../core/journal.ts";
 import type { Connector, ConnectorReadResult, ConnectorSettings, Observation } from "./connector.ts";
 import { FileConnector } from "./file-connector.ts";
+import { CalendarConnector } from "./calendar-connector.ts";
+import { EmailConnector } from "./email-connector.ts";
 
 /**
  * Builds the enabled connectors and records what they saw.
@@ -39,16 +41,66 @@ export async function writeConnectorSettings(
 }
 
 /**
- * Only file observation ships today. A new source becomes available by adding
+ * Builds a connector from its setting. A new source becomes available by adding
  * a builder here, not by changing anything that consumes observations.
- * 目前只提供文件观察。新增来源只需在此添加一个构造器，消费观察结果的那一侧无需改动。
+ *
+ * Credentials are named, never stored: `env` lists variable names, and a
+ * connector that needs one reads it from the process environment at build
+ * time. A missing variable leaves that connector disabled with a reported
+ * error rather than an empty-looking mailbox.
+ * 依据设置构建 Connector。新增来源只需在此添加构造器，消费观察结果的那一侧无需改动。
+ *
+ * 凭据只以名字出现、绝不存储：`env` 列出变量名，需要的 Connector 在构建时从进程环境读取。
+ * 变量缺失时该 Connector 保持禁用并报告错误，而不是显示成一个空邮箱。
  */
-export function buildConnector(settings: ConnectorSettings, workspacePath: string): Connector | undefined {
+export function buildConnector(
+  settings: ConnectorSettings,
+  workspacePath: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): Connector | undefined {
   if (!settings.enabled) return undefined;
   if (settings.id === "local-files" || settings.id.startsWith("files:")) {
     return new FileConnector({ id: settings.id, root: settings.target ?? workspacePath });
   }
+  if (settings.id === "calendar" || settings.id.startsWith("calendar:")) {
+    if (settings.target === undefined) return new UnavailableConnector(settings.id, "A calendar connector needs a target: an .ics path or an https URL.");
+    return new CalendarConnector({ id: settings.id, source: settings.target });
+  }
+  if (settings.id === "email" || settings.id.startsWith("email:")) {
+    const [host, user] = (settings.target ?? "").split("|");
+    const passwordVariable = settings.env?.find((name) => /pass|token|secret/i.test(name));
+    const password = passwordVariable === undefined ? undefined : environment[passwordVariable];
+    if (host === undefined || host.length === 0 || user === undefined || password === undefined) {
+      return new UnavailableConnector(
+        settings.id,
+        "An email connector needs target \"host|user\" and one env variable holding the password (e.g. CLONE_AI_EMAIL_PASSWORD).",
+      );
+    }
+    return new EmailConnector({ id: settings.id, host, user, password });
+  }
   return undefined;
+}
+
+/**
+ * A connector that explains why it cannot run. Reporting beats disappearing:
+ * the owner enabled it and deserves to know what is missing.
+ * 一个说明自己为何无法运行的 Connector。报告胜过消失：所有者启用了它，理应知道缺什么。
+ */
+class UnavailableConnector implements Connector {
+  readonly id: string;
+  readonly label = "Unavailable";
+  readonly scope: string;
+  readonly #reason: string;
+
+  constructor(id: string, reason: string) {
+    this.id = id;
+    this.#reason = reason;
+    this.scope = "Read-only: nothing (not configured)";
+  }
+
+  async read(): Promise<ConnectorReadResult> {
+    return { connectorId: this.id, observedAt: new Date().toISOString(), observations: [], error: this.#reason };
+  }
 }
 
 export interface ObservationSweep {

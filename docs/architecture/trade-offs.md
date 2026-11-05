@@ -249,6 +249,27 @@ the system prompt changes between turns, which weakens prompt caching.
 **Reversal condition.** If per-turn latency becomes visible, or if prompt
 caching savings outweigh push accuracy.
 
+## 2026-11-05 — Calendar and email arrive as read-only connectors
+
+**Decided:** `CalendarConnector` reads ICS from a file or an https URL;
+`EmailConnector` reads an IMAP INBOX. Neither can write, accept an invite or
+send mail. Credentials are named (`env`) and read from the process environment
+at build time; a missing variable leaves the connector disabled and says why.
+
+**Why ICS and IMAP rather than vendor APIs.** One reader covers Apple, Google,
+Outlook and Nextcloud exports without OAuth, a vendor SDK, or storing a token
+refresh flow. IMAP is the one protocol every mailbox speaks.
+
+**What was given up.** No push: both poll on the maintenance sweep, so a
+calendar change is seen within one interval, not immediately. No thread bodies
+beyond a snippet, and no attachments. Mail is read-only, so "reply for me"
+remains a separate work order the owner must approve — deliberate, but it means
+the twin cannot yet answer an email end to end.
+
+**Reversal condition.** If replies become a product requirement, add an action
+connector with receipts; do not add a write method to this observation
+connector.
+
 ## 2026-11-05 — Supersedes: conversation mining defaults to a cheap local filter
 
 **Decided:** `CLONE_AI_MEMORY_MINING` is now a three-way switch.
