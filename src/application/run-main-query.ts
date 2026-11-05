@@ -21,6 +21,7 @@ import {
   type MainAgentTurnSource,
 } from "../main-agent/turn-audit.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
+import { isNativeMainAgentSelected, runNativeMainAgentTurn } from "../main-agent/native-runtime.ts";
 import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
 import { beginInvocation, type InvocationCaller, type InvocationSurface } from "../audit/invocation-ledger.ts";
 
@@ -77,6 +78,19 @@ export async function runMainAgentQuery(
   });
   try {
     const result = await withMainAgentLock(dataDirectory, async () => {
+    if (isNativeMainAgentSelected()) {
+      if (options.images !== undefined && options.images.length > 0) {
+        return { reply: "", error: "The native Main Agent runtime does not support image attachments yet.", newRuns: [] };
+      }
+      return runNativeMainAgentTurn({
+        dataDirectory,
+        text,
+        source: options.source ?? "companion",
+        ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
+        ...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
+        onMetadata: (metadata) => audit.note(metadata),
+      });
+    }
     const before = new Set((await currentRuns(dataDirectory)).map((run) => run.id));
 
     const { session, prompt } = await createMainAgentSession({ dataDirectory, query: text });

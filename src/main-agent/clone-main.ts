@@ -17,6 +17,7 @@
  */
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { createMainAgentSession } from "./session.ts";
+import { isNativeMainAgentSelected, runNativeMainAgentTurn } from "./native-runtime.ts";
 import { recordPromptSnapshot } from "./prompt-snapshot.ts";
 import { beginMainAgentTurn, finishMainAgentTurn, observeMainAgentSession } from "./turn-audit.ts";
 import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
@@ -38,6 +39,20 @@ await migrateLegacyCloneHome({
   legacyDirectory: defaultLegacyDirectory(paths.workspacePath),
   targetDirectory: paths.dataDirectory,
 });
+if (isNativeMainAgentSelected()) {
+  const result = await runNativeMainAgentTurn({
+    dataDirectory: paths.dataDirectory,
+    text: query,
+    source: "main-cli",
+    onDelta: (delta) => process.stdout.write(delta),
+  });
+  process.stdout.write("\n");
+  if (result.error !== undefined) {
+    console.error(result.error);
+    process.exit(1);
+  }
+  process.exit(0);
+}
 const { session, prompt } = await createMainAgentSession({ dataDirectory: paths.dataDirectory, query });
 const audit = await beginInvocation({
   prompt: query,
