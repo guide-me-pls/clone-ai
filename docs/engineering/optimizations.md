@@ -104,3 +104,33 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   and a model dependency), and it produces draft PRs, a deliberate exception to
   the direct-to-main rule for routine work. The original chain was not captured.
 - **Reversal condition:** see both trade-off entries.
+
+## 2026-11-05 — Turn-level audit for every Main Agent entry point
+
+- **Goal / hypothesis:** make a Main Agent turn auditable from the journal
+  regardless of how it was started — CLI, `npm run main`, companion/server, or
+  WhatsApp — including input, reply, tool calls, model/effort, usage and status.
+- **Trade-off:** [every turn is a journal record](../architecture/trade-offs.md#2026-11-05--every-main-agent-turn-is-a-journal-record-not-a-side-file).
+- **Change:** new `src/main-agent/turn-audit.ts` (shared begin/observe/finish
+  plus the ledger), new `src/audit/turn-audit.ts` (projection), the two journal
+  event types, `clone-ai audit turns`, `GET /api/audit/turns`, the audit-page
+  tab, `turnId` on usage records, CLI usage recording, and self-review usage.
+- **Eval:** `test/main-agent-turn-audit.test.ts` — 4 tests covering redaction,
+  tool events, a failed turn, interruption idempotence, and newest-first loading.
+  Full suite: 544 tests / 541 pass / 3 skipped; `npm run typecheck` and
+  `npm run gate` pass; `node --check` on the audit UI.
+- **Execution chain:** the gaps were found by reading each entry point and the
+  audit projection; the trade-off was written first; one shared module was wired
+  into four entry points; the tests and the full suite followed. Landed directly
+  on `main`, no branch or PR. This change touches `src/core/contracts.ts` and
+  several modules, which the nightly repair lane's protected-path gate forbids,
+  so it was implemented here under the owner's direct instruction — the lane
+  remains the default for trace-reproducible bugs.
+- **Pros:** the same code writes the turn on every entry point, so the ledger and
+  the journal cannot drift; tool calls and usage are finally attributable to a
+  turn; redaction and caps bound the added journal size.
+- **Cons / next time:** black-box CLI workers' internal tool calls remain
+  invisible (a structural boundary); native-worker model usage still has no
+  usage record; `scripts/run-pi-task.mjs` and `nightly-rsi` remain outside the
+  journal; turn events are not yet merged into the per-run trace view.
+- **Reversal condition:** see the trade-off entry.

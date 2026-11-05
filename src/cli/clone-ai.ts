@@ -19,6 +19,12 @@ import { dirname, join } from "node:path";
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
 import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
+import {
+  beginMainAgentTurn,
+  finishMainAgentTurn,
+  observeMainAgentSession,
+} from "../main-agent/turn-audit.ts";
+import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
 import { createKernelRuntimeSession } from "../main-agent/tools/kernel-tools.ts";
 import { MainAgentBusyError, withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { BadCaseLog } from "../reporting/bad-case-log.ts";
@@ -59,6 +65,7 @@ Usage:
   clone-ai authority grant <files|shell|network> <read|write|exec> <resource> --max <level> [--label <text>] [--until <ISO date>]
   clone-ai authority revoke <policyId>
   clone-ai audit [<runId>|export [--out file]]  Why runs failed, per run; export JSONL for evals
+  clone-ai audit turns [--limit N] [--json]  Main Agent turns: input, reply, tools, model usage
   clone-ai traces [list|export|show <runId>|clear --yes]  Failed traces for the nightly repair job
   clone-ai model <worker> [<model>|--clear]  Show, pin or clear the model a worker CLI uses
   clone-ai effort <worker> [<level>|--clear]  Show, pin or clear the reasoning effort
@@ -146,16 +153,53 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
       // Record the inputs before the prompt runs: a failed turn is only
       // debuggable if the prompt it read is still on disk.
       // 在 prompt 运行前记录输入：失败的一轮只有在它读过的提示词仍在磁盘上时才可调试。
-      await recordPromptSnapshot(dataDirectory, prompt);
+      const snapshot = await recordPromptSnapshot(dataDirectory, prompt);
+      const sessionFile = session.sessionManager.getSessionFile();
+      const turn = await beginMainAgentTurn({
+        dataDirectory,
+        text: query,
+        source: "cli",
+        ...(sessionFile === undefined ? {} : { sessionFile }),
+        ...(prompt.modelId === undefined ? {} : { modelId: prompt.modelId }),
+        ...(prompt.provider === undefined ? {} : { provider: prompt.provider }),
+        ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
+        ...(snapshot === undefined ? {} : { promptMaterialHash: snapshot.materialHash }),
+      });
+      observeMainAgentSession(session, turn);
+      let reply = "";
       session.subscribe((event) => {
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+          reply += event.assistantMessageEvent.delta;
           process.stdout.write(event.assistantMessageEvent.delta);
         }
       });
+      const started = Date.now();
+      const beforeStats = (() => {
+        try { return session.getSessionStats(); } catch { return undefined; }
+      })();
+      let turnStatus: "completed" | "failed" = "completed";
+      let turnError: string | undefined;
       try {
         await session.prompt(query);
         process.stdout.write("\n");
+      } catch (error: unknown) {
+        turnStatus = "failed";
+        turnError = error instanceof Error ? error.message : String(error);
+        throw error;
       } finally {
+        const usage = collectSessionUsage(session, Date.now() - started, beforeStats);
+        try {
+          await recordUsage(dataDirectory, { ...usage, turnId: turn.turnId });
+        } catch {
+          // Usage is telemetry; losing it must not hide the reply or the error.
+          // 用量是遥测；丢掉它不能盖住回复或错误。
+        }
+        await finishMainAgentTurn(turn, {
+          status: turnStatus,
+          reply,
+          ...(turnError === undefined ? {} : { error: turnError }),
+          usage: { ...usage, turnId: turn.turnId },
+        });
         session.dispose();
       }
     });
@@ -548,6 +592,32 @@ async function auditCommand(dataDirectory: string, args: string[]): Promise<numb
   const journal = createJournalStore(dataDirectory);
   try {
     const [first, ...rest] = args;
+    if (first === "turns") {
+      const { loadTurnAudits } = await import("../audit/turn-audit.ts");
+      const limitIndex = rest.indexOf("--limit");
+      const requested = limitIndex >= 0 ? Number.parseInt(rest[limitIndex + 1] ?? "", 10) : 100;
+      const turns = await loadTurnAudits(journal, { limit: Number.isFinite(requested) ? requested : 100 });
+      if (rest.includes("--json")) {
+        process.stdout.write(`${JSON.stringify(turns, null, 2)}\n`);
+        return 0;
+      }
+      if (turns.length === 0) {
+        console.log("No Main Agent turns recorded yet.");
+        return 0;
+      }
+      for (const turn of turns) {
+        const usage = turn.usage === undefined
+          ? ""
+          : ` · ${turn.usage.totalTokens ?? 0} tokens${turn.usage.costUsd === undefined ? "" : ` · $${turn.usage.costUsd.toFixed(4)}`}`;
+        const input = turn.input.replace(/\s+/g, " ").slice(0, 80);
+        const output = (turn.reply ?? turn.error ?? "").replace(/\s+/g, " ").slice(0, 80);
+        console.log(`${turn.turnId.slice(0, 8)}  ${turn.status.padEnd(10)} ${turn.source.padEnd(9)} ${turn.toolCalls.length} 个工具 · ${turn.modelId ?? "默认模型"}${usage}  ${turn.startedAt}`);
+        console.log(`  in:  ${input}`);
+        if (output.length > 0) console.log(`  out: ${output}`);
+        for (const call of turn.toolCalls) console.log(`  tool: ${call.name}${call.isError === true ? " (error)" : ""}${call.durationMs === undefined ? "" : ` ${call.durationMs}ms`}`);
+      }
+      return 0;
+    }
     if (first === "export") {
       const records = await loadAudits(journal);
       const out = rest.indexOf("--out") === -1 ? undefined : rest[rest.indexOf("--out") + 1];

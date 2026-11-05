@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Every Main Agent turn is in the audit
+
+CLI, `npm run main`, the desktop/server companion, and WhatsApp now write the same two journal events per turn — `main_agent.turn_started` and `main_agent.turn_completed` — plus `agent.tool_started` / `agent.tool_completed` for every Main Agent tool call. Each turn carries the input and reply (PII-redacted and capped), model, provider, reasoning effort, token usage, prompt material hash, spawned run ids, and tool calls with redacted argument summaries. The audit page gains a **Main Agent turns** tab, `clone-ai audit turns` prints the same, and `GET /api/audit/turns` serves it. The existing `main-agent-turns.jsonl` ledger is written by the same module, so the conversation view and the journal cannot disagree.
+
+CLI、`npm run main`、桌面/服务器 companion 与 WhatsApp 现在为每个回合写同样两条 Journal 事件——`main_agent.turn_started` 与 `main_agent.turn_completed`——并为每次主 Agent 工具调用写 `agent.tool_started` / `agent.tool_completed`。每个回合携带输入与回复（PII 脱敏并截断）、模型、Provider、推理强度、token 用量、提示词材料哈希、产生的 Run id，以及带脱敏参数摘要的工具调用。审计页新增 **主 Agent 回合** 标签页，`clone-ai audit turns` 打印同样的内容，`GET /api/audit/turns` 提供数据。既有的 `main-agent-turns.jsonl` 台账由同一模块写入，因此对话视图与 Journal 不会互相矛盾。
+
 ### An offline regression gate
 
 `npm run gate` now runs on every CI commit and costs nothing. It re-runs evidence verification and authority policy over held-out fixtures under `benchmark/gate/`, and calibrates the audit projection against owner labels (agreement, falsePass, falseFail) using the fixture dataset or a real `clone-ai audit export` file with `--audit`. Per-case behavior is recorded in `benchmark/gate/baseline.json`; any verdict change fails until the baseline is regenerated in the same change, so a shift is reviewed rather than discovered later. The audit dataset is hashed so held-out records cannot change silently.

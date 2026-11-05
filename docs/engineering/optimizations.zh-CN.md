@@ -83,3 +83,25 @@
 - **缺点 / 下次：** 端到端修复没有在 CI 中执行（成本与模型依赖），且它产出草稿 PR，这是对
   日常直接合 main 规则的有意例外。原执行链路未被记录。
 - **推翻条件：** 见上面两条取舍条目。
+
+## 2026-11-05 — 所有主 Agent 入口的回合级审计
+
+- **目标 / 假设：** 无论从 CLI、`npm run main`、companion/server 还是 WhatsApp 发起，
+  主 Agent 回合都应从 Journal 可审计——包括输入、回复、工具调用、模型/强度、用量与状态。
+- **取舍：** [每个回合都是一条 Journal 记录](../architecture/trade-offs.zh-CN.md#2026-11-05--每个主-agent-回合都是一条-journal-记录而不是旁路文件)。
+- **变更：** 新增 `src/main-agent/turn-audit.ts`（共享 begin/observe/finish 与台账）、
+  `src/audit/turn-audit.ts`（投影）、两种 Journal 事件类型、`clone-ai audit turns`、
+  `GET /api/audit/turns`、审计页标签、用量记录的 `turnId`、CLI 用量记录，以及自评审用量。
+- **Eval：** `test/main-agent-turn-audit.test.ts` 4 个用例，覆盖脱敏、工具事件、失败回合、
+  中断幂等与新的在前加载。全量：544 个测试 / 541 通过 / 3 跳过；`npm run typecheck` 与
+  `npm run gate` 通过；审计 UI 通过 `node --check`。
+- **执行链路：** 通过阅读每个入口与审计投影定位缺口；先写取舍；用一个共享模块接入四个
+  入口；随后补测试与全量验证。直接落在 `main`，没有分支或 PR。本次触及
+  `src/core/contracts.ts` 与多个模块，而夜间修复通道的受保护路径闸门禁止这些路径，
+  因此在所有者直接指示下于本会话实现——该通道仍是可复现 bug 的默认路径。
+- **优点：** 同一段代码在所有入口写回合，台账与 Journal 不会漂移；工具调用与用量终于可
+  归因到回合；脱敏与截断限制了 Journal 体积。
+- **缺点 / 下次：** 黑盒 CLI Worker 的内部工具调用仍不可见（结构性边界）；原生 Worker 的
+  模型用量仍没有 usage 记录；`scripts/run-pi-task.mjs` 与 `nightly-rsi` 仍在 Journal
+  之外；回合事件尚未并入单 Run 轨迹视图。
+- **推翻条件：** 见取舍条目。
