@@ -293,6 +293,8 @@
         <div class="au-chips">${usage}${turn.promptMaterialHash ? `<span>prompt ${esc(turn.promptMaterialHash.slice(0, 8))}</span>` : ""}${turn.spawnedRunIds?.length ? `<span>${turn.spawnedRunIds.length} 个 Run</span>` : ""}</div>
       </section>`;
     }).join("")}</div>`;
+  }
+
   function invocationsView() {
     const list = state.invocations;
     const selected = list.find((record) => record.id === state.invocationSelected);
