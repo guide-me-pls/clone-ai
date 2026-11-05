@@ -569,6 +569,30 @@ export class CloneRuntime {
     return this.requireRun(runId);
   }
 
+  /**
+   * Where a run is, step by step: which steps exist, which have evidence, and
+   * what the active one last said. A `running` status alone cannot tell an
+   * owner whether a three-step plan is on step one or three.
+   * Run 的逐步位置：有哪些步骤、哪些已有证据、进行中的那一步最后说了什么。仅凭 `running` 状态，
+   * 所有者无法判断一个三步计划走到第一步还是第三步。
+   */
+  getRunProgress(runId: string): { status: RunStatus; activeStepId?: string; steps: Array<{ stepId: string; completed: boolean; lastMessage?: string; at?: string }> } {
+    const run = this.requireRun(runId);
+    const plan = run.planId === undefined ? undefined : this.#state.plans[run.planId];
+    const steps = (plan?.steps ?? []).map((step) => {
+      const activity = Object.entries(this.#state.stepActivity)
+        .filter(([key]) => key.startsWith(`${runId}:${step.id}`))
+        .map(([, value]) => value)
+        .sort((left, right) => right.at.localeCompare(left.at))[0];
+      return {
+        stepId: step.id,
+        completed: this.stepHasCompletedEvidence(runId, step),
+        ...(activity === undefined ? {} : { lastMessage: activity.message, at: activity.at }),
+      };
+    });
+    return { status: run.status, ...(run.activeStepId === undefined ? {} : { activeStepId: run.activeStepId }), steps };
+  }
+
   /** Read-only view of every run in the projection, oldest first. 投影中全部 Run 的只读视图，按创建时间升序。 */
   listRuns(): Run[] {
     return Object.values(this.#state.runs)
