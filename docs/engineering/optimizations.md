@@ -26,6 +26,79 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+## 2026-11-05 — Shared audit for every Agent invocation
+
+- **Goal / hypothesis:** make every Main Agent call visible in the owner's
+  audit even when an integrating agent uses an isolated `CLONE_HOME`.
+- **Trade-off:** [invocations audited outside CLONE_HOME](../architecture/trade-offs.md#2026-11-05--every-agent-invocation-is-audited-outside-clone_home).
+- **Change:** `src/audit/invocation-ledger.ts` records caller, request, visible
+  reply, error, model, effort, workspace, session file, Run ids and duration in
+  `~/.clone/audit/invocations.jsonl`. CLI, desktop companion, WhatsApp and the
+  standalone Main Agent entry all write through the same ledger. The audit page
+  gained an **Agent invocations** tab and `clone-ai invocations` exposes the
+  same records.
+- **Eval:** `test/invocation-ledger.test.ts` and the companion API test cover
+  isolated-home visibility, redaction, failed turns, interrupted starts and
+  detail output. A real turn run with a temporary `CLONE_HOME` appeared in the
+  default ledger with caller `codex`, model
+  `360/deepseek/deepseek-v4.1-flash`, effort `high`, and reply `OK`
+  (invocation `7cb576ee`). Full suite: 568 tests, 565 passed, 3 skipped, 0
+  failed; `npm run gate` passed.
+- **Execution chain:** implemented and tested in this working tree after the
+  self-fix runs exposed that temporary homes hid their audit. The same change
+  also keeps the verifier's file-expectation regression coverage.
+- **Pros:** the owner can now answer who called Clone AI, what they asked, what
+  came back and which Run was created without depending on the caller's data
+  directory.
+- **Cons / next time:** the ledger is a second plaintext store; retention and
+  encryption are not yet configurable.
+- **Reversal condition:** move to an encrypted owner-scoped audit store if the
+  plaintext JSONL no longer meets the threat model.
+
+## 2026-11-05 — Narrow inferred file expectations
+
+- **Goal / hypothesis:** prevent implementation identifiers from producing
+  missing-file failures while retaining ordinary paths and explicitly requested
+  root-level deliverables.
+- **Trade-off:** [explicit intent for root-level names](../architecture/trade-offs.md#2026-11-05--require-explicit-intent-for-root-level-file-names).
+- **Change:** `src/core/verification.ts` filters URLs, code expressions and
+  uppercase constant directory segments, and requires same-sentence file
+  intent plus an allowed extension for root-level names. The regression cases
+  are in `test/verification.test.ts`; bilingual JSDoc and changelog describe
+  the behavior.
+- **Eval:** Before: the documented offline reproduction in
+  `docs/engineering/verification-repair-blocked-2026-11-05.md` extracted all
+  four implementation identifiers and produced a missing-file failure. No
+  before-change test was run in this work order. After:
+  `node --experimental-strip-types --test test/verification.test.ts test/golden-path.test.ts`
+  passed 16/16 tests, and `npm run typecheck` exited 0.
+- **Execution chain:** an owner-authorized interactive worker inspected the
+  existing reproduction and workspace, recorded the trade-off before editing,
+  then implemented the filter and deterministic regression cases. No live model
+  test, network operation, or benchmark was used; elapsed time and worker cost
+  were not measured.
+- **Workspace observation:** while this worker was running, the initially
+  unmerged changelog and other pre-existing changes disappeared from the short
+  status. The current HEAD is merge commit `ba1fe4a`, which already contains
+  this work's verification tests and changelog entry. This worker ran no commit
+  or push. After verification, `git status --short` reported:
+
+  ```text
+   M docs/architecture/trade-offs.md
+   M docs/architecture/trade-offs.zh-CN.md
+   M docs/engineering/optimizations.md
+   M src/core/verification.ts
+  ```
+
+- **Pros:** the documented false-failure scenario and both path forms have
+  targeted coverage without model calls.
+- **Cons / next time:** the whitelist and explicit-intent rule can miss real
+  deliverables; the full suite and gate are outside this work order. Collect
+  representative missed cases before widening either rule.
+- **Reversal condition:** revisit when representative real deliverables show
+  misses matter; widen vocabulary or extensions only with regression cases
+  preserving the exclusions.
+
 ## 2026-11-05 — Remember consumed nightly repair traces
 
 - **Goal / hypothesis:** avoid repeating successful repairs for unchanged failed
