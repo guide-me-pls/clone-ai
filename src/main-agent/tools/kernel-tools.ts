@@ -9,8 +9,9 @@
  */
 import { join } from "node:path";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import type { TSchema } from "typebox";
 
 import type { PlanStep } from "../../core/contracts.ts";
 import type { CloneRuntime } from "../../core/runtime.ts";
@@ -25,9 +26,17 @@ import { createJournalStore } from "../../core/sqlite-journal.ts";
 import { describeAuthority, StandingPolicyStore } from "../../authority/standing-policy-store.ts";
 import { MdMemoryStore } from "../../memory/md-memory-store.ts";
 import { MemoryGovernance } from "../../memory/memory-governance.ts";
+import type { RegisteredToolSnapshot } from "../prompt-snapshot.ts";
 
 export interface KernelToolsOptions {
   dataDirectory: string;
+  /**
+   * Called once for every tool as it is registered, so prompt provenance hashes
+   * the table the model actually received instead of a hand-maintained copy.
+   * 每个工具注册时调用一次，使提示词溯源哈希的是模型真正收到的工具表，
+   * 而不是一份手工维护的副本。
+   */
+  onRegister?: (tool: RegisteredToolSnapshot) => void;
 }
 
 export interface PlanProposalResult {
@@ -424,12 +433,27 @@ export async function describeExecutors(dataDirectory: string): Promise<{ text: 
 }
 
 export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelToolsOptions): void {
+  // One choke point for registration: provenance sees every tool, including
+  // ones added later, without a second list to keep in sync.
+  // 注册的唯一入口：溯源能看到每一个工具（包括以后新增的），不需要维护第二份清单。
+  const register = <TParams extends TSchema, TDetails = unknown, TState = any>(
+    tool: ToolDefinition<TParams, TDetails, TState>,
+  ): void => {
+    options.onRegister?.({
+      name: tool.name,
+      label: tool.label,
+      description: tool.description,
+      parameters: tool.parameters,
+    });
+    pi.registerTool(tool);
+  };
+
   const withKernel = async <T>(operation: (runtime: CloneRuntime) => Promise<T>): Promise<T> => {
     const { runtime, close } = await createKernelRuntimeSession(options.dataDirectory);
     try { return await operation(runtime); } finally { close(); }
   };
 
-  pi.registerTool({
+  register({
     name: "propose_work_plan",
     label: "Propose Work Plan",
     description:
@@ -467,7 +491,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "request_approval",
     label: "Request Approval",
     description:
@@ -482,7 +506,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "recall_memory",
     label: "Recall Memory",
     description:
@@ -497,7 +521,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "read_memory",
     label: "Read Memory",
     description:
@@ -512,7 +536,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "get_authority",
     label: "Get Authority",
     description:
@@ -526,7 +550,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "get_run_status",
     label: "Get Run Status",
     description:
@@ -540,7 +564,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "get_situation",
     label: "Get Situation",
     description:
@@ -576,7 +600,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "search_history",
     label: "Search History",
     description:
@@ -619,7 +643,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "record_state",
     label: "Record Owner State",
     description:
@@ -644,7 +668,7 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  pi.registerTool({
+  register({
     name: "install_agent",
     label: "Install Agent",
     description:
