@@ -492,11 +492,33 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   run each; result file
   `benchmark/results/main-agent-2026-11-05T09-26-57-563Z.json`. Compared with
   the pre-streaming run, no behavior change and no lost usage.
-- **Assumption / not verified:** the deterministic summary's extra system message
-  is unit-tested but was not sent to the live endpoint in the benchmark (each
-  task starts with an empty history). Multiple system messages are standard
-  OpenAI-compatible behavior, but this remains an assumption.
+- **Live validation:** the summary was sent to the real endpoint in the
+  long-context run below; all five checks passed. The earlier assumption is
+  resolved.
 - **Pros / cons:** streaming removes the frozen-interface effect; deterministic
   compaction is cheap and auditable but less faithful than a model-written
-  summary; long-conversation quality still needs a live test.
+  summary; long-conversation quality was validated on one seeded transcript
+  below.
+- **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — Long-context validation of native compaction
+
+- **Goal / hypothesis:** verify against the real endpoint that the deterministic
+  summary is accepted, that the newest turns stay verbatim, and that a fact from
+  the oldest turn survives compaction well enough for the model to answer.
+- **Trade-off:** [streaming and compaction](../architecture/trade-offs.md#2026-11-05--native-main-agent-streams-and-compacts-deterministically).
+- **Benchmark run:** command
+  `CLONE_AI_BENCH_MAIN_MODEL=360/anthropic/claude-sonnet-5-5 npm run bench:long`;
+  model `360/anthropic/claude-sonnet-5-5` via Magpie at
+  `http://127.0.0.1:3425`; 24 seeded completed turns (one needle in the oldest),
+  `historyChars` 4,000, one real turn; result file
+  `benchmark/results/native-main-long-context-2026-11-05T09-43-52-438Z.json`.
+- **Result:** 9 messages (4 user), a 2,121-character deterministic summary; the
+  endpoint accepted it; the newest turn stayed verbatim; the reply was exactly
+  `BLUE-FALCON`; 7,842 tokens, 1 model call; all five checks true.
+- **What it proves / does not:** multiple system messages are accepted in
+  practice, and a fact placed at the start of an old turn survives the summary.
+  It does not prove that a fact buried later in an old turn survives: the
+  summary truncates each old turn to 160 characters and the whole summary to
+  2,000. That remains the known weakness of deterministic compaction.
 - **Reversal condition:** see the trade-off entry.

@@ -61,6 +61,12 @@ CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main
 原生端点来自 `CLONE_AI_NATIVE_BASE_URL`（默认 `http://127.0.0.1:3425`）。这是每格只跑
 一次的对比，不是统计基准；模型本身在运行之间会波动。
 
+## 长对话验证（`npm run bench:long`）
+
+写入 24 条已完成轮次并把针放在最老一轮，用 `historyChars=4000` 跑一次真实原生回合，
+捕获发出的请求，并检查：摘要存在、摘要含针、最新轮次保持原文、回复含针、没有错误。
+报告位于 `benchmark/results/`。
+
 ## 回归门禁（`npm run gate`）
 
 离线门禁在 CI 中随每次提交运行，零成本：它针对 `benchmark/gate/` 下的 held-out
