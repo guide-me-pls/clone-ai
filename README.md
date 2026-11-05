@@ -85,6 +85,7 @@ context and capability grant necessary for an assignment.
 | **Codex** | Coding, review, repository operations, and artifact creation. | Black-box launch recipe |
 | **Pi** | A replaceable terminal Agent with its own Skills and MCPs. | Black-box launch recipe |
 | **opencode** | An optional alternative coding Agent. | Black-box launch recipe |
+| **Native worker** | In-process loop with per-call scope gates; filesystem tools only, reports exact token usage. | Built in; set `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` |
 | **Custom runtimes** | User- or organization-specific commands and local tools. | Add a `providers.json` recipe |
 | **Python workers** | Extraction, ranking, forecasting, evaluation, and local ML proposals. | Future black-box recipe |
 

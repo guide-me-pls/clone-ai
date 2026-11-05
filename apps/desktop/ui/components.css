@@ -747,7 +747,7 @@ textarea:focus-visible {
 .schedule-create { border-radius: 9px; background: var(--accent); }
 .schedule-row { border-bottom-color: var(--line); }
 .schedule-row b { color: var(--text); }
-.scroll-bottom { border-color: var(--line); color: var(--accent); background: var(--surface-raised); }
+.scroll-bottom { bottom: 140px; border-color: var(--line); color: var(--accent); background: var(--surface-raised); }
 .startup-screen { background: var(--canvas); }
 .startup-mark { color: #fff; background: #202720; box-shadow: 0 8px 22px rgba(32, 39, 33, .16); }
 .startup-card b { color: var(--text); }
@@ -922,21 +922,21 @@ body { color: #202020; }
 .status-pill.completed { border-color: #d9e8de; color: #4b795c; background: #f3f8f4; }
 .status-pill.needs-attention { border-color: #ecdada; color: #a35454; background: #fbf5f5; }
 
-.conversation { padding: 28px 34px 20px; background: #fff; scrollbar-color: #ccc transparent; }
-.conversation-inner { width: min(760px, 100%); }
+.conversation { padding: 28px 34px 132px; background: #fff; scrollbar-color: #ccc transparent; scroll-padding-bottom: 128px; }
+.conversation-inner { display: block; width: min(760px, 100%); }
 .day-divider { margin-bottom: 23px; color: #aaa; font-size: 10px; }
 .day-divider::before, .day-divider::after { background: #ededed; }
-.message { display: block; margin-bottom: 22px; }
+.message { display: block; width: 100%; margin-bottom: 22px; }
 .message-heading { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
 .message-heading b { color: #666; font-size: 11.5px; font-weight: 600; }
 .message-heading time { color: #aaa; font-size: 10.5px; }
 .message-body { min-width: 0; max-width: 100%; }
 .message-copy, .clone-card p, .clone-text { color: #333; font-size: 14px; line-height: 1.7; }
 .message-copy { max-width: none; padding: 0; }
-.message.person { width: min(620px, 86%); margin-left: auto; margin-bottom: 25px; }
+.message.person { width: 100%; margin-left: auto; margin-bottom: 25px; }
 .message.person .message-heading { justify-content: flex-end; margin-bottom: 4px; }
 .message.person .message-body { display: flex; justify-content: flex-end; }
-.person .message-copy { display: block; width: fit-content; max-width: 100%; margin-left: auto; padding: 8px 12px; border: 1px solid #e9e9e9; border-radius: 13px; color: #333; background: #f5f5f5; font-size: 13.5px; line-height: 1.55; }
+.person .message-copy { display: block; width: fit-content; max-width: min(620px, 86%); margin-left: auto; padding: 8px 12px; border: 1px solid #e9e9e9; border-radius: 13px; color: #333; background: #f5f5f5; font-size: 13.5px; line-height: 1.55; }
 .message.clone .message-heading b { color: #555; }
 .clone-card, .clone-card.success, .clone-card.warning, .clone-card.approval { padding: 0; border: 0; border-radius: 0; color: #333; background: transparent; box-shadow: none; }
 .clone-card.success, .clone-card.warning, .clone-card.approval { padding: 10px 12px; border: 1px solid #ececec; border-radius: 8px; background: #fafafa; }
@@ -1079,7 +1079,7 @@ body.empty-conversation #session-subtitle, body.empty-conversation #session-stat
 @media (max-width: 760px) {
   .app-shell { grid-template-columns: 1fr; }
   .topbar { min-height: 52px; padding: 0 16px; }
-  .conversation { padding: 22px 16px 16px; }
+  .conversation { padding: 22px 16px 132px; }
   .composer-wrap { padding: 0 16px 14px; }
   body.empty-conversation .conversation { padding: 18px 16px 0; }
   .starter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
@@ -1326,7 +1326,7 @@ body.empty-conversation .conversation {
   overflow: auto;
   padding: 28px 34px;
 }
-body.empty-conversation .conversation-inner { display: flex; width: min(760px, 100%); justify-content: center; margin: 0 auto; }
+body.empty-conversation .conversation-inner:not(:has(.message)) { display: flex; width: min(760px, 100%); justify-content: center; margin: 0 auto; }
 body.empty-conversation .welcome { width: 100%; min-height: 0; padding: 0; }
 body.empty-conversation .composer-wrap { padding-top: 0; padding-bottom: 24px; }
 
@@ -1383,6 +1383,15 @@ body.empty-conversation .composer-wrap { padding-top: 0; padding-bottom: 24px; }
 }
 .composer .send:hover { background: #151815; }
 .composer .send svg { width: 15px; height: 15px; }
+.composer .attach { display: grid; flex: 0 0 32px; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 8px; color: #777; background: transparent; cursor: pointer; }
+.composer .attach:hover { color: #333; background: #f1f1ef; }
+.composer .attach svg { width: 17px; height: 17px; }
+.attachment-preview { display: flex; width: min(760px, 100%); gap: 8px; margin: 7px auto 0; overflow-x: auto; }
+.attachment-chip { position: relative; flex: 0 0 76px; height: 76px; overflow: hidden; border: 1px solid #e2e2e2; border-radius: 9px; background: #f7f7f5; }
+.attachment-chip img { width: 100%; height: 100%; object-fit: cover; }
+.attachment-chip button { position: absolute; top: 3px; right: 3px; display: grid; width: 20px; height: 20px; padding: 0; place-items: center; border: 0; border-radius: 50%; color: #fff; background: rgba(0,0,0,.62); cursor: pointer; }
+.message-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.message-attachments img { width: 120px; max-height: 120px; object-fit: cover; border: 1px solid #e5e5e5; border-radius: 8px; }
 .composer-hint {
   margin-top: 5px;
   color: #b1b4ae;

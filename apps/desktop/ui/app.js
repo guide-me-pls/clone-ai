@@ -31,7 +31,74 @@ const state = {
   settingsSection: "agents",
   locale: "zh-CN",
   strings: {},
+  attachments: [],
 };
+const MAX_ATTACHMENTS = 4;
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+
+function renderAttachments() {
+  const host = $("attachment-preview");
+  if (!host) return;
+  host.hidden = state.attachments.length === 0;
+  host.innerHTML = state.attachments.map((item, index) => `<div class="attachment-chip" title="${escape(item.name)}"><img src="${item.previewUrl}" alt="${escape(item.name)}" /><button type="button" data-remove-attachment="${index}" aria-label="移除附件">×</button></div>`).join("");
+}
+
+function readDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("读取附件失败。"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function videoFrame(file) {
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.muted = true;
+  video.playsInline = true;
+  video.src = url;
+  try {
+    await new Promise((resolve, reject) => {
+      video.onloadeddata = resolve;
+      video.onerror = () => reject(new Error("无法读取视频。"));
+      video.load();
+    });
+    video.currentTime = Math.min(1, Math.max(0.05, (video.duration || 1) / 3));
+    await new Promise((resolve, reject) => {
+      video.onseeked = resolve;
+      video.onerror = () => reject(new Error("无法提取视频画面。"));
+    });
+    const scale = Math.min(1, 1280 / Math.max(1, video.videoWidth));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    const previewUrl = canvas.toDataURL("image/jpeg", 0.86);
+    return { name: `${file.name}（视频帧）`, mimeType: "image/jpeg", data: previewUrl.split(",")[1], previewUrl };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function addAttachmentFiles(files) {
+  for (const file of files) {
+    if (state.attachments.length >= MAX_ATTACHMENTS) { announce(`最多添加 ${MAX_ATTACHMENTS} 个图片或视频。`, true); break; }
+    try {
+      if (file.type.startsWith("video/")) {
+        state.attachments.push(await videoFrame(file));
+        continue;
+      }
+      if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { announce("只支持 PNG、JPEG、GIF、WebP 图片或视频。", true); continue; }
+      if (file.size > MAX_ATTACHMENT_BYTES) { announce(`${file.name} 超过 5MB。`, true); continue; }
+      const previewUrl = await readDataUrl(file);
+      state.attachments.push({ name: file.name, mimeType: file.type, data: previewUrl.split(",")[1], previewUrl });
+    } catch (error) {
+      announce(error.message || "附件读取失败。", true);
+    }
+  }
+  renderAttachments();
+}
 const icon = (name) => name === "spark"
   ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 1.8 7.2L21 11l-7.2 1.8L12 20l-1.8-7.2L3 11l7.2-1.8L12 2Z"/></svg>`
   : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>`;
@@ -1062,7 +1129,7 @@ function restoreDisclosureScrolls(id) {
     });
   });
 }
-function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", session === null); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
+function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || session.messages.length === 0); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
 async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (state.streaming) return; const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.composingNew && (!state.selectedId || !sessions.some((session) => session.id === state.selectedId))) state.selectedId = sessions.find((session) => session.id === MAIN_CONVERSATION_ID)?.id ?? sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
 async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
@@ -1072,11 +1139,15 @@ async function createSession(query) { const button = $("submit"); button.disable
   // conversation showed nothing, so the app looked frozen mid-thought.
   // 消息与实时回复卡片在请求发出之前就出现。模型调用可能耗时数秒，而此前输入框保留原文、
   // 会话区毫无变化，应用看起来就像在思考中卡住了。
+  const outgoingAttachments = [...state.attachments];
+  state.attachments = [];
+  renderAttachments();
   $("query").value = ""; resizeComposer();
   document.body.classList.remove("empty-conversation");
   const inner = $("conversation-inner");
   const welcome = inner.querySelector(".welcome"); if (welcome) inner.innerHTML = "";
-  inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${escape(query)}</div></div></div>`);
+  const attachmentMarkup = outgoingAttachments.map((item) => `<img src="${item.previewUrl}" alt="${escape(item.name)}" />`).join("");
+  inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${escape(query || "（已发送图片/视频）")}</div>${attachmentMarkup ? `<div class="message-attachments">${attachmentMarkup}</div>` : ""}</div></div>`);
   const card = document.createElement("div"); card.className = "message clone";
   card.innerHTML = `<div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="clone-text" data-streaming="1" hidden></div></div>`;
   inner.appendChild(card);
@@ -1134,7 +1205,7 @@ async function createSession(query) { const button = $("submit"); button.disable
     const response = await fetch("/api/main-agent/stream", {
       method: "POST",
       headers,
-      body: JSON.stringify({ text: query, turnId }),
+      body: JSON.stringify({ text: query, turnId, ...(outgoingAttachments.length === 0 ? {} : { attachments: outgoingAttachments.map(({ mimeType, data }) => ({ mimeType, data })) }) }),
       signal: controller.signal,
     });
     if (!response.ok || !response.body) { const detail = await response.json().catch(() => ({})); throw new Error(detail.error || `请求失败：${response.status}`); }
@@ -1334,9 +1405,26 @@ $("opportunity-strip").addEventListener("click", (event) => { const settings = e
 $("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
 $("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
-$("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0) { announce("请输入你想推进的事情。", true); return; } void createSession(query); });
+$("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0 && state.attachments.length === 0) { announce("请输入你想推进的事情，或添加图片/视频。", true); return; } void createSession(query); });
 $("query").addEventListener("input", resizeComposer);
-$("query").addEventListener("keydown", (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); $("request-form").requestSubmit(); } });
+$("attach").addEventListener("click", () => $("attachments").click());
+$("attachments").addEventListener("change", async (event) => { const input = event.target; await addAttachmentFiles(input.files || []); input.value = ""; });
+$("attachment-preview").addEventListener("click", (event) => { const remove = event.target.closest("[data-remove-attachment]"); if (!remove) return; state.attachments.splice(Number(remove.dataset.removeAttachment), 1); renderAttachments(); });
+// macOS may deliver candidate-confirming Enter just after compositionend.
+// macOS 可能在 compositionend 之后才派发确认候选词的回车。
+const IME_ENTER_GRACE_MS = 100;
+let isComposing = false;
+let lastCompositionEndAt = -Infinity;
+$("query").addEventListener("compositionstart", () => { isComposing = true; });
+$("query").addEventListener("compositionend", () => { isComposing = false; lastCompositionEndAt = Date.now(); });
+$("query").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  if (isComposing || Date.now() - lastCompositionEndAt < IME_ENTER_GRACE_MS || event.isComposing || event.keyCode === 229) {
+    event.preventDefault();
+    return;
+  }
+  if (!event.shiftKey) { event.preventDefault(); $("request-form").requestSubmit(); }
+});
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") { setSidebarOpen(false); closeSchedules(); closeSettings(); } });
 function updateScrollBottom() { const viewport = $("conversation"); const far = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop > 160; $("scroll-bottom").classList.toggle("visible", far); }
 $("conversation").addEventListener("scroll", rememberCurrentScroll, { passive: true });

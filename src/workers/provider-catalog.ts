@@ -7,6 +7,7 @@ import { BlackBoxCliWorker, type BlackBoxProviderConfig } from "./black-box-cli-
 import { resolveExecutable } from "./executable-resolver.ts";
 import { EFFORT_LEVELS, effortChoices, isEffortLevel, type EffortLevel } from "./effort.ts";
 import { assertWorkerEnvName } from "./worker-env.ts";
+import { createConfiguredNativeWorker } from "./native-worker-factory.ts";
 import { ProviderRegistry, type ProviderDefinition } from "./provider-registry.ts";
 import type { AgentRole } from "../config/worker-settings.ts";
 
@@ -45,8 +46,32 @@ export function toProviderDefinition(config: BlackBoxProviderConfig): ProviderDe
   };
 }
 
+/**
+ * The in-process worker is a provider like any other: selectable per agent,
+ * identified by the configured agent id, and refusing external roles because it
+ * has no governed action connector. It still needs an explicit endpoint.
+ * 进程内 Worker 与其他 Provider 一样：可按 Agent 选择，以配置的 Agent id 为身份，
+ * 因为没有受治理的动作连接器而拒绝 external 角色。它仍需要显式配置端点。
+ */
+export function nativeProviderDefinition(): ProviderDefinition {
+  return {
+    id: "native",
+    label: "Native worker (OpenAI-compatible)",
+    supportedRoles: ["direct", "research", "draft", "review"],
+    roleRestrictionReason: "The native worker cannot perform external side effects; use a governed action connector.",
+    createAdapter: ({ agentId, workCapabilities, workspacePath }) => {
+      const worker = createConfiguredNativeWorker(process.env, workspacePath ?? process.cwd(), { id: agentId, workCapabilities });
+      if (worker === undefined) {
+        throw new Error("The native worker needs CLONE_AI_NATIVE_MODEL and CLONE_AI_NATIVE_BASE_URL.");
+      }
+      return worker;
+    },
+  };
+}
+
 export function createBuiltInProviderRegistry(): ProviderRegistry {
   const registry = new ProviderRegistry();
+  registry.register(nativeProviderDefinition());
   for (const config of BUILT_IN_PROVIDER_CONFIGS) registry.register(toProviderDefinition(config));
   return registry;
 }
@@ -66,6 +91,10 @@ export async function loadProviderRegistry(dataDirectory: string): Promise<Provi
 
   const registry = new ProviderRegistry();
   for (const config of byId.values()) registry.register(toProviderDefinition(config));
+  // A user declaration named `native` overrides the built-in definition above;
+  // otherwise the in-process provider is available like every CLI.
+  // 名为 `native` 的用户声明会覆盖内建定义；否则进程内 Provider 与每个 CLI 一样可选。
+  if (!byId.has("native")) registry.register(nativeProviderDefinition());
   return registry;
 }
 

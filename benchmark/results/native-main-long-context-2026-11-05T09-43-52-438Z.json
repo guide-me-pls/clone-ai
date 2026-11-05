@@ -1,0 +1,32 @@
+{
+  "ranAt": "2026-11-05T09:43:52.438Z",
+  "model": "360/anthropic/claude-sonnet-5-5",
+  "endpoint": "http://127.0.0.1:3425",
+  "historyChars": 4000,
+  "seededTurns": 24,
+  "messages": 9,
+  "userMessages": 4,
+  "messageRoles": [
+    "system",
+    "system",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user"
+  ],
+  "summaryPreview": "Earlier conversation (compacted deterministically; background only, full text is in the turn ledger and search_history):\n项目代号是 BLUE-FALCON。这是一条必须记住的约定。 背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息 → 已记录第 0 项。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说\n讨论的第 1 个细节。 背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信息。背景信 → 已记录第 1 项。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说明。说\n讨论的第 2 个细节。 背景信息。背景信息。背景信息。背景信息",
+  "reply": "BLUE-FALCON",
+  "totalTokens": 7842,
+  "modelCalls": 1,
+  "checks": {
+    "summaryPresent": true,
+    "summaryHasNeedle": true,
+    "newestTurnVerbatim": true,
+    "replyHasNeedle": true,
+    "noError": true
+  },
+  "reportPath": "/Users/qihoo/study/clone-ai/.claude/worktrees/agent-rsi-4374c5/benchmark/results/native-main-long-context-2026-11-05T09-43-52-438Z.json"
+}

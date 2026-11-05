@@ -16,7 +16,7 @@
   const STAGE = { none: "无", planning: "规划", policy: "策略", execution: "执行", verification: "验证", cancelled: "取消", unknown: "未记录" };
   const OUTCOME = { allowed: ["允许", "ok"], approval_required: ["需审批", "warn"], denied: ["拒绝", "bad"] };
   const state = {
-    data: null, view: "overview", status: "all", provider: "all", query: "", showDeleted: true,
+    data: null, turns: [], view: "overview", status: "all", provider: "all", query: "", showDeleted: true,
     selected: null, loading: false, error: null, raw: false, traces: new Map(),
     review: null, reviewBusy: false, reviewError: null,
     invocations: [], invocationSelected: null, invocationDetail: null,
@@ -40,6 +40,7 @@
     state.loading = true; state.error = null; render();
     try {
       state.data = await api("/api/audit");
+      state.turns = (await api("/api/audit/turns?limit=100").catch(() => ({ turns: [] }))).turns ?? [];
       state.invocations = (await api("/api/invocations").catch(() => ({ records: [] }))).records ?? [];
       state.review = (await api("/api/audit/review").catch(() => ({ review: null }))).review ?? null;
       state.selfcheck = (await api("/api/audit/selfcheck").catch(() => ({ rounds: [] }))).rounds ?? [];
@@ -161,7 +162,7 @@
       const tone = e.outcome === "failed" ? "bad" : e.outcome === "completed" ? "ok" : "info";
       return `<div class="au-exec"><div class="au-exec-head"><b>${esc(e.providerId ?? "?")}</b><span>${esc(e.agentId ?? "")}${e.workOrderId ? ` · ${esc(e.workOrderId)}` : ""} · 步骤 ${esc(e.stepId)}</span>${badge(e.outcome === "failed" ? "失败" : e.outcome === "completed" ? "完成" : "未结束", tone)}<em>${ms(e.durationMs)}</em></div>
         <div class="au-bar"><i class="au-fill-${tone}" style="width:${Math.max(3, ((e.durationMs ?? 0) / total) * 100)}%"></i></div>
-        <div class="au-chips"><span>${e.progressEvents} 条进度</span>${u ? `<span>${u.calls} 次模型调用</span><span>${num(u.inputTokens)}↑ ${num(u.outputTokens)}↓ tokens</span><span>${usd(u.costUsd)}</span><span>${esc(u.models.join(", "))}</span><span title="网关无法确认请求属于哪个 Run">按时间窗口推断</span>` : `<span>无网关数据</span>`}</div>
+        <div class="au-chips"><span>${e.progressEvents} 条进度</span>${e.usage ? `<span>精确用量 ${num(e.usage.inputTokens ?? 0)}↑ ${num(e.usage.outputTokens ?? 0)}↓ tokens</span>${e.usage.modelCalls !== undefined ? `<span>${e.usage.modelCalls} 次模型调用</span>` : ""}` : ""}${u ? `<span>${u.calls} 次模型调用</span><span>${num(u.inputTokens)}↑ ${num(u.outputTokens)}↓ tokens</span><span>${usd(u.costUsd)}</span><span>${esc(u.models.join(", "))}</span><span title="网关无法确认请求属于哪个 Run">按时间窗口推断</span>` : `<span>无网关数据</span>`}</div>
         ${e.failure ? `<div class="au-callout au-callout-bad"><b>${esc(e.failure.category ?? "失败")}</b>${e.failure.exitCode != null ? ` · 退出码 ${esc(e.failure.exitCode)}` : ""}<pre>${esc(e.failure.message)}</pre></div>` : ""}
         ${u?.errorSamples?.length ? `<div class="au-callout au-callout-warn"><b>网关返回的错误（${u.errors}）</b>${u.errorSamples.map((x) => `<pre>${esc(x.status)} ${esc(x.model ?? "")}\n${esc(x.message)}</pre>`).join("")}</div>` : ""}</div>`;
     }).join("");
@@ -289,6 +290,29 @@
       </div>`;
   }
 
+  /** Main Agent turns: input, reply, tools, model usage. 主 Agent 回合：输入、回复、工具、模型用量。 */
+  function turnsView() {
+    const turns = state.turns ?? [];
+    if (!turns.length) return `<p class="au-empty">还没有主 Agent 回合记录。CLI、桌面或 WhatsApp 的每一次对话都会出现在这里。</p>`;
+    return `<div class="au-turns">${turns.map((turn) => {
+      const tone = turn.status === "completed" ? "ok" : turn.status === "failed" ? "bad" : turn.status === "interrupted" ? "warn" : "info";
+      const label = turn.status === "completed" ? "完成" : turn.status === "failed" ? "失败" : turn.status === "interrupted" ? "中断" : "进行中";
+      const usage = turn.usage ? `<span>${num(turn.usage.totalTokens ?? 0)} tokens</span>${turn.usage.costUsd !== undefined ? `<span>${usd(turn.usage.costUsd)}</span>` : ""}` : "";
+      const tools = turn.toolCalls.length
+        ? `<ul class="au-turn-tools">${turn.toolCalls.map((call) => `<li><code>${esc(call.name)}</code>${call.isError ? badge("错误", "bad") : ""}${call.durationMs !== undefined ? `<em>${ms(call.durationMs)}</em>` : ""}${call.inputSummary ? `<span>${esc(call.inputSummary.slice(0, 240))}</span>` : ""}</li>`).join("")}</ul>`
+        : `<p class="au-empty">本轮没有调用工具。</p>`;
+      return `<section class="au-card au-turn">
+        <div class="au-turn-head"><b>${esc(turn.input.replace(/\s+/g, " ").slice(0, 140) || "（无输入）")}</b>${badge(label, tone)}
+          <small>${esc(turn.source)} · ${esc(turn.modelId ?? "默认模型")}${turn.effort ? ` · ${esc(turn.effort)}` : ""} · ${stamp(turn.startedAt)}${turn.durationMs !== undefined ? ` · ${ms(turn.durationMs)}` : ""}</small></div>
+        <div class="au-turn-body"><p class="au-note">输入</p><pre>${esc(turn.input)}</pre>
+          ${turn.reply ? `<p class="au-note">回复</p><pre>${esc(turn.reply)}</pre>` : ""}
+          ${turn.error ? `<div class="au-callout au-callout-bad"><b>错误</b><pre>${esc(turn.error)}</pre></div>` : ""}</div>
+        ${tools}
+        <div class="au-chips">${usage}${turn.promptMaterialHash ? `<span>prompt ${esc(turn.promptMaterialHash.slice(0, 8))}</span>` : ""}${turn.spawnedRunIds?.length ? `<span>${turn.spawnedRunIds.length} 个 Run</span>` : ""}</div>
+      </section>`;
+    }).join("")}</div>`;
+  }
+
   function invocationsView() {
     const list = state.invocations;
     const selected = list.find((record) => record.id === state.invocationSelected);
@@ -319,13 +343,13 @@
     if (!host) return;
     const keep = host.querySelector(".au-list")?.scrollTop ?? 0;
     const keepDetail = host.querySelector(".au-detail")?.scrollTop ?? 0;
-    const tabs = [["overview", "总览"], ["runs", "运行记录"], ["invocations", "Agent 调用"], ["eval", "评估"]]
+    const tabs = [["overview", "总览"], ["turns", "主 Agent 回合"], ["runs", "运行记录"], ["invocations", "Agent 调用"], ["eval", "评估"]]
       .map(([v, l]) => `<button type="button" class="au-tab${state.view === v ? " is-on" : ""}" data-au-view="${v}">${l}</button>`).join("");
     let body = "";
     if (state.error) body = `<div class="au-callout au-callout-bad"><b>读取审计失败</b><pre>${esc(state.error)}</pre></div>`;
     else if (!state.data) body = `<p class="au-empty">${state.loading ? "正在读取…" : "尚未加载。"}</p>`;
-    else if (!state.data.records.length && state.view !== "invocations") body = `<p class="au-empty">还没有任何运行记录。发起一个任务后，这里会出现它的完整轨迹。</p>`;
-    else body = state.view === "overview" ? overview() : state.view === "runs" ? runs() : state.view === "invocations" ? invocationsView() : evaluation();
+    else if (!state.data.records.length && !(state.turns ?? []).length && !(state.invocations ?? []).length) body = `<p class="au-empty">还没有任何记录。发起一个任务或对话后，这里会出现它的完整轨迹。</p>`;
+    else body = state.view === "overview" ? overview() : state.view === "turns" ? turnsView() : state.view === "runs" ? runs() : state.view === "invocations" ? invocationsView() : evaluation();
     host.innerHTML = `<div class="au-head"><div><h3>审计与评估</h3><p>每个 Run 的轨迹都从 Journal 投影而来：为什么成功或失败、哪个工具、花了多久和多少钱，一目了然。</p></div>
         <div class="au-actions"><button type="button" class="au-btn" data-au-refresh>${state.loading ? "刷新中…" : "刷新"}</button><button type="button" class="au-btn" data-au-export>导出 JSONL</button></div></div>
       <div class="au-tabs" role="tablist">${tabs}</div>${body}`;

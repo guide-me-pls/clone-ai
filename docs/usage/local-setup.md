@@ -83,6 +83,32 @@ recipe — never credential values.
 Note: desktop apps (Claude Code Desktop, opencode Desktop) are not usable as
 workers. Clone AI needs a headless CLI it can run with a prompt and a workspace.
 
+Clone AI also ships an in-process `native` execution provider: select `native`
+for an agent and set `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`.
+It needs no CLI and checks every tool call against the step's scopes.
+
+### Native Main Agent (experimental)
+
+Pi remains the default Main Agent runtime. To run the Main Agent in-process
+against an OpenAI-compatible endpoint:
+
+```bash
+export CLONE_AI_MAIN_RUNTIME=native
+export CLONE_AI_NATIVE_MODEL=<model-id>
+export CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url>
+export CLONE_AI_NATIVE_API_KEY=<key>   # optional
+clone-ai "你好"
+```
+
+The native loop writes the same `main_agent.turn_*`, `agent.tool_*` and
+`usage.recorded` events, uses the turn ledger as its transcript, and answers
+`search_history` from that ledger. It streams tokens as they arrive and compacts
+a long transcript deterministically: the newest turns stay verbatim within a
+12,000-character budget, older turns become a bounded summary, and the full text
+stays in the turn ledger. Image attachments are sent as OpenAI-style data URLs
+in the current message; they are per-turn and not stored in the ledger. Unset
+`CLONE_AI_MAIN_RUNTIME` to return to Pi.
+
 ## 5. Where your data lives
 
 | Item | Location |
