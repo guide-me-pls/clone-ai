@@ -19,7 +19,11 @@ async function command(name, args) {
 
 async function main() {
   const branch = (await run("git", ["branch", "--show-current"], { cwd: process.cwd() })).stdout.trim();
-  if (branch !== "main") throw new Error(`selfcheck:push only runs on main, current branch is ${branch || "(detached)"}.`);
+  const expectedBranch = process.env.SELFCHECK_BRANCH?.trim() || "main";
+  const pushRef = process.env.SELFCHECK_PUSH_REF?.trim() || "main";
+  if (branch !== expectedBranch) {
+    throw new Error(`selfcheck:push expected branch ${expectedBranch}, current branch is ${branch || "(detached)"}.`);
+  }
   const dirty = (await run("git", ["status", "--porcelain"], { cwd: process.cwd() })).stdout.trim();
   if (dirty.length > 0) throw new Error("selfcheck:push refuses a dirty worktree; commit or remove changes first.");
 
@@ -30,18 +34,18 @@ async function main() {
   console.log("[selfcheck] npm run gate");
   await command("npm", ["run", "gate"]);
 
-  console.log("[selfcheck] fetching origin/main");
-  await command("git", ["fetch", "origin", "main"]);
-  const ahead = (await run("git", ["rev-list", "--count", "origin/main..HEAD"], { cwd: process.cwd() })).stdout.trim();
-  const behind = (await run("git", ["rev-list", "--count", "HEAD..origin/main"], { cwd: process.cwd() })).stdout.trim();
-  if (behind !== "0") throw new Error(`refusing to push: behind origin/main by ${behind} commit(s); rebase first.`);
+  console.log(`[selfcheck] fetching origin/${pushRef}`);
+  await command("git", ["fetch", "origin", pushRef]);
+  const ahead = (await run("git", ["rev-list", "--count", `origin/${pushRef}..HEAD`], { cwd: process.cwd() })).stdout.trim();
+  const behind = (await run("git", ["rev-list", "--count", `HEAD..origin/${pushRef}`], { cwd: process.cwd() })).stdout.trim();
+  if (behind !== "0") throw new Error(`refusing to push: behind origin/${pushRef} by ${behind} commit(s); rebase first.`);
   if (ahead === "0") {
     console.log("[selfcheck] nothing to push");
     return;
   }
 
-  console.log(`[selfcheck] pushing ${ahead} commit(s) to origin/main`);
-  await command("git", ["push", "origin", "main"]);
+  console.log(`[selfcheck] pushing ${ahead} commit(s) to origin/${pushRef}`);
+  await command("git", ["push", "origin", `HEAD:${pushRef}`]);
   console.log("[selfcheck] passed and pushed");
 }
 
