@@ -19,6 +19,29 @@ made fresh audit and IME fixes invisible.
 macOS build toolchain. If development moves to a live-reload runtime, remove
 the bundle rebuild from this path.
 
+## 2026-11-05 — Native Main Agent streams and compacts deterministically
+
+**Decision.** The native Main Agent requests SSE streaming with
+`stream_options.include_usage`, forwards content deltas to `onDelta`, assembles
+tool-call deltas by index, and parses the final usage chunk. When the transcript
+exceeds `historyChars` (default 12,000), older turns are replaced by a bounded
+deterministic summary; the newest turns stay verbatim. Full text remains in the
+turn ledger and is reachable through `search_history`.
+
+**Evidence.** The flag-gated native loop was non-streaming, so the interface
+looked frozen until a whole round finished, and it kept only the last 12 turns
+with no compaction. Magpie returns OpenAI-style SSE chunks and a final usage
+chunk when `include_usage` is set, so both fit the existing client.
+
+**What it costs.** The summary is extractive and truncated rather than
+model-written, so it preserves topics and decisions less well than Pi's
+generated summary. Streaming tool-call fragments add parser complexity, and a
+malformed stream fails the turn with a clear error instead of guessing.
+
+**Reversal condition.** If long-conversation quality suffers, replace the
+deterministic summary with a model-written compaction step (one extra call) and
+keep the deterministic one as the fallback when that call fails.
+
 ## 2026-11-05 — A native Main Agent loop behind a flag, not a flag day
 
 **Decision.** Add an in-process Main Agent runtime selected by
