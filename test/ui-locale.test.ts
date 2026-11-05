@@ -27,6 +27,9 @@ test("the desktop HTML marks chrome so config.locale can replace it", async () =
   assert.match(html, /components\.css/);
   assert.match(html, /components\.js/);
   assert.match(html, /id="agent-page"/);
+  assert.match(html, /id="mobile-open"/);
+  assert.match(html, /data-settings-panel="mobile"/);
+  assert.match(html, /id="whatsapp-binding-form"/);
   const js = await readFile(join(process.cwd(), "apps/desktop/ui/app.js"), "utf8");
   assert.match(js, /function applyChrome/);
   assert.match(js, /config\.ui\?\.strings/);
@@ -37,6 +40,8 @@ test("the desktop HTML marks chrome so config.locale can replace it", async () =
   assert.match(js, /classList\.toggle\("empty-conversation"/);
   assert.match(js, /welcome-copy/);
   assert.match(js, /api\/main-agent\/interruptions/);
+  assert.match(js, /api\/mobile\/whatsapp/);
+  assert.match(js, /function saveWhatsAppBinding/);
   assert.match(js, /function plainPreview/);
   assert.doesNotMatch(js, /agent-auto-mode|data-agent-auto-mode/);
 });

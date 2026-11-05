@@ -76,6 +76,31 @@ test("the model options endpoint exposes only credential-blind selectable refere
   assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
 });
 
+test("the mobile binding entry reports setup state without leaking credentials", async (t) => {
+  const { url, token } = await companion(t);
+  const statusResponse = await companionFetch(url, token, "/api/mobile/whatsapp");
+  assert.equal(statusResponse.status, 200);
+  const status = await statusResponse.json() as {
+    status: {
+      configured: boolean;
+      bridge: { port: number };
+      tunnel: { installCommand: string };
+    };
+  };
+  assert.equal(status.status.configured, false);
+  assert.equal(status.status.bridge.port, 4318);
+  assert.match(status.status.tunnel.installCommand, /cloudflared/);
+  assert.doesNotMatch(JSON.stringify(status), /"(?:accessToken|appSecret)"\s*:/);
+
+  const invalid = await companionFetch(url, token, "/api/mobile/whatsapp/binding", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ allowedNumbers: "+8613800000000" }),
+  });
+  assert.equal(invalid.status, 400);
+  assert.match((await invalid.json() as { error: string }).error, /绑定还不完整/);
+});
+
 test("an interrupted Main Agent turn is persisted and survives a restart", async (t) => {
   const { url, token, dataDirectory } = await companion(t);
   const response = await companionFetch(url, token, "/api/main-agent/interruptions", {

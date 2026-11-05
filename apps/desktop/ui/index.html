@@ -20,6 +20,7 @@
         </div>
         <button class="new-session" id="new-session" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="new-session">新建任务</span><kbd>⌘N</kbd></button>
         <button class="schedule-button" id="schedule-open" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M8 3v4M16 3v4M3 10h18"/></svg><span data-i18n="schedules">定时任务</span><b id="schedule-count">0</b></button>
+        <button class="schedule-button mobile-entry" id="mobile-open" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/></svg><span>连接手机</span><b id="mobile-state">未绑定</b></button>
         <div class="session-label"><span data-i18n="your-sessions">最近任务</span><span class="session-count" id="session-count">0</span></div>
         <div class="session-list" id="session-list" aria-live="polite"></div>
       </aside>
@@ -69,6 +70,7 @@
           <nav class="settings-nav" aria-label="设置导航" data-i18n="settings-nav" data-i18n-attr="aria-label">
             <button type="button" data-settings-section="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16M4 12h16M4 19h11"/><path d="m17 17 2 2 3-4"/></svg><span data-i18n="nav-audit">审计与轨迹</span></button>
             <button type="button" data-settings-section="agents" aria-current="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4.5"/></svg><span data-i18n="nav-agents">Agent</span></button>
+            <button type="button" data-settings-section="mobile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/></svg><span>手机通道</span></button>
             <button type="button" data-settings-section="memory"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3h8a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4Z"/><path d="M8 9h8M8 13h5"/></svg><span data-i18n="nav-memory">记忆与数据</span></button>
             <button type="button" data-settings-section="context"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/><path d="M8 10h8M8 14h4"/></svg><span data-i18n="nav-context">上下文</span></button>
             <button type="button" data-settings-section="safety"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3 20 6v5c0 5-3.4 8.8-8 10-4.6-1.2-8-5-8-10V6l8-3Z"/><path d="m9 12 2 2 4-4"/></svg><span data-i18n="nav-safety">权限与安全</span></button>
@@ -81,6 +83,51 @@
             </section>
             <section class="settings-panel" data-settings-panel="agents">
               <div id="agent-page" class="agent-page"></div>
+            </section>
+            <section class="settings-panel" data-settings-panel="mobile" hidden>
+              <h3>连接手机</h3>
+              <p>用手机 WhatsApp 找到这里的 Clone AI。绑定完成后，你在手机上发的文字会进入同一个 Main Agent；回复也会自动发回 WhatsApp。</p>
+              <div class="mobile-binding-overview" id="whatsapp-overview"></div>
+              <div class="settings-card mobile-binding-card">
+                <div class="mobile-binding-heading">
+                  <div><h4>1. 填写 WhatsApp Cloud API 配置</h4><p>这些值只保存在本机权限为 0600 的文件中。Access Token 和 App Secret 保存后不会回显。</p></div>
+                  <span class="settings-value" id="whatsapp-credential-state">未配置</span>
+                </div>
+                <form id="whatsapp-binding-form" class="mobile-binding-form">
+                  <label>允许使用手机通道的号码（多个用逗号分隔）<input id="whatsapp-allowed-numbers" type="text" autocomplete="off" placeholder="+8613800000000" /></label>
+                  <label>Phone Number ID<input id="whatsapp-phone-number-id" type="text" autocomplete="off" placeholder="Meta 控制台里的 Phone number ID" /></label>
+                  <label>Access Token<input id="whatsapp-access-token" type="password" autocomplete="new-password" placeholder="留空则保留已保存的值" /></label>
+                  <label>App Secret<input id="whatsapp-app-secret" type="password" autocomplete="new-password" placeholder="留空则保留已保存的值" /></label>
+                  <label class="mobile-binding-wide">Webhook Verify Token
+                    <span class="mobile-inline-control"><input id="whatsapp-verify-token" type="text" autocomplete="off" placeholder="点击生成一个校验码" /><button class="secondary" id="whatsapp-generate-token" type="button">生成</button><button class="secondary" id="whatsapp-copy-token" type="button">复制</button></span>
+                  </label>
+                  <div class="mobile-binding-actions mobile-binding-wide">
+                    <button class="primary" id="whatsapp-save" type="submit">保存并启动手机桥</button>
+                    <button class="secondary" id="whatsapp-stop-bridge" type="button">停止手机桥</button>
+                    <button class="secondary" id="whatsapp-verify" type="button">验证 Meta 凭据</button>
+                    <span class="mobile-binding-hint" id="whatsapp-verify-result"></span>
+                  </div>
+                </form>
+                <details class="mobile-meta-help"><summary>这些值在哪里找？</summary><p>Meta App → WhatsApp → API Setup：取得 Phone Number ID 和 Access Token；Meta App → App settings → Basic：取得 App Secret。必须先把你的手机号加入测试号码或正式接收号码。</p><button class="link-button" id="whatsapp-open-meta" type="button">打开 Meta 开发者控制台 ↗</button></details>
+              </div>
+              <div class="settings-card mobile-binding-card" id="whatsapp-tunnel-card">
+                <div class="mobile-binding-heading">
+                  <div><h4>2. 生成公网 Webhook 地址</h4><p>WhatsApp 必须通过 HTTPS 找到这台 Mac。Clone AI 使用临时 Cloudflare Tunnel；地址生成后复制到 Meta 的 Webhook 配置。</p></div>
+                  <span class="settings-value" id="whatsapp-tunnel-state">未启动</span>
+                </div>
+                <div class="mobile-webhook-row"><code id="whatsapp-webhook-url">还没有公网地址</code><button class="secondary" id="whatsapp-copy-webhook" type="button">复制 Webhook 地址</button></div>
+                <div class="mobile-binding-actions">
+                  <button class="primary" id="whatsapp-start-tunnel" type="button">启动免费隧道</button>
+                  <button class="secondary" id="whatsapp-stop-tunnel" type="button">停止隧道</button>
+                  <button class="secondary" id="whatsapp-install-cloudflared" type="button" hidden>安装 cloudflared</button>
+                </div>
+                <p class="mobile-binding-hint" id="whatsapp-tunnel-hint"></p>
+              </div>
+              <div class="settings-card mobile-binding-card">
+                <div class="mobile-binding-heading"><div><h4>3. 在 Meta 完成验证</h4><p>把上面的 Webhook 地址和 Verify Token 填进 Meta，订阅 <code>messages</code> 字段，然后从白名单手机号发一句 WhatsApp。</p></div><span class="settings-value" id="whatsapp-ready-state">等待配置</span></div>
+                <ol class="mobile-checklist" id="whatsapp-checklist"></ol>
+                <p class="mobile-binding-note">WhatsApp Cloud API 不是 iMessage。Apple 没有提供受支持的 iMessage 机器人 API，因此这里使用 WhatsApp；Meta 的计费规则仍以控制台为准。</p>
+              </div>
             </section>
             <section class="settings-panel" data-settings-panel="memory" hidden>
               <h3 data-i18n="memory-title">记忆库</h3><p data-i18n="memory-lead">每条记忆都是一个 <code>.md</code> 文件，正文归你所有。你可以在这里改，也可以直接用编辑器改文件——打开这个面板时会自动把磁盘上的改动同步回来。分身与子 Agent 都从这一个库召回。</p>

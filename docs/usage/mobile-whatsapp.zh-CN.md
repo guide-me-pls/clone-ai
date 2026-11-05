@@ -30,9 +30,27 @@ iPhone WhatsApp
 ```
 
 桥与桌面窗口分离，拥有自己的 SQLite 收件箱，验证每个原始 Webhook 请求体，并且只接受
-白名单号码。把它放进独立 LaunchAgent 后，关闭桌面窗口不会停止它。
+白名单号码。App 内向导会把它作为独立的本地进程启动，因此关闭桌面窗口不会停止它；
+需要断开时，在同一个向导里点击“停止手机桥”。
 
-## 配置 Meta
+## 在 App 内一键绑定
+
+最短路径是使用 App 内的向导：
+
+1. 点击左侧的 **连接手机**，或打开 **设置 → 手机通道**。
+2. 填写白名单 WhatsApp 号码、Phone Number ID、Access Token、App Secret；
+   生成 Verify Token，然后点击 **保存并启动手机桥**。
+3. 如果缺少 `cloudflared`，点击 **安装 cloudflared**。它会使用 Homebrew，
+   并且必须先在 App 内明确确认。
+4. 点击 **启动免费隧道**，复制生成的 HTTPS Webhook 地址，再复制 Verify Token。
+5. 到 Meta 的 WhatsApp 配置中粘贴以 `/webhook` 结尾的回调地址和 Verify Token，
+   订阅 `messages` 字段，然后用白名单手机号发一条 WhatsApp。
+
+App 内的清单会依次显示：凭据已保存、手机桥已运行、公网地址已生成、
+Meta 已完成 GET 验证、已经收到手机消息。Access Token 和 App Secret 在这套 UI 中是
+只写字段：保存到权限为 `0600` 的 `~/.clone/whatsapp.env`，状态接口永不回显。
+
+## 手动配置 Meta
 
 1. 创建带 WhatsApp 产品的 Meta App，并使用测试或正式电话号码。
 2. 记录 Phone number ID、App Secret 和 Cloud API Access Token。
@@ -49,7 +67,8 @@ export WHATSAPP_ALLOWED_NUMBERS='+8613800000000'
 
 多个所有者用逗号分隔。白名单必须配置；空白名单会拒绝所有发送者。
 
-需要本机常驻时，安装当前用户的 LaunchAgent：
+旧的命令行 LaunchAgent 安装器仍可用于恢复和无 GUI 的场景。App 内向导是新的主路径；
+两者只能选一个，不能让两个桥同时争用同一端口和收件箱。
 
 ```bash
 npm run mobile:install
