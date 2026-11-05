@@ -9,11 +9,19 @@ govern it.
 一个**草稿 PR**。它从不合并、不碰正在服务的检出，也不修改约束它自己的规则。
 
 ```bash
-# record the failures (redacted) that the night job will read
-clone-ai traces export
-clone-ai traces            # list what is on disk
+clone-ai selfcheck              # adversarial probes + gate; journals the round
+clone-ai selfcheck --full       # also npm test
+clone-ai selfcheck --repair     # a red round is handed to the repair lane
+clone-ai traces                 # list what is on disk for the night job
 node scripts/nightly-rsi.mjs --dry-run
 ```
+
+The nightly schedule runs `selfcheck --full --repair`: the agent attacks its
+own boundaries, records the round, and only when something is red does the
+gated repair lane turn the failure into a draft PR.
+
+夜间计划运行 `selfcheck --full --repair`：Agent 先攻击自己的边界并记录这一轮，只有出现红色
+探针时，带闸门的修复通道才把失败变成草稿 PR。
 
 ## What a trace contains / 轨迹里有什么
 
