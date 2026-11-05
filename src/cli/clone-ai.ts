@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
+import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
 import { createKernelRuntimeSession } from "../main-agent/tools/kernel-tools.ts";
 import { MainAgentBusyError, withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { BadCaseLog } from "../reporting/bad-case-log.ts";
@@ -119,7 +120,7 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
   try {
     await withMainAgentLock(dataDirectory, async () => {
       const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-      const { session } = await createMainAgentSession({
+      const { session, prompt } = await createMainAgentSession({
         dataDirectory,
         // A fresh conversation is explicit; the default continues the last one.
         // 新会话是显式选择；默认续上一次对话。
@@ -132,6 +133,10 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
           await writeCurrentSessionPointer(join(dataDirectory, "pi-sessions", "main-agent"), file);
         }
       }
+      // Record the inputs before the prompt runs: a failed turn is only
+      // debuggable if the prompt it read is still on disk.
+      // 在 prompt 运行前记录输入：失败的一轮只有在它读过的提示词仍在磁盘上时才可调试。
+      await recordPromptSnapshot(dataDirectory, prompt);
       session.subscribe((event) => {
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
           process.stdout.write(event.assistantMessageEvent.delta);
