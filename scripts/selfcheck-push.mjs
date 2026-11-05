@@ -34,6 +34,15 @@ async function main() {
   console.log("[selfcheck] npm run gate");
   await command("npm", ["run", "gate"]);
 
+  if (process.platform === "darwin") {
+    // The desktop app is a packaged sidecar plus UI; source edits do not hot
+    // reload. Replace the bundle only after every deterministic gate passes.
+    // 桌面 App 是打包后的 sidecar 与 UI；源码修改不会热更新。只有全部确定性门禁
+    // 通过后才替换 App 包。
+    console.log("[selfcheck] rebuilding and replacing the macOS app");
+    await command("npm", ["run", "desktop:mac:build", "--", "--replace"]);
+  }
+
   console.log(`[selfcheck] fetching origin/${pushRef}`);
   await command("git", ["fetch", "origin", pushRef]);
   const ahead = (await run("git", ["rev-list", "--count", `origin/${pushRef}..HEAD`], { cwd: process.cwd() })).stdout.trim();
