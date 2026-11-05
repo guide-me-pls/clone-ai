@@ -12,8 +12,9 @@ import {
 } from "../src/main-agent/native-runtime.ts";
 import { appendMainAgentTurnRecord } from "../src/main-agent/turn-audit.ts";
 
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+function sseResponse(chunks: unknown[]): Response {
+  const body = `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`;
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
 }
 
 test("the native main agent runs tools, streams the reply and audits the turn", async (t) => {
@@ -25,20 +26,18 @@ test("the native main agent runs tools, streams the reply and audits the turn", 
     bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
     calls += 1;
     if (calls === 1) {
-      return jsonResponse({
-        choices: [{
-          message: {
-            content: null,
-            tool_calls: [{ id: "c1", type: "function", function: { name: "get_authority", arguments: "{}" } }],
-          },
-        }],
-        usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
-      });
+      return sseResponse([
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", type: "function", function: { name: "get_authority", arguments: "{}" } }] } }] },
+        { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+        { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } },
+      ]);
     }
-    return jsonResponse({
-      choices: [{ message: { content: "All set.", tool_calls: [] } }],
-      usage: { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 },
-    });
+    return sseResponse([
+      { choices: [{ delta: { content: "All " } }] },
+      { choices: [{ delta: { content: "set." } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      { choices: [], usage: { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 } },
+    ]);
   }) as unknown as typeof fetch;
 
   const deltas: string[] = [];
@@ -53,7 +52,7 @@ test("the native main agent runs tools, streams the reply and audits the turn", 
 
   assert.equal(result.error, undefined);
   assert.equal(result.reply, "All set.");
-  assert.deepEqual(deltas, ["All set."]);
+  assert.deepEqual(deltas, ["All ", "set."]);
   assert.equal(bodies.length, 2);
   const first = bodies[0] as { tools?: Array<{ function: { name: string } }> };
   assert.ok(first.tools?.some((tool) => tool.function.name === "get_authority"));
@@ -98,10 +97,11 @@ test("the native main agent includes prior turns from the ledger", async (t) => 
   let body: { messages: Array<{ role: string; content?: string }> } | undefined;
   const fetchImpl = (async (_url: string, init: RequestInit) => {
     body = JSON.parse(String(init.body)) as { messages: Array<{ role: string; content?: string }> };
-    return jsonResponse({
-      choices: [{ message: { content: "Sure.", tool_calls: [] } }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    });
+    return sseResponse([
+      { choices: [{ delta: { content: "Sure." } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
   }) as unknown as typeof fetch;
   const result = await runNativeMainAgentTurn({
     dataDirectory: directory,
@@ -124,4 +124,43 @@ test("the native flag and endpoint are explicit", () => {
   const configured = readNativeMainAgentEndpoint({ CLONE_AI_NATIVE_MODEL: "m", CLONE_AI_NATIVE_BASE_URL: "http://x/" });
   assert.equal(configured.endpoint?.baseUrl, "http://x");
   assert.equal(configured.endpoint?.model, "m");
+});
+
+test("a long transcript is compacted deterministically, keeping the newest turns verbatim", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-native-compact-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const long = "x".repeat(800);
+  for (let index = 0; index < 20; index += 1) {
+    await appendMainAgentTurnRecord(directory, {
+      id: `turn-${index}`,
+      text: `question ${index} ${long}`,
+      status: "completed",
+      startedAt: new Date(Date.now() - (20 - index) * 60_000).toISOString(),
+      completedAt: new Date(Date.now() - (20 - index) * 60_000 + 1_000).toISOString(),
+      reply: `answer ${index} ${long}`,
+    });
+  }
+  let body: { messages: Array<{ role: string; content?: string }> } | undefined;
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    body = JSON.parse(String(init.body)) as { messages: Array<{ role: string; content?: string }> };
+    return sseResponse([
+      { choices: [{ delta: { content: "OK." } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+  }) as unknown as typeof fetch;
+  const result = await runNativeMainAgentTurn({
+    dataDirectory: directory,
+    text: "newest question",
+    source: "cli",
+    endpoint: { baseUrl: "http://gateway", model: "m" },
+    fetchImpl,
+    historyChars: 4_000,
+  });
+  assert.equal(result.reply, "OK.");
+  const messages = body?.messages ?? [];
+  assert.ok(messages.some((message) => message.role === "system" && String(message.content).includes("compacted deterministically")));
+  const userMessages = messages.filter((message) => message.role === "user");
+  assert.ok(userMessages.length < 20);
+  assert.ok(userMessages.some((message) => String(message.content).startsWith("question 19 ")));
 });

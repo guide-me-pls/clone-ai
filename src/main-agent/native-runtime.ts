@@ -54,6 +54,8 @@ export interface NativeMainAgentOptions {
   fetchImpl?: typeof fetch;
   maxRounds?: number;
   historyTurns?: number;
+  /** Character budget for the verbatim transcript before deterministic compaction. 逐字对话记录在确定性压缩前的字符预算。 */
+  historyChars?: number;
   cwd?: string;
 }
 
@@ -161,7 +163,10 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
   });
 
   const before = new Set((await currentRuns(options.dataDirectory)).map((run) => run.id));
-  const history = await recentMessages(options.dataDirectory, turnId, options.historyTurns ?? 12);
+  const history = await buildHistory(options.dataDirectory, turnId, {
+    turns: options.historyTurns ?? 24,
+    chars: options.historyChars ?? 12_000,
+  });
   const messages: NativeMessage[] = [
     { role: "system", content: compiled.systemPrompt },
     ...history,
@@ -175,7 +180,7 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
   const maxRounds = Math.max(1, options.maxRounds ?? 8);
   try {
     for (let round = 0; round < maxRounds; round += 1) {
-      const response = await chat(endpoint, messages, tools, options.fetchImpl ?? fetch);
+      const response = await chat(endpoint, messages, tools, options.fetchImpl ?? fetch, options.onDelta);
       usage.modelCalls += 1;
       if (response.usage !== undefined) {
         sawUsage = true;
@@ -185,11 +190,6 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
       }
       if (response.content !== null && response.content.length > 0) {
         reply += response.content;
-        try {
-          options.onDelta?.(response.content);
-        } catch {
-          // A broken sink must not lose the reply. 断开的下游不能丢回复。
-        }
       }
       if (response.toolCalls.length === 0) break;
       messages.push({
@@ -263,6 +263,7 @@ async function chat(
   messages: NativeMessage[],
   tools: readonly PlainKernelTool[],
   fetchImpl: typeof fetch,
+  onDelta?: (delta: string) => void,
 ): Promise<NativeReply> {
   const response = await fetchImpl(`${endpoint.baseUrl}/v1/chat/completions`, {
     method: "POST",
@@ -286,7 +287,8 @@ async function chat(
           })),
           tool_choice: "auto",
         }),
-      stream: false,
+      stream: true,
+      stream_options: { include_usage: true },
     }),
     signal: AbortSignal.timeout(endpoint.timeoutMs ?? 120_000),
   });
@@ -294,25 +296,87 @@ async function chat(
     const detail = await response.text().catch(() => "");
     throw new Error(`The Main Agent endpoint answered ${response.status}: ${detail.slice(0, 300)}`);
   }
-  const body = await response.json() as {
-    choices?: Array<{
-      message?: {
-        content?: string | null;
-        tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>;
-      };
-    }>;
-    usage?: unknown;
+  if (response.body === null) throw new Error("The Main Agent endpoint returned no stream.");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let usage: ModelUsage | undefined;
+  const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+
+  const handleLine = (raw: string): void => {
+    const line = raw.trim();
+    if (line.length === 0 || line.startsWith(":")) return;
+    if (!line.startsWith("data:")) return;
+    const data = line.slice(5).trim();
+    if (data.length === 0 || data === "[DONE]") return;
+    let chunk: {
+      choices?: Array<{
+        delta?: {
+          content?: string | null;
+          tool_calls?: Array<{
+            index?: number;
+            id?: string;
+            function?: { name?: string; arguments?: string };
+          }>;
+        };
+      }>;
+      usage?: unknown;
+    };
+    try {
+      chunk = JSON.parse(data) as typeof chunk;
+    } catch {
+      return;
+    }
+    if (chunk.usage !== undefined) {
+      const parsed = parseUsage(chunk.usage);
+      if (parsed !== undefined) usage = parsed;
+    }
+    const delta = chunk.choices?.[0]?.delta;
+    if (delta === undefined) return;
+    if (typeof delta.content === "string" && delta.content.length > 0) {
+      content += delta.content;
+      try {
+        onDelta?.(delta.content);
+      } catch {
+        // A broken sink must not lose the reply. 断开的下游不能丢回复。
+      }
+    }
+    for (const fragment of delta.tool_calls ?? []) {
+      const index = typeof fragment.index === "number" ? fragment.index : 0;
+      const current = toolCalls.get(index) ?? { id: "", name: "", arguments: "" };
+      if (typeof fragment.id === "string" && fragment.id.length > 0) current.id = fragment.id;
+      if (typeof fragment.function?.name === "string" && fragment.function.name.length > 0) current.name += fragment.function.name;
+      if (typeof fragment.function?.arguments === "string") current.arguments += fragment.function.arguments;
+      toolCalls.set(index, current);
+    }
   };
-  const message = body.choices?.[0]?.message;
-  if (message === undefined) throw new Error("The Main Agent endpoint returned no message.");
-  const usage = parseUsage(body.usage);
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      handleLine(line);
+      newline = buffer.indexOf("\n");
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim().length > 0) handleLine(buffer);
+
   return {
-    content: message.content ?? null,
-    toolCalls: (message.tool_calls ?? []).map((call) => ({
-      id: call.id,
-      name: call.function.name,
-      arguments: call.function.arguments,
-    })),
+    content: content.length > 0 ? content : null,
+    toolCalls: [...toolCalls.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([, call]) => ({
+        id: call.id.length > 0 ? call.id : randomUUID(),
+        name: call.name,
+        arguments: call.arguments.length > 0 ? call.arguments : "{}",
+      })),
     ...(usage === undefined ? {} : { usage }),
   };
 }
@@ -360,17 +424,63 @@ async function searchLedger(dataDirectory: string, query: string, limit: number)
   return scored.slice(0, take).map((item) => `[${item.at}] ${item.excerpt}`).join("\n\n");
 }
 
-async function recentMessages(dataDirectory: string, excludeTurnId: string, limit: number): Promise<NativeMessage[]> {
+async function buildHistory(
+  dataDirectory: string,
+  excludeTurnId: string,
+  options: { turns: number; chars: number },
+): Promise<NativeMessage[]> {
   const records = (await readMainAgentTurnRecords(dataDirectory))
     .filter((record) => record.id !== excludeTurnId && record.status === "completed" && (record.reply ?? "").trim().length > 0)
     .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))
-    .slice(-Math.max(1, limit));
+    .slice(-Math.max(1, options.turns));
+  const pairs = records.map((record) => ({
+    user: record.text.slice(0, 4_000),
+    assistant: (record.reply ?? "").slice(0, 4_000),
+  }));
+  const budget = Math.max(1, options.chars);
+  const total = pairs.reduce((sum, pair) => sum + pair.user.length + pair.assistant.length, 0);
+  if (total <= budget) return flattenPairs(pairs);
+
+  // Keep the newest pairs verbatim within two thirds of the budget; summarise
+  // the rest into a bounded system note. The full text stays in the ledger.
+  // 在预算的三分之二内保留最新若干轮的原文；其余压成一段有界系统说明。全文仍在台账里。
+  const keepBudget = Math.floor(budget * 0.66);
+  const keep: typeof pairs = [];
+  let kept = 0;
+  for (let index = pairs.length - 1; index >= 0; index -= 1) {
+    const pair = pairs[index]!;
+    const size = pair.user.length + pair.assistant.length;
+    if (keep.length > 0 && kept + size > keepBudget) break;
+    keep.unshift(pair);
+    kept += size;
+  }
+  const older = pairs.slice(0, pairs.length - keep.length);
+  const summary = older
+    .map((pair) => `${trim(pair.user, 160)} → ${trim(pair.assistant, 160)}`)
+    .join("\n")
+    .slice(0, 2_000);
   const messages: NativeMessage[] = [];
-  for (const record of records) {
-    messages.push({ role: "user", content: record.text.slice(0, 4_000) });
-    messages.push({ role: "assistant", content: (record.reply ?? "").slice(0, 4_000) });
+  if (summary.length > 0) {
+    messages.push({
+      role: "system",
+      content: `Earlier conversation (compacted deterministically; background only, full text is in the turn ledger and search_history):\n${summary}`,
+    });
+  }
+  messages.push(...flattenPairs(keep));
+  return messages;
+}
+
+function flattenPairs(pairs: ReadonlyArray<{ user: string; assistant: string }>): NativeMessage[] {
+  const messages: NativeMessage[] = [];
+  for (const pair of pairs) {
+    messages.push({ role: "user", content: pair.user });
+    messages.push({ role: "assistant", content: pair.assistant });
   }
   return messages;
+}
+
+function trim(text: string, limit: number): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, limit);
 }
 
 async function readMainAgentEffort(dataDirectory: string, environment: NodeJS.ProcessEnv): Promise<string | undefined> {

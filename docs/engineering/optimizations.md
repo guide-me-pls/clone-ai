@@ -426,9 +426,10 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 - **Pros:** the native path writes the same audit and usage records; the tool
   table is captured from the Pi extension so the two runtimes cannot drift; the
   shared invocation ledger identifies the caller.
-- **Cons / next time:** non-streaming; no compaction; images refused;
-  `search_history` searches the turn ledger, not Pi session files; native turns
-  are not resumable as Pi sessions. The Pi-versus-native comparison is below.
+- **Cons / next time:** at that point non-streaming and without compaction;
+  both were added next (see the entry below). Images refused; `search_history`
+  searches the turn ledger, not Pi session files; native turns are not
+  resumable as Pi sessions.
 - **Reversal condition:** see the trade-off entry.
 
 ## 2026-11-05 — Native vs Pi Main Agent comparison
@@ -467,4 +468,35 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   tasks. It still lacks streaming and compaction, so the next comparison should
   include a long conversation and a multi-turn tool task; those are the likely
   divergence points.
+- **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — Native Main Agent streams and compacts
+
+- **Goal / hypothesis:** remove the two remaining gaps before any default
+  change: stream tokens as they arrive, and keep a long conversation from
+  silently losing early detail.
+- **Trade-off:** [streaming and compaction](../architecture/trade-offs.md#2026-11-05--native-main-agent-streams-and-compacts-deterministically).
+- **Change:** the native runtime requests SSE (`stream: true`,
+  `stream_options.include_usage`), forwards content deltas, assembles tool-call
+  fragments by index and parses the final usage chunk. `buildHistory` keeps the
+  newest turns verbatim within two thirds of `historyChars` (12,000 default) and
+  replaces older turns with a bounded deterministic summary; the full text
+  remains in the turn ledger.
+- **Eval:** `test/native-main-agent.test.ts` drives SSE directly: deltas arrive
+  individually, tool-call fragments assemble, usage survives streaming, and a
+  20-turn transcript compacts to a summary plus the newest turn. Full suite: 579
+  tests / 576 pass / 3 skipped; typecheck, gate and bilingual docs pass.
+- **Benchmark:** `CLONE_AI_BENCH_MAIN_MODEL=360/anthropic/claude-sonnet-5-5 npm run bench:main`
+  → both 3/3; direct 2.5s / 3,795 vs 2.5s / 3,864; authority 7.8s / 8,013 vs
+  9.2s / 8,141; plan 14.2s / 9,138 vs 11.2s / 8,929; same tool choices and one
+  run each; result file
+  `benchmark/results/main-agent-2026-11-05T09-26-57-563Z.json`. Compared with
+  the pre-streaming run, no behavior change and no lost usage.
+- **Assumption / not verified:** the deterministic summary's extra system message
+  is unit-tested but was not sent to the live endpoint in the benchmark (each
+  task starts with an empty history). Multiple system messages are standard
+  OpenAI-compatible behavior, but this remains an assumption.
+- **Pros / cons:** streaming removes the frozen-interface effect; deterministic
+  compaction is cheap and auditable but less faithful than a model-written
+  summary; long-conversation quality still needs a live test.
 - **Reversal condition:** see the trade-off entry.
