@@ -118,7 +118,7 @@ export function buildAttention(input: AttentionInput): AttentionItem[] {
     });
   }
 
-  for (const observation of input.observations ?? []) {
+  for (const observation of (input.observations ?? []).filter(looksActionable)) {
     items.push({
       id: `observation:${observation.connectorId ?? "unknown"}:${observation.externalId}`,
       kind: "observation",
@@ -136,4 +136,26 @@ export function buildAttention(input: AttentionInput): AttentionItem[] {
   }
 
   return items.sort((left, right) => right.urgency - left.urgency || left.title.localeCompare(right.title));
+}
+
+/**
+ * Whether an observation is worth an interruption.
+ *
+ * Every observation used to become an attention item, which meant a marketing
+ * email and a lunch-planning group chat both demanded the owner's attention —
+ * measured as a 100% false-positive rate in the restraint suite. An observation
+ * is background by default; it earns an interruption only when its own text asks
+ * for a decision: a deadline, a confirmation, a payment, a cancellation. The
+ * signal is in the text because no connector can know the owner's priorities.
+ *
+ * 一条观察是否值得打扰。
+ *
+ * 此前每条观察都会变成注意力条目，意味着营销邮件和约午饭的群聊都会要求所有者注意——在克制套件中实测
+ * 误报率 100%。观察默认属于背景；只有当它自己的文字要求做决定时才挣得一次打扰：截止、确认、付款、取消。
+ * 信号取自文本，因为没有任何 Connector 知道所有者的优先级。
+ */
+const ACTION_SIGNALS = /截止|到期|确认|付款|发票|取消|延期|请回复|需要你|待办|deadline|due|confirm|payment|invoice|cancel|please reply|action required/i;
+
+export function looksActionable(observation: { title: string; body?: string }): boolean {
+  return ACTION_SIGNALS.test(`${observation.title} ${observation.body ?? ""}`);
 }
