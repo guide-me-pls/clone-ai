@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { buildInstructions, decideTool, NativeAgentWorker, type NativeModelClient, type NativeToolCall } from "../src/workers/native-agent-worker.ts";
+import { fileTools } from "../src/workers/native-worker-factory.ts";
 import type { ExecutionAssignment, ExecutionEvent } from "../src/core/contracts.ts";
 import { resolveGrants } from "../src/authority/path-gateway.ts";
 
@@ -132,4 +133,24 @@ test("exact usage from the model client reaches the completed event", async (t) 
   assert.equal(worker.id, "agent-1");
   assert.equal(worker.providerId, "native");
   assert.deepEqual(capabilities.work, ["drafting"]);
+});
+
+test("successful writes become artifact evidence the verifier can check", async (t) => {
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: fileTools(),
+    createClient: () => ({
+      async run(input) {
+        await input.execute({ name: "write_file", input: { path: "out/note.md", content: "hi" } });
+        return { summary: "wrote it" };
+      },
+    }),
+  });
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute(assignment(directory))) events.push(event);
+  const evidence = events.filter((event) => event.type === "evidence");
+  assert.ok(evidence.some((event) => event.type === "evidence" && event.evidence.kind === "artifact" && event.evidence.locator === "out/note.md"));
+  assert.equal(await readFile(join(directory, "out/note.md"), "utf8"), "hi");
 });

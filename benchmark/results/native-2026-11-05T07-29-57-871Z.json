@@ -1,0 +1,40 @@
+{
+  "provider": "native",
+  "ranAt": "2026-11-05T07:29:57.872Z",
+  "records": [
+    {
+      "taskId": "summarize",
+      "title": "Read-only summary",
+      "passed": false,
+      "expectedFailure": false,
+      "status": "failed",
+      "durationMs": 18054,
+      "artifacts": [
+        {
+          "path": ".clone/workspace-execution.sqlite3",
+          "bytes": 0
+        },
+        {
+          "path": "README.md",
+          "bytes": 236
+        },
+        {
+          "path": "out/summary.md",
+          "bytes": 370
+        }
+      ],
+      "verification": {
+        "passed": false,
+        "needsReview": false,
+        "summary": "Verification failed. Summarize the project: \"out/summary.md\" was promised but does not exist on disk."
+      },
+      "usage": {
+        "inputTokens": 1674,
+        "outputTokens": 450,
+        "totalTokens": 2124,
+        "modelCalls": 3
+      },
+      "failureReason": "Verification failed. Summarize the project: \"out/summary.md\" was promised but does not exist on disk."
+    }
+  ]
+}

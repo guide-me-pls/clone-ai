@@ -119,10 +119,49 @@
   `test/audit.test.ts`（Runtime 记录用量且审计投影出来）。全量：549 个测试 / 546 通过 /
   3 跳过；`npm run typecheck` 与 `npm run gate` 通过。
 - **执行链路：** 先写取舍；按 Provider、客户端、Worker、Runtime、审计、UI 的顺序实现；
-  每层补测试；最后跑全量与门禁。没有运行真实的原生 vs CLI benchmark——本会话没有端点或
-  凭据——因此那项对比标记为**假设**，是下一步的测量。
+  每层补测试；最后跑全量与门禁。该项真实对比后来已运行——见下面的 benchmark 条目。
 - **优点：** 原生 Worker 可按 Agent 选择与识别；精确 token 可归因到单个步骤；不返回 usage 的
   Provider 只被计数、不被定价，而不是看起来免费。
 - **缺点 / 下次：** 没有真实端点测试；原生 Worker 仍只有文件工具；默认 Agent 仍指向 CLI；
   未配置两个环境变量时选择 `native` 会在构建 Registry 时以清晰错误失败。
+- **推翻条件：** 见取舍条目。
+
+## 2026-11-05 — 原生 vs Claude：可靠性任务集 benchmark
+
+- **目标 / 假设：** 测量进程内 Worker 是否能在同一组固定任务上完成得像 Claude Code CLI
+  一样，并拿到精确用量、找出差异。
+- **取舍：** [原生 Provider](../architecture/trade-offs.zh-CN.md#2026-11-05--原生-worker-成为可选-provider并记录精确用量)。
+- **变更：** `benchmark/run.ts` 接受 `--provider native`（无需 `--unsafe-host`），记录
+  验证结果、失败原因与精确用量，并把基准工作区交给验证器。缺少工作区是一个真实的 harness
+  bug：所有相对产物都被当成不存在，第一次运行连 summarize 都失败
+  （`native-2026-11-05T07-23-30-609Z.json` 保留了证据）。
+- **Benchmark 运行 — 原生：** 命令
+  `CLONE_AI_NATIVE_MODEL=360/moonshotai/kimi-k3.1-pro CLONE_AI_NATIVE_BASE_URL=http://127.0.0.1:3425 npm run bench -- --provider native --tasks summarize,two-step-chain,three-step-pipeline,code-tool,missing-input`；
+  Provider/模型：`native`，经本地 Magpie，模型 `360/moonshotai/kimi-k3.1-pro`；数据集：
+  `benchmark/tasks.ts` 的 5 个任务；参数：原生 `maxRounds` 12、WorkOrder 预算 12 次模型
+  调用 / 20 次工具调用、每任务时长取自 `tasks.ts`；环境：macOS、Magpie
+  `127.0.0.1:3425`、无 API Key；结果文件
+  `benchmark/results/native-2026-11-05T07-36-54-051Z.json`。**4/5**：
+  summarize 15.9s / 2,112 tokens；two-step-chain 55.1s / 5,022；
+  three-step-pipeline 131.1s / 10,973；code-tool 45.6s / 4,891；
+  missing-input 20.5s / 2,002——**完成并伪造了 `out/summary.md`**，预期失败没有发生。
+  合计 25,000 tokens。
+- **Benchmark 运行 — Claude：** 命令
+  `npm run bench -- --unsafe-host --provider claude --tasks summarize,two-step-chain,three-step-pipeline,code-tool,missing-input`；
+  Provider/模型：`claude` 及其配置的默认模型；同一数据集与参数；结果文件
+  `benchmark/results/claude-2026-11-05T07-48-06-889Z.json`。**4/5**：
+  summarize 15.7s；two-step-chain 30.6s；three-step-pipeline 82.2s；code-tool 60.8s；
+  missing-input 58.6s——**在验证阶段失败**（`out/summary.md` 不存在），但 benchmark 的
+  预期失败要求执行阶段的 `no_artifact`，因此被计为意外失败。CLI 不向运行器报告 token。
+- **Benchmark 运行 — Pi：** 命令
+  `npm run bench -- --unsafe-host --provider pi --tasks summarize`；结果文件
+  `benchmark/results/pi-2026-11-05T07-41-52-338Z.json`；最简单的任务在 180s WorkOrder
+  超时。是真实的可靠性数据点，不是模型对比。
+- **数字说明：** 四个可解任务两边都通过。原生在 code-tool 更快（45.6s vs 60.8s），在两个
+  链式任务更慢（55.1s vs 30.6s；131.1s vs 82.2s）。原生报告精确用量（合计约 25k tokens）；
+  CLI 不报告。missing-input 两边都不符合预期，原因相反：原生伪造产物，Claude 在验证阶段
+  干净失败。
+- **发现 / 下一步：** 加固原生 Prompt，使必需输入缺失时停止而不是编造；决定验证阶段缺失
+  产物是否应计入 `no_artifact`（本质上是同一件事）。在两者决定前，原生 Worker 在可解任务上
+  与 Claude 持平，但在 missing-input 的诚实性上更弱。
 - **推翻条件：** 见取舍条目。

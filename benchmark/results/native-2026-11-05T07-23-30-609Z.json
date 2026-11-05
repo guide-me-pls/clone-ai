@@ -1,0 +1,34 @@
+{
+  "provider": "native",
+  "ranAt": "2026-11-05T07:23:30.609Z",
+  "records": [
+    {
+      "taskId": "summarize",
+      "title": "Read-only summary",
+      "passed": false,
+      "expectedFailure": false,
+      "status": "failed",
+      "durationMs": 14909,
+      "artifacts": [
+        {
+          "path": ".clone/workspace-execution.sqlite3",
+          "bytes": 0
+        },
+        {
+          "path": "README.md",
+          "bytes": 236
+        },
+        {
+          "path": "out/summary.md",
+          "bytes": 477
+        }
+      ],
+      "usage": {
+        "inputTokens": 1689,
+        "outputTokens": 352,
+        "totalTokens": 2041,
+        "modelCalls": 3
+      }
+    }
+  ]
+}
