@@ -46,6 +46,7 @@ import { stat } from "node:fs/promises";
 import type { JournalStore } from "../core/journal.ts";
 import { PersonalStateStore } from "./personal-state-store.ts";
 import { projectPersonalState } from "./state-projector.ts";
+import { readTypes } from "../core/journal-types.ts";
 import type { Commitment } from "./personal-state.ts";
 
 export interface CommitmentSettlement {
@@ -58,12 +59,23 @@ export interface CommitmentSettlement {
   dueAt?: string;
 }
 
+/** Everything this pass reads, and nothing else. 本次扫描读取的全部事件类型，仅此而已。 */
+const RECONCILE_TYPES = [
+  "state.goal.recorded", "state.goal.updated", "state.goal.archived",
+  "state.commitment.recorded", "state.commitment.updated", "state.commitment.archived",
+  "state.self_model.recorded", "state.self_model.updated", "state.self_model.archived",
+  "plan.created", "run.created", "run.status_changed", "verification.completed", "evidence.recorded",
+] as const;
+
 export async function reconcileCommitments(
   journal: JournalStore,
   options: { now?: Date } = {},
 ): Promise<CommitmentSettlement[]> {
   const now = options.now ?? new Date();
-  const events = await journal.list();
+  // The reconciler reads run/plan/commitment events; the memory and audit
+  // history it never looks at is the bulk of a long-lived journal.
+  // 对账器只读 Run / 计划 / 承诺事件；它从不查看的记忆与审计历史正是一本长期 Journal 的主体。
+  const events = await readTypes(journal, RECONCILE_TYPES);
   const state = projectPersonalState(events);
 
   // Which run was planned to serve which commitment — the linkage the plan
