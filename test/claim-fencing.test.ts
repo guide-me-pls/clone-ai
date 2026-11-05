@@ -13,6 +13,144 @@ import { EvidenceVerifier } from "../src/core/verification.ts";
 import { MemoryPipeline } from "../src/memory/memory-pipeline.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 
+test("orphan recovery leaves a fresh planning run without a claim alone", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-fresh-planning-"));
+  const journal = new SqliteJournalStore(join(directory, "journal.sqlite3"));
+  t.after(async () => { journal.close(); await rm(directory, { recursive: true, force: true }); });
+  const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory: new MemoryPipeline(journal) });
+  const { run } = await runtime.acceptTrigger({ kind: "manual", summary: "fresh planning", payload: {} });
+  assert.deepEqual(await runtime.recoverOrphanedRuns(), []);
+  assert.equal(runtime.getRun(run.id).status, "planning");
+});
+
+test("orphan recovery leaves an aged planning run with a live claim alone", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-claimed-planning-"));
+  const journal = new SqliteJournalStore(join(directory, "journal.sqlite3"));
+  t.after(async () => { journal.close(); await rm(directory, { recursive: true, force: true }); });
+  const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory: new MemoryPipeline(journal) });
+  const { run } = await runtime.acceptTrigger({ kind: "manual", summary: "claimed planning", payload: {} });
+  t.mock.timers.tick(16 * 60_000);
+  assert.ok(await journal.claimRun({ runId: run.id, ownerId: "planner", leaseMs: 60_000 }));
+  assert.deepEqual(await runtime.recoverOrphanedRuns(), []);
+  assert.equal(runtime.getRun(run.id).status, "planning");
+  assert.equal((await journal.readClaim(run.id))?.ownerId, "planner");
+});
+
+test("orphan recovery fails an aged planning run without a plan or live claim", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-orphan-planning-"));
+  const journal = new SqliteJournalStore(join(directory, "journal.sqlite3"));
+  t.after(async () => { journal.close(); await rm(directory, { recursive: true, force: true }); });
+  const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory: new MemoryPipeline(journal) });
+  const { run } = await runtime.acceptTrigger({ kind: "manual", summary: "abandoned planning", payload: {} });
+  t.mock.timers.tick(16 * 60_000);
+  const recovered = await runtime.recoverOrphanedRuns();
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0]?.runId, run.id);
+  assert.equal(recovered[0]?.action, "failed");
+  assert.match(recovered[0]?.reason ?? "", /orphaned planning/);
+  assert.equal(runtime.getRun(run.id).status, "failed");
+  assert.match(runtime.getRun(run.id).failureReason ?? "", /orphaned planning/);
+  const reopened = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory: new MemoryPipeline(journal) });
+  await reopened.hydrate();
+  assert.equal(reopened.getRun(run.id).status, "failed");
+  assert.match(reopened.getRun(run.id).failureReason ?? "", /orphaned planning/);
+});
+
+test("orphan recovery leaves an aged planning run that already has a plan alone", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-planned-planning-"));
+  const journal = new SqliteJournalStore(join(directory, "journal.sqlite3"));
+  t.after(async () => { journal.close(); await rm(directory, { recursive: true, force: true }); });
+  const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory: new MemoryPipeline(journal) });
+  const { run } = await runtime.acceptTrigger({ kind: "manual", summary: "planning with plan", payload: {} });
+  await journal.append({ type: "plan.created", taskId: run.taskId, runId: run.id, payload: { id: "plan-1", runId: run.id, summary: "plan", steps: [], createdAt: new Date().toISOString() } });
+  await runtime.refresh();
+  t.mock.timers.tick(16 * 60_000);
+  assert.deepEqual(await runtime.recoverOrphanedRuns(), []);
+  assert.equal(runtime.getRun(run.id).status, "planning");
+  assert.equal(runtime.getRun(run.id).planId, "plan-1");
+});
+
+test("planning recovery waits until strictly after the grace period and accepts an expired claim", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-planning-grace-"));
+  const journal = new SqliteJournalStore(join(directory, "journal.sqlite3"));
+  t.after(async () => { journal.close(); await rm(directory, { recursive: true, force: true }); });
+  const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory: new MemoryPipeline(journal) });
+  const { run } = await runtime.acceptTrigger({ kind: "manual", summary: "planning grace period", payload: {} });
+  assert.ok(await journal.claimRun({ runId: run.id, ownerId: "old-planner", leaseMs: 1_000 }));
+  t.mock.timers.tick(15 * 60_000);
+  assert.deepEqual(await runtime.recoverOrphanedRuns(), []);
+  assert.equal(runtime.getRun(run.id).status, "planning");
+  t.mock.timers.tick(1);
+  assert.equal((await runtime.recoverOrphanedRuns())[0]?.action, "failed");
+  assert.equal(runtime.getRun(run.id).status, "failed");
+});
+
+test("planning recovery cannot overwrite a plan attached after its snapshot", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-planning-plan-race-"));
+  const path = join(directory, "journal.sqlite3");
+  const journal = new SqliteJournalStore(path);
+  const otherJournal = new SqliteJournalStore(path);
+  t.after(async () => { journal.close(); otherJournal.close(); await rm(directory, { recursive: true, force: true }); });
+  const makeRuntime = (store: SqliteJournalStore): CloneRuntime => new CloneRuntime({
+    journal: store, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory: new MemoryPipeline(store),
+  });
+  const runtime = makeRuntime(journal);
+  const { run } = await runtime.acceptTrigger({ kind: "manual", summary: "concurrent plan", payload: {} });
+  const planner = makeRuntime(otherJournal);
+  await planner.hydrate();
+  t.mock.timers.tick(16 * 60_000);
+  const original = journal.appendClaimedIfUnchanged.bind(journal);
+  journal.appendClaimedIfUnchanged = async (event, claim, lastSequence) => {
+    await planner.attachPlan(run.id, {
+      summary: "concurrent plan",
+      steps: [{ id: "s", title: "work", instructions: "work", risk: "read_only", acceptanceCriteria: ["result"], agentId: "worker", requiredCapabilities: ["review"] }],
+    });
+    return original(event, claim, lastSequence);
+  };
+  assert.deepEqual(await runtime.recoverOrphanedRuns(), []);
+  await runtime.refresh();
+  assert.equal(runtime.getRun(run.id).status, "queued");
+  assert.ok(runtime.getRun(run.id).planId);
+  assert.equal((await journal.listForRun(run.id)).some((event) => event.type === "run.status_changed" && (event.payload as { status?: string }).status === "failed"), false);
+});
+
+test("planning recovery cannot claim a run won by another owner", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-planning-claim-race-"));
+  const journal = new SqliteJournalStore(join(directory, "journal.sqlite3"));
+  t.after(async () => { journal.close(); await rm(directory, { recursive: true, force: true }); });
+  const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory: new MemoryPipeline(journal) });
+  const { run } = await runtime.acceptTrigger({ kind: "manual", summary: "concurrent claim", payload: {} });
+  t.mock.timers.tick(16 * 60_000);
+  const original = journal.claimRun.bind(journal);
+  journal.claimRun = async (input) => {
+    if (input.ownerId.startsWith("recovery-")) await original({ ...input, ownerId: "planner" });
+    return original(input);
+  };
+  assert.deepEqual(await runtime.recoverOrphanedRuns(), []);
+  assert.equal(runtime.getRun(run.id).status, "planning");
+  assert.equal((await journal.readClaim(run.id))?.ownerId, "planner");
+});
+
+test("planning recovery skips stores without conditional fenced writes", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-planning-unsupported-"));
+  const journal = new SqliteJournalStore(join(directory, "journal.sqlite3"));
+  t.after(async () => { journal.close(); await rm(directory, { recursive: true, force: true }); });
+  Object.defineProperty(journal, "appendClaimedIfUnchanged", { value: undefined });
+  const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory: new MemoryPipeline(journal) });
+  const { run } = await runtime.acceptTrigger({ kind: "manual", summary: "unsupported store", payload: {} });
+  t.mock.timers.tick(16 * 60_000);
+  assert.deepEqual(await runtime.recoverOrphanedRuns(), []);
+  assert.equal(runtime.getRun(run.id).status, "planning");
+  assert.equal(await journal.readClaim(run.id), undefined);
+});
+
 test("a consumer cancels its worker when lease renewal fails", { timeout: 10_000 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-lease-loss-"));
   const journal = new SqliteJournalStore(join(directory, "journal.sqlite3"));

@@ -70,6 +70,7 @@ import { describeHistory, mainAgentSessionDirectory, readConversation, searchHis
 import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
 import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
 import { listPiModelIds, listPiModels, piModelReference } from "./main-agent/pi-model-catalog.ts";
+import { readInvocation, readInvocations } from "./audit/invocation-ledger.ts";
 import { WhatsAppBindingInputError, WhatsAppSetupService } from "./mobile/whatsapp-setup.ts";
 import {
   listEffectiveProviderConfigs,
@@ -1033,6 +1034,31 @@ async function handleRequest(
     }
   }
 
+  if (url.pathname.startsWith("/api/invocations")) {
+    // The invocation ledger is shared across data directories, so an agent that
+    // runs with an isolated CLONE_HOME is still visible in the owner's audit.
+    // 调用账本跨数据目录共享，因此使用隔离 CLONE_HOME 的 Agent 仍会出现在所有者审计中。
+    try {
+      if (method === "GET" && url.pathname === "/api/invocations") {
+        const requested = Number.parseInt(url.searchParams.get("limit") ?? "100", 10);
+        const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 500) : 100;
+        const records = await readInvocations({ dataDirectory: context.dataDirectory, limit });
+        sendJson(response, 200, { records });
+        return;
+      }
+      const match = /^\/api\/invocations\/([^/]+)$/.exec(url.pathname);
+      if (method === "GET" && match !== null) {
+        const record = await readInvocation(decodeURIComponent(match[1]!), { dataDirectory: context.dataDirectory, limit: 500 });
+        if (record === undefined) sendJson(response, 404, { error: "Unknown invocation." });
+        else sendJson(response, 200, { record });
+        return;
+      }
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid invocation request." });
+      return;
+    }
+  }
+
   if (url.pathname.startsWith("/api/audit")) {
     // The audit is a projection of the journal. Deleting a session hides it from the
     // conversation list only; the record stays here, marked deleted, so an eval never
@@ -1654,6 +1680,17 @@ async function handleRequest(
     const turnId = typeof body.turnId === "string" && body.turnId.trim().length > 0
       ? body.turnId.trim()
       : randomUUID();
+    const callerKind = typeof request.headers["x-clone-caller"] === "string" ? request.headers["x-clone-caller"] : undefined;
+    const callerSession = typeof request.headers["x-clone-caller-session"] === "string" ? request.headers["x-clone-caller-session"] : undefined;
+    const invocation = {
+      surface: callerKind === "whatsapp" ? "mobile" as const : "desktop" as const,
+      ...(callerKind === undefined ? {} : {
+        caller: {
+          kind: callerKind,
+          ...(callerSession === undefined ? {} : { sessionId: callerSession }),
+        },
+      }),
+    };
     if (text.length === 0 && attachments.images.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
@@ -1680,6 +1717,7 @@ async function handleRequest(
       const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
         onDelta: (delta) => send("delta", { delta }),
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
+        ...invocation,
       });
       send("done", result);
     } catch (error: unknown) {
@@ -1708,6 +1746,17 @@ async function handleRequest(
     const turnId = typeof body.turnId === "string" && body.turnId.trim().length > 0
       ? body.turnId.trim()
       : randomUUID();
+    const callerKind = typeof request.headers["x-clone-caller"] === "string" ? request.headers["x-clone-caller"] : undefined;
+    const callerSession = typeof request.headers["x-clone-caller-session"] === "string" ? request.headers["x-clone-caller-session"] : undefined;
+    const invocation = {
+      surface: callerKind === "whatsapp" ? "mobile" as const : "desktop" as const,
+      ...(callerKind === undefined ? {} : {
+        caller: {
+          kind: callerKind,
+          ...(callerSession === undefined ? {} : { sessionId: callerSession }),
+        },
+      }),
+    };
     if (text.length === 0 && attachments.images.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
@@ -1742,6 +1791,7 @@ async function handleRequest(
     try {
       const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
+        ...invocation,
       });
       sendJson(response, 200, result);
     } catch (error: unknown) {

@@ -19,6 +19,13 @@ export interface JournalStore {
   append(event: NewJournalEvent): Promise<JournalEvent>;
   appendBatch?(events: readonly NewJournalEvent[]): Promise<JournalEvent[]>;
   appendClaimed?(event: NewJournalEvent, claim: { runId: string; ownerId: string }): Promise<JournalEvent>;
+  /**
+   * Atomically append under a live claim only if no events were added to the Run
+   * since lastSequence; return undefined if it changed, throw if the claim is lost.
+   * 在存活领取下，仅当 Run 在 lastSequence 后没有新事件时原子追加；Run 变化则返回
+   * undefined，领取失效则抛错。
+   */
+  appendClaimedIfUnchanged?(event: NewJournalEvent, claim: { runId: string; ownerId: string }, lastSequence: number): Promise<JournalEvent | undefined>;
   appendBatchClaimed?(events: readonly NewJournalEvent[], claim: { runId: string; ownerId: string }): Promise<JournalEvent[]>;
   /** Appends only while the run still has the expected status. 仅在 Run 仍处于预期状态时追加。 */
   appendBatchIfStatus?(events: readonly NewJournalEvent[], expected: { runId: string; status: RunStatus }): Promise<JournalEvent[]>;

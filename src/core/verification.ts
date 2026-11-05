@@ -40,20 +40,43 @@ export interface FileExpectation {
 export function extractFileExpectations(step: PlanStep): FileExpectation[] {
   const text = [step.instructions, ...step.acceptanceCriteria].join("\n");
   const found = new Map<string, FileExpectation>();
+  const rootExtensions = new Set([
+    "md", "markdown", "txt", "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs",
+    "json", "jsonl", "yaml", "yml", "toml", "sh", "py", "go", "rs", "java", "kt",
+    "sql", "html", "css", "csv", "xml", "lock",
+  ]);
+  const fileIntent = /\b(?:file|exists|exist|create|write|save|output|update|add)\b|文件|存在|创建|写|写入|保存|生成|产出|更新/i;
 
-  // Quoted paths first: `weekly-report.md`, "docs/plan.md", 'a/b.txt'.
-  // 先取被引号包裹的路径。
-  const quoted = /[`"'"']([^`"'"'\s]+\.[A-Za-z0-9]{1,8})[`"'"']/g;
-  // Then bare paths that still look like files rather than sentences.
-  // 再取仍然像文件而不像句子的裸写路径。
-  const bare = /(?:^|[\s(（])([A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8})(?=[\s)）,，。;；:：]|$)/gm;
-
-  for (const pattern of [quoted, bare]) {
-    for (const match of text.matchAll(pattern)) {
-      const candidate = match[1];
-      if (candidate === undefined) continue;
-      if (candidate.startsWith("..")) continue;
-      if (!found.has(candidate)) found.set(candidate, { path: candidate, mustContain: [] });
+  for (const assertion of [step.instructions, ...step.acceptanceCriteria]) {
+    // A period inside a filename is not a sentence boundary.
+    // 文件名中的点不是句子边界。
+    for (const sentence of assertion.split(/\n|(?<=[。！？；])|(?<=[.!?;])(?=\s|$)/)) {
+      const quoted = /[`"']([^`"'\s]+)[`"']/g;
+      const bare = /(?:^|[\s(（])([A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8})(?=[\s)）,.，。;；:：]|$)/g;
+      for (const pattern of [quoted, bare]) {
+        for (const match of sentence.matchAll(pattern)) {
+          const candidate = match[1];
+          if (candidate === undefined || candidate.startsWith("..")) continue;
+          if (!/^[A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8}$/.test(candidate)) continue;
+          const candidateStart = match.index + match[0].indexOf(candidate);
+          const prefix = sentence.slice(0, candidateStart).replace(/[`"']$/, "");
+          const suffix = sentence.slice(match.index + match[0].length);
+          if (/[A-Za-z_$][\w.$]*\s*\($/.test(prefix) || /^\s*\(/.test(suffix)) continue;
+          const segments = candidate.split(/[/\\]/);
+          if (segments.length > 1) {
+            // Only SCREAMING_SNAKE_CASE segments are code constants. A single
+            // uppercase directory such as macOS's `/var/.../T/` is still a real
+            // path and must remain eligible for the workspace boundary check.
+            // 只有 SCREAMING_SNAKE_CASE 段才是代码常量；macOS `/var/.../T/`
+            // 这类单字母大写目录仍是真实路径，必须继续接受工作区边界检查。
+            if (segments.slice(0, -1).some((segment) => segment.includes("_") && /^[A-Z0-9_]+$/.test(segment))) continue;
+          } else {
+            const extension = candidate.slice(candidate.lastIndexOf(".") + 1).toLowerCase();
+            if (!rootExtensions.has(extension) || !fileIntent.test(sentence)) continue;
+          }
+          if (!found.has(candidate)) found.set(candidate, { path: candidate, mustContain: [] });
+        }
+      }
     }
   }
 
