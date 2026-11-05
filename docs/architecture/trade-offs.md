@@ -190,6 +190,26 @@ the system prompt changes between turns, which weakens prompt caching.
 **Reversal condition.** If per-turn latency becomes visible, or if prompt
 caching savings outweigh push accuracy.
 
+## 2026-11-05 — In-step resume: deliberately not built
+
+**Decided:** a worker that dies mid-step is restarted whole (when replay-safe)
+or failed; no adapter resumes inside a step.
+
+**Why.** The two boundaries that matter are already enforceable — the step and
+the run. Resuming *inside* a step means trusting a worker's claim about how far
+it got, which a black-box CLI cannot make and a native worker would have to
+commit to a checkpoint protocol before every side effect. The current policy
+(re-queue only when replay-safe; fail when the work was external or
+mid-verification) is the conservative reading of the same facts.
+
+**What was given up.** A long step that dies at 90% is paid for again. For the
+native worker this is bounded by its duration budget, not by correctness.
+
+**Reversal condition.** If long steps become common and re-running them is
+expensive, add an explicit checkpoint to `NativeModelClient` — a resumable
+conversation state the worker itself wrote and can validate — never a guess
+from workspace state.
+
 ## 2026-11-05 — Calendar and email arrive as read-only connectors
 
 **Decided:** `CalendarConnector` reads ICS from a file or an https URL;
@@ -210,6 +230,46 @@ the twin cannot yet answer an email end to end.
 **Reversal condition.** If replies become a product requirement, add an action
 connector with receipts; do not add a write method to this observation
 connector.
+
+## 2026-11-05 — The memory context budget is spent per class
+
+**Decided:** preferences may claim 50% of the remaining budget, task outcomes
+25%, project facts 20%, agent outcomes 5%, filled in that order, with unused
+capacity rolling forward.
+
+**Why.** A flat 1200-character cap let a week of finished-task logs crowd out
+the one preference that would change an answer; preference questions were the
+worst slice on LongMemEval, at 56.7% context hit rate against 92-99% elsewhere.
+
+**What was given up.** Ranking is no longer purely by relevance score: a
+high-scoring task memory can be dropped for a lower-scoring preference. That is
+the intended trade, but it means a debugging question about a recent task may
+see less of that task than before.
+
+**Reversal condition.** If the context-boundary benchmark shows a regression on
+task-shaped questions, raise the task-outcome share or make the weights depend
+on the intent.
+
+## 2026-11-05 — Conflict detection is token overlap, and says so
+
+**Decided:** `findConflicts` compares token overlap (overlap coefficient) among
+active memories of the same type; ≥0.55 is a near-duplicate, ≥0.35 a subject
+worth reviewing. Matched restatements are dropped from the recalled set before
+the context is built.
+
+**Measured limits.** Reworded statements score 0.57-0.93; unrelated ones 0.0-0.4.
+A *changed value* in Chinese ("蓝色" -> "绿色") scores only 0.29 and is therefore
+**not reliably caught** — the differing value replaces a bigram at both ends.
+The tests assert the cases that work and say so in the comment; they do not
+assert the case that does not.
+
+**What was given up.** Contradictions phrased differently remain undetected, and
+may both be recalled. Mitigation: only one is dropped when they *are* detected,
+and the owner sees conflicts as review suggestions rather than automatic
+deletion.
+
+**Reversal condition.** An embedding-based comparison, measured on the same
+pairs, that catches the value-change case above.
 
 ## 2026-11-05 — Supersedes: conversation mining defaults to a cheap local filter
 
