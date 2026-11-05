@@ -249,6 +249,41 @@ the system prompt changes between turns, which weakens prompt caching.
 **Reversal condition.** If per-turn latency becomes visible, or if prompt
 caching savings outweigh push accuracy.
 
+## 2026-11-05 — Consistency is measured, and the first run failed three of four
+
+**Decided:** `npm run bench:consistency` runs four consistency scenarios and two
+restraint scenarios against the real recall + context + attention path.
+
+**What the first run measured.** 1/4 consistency scenarios passed and 100% of
+irrelevant observations became interruptions. The three failures were real:
+
+- a moved meeting and the old time both reached the context;
+- a changed preference competed with the previous one;
+- a stated preference was not recalled at all against a long question.
+
+**What was changed in response.**
+
+- Preferences may be recalled below the product floor (0.08 instead of 0.2),
+  but only on a *distinctive* match — a term shared by at most a quarter of the
+  library. Measured: without the distinctiveness check the lower floor made an
+  idle memory look used and defeated idle archival. Function-word bigrams
+  (必须, 应该, 时候) were added to the same exclusion the Latin stopword list
+  already applied.
+- A newer memory using an explicit replacement verb (改到, 改用, 不再, "changed
+  to") retires an older memory of the same type that shares a substantive term,
+  **in the context only**. Similarity alone does not do it: "周五下午三点开会" and
+  "周五的会改到周四下午" share two tokens of a dozen, so the verb is the signal.
+- Observations earn an interruption only when their text asks for a decision
+  (截止, 确认, due, invoice …). Everything else is background.
+
+**What was given up.** A memory that supersedes another without saying so
+("会改期了" with no verb) still leaves both in the context. An urgent-looking
+message with none of the signal words is missed. Both are recorded, not hidden.
+
+**Reversal condition.** Any of the three scenarios regressing is the signal to
+revisit its fix; a semantic comparator would let the supersede rule drop the
+verb requirement.
+
 ## 2026-11-05 — In-step resume: deliberately not built
 
 **Decided:** a worker that dies mid-step is restarted whole (when replay-safe)

@@ -36,7 +36,9 @@ test("met commitments and connector observations keep their provenance", () => {
   const items = buildAttention({
     now,
     commitments: [commitment({ status: "met" })],
-    observations: [{ externalId: "ev1", kind: "calendar_event", title: "Design review", connectorId: "calendar" }],
+    // An observation only earns attention when its text asks for a decision.
+    // 观察只有在文字要求做出决定时才挣得一次注意。
+    observations: [{ externalId: "ev1", kind: "message", title: "Please confirm the invoice deadline", connectorId: "email" }],
   });
   assert.equal(items.length, 1);
   assert.equal(items[0]!.kind, "observation");
