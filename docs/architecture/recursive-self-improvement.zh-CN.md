@@ -199,3 +199,16 @@ CLONE_AI_NATIVE_API_KEY=<可选>
 
 未配置模型时工厂返回空，Registry 继续使用沙箱化的 CLI Worker。已针对本机 OpenAI 兼容网关做过端到端验证：
 Worker 列出空工作区、写入 `out/hello.txt`、读回确认后停止——每次调用都通过 Scope 闸门。
+
+## 14. 个人 Agent 界面（2026-11-05）
+
+- **按类别分配上下文预算** —— 偏好 50%、任务结果 25%、事实 20%、Agent 结果 5%，按剩余额度计算；用不完的向后顺延。
+- **冲突复核** —— `src/memory/conflict.ts` 提议退役复述记忆（`findConflicts`），并在召回集中去重复述（`dedupeContext`）。
+  词重叠捕获不到取值改变；权衡记录如实记下这一局限。
+- **对话学习默认开启** —— `CLONE_AI_MEMORY_MINING`：未设置=只提炼含持久陈述信号的回合，`off`=两条路径都关闭，`all`=每轮都提炼。
+- **Connector** —— 日历（ICS 文件或 https URL）与邮件（IMAP，只读），两者在无法运行时都会说明原因而不是显示为空。
+- **对话附件** —— 按签名校验图片，交给会话 Prompt，绝不写入工作区。
+- **注意力列表** —— `GET /api/attention` 把承诺、待审项、建议、机会与观察合成一个按紧迫度排序的列表；每项都指向拥有它的服务。
+- **导出** —— `clone-ai export [dir]` 写出可读目录树与清单，清单明确声明归档未加密。
+- **步骤级进度** —— `getRunProgress`、`get_run_status` 与 `GET /api/runs/:id/progress` 报告每步完成情况与最后的报告。
+- **基准** —— `npm run bench:journal` 记录 append/list/replay/refresh 耗时；3 万条事件：list 32 ms、replay 77 ms、热刷新 0 ms。
