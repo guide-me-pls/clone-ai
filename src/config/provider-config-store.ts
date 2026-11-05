@@ -2,6 +2,7 @@ import { readJsonFile, writeJsonAtomic } from "../config/json-file.ts";
 import { BUILT_IN_PROVIDER_CONFIGS } from "../workers/provider-catalog.ts";
 import type { BlackBoxProviderConfig } from "../workers/black-box-cli-worker.ts";
 import { EFFORT_LEVELS, effortChoices, isEffortLevel, type EffortLevel } from "../workers/effort.ts";
+import { assertWorkerEnvName } from "../workers/worker-env.ts";
 
 /**
  * Read only the owner's overrides. Built-ins remain source-controlled defaults;
@@ -75,6 +76,7 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
   const timeoutMs = record.timeoutMs;
   if (args !== undefined && (!Array.isArray(args) || args.some((item) => typeof item !== "string"))) throw new Error(`Provider ${id} args must be strings.`);
   if (env !== undefined && (!Array.isArray(env) || env.some((item) => typeof item !== "string" || !/^[A-Z_][A-Z0-9_]*\*?$/i.test(item)))) throw new Error(`Provider ${id} env must contain variable names only.`);
+  for (const name of Array.isArray(env) ? env : []) assertWorkerEnvName(name);
   if (work !== undefined && (!Array.isArray(work) || work.some((item) => typeof item !== "string" || item.trim().length === 0))) throw new Error(`Provider ${id} work must contain non-empty strings.`);
   if (supportedRoles !== undefined && (!Array.isArray(supportedRoles) || supportedRoles.some((role) => !isRole(role)))) throw new Error(`Provider ${id} has an invalid supportedRoles list.`);
   if (record.promptVia !== undefined && record.promptVia !== "arg" && record.promptVia !== "stdin") throw new Error(`Provider ${id} promptVia must be arg or stdin.`);
