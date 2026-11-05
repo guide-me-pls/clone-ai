@@ -141,3 +141,19 @@ test("an empty state says so rather than pretending to know things", () => {
 
   assert.match(rendered, /nothing recorded yet/);
 });
+
+test("background work that finished is in the briefing, with evidence counts", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-briefing-work-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const journal = new JsonlJournalStore(join(directory, "journal.jsonl"));
+  const now = "2026-11-04T10:00:00.000Z";
+  await journal.append({ type: "task.created", taskId: "t1", payload: { id: "t1", title: "整理周报", objective: "整理", acceptanceCriteria: ["ok"], createdAt: now, triggerId: "g1" } });
+  await journal.append({ type: "run.created", taskId: "t1", runId: "run-abcdef12", payload: {} });
+  await journal.append({ type: "plan.created", taskId: "t1", runId: "run-abcdef12", payload: { summary: "整理周报并写盘", steps: [] } });
+  await journal.append({ type: "evidence.recorded", taskId: "t1", runId: "run-abcdef12", payload: { id: "e1", kind: "artifact", summary: "report.md" } });
+  await journal.append({ type: "run.status_changed", taskId: "t1", runId: "run-abcdef12", payload: { status: "completed" } });
+
+  const briefing = await compileBriefing({ journal, dataDirectory: directory, workspacePath: directory, now, includeObservations: false });
+  assert.match(briefing.text, /Recently finished background work/);
+  assert.match(briefing.text, /completed: 整理周报并写盘 \(run run-abcd, 1 evidence item/);
+});

@@ -21,6 +21,9 @@ const state = {
   situation: null,
   config: null,
   connectors: [],
+  whatsapp: null,
+  whatsappLoading: false,
+  whatsappDirty: false,
   modelOptions: [],
   modelOptionsLoaded: false,
   modelOptionsLoading: false,
@@ -80,7 +83,7 @@ function applyChrome(locale, strings) {
 }
 const api = async (path, options = {}) => {
   const headers = new Headers(options.headers);
-  if (window.CLONE_AI_TOKEN) headers.set("Authorization", `Bearer ${window.CLONE_AI_TOKEN}`);
+  if (window.CLONE_AI_TOKEN) headers.set("x-clone-ai-token", window.CLONE_AI_TOKEN);
   const response = await fetch(path, { ...options, headers });
   const body = response.status === 204 ? {} : await response.json();
   if (!response.ok) throw new Error(body.error || t("local-request-failed"));
@@ -99,9 +102,34 @@ const statusMeta = (status) => {
   return { label: t("status-running"), className: "running", dot: "running" };
 };
 function announce(message, error = false) { const node = $("notice"); node.textContent = message; node.className = `notice visible${error ? " error" : ""}`; clearTimeout(node.timer); node.timer = setTimeout(() => node.className = "notice", 3200); }
-function sessionMarkup(session) { const status = statusMeta(session.status); return `<div class="session-item"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title">${escape(plainPreview(session.title))}</span><span class="session-meta">${escape(plainPreview(session.preview) || status.label)}</span></span></button><button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="隐藏会话">×</button></div>`; }
-function renderSessions(sessions) {
-  const signature = JSON.stringify([state.selectedId, sessions.map((session) => [session.id, session.title, session.preview, session.status, session.updatedAt])]);
+function sessionMarkup(session) {
+  const status = statusMeta(session.status);
+  const child = session.parentId !== undefined;
+  const metaText = plainPreview(session.preview) || status.label;
+  // The relation is shown, not implied: a task of the chat says so, and the chat
+  // says how many tasks it owns. Deleting the chat takes them with it.
+  // 关系要明示：属于对话的任务会标出来，对话则说明自己有几个任务。删除对话会一并带走它们。
+  const relation = child ? "子任务 · " : session.childCount ? `${session.childCount} 个子任务 · ` : "";
+  return `<div class="session-item${child ? " is-child" : ""}${session.kind === "conversation" ? " is-conversation" : ""}"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title">${escape(plainPreview(session.title))}</span><span class="session-meta">${escape(relation + metaText)}</span></span></button><button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="${child ? "隐藏这条子任务" : session.kind === "conversation" ? "隐藏对话及其子任务" : "隐藏会话"}">×</button></div>`;
+}
+function renderSessions(rawSessions) {
+  // A derived task sits under the conversation that spawned it, so one request
+  // never reads as two chats. 派生任务排在其所属对话之下，使一次请求不会读成两个对话。
+  const ids = new Set(rawSessions.map((session) => session.id));
+  const childrenOf = new Map();
+  for (const session of rawSessions) {
+    if (session.parentId === undefined || !ids.has(session.parentId)) continue;
+    const list = childrenOf.get(session.parentId) || [];
+    list.push(session);
+    childrenOf.set(session.parentId, list);
+  }
+  const sessions = [];
+  for (const session of rawSessions) {
+    if (session.parentId !== undefined && ids.has(session.parentId)) continue;
+    sessions.push(session);
+    for (const child of childrenOf.get(session.id) || []) sessions.push(child);
+  }
+  const signature = JSON.stringify([state.selectedId, sessions.map((session) => [session.id, session.title, session.preview, session.status, session.updatedAt, session.parentId, session.childCount]), state.dashboard?.deletedConversations]);
   if (state.signatures.sessions === signature) return;
   state.signatures.sessions = signature;
   $("session-count").textContent = String(sessions.length);
@@ -109,7 +137,9 @@ function renderSessions(sessions) {
   const todayKey = new Date().toDateString();
   const today = sessions.filter((session) => new Date(session.updatedAt).toDateString() === todayKey);
   const earlier = sessions.filter((session) => new Date(session.updatedAt).toDateString() !== todayKey);
-  $("session-list").innerHTML = `${today.length ? `<div class="session-group">${t("today")}</div>${today.map(sessionMarkup).join("")}` : ""}${earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map(sessionMarkup).join("")}` : ""}`;
+  const hidden = (state.dashboard?.deletedConversations || []).map((entry) => `<div class="session-item is-hidden-conversation"><span class="session-copy"><span class="session-title">${escape(entry.title)}${entry.childCount ? ` · ${entry.childCount} 个子任务` : ""}</span><span class="session-meta">已隐藏</span></span><button class="session-restore" type="button" data-restore-conversation="${escape(entry.id)}">恢复</button></div>`).join("");
+  const hiddenBlock = hidden ? `<div class="session-group">已隐藏</div>${hidden}` : "";
+  $("session-list").innerHTML = `${today.length ? `<div class="session-group">${t("today")}</div>${today.map(sessionMarkup).join("")}` : ""}${earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map(sessionMarkup).join("")}` : ""}${hiddenBlock}`;
 }
 function renderSchedules(schedules, occurrences = [], reportDeliveries = [], reportError = false) {
   state.schedules = schedules;
@@ -205,6 +235,11 @@ function renderAgentPage() {
       : unrestricted
         ? ui.badge(access, "warning")
         : ui.badge(access, "success", { dot: true });
+    const effortLevels = Array.isArray(provider.efforts) ? provider.efforts : [];
+    const effortSelect = effortLevels.length
+      ? `<select class="agent-effort-select" data-provider-effort="${escape(provider.id)}" aria-label="${escape(t("provider-effort"))} · ${escape(provider.title)}"><option value="">${escape(t("effort-default"))}</option>${effortLevels.map((level) => `<option value="${escape(level)}"${provider.effort === level ? " selected" : ""}>${escape(level)}</option>`).join("")}</select>`
+      : "";
+
     const action = provider.installed
       ? provider.executionBlocked
         ? ui.button({
@@ -247,7 +282,7 @@ function renderAgentPage() {
       title: provider.title,
       description: `${t("provider-purpose")} · ${provider.command}`,
       meta: `<span class="c-cluster">${meta}</span>${provider.resolvedPath ? `<code class="agent-provider-path" title="${escape(provider.resolvedPath)}">${escape(provider.resolvedPath)}</code>` : ""}`,
-      actions: action,
+      actions: `${effortSelect}${action}`,
       tone: provider.installed ? "default" : "warning",
     });
   }).join("");
@@ -373,7 +408,227 @@ function renderSituation(situation, config) {
     workspace.title = workspacePath;
   }
   renderModelOptions();
+  renderMainAgentEffort();
   renderAgentPage();
+}
+
+/** Render the owner-facing phone binding state; secrets are deliberately never rendered. 渲染面向所有者的手机绑定状态；这里刻意不渲染任何秘密值。 */
+function renderWhatsApp(status) {
+  if (!status) return;
+  state.whatsapp = status;
+  const configured = status.configured === true;
+  const bridgeRunning = status.bridge?.running === true;
+  const tunnelRunning = status.tunnel?.running === true;
+  const managedTunnel = status.tunnel?.managed === true;
+  const tunnelUrl = status.tunnel?.webhookUrl || "";
+  const verified = Boolean(status.bridge?.webhookVerifiedAt);
+  const phone = status.phoneNumberId ? `Phone Number ID ${status.phoneNumberId}` : "还没有保存 Phone Number ID";
+  if ($("mobile-state")) $("mobile-state").textContent = status.ready ? "已连接" : configured ? (bridgeRunning ? "待验证" : "已停止") : "未绑定";
+  if ($("whatsapp-credential-state")) $("whatsapp-credential-state").textContent = configured ? "已保存" : "未配置";
+  if ($("whatsapp-tunnel-state")) $("whatsapp-tunnel-state").textContent = managedTunnel ? "服务器入口" : tunnelRunning ? "运行中" : "未启动";
+  if ($("whatsapp-ready-state")) $("whatsapp-ready-state").textContent = status.ready ? "已接通" : "等待配置";
+  const allowed = Array.isArray(status.allowedNumbers) ? status.allowedNumbers : [];
+  if (!state.whatsappDirty && $("whatsapp-allowed-numbers") && document.activeElement !== $("whatsapp-allowed-numbers")) {
+    $("whatsapp-allowed-numbers").value = allowed.join(", ");
+  }
+  if (!state.whatsappDirty && $("whatsapp-phone-number-id") && document.activeElement !== $("whatsapp-phone-number-id")) {
+    $("whatsapp-phone-number-id").value = status.phoneNumberId || "";
+  }
+  if (!state.whatsappDirty && $("whatsapp-verify-token") && document.activeElement !== $("whatsapp-verify-token")) {
+    $("whatsapp-verify-token").value = status.verifyToken || "";
+  }
+  if ($("whatsapp-webhook-url")) $("whatsapp-webhook-url").textContent = tunnelUrl || "还没有公网地址";
+  const install = $("whatsapp-install-cloudflared");
+  if (install) install.hidden = managedTunnel || status.tunnel?.cloudflaredInstalled === true;
+  if ($("whatsapp-start-tunnel")) $("whatsapp-start-tunnel").hidden = managedTunnel;
+  if ($("whatsapp-stop-tunnel")) $("whatsapp-stop-tunnel").hidden = managedTunnel;
+  if ($("whatsapp-start-tunnel")) $("whatsapp-start-tunnel").disabled = !configured || status.tunnel?.cloudflaredInstalled !== true || tunnelRunning;
+  if ($("whatsapp-stop-tunnel")) $("whatsapp-stop-tunnel").disabled = !tunnelRunning;
+  if ($("whatsapp-copy-webhook")) $("whatsapp-copy-webhook").disabled = !tunnelUrl;
+  if ($("whatsapp-verify")) $("whatsapp-verify").disabled = !configured;
+  if ($("whatsapp-stop-bridge")) $("whatsapp-stop-bridge").disabled = !bridgeRunning;
+  if ($("whatsapp-tunnel-hint")) {
+    $("whatsapp-tunnel-hint").textContent = status.tunnel?.error
+      || (status.bridge?.stale
+        ? "检测到旧版本手机桥仍在运行；点击“保存并启动手机桥”会安全地替换它。"
+        : managedTunnel ? "服务器已经提供固定 HTTPS 入口；不需要在本机安装隧道工具。" : tunnelRunning ? "复制这个 HTTPS 地址 + /webhook 到 Meta；隧道地址通常会在重启后变化。" : status.tunnel?.cloudflaredInstalled ? "点击启动免费隧道，生成 Meta 可访问的地址。" : "还没有 cloudflared；可以在这里一键安装。");
+  }
+  if ($("whatsapp-verify-result")) $("whatsapp-verify-result").textContent = configured ? phone : "先填写四项凭据和一个手机号。";
+  const overview = $("whatsapp-overview");
+  if (overview) {
+    overview.innerHTML = `<div class="mobile-status-card ${configured ? "is-ready" : ""}"><b>${configured ? "本机已保存绑定" : "还没有绑定手机"}</b><span>${escape(phone)}</span><span>${bridgeRunning ? "手机桥在线" : "手机桥未启动"} · ${tunnelRunning ? "公网入口在线" : "公网入口未启动"}</span>${status.bridge?.error ? `<span class="mobile-status-error">${escape(status.bridge.error)}</span>` : ""}</div>`;
+  }
+  const checklist = $("whatsapp-checklist");
+  if (checklist) {
+    const rows = [
+      [configured, "填写 Cloud API 凭据和白名单号码"],
+      [bridgeRunning, "手机桥在本机运行"],
+      [tunnelRunning, "HTTPS Webhook 地址已生成"],
+      [verified, "Meta 已成功验证 Webhook"],
+      [Boolean(status.bridge?.lastMessageAt), status.bridge?.lastMessageAt ? `收到手机消息（${time(status.bridge.lastMessageAt)}）` : "从手机发一条 WhatsApp 做最终测试"],
+    ];
+    checklist.innerHTML = rows.map(([done, text]) => `<li class="${done ? "is-done" : ""}"><span>${done ? "✓" : "○"}</span>${escape(String(text))}</li>`).join("");
+  }
+}
+
+async function refreshWhatsApp() {
+  if (state.whatsappLoading) return;
+  state.whatsappLoading = true;
+  try {
+    const result = await api("/api/mobile/whatsapp");
+    renderWhatsApp(result.status);
+  } catch (error) {
+    announce(error.message, true);
+  } finally {
+    state.whatsappLoading = false;
+  }
+}
+
+async function saveWhatsAppBinding() {
+  const button = $("whatsapp-save");
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/mobile/whatsapp/binding", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        allowedNumbers: $("whatsapp-allowed-numbers").value,
+        phoneNumberId: $("whatsapp-phone-number-id").value,
+        accessToken: $("whatsapp-access-token").value,
+        appSecret: $("whatsapp-app-secret").value,
+        verifyToken: $("whatsapp-verify-token").value,
+      }),
+    });
+    $("whatsapp-access-token").value = "";
+    $("whatsapp-app-secret").value = "";
+    state.whatsappDirty = false;
+    renderWhatsApp(result.status);
+    announce("手机绑定已保存，手机桥已启动。");
+  } catch (error) {
+    announce(error.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function verifyWhatsAppBinding() {
+  const button = $("whatsapp-verify");
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/mobile/whatsapp/verify", { method: "POST" });
+    renderWhatsApp(result.status);
+    const name = result.profile?.verifiedName || "Meta 号码";
+    const phone = result.profile?.displayPhoneNumber || "";
+    $("whatsapp-verify-result").textContent = `${name}${phone ? ` · ${phone}` : ""} 已验证`;
+    announce("Meta 凭据验证通过。");
+  } catch (error) {
+    if ($("whatsapp-verify-result")) $("whatsapp-verify-result").textContent = error.message;
+    announce(error.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function startWhatsAppTunnel() {
+  const button = $("whatsapp-start-tunnel");
+  if (button) { button.disabled = true; button.textContent = "正在启动…"; }
+  try {
+    const result = await api("/api/mobile/whatsapp/tunnel/start", { method: "POST" });
+    renderWhatsApp(result.status);
+    announce("公网 Webhook 地址已生成。");
+  } catch (error) {
+    announce(error.message, true);
+    await refreshWhatsApp();
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "启动免费隧道"; }
+  }
+}
+
+async function installCloudflared() {
+  if (!(await confirmDialog("这会用 Homebrew 安装 cloudflared。安装不会触碰 WhatsApp 凭据。继续吗？", "安装"))) return;
+  const button = $("whatsapp-install-cloudflared");
+  if (button) { button.disabled = true; button.textContent = "正在安装…"; }
+  try {
+    const result = await api("/api/mobile/whatsapp/tunnel/install", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ acknowledgeInstall: true }),
+    });
+    renderWhatsApp(result.status);
+    announce(result.installed ? "cloudflared 已安装。" : "安装命令结束，但仍未找到 cloudflared；请查看安装输出。");
+  } catch (error) {
+    announce(error.message, true);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "安装 cloudflared"; }
+  }
+}
+
+async function stopWhatsAppTunnel() {
+  try {
+    const result = await api("/api/mobile/whatsapp/tunnel/stop", { method: "POST" });
+    renderWhatsApp(result.status);
+    announce("公网隧道已停止。");
+  } catch (error) {
+    announce(error.message, true);
+  }
+}
+
+async function stopWhatsAppBridge() {
+  const button = $("whatsapp-stop-bridge");
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/mobile/whatsapp/bridge/stop", { method: "POST" });
+    renderWhatsApp(result.status);
+    announce("手机桥已停止；保存的凭据仍然保留。");
+  } catch (error) {
+    announce(error.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function generateWhatsAppVerifyToken() {
+  const bytes = new Uint8Array(18);
+  crypto.getRandomValues(bytes);
+  const token = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  const input = $("whatsapp-verify-token");
+  if (input) {
+    input.value = token;
+    state.whatsappDirty = true;
+    input.focus();
+    input.select();
+  }
+}
+
+async function copyText(value, successMessage) {
+  if (!value) {
+    announce("还没有可复制的内容。", true);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+    announce(successMessage);
+  } catch {
+    announce("复制失败，请手动选中文本复制。", true);
+  }
+}
+
+function openMobileBinding() {
+  closeSchedules();
+  setSidebarOpen(false);
+  state.settingsSection = "mobile";
+  notifyDesktopNavigation("settings");
+  openSettings();
+  selectSettingsSection("mobile", true);
+  void refreshWhatsApp();
+}
+
+function openMetaDeveloperConsole() {
+  if (window.CloneNative?.openURL) {
+    window.CloneNative.openURL("https://developers.facebook.com/apps/");
+    return;
+  }
+  announce("当前窗口无法打开外部链接，请手动访问 developers.facebook.com/apps。", true);
 }
 
 function renderModelOptions() {
@@ -488,6 +743,24 @@ async function setConnectorEnabled(id, enabled) { const next = (state.connectors
 
 async function removeConnector(id) { await saveConnectors((state.connectors || []).filter((connector) => connector.id !== id), "观察来源已移除。"); }
 
+function renderMainAgentEffort() {
+  const select = $("config-main-agent-effort");
+  if (!select) return;
+  const current = state.config?.config?.mainAgentEffort || "";
+  const model = String(state.config?.config?.mainAgentModel || "").replace(/^magpie\//, "");
+  // The gateway knows which levels this exact model offers; without it, fall back
+  // to the levels the CLIs understand so the choice is never invented.
+  // 网关知道这个模型具体支持哪些档位；拿不到时退回 CLI 通用档位，绝不凭空编造。
+  const fromGateway = (state.gateway?.models || []).find((entry) => entry.id === model)?.reasoningLevels;
+  const levels = Array.isArray(fromGateway) && fromGateway.length > 0 ? fromGateway : EFFORT_LEVELS;
+  const signature = JSON.stringify([levels, current]);
+  if (select.dataset.signature === signature) return;
+  select.dataset.signature = signature;
+  select.innerHTML = `<option value="">${escape(t("effort-default"))}</option>${levels.map((level) => `<option value="${escape(level)}"${current === level ? " selected" : ""}>${escape(level)}</option>`).join("")}`;
+}
+
+async function saveMainAgentEffort() { const select = $("config-main-agent-effort"); if (!select) return; try { await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ mainAgentEffort: select.value }) }); await refresh({ preserveScroll: true }); announce(t("effort-saved")); } catch (error) { announce(error.message, true); } }
+
 async function saveMainAgentModel() { const select = $("config-main-agent-model"); if (!select) return; try { await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ mainAgentModel: select.value }) }); await refresh({ preserveScroll: true }); announce(t("model-saved")); } catch (error) { announce(error.message, true); } }
 
 async function saveLocale() {
@@ -575,6 +848,7 @@ async function decideOpportunity(id, action) {
   } catch (error) { announce(error.message, true); }
 }
 
+const EFFORT_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const MEMORY_TYPES = [["preference", "偏好"], ["fact", "事实"], ["decision", "决定"], ["procedure", "流程"], ["commitment", "承诺"]];
 const MEMORY_SENSITIVITIES = [["private", "私有"], ["public", "公开"], ["secret", "机密"]];
 function options(pairs, selected) { return pairs.map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join(""); }
@@ -790,7 +1064,7 @@ function restoreDisclosureScrolls(id) {
 }
 function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", session === null); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
-async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (state.streaming) return; const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.composingNew && (!state.selectedId || !sessions.some((session) => session.id === state.selectedId))) state.selectedId = sessions.find((session) => session.id === MAIN_CONVERSATION_ID)?.id ?? sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
+async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (state.streaming) return; const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.composingNew && (!state.selectedId || !sessions.some((session) => session.id === state.selectedId))) state.selectedId = sessions.find((session) => session.id === MAIN_CONVERSATION_ID)?.id ?? sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
 async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
   state.streaming = true;
   // The message and a live reply card appear before the request is sent. A model
@@ -856,7 +1130,7 @@ async function createSession(query) { const button = $("submit"); button.disable
   armStallTimer();
   try {
     const headers = { "content-type": "application/json" };
-    if (window.CLONE_AI_TOKEN) headers.Authorization = `Bearer ${window.CLONE_AI_TOKEN}`;
+    if (window.CLONE_AI_TOKEN) headers["x-clone-ai-token"] = window.CLONE_AI_TOKEN;
     const response = await fetch("/api/main-agent/stream", {
       method: "POST",
       headers,
@@ -964,7 +1238,7 @@ function focusComposerIfVisible() {
   }, 40);
 }
 function closeSchedules() { $("schedule-modal").setAttribute("aria-hidden", "true"); notifyDesktopNavigation("conversation"); focusComposerIfVisible(); }
-function selectSettingsSection(section) { state.settingsSection = section; document.querySelectorAll("[data-settings-section]").forEach((button) => button.setAttribute("aria-current", String(button.dataset.settingsSection === section))); document.querySelectorAll("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== section; }); notifyDesktopNavigation(section === "agents" ? "agents" : section === "memory" ? "memory" : "settings"); if (section === "agents" && !state.gatewayLoading) void refreshGateways(); }
+function selectSettingsSection(section, forceReset = false) { const changed = forceReset || state.settingsSection !== section; state.settingsSection = section; document.querySelectorAll("[data-settings-section]").forEach((button) => button.setAttribute("aria-current", String(button.dataset.settingsSection === section))); document.querySelectorAll("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== section; }); if (changed) { const content = document.querySelector(".settings-content"); if (content) content.scrollTop = 0; } notifyDesktopNavigation(section === "agents" ? "agents" : section === "memory" ? "memory" : "settings"); if (section === "agents" && !state.gatewayLoading) void refreshGateways(); }
 function openSettings() { selectSettingsSection(state.settingsSection); $("settings-modal").setAttribute("aria-hidden", "false"); }
 function closeSettings() { $("settings-modal").setAttribute("aria-hidden", "true"); notifyDesktopNavigation("conversation"); focusComposerIfVisible(); }
 async function createSchedule(query) { const button = $("schedule-create"); const kind = $("schedule-kind").value; const body = { query, kind, time: $("schedule-time").value }; if (kind === "weekly") body.weekdays = [...document.querySelectorAll('input[name="schedule-weekday"]:checked')].map((input) => Number(input.value)); if (kind === "monthly" || kind === "yearly") body.dayOfMonth = Number($("schedule-day").value); if (kind === "yearly") body.month = Number($("schedule-month").value); if (kind === "interval") body.intervalMinutes = Math.max(1, Math.floor(Number($("schedule-interval-value").value) || 0)) * Number($("schedule-interval-unit").value); button.disabled = true; try { await api("/api/schedules", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); $("schedule-query").value = ""; await refresh(); announce("定时任务已保存到本地运行时。"); } catch (error) { announce(error.message, true); } finally { button.disabled = false; } }
@@ -975,29 +1249,65 @@ async function updateAgent(id, update, message) { try { await api(`/api/settings
 async function setAgentEnabled(id, enabled) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { enabled }, agent ? `${agent.title}${enabled ? "已启用" : "已关闭"}。` : "Agent 设置已更新。"); }
 async function setAgentProvider(id, providerId) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { providerId }, agent ? `${agent.title} 已绑定到 ${providerLabel(providerId)}。` : "Agent Provider 已更新。"); }
 async function installProvider(id) { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector(`[data-install-provider="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { await api(`/api/agents/${encodeURIComponent(id)}/install`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); await refresh(); announce(`${providerLabel(id)} 已安装并完成检测。`); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
+/** Pin the reasoning effort of one worker CLI; the gateway reports which levels its model offers. 固定某个 worker CLI 的推理强度；网关会报告其模型支持的档位。 */
+async function setProviderEffort(id, effort) {
+  try {
+    const current = await api("/api/settings/providers");
+    const provider = current.providers.find((item) => item.id === id);
+    if (!provider) throw new Error("Provider not found.");
+    const next = { ...provider };
+    if (effort) next.effort = effort; else delete next.effort;
+    await api("/api/settings/providers", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) });
+    await refresh({ preserveScroll: true });
+    announce(t("effort-saved"));
+  } catch (error) { announce(error.message, true); }
+}
+
 async function setProviderHostAccess(id, allow) { if (allow && !(await confirmDialog(t("worker-allow-warning"), t("worker-allow")))) return; try { const current = await api("/api/settings/providers"); const provider = current.providers.find((item) => item.id === id); if (!provider) throw new Error("Provider not found."); const next = { ...provider }; if (allow) { next.hostAccess = "unrestricted"; next.acknowledgeUnrestrictedHostAccess = true; } else delete next.hostAccess; await api("/api/settings/providers", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) }); await refresh(); announce(t("worker-access-saved")); } catch (error) { announce(error.message, true); } }
 async function installMissingProviders() { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector("[data-install-missing]"); if (button) { button.disabled = true; button.querySelector("span").textContent = t("installing"); } try { const result = await api("/api/agents/install-missing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); state.signatures.agentPage = ""; await refresh(); announce(result.installed.length ? `已自动安装 ${result.installed.length} 个 Provider。` : "没有可自动安装的缺失 Provider。"); } catch (error) { announce(error.message, true); await refresh(); } }
 async function searchMemories(query) { try { const result = await api(`/api/memory/governed/recall?q=${encodeURIComponent(query)}`); renderMemorySearch(result.matches || []); } catch (error) { announce(error.message, true); } }
 function confirmDialog(message, okLabel) { return new Promise((resolve) => { const modal = $("confirm-modal"); $("confirm-message").textContent = message; const ok = $("confirm-ok"); ok.textContent = okLabel || "确认"; modal.setAttribute("aria-hidden", "false"); const done = (result) => { modal.setAttribute("aria-hidden", "true"); ok.onclick = $("confirm-cancel").onclick = modal.onclick = null; resolve(result); }; ok.onclick = () => done(true); $("confirm-cancel").onclick = () => done(false); modal.onclick = (event) => { if (event.target === modal) done(false); }; }); }
-async function deleteSession(id) { if (!(await confirmDialog("从会话列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。", "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
-$("session-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
+async function restoreConversation(id) {
+  try {
+    await api(`/api/sessions/${encodeURIComponent(id)}/restore`, { method: "POST" });
+    await refresh({ preserveScroll: false });
+    announce("对话及其子任务已恢复。");
+  } catch (error) { announce(error.message, true); }
+}
+
+async function deleteSession(id) { const session = (state.dashboard?.sessions || []).find((item) => item.id === id); const message = id === "main-agent-conversation" ? `隐藏这个对话？它的 ${session?.childCount || 0} 个子任务会一起隐藏。审计日志、记忆和备份不受影响，随时可以恢复。` : session?.parentId ? "隐藏这条子任务？审计记录会保留。父对话不受影响。" : "从会话列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。"; if (!(await confirmDialog(message, "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
+$("session-list").addEventListener("click", (event) => { const restore = event.target.closest("[data-restore-conversation]"); if (restore) { void restoreConversation(restore.dataset.restoreConversation); return; } const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
 $("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
 $("config-workspace-choose").addEventListener("click", () => void chooseWorkspace());
 $("config-workspace-reveal").addEventListener("click", revealWorkspace);
 $("config-main-agent-model-save").addEventListener("click", () => void saveMainAgentModel());
+$("config-main-agent-effort-save").addEventListener("click", () => void saveMainAgentEffort());
+document.addEventListener("change", (event) => { const select = event.target instanceof Element && event.target.closest("[data-provider-effort]"); if (select && select.value !== undefined) void setProviderEffort(select.dataset.providerEffort, select.value); });
 $("config-locale")?.addEventListener("change", () => void saveLocale());
 $("connector-add").addEventListener("click", () => void addConnector());
 $("connector-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-connector-remove]"); if (remove) void removeConnector(remove.dataset.connectorRemove); });
 $("connector-list").addEventListener("change", (event) => { const toggle = event.target.closest("[data-connector-toggle]"); if (toggle) void setConnectorEnabled(toggle.dataset.connectorToggle, toggle.checked); });
 $("schedule-open").addEventListener("click", openSchedules);
+$("mobile-open").addEventListener("click", openMobileBinding);
 $("schedule-close").addEventListener("click", closeSchedules);
 function setSidebarOpen(open) { document.body.classList.toggle("sidebar-open", open); }
 $("menu-open").addEventListener("click", () => setSidebarOpen(true));
 $("sidebar-backdrop").addEventListener("click", () => setSidebarOpen(false));
 $("settings-close").addEventListener("click", closeSettings);
 $("settings-modal").addEventListener("click", (event) => { const button = event.target.closest("[data-settings-section]"); if (button) selectSettingsSection(button.dataset.settingsSection); });
+$("whatsapp-binding-form").addEventListener("submit", (event) => { event.preventDefault(); void saveWhatsAppBinding(); });
+$("whatsapp-binding-form").addEventListener("input", () => { state.whatsappDirty = true; });
+$("whatsapp-verify").addEventListener("click", () => void verifyWhatsAppBinding());
+$("whatsapp-stop-bridge").addEventListener("click", () => void stopWhatsAppBridge());
+$("whatsapp-generate-token").addEventListener("click", generateWhatsAppVerifyToken);
+$("whatsapp-copy-token").addEventListener("click", () => void copyText($("whatsapp-verify-token").value, "Verify Token 已复制。"));
+$("whatsapp-start-tunnel").addEventListener("click", () => void startWhatsAppTunnel());
+$("whatsapp-stop-tunnel").addEventListener("click", () => void stopWhatsAppTunnel());
+$("whatsapp-install-cloudflared").addEventListener("click", () => void installCloudflared());
+$("whatsapp-copy-webhook").addEventListener("click", () => void copyText(state.whatsapp?.tunnel?.webhookUrl || "", "Webhook 地址已复制。"));
+$("whatsapp-open-meta").addEventListener("click", openMetaDeveloperConsole);
 $("schedule-form").addEventListener("submit", (event) => { event.preventDefault(); void createSchedule($("schedule-query").value.trim()); });
 $("schedule-kind").addEventListener("change", renderScheduleOptions);
 $("schedule-list").addEventListener("click", (event) => { const report = event.target.closest("[data-report-day]"); if (report) { void resolveReportDelivery(report.dataset.reportDay, report.dataset.resolution); return; } const occurrence = event.target.closest("[data-schedule-occurrence]"); if (occurrence) { void resolveScheduleOccurrence(occurrence.dataset.scheduleOccurrence, occurrence.dataset.resolution); return; } const button = event.target.closest("[data-schedule-toggle]"); if (button) void setScheduleEnabled(button.dataset.scheduleToggle, button.dataset.scheduleEnabled === "true"); });
@@ -1042,6 +1352,7 @@ window.closeSchedules = closeSchedules;
 window.closeSettings = closeSettings;
 window.openSchedules = openSchedules;
 window.openSettings = openSettings;
+window.openMobileBinding = openMobileBinding;
 window.selectSettingsSection = selectSettingsSection;
 window.setSidebarOpen = setSidebarOpen;
 window.cloneMarkdownForPreview = richText;

@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
+import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
 import { createKernelRuntimeSession } from "../main-agent/tools/kernel-tools.ts";
 import { MainAgentBusyError, withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { BadCaseLog } from "../reporting/bad-case-log.ts";
@@ -59,6 +60,7 @@ Usage:
   clone-ai authority revoke <policyId>
   clone-ai audit [<runId>|export [--out file]]  Why runs failed, per run; export JSONL for evals
   clone-ai model <worker> [<model>|--clear]  Show, pin or clear the model a worker CLI uses
+  clone-ai effort <worker> [<level>|--clear]  Show, pin or clear the reasoning effort
   clone-ai bench [--provider p]  Run the reliability benchmark
   clone-ai doctor                Check the local setup
   clone-ai --help | --version
@@ -109,6 +111,7 @@ async function main(): Promise<number> {
     case "authority": return authorityCommand(paths.dataDirectory, argv.slice(1));
     case "audit": return auditCommand(paths.dataDirectory, argv.slice(1));
     case "model": return modelCommand(paths.dataDirectory, argv.slice(1));
+    case "effort": return effortCommand(paths.dataDirectory, argv.slice(1));
     case "bench": return runBench(argv.slice(1));
     case "doctor": return doctor(paths.dataDirectory);
     default: return converse(paths.dataDirectory, argv.join(" ").trim());
@@ -124,7 +127,7 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
   try {
     await withMainAgentLock(dataDirectory, async () => {
       const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-      const { session } = await createMainAgentSession({
+      const { session, prompt } = await createMainAgentSession({
         dataDirectory,
         query,
         // A fresh conversation is explicit; the default continues the last one.
@@ -138,6 +141,10 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
           await writeCurrentSessionPointer(join(dataDirectory, "pi-sessions", "main-agent"), file);
         }
       }
+      // Record the inputs before the prompt runs: a failed turn is only
+      // debuggable if the prompt it read is still on disk.
+      // 在 prompt 运行前记录输入：失败的一轮只有在它读过的提示词仍在磁盘上时才可调试。
+      await recordPromptSnapshot(dataDirectory, prompt);
       session.subscribe((event) => {
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
           process.stdout.write(event.assistantMessageEvent.delta);
@@ -470,6 +477,29 @@ async function authorityCommand(dataDirectory: string, args: string[]): Promise<
 
 /** Pin the model a worker CLI uses, so it does not inherit a default the gateway cannot serve. 固定 worker CLI 使用的模型，避免它沿用网关无法正确服务的默认模型。 */
 /** Audit is a projection of the journal; nothing here writes. 审计是 Journal 的投影，这里不写任何东西。 */
+/** Pin the reasoning effort a worker CLI uses; the gateway says which levels its model supports. 固定 worker CLI 的推理强度；网关会说明其模型支持哪些档位。 */
+async function effortCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const { listEffectiveProviderConfigs, readUserProviderConfigs, upsertUserProviderConfig } = await import("../config/provider-config-store.ts");
+  const [providerId, value] = args;
+  const effective = await listEffectiveProviderConfigs(dataDirectory);
+  if (providerId === undefined) {
+    for (const provider of effective) console.log(`${provider.id}: ${provider.effort ?? "(CLI default)"}${provider.efforts ? ` · levels ${provider.efforts.join(", ")}` : ""}`);
+    return 0;
+  }
+  const provider = effective.find((candidate) => candidate.id === providerId);
+  if (provider === undefined) { console.error(`Unknown worker "${providerId}".`); return 1; }
+  if (value === undefined) { console.log(`${provider.id}: ${provider.effort ?? "(CLI default)"}${provider.efforts ? ` · levels ${provider.efforts.join(", ")}` : ""}`); return 0; }
+  if (value !== "--clear" && provider.efforts !== undefined && !provider.efforts.includes(value as never)) {
+    console.error(`${providerId} accepts: ${provider.efforts.join(", ")}.`);
+    return 1;
+  }
+  const existing = (await readUserProviderConfigs(dataDirectory)).find((candidate) => candidate.id === providerId) ?? { id: provider.id, command: provider.command };
+  const { effort: _drop, ...rest } = existing;
+  await upsertUserProviderConfig(dataDirectory, value === "--clear" ? rest : { ...rest, effort: value as never });
+  console.log(value === "--clear" ? `${providerId}: effort cleared.` : `${providerId}: effort pinned to ${value}.`);
+  return 0;
+}
+
 async function auditCommand(dataDirectory: string, args: string[]): Promise<number> {
   const { loadAudits, summarizeAudits, toJsonl } = await import("../audit/audit-service.ts");
   const { writeFile } = await import("node:fs/promises");

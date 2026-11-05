@@ -6,6 +6,65 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### An offline regression gate
+
+`npm run gate` now runs on every CI commit and costs nothing. It re-runs evidence verification and authority policy over held-out fixtures under `benchmark/gate/`, and calibrates the audit projection against owner labels (agreement, falsePass, falseFail) using the fixture dataset or a real `clone-ai audit export` file with `--audit`. Per-case behavior is recorded in `benchmark/gate/baseline.json`; any verdict change fails until the baseline is regenerated in the same change, so a shift is reviewed rather than discovered later. The audit dataset is hashed so held-out records cannot change silently.
+
+`npm run gate` 现在随每次 CI 提交运行且零成本。它针对 `benchmark/gate/` 下的 held-out 夹具重新运行证据验证与权限策略，并用所有者标注校准审计投影（一致率、假通过、假失败）——数据集可以用内置夹具，也可以用 `--audit` 传入真实的 `clone-ai audit export` 文件。逐用例行为记录在 `benchmark/gate/baseline.json`；任何判定变化都会失败，直到在同一次变更中重新生成基线，因此变化会被审查而不是日后才发现。审计数据集带哈希，held-out 记录无法悄悄变化。
+
+### Prompt provenance for every Main Agent turn
+
+Every Main Agent turn now records what it was told before it answered: the charter version and hash, the compiled situation briefing hash, the exact tool table hash, and the model id plus reasoning effort. Identical material is stored once in `<clone home>/prompt-snapshots/<hash>.json`; each turn appends a `main_agent.prompt_snapshot` journal event that points at it and, for desktop turns, carries the turn id. `GET /api/main-agent/prompt-snapshots` lists recent snapshots. Recording is telemetry: a write failure is logged and never aborts the turn.
+
+每次主 Agent 回合现在会记录它在回答前收到的输入：charter 版本与哈希、编译后情境简报的哈希、完整工具表的哈希，以及模型 id 与推理强度。相同材料只保存一份到 `<clone home>/prompt-snapshots/<hash>.json`；每轮追加一条 `main_agent.prompt_snapshot` Journal 事件指向它，桌面回合还会带上 turn id。`GET /api/main-agent/prompt-snapshots` 可列出最近的快照。记录属于遥测：写入失败只记日志，绝不中断本回合。
+
+### Headless server deployment
+
+Clone AI can now run without a Mac on a small Linux host. `npm run server` starts the same Runtime and UI in explicit server mode with a stable bearer token and a proxy-only secret; the `Dockerfile` and `compose.server.yml` pair it with Caddy, HTTPS, owner authentication, persistent data/workspace volumes, and a public `/webhook` route for WhatsApp. The web UI uses a custom token header so Caddy Basic Auth can remain in the standard `Authorization` header. Server mode refuses direct app-port access that does not come through the trusted proxy. A 1 vCPU / 2 GB host is documented for remote models, scheduling, memory, audit, and WhatsApp only; local LLM execution and child-agent CLI installation are explicitly out of scope for the base image.
+
+### 无界面服务器部署
+
+Clone AI 现在不依赖 Mac，也可以运行在小型 Linux 服务器上。`npm run server` 以显式服务器模式启动同一套 Runtime 和 UI，使用稳定 Bearer Token 和仅由反向代理注入的密钥；`Dockerfile` 与 `compose.server.yml` 组合 Caddy、HTTPS、所有者认证、持久化数据/Workspace 卷以及 WhatsApp 的公开 `/webhook` 路由。Web UI 改用自定义 Token Header，因此 Caddy Basic Auth 可以继续占用标准 `Authorization` 头。服务器模式会拒绝不经过可信代理的 App 端口直连。文档明确 1 核 2G 只用于远程模型、调度、记忆、审计和 WhatsApp；基础镜像不承担本地大模型和子 Agent CLI 安装。
+
+### WhatsApp phone bridge
+
+The owner can now text Clone AI from WhatsApp without SMS or a direct inbound port on the Mac. A separate loopback bridge verifies Meta's raw webhook signature, enforces an E.164 allowlist, stores messages in SQLite before returning `200`, deduplicates Meta retries by message id, and forwards visible replies through the Cloud API. Long replies are split below the 4096-character limit. If the desktop runtime is closed or busy, the message stays queued with backoff and the owner is told it was not executed; the same turn id prevents a completed request from running twice. `npm run mobile:install` creates an optional per-user LaunchAgent with its secrets in a `0600` env file. Apple provides no supported iMessage bot API, so WhatsApp is the implemented phone channel; Meta's current message pricing still applies.
+
+The Mac app now exposes a **Connect phone** entry in the sidebar and a **Phone channel** settings wizard. It writes the Cloud API credentials to a `0600` env file, starts or stops the bridge, verifies Meta credentials, installs `cloudflared` through Homebrew only after confirmation, starts/stops the HTTPS tunnel, copies the Webhook URL and Verify Token, and shows the live binding checklist. Access Token and App Secret are never returned to the UI.
+
+### WhatsApp 手机通道
+
+所有者现在可以从 WhatsApp 给 Clone AI 发文字，不依赖短信，也不需要把 Mac 的端口直接暴露到公网。独立的回环桥会验证 Meta 原始 Webhook 签名、执行 E.164 白名单、先写入 SQLite 再返回 `200`、按 message id 去重，并通过 Cloud API 发送可见回复。长回复会按 4096 字符上限切分。桌面 Runtime 关闭或正忙时，消息会退避排队，并明确提示“尚未执行”；相同回合 id 保证已完成的请求不会再次调用模型。`npm run mobile:install` 可安装当前用户的 LaunchAgent，密钥保存在 `0600` 环境文件中。Apple 没有受支持的 iMessage 机器人 API，因此已实现的是 WhatsApp 通道；Meta 当前的商业消息计费规则仍然适用。
+
+Mac App 现在在侧栏提供 **连接手机** 入口，并在设置中提供 **手机通道** 向导：保存 Cloud API 凭据到 `0600` 文件、启动或停止手机桥、验证 Meta 凭据、在明确确认后通过 Homebrew 安装 `cloudflared`、启动或停止 HTTPS 隧道、复制 Webhook 地址和 Verify Token，并实时显示绑定清单。Access Token 与 App Secret 永远不会返回到 UI。
+
+### Tasks stay inside the conversation that spawned them
+
+A run the Main Agent proposed during a chat is now a **child task of that conversation**, not a second conversation beside it. The sidebar shows the relation (the chat says how many tasks it owns, each task says 子任务 and is indented under its parent), hiding the conversation hides its children in the same step with a confirmation that names the count, and a "已隐藏" row lets the owner restore the conversation together with exactly the tasks that went with it. Deleting a task on its own leaves the conversation alone.
+
+主 Agent 在对话中提案的 Run 现在是该对话的**子任务**，而不是旁边另一个对话。侧栏把这个关系画出来（对话显示自己有几个任务，任务标为"子任务"并缩进在父级之下），隐藏对话会在同一步连带隐藏子任务，确认框会说明数量；「已隐藏」一行可把对话连同当初一起隐藏的任务精确恢复。单独删除某个任务不影响对话。
+
+
+### Effort, readable traces, and a daemon that reports back
+
+A model's reasoning effort can now be chosen per worker and for the Main Agent. The gateway reports the levels each model actually offers (`reasoning_levels`), worker providers declare the levels their CLI accepts, and the settings page offers only those: Claude Code gets `--effort`, Codex `-c model_reasoning_effort=…`, Pi `--thinking`. `clone-ai effort <worker> <level>` pins it from the CLI; `config.json` `mainAgentEffort` (or `CLONE_AI_MAIN_EFFORT`) sets it for the Main Agent. Verified against the real CLIs: Claude Code with `--effort high` and Pi with `--thinking medium` both completed; Codex accepts the config override.
+
+Every run can be read end to end: `GET /api/runs/:id/trace` returns the run's whole journal in order with a plain-language label and detail for each event, and the audit view renders it (完整轨迹, raw payload one level down). Events that used to read "Recorded in the local journal." now say what happened (status, plan steps, which provider ran, evidence, verification, memory used).
+
+A guardian now reports background work back into the conversation: when a run settles, the daemon writes a one-line update that the chat shows as a message, and the Main Agent's briefing lists recently finished work with evidence counts — so the next turn starts from the result, not from a status colour.
+
+Sidebar previews are plain text and strictly one line with an ellipsis; markdown from the model no longer leaks into the list. The empty conversation dropped its three starter cards.
+
+### 强度、可读的轨迹，以及会回报的后台
+
+每个 worker 和 Main Agent 现在都可以选择推理强度。网关会报告每个模型实际支持的档位，worker provider 声明各自 CLI 接受的档位，设置页只列出这些：Claude Code 用 `--effort`，Codex 用 `-c model_reasoning_effort=…`，Pi 用 `--thinking`。CLI 用 `clone-ai effort <worker> <level>` 固定；`config.json` 的 `mainAgentEffort`（或 `CLONE_AI_MAIN_EFFORT`）设置主 Agent。已对真实 CLI 验证：Claude Code `--effort high` 与 Pi `--thinking medium` 均完成；Codex 接受该配置覆盖。
+
+每个 Run 都可端到端阅读：`GET /api/runs/:id/trace` 按顺序返回该 Run 的全部 Journal 事件，每条都有可读的标题与说明，审计页渲染成「完整轨迹」（原始数据在下一层）。过去显示 "Recorded in the local journal." 的事件，现在会说明发生了什么（状态、计划步骤、哪个 Provider 执行、证据、验证、用到的记忆）。
+
+新增守护：后台 Run 落定时，守护进程写一条更新，对话把它显示为消息；Main Agent 的简报会列出最近完成的工作及证据数——下一轮从结果开始，而不是从一个状态颜色开始。
+
+侧栏预览改为纯文本、严格单行省略号；模型输出的 Markdown 不再漏进列表。空对话去掉了三张起始卡片。
+
 ### Memory, classified and layered
 
 The memory page now groups by kind — commitments and boundaries, preferences, decisions, procedures, facts — with each group's size and total recalls on its header. Rows stay collapsed inside the group; opening one shows its body, provenance, and the runs that actually recalled it (from `memory.recalled` in the journal, with a link to the run and the query). Reading a memory counts as a use, and the detail endpoint now returns that usage list.

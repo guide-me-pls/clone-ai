@@ -1389,3 +1389,80 @@ body.empty-conversation .composer-wrap { padding-top: 0; padding-bottom: 24px; }
   font-size: 9.5px;
 }
 body.empty-conversation .composer-wrap { padding-bottom: 18px; }
+
+/* Phone binding is a guided setup, not a settings form dump. */
+/* 手机绑定采用分步向导，而不是把所有配置一次堆成表单。 */
+.mobile-entry b { min-width: 38px; color: #617069; }
+.mobile-binding-overview { margin-bottom: 14px; }
+.mobile-status-card {
+  display: grid;
+  gap: 4px;
+  padding: 16px 18px;
+  border: 1px solid #e5e8e2;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fbfcf9, #f5f8f3);
+}
+.mobile-status-card.is-ready { border-color: #cfe3d4; background: linear-gradient(135deg, #f6fbf7, #edf7f0); }
+.mobile-status-card b { color: #25302a; font-size: 14px; }
+.mobile-status-card span { color: #77827c; font-size: 11px; }
+.mobile-status-card .mobile-status-error { color: #a34c3f; }
+.mobile-binding-card { margin-top: 12px; }
+.mobile-binding-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.mobile-binding-heading h4 { margin: 0; }
+.mobile-binding-heading p { max-width: 620px; }
+.mobile-binding-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.mobile-binding-form label { display: grid; gap: 6px; color: #536159; font-size: 10px; font-weight: 650; letter-spacing: .02em; }
+.mobile-binding-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #dfe4dc;
+  border-radius: 8px;
+  background: #fff;
+  color: #273129;
+  font: 12px/1.4 var(--font-body);
+}
+.mobile-binding-form input:focus { border-color: #8bac95; outline: 0; box-shadow: 0 0 0 2px rgba(48, 115, 73, .08); }
+.mobile-binding-wide { grid-column: 1 / -1; }
+.mobile-inline-control { display: flex; gap: 7px; }
+.mobile-inline-control input { flex: 1; }
+.mobile-binding-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mobile-binding-actions button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--subtle); cursor: pointer; }
+.mobile-binding-actions button:hover { border-color: #c9cec7; color: var(--text); }
+.mobile-binding-actions button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.mobile-binding-actions button.primary:hover { border-color: #174b37; background: #174b37; color: #fff; }
+.mobile-binding-actions button:disabled { opacity: .38; cursor: not-allowed; }
+.mobile-binding-actions button:disabled:hover { border-color: var(--line); color: var(--subtle); }
+.mobile-binding-actions button.primary:disabled:hover { border-color: var(--accent); color: #fff; }
+.mobile-binding-hint { color: #859088; font-size: 10px; }
+.mobile-meta-help { margin-top: 14px; padding-top: 12px; border-top: 1px solid #edf0ea; color: #6c786f; font-size: 11px; }
+.mobile-meta-help summary { cursor: pointer; color: #4e5e53; font-weight: 650; }
+.mobile-meta-help p { margin: 8px 0; line-height: 1.65; }
+.link-button { padding: 0; border: 0; background: none; color: #2f7550; cursor: pointer; font: inherit; }
+.link-button:hover { text-decoration: underline; }
+.mobile-webhook-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.mobile-webhook-row code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 9px 10px;
+  border: 1px solid #e2e6de;
+  border-radius: 8px;
+  background: #fbfcfa;
+  color: #45534a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile-checklist { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
+.mobile-checklist li { display: flex; gap: 9px; align-items: center; color: #7a857e; font-size: 11px; }
+.mobile-checklist li > span { display: grid; width: 17px; height: 17px; place-items: center; border: 1px solid #dfe4dd; border-radius: 50%; font-size: 9px; }
+.mobile-checklist li.is-done { color: #315f44; }
+.mobile-checklist li.is-done > span { border-color: #b7d5c1; background: #eaf5ed; color: #2f7a4d; }
+.mobile-binding-note { margin: 14px 0 0; color: #8b958e; font-size: 10px; line-height: 1.65; }
+
+@media (max-width: 760px) {
+  .mobile-binding-form { grid-template-columns: 1fr; }
+  .mobile-binding-wide { grid-column: auto; }
+  .mobile-binding-heading { flex-direction: column; gap: 4px; }
+  .mobile-webhook-row { align-items: stretch; flex-direction: column; }
+}

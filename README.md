@@ -8,6 +8,8 @@
 
 `Status: initial runtime scaffold` · `License: MIT` · `Core: TypeScript + Node.js + Python`
 
+Deployment: [Mac app](apps/desktop/README.md) · [Linux server](docs/usage/server-deployment.md) · [WhatsApp phone channel](docs/usage/mobile-whatsapp.md)
+
 ---
 
 ## Current Safety Boundary

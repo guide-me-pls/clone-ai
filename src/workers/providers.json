@@ -6,6 +6,7 @@
       "command": "claude",
       "args": [
         "{{modelArgs}}",
+        "{{effortArgs}}",
         "-p",
         "{{prompt}}"
       ],
@@ -31,6 +32,17 @@
       "modelArgs": [
         "--model",
         "{{model}}"
+      ],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "effortArgs": [
+        "--effort",
+        "{{effort}}"
       ]
     },
     {
@@ -41,6 +53,7 @@
         "exec",
         "--skip-git-repo-check",
         "{{modelArgs}}",
+        "{{effortArgs}}",
         "{{sandboxArgs}}",
         "{{prompt}}"
       ],
@@ -60,6 +73,16 @@
       "modelArgs": [
         "-m",
         "{{model}}"
+      ],
+      "efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "effortArgs": [
+        "-c",
+        "model_reasoning_effort={{effort}}"
       ]
     },
     {
@@ -68,6 +91,7 @@
       "command": "pi",
       "args": [
         "{{modelArgs}}",
+        "{{effortArgs}}",
         "-p",
         "{{prompt}}"
       ],
@@ -87,6 +111,19 @@
       "modelArgs": [
         "--model",
         "{{model}}"
+      ],
+      "efforts": [
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "effortArgs": [
+        "--thinking",
+        "{{effort}}"
       ]
     },
     {

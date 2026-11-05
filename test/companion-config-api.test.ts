@@ -76,6 +76,70 @@ test("the model options endpoint exposes only credential-blind selectable refere
   assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
 });
 
+test("the mobile binding entry reports setup state without leaking credentials", async (t) => {
+  const { url, token } = await companion(t);
+  const statusResponse = await companionFetch(url, token, "/api/mobile/whatsapp");
+  assert.equal(statusResponse.status, 200);
+  const status = await statusResponse.json() as {
+    status: {
+      configured: boolean;
+      bridge: { port: number };
+      tunnel: { installCommand: string };
+    };
+  };
+  assert.equal(status.status.configured, false);
+  assert.equal(status.status.bridge.port, 4318);
+  assert.match(status.status.tunnel.installCommand, /cloudflared/);
+  assert.doesNotMatch(JSON.stringify(status), /"(?:accessToken|appSecret)"\s*:/);
+
+  const invalid = await companionFetch(url, token, "/api/mobile/whatsapp/binding", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ allowedNumbers: "+8613800000000" }),
+  });
+  assert.equal(invalid.status, 400);
+  assert.match((await invalid.json() as { error: string }).error, /绑定还不完整/);
+});
+
+test("server mode accepts the UI token header and a fixed public webhook", async (t) => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-api-server-home-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "clone-api-server-ws-"));
+  const token = "s".repeat(64);
+  const proxySecret = "p".repeat(64);
+  const server = await startCompanionServer({
+    port: 0,
+    host: "127.0.0.1",
+    dataDirectory,
+    workspacePath,
+    serverMode: true,
+    publicBaseUrl: "https://agent.example.com",
+    token,
+    proxySecret,
+  });
+  t.after(async () => {
+    await server.close();
+    await rm(dataDirectory, { recursive: true, force: true });
+    await rm(workspacePath, { recursive: true, force: true });
+  });
+  const authorized = await fetch(`${server.url}/api/config`, {
+    headers: { "x-clone-ai-token": token, "x-clone-proxy-secret": proxySecret },
+  });
+  assert.equal(authorized.status, 200);
+  const mobile = await fetch(`${server.url}/api/mobile/whatsapp`, {
+    headers: { "x-clone-ai-token": token, "x-clone-proxy-secret": proxySecret },
+  });
+  assert.equal(mobile.status, 200);
+  const body = await mobile.json() as { status: { tunnel: { managed: boolean; webhookUrl?: string } } };
+  assert.equal(body.status.tunnel.managed, true);
+  assert.equal(body.status.tunnel.webhookUrl, "https://agent.example.com/webhook");
+  const unauthorized = await fetch(`${server.url}/api/config`, {
+    headers: { "x-clone-proxy-secret": proxySecret },
+  });
+  assert.equal(unauthorized.status, 401);
+  const direct = await fetch(`${server.url}/api/health`);
+  assert.equal(direct.status, 403);
+});
+
 test("an interrupted Main Agent turn is persisted and survives a restart", async (t) => {
   const { url, token, dataDirectory } = await companion(t);
   const response = await companionFetch(url, token, "/api/main-agent/interruptions", {
@@ -93,6 +157,33 @@ test("an interrupted Main Agent turn is persisted and survives a restart", async
   assert.equal(records[0]?.status, "interrupted");
   assert.equal(records[0]?.text, "整理今天需要推进的事情");
   assert.match(records[0]?.error ?? "", /stopped/);
+});
+
+test("a completed remote turn is returned without invoking the model again", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  await writeFile(join(dataDirectory, "main-agent-turns.jsonl"), [
+    JSON.stringify({
+      id: "whatsapp:wamid.123",
+      text: "整理今天需要推进的事情",
+      status: "completed",
+      startedAt: "2026-11-04T03:00:00.000Z",
+      completedAt: "2026-11-04T03:00:01.000Z",
+      reply: "原回复",
+    }),
+    "",
+  ].join("\n"));
+  const response = await companionFetch(url, token, "/api/main-agent/query", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      turnId: "whatsapp:wamid.123",
+      text: "一个不应执行的重复请求",
+    }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json() as { reply: string; deduplicated: boolean };
+  assert.equal(body.reply, "原回复");
+  assert.equal(body.deduplicated, true);
 });
 
 test("a terminal turn is not overwritten by a later interruption report", async (t) => {
