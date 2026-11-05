@@ -35,10 +35,32 @@ iPhone WhatsApp
 
 The bridge is deliberately separate from the desktop window. It owns its own
 SQLite inbox, verifies every raw webhook body, and only accepts allowlisted
-phone numbers. Closing the desktop window does not stop it when it is run under
-its own LaunchAgent.
+phone numbers. The in-app wizard starts it as a detached local process, so
+closing the desktop window does not stop it. Stop it from the same wizard when
+you want to take the phone channel offline.
 
-## Configure Meta
+## Bind from the app
+
+The shortest path is the in-app wizard:
+
+1. Click **Connect phone** in the left sidebar, or open **Settings → Phone channel**.
+2. Fill in the allowlisted WhatsApp number, Phone Number ID, Access Token, and
+   App Secret. Generate a Verify Token, then click **Save and start bridge**.
+3. If `cloudflared` is missing, click **Install cloudflared**. This uses
+   Homebrew and requires an explicit in-app confirmation.
+4. Click **Start free tunnel**, copy the generated HTTPS Webhook address, and
+   copy the Verify Token.
+5. In Meta's WhatsApp configuration, paste the callback URL ending in
+   `/webhook`, paste the Verify Token, subscribe to `messages`, then send a
+   message from the allowlisted phone.
+
+The checklist in the app shows whether credentials are saved, the bridge is
+running, the tunnel exists, Meta has completed its GET challenge, and a message
+has arrived. Access Token and App Secret are write-only fields in this UI: they
+are stored in `~/.clone/whatsapp.env` with mode `0600` and are never returned by
+the status API.
+
+## Configure Meta manually
 
 1. Create a Meta app with the WhatsApp product and a test or production phone
    number.
@@ -57,7 +79,9 @@ export WHATSAPP_ALLOWED_NUMBERS='+8613800000000'
 Multiple owners must be separated by commas. The allowlist is required; an
 empty allowlist refuses every sender.
 
-For an always-on local bridge, install the per-user LaunchAgent:
+The older command-line LaunchAgent installer remains for recovery and
+non-GUI setups. Choose either the app-managed bridge or the LaunchAgent,
+not both: two processes cannot share one bridge port and inbox.
 
 ```bash
 npm run mobile:install
