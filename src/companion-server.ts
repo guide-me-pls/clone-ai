@@ -5,7 +5,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task } from "./core/contracts.ts";
+import { EFFORT_LEVELS, isEffortLevel, type EffortLevel } from "./workers/effort.ts";
 import { describeFailureForOwner } from "./core/failure-display.ts";
+import { appendWorkUpdate, describeWorkUpdate, readWorkUpdates } from "./main-agent/work-updates.ts";
 import { createJournalStore } from "./core/sqlite-journal.ts";
 import { replay } from "./core/run-state.ts";
 import { approveQueryRun, cancelQueryRun, rejectQueryRun, reviewQueryRun, runQuery } from "./application/run-query.ts";
@@ -19,9 +21,11 @@ import { runMainAgentQuery } from "./application/run-main-query.ts";
 import { MainAgentBusyError } from "./main-agent/prompt-lock.ts";
 import {
   authorizeCompanionRequest,
+  clearCompanionEndpointIfOwned,
   injectCompanionToken,
   issueCompanionToken,
   normalizeCompanionHost,
+  persistCompanionEndpoint,
   persistCompanionToken,
 } from "./companion-auth.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
@@ -61,6 +65,7 @@ import { describeHistory, mainAgentSessionDirectory, readConversation, searchHis
 import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
 import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
 import { listPiModelIds, listPiModels, piModelReference } from "./main-agent/pi-model-catalog.ts";
+import { WhatsAppBindingInputError, WhatsAppSetupService } from "./mobile/whatsapp-setup.ts";
 import {
   listEffectiveProviderConfigs,
   readUserProviderConfigs,
@@ -74,6 +79,14 @@ export interface CompanionServerOptions {
   dataDirectory?: string;
   workspacePath?: string;
   clientPath?: string;
+  /** Explicit server deployment mode; never enabled by the desktop app. 显式服务器部署模式；桌面 App 不会启用。 */
+  serverMode?: boolean;
+  /** Stable public origin used by the server deployment and its documentation. 服务器部署使用的稳定公网来源。 */
+  publicBaseUrl?: string;
+  /** Stable companion token for a server deployment. 服务器部署使用的稳定 Companion 令牌。 */
+  token?: string;
+  /** Secret injected by the trusted reverse proxy; it keeps the app port private. 由可信反向代理注入的密钥，用于确保应用端口不直接暴露。 */
+  proxySecret?: string;
 }
 
 export interface RunningCompanionServer {
@@ -176,6 +189,107 @@ function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
+/**
+ * Runs the Main Agent proposed during a conversation. They are tasks of that
+ * chat; listing them as sibling conversations is what made one request look like
+ * two chats.
+ * 主 Agent 在对话中提案的 Run。它们是该对话的任务；把它们列为同级对话，就使一次请求看起来
+ * 像两个对话。
+ */
+function derivedRunIds(events: readonly JournalEvent[]): Set<string> {
+  const triggerSource = new Map<string, string>();
+  for (const event of events) {
+    if (event.type !== "trigger.received") continue;
+    const trigger = asRecord(event.payload);
+    if (typeof trigger.id !== "string") continue;
+    // The Trigger's own payload carries the source; the event payload wraps it.
+    // Trigger 自己的 payload 携带来源；事件 payload 把它包了一层。
+    triggerSource.set(trigger.id, String(asRecord(trigger.payload).source ?? ""));
+  }
+  const taskTrigger = new Map<string, string>();
+  for (const event of events) {
+    if (event.type !== "task.created" || event.taskId === undefined) continue;
+    const payload = asRecord(event.payload);
+    if (typeof payload.triggerId === "string") taskTrigger.set(event.taskId, payload.triggerId);
+  }
+  const derived = new Set<string>();
+  for (const event of events) {
+    if (event.type !== "run.created" || event.runId === undefined || event.taskId === undefined) continue;
+    const trigger = taskTrigger.get(event.taskId);
+    if (trigger !== undefined && triggerSource.get(trigger) === "main-agent") derived.add(event.runId);
+  }
+  return derived;
+}
+
+/**
+ * Derives the one-line update for a settled run from the journal, then stores it.
+ * Everything here is read-only against the Kernel; the journal stays the truth
+ * and this is a readable projection for the conversation.
+ * 从 Journal 推导落定 Run 的一行更新并保存。这里对 Kernel 全是只读；Journal 仍是真相，
+ * 这只是给对话看的可读投影。
+ */
+async function recordWorkUpdate(
+  dataDirectory: string,
+  journal: JournalStore,
+  runtime: { getRun(runId: string): Run },
+  runId: string,
+): Promise<void> {
+  let run: Run;
+  try {
+    run = runtime.getRun(runId);
+  } catch {
+    return;
+  }
+  const status = run.status;
+  if (status !== "completed" && status !== "failed" && status !== "cancelled" && status !== "waiting_review") return;
+  const events = (await journal.list()).filter((event) => event.runId === runId);
+  const plan = events.find((event) => event.type === "plan.created");
+  const task = events.find((event) => event.type === "task.created");
+  const steps = plan === undefined ? [] : (asRecord(plan.payload).steps as Array<{ title?: string }> | undefined) ?? [];
+  const rawTitle = asRecord(task?.payload).title;
+  const title = (typeof rawTitle === "string" ? rawTitle : steps[0]?.title) ?? "未命名任务";
+  const evidenceCount = events.filter((event) => event.type === "evidence.recorded").length;
+  const failure = events.find((event) => event.type === "execution.failed");
+  const reason = failure === undefined ? undefined : String(asRecord(failure.payload).message ?? "");
+  const summary = status === "completed"
+    ? `完成 ${steps.length || 1} 个步骤`
+    : reason !== undefined && reason.length > 0
+      ? reason.split("\n")[0]!.slice(0, 160)
+      : "";
+  await appendWorkUpdate(dataDirectory, {
+    id: `${runId}:${status}`,
+    runId,
+    title: plainText(title).slice(0, 120),
+    status,
+    summary: plainText(summary),
+    at: run.updatedAt,
+    evidenceCount,
+  });
+}
+
+/**
+ * Markdown stripped down to what a one-line sidebar can show. The preview used
+ * to carry "**bold**" and code ticks straight from the model, which wrapped into
+ * several lines and read as noise.
+ * 把 Markdown 收敛成单行侧栏能显示的样子。此前的预览把模型输出里的 "**加粗**" 和反引号原样
+ * 带出来，撑成好几行，读起来像噪音。
+ */
+export function plainText(value: string): string {
+  return String(value ?? "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s{0,3}[-*+]\s+/gm, "")
+    .replace(/^\s{0,3}\d+[.)]\s+/gm, "")
+    .replace(/(\*\*|__)(.*?)\1/g, "$2")
+    .replace(/(^|\s)[*_](\S[^*_]*?)[*_](?=\s|$)/g, "$1$2")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export async function readMainAgentTurnRecords(dataDirectory: string): Promise<MainAgentTurnRecord[]> {
   const file = join(dataDirectory, "main-agent-turns.jsonl");
   let source: string;
@@ -253,7 +367,7 @@ async function runRecordedMainAgentTurn(
     ownerPid: process.pid,
   });
   try {
-    const result = await runMainAgentQuery(dataDirectory, text, options);
+    const result = await runMainAgentQuery(dataDirectory, text, { ...options, turnId });
     if (result.error !== undefined) {
       throw new Error(result.error);
     }
@@ -290,7 +404,8 @@ async function runRecordedMainAgentTurn(
  * 它绝不是托管 Web 服务。
  */
 export async function startCompanionServer(options: CompanionServerOptions = {}): Promise<RunningCompanionServer> {
-  const host = normalizeCompanionHost(options.host ?? "127.0.0.1");
+  const serverMode = options.serverMode === true;
+  const host = normalizeCompanionHost(options.host ?? (serverMode ? "0.0.0.0" : "127.0.0.1"), serverMode);
   const port = options.port ?? parsePort(process.env.CLONE_AI_PORT, 4317);
   // One resolver owns every persistent path, so the daemon, the CLI, and the
   // Main Agent cannot disagree about where the owner's data lives.
@@ -333,7 +448,10 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     readFile(join(clientDirectory, "memory.css"), "utf8"),
     readFile(join(clientDirectory, "memory.js"), "utf8"),
   ]);
-  const token = issueCompanionToken();
+  const token = options.token?.trim() || issueCompanionToken();
+  if (serverMode && token.length < 32) {
+    throw new Error("Server deployment requires CLONE_AI_COMPANION_TOKEN with at least 32 characters.");
+  }
   await persistCompanionToken(paths.dataDirectory, token);
   const clientHtml = injectCompanionToken(client, token);
   const startedAt = Date.now();
@@ -356,6 +474,11 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   });
   const improvement = new ImprovementService({ journal, governance: memoryGovernance, pipeline: assembly.memory });
   const config = new CloneConfigStore(paths);
+  const whatsappSetup = new WhatsAppSetupService(dataDirectory, options.publicBaseUrl);
+  const proxySecret = options.proxySecret?.trim();
+  if (serverMode && (proxySecret === undefined || proxySecret.length < 32)) {
+    throw new Error("Server deployment requires a proxy secret with at least 32 characters.");
+  }
   const scheduler = new LocalScheduler({
     store: schedules,
     run: async (schedule, occurrence) => {
@@ -390,6 +513,12 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         error: error instanceof Error ? error.message : String(error),
       });
     },
+    // The guardian: when a background run settles, say what happened in the
+    // conversation, so the next turn — human or Main Agent — starts from the
+    // result instead of a status colour.
+    // 守护线程：后台 Run 落定时，在对话里说明发生了什么，使下一轮——不论是人还是 Main
+    // Agent——从结果开始，而不是从一个状态颜色开始。
+    onSettled: (runId) => recordWorkUpdate(dataDirectory, journal, queueRuntime, runId),
   });
   runQueue.start();
   const opportunityService = new OpportunityService(journal);
@@ -504,6 +633,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       await handleRequest(request, response, {
         host,
         listenPort: bound.port,
+        allowRemoteHost: serverMode,
+        proxySecret,
         token,
         startedAt,
         dataDirectory,
@@ -527,6 +658,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         improvement,
         reportRunner,
         opportunityService,
+        whatsappSetup,
         badCaseLog,
         journal,
         runtime: queueRuntime,
@@ -551,7 +683,15 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   if (address === null || typeof address === "string") {
     throw new Error("The local companion did not expose a TCP address.");
   }
-  const url = `http://${host === "::1" ? "[::1]" : host}:${address.port}`;
+  const localHost = host === "0.0.0.0" ? "127.0.0.1" : host === "::" ? "::1" : host;
+  const url = `http://${localHost === "::1" ? "[::1]" : localHost}:${address.port}`;
+  const endpointStartedAt = new Date().toISOString();
+  await persistCompanionEndpoint(dataDirectory, url, endpointStartedAt);
+  void whatsappSetup.initialize().catch((error: unknown) => {
+    logJson("error", "WhatsApp bridge initialization failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   bound.port = address.port;
   scheduler.start();
   return {
@@ -570,6 +710,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       await runQueue.stop();
       await Promise.allSettled([maintenanceInFlight, reportInFlight]);
       await serverClosed;
+      await clearCompanionEndpointIfOwned(dataDirectory, endpointStartedAt);
       await memoryGovernance.close();
       // Release the journal last: the queue and governance above may still be
       // finishing writes, and closing the database under them would lose those
@@ -587,6 +728,8 @@ async function handleRequest(
   context: {
     host: string;
     listenPort: number;
+    allowRemoteHost: boolean;
+    proxySecret?: string;
     token: string;
     startedAt: number;
     dataDirectory: string;
@@ -610,6 +753,7 @@ async function handleRequest(
     improvement: ImprovementService;
     reportRunner?: DailyReportRunner;
     opportunityService: OpportunityService;
+    whatsappSetup: WhatsAppSetupService;
     badCaseLog: BadCaseLog;
     journal: JournalStore;
     runtime: CloneRuntime;
@@ -619,14 +763,22 @@ async function handleRequest(
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host === "::1" ? "[::1]" : context.host}`);
   const method = request.method ?? "GET";
+  if (context.proxySecret !== undefined
+    && headerValue(request.headers["x-clone-proxy-secret"]) !== context.proxySecret) {
+    sendJson(response, 403, { error: "A trusted reverse proxy is required." });
+    return;
+  }
   const authorized = authorizeCompanionRequest({
     method,
     pathname: url.pathname,
     hostHeader: headerValue(request.headers.host),
     originHeader: headerValue(request.headers.origin),
-    authorization: headerValue(request.headers.authorization),
+    authorization: headerValue(request.headers["x-clone-ai-token"]) !== undefined
+      ? `Bearer ${headerValue(request.headers["x-clone-ai-token"])}`
+      : headerValue(request.headers.authorization),
     token: context.token,
     listenPort: context.listenPort,
+    allowRemoteHost: context.allowRemoteHost,
   });
   if (!authorized.ok) {
     sendJson(response, authorized.status, { error: authorized.error });
@@ -731,12 +883,78 @@ async function handleRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/mobile/whatsapp") {
+    sendJson(response, 200, { status: await context.whatsappSetup.status() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/binding") {
+    const body = await readJsonBody(request);
+    const input: Record<string, string> = {};
+    for (const key of ["accessToken", "phoneNumberId", "verifyToken", "appSecret", "allowedNumbers", "graphVersion"]) {
+      if (typeof body[key] === "string") input[key] = body[key];
+    }
+    try {
+      sendJson(response, 200, { status: await context.whatsappSetup.saveBinding(input) });
+    } catch (error: unknown) {
+      if (error instanceof WhatsAppBindingInputError) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/bridge/start") {
+    await context.whatsappSetup.startBridge();
+    sendJson(response, 200, { status: await context.whatsappSetup.status() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/bridge/stop") {
+    await context.whatsappSetup.stopBridge();
+    sendJson(response, 200, { status: await context.whatsappSetup.status() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/tunnel/start") {
+    sendJson(response, 200, { status: await context.whatsappSetup.startTunnel() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/tunnel/stop") {
+    sendJson(response, 200, { status: await context.whatsappSetup.stopTunnel() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/tunnel/install") {
+    const body = await readJsonBody(request);
+    if (body.acknowledgeInstall !== true) {
+      sendJson(response, 400, { error: "安装 cloudflared 需要明确确认。" });
+      return;
+    }
+    const result = await context.whatsappSetup.installCloudflared();
+    sendJson(response, 200, { ...result, status: await context.whatsappSetup.status() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/mobile/whatsapp/verify") {
+    sendJson(response, 200, {
+      profile: await context.whatsappSetup.verifyCloudCredentials(),
+      status: await context.whatsappSetup.status(),
+    });
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/api/options") {
     const current = await context.config.get();
     const piModels = await listPiModels().catch(() => []);
     sendJson(response, 200, {
       workspacePath: current.workspacePath,
       mainAgentModel: current.mainAgentModel,
+      mainAgentEffort: current.mainAgentEffort,
+      effortLevels: EFFORT_LEVELS,
       models: piModels,
     });
     return;
@@ -744,7 +962,7 @@ async function handleRequest(
 
   if (request.method === "PATCH" && url.pathname === "/api/config") {
     const body = await readJsonBody(request);
-    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string } = {};
+    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined } = {};
     if (typeof body.workspacePath === "string" && body.workspacePath.trim().length > 0) {
       update.workspacePath = body.workspacePath.trim();
     }
@@ -756,8 +974,16 @@ async function handleRequest(
       }
       update.mainAgentModel = body.mainAgentModel.trim();
     }
+    if ("mainAgentEffort" in body) {
+      if (body.mainAgentEffort === "" || body.mainAgentEffort === null) update.mainAgentEffort = undefined;
+      else if (isEffortLevel(body.mainAgentEffort)) update.mainAgentEffort = body.mainAgentEffort;
+      else {
+        sendJson(response, 400, { error: `mainAgentEffort must be one of ${EFFORT_LEVELS.join(", ")} (empty clears it).` });
+        return;
+      }
+    }
     if (Object.keys(update).length === 0) {
-      sendJson(response, 400, { error: "Provide a workspacePath, locale, or mainAgentModel to change." });
+      sendJson(response, 400, { error: "Provide a workspacePath, locale, mainAgentModel, or mainAgentEffort to change." });
       return;
     }
     sendJson(response, 200, { config: await context.config.update(update) });
@@ -1533,6 +1759,33 @@ async function handleRequest(
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
+    // A remote channel can retry after its own timeout. Reusing a terminal
+    // turn id returns the original result instead of running the request again.
+    // 远程通道可能在自身超时后重试；终态回合复用原 id 时返回原结果，而不是再次执行。
+    const existingTurn = (await readMainAgentTurnRecords(context.dataDirectory))
+      .find((record) => record.id === turnId);
+    if (existingTurn?.status === "completed") {
+      sendJson(response, 200, {
+        reply: existingTurn.reply ?? "",
+        newRuns: [],
+        deduplicated: true,
+      });
+      return;
+    }
+    if (existingTurn?.status === "failed" || existingTurn?.status === "interrupted") {
+      sendJson(response, 409, {
+        error: existingTurn.error ?? "This turn already ended without a successful reply.",
+        deduplicated: true,
+      });
+      return;
+    }
+    if (existingTurn?.status === "started") {
+      sendJson(response, 409, {
+        error: "This turn is already running.",
+        deduplicated: true,
+      });
+      return;
+    }
     try {
       const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
@@ -1545,6 +1798,24 @@ async function handleRequest(
       }
       throw error;
     }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/main-agent/prompt-snapshots") {
+    // Recent prompt provenance, newest first. The full material lives in the
+    // content-addressed file named by `locator`; this listing carries hashes,
+    // model, and effort so a change can be spotted without opening it.
+    // 最近的提示词溯源，新的在前。完整材料在 `locator` 指向的内容寻址文件里；此列表
+    // 只带哈希、模型与强度，不打开文件就能看出变化。
+    const requested = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
+    const take = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 100) : 20;
+    const events = await context.journal.list();
+    const snapshots = events
+      .filter((event) => event.type === "main_agent.prompt_snapshot")
+      .slice(-take)
+      .reverse()
+      .map((event) => ({ sequence: event.sequence, occurredAt: event.occurredAt, ...asRecord(event.payload) }));
+    sendJson(response, 200, { snapshots });
     return;
   }
 
@@ -1589,6 +1860,10 @@ async function handleRequest(
   if (request.method === "GET" && sessionMatch?.[1] !== undefined) {
     const runId = decodeURIComponent(sessionMatch[1]);
     if (runId === MAIN_AGENT_SESSION_ID) {
+      if (await context.sessions.isConversationDeleted(runId)) {
+        sendJson(response, 404, { error: "This conversation was hidden together with its tasks." });
+        return;
+      }
       sendJson(response, 200, await buildMainAgentConversation(context.dataDirectory));
       return;
     }
@@ -1602,7 +1877,11 @@ async function handleRequest(
   if (request.method === "DELETE" && sessionMatch?.[1] !== undefined) {
     const runId = decodeURIComponent(sessionMatch[1]);
     if (runId === MAIN_AGENT_SESSION_ID) {
-      sendJson(response, 405, { error: "The Main Agent conversation cannot be hidden while it is the active chat." });
+      // Hiding the conversation hides the tasks it spawned, in one step. 隐藏对话时一并隐藏它派生出的任务。
+      const view = await loadRuntimeView(context.dataDirectory);
+      const children = [...derivedRunIds(view.events)].filter((id) => view.runs.some((run) => run.id === id));
+      await context.sessions.deleteConversation(runId, children);
+      sendJson(response, 204, undefined);
       return;
     }
     const { runs } = await loadRuntimeView(context.dataDirectory);
@@ -1617,7 +1896,9 @@ async function handleRequest(
 
   const restoreMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/restore$/);
   if (request.method === "POST" && restoreMatch?.[1] !== undefined) {
-    await context.sessions.restore(decodeURIComponent(restoreMatch[1]));
+    const target = decodeURIComponent(restoreMatch[1]);
+    if (target === MAIN_AGENT_SESSION_ID) await context.sessions.restoreConversation(target);
+    else await context.sessions.restore(target);
     sendJson(response, 204, undefined);
     return;
   }
@@ -1681,6 +1962,48 @@ async function handleRequest(
     }
     return;
   }
+
+  const traceMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/trace$/);
+  if (request.method === "GET" && traceMatch?.[1] !== undefined) {
+    // The full, ordered trace of one run: every journal event in plain language,
+    // with the raw payload kept one level down. This is the view an owner or an
+    // eval reads to answer "what actually happened, in what order?".
+    // 单个 Run 的完整有序轨迹：每条 Journal 事件都用可读的语言呈现，原始数据放在下一层。
+    // 所有者或评估据此回答"究竟发生了什么、按什么顺序"。
+    const runId = decodeURIComponent(traceMatch[1]);
+    try {
+      const events = await context.journal.list();
+      const run = events.find((event) => event.type === "run.created" && event.runId === runId);
+      if (run === undefined) {
+        sendJson(response, 404, { error: "Unknown run." });
+        return;
+      }
+      const taskId = run.taskId;
+      const task = events.find((event) => event.type === "task.created" && event.taskId === taskId);
+      const triggerId = task === undefined ? undefined : String(asRecord(task.payload).triggerId ?? "");
+      const items = events
+        .filter((event) => event.runId === runId
+          || (event.runId === undefined && taskId !== undefined && event.taskId === taskId)
+          || (event.type === "trigger.received" && triggerId !== undefined && String(asRecord(event.payload).id ?? "") === triggerId))
+        .sort((left, right) => left.sequence - right.sequence)
+        .map((event) => {
+          const described = toTimelineItem(event);
+          return {
+            sequence: event.sequence,
+            at: described.occurredAt,
+            type: event.type,
+            label: described.label,
+            detail: described.detail,
+            payload: JSON.stringify(event.payload ?? null).slice(0, 2_000),
+          };
+        });
+      sendJson(response, 200, { runId, taskId: taskId ?? null, items });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The trace could not be read." });
+    }
+    return;
+  }
+
   const approvalMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/approve$/);
   if (request.method === "POST" && approvalMatch?.[1] !== undefined) {
     try {
@@ -1751,6 +2074,7 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
     readConversation(dataDirectory, 200),
   ]);
   const deletedRunIds = await sessions.deletedRunIds();
+  const conversationDeleted = await sessions.isConversationDeleted(MAIN_AGENT_SESSION_ID);
   const visibleRuns = runs.filter((run) => !deletedRunIds.has(run.id));
   const visibleRunIds = new Set(visibleRuns.map((run) => run.id));
   const eventsByRun = new Map<string, JournalEvent[]>();
@@ -1768,11 +2092,24 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
   // 独立会话，就使每条消息都裂变出一个新的对话框。这些 Run 仍留在 Journal 与审计里，
   // 侧栏只显示任务。
   const taskRuns = visibleRuns.filter((run) => !isConversationalRun(state, run));
-  const conversationSummary = summarizeOwnerConversation(ownerHistory, turns);
+  // Runs the Main Agent proposed are tasks of the conversation, not sibling
+  // chats: one request must not read as two conversations in the sidebar.
+  // 主 Agent 提案的 Run 是对话的任务，而不是同级对话：一次请求不应在侧栏读成两个对话。
+  const derived = derivedRunIds(events);
+  const childCount = taskRuns.filter((run) => derived.has(run.id)).length;
+  const summary = conversationDeleted ? undefined : summarizeOwnerConversation(ownerHistory, turns);
+  const conversationSummary = summary === undefined
+    ? undefined
+    : {
+        ...summary,
+        kind: "conversation" as const,
+        ...(childCount === 0 ? {} : { childCount }),
+      };
   const allSessions = [
     ...taskRuns.map((run) => ({
       ...toSessionSummary(run, tasks, describeRunFailure(run, eventsByRun.get(run.id) ?? []).reason),
       updatedAtMs: Date.parse(run.updatedAt),
+      ...(derived.has(run.id) ? { parentId: MAIN_AGENT_SESSION_ID } : {}),
     })),
     ...(conversationSummary === undefined ? [] : [conversationSummary]),
   ].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
@@ -1833,6 +2170,13 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
     completed,
     memories,
     sessions: groupedSessions.slice(0, 40).map(({ updatedAtMs: _updatedAtMs, duplicateCount: _duplicateCount, ...summary }) => summary),
+    deletedConversations: (await sessions.deletedConversations())
+      .map((entry) => ({
+        id: entry.id,
+        title: "已隐藏的对话",
+        childCount: entry.childRunIds.length,
+        at: entry.at,
+      })),
     timeline: events.slice(-12).reverse().map(toTimelineItem),
   };
 }
@@ -1924,14 +2268,14 @@ function toMainAgentTurnSummary(turn: MainAgentTurnRecord): SessionSummary & { u
     : undefined;
   return {
     id: MAIN_AGENT_SESSION_ID,
-    title: turn.text.replace(/\s+/g, " ").trim().slice(0, 80) || "Main Agent conversation",
+    title: plainText(turn.text).slice(0, 80) || "Main Agent conversation",
     status: turn.status === "completed" ? "completed" : turn.status === "started" ? "running" : "failed",
     updatedAt,
     updatedAtMs: Date.parse(updatedAt),
     preview: turn.status === "failed" || turn.status === "interrupted"
       ? `异常中断：${display?.summary ?? "本轮没有完成"}`
       : turn.reply?.trim()
-        ? turn.reply.replace(/\s+/g, " ").slice(0, 80)
+        ? plainText(turn.reply).slice(0, 120)
         : "本轮没有返回文字",
   };
 }
@@ -1991,6 +2335,18 @@ async function buildMainAgentConversation(dataDirectory: string): Promise<Sessio
         tone: "warning",
       });
     }
+  }
+  // Work updates are merged into the same thread by time, so a task that finished
+  // while the owner was away reads as part of the conversation, not as a status.
+  // 工作更新按时间合入同一条线程：所有者不在时完成的任务读起来是对话的一部分，而不是状态。
+  for (const update of await readWorkUpdates(dataDirectory)) {
+    messages.push({
+      id: `work-${update.id}`,
+      role: "clone",
+      text: describeWorkUpdate(update),
+      occurredAt: update.at,
+      ...(update.status === "failed" || update.status === "waiting_review" ? { tone: "warning" as const } : {}),
+    });
   }
   messages.sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
   const summary = summarizeOwnerConversation(history, turns);
@@ -2111,10 +2467,10 @@ async function loadRuntimeView(dataDirectory: string) {
 function toSessionSummary(run: Run, tasks: Record<string, Task>, failureReason?: string): SessionSummary {
   return {
     id: run.id,
-    title: titleFor(run, tasks),
+    title: plainText(titleFor(run, tasks)).slice(0, 90),
     status: run.status,
     updatedAt: run.updatedAt,
-    preview: previewForStatus(run.status, failureReason ?? run.failureReason),
+    preview: plainText(previewForStatus(run.status, failureReason ?? run.failureReason)).slice(0, 120),
   };
 }
 
@@ -2363,32 +2719,65 @@ function toTimelineItem(event: JournalEvent): { label: string; detail: string; o
     "execution.started": "开始执行步骤",
     "execution.failed": "执行失败",
     "execution.progress": "执行进度",
-    "subagent.dispatched": "Dispatched a child agent",
-    "subagent.resumed": "Resumed a child agent",
-    "subagent.session_started": "Child-agent session started",
-    "subagent.progress": "Child-agent progress",
-    "subagent.completed": "Child agent returned evidence",
-    "subagent.failed": "Child agent failed",
-    "subagent.cancelled": "Child agent cancelled",
-    "subagent.verified": "Verified child-agent evidence",
-    "dispatch.decided": "Routed to a worker",
-    "dispatch.blocked": "Dispatch blocked",
-    "agent.installed": "Installed a worker",
-    "agent.install_failed": "Worker installation failed",
-    "agent.message_delta": "Agent streamed a message",
-    "agent.tool_started": "Agent started a tool",
-    "agent.tool_completed": "Agent finished a tool",
-    "evidence.recorded": "Recorded evidence",
-    "workspace.isolation.applied": "Returned isolated files",
-    "verification.completed": "Recorded verification result",
-    "memory.candidate.requested": "Queued memory review",
-    "memory.candidate.proposed": "Proposed memory candidate",
-    "memory.recalled": "Recalled local memory",
+    "subagent.dispatched": "派发子 Agent",
+    "subagent.resumed": "恢复子 Agent",
+    "subagent.session_started": "子 Agent 会话开始",
+    "subagent.progress": "子 Agent 进度",
+    "subagent.completed": "子 Agent 返回证据",
+    "subagent.failed": "子 Agent 失败",
+    "subagent.cancelled": "子 Agent 已取消",
+    "subagent.verified": "校验子 Agent 证据",
+    "dispatch.decided": "选择执行者",
+    "dispatch.blocked": "派发被拒绝",
+    "agent.installed": "安装 Worker",
+    "agent.install_failed": "Worker 安装失败",
+    "agent.message_delta": "Agent 输出文字",
+    "agent.tool_started": "Agent 调用工具",
+    "agent.tool_completed": "Agent 结束工具",
+    "evidence.recorded": "记录证据",
+    "workspace.isolation.applied": "隔离工作落盘",
+    "verification.completed": "记录验证结果",
+    "memory.candidate.requested": "排队记忆复核",
+    "memory.candidate.proposed": "提出记忆候选",
+    "memory.recalled": "召回本地记忆",
+    "usage.recorded": "记录用量",
+    "main_agent.prompt_snapshot": "记录提示词快照",
+    "audit.labeled": "人工判定",
+    "authority.changed": "修改权限",
   };
   return { label: labels[event.type] ?? event.type, detail: detailFor(event.type, payload), occurredAt: event.occurredAt };
 }
 
 function detailFor(type: JournalEvent["type"], payload: Record<string, unknown>): string {
+  if (type === "run.status_changed" && typeof payload.status === "string") {
+    const statusLabel: Record<string, string> = {
+      created: "已创建", planning: "规划中", queued: "排队中", running: "运行中", waiting_approval: "等待你审批",
+      verifying: "验证中", waiting_review: "等待你复核", completed: "已完成", failed: "失败", cancelled: "已取消",
+    };
+    const reason = typeof payload.reason === "string" ? `：${payload.reason}` : "";
+    return `${statusLabel[payload.status] ?? payload.status}${payload.activeStepId ? ` · 步骤 ${String(payload.activeStepId)}` : ""}${reason}`;
+  }
+  if (type === "plan.created") {
+    const steps = Array.isArray(payload.steps) ? payload.steps as Array<Record<string, unknown>> : [];
+    const titles = steps.map((step) => String(step.title ?? step.id ?? "步骤")).slice(0, 4);
+    return `${steps.length} 个步骤：${titles.join(" → ")}${steps.length > 4 ? " …" : ""}`;
+  }
+  if (type === "execution.started") {
+    return `${String(payload.providerId ?? "worker")} 执行步骤 ${String(payload.stepId ?? "")}${Array.isArray(payload.authorizedEvidenceKinds) ? ` · 可记录 ${payload.authorizedEvidenceKinds.join("/")}` : ""}`;
+  }
+  if (type === "evidence.recorded") {
+    return `${String(payload.kind ?? "证据")}${payload.locator ? ` · ${String(payload.locator)}` : ""}${payload.summary ? ` — ${String(payload.summary).slice(0, 120)}` : ""}`;
+  }
+  if (type === "subagent.dispatched") {
+    return `${String(payload.providerId ?? "worker")} 承接 ${String(payload.workOrderId ?? "子任务")}`;
+  }
+  if (type === "subagent.failed" && typeof payload.message === "string") {
+    const report = asRecord(payload.report);
+    return `${payload.message}${typeof report.category === "string" ? `（${report.category}）` : ""}`;
+  }
+  if (type === "trigger.received" && typeof payload.summary === "string") {
+    return payload.summary.slice(0, 160);
+  }
   if (type === "execution.failed") {
     const message = typeof payload.message === "string" ? payload.message : "Execution stopped without a reason.";
     const report = asRecord(payload.report);
@@ -2415,46 +2804,61 @@ function detailFor(type: JournalEvent["type"], payload: Record<string, unknown>)
   }
   if (type === "policy.decided") {
     const decision = asRecord(payload.decision);
+    const reason = typeof decision.reason === "string" ? `：${decision.reason}` : "";
     return decision.outcome === "approval_required"
-      ? "An external action needs your approval."
+      ? `这一步会影响外部系统，需要你确认${reason}`
       : decision.outcome === "allowed"
-        ? "This local, reversible step may continue."
-        : "The current policy did not allow this step.";
+        ? `本地的可逆步骤，允许继续${reason}`
+        : `当前策略不允许这一步${reason}`;
   }
   if (type === "verification.completed") {
-    return typeof payload.summary === "string" ? payload.summary : "Recorded the verification result.";
+    const summary = typeof payload.summary === "string" ? `：${payload.summary}` : "";
+    return payload.passed === true ? `验证通过${summary}` : payload.needsReview === true ? `需要你复核${summary}` : `验证未通过${summary}`;
   }
   if (type === "workspace.isolation.applied") {
-    return typeof payload.summary === "string"
-      ? payload.summary
-      : `Isolated work settled at ${String(payload.isolatedPath ?? "the sandbox")}.`;
+    const copied = Array.isArray(payload.copied) ? payload.copied : [];
+    return `隔离工作结束：${copied.length} 个文件回到工作区${payload.kept === true ? "，沙箱保留供检查" : ""}`;
   }
   if (type === "memory.recalled") {
     const memories = Array.isArray(payload.memories) ? payload.memories : [];
-    return `Used ${memories.length} active local memory item${memories.length === 1 ? "" : "s"} as task context.`;
+    const titles = memories.map((memory) => String(asRecord(memory).summary ?? "")).filter((text) => text.length > 0);
+    return `用到 ${memories.length} 条记忆${titles.length > 0 ? `：${titles.slice(0, 3).map((text) => `「${text.slice(0, 40)}」`).join(" ")}` : ""}`;
+  }
+  if (type === "run.created") {
+    return `运行 ${String(payload.id ?? "").slice(0, 8)} 已创建${payload.taskId === undefined ? "" : `（任务 ${String(payload.taskId).slice(0, 8)}）`}`;
+  }
+  if (type === "task.created") {
+    return `任务「${String(payload.title ?? "未命名")}」：${String(payload.objective ?? "").slice(0, 120)}`;
   }
   if (type === "dispatch.decided") {
     const sourceLabels: Record<string, string> = {
-      explicit: "the owner explicitly requested",
-      rule: "capability and priority rules",
-      memory: "past outcomes in memory",
-      description: "worker self-descriptions",
+      explicit: "你明确指定",
+      rule: "能力与优先级规则",
+      memory: "过去的结果",
+      description: "Worker 自述",
     };
     const source = typeof payload.source === "string" ? payload.source : "rule";
     const worker = typeof payload.selectedAgentId === "string" ? payload.selectedAgentId : "?";
     const reason = typeof payload.reason === "string" ? payload.reason : "";
-    return `Selected ${worker} (${sourceLabels[source] ?? source})${reason ? `. ${reason}` : ""}`;
+    return `选中 ${worker}（依据：${sourceLabels[source] ?? source}）${reason ? `。${reason}` : ""}`;
   }
   if (type === "dispatch.blocked") {
     const code = typeof payload.code === "string" ? payload.code : "";
     const reason = typeof payload.reason === "string" ? payload.reason : "";
-    return `No worker could run this task (${code}). ${reason}`;
+    return `没有 Worker 能执行这一步（${code}）。${reason}`;
   }
   if (type === "agent.installed") {
-    return `Installed ${String(payload.agentId ?? "a worker")}${typeof payload.version === "string" ? ` (${payload.version})` : ""}.`;
+    return `已安装 ${String(payload.agentId ?? "Worker")}${typeof payload.version === "string" ? `（${payload.version}）` : ""}`;
   }
   if (type === "agent.install_failed") {
-    return `Installation of ${String(payload.agentId ?? "a worker")} failed: ${String(payload.message ?? "")}`;
+    return `安装 ${String(payload.agentId ?? "Worker")} 失败：${String(payload.message ?? "")}`;
+  }
+  if (type === "main_agent.prompt_snapshot") {
+    const model = typeof payload.modelId === "string" ? payload.modelId : "默认模型";
+    const effort = typeof payload.effort === "string" ? ` · 强度 ${payload.effort}` : "";
+    const tools = Array.isArray(payload.toolNames) ? payload.toolNames.length : 0;
+    const hash = typeof payload.promptHash === "string" ? payload.promptHash.slice(0, 8) : "?";
+    return `${model}${effort} · ${tools} 个工具 · 提示词 ${hash}`;
   }
   if (typeof payload.summary === "string") {
     return payload.summary;
@@ -2462,7 +2866,7 @@ function detailFor(type: JournalEvent["type"], payload: Record<string, unknown>)
   if (typeof payload.title === "string") {
     return payload.title;
   }
-  return "Recorded in the local journal.";
+  return "已记入本地 Journal。";
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -2529,6 +2933,8 @@ interface DashboardView {
   completed: Array<{ runId: string; title: string; status: string; updatedAt: string; evidenceCount: number }>;
   memories: Array<{ summary: string; confidence: string }>;
   sessions: SessionSummary[];
+  /** Conversations hidden together with their tasks, offered back in the sidebar. 与其任务一起隐藏的对话，在侧栏提供恢复。 */
+  deletedConversations: Array<{ id: string; title: string; childCount: number; at: string }>;
   timeline: Array<{ label: string; detail: string; occurredAt: string }>;
 }
 
@@ -2538,6 +2944,11 @@ interface SessionSummary {
   status: string;
   updatedAt: string;
   preview: string;
+  /** Set for a run derived from a conversation: it is a task of that chat, not another chat. 由对话派生出的 Run 会带此字段：它是该对话的任务，而不是另一个对话。 */
+  parentId?: string;
+  /** On the conversation: how many task runs belong to it. 对话上：属于它的任务数。 */
+  childCount?: number;
+  kind?: "conversation";
 }
 
 interface ConversationMessage {
