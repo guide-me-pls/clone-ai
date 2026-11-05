@@ -9,7 +9,11 @@ import { logJson } from "./json-log.ts";
  * 时长与模型 id 始终可写。
  */
 export interface UsageRecord {
-  source: "main-agent" | "planner";
+  source: "main-agent" | "planner" | "self-review";
+  /** The Main Agent turn this call belongs to, when one exists. 本次调用所属的主 Agent 回合（若存在）。 */
+  turnId?: string;
+  /** The run this call belongs to, when one exists. 本次调用所属的 Run（若存在）。 */
+  runId?: string;
   durationMs: number;
   modelId?: string;
   provider?: string;

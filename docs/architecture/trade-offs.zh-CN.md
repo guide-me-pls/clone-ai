@@ -5,6 +5,26 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-05 — 每个主 Agent 回合都是一条 Journal 记录，而不是旁路文件
+
+**决定。** 所有入口——CLI、`npm run main`、companion/server、WhatsApp——为同一回合写
+两条相同的 Journal 事件：`main_agent.turn_started` 与 `main_agent.turn_completed`。
+主 Agent 每次调用工具还写 `agent.tool_started` / `agent.tool_completed`。回合记录携带
+输入与回复（PII 脱敏并截断）、模型、Provider、推理强度、token 用量、提示词材料哈希、
+工具调用（参数为脱敏摘要）与终态。既有的 `main-agent-turns.jsonl` 台账由同一个模块写入，
+因此界面与 Journal 不会互相矛盾。
+
+**依据。** 改动之前，CLI 与 `npm run main` 只写提示词快照；companion 写的是审计从不读取
+的旁路 JSONL；Pi 的 `tool_execution_*` 事件从未被订阅；`usage.recorded` 没有回合 id。于是
+其他 Agent 通过 `clone-ai "..."` 做的事，可能完全没有可审计的输入、回复、工具调用或模型
+用量。Journal 是 append-only 的真相，回合数据应当放在这里，而不是第二份日志。
+
+**代价。** 输入与回复文本会增加 Journal 体积。它们会被脱敏与截断；完整对话仍保留在事件
+所指的 Pi 会话文件中。工具参数只存脱敏摘要，不存原文。
+
+**推翻条件。** 若 Journal 体积成为实际问题，把文本移到内容寻址的回合文件（与提示词快照
+同一模式），事件里只保留哈希与定位符。若脱敏对工具参数不够，只保留工具名与哈希。
+
 ## 2026-11-05 — 提示词溯源 = 内容寻址文件 + 一条 Journal 事件
 
 **决定。** 每个主 Agent 回合记录 charter 版本、编译后的情境简报、实际注册的工具表、
