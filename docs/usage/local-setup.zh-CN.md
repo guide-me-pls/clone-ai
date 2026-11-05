@@ -79,7 +79,9 @@ Clone AI 自己不实现 Coding Agent，它监督你已有的那些。
 
 Clone AI 还自带进程内的 `native` 执行 Provider：把某个 Agent 的 Provider 设为
 `native`，并设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`。它不需要
-CLI，且每次工具调用都按步骤 Scope 校验。
+CLI，且每次工具调用都按步骤 Scope 校验。设置这两个变量后，`direct`、`research`、
+`draft`、`review` 的默认 Agent 已经使用它；`external` 仍走 CLI 路径，因为原生 Worker
+没有受治理的动作连接器。在设置中保存的 Provider 始终优先于默认。
 
 ### 主 Agent 运行时
 
