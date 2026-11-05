@@ -1,0 +1,17 @@
+{$CLONE_AI_DOMAIN} {
+  encode zstd gzip
+
+  @whatsapp_webhook path /webhook /webhook/*
+  handle @whatsapp_webhook {
+    reverse_proxy clone-ai:4318
+  }
+
+  handle {
+    basic_auth {
+      {$CLONE_AI_BASIC_AUTH_USER} {$CLONE_AI_BASIC_AUTH_HASH}
+    }
+    reverse_proxy clone-ai:4317 {
+      header_up X-Clone-Proxy-Secret {$CLONE_AI_PROXY_SECRET}
+    }
+  }
+}
