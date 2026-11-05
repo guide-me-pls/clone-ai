@@ -101,3 +101,35 @@ test("a realpath-mismatched workspace still admits paths inside it, and refuses 
   assert.equal(decideTool({ risk: "write", grants, workspace: directory, path: "out/hello.txt" }).allowed, true);
   assert.equal(decideTool({ risk: "write", grants, workspace: directory, path: "../escape.md" }).allowed, false);
 });
+
+test("exact usage from the model client reaches the completed event", async (t) => {
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "agent-1",
+    label: "A",
+    providerId: "native",
+    workCapabilities: ["drafting", "external_action"],
+    tools: [],
+    createClient: () => ({
+      async run() {
+        return { summary: "done", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, modelCalls: 2 } };
+      },
+    }),
+  });
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute(assignment(directory))) events.push(event);
+  const completed = events.find((event) => event.type === "completed");
+  assert.ok(completed !== undefined && completed.type === "completed");
+  const usage = completed.usage;
+  assert.ok(usage !== undefined);
+  assert.equal(usage.inputTokens, 10);
+  assert.equal(usage.outputTokens, 5);
+  assert.equal(usage.totalTokens, 15);
+  assert.equal(usage.modelCalls, 2);
+  assert.equal(typeof usage.durationMs, "number");
+
+  const capabilities = await worker.capabilities();
+  assert.equal(worker.id, "agent-1");
+  assert.equal(worker.providerId, "native");
+  assert.deepEqual(capabilities.work, ["drafting"]);
+});

@@ -5,6 +5,25 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-05 — 原生 Worker 成为可选 Provider，并记录精确用量
+
+**决定。** `native` 注册进 Provider 目录，所有者可以像选择 CLI 一样按 Agent 选择它。
+Adapter 的 id 是配置的 Agent id，`providerId` 是 `native`；能力来自 Agent 角色，排除外部
+副作用。它的模型客户端按每次模型调用报告精确 token 用量，Kernel 以带 runId 与 stepId 的
+`usage.recorded` 记入 Journal。它仍要求 `CLONE_AI_NATIVE_MODEL` 与
+`CLONE_AI_NATIVE_BASE_URL`，不会成为默认。
+
+**依据。** 这个 Worker 早已存在，并在每次工具调用时执行 Scope 校验，但它对设置界面不可见
+（只是 Agent Registry 里的一个特例）、不报告用量，Adapter 身份是字面量 `native` 而不是
+配置的 Agent。新的回合/Run 审计已经能携带精确用量；让原生路径保持不可测量，就无法做
+CLI 与原生 Worker 的对比。
+
+**代价。** 所有者必须配置 OpenAI 兼容端点；Worker 没有外部动作工具，`external` 仍交给受
+治理的 Connector；token 数取决于端点是否返回 usage 块。
+
+**推翻条件。** 若端点很少返回 usage，保留网关按时间窗口的推断作为兜底，并标注精确用量
+不可得。若原生循环在基准上不如某个 CLI 可靠，就让 CLI 保持默认、原生保持可选。
+
 ## 2026-11-05 — 每个主 Agent 回合都是一条 Journal 记录，而不是旁路文件
 
 **决定。** 所有入口——CLI、`npm run main`、companion/server、WhatsApp——为同一回合写

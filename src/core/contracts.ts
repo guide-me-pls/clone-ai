@@ -468,6 +468,23 @@ export interface WorkerMemorySource {
   }>>;
 }
 
+/**
+ * What an adapter can say about the model calls behind one execution.
+ * Optional fields stay absent rather than being invented when a provider
+ * omits its usage block.
+ * Adapter 对一次执行背后的模型调用能诚实说出的内容。Provider 不返回 usage 时，
+ * 可选字段保持缺省，而不是编造为 0。
+ */
+export interface ModelUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cachedInputTokens?: number;
+  /** Model round trips, when the adapter can count them. 模型往返次数（Adapter 能计数时）。 */
+  modelCalls?: number;
+  durationMs?: number;
+}
+
 export type ExecutionEvent =
   | { type: "session_started"; sessionId: string }
   | { type: "message_delta"; text: string }
@@ -477,7 +494,7 @@ export type ExecutionEvent =
   | { type: "tool_completed"; toolCallId: string; tool: string; isError: boolean }
   | { type: "progress"; message: string }
   | { type: "evidence"; evidence: Omit<Evidence, "id" | "runId" | "stepId" | "createdAt"> }
-  | { type: "completed"; summary: string }
+  | { type: "completed"; summary: string; usage?: ModelUsage }
   | { type: "failed"; message: string; report?: FailureReport };
 
 export interface RuntimeCapabilities {

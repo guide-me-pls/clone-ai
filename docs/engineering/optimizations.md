@@ -130,7 +130,36 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   the journal cannot drift; tool calls and usage are finally attributable to a
   turn; redaction and caps bound the added journal size.
 - **Cons / next time:** black-box CLI workers' internal tool calls remain
-  invisible (a structural boundary); native-worker model usage still has no
-  usage record; `scripts/run-pi-task.mjs` and `nightly-rsi` remain outside the
-  journal; turn events are not yet merged into the per-run trace view.
+  invisible (a structural boundary); native-worker model usage was not recorded
+  at the time (superseded by the native-provider entry below);
+  `scripts/run-pi-task.mjs` and `nightly-rsi` remain outside the journal; turn
+  events are not yet merged into the per-run trace view.
+- **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — Native worker as a first-class provider with exact usage
+
+- **Goal / hypothesis:** let an owner select the in-process worker per agent like
+  any CLI, and make its model usage exact and attributable, so a
+  CLI-versus-native comparison has data instead of impressions.
+- **Trade-off:** [native provider](../architecture/trade-offs.md#2026-11-05--the-native-worker-becomes-a-provider-with-exact-usage-still-opt-in).
+- **Change:** `native` registered in the provider catalog with agent identity and
+  role capabilities; the native adapter reports usage; the OpenAI-compatible
+  client parses both usage shapes; the runtime journals `usage.recorded` with
+  runId/stepId; the audit exposes exact usage per execution; the audit UI shows
+  it next to the gateway estimate.
+- **Eval:** `test/native-client.test.ts` (usage parsing for both shapes, honest
+  counting without tokens, provider identity/roles), `test/native-agent-worker.test.ts`
+  (the completed event carries usage), `test/audit.test.ts` (the runtime journals
+  usage and the audit projects it). Full suite: 549 tests / 546 pass / 3 skipped;
+  `npm run typecheck` and `npm run gate` pass.
+- **Execution chain:** trade-off first; provider, client, worker, runtime, audit
+  and UI in that order; tests after each layer; full suite and gate at the end.
+  A live native-versus-CLI benchmark was not run — no endpoint or credentials in
+  this session — so that comparison is **assumed** and is the next measurement.
+- **Pros:** the native worker is selectable and identifiable per agent; exact
+  tokens are attributable to one step; a provider that omits usage is counted but
+  not priced instead of looking free.
+- **Cons / next time:** no live endpoint test; the native worker still has only
+  filesystem tools; the default agents still point at CLIs; selecting `native`
+  without the two env vars fails at registry build with a clear message.
 - **Reversal condition:** see the trade-off entry.
