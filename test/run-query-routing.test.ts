@@ -159,6 +159,31 @@ test("a blocked query is journaled and its run is closed, not left planning", as
   assert.ok(statuses.includes("failed"), `run should be closed, saw ${statuses.join(", ")}`);
 });
 
+test("a planner failure closes its run instead of leaving it planning", async (t) => {
+  const dataDirectory = await home(t);
+  const planner = {
+    async plan(): Promise<never> {
+      throw new Error("planner exploded");
+    },
+  };
+
+  await assert.rejects(
+    runQuery(dataDirectory, "调研一下这个库的现状", {}, undefined, {
+      planner,
+      agents: createScriptedAgentRegistry(),
+      workspacePath: dataDirectory,
+    }),
+    /planner exploded/,
+  );
+
+  const events = await journalEvents(dataDirectory);
+  const statuses = events
+    .filter((event) => event.type === "run.status_changed")
+    .map((event) => event.payload as { status?: string; reason?: string });
+  assert.equal(statuses.at(-1)?.status, "failed");
+  assert.match(statuses.at(-1)?.reason ?? "", /planning failed: planner exploded/);
+});
+
 test("the dispatch decision is journaled before the worker runs", async (t) => {
   const dataDirectory = await home(t);
 

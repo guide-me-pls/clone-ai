@@ -18,10 +18,12 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
+
+import { protectedPathViolations, stagedPaths } from "./nightly-rsi-policy.mjs";
 
 const run = promisify(execFile);
 const args = process.argv.slice(2);
@@ -43,20 +45,6 @@ const BRANCH = `rsi/auto-fix-${STAMP}`;
 const WORKTREE = join(REPO, ".claude", "worktrees", `rsi-${STAMP}`);
 const REPORT_DIR = join(DATA, "rsi");
 const LOCK = join(DATA, "rsi", "nightly.lock");
-
-const PROTECTED = [
-  "src/authority/",
-  "src/core/policy.ts",
-  "src/core/tool-authority.ts",
-  "src/core/contracts.ts",
-  "src/audit/apply-review.ts",
-  "src/audit/self-review.ts",
-  ".github/",
-  "scripts/",
-  "test/regression/",
-  ".claude/",
-  "package.json",
-];
 
 function log(message) {
   console.log(`[rsi ${new Date().toISOString()}] ${message}`);
@@ -82,8 +70,8 @@ async function main() {
     let keep = KEEP;
     try {
       const report = await repair(traces);
-      keep = keep || report.status !== "pr-created";
       await finish(report);
+      keep = keep || report.status !== "pr-created";
       if (report.status === "pr-created" && !keep) await cleanupWorktree();
       await notify(report);
       await writeReport(report);
@@ -138,7 +126,9 @@ async function requireBinary(binary) {
 
 async function ensureRepo() {
   const { stdout } = await run("git", ["rev-parse", "--show-toplevel"], { cwd: REPO });
-  if (resolve(stdout.trim()) !== REPO) throw new Error(`--repo is not a git root: ${REPO}`);
+  const actual = await realpath(stdout.trim());
+  const requested = await realpath(REPO);
+  if (actual !== requested) throw new Error(`--repo is not a git root: ${REPO}`);
   await run("git", ["worktree", "prune"], { cwd: REPO }).catch(() => undefined);
 }
 
@@ -176,7 +166,12 @@ async function repair(traces) {
 
   const tests = await producedTests();
   if (tests.length === 0) throw new Error("phase 1 produced no files under test/regression/");
-  const red = await runTests("test/regression/");
+  // Pass the files explicitly: a shell-less spawn does not expand globs, and
+  // some temp-directory paths are symlinked. The test runner must receive the
+  // real paths that were just produced.
+  // 显式传入文件：无 shell 的 spawn 不会展开 glob，临时目录路径也可能是符号链接。
+  // 必须把刚生成的真实文件路径交给测试运行器。
+  const red = await runTests(tests);
   if (red.status === 0) throw new Error("the new regression tests pass without a fix; refusing to continue (not a reproduction)");
   const hashes = await hashFiles(tests);
   log(`phase 1 ok: ${tests.length} test file(s) are red for the recorded failure`);
@@ -201,17 +196,28 @@ async function repair(traces) {
   const after = await hashFiles(tests);
   if (JSON.stringify(after) !== JSON.stringify(hashes)) throw new Error("phase 2 modified the regression tests; rejecting the fix");
 
-  const diff = await git(["diff", "--name-only", "main...HEAD"], true).catch(async () => await git(["status", "--porcelain"]));
-  const touched = diff.split("\n").map((line) => line.replace(/^\s*[AM?]{1,2}\s+/, "").trim()).filter(Boolean);
-  const forbidden = touched.filter((path) => PROTECTED.some((prefix) => path.startsWith(prefix) && !path.startsWith("test/regression/")));
-  if (forbidden.length > 0) throw new Error(`the fix touched protected paths: ${forbidden.join(", ")}`);
-
   const testsGreen = await runTests();
   if (testsGreen.status !== 0) throw new Error("npm test did not pass after the fix");
   const typecheck = await sh("npx", ["tsc", "--noEmit"]);
   if (typecheck.status !== 0) throw new Error("typecheck did not pass after the fix");
 
+  // Trace files are model input, never part of a fix: remove them before
+  // staging so a draft PR cannot carry the owner's failed-run data into git.
+  // 轨迹文件是模型输入，绝不是修复的一部分：暂存前删除，避免草稿 PR 把所有者
+  // 的失败运行数据带进 git。
+  await rm(join(WORKTREE, ".rsi"), { recursive: true, force: true });
+  // Stage first and inspect the *staged* diff. Checking `main...HEAD` before the
+  // commit compares main with itself and always returns nothing, which silently
+  // disabled the protected-path gate.
+  // 先暂存再看“已暂存”的差异。若在提交前检查 `main...HEAD`，等于拿 main 和它自己比，
+  // 永远为空，会静默关闭保护路径闸门。
   await git(["add", "-A"]);
+  const staged = await git(["diff", "--cached", "--name-only", "-z"]);
+  const touched = stagedPaths(staged);
+  const forbidden = protectedPathViolations(touched);
+  if (forbidden.length > 0) {
+    throw new Error(`the fix touched protected paths: ${forbidden.join(", ")}`);
+  }
   await git(["commit", "-m", `fix(rsi): resolve ${traces.length} failed trace(s)`, "-m", `Traces: ${traces.map((trace) => trace.runId).join(", ")}`]);
   return {
     status: "fixed",
@@ -288,8 +294,10 @@ async function hashFiles(files) {
   return out;
 }
 
-async function runTests(subset) {
-  const target = subset === undefined ? ["npm", "test"] : ["node", "--experimental-strip-types", "--test", `${subset}*.test.ts`];
+async function runTests(files) {
+  const target = files === undefined
+    ? ["npm", "test"]
+    : ["node", "--experimental-strip-types", "--test", ...files];
   return sh(target[0], target.slice(1));
 }
 

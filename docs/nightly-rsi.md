@@ -43,13 +43,18 @@ retried three or more times, a run the owner cancelled, a run labelled
    continue if they already pass (that would not be a reproduction).
 3. **Tests are hashed** — after the fix phase the same hashes must hold, so a
    model cannot make the suite green by rewriting the test.
-4. **Protected paths** — `src/authority/`, `src/core/policy.ts`, `contracts`,
-   `.github/`, `scripts/`, `.claude/`, `package.json` may not appear in the diff.
+4. **Protected paths** — the safety plane (authority, policy, contracts,
+   verification, invariants, journal, run state, runtime, auth), review code,
+   `.github/`, `scripts/`, `.claude/`, dependency manifests, deployment files,
+   existing tests, and TypeScript test configuration may not appear in the
+   diff. A repair may only add files under `test/regression/`. The manifest
+   lives in `scripts/nightly-rsi-policy.mjs`.
 5. **Draft PR only** — the branch is pushed and `gh pr create --draft` runs;
    merging stays with the owner. If `gh` is unavailable a patch file is written
    to `~/.clone/rsi/` instead.
 
-1. **隔离 worktree**；2. **先写测试并脚本验红**；3. **测试文件哈希校验**；4. **受保护路径不可进入 diff**；
+1. **隔离 worktree**；2. **先写测试并脚本验红**；3. **测试文件哈希校验**；4. **受保护路径不可进入 diff**
+   （清单在 `scripts/nightly-rsi-policy.mjs`，包含策略、验证、Journal、Runtime、认证和部署文件）；
 5. **只产出草稿 PR**（`gh` 不可用时落为补丁文件）。
 
 The model runs headless (`claude -p`) with a narrow `--allowedTools` list and no
@@ -62,12 +67,14 @@ web tools, capped by `--max-turns`. Errors from either phase are written to
 ## Scheduling on macOS / 在 macOS 上定时
 
 Use launchd, not cron: an OAuth-authenticated Claude Code keeps its credentials
-in the login Keychain, which a bare cron session cannot unlock. Install
-`scripts/com.cloneai.rsi.plist.example` into `~/Library/LaunchAgents/`, adjust
-the paths, and load it in the GUI domain:
+in the login Keychain, which a bare cron session cannot unlock. The example
+first runs `clone-ai traces export`, so the nightly job does not silently find
+an empty directory. Install `scripts/com.cloneai.rsi.plist.example` into
+`~/Library/LaunchAgents/`, adjust the paths, and load it in the GUI domain:
 
 用 launchd 而不是 cron：OAuth 登录的 Claude Code 把凭据放在登录钥匙串里，纯 cron 会话
-解不开它。把示例 plist 放进 `~/Library/LaunchAgents/`，改好路径后在 GUI 域加载：
+解不开它。示例会先执行 `clone-ai traces export`，避免夜间任务静默读到空目录。把示例 plist
+放进 `~/Library/LaunchAgents/`，改好路径后在 GUI 域加载：
 
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cloneai.rsi.plist

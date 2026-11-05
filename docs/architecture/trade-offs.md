@@ -486,4 +486,3 @@ flood of approvals trains the owner to approve blindly, which defeats the gate.
 ones are decided.
 
 **Status:** the bucket size and the cap of 10 are assumed, not tuned.
-

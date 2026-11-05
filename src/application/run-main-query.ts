@@ -79,7 +79,6 @@ export async function runMainAgentQuery(
       // Mining is optional; a missing mining path must not fail the reply.
       // 提炼是可选的；提炼路径缺失不能导致回复失败。
     }
-
     let reply = "";
     // Declared before the subscription so the callback never touches a
     // binding that is still in its temporal dead zone.
