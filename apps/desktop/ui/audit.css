@@ -153,3 +153,9 @@ body.empty-conversation .welcome { padding-bottom: 0; }
 .au-applied-mark { color: var(--au-ok); font-size: 11.5px; margin-right: 4px; }
 .au-btn-primary { background: #20242c; border-color: #20242c; color: #fff; }
 .au-btn-primary:hover:not(:disabled) { background: #2c323c; }
+
+/* Self-check loop: one card with the latest round and a short history. 自检回路：一张卡片，显示最近一轮与简短历史。 */
+.au-selfcheck { margin-bottom: 14px; }
+.au-history { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.au-history li { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: var(--subtle, #5c6675); }
+.au-history time { color: var(--muted, #8791a1); font-variant-numeric: tabular-nums; }

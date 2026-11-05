@@ -6,6 +6,16 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-05 — The agent runs its own adversarial suite and repair loop
+
+**Decision.** Add a deterministic, offline adversarial suite (injection wrapping, approval replay/expiry/forwarding, protected paths and symlink escapes, tool credentials in worker env, secret-memory recall, trace redaction, rate limits) plus a self-check loop that records every round in the journal and, on a red probe, exports the failure as a trace for the existing gated repair lane. A round runs the suite, `npm run gate`, and (optionally) `npm test`; repairs still produce a draft PR and merging stays with the owner.
+
+**Alternatives rejected.** (a) Model-driven red teaming as the primary loop — nondeterministic, costs tokens per round, and cannot be compared across runs; kept as a later layer. (b) Letting the loop edit code directly — violates the existing repair gates and makes "did it improve?" unanswerable. (c) A separate test runner — the repository already has `npm run gate` and `node --test`; a second runner would drift.
+
+**Evidence.** Every probe corresponds to a boundary that already exists in code and has a unit test or prior incident: forwarded WhatsApp content (shipped with `forwarded` + `<untrusted_data>`), approval codes (one-time, hashed, TTL), `forbiddenRoots`, `assertWorkerEnvName`, secret-memory exclusion, `digestEvents`. The suite turns those into one measured, recorded signal instead of scattered assumptions. Deterministic probes pass on this revision; the loop's repair branch is exercised with `--dry-run`.
+
+**Cost and reversal condition.** Each round is CPU-only and adds one journal event plus a report file; repairs cost model tokens only when a probe is red and `--repair` is passed. Reverse this if the suite stops distinguishing a regression from noise (probes start passing regardless of code), or if a real incident shows the probe set missing the class that failed — extend the suite rather than loosening it.
+
 ## 2026-11-05 — Every Agent invocation is audited outside CLONE_HOME
 
 **Decision.** Every Main Agent invocation writes a shared append-only record
