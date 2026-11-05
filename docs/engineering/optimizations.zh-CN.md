@@ -393,3 +393,20 @@
   使用 Pi。未设置的情况依赖环境，因此当前运行时在回合记录（`provider`）里可见，而不是
   靠一个隐含的开关。
 - **推翻条件：** 见取舍条目。
+
+## 2026-11-05 — direct / research / draft / review 默认使用原生 Worker
+
+- **目标 / 假设：** 默认使用已验证的进程内 Worker，但不强加给 external 角色，也不覆盖
+  所有者已保存的选择。
+- **取舍：** [Worker 默认](../architecture/trade-offs.zh-CN.md#2026-11-05--配置了端点的原生-worker-成为可承担角色的默认)。
+- **变更：** 设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` 时，
+  `defaultWorkerProfiles(environment)` 与 `WorkerSettingsStore` 的 `normalize` 让除
+  `external` 外的角色默认使用 `native`；已保存的 Provider id 仍然优先，未知或与角色不
+  兼容的保存值仍回退到默认。
+- **Eval：** `test/worker-defaults.test.ts`——有/无端点时的角色矩阵、缺失设置文件、已保存
+  的 `pi` 选择被保留。全量：582 个测试 / 579 通过 / 3 跳过；typecheck、gate 与双语文档
+  通过。设置端点后手工检查输出：direct/research/draft/review 为 `native`，external 为
+  `codex-cli`。
+- **优点 / 缺点：** 配置了端点的部署不再取决于恰好装了哪个 CLI；`external` 仍走受治理的
+  CLI 路径。原生 Worker 只有文件工具，因此日后需要网络或外部动作的角色必须更换 Provider。
+- **推翻条件：** 见取舍条目。

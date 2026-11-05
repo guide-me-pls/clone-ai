@@ -80,32 +80,45 @@ const DEFAULT_AGENTS: WorkerProfile[] = [
 
 /**
  * Return a fresh default catalog so callers never mutate the module-level
- * settings. The catalog is planning metadata, not an execution grant.
+ * settings. When the native endpoint is configured, the roles it can serve
+ * default to the in-process worker; external stays on the CLI path because the
+ * native worker has no governed action connector.
  *
- * 返回一份全新的默认 Agent 目录，避免调用方修改模块级设置。这个目录只是规划元数据，
- * 不是执行授权。
+ * 返回一份全新的默认 Agent 目录，避免调用方修改模块级设置。配置了原生端点时，它可承担的
+ * 角色默认使用进程内 Worker；external 保留 CLI 路径，因为原生 Worker 没有受治理的动作
+ * 连接器。
  */
-export function defaultWorkerProfiles(): WorkerProfile[] {
-  return DEFAULT_AGENTS.map((agent) => ({ ...agent }));
+export function defaultWorkerProfiles(environment: NodeJS.ProcessEnv = process.env): WorkerProfile[] {
+  return defaultAgents(environment);
+}
+
+function defaultAgents(environment: NodeJS.ProcessEnv): WorkerProfile[] {
+  const nativeAvailable = Boolean(environment.CLONE_AI_NATIVE_MODEL?.trim()) && Boolean(environment.CLONE_AI_NATIVE_BASE_URL?.trim());
+  return DEFAULT_AGENTS.map((agent) => ({
+    ...agent,
+    providerId: nativeAvailable && agent.role !== "external" ? "native" : agent.providerId,
+  }));
 }
 
 export class WorkerSettingsStore {
   readonly #path: string;
   readonly #providers: ProviderRegistry;
+  readonly #environment: NodeJS.ProcessEnv;
   #writes: Promise<void> = Promise.resolve();
 
-  constructor(path: string, providers: ProviderRegistry = builtInProviders) {
+  constructor(path: string, providers: ProviderRegistry = builtInProviders, environment: NodeJS.ProcessEnv = process.env) {
     this.#path = path;
     this.#providers = providers;
+    this.#environment = environment;
   }
 
   async get(): Promise<CloneSettings> {
     try {
       const source = await readFile(this.#path, "utf8");
-      return normalize(JSON.parse(source) as Partial<CloneSettings>, this.#providers);
+      return normalize(JSON.parse(source) as Partial<CloneSettings>, this.#providers, this.#environment);
     } catch (error: unknown) {
       if (isMissingFile(error)) {
-        return { agents: defaultWorkerProfiles() };
+        return { agents: defaultWorkerProfiles(this.#environment) };
       }
       throw error;
     }
@@ -153,10 +166,10 @@ export class WorkerSettingsStore {
   }
 }
 
-function normalize(input: Partial<CloneSettings>, providers: ProviderRegistry): CloneSettings {
+function normalize(input: Partial<CloneSettings>, providers: ProviderRegistry, environment: NodeJS.ProcessEnv): CloneSettings {
   const configured = new Map((input.agents ?? []).map((agent) => [agent.id, agent]));
   return {
-    agents: DEFAULT_AGENTS.map((agent) => {
+    agents: defaultAgents(environment).map((agent) => {
       const saved = configured.get(agent.id);
       const savedProvider = saved?.providerId;
       // An unknown or role-incompatible saved provider falls back to the

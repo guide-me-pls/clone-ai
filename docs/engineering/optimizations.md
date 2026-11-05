@@ -564,3 +564,24 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   is environment-dependent, so the active runtime is visible in the turn record
   (`provider`) rather than implied by a flag.
 - **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — Native worker defaults for direct, research, draft and review
+
+- **Goal / hypothesis:** use the validated in-process worker by default, without
+  forcing it on the external role or overriding an owner's saved choice.
+- **Trade-off:** [worker defaults](../architecture/trade-offs.md#2026-11-05--native-worker-is-the-default-for-eligible-roles-when-configured).
+- **Change:** `defaultWorkerProfiles(environment)` and
+  `WorkerSettingsStore`'s `normalize` choose `native` for every role except
+  `external` when `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are set;
+  a saved provider id still wins, and an unknown or role-incompatible saved id
+  still falls back to the default.
+- **Eval:** `test/worker-defaults.test.ts` — the role matrix with and without the
+  endpoint, a missing settings file, and a saved `pi` choice surviving. Full
+  suite: 582 tests / 579 pass / 3 skipped; typecheck, gate and bilingual docs.
+  Manual check with the endpoint set printed `native` for direct/research/draft/
+  review and `codex-cli` for external.
+- **Pros / cons:** configured deployments stop depending on which CLI happens to
+  be installed; `external` stays on the governed CLI path. The native worker has
+  file tools only, so a role that later needs network or external actions must
+  change provider.
+- **Reversal condition:** see the trade-off entry.

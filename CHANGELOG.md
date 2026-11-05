@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Native worker defaults for eligible roles
+
+With `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` set, the default agents for `direct`, `research`, `draft` and `review` now use the in-process native worker; `external` stays on the CLI path because the native worker has no governed action connector. A provider saved in settings still wins, and without the endpoint the previous CLI defaults apply.
+
+设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` 后，`direct`、`research`、`draft`、`review` 的默认 Agent 现在使用进程内的原生 Worker；`external` 仍走 CLI 路径，因为原生 Worker 没有受治理的动作连接器。设置中保存的 Provider 仍然优先，未配置端点时沿用之前的 CLI 默认。
+
 ### Native Main Agent is the default when configured
 
 With `CLONE_AI_MAIN_RUNTIME` unset, the Main Agent now uses the native in-process loop when `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are present; otherwise it stays on Pi. `CLONE_AI_MAIN_RUNTIME=pi` forces Pi, `=native` forces native, and an unknown value is refused. A live smoke without the flag recorded `provider: "native"`, and the full suite still passes.

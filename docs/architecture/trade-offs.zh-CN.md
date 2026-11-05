@@ -16,6 +16,23 @@
 **代价和推翻条件。** 自检会变慢并依赖 macOS 构建工具链。如果开发环境改用具热更新的
 运行时，应从这个路径移除 App 包重建。
 
+## 2026-11-05 — 配置了端点的原生 Worker 成为可承担角色的默认
+
+**决定。** 设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` 时，默认 Agent
+目录把 direct、research、draft、review 的 `providerId` 设为 `native`。`external` 保留
+CLI 默认，因为原生 Worker 没有受治理的动作连接器。没有端点时保留 CLI 默认。所有者已在
+设置中保存的 Provider id 始终优先于默认。
+
+**依据。** 原生 Worker 通过了 5/5 可靠性 benchmark（包括预期的 `no_artifact` 失败），
+在每次工具调用时执行 Scope 校验并报告精确用量。默认目录只在没有设置文件、或某个 Agent
+未被所有者改动时使用；保存的选择会被保留。
+
+**代价。** 默认 Agent 现在依赖原生端点可用；原生 Worker 只有文件工具（无网络或外部动作）；
+原本依赖 Claude/Codex/Pi 隐式默认的所有者，若不保存选择，会看到不同的 Worker。
+
+**推翻条件。** 若原生 Worker 在 benchmark 上回退，或某个角色需要它没有的工具，就为该角色
+恢复 CLI 默认。
+
 ## 2026-11-05 — 配置了端点的原生主 Agent 成为默认
 
 **决定。** `CLONE_AI_MAIN_RUNTIME` 未设置时，若存在 `CLONE_AI_NATIVE_MODEL` 与
