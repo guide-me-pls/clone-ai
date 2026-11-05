@@ -78,6 +78,12 @@ is present, the needle is in it, the newest turn stayed verbatim, the reply
 contains the needle, and there was no error. The report lands under
 `benchmark/results/`.
 
+## Image validation (`npm run bench:images`)
+
+Generates a solid red PNG, sends it as a data URL through the native Main Agent,
+and checks that the image part reached the endpoint and the model answered red.
+The report lands under `benchmark/results/`.
+
 ## Regression gate (`npm run gate`)
 
 The offline gate runs on every commit in CI and costs nothing: it re-runs the

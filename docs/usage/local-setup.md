@@ -105,8 +105,9 @@ The native loop writes the same `main_agent.turn_*`, `agent.tool_*` and
 `search_history` from that ledger. It streams tokens as they arrive and compacts
 a long transcript deterministically: the newest turns stay verbatim within a
 12,000-character budget, older turns become a bounded summary, and the full text
-stays in the turn ledger. Image attachments are still refused in this version.
-Unset `CLONE_AI_MAIN_RUNTIME` to return to Pi.
+stays in the turn ledger. Image attachments are sent as OpenAI-style data URLs
+in the current message; they are per-turn and not stored in the ledger. Unset
+`CLONE_AI_MAIN_RUNTIME` to return to Pi.
 
 ## 5. Where your data lives
 

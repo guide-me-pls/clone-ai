@@ -427,7 +427,8 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   table is captured from the Pi extension so the two runtimes cannot drift; the
   shared invocation ledger identifies the caller.
 - **Cons / next time:** at that point non-streaming and without compaction;
-  both were added next (see the entry below). Images refused; `search_history`
+  both were added next (see the entry below). Images were refused at that point
+  and are supported now; `search_history`
   searches the turn ledger, not Pi session files; native turns are not
   resumable as Pi sessions.
 - **Reversal condition:** see the trade-off entry.
@@ -521,4 +522,22 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   It does not prove that a fact buried later in an old turn survives: the
   summary truncates each old turn to 160 characters and the whole summary to
   2,000. That remains the known weakness of deterministic compaction.
+- **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — Native Main Agent accepts images
+
+- **Goal / hypothesis:** close the last capability gap between the Pi and native
+  Main Agents: image attachments.
+- **Trade-off:** [image attachments](../architecture/trade-offs.md#2026-11-05--native-main-agent-accepts-image-attachments).
+- **Change:** the native user message becomes OpenAI-style content parts when
+  images are present (`text` plus `image_url` data URLs); `run-main-query` passes
+  the attachments instead of refusing them. Images are per-turn and are not
+  persisted in the turn ledger.
+- **Eval:** `test/native-main-agent.test.ts` asserts the image part and data URL
+  in the captured request. Live validation: a 64×64 solid red PNG was sent and
+  the reply was `Red.`; image part present, no error, 3,806 tokens, 1 model call;
+  result `benchmark/results/native-main-images-2026-11-05T10-01-47-161Z.json`.
+- **Pros / cons:** the native flag no longer removes a capability; base64 inflates
+  the request, there is no downscaling, and the image cannot be recovered from
+  the ledger later.
 - **Reversal condition:** see the trade-off entry.

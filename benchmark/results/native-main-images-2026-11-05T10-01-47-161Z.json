@@ -1,0 +1,14 @@
+{
+  "ranAt": "2026-11-05T10:01:47.161Z",
+  "model": "360/anthropic/claude-sonnet-5-5",
+  "endpoint": "http://127.0.0.1:3425",
+  "imageBytes": 168,
+  "reply": "Red.",
+  "totalTokens": 3806,
+  "modelCalls": 1,
+  "checks": {
+    "imagePartPresent": true,
+    "replyMentionsRed": true,
+    "noError": true
+  }
+}

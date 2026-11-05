@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Native Main Agent accepts images
+
+The native Main Agent now sends image attachments as OpenAI-style `image_url` data URLs in the current user message, so switching from Pi no longer removes the feature. Images are per-turn and not stored in the turn ledger. A live validation (64×64 red PNG) returned "Red." with 3,806 tokens.
+
+原生主 Agent 现在把图片附件以 OpenAI 风格 `image_url` data URL 放进当前 user 消息，因此从 Pi 切换过来不再丢失该功能。图片是逐回合的，不写入回合台账。实机验证（64×64 红色 PNG）返回 "Red."，消耗 3,806 tokens。
+
 ### Native Main Agent streams and compacts
 
 The flag-gated native Main Agent now streams SSE tokens to the interface, assembles streamed tool-call fragments, parses the final usage chunk, and compacts long transcripts deterministically: the newest turns stay verbatim within `historyChars` (12,000), older turns become a bounded summary, and the full text remains in the turn ledger for `search_history`. The Pi-versus-native comparison still passes 3/3 on both after the change. A live long-context validation (24 seeded turns, 4,000-char budget) confirmed the endpoint accepts the summary and a fact from the oldest turn survives it.

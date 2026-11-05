@@ -56,6 +56,8 @@ export interface NativeMainAgentOptions {
   historyTurns?: number;
   /** Character budget for the verbatim transcript before deterministic compaction. 逐字对话记录在确定性压缩前的字符预算。 */
   historyChars?: number;
+  /** Images attached to this turn, sent as OpenAI-style data URLs. 本回合附带的图片，以 OpenAI 风格 data URL 发送。 */
+  images?: Array<{ type: "image"; data: string; mimeType: string }>;
   cwd?: string;
 }
 
@@ -65,8 +67,13 @@ export interface NativeMainAgentResult {
   newRuns: Array<Pick<Run, "id" | "status" | "planId">>;
 }
 
+type NativeContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 type NativeMessage =
-  | { role: "system" | "user"; content: string }
+  | { role: "system"; content: string }
+  | { role: "user"; content: string | NativeContentPart[] }
   | { role: "assistant"; content: string | null; tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> }
   | { role: "tool"; tool_call_id: string; content: string };
 
@@ -167,10 +174,26 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
     turns: options.historyTurns ?? 24,
     chars: options.historyChars ?? 12_000,
   });
+  const images = options.images ?? [];
+  const currentText = options.text.length > 0
+    ? options.text
+    : images.length > 0 ? "(see attached image)" : "(empty message)";
+  const userMessage: NativeMessage = images.length === 0
+    ? { role: "user", content: currentText }
+    : {
+      role: "user",
+      content: [
+        { type: "text", text: currentText },
+        ...images.map((image) => ({
+          type: "image_url" as const,
+          image_url: { url: `data:${image.mimeType};base64,${image.data}` },
+        })),
+      ],
+    };
   const messages: NativeMessage[] = [
     { role: "system", content: compiled.systemPrompt },
     ...history,
-    { role: "user", content: options.text.length === 0 ? "(empty message)" : options.text },
+    userMessage,
   ];
   const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, modelCalls: 0 };
   let sawUsage = false;
