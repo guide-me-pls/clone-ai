@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+.env
+deploy/server.env
+.clone
+.clone-ai
+dist
+node_modules
+apps/desktop/.build
+apps/desktop/src-tauri/binaries
+apps/desktop/src-tauri/target
+*.log
+server-log.txt

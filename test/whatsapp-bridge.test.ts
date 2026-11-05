@@ -69,6 +69,7 @@ function config(overrides: Partial<WhatsAppCloudConfig> = {}): WhatsAppCloudConf
     appSecret: secret,
     allowedNumbers: allowedWhatsAppNumbers(["+86 138 0000 0000"]),
     graphVersion: "v23.0",
+    host: "127.0.0.1",
     port: 4318,
     ...overrides,
   };
@@ -400,4 +401,13 @@ test("saving an incomplete binding is an input error, not a partial file", async
     WhatsAppBindingInputError,
   );
   await assert.rejects(readFile(join(directory, "whatsapp.env"), "utf8"), /ENOENT/);
+});
+
+test("server deployment exposes a fixed webhook without requiring cloudflared", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-whatsapp-server-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const status = await new WhatsAppSetupService(directory, "https://agent.example.com").status();
+  assert.equal(status.tunnel.managed, true);
+  assert.equal(status.tunnel.running, true);
+  assert.equal(status.tunnel.webhookUrl, "https://agent.example.com/webhook");
 });
