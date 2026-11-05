@@ -19,6 +19,30 @@ made fresh audit and IME fixes invisible.
 macOS build toolchain. If development moves to a live-reload runtime, remove
 the bundle rebuild from this path.
 
+## 2026-11-05 — Native Main Agent accepts image attachments
+
+**Decision.** The native Main Agent sends image attachments as OpenAI-style
+`image_url` data URLs in the current user message, alongside the text part. The
+Pi-versus-native switch therefore no longer removes a capability. Images are
+per-turn: they are not persisted in the turn ledger, so `search_history` finds
+the text, not the pixels. No downscaling is done in this version; an endpoint
+that rejects a large payload fails the turn with its own error.
+
+**Evidence.** The main branch added media attachments to the Main Agent, while
+the native branch explicitly refused images; switching `CLONE_AI_MAIN_RUNTIME`
+silently removed a feature. Magpie's catalog advertises image input for the
+models used here, and the OpenAI-compatible content-parts format is what the
+native client already speaks.
+
+**What it costs.** Base64 images inflate the request and the prompt token count;
+a very large image can exceed an endpoint's body limit. The full image is not
+recoverable from the ledger later.
+
+**Reversal condition.** If payload size becomes a practical limit, store
+attachments as content-addressed files under the clone home and send file URLs
+when the endpoint supports them, or downscale before encoding. If image history
+must be searchable, persist attachment locators in the turn event.
+
 ## 2026-11-05 — Native Main Agent streams and compacts deterministically
 
 **Decision.** The native Main Agent requests SSE streaming with

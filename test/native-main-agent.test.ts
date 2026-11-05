@@ -164,3 +164,31 @@ test("a long transcript is compacted deterministically, keeping the newest turns
   assert.ok(userMessages.length < 20);
   assert.ok(userMessages.some((message) => String(message.content).startsWith("question 19 ")));
 });
+
+test("image attachments become OpenAI-style data URLs", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-native-image-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  let body: { messages: Array<{ role: string; content?: unknown }> } | undefined;
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    body = JSON.parse(String(init.body)) as { messages: Array<{ role: string; content?: unknown }> };
+    return sseResponse([
+      { choices: [{ delta: { content: "red" } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      { choices: [], usage: { prompt_tokens: 100, completion_tokens: 1, total_tokens: 101 } },
+    ]);
+  }) as unknown as typeof fetch;
+  const result = await runNativeMainAgentTurn({
+    dataDirectory: directory,
+    text: "What color is this image?",
+    source: "cli",
+    endpoint: { baseUrl: "http://gateway", model: "m" },
+    fetchImpl,
+    images: [{ type: "image", data: "AAAA", mimeType: "image/png" }],
+  });
+  assert.equal(result.reply, "red");
+  const user = body?.messages.find((message) => message.role === "user");
+  assert.ok(Array.isArray(user?.content));
+  const parts = user!.content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
+  assert.ok(parts.some((part) => part.type === "text" && part.text === "What color is this image?"));
+  assert.ok(parts.some((part) => part.type === "image_url" && part.image_url?.url === "data:image/png;base64,AAAA"));
+});

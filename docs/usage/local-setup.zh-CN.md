@@ -96,7 +96,8 @@ clone-ai "你好"
 原生循环写入相同的 `main_agent.turn_*`、`agent.tool_*` 与 `usage.recorded` 事件，
 以回合台账作为对话记录，并从台账检索 `search_history`。它会随 token 到达流式输出，
 并对长对话做确定性压缩：最新轮次在 12,000 字符预算内保留原文，较早轮次变成有界摘要，
-全文仍留在回合台账中。本版本仍拒绝图片附件。取消 `CLONE_AI_MAIN_RUNTIME` 即回到 Pi。
+全文仍留在回合台账中。图片附件以 OpenAI 风格 data URL 随当前消息发送；它们是逐回合的，
+不存入台账。取消 `CLONE_AI_MAIN_RUNTIME` 即回到 Pi。
 
 ## 5. 数据都在哪里
 
