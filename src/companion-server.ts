@@ -31,6 +31,9 @@ import {
 import { MemoryGovernance } from "./memory/memory-governance.ts";
 import { ImprovementService } from "./improvement/improvement-service.ts";
 import { parseAttachments } from "./main-agent/attachments.ts";
+import { buildAttention } from "./opportunity/attention.ts";
+import { PersonalStateStore } from "./state/personal-state-store.ts";
+import { sweepConnectors } from "./connectors/connector-registry.ts";
 import { scanMemoryPii } from "./memory/memory-hygiene.ts";
 import { describeAuthority, StandingPolicyStore } from "./authority/standing-policy-store.ts";
 import { OpportunityService } from "./opportunity/opportunity-service.ts";
@@ -1329,6 +1332,24 @@ async function handleRequest(
   if (request.method === "GET" && url.pathname === "/api/reporting/bad-cases") {
     const text = await context.badCaseLog.readLog();
     sendJson(response, 200, { text });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/attention") {
+    // One list of what needs the owner, composed from the services that own
+    // each item. Read-only: acting on an item goes through its service.
+    // 一份"需要所有者处理"的列表，由拥有每一项的服务合成。只读：对某项采取行动要走它所属的服务。
+    const state = await new PersonalStateStore(context.journal).refresh();
+    const sweep = await sweepConnectors({ dataDirectory: context.dataDirectory, workspacePath: context.workspacePath, limitPerConnector: 5 });
+    sendJson(response, 200, {
+      items: buildAttention({
+        commitments: Object.values(state.commitments),
+        goals: Object.values(state.goals),
+        observations: sweep.observations.map((observation, index) => ({ ...observation, connectorId: sweep.results[index]?.connectorId })),
+        candidates: await context.memoryGovernance.pendingCandidates(),
+        suggestions: await context.improvement.pending(),
+        opportunities: await context.opportunityService.list(),
+      }),
+    });
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/opportunities") {
