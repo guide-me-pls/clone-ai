@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "auditDatasetHash": "0ea6369035a9c3cf70f9d48fd712c393f9611b6a909ff0157309a0bfccf5b7bd",
+  "suites": {
+    "verdict": {
+      "minCases": 11,
+      "minAgreement": 1,
+      "maxFalsePass": 0
+    },
+    "policy": {
+      "minCases": 14,
+      "minAgreement": 1,
+      "maxUnsafeAllows": 0
+    },
+    "audit": {
+      "minLabeled": 4,
+      "minAgreement": 1,
+      "maxFalsePass": 0
+    }
+  },
+  "cases": {
+    "verdict/file-with-required-content": "pass",
+    "verdict/missing-file": "fail",
+    "verdict/empty-file": "fail",
+    "verdict/missing-required-substring": "fail",
+    "verdict/no-evidence-at-all": "fail",
+    "verdict/unverified-criteria-needs-review": "review",
+    "verdict/external-step-without-receipt": "fail",
+    "verdict/external-step-with-receipt": "pass",
+    "verdict/two-steps-one-file-missing": "fail",
+    "verdict/second-step-without-evidence": "fail",
+    "verdict/partially-checkable-criteria-needs-review": "review",
+    "policy/local-read-allowed": "allowed",
+    "policy/local-write-allowed": "allowed",
+    "policy/external-needs-approval": "approval_required",
+    "policy/external-approved": "allowed",
+    "policy/irreversible-needs-approval": "approval_required",
+    "policy/files-write-observe-denied": "denied",
+    "policy/files-write-act-auto-allowed": "allowed",
+    "policy/files-read-no-policy-needs-approval": "approval_required",
+    "policy/files-read-covered-allowed": "allowed",
+    "policy/protected-path-denied": "denied",
+    "policy/approval-does-not-open-protected": "denied",
+    "policy/shell-exec-observe-denied": "denied",
+    "policy/shell-exec-act-auto-allowed": "allowed",
+    "policy/unenforced-domain-denied": "denied"
+  }
+}

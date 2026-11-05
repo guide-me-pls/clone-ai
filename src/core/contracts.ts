@@ -352,7 +352,14 @@ export type JournalEventType =
   // tokens; otherwise duration and model id still land so the ledger is not empty.
   // 模型回合的费用/时长。SDK 有 token 时从会话元数据抄来；否则仍记下时长与模型 id，
   // 账本不会是空的。
-  | "usage.recorded";
+  | "usage.recorded"
+  // What the Main Agent was told before it answered: hashes of the charter,
+  // briefing, and tool table plus the model that read them. Without this a
+  // failure cannot be attributed to a prompt revision, and an "improvement"
+  // cannot be compared with the baseline it replaced.
+  // 主 Agent 回答前收到的输入：charter、简报与工具表的哈希，以及读取它们的模型。
+  // 没有它，失败无法归因到某一版提示词，"改进"也无法与它所替换的基线比较。
+  | "main_agent.prompt_snapshot";
 
 export interface JournalEvent {
   id: string;
