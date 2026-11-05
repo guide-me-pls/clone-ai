@@ -6,6 +6,16 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Failed traces and a nightly repair pipeline (draft PRs only)
+
+Failures now become documents a repair job can read: `clone-ai traces export` writes one redacted JSON per failed or cancelled run under `~/.clone/failed-traces/`, including the request, plan, per-step provider, failure stage/category, gateway errors, evidence, and the owner's label. Implicit failures are captured too — a step retried three or more times, a cancelled run, an "不合格" label, or an owner correction ("不对，重来") within ten minutes of the run ending. `scripts/nightly-rsi.mjs` turns those into a repair: an isolated worktree, a regression test written first and verified red by the script, test files hashed before the fix, a fix phase under a narrow tool allowlist, a protected-path diff check, then `npm test` + `tsc`, a commit, and a **draft** PR (or a patch file). Merging stays with the owner. `launchd` runs it in the GUI domain so Claude Code's Keychain login works; a lock file prevents overlapping runs.
+
+Workers may now only inherit model credentials: a provider declaration that lists tool credentials (`GITHUB_TOKEN`, `AWS_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `*_SECRET`, …) is refused before launch, with the error pointing at the credential broker.
+
+失败现在会变成修复任务可读的文档：`clone-ai traces export` 为每个失败或取消的 Run 在 `~/.clone/failed-traces/` 写一份脱敏 JSON，包含请求、计划、每一步的 Provider、失败阶段与类别、网关错误、证据与所有者判定。隐性失败也会记录——同一步骤重试三次以上、被取消、被判"不合格"，或运行结束后十分钟内的"不对，重来"。`scripts/nightly-rsi.mjs` 把这些变成一次修复：隔离 worktree、先写回归测试并由脚本验红、修复前对测试文件做哈希、窄工具白名单下修复、受保护路径 diff 检查，然后 `npm test` + `tsc`、提交、**草稿** PR（或补丁文件）。合并权仍在所有者。`launchd` 在 GUI 域运行以读取 Claude Code 的钥匙串登录；锁文件防止重叠运行。
+
+Worker 现在只能继承模型凭据：Provider 声明里若出现工具凭据（`GITHUB_TOKEN`、`AWS_*`、`GOOGLE_APPLICATION_CREDENTIALS`、`*_SECRET` 等），会在启动前被拒绝，错误信息指向凭据代管。
+
 ### AI self-review with one-click, reversible configuration changes
 
 The evaluation tab can now have the system review its own audit: pass rate, failure stages and categories, gateway errors, durations, costs, and the owner's labels are compressed into one digest, and a review model returns findings plus a short list of configuration actions. Each action is validated against what this machine can actually do (a level the CLI declares, a model id that appears in the facts), applied only when the owner clicks, journaled as `recommendation.applied` with the previous and new value, and reversible from the same row. The surface is deliberately narrow — worker model/effort and Main Agent model/effort; code, prompts, policy and evidence rules are not reachable, and nothing runs on its own. When the model is unavailable the review degrades to measured facts rather than inventing advice.

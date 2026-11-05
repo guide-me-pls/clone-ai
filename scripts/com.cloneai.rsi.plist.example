@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Copy to ~/Library/LaunchAgents/com.cloneai.rsi.plist, fix REPO and DATA, then:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cloneai.rsi.plist
+  The GUI domain is required for Claude Code's Keychain-backed OAuth login.
+  复制到 ~/Library/LaunchAgents/ 并改好路径；必须加载在 GUI 域，Claude Code 的钥匙串登录
+  才能被读取。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cloneai.rsi</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd "$HOME/projects/clone-ai" &amp;&amp; exec node scripts/nightly-rsi.mjs --max-traces 5</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <!-- launchd does not expand $HOME in PATH either; add /Users/<you>/.local/bin
+         as an absolute entry if claude lives there. launchd 同样不展开 PATH 里的 $HOME。 -->
+    <!-- launchd does not expand $HOME in values; leave these unset to use ~/.clone,
+         or write absolute paths. launchd 不会展开值里的 $HOME；留空沿用 ~/.clone，或写绝对路径。 -->
+    <key>RSI_NOTIFY_URL</key>
+    <string></string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>17</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <!-- Replace with absolute paths; launchd does not expand ~ or $HOME here. 换成绝对路径。 -->
+  <key>StandardOutPath</key>
+  <string>/tmp/clone-ai-rsi.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/clone-ai-rsi.err.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
