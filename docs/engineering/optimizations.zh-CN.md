@@ -23,6 +23,75 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+## 2026-11-05 — 所有 Agent 调用共享审计
+
+- **目标 / 假设：** 即使接入 Agent 使用隔离 `CLONE_HOME`，每次 Main Agent 调用也要
+  出现在所有者审计中。
+- **取舍：** [在 CLONE_HOME 之外审计调用](../architecture/trade-offs.zh-CN.md#2026-11-05--所有-agent-调用在-clone_home-之外审计)。
+- **变更：** `src/audit/invocation-ledger.ts` 将调用者、请求、可见回复、错误、模型、
+  强度、Workspace、会话文件、Run id 与耗时写入
+  `~/.clone/audit/invocations.jsonl`。CLI、桌面 companion、WhatsApp 与独立 Main
+  Agent 入口共用同一账本。审计页新增 **Agent 调用** 页签，CLI 新增
+  `clone-ai invocations`。
+- **Eval：** `test/invocation-ledger.test.ts` 与 companion API 测试覆盖隔离主目录、
+  脱敏、失败回合、中断开始和详情输出。使用临时 `CLONE_HOME` 的真实回合出现在默认
+  账本中，调用者 `codex`、模型 `360/deepseek/deepseek-v4.1-flash`、强度 `high`、
+  回复 `OK`（invocation `7cb576ee`）。完整套件 568 项、565 通过、3 跳过、0 失败；
+  `npm run gate` 通过。
+- **执行链路：** 自修复运行暴露临时主目录导致审计不可见后，在当前工作区实现并验证。
+  同时保留验证器文件期望的回归覆盖。
+- **优点：** 所有者现在能看到谁调用了 Clone AI、问什么、回复什么、产生哪个 Run，
+  不再依赖调用方的数据目录。
+- **缺点 / 下次：** 账本是第二个明文存储；保留期与加密策略尚未可配置。
+- **推翻条件：** 如果明文 JSONL 不再满足威胁模型，迁移到加密的、所有者作用域审计存储。
+
+## 2026-11-05 — 记住夜间修复已消费的轨迹
+
+- **目标 / 假设：** 成功修复后不再重复处理未改变的轨迹；同一 runId 的文件内容
+  改变后仍可修复。
+- **取舍：** [runId 和文件指纹](../architecture/trade-offs.zh-CN.md#2026-11-05--按-runid-和文件指纹消费已修复轨迹)。
+- **变更：** `scripts/nightly-rsi-state.mjs` 用原子替换保存指纹与结果信息；
+  `scripts/nightly-rsi.mjs` 筛选批次并仅在成功结果后记录。配套声明、
+  `test/nightly-rsi-state.test.ts`、`docs/nightly-rsi.md` 和双语 CHANGELOG
+  说明并覆盖该契约。
+- **Eval：** 变更前代码检查显示没有消费状态；运行 `node --experimental-strip-types
+  --test test/nightly-rsi-state.test.ts` 因新模块不存在而失败，因此没有旧行为的实测
+  基线。变更后同一命令的 6 个确定性测试通过；`node --check
+  scripts/nightly-rsi-state.mjs`、`node --check scripts/nightly-rsi.mjs` 与
+  `npm run typecheck` 均通过。
+- **执行链路：** Main Agent 使用 DeepSeek V4.1 Flash、`high` 强度提出单步计划，
+  `draft-maker`/`codex-cli` 实现状态模块、接线、测试和文档。Runtime 随后把该步骤
+  判为失败，因为文件验证器把 `fs.rename`、`os.tmpdir`、`consumed-traces.json` 等
+  引号内标识符误当成工作区必须存在的文件。监工独立运行目标测试和 typecheck，均通过；
+  这个假失败作为独立验证器缺陷继续修复。耗时约 3.5 分钟；使用了实时模型调用，费用未测量。
+- **优点：** 结果判定与脚本共用；离线覆盖损坏状态、替换失败清理和内容改变后的重试。
+- **缺点 / 下次：** 本任务没有端到端运行修复或 dry run，完整的模型依赖行为仍属假设；
+  `npm test` 和 `npm run gate` 明确不在允许的命令范围内。
+- **推翻条件：** 需要跨机器持久共享账本，或文件字节变化但有效证据不变导致反复修复时，
+  替换这一文件方案。
+
+## 2026-11-05 — 保守恢复规划阶段孤儿
+
+- **目标 / 假设：** 关闭已放弃的规划 Run，同时不回收新建、已领取或已有计划的工作。
+  15 分钟宽限期未经测量，不能证明没有租约的规划者已经停止。
+- **取舍：** [规划孤儿宽限期](../architecture/trade-offs.zh-CN.md#2026-11-05--规划孤儿只在保守宽限期后恢复)。
+- **变更：** `src/core/runtime.ts` 检查时间与领取；Journal 契约及 SQLite 实现增加
+  条件围栏写入，拒绝并发 Run 变化。`test/claim-fencing.test.ts` 覆盖生命周期、阈值、
+  领取竞争、并发计划和不支持条件写入的存储。
+- **Eval：** 实现前，针对性孤儿恢复用例为红。实现后 `node --experimental-strip-types
+  --test test/claim-fencing.test.ts` 的 15 项全部通过，`npm run typecheck` 和
+  `npm run gate` 通过。关闭实时模型测试后，完整套件通过 545 项、跳过 3 项、0 失败。
+  第一次全量运行仅因一个遗留 WhatsApp 桥进程占用 4318 端口而失败；清理后套件干净。
+- **执行链路：** Main Agent 使用用户授权的 Magpie DeepSeek V4.1 Flash、`high` 强度
+  提出计划，`claude-code` 调研，`codex-cli` 实现并记录。自执行耗时约 17 分钟。它的
+  验证步骤错误地启用了实时测试并运行全量套件而挂起；监工取消该 Run、保留已完成的修改，
+  再独立运行针对性测试和完整确定性套件。模型费用未测量。
+- **优点：** 修复前复现失败；事务保护快照之后到达的计划；测试无需真实模型。
+- **缺点 / 下次：** 超时不能确认规划者是否存活，全量测试也未能在本环境通过。应使用
+  规划者租约和时长测量，并在测试前隔离工作区和端口。
+- **推翻条件：** 如果正常无领取规划超过 15 分钟，应在启用恢复前改用可靠的规划者租约，
+  或根据实测时长调整阈值。
+
 ## 2026-11-05 — 提示词溯源与离线回归门禁
 
 - **目标 / 假设：** 让主 Agent 的一轮回答可以归因到它真正读到的提示词，并让 harness

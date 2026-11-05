@@ -31,6 +31,27 @@ rule to declared work-order inputs or an explicit `requiredInputs` field; do not
 remove the failure on a required input.
 
 ## 2026-11-05 — The native worker becomes a provider with exact usage, still opt-in
+## 2026-11-05 — Every Agent invocation is audited outside CLONE_HOME
+
+**Decision.** Every Main Agent invocation writes a shared append-only record
+under `~/.clone/audit/invocations.jsonl`, independent of the invocation's
+`CLONE_HOME`. The record carries caller, surface, visible request and reply,
+error, workspace, data directory, model, effort, session file, Run ids and
+duration. An explicit `CLONE_AI_AUDIT_HOME` can relocate it for controlled
+deployments and tests.
+
+**Evidence.** Self-fix runs used a temporary `CLONE_HOME`; their journals were
+correct but invisible to the desktop audit, which reads the owner's normal
+home. After this change, a real DeepSeek V4.1 Flash `high` turn launched with
+an isolated home appeared in the shared default ledger with caller `codex` and
+reply `OK` (invocation `7cb576ee`).
+
+**Cost and reversal condition.** This is a second storage location and the
+visible reply is sensitive data; it is PII/token-redacted, truncated, and
+excludes private reasoning. Replace it with an encrypted owner-scoped store if
+the plaintext JSONL no longer meets the threat model.
+
+## 2026-11-05 — Require explicit intent for root-level file names
 
 **Decision.** `native` is registered in the provider catalog, so an owner can
 select it per agent like any CLI. The adapter's id is the configured agent id
@@ -45,6 +66,13 @@ but it was invisible to settings (only a special case in the agent registry),
 reported no usage, and its adapter identity was literally `native` rather than
 the configured agent. The turn/run audit can now carry exact usage; leaving the
 native path unmeasured would make any CLI-versus-native comparison impossible.
+**Evidence.** The nightly repair trace reported a false failure when the
+verifier interpreted `fs.rename`, `os.tmpdir`, `consumed-traces.json`, and
+`REPORT_DIR/consumed-traces.json` as required workspace files. Source
+inspection shows the previous extractor accepted dotted tokens without those
+distinctions. The targeted offline regression tests pass after the change;
+broader coverage remains a hypothesis. No before-change eval was run under
+this work order.
 
 **What it costs.** The owner must configure an OpenAI-compatible endpoint; the
 worker has no external-action tools, so `external` stays with governed
@@ -82,6 +110,25 @@ event. Tool arguments are stored as a redacted summary, not verbatim.
 content-addressed turn file (the prompt-snapshot pattern) and keep only its hash
 and locator in the event. If redaction proves insufficient for tool arguments,
 store the tool name and a hash only.
+## 2026-11-05 — Recover planning orphans only after a conservative grace period
+
+**Decision.** Fail a planning Run only if it has no plan, no live claim, and
+its last update is more than 15 minutes old. Acquire a recovery claim and
+atomically reject the failure if the Run changed since the refreshed projection.
+Leave stores that cannot make that conditional fenced write untouched. Do not
+change recovery of running or verifying Runs.
+
+**Evidence.** Recovery currently scans only `running` and `verifying`; a
+planner that dies before producing a plan can leave a Run in `planning`
+indefinitely. Assuming 15 minutes is sufficient for ordinary unclaimed
+planning is conservative but not measured; an active planner without a lease
+can still exceed it. Immediate failure or age alone would endanger fresh or
+claimed work. Rechecking only in memory would allow a concurrent plan or
+cancellation to be overwritten before the failure is written.
+
+**Reversal condition.** If observed legitimate unclaimed planning takes more
+than 15 minutes, replace the timeout with a reliable planner lease or adjust
+the threshold based on measured durations before enabling this recovery.
 
 ## 2026-11-05 — Prompt provenance is a content-addressed file plus a journal event
 
@@ -633,3 +680,23 @@ flood of approvals trains the owner to approve blindly, which defeats the gate.
 ones are decided.
 
 **Status:** the bucket size and the cap of 10 are assumed, not tuned.
+
+## 2026-11-05 — Consume repaired traces by runId and file fingerprint
+
+**Decided.** Store the latest successful batch outcome for each runId alongside
+the SHA-256 of the exact input file, and skip only a matching pair. Mark only
+`fixed`, `pr-created`, or `patch-only`; an error remains eligible. Persist via
+a same-directory rename; an unreadable or malformed state falls back to empty.
+
+**Evidence and alternatives.** The current `loadTraces` reads the first files
+without a record of earlier outcomes, so unchanged failures are sent to repair
+again; this follows from code inspection, not a measured production incident.
+Always retrying wastes repair work; recording runId alone would suppress new
+content. The effectiveness of the complete model-dependent workflow remains
+**assumed**, since it is outside this offline work order. Lost or corrupt state
+can cause repeat work, and a later failure after a successful outcome does not
+roll that outcome back.
+
+**Reversal condition.** Replace this file-based scheme if a durable shared
+ledger is needed across machines, or if trace exports change bytes without
+changing actionable evidence often enough to cause repeated repairs.

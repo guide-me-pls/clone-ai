@@ -20,6 +20,7 @@ import { createMainAgentSession } from "./session.ts";
 import { recordPromptSnapshot } from "./prompt-snapshot.ts";
 import { beginMainAgentTurn, finishMainAgentTurn, observeMainAgentSession } from "./turn-audit.ts";
 import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
+import { beginInvocation } from "../audit/invocation-ledger.ts";
 
 const query = process.argv.slice(2).join(" ").trim();
 if (query.length === 0) {
@@ -38,6 +39,14 @@ await migrateLegacyCloneHome({
   targetDirectory: paths.dataDirectory,
 });
 const { session, prompt } = await createMainAgentSession({ dataDirectory: paths.dataDirectory, query });
+const audit = await beginInvocation({
+  prompt: query,
+  surface: "main",
+  workspacePath: paths.workspacePath,
+  dataDirectory: paths.dataDirectory,
+  command: "main",
+});
+let reply = "";
 
 // The turn's inputs are recorded before the model sees them, so a failed run
 // can be attributed to a prompt revision instead of guessed at.
@@ -55,14 +64,18 @@ const turn = await beginMainAgentTurn({
   ...(snapshot === undefined ? {} : { promptMaterialHash: snapshot.materialHash }),
 });
 observeMainAgentSession(session, turn);
-let reply = "";
+audit.note({
+  ...(sessionFile === undefined ? {} : { sessionFile }),
+  ...(prompt.modelId === undefined ? {} : { modelId: prompt.modelId }),
+  ...(prompt.provider === undefined ? {} : { provider: prompt.provider }),
+  ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
+});
 session.subscribe((event) => {
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
     reply += event.assistantMessageEvent.delta;
     process.stdout.write(event.assistantMessageEvent.delta);
   }
 });
-
 const started = Date.now();
 const beforeStats = (() => {
   try {
@@ -76,9 +89,11 @@ let turnError: string | undefined;
 try {
   await session.prompt(query);
   process.stdout.write("\n");
+  await audit.complete({ reply });
 } catch (error: unknown) {
   turnStatus = "failed";
   turnError = error instanceof Error ? error.message : String(error);
+  await audit.fail(error);
   throw error;
 } finally {
   const usage = collectSessionUsage(session, Date.now() - started, beforeStats);
