@@ -17,7 +17,8 @@
     "bench:memory": "node --experimental-strip-types benchmark/long-memory-eval.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "cli": "node src/cli/clone-ai.ts"
+    "cli": "node src/cli/clone-ai.ts",
+    "bench:journal": "node --experimental-strip-types benchmark/journal-stress.ts"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
