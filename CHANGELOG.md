@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Main Agent comparison benchmark
+
+`npm run bench:main` runs three fixed prompts — direct answer, authority read, plan proposal — through the Pi runtime and the native loop with the same model and an isolated clone home per task, recording duration, tokens, tool calls, created runs and whether the expectation held. First working run on Sonnet 5.5 via Magpie: both 3/3, 21,514 vs 21,160 tokens, 23.0s vs 24.9s summed. A first attempt on the broken gemini endpoint failed for both runtimes and is kept as evidence.
+
+`npm run bench:main` 用同一模型与每个任务独立的 clone home，把三条固定 Prompt——直接回答、读取权限、提案计划——分别跑过 Pi 运行时与原生循环，记录耗时、tokens、工具调用、产生的 Run 与预期是否成立。首次有效运行（Sonnet 5.5 经 Magpie）：两边均 3/3，21,514 vs 21,160 tokens，总耗时 23.0s vs 24.9s。第一次尝试因 gemini 端点故障对两个运行时都失败，保留为证据。
+
 ### A native Main Agent loop behind a flag
 
 `CLONE_AI_MAIN_RUNTIME=native` runs the Main Agent in-process against an OpenAI-compatible endpoint (`CLONE_AI_NATIVE_*`): the same charter/briefing/memory-push prompt, the same Kernel tools captured from the Pi extension, the turn ledger as transcript, and the same prompt-snapshot/turn/tool/usage audit. Pi remains the default and fallback. The first native loop is non-streaming, keeps the last 12 turns without compaction, refuses image attachments, and answers `search_history` from the turn ledger.

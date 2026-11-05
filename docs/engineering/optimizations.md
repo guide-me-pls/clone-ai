@@ -411,6 +411,43 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   shared invocation ledger identifies the caller.
 - **Cons / next time:** non-streaming; no compaction; images refused;
   `search_history` searches the turn ledger, not Pi session files; native turns
-  are not resumable as Pi sessions; no benchmark comparison of the native Main
-  Agent against Pi yet — the live smoke is one turn, not a benchmark.
+  are not resumable as Pi sessions. The Pi-versus-native comparison is below.
+- **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — Native vs Pi Main Agent comparison
+
+- **Goal / hypothesis:** check whether the native loop matches Pi on the same
+  Main Agent tasks — direct answer, an authority read, and a plan proposal —
+  before changing any default.
+- **Trade-off:** [native main](../architecture/trade-offs.md#2026-11-05--a-native-main-agent-loop-behind-a-flag-not-a-flag-day).
+- **Change:** new `benchmark/main-agent.ts` and `npm run bench:main`: three fixed
+  prompts, an isolated clone home per task, the same model and endpoint for both
+  runtimes, and a report with duration, tokens, tool calls, created runs, turn
+  status and whether the expectation held.
+- **Benchmark run — failed attempt:** command
+  `CLONE_AI_BENCH_MAIN_MODEL=360/google/gemini-4-argon npm run bench:main`;
+  both runtimes failed every task with a 400 from Magpie's upstream ("could not
+  connect to stream"). The endpoint, not the harness, was broken
+  (`main-agent-2026-11-05T09-01-57-162Z.json`).
+- **Benchmark run — working:** command
+  `CLONE_AI_BENCH_MAIN_MODEL=360/anthropic/claude-sonnet-5-5 npm run bench:main`;
+  model: `360/anthropic/claude-sonnet-5-5` through Magpie at
+  `http://127.0.0.1:3425`; tasks: direct-answer, authority-read, plan-proposal;
+  one run per runtime per task; isolated clone home; result file
+  `benchmark/results/main-agent-2026-11-05T09-06-13-005Z.json`. **Both 3/3**:
+  - direct-answer: Pi 3.3s / 3,865 tokens, native 5.9s / 3,795 tokens; no tools,
+    no runs.
+  - authority-read: Pi 7.6s / 8,197, native 9.5s / 7,958; both called
+    `get_authority` once; no runs.
+  - plan-proposal: Pi 12.1s / 9,452, native 9.5s / 9,407; both called
+    `propose_work_plan` once and created one run.
+- **What the numbers say:** same task outcomes, same tool choice and same
+  run creation. Tokens are nearly identical (Pi 21,514; native 21,160, about
+  1.6% fewer). Pi is slightly faster overall (23.0s vs 24.9s summed), but native
+  is faster on plan-proposal (9.5s vs 12.1s). One run per cell; treat this as a
+  parity check, not a statistical benchmark.
+- **Findings / next:** the native loop is behaviorally comparable on these
+  tasks. It still lacks streaming and compaction, so the next comparison should
+  include a long conversation and a multi-turn tool task; those are the likely
+  divergence points.
 - **Reversal condition:** see the trade-off entry.
