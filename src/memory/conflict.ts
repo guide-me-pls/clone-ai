@@ -128,3 +128,65 @@ export function dedupeContext<T extends { id: string; summary: string; score: nu
   }
   return kept;
 }
+
+/**
+ * Statements that explicitly replace an earlier one: "改到", "改用", "不再", "changed to".
+ *
+ * A supersede marker is the one reliable, cheap signal that a memory is not an
+ * addition but a replacement. Token similarity alone cannot tell "周五下午三点开会"
+ * from "周五的会改到周四下午" — they share two tokens out of a dozen — but the
+ * verb 改到 says what happened. When such a memory exists, an older memory of the
+ * same type sharing any substantive term is dropped from the *context* (not
+ * archived): a wrong drop costs one missed fact for one turn, an archived memory
+ * costs the owner a correction.
+ *
+ * 明确取代先前陈述的措辞："改到"、"改用"、"不再"、"changed to"。
+ *
+ * 取代标记是"这条记忆不是补充而是替换"的唯一可靠且廉价的信号。仅凭词相似度无法区分"周五下午三点开会"
+ * 与"周五的会改到周四下午"——十几个词里只共享两个——但"改到"这个动词说明了发生了什么。当这样一条记忆
+ * 存在时，同类型、共享任一实词的较旧记忆会从**上下文**中丢弃（而非归档）：丢错的代价是某一轮少一条事实，
+ * 归档错的代价是所有者要自己纠正。
+ */
+const SUPERSEDE_MARKERS = /改成|改为|改用|改到|换成|不再|取消|推迟|提前|instead of|changed to|moved to|no longer/i;
+
+/** Function words that carry no subject; sharing only these is not a shared subject. 不承载主题的虚词；只共享这些不算共享主题。 */
+const FUNCTION_WORDS = new Set([
+  "the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "is", "are", "was", "be",
+  "我们", "你们", "他们", "已经", "因为", "所以", "但是", "如果", "就是", "不是", "没有",
+  "必须", "需要", "可以", "应该", "什么", "怎么", "时候", "现在", "今天", "明天",
+]);
+
+export interface SupersedeSubject {
+  id: string;
+  summary: string;
+  type?: string;
+  createdAt?: string;
+}
+
+/** True when the two share at least one non-function token. 当两者至少共享一个非虚词 token 时为真。 */
+function sharesSubject(left: string, right: string): boolean {
+  const rightTokens = new Set(tokenize(right).filter((term) => !FUNCTION_WORDS.has(term)));
+  return tokenize(left).some((term) => !FUNCTION_WORDS.has(term) && rightTokens.has(term));
+}
+
+/**
+ * Drops older memories a newer statement explicitly replaces. Memories without
+ * a creation time are never dropped, because "older" cannot be established.
+ * 丢弃被较新陈述明确取代的旧记忆。没有创建时间的记忆永不丢弃，因为无法确定"较旧"。
+ */
+export function applySupersedes<T extends SupersedeSubject>(candidates: readonly T[]): T[] {
+  const dated = candidates.filter((candidate) => candidate.createdAt !== undefined);
+  const superseded = new Set<string>();
+  for (const newer of dated) {
+    if (!SUPERSEDE_MARKERS.test(newer.summary)) continue;
+    for (const older of dated) {
+      if (older === newer) continue;
+      if (older.type !== newer.type) continue;
+      const newerIsLater = Date.parse(newer.createdAt!) > Date.parse(older.createdAt!);
+      if (!newerIsLater) continue;
+      if (SUPERSEDE_MARKERS.test(older.summary)) continue;
+      if (sharesSubject(newer.summary, older.summary)) superseded.add(older.id);
+    }
+  }
+  return candidates.filter((candidate) => !superseded.has(candidate.id));
+}

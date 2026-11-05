@@ -22,7 +22,8 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "cli": "node src/cli/clone-ai.ts",
-    "bench:journal": "node --experimental-strip-types benchmark/journal-stress.ts"
+    "bench:journal": "node --experimental-strip-types benchmark/journal-stress.ts",
+    "bench:consistency": "node --experimental-strip-types benchmark/memory-consistency.ts"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

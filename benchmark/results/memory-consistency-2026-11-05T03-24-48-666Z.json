@@ -1,0 +1,68 @@
+{
+  "consistency": {
+    "scenarios": [
+      {
+        "id": "meeting-moved",
+        "description": "A meeting moved this morning must replace last week's time when asked about the original day.",
+        "included": [
+          "new"
+        ],
+        "missingTruth": false,
+        "contaminated": [],
+        "passed": true
+      },
+      {
+        "id": "preference-updated",
+        "description": "A changed preference must replace the earlier one rather than compete with it.",
+        "included": [
+          "new"
+        ],
+        "missingTruth": false,
+        "contaminated": [],
+        "passed": true
+      },
+      {
+        "id": "preference-survives-drift",
+        "description": "Weeks of unrelated task memories must not bury a stated preference.",
+        "included": [
+          "preference"
+        ],
+        "missingTruth": false,
+        "contaminated": [],
+        "passed": true
+      },
+      {
+        "id": "fact-recalled-once-removed-later",
+        "description": "A fact stated once is still retrievable a month later.",
+        "included": [
+          "fact"
+        ],
+        "missingTruth": false,
+        "contaminated": [],
+        "passed": true
+      }
+    ],
+    "passed": 4,
+    "total": 4,
+    "contaminationRate": 0
+  },
+  "restraint": {
+    "scenarios": [
+      {
+        "id": "spam-and-group-chat",
+        "surfaced": 0,
+        "expected": 0,
+        "falsePositives": 0,
+        "passed": true
+      },
+      {
+        "id": "one-real-message",
+        "surfaced": 1,
+        "expected": 1,
+        "falsePositives": 0,
+        "passed": true
+      }
+    ],
+    "falsePositiveRate": 0
+  }
+}
