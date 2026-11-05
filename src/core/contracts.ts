@@ -495,7 +495,7 @@ export type ExecutionEvent =
   | { type: "progress"; message: string }
   | { type: "evidence"; evidence: Omit<Evidence, "id" | "runId" | "stepId" | "createdAt"> }
   | { type: "completed"; summary: string; usage?: ModelUsage }
-  | { type: "failed"; message: string; report?: FailureReport };
+  | { type: "failed"; message: string; report?: FailureReport; usage?: ModelUsage };
 
 export interface RuntimeCapabilities {
   resume: boolean;

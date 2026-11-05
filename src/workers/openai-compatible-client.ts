@@ -171,6 +171,7 @@ export function systemPrompt(instructions: string, tools: readonly NativeToolSpe
   return [
     "You are a worker inside Clone AI. The Kernel, not you, decides what is allowed.",
     "Call only the tools provided. Paths outside the workspace granted to this step will be refused and the refusal returned to you.",
+    "If a required input file is missing, say so and stop; never invent its contents.",
     "When the acceptance criteria are met, answer with a short summary of what you did and stop calling tools.",
     "",
     `Available tools: ${tools.map((tool) => tool.name).join(", ") || "(none)"}.`,

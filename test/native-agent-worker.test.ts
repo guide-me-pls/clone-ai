@@ -154,3 +154,50 @@ test("successful writes become artifact evidence the verifier can check", async 
   assert.ok(evidence.some((event) => event.type === "evidence" && event.evidence.kind === "artifact" && event.evidence.locator === "out/note.md"));
   assert.equal(await readFile(join(directory, "out/note.md"), "utf8"), "hi");
 });
+
+test("a missing input named in the instructions fails instead of allowing invention", async (t) => {
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: fileTools(),
+    createClient: () => ({
+      async run(input) {
+        await input.execute({ name: "read_file", input: { path: "docs/absent.md" } });
+        await input.execute({ name: "write_file", input: { path: "out/summary.md", content: "invented" } });
+        return { summary: "done", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, modelCalls: 1 } };
+      },
+    }),
+  });
+  const base = assignment(directory);
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute({
+    ...base,
+    step: { ...base.step, instructions: "Read docs/absent.md and write out/summary.md." },
+  })) events.push(event);
+  const failed = events.find((event) => event.type === "failed");
+  assert.ok(failed !== undefined && failed.type === "failed");
+  assert.equal(failed.report?.category, "no_artifact");
+  assert.equal(failed.report?.signature, "native-missing-input");
+  assert.equal(failed.usage?.totalTokens, 15);
+  assert.equal(events.some((event) => event.type === "completed"), false);
+});
+
+test("a failed read the instructions do not name is returned to the model, not fatal", async (t) => {
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: fileTools(),
+    createClient: () => ({
+      async run(input) {
+        const outcome = await input.execute({ name: "read_file", input: { path: "wrong/guess.md" } });
+        assert.equal(outcome.isError, true);
+        return { summary: "recovered" };
+      },
+    }),
+  });
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute(assignment(directory))) events.push(event);
+  assert.equal(events.some((event) => event.type === "completed"), true);
+});

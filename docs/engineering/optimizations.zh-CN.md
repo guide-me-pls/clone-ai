@@ -163,5 +163,26 @@
   干净失败。
 - **发现 / 下一步：** 加固原生 Prompt，使必需输入缺失时停止而不是编造；决定验证阶段缺失
   产物是否应计入 `no_artifact`（本质上是同一件事）。在两者决定前，原生 Worker 在可解任务上
-  与 Claude 持平，但在 missing-input 的诚实性上更弱。
+  与 Claude 持平，但在 missing-input 的诚实性上更弱。（已在下面的条目中修复。）
+- **推翻条件：** 见取舍条目。
+
+## 2026-11-05 — 命名输入缺失时原生 Worker 失败
+
+- **目标 / 假设：** 当 WorkOrder 或步骤指令点名的文件缺失时，阻止原生 Worker 编造内容；
+  benchmark 显示它会完成并伪造产物。
+- **取舍：** [缺失输入](../architecture/trade-offs.zh-CN.md#2026-11-05--命名输入缺失时原生-worker-失败而不是允许编造)。
+- **变更：** 读取 WorkOrder 目标或步骤指令点名的路径失败时，回合以 `no_artifact` /
+  `native-missing-input` 结束；Prompt 要求模型不要编造缺失输入；失败 Adapter 的用量也会
+  记入 Journal。
+- **Eval：** `test/native-agent-worker.test.ts`——命名输入缺失以正确类别与签名失败、未被
+  指令点名的失败读取仍可恢复、失败用量被携带。Benchmark：原生套件 5/5
+  （`native-2026-11-05T08-07-23-864Z.json`）；最终代码重跑 `missing-input` 为预期失败，
+  携带 1,397 tokens（`native-2026-11-05T08-10-22-910Z.json`）。全量：552 个测试 / 549 通过
+  / 3 跳过；typecheck、gate 与双语文档通过。
+- **执行链路：** 由 benchmark 发现；先写取舍；加守卫与 Prompt；补测试；重跑 benchmark；
+  最后补失败用量，避免失败运行静默。
+- **优点：** 声明为必需的输入缺失后不再接受编造；失败运行也会报告 token。
+- **缺点 / 下次：** 指令中点名的合法可选路径缺失也会失败；benchmark 中 Claude 的
+  `missing-input` 仍被计为意外失败，因为它在验证阶段而非执行阶段失败。`no_artifact` 的
+  口径需要另行决定。
 - **推翻条件：** 见取舍条目。

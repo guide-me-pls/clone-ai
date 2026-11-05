@@ -6,6 +6,30 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-05 — A missing named input fails the native worker instead of allowing invention
+
+**Decision.** If a read tool fails on a path named in the work order's objective
+or the step's instructions, the worker ends the turn as `no_artifact` with
+signature `native-missing-input`; artifacts produced after that read are not
+accepted. A failed read on a path the instructions do not name is still returned
+to the model so it can retry. The worker's prompt also tells the model to stop
+and report a missing required input instead of inventing its contents.
+
+**Evidence.** The `missing-input` benchmark task asks the worker to read
+`docs/absent.md` and write `out/summary.md`. On 2026-11-05 the native worker read
+the absent file, received ENOENT, then wrote an invented 90-byte summary and
+passed verification; Claude failed cleanly at verification. The loop's
+resilience to one bad call is right for a retry, but wrong for an input the task
+declared as required.
+
+**What it costs.** A task that names a path that is legitimately optional and
+absent now fails. Instructions must name required inputs; the model may still
+spend tokens before the guard fires.
+
+**Reversal condition.** If real tasks routinely name optional paths, narrow the
+rule to declared work-order inputs or an explicit `requiredInputs` field; do not
+remove the failure on a required input.
+
 ## 2026-11-05 — The native worker becomes a provider with exact usage, still opt-in
 
 **Decision.** `native` is registered in the provider catalog, so an owner can

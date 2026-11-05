@@ -1550,6 +1550,11 @@ export class CloneRuntime {
     event: Exclude<ExecutionEvent, { type: "completed" }>,
     allowedEvidenceKinds: ReadonlySet<Evidence["kind"]>,
   ): Promise<void> {
+    // A failed adapter still spent model calls; record them before the failure.
+    // 失败的 Adapter 同样消耗了模型调用；在失败之前先记录用量。
+    if (event.type === "failed" && event.usage !== undefined) {
+      await this.recordExecutionUsage(input, event.usage);
+    }
     if (event.type === "session_started") {
       await this.record({
         type: input.workOrder === undefined ? "execution.progress" : "subagent.session_started",

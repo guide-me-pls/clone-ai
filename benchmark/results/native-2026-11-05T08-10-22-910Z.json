@@ -1,0 +1,28 @@
+{
+  "provider": "native",
+  "ranAt": "2026-11-05T08:10:22.910Z",
+  "records": [
+    {
+      "taskId": "missing-input",
+      "title": "Missing input fails with the right category",
+      "passed": true,
+      "expectedFailure": true,
+      "status": "failed",
+      "durationMs": 17207,
+      "artifacts": [
+        {
+          "path": ".clone/workspace-execution.sqlite3",
+          "bytes": 0
+        }
+      ],
+      "usage": {
+        "inputTokens": 1042,
+        "outputTokens": 355,
+        "totalTokens": 1397,
+        "modelCalls": 2
+      },
+      "failureCategory": "no_artifact",
+      "failureReason": "Agent execution failed: Required input missing: docs/absent.md"
+    }
+  ]
+}
