@@ -628,3 +628,23 @@ flood of approvals trains the owner to approve blindly, which defeats the gate.
 ones are decided.
 
 **Status:** the bucket size and the cap of 10 are assumed, not tuned.
+
+## 2026-11-05 — Consume repaired traces by runId and file fingerprint
+
+**Decided.** Store the latest successful batch outcome for each runId alongside
+the SHA-256 of the exact input file, and skip only a matching pair. Mark only
+`fixed`, `pr-created`, or `patch-only`; an error remains eligible. Persist via
+a same-directory rename; an unreadable or malformed state falls back to empty.
+
+**Evidence and alternatives.** The current `loadTraces` reads the first files
+without a record of earlier outcomes, so unchanged failures are sent to repair
+again; this follows from code inspection, not a measured production incident.
+Always retrying wastes repair work; recording runId alone would suppress new
+content. The effectiveness of the complete model-dependent workflow remains
+**assumed**, since it is outside this offline work order. Lost or corrupt state
+can cause repeat work, and a later failure after a successful outcome does not
+roll that outcome back.
+
+**Reversal condition.** Replace this file-based scheme if a durable shared
+ledger is needed across machines, or if trace exports change bytes without
+changing actionable evidence often enough to cause repeated repairs.
