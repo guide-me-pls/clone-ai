@@ -6,6 +6,22 @@
 什么条件下后来者应当推翻它。
 
 ## 2026-11-05 — 原生 Worker 成为可选 Provider，并记录精确用量
+## 2026-11-05 — 所有 Agent 调用在 CLONE_HOME 之外审计
+
+**决定。** 每次 Main Agent 调用都在 `~/.clone/audit/invocations.jsonl` 下写入共享、
+追加式记录，不受调用的 `CLONE_HOME` 影响。记录包含调用者、界面、可见请求与回复、错误、
+Workspace、数据目录、模型、推理强度、会话文件、Run id 与耗时。受控部署和测试可通过
+`CLONE_AI_AUDIT_HOME` 移动账本。
+
+**依据。** 自修复运行使用了临时 `CLONE_HOME`；Journal 本身正确，但桌面审计读取所有者
+常规主目录，因此完全看不到。改动后，使用隔离主目录的一次真实 DeepSeek V4.1 Flash
+`high` 调用出现在默认共享账本中，调用者为 `codex`，回复为 `OK`（调用 id `7cb576ee`）。
+
+**代价和推翻条件。** 这会增加第二个存储位置，且可见回复属于敏感数据；账本会做 PII/Token
+脱敏、截断，并且不包含私有推理。如果明文 JSONL 不再满足威胁模型，应迁移到加密的、
+所有者作用域的存储。
+
+## 2026-11-05 — 根级文件名需要明确的文件意图
 
 **决定。** `native` 注册进 Provider 目录，所有者可以像选择 CLI 一样按 Agent 选择它。
 Adapter 的 id 是配置的 Agent id，`providerId` 是 `native`；能力来自 Agent 角色，排除外部
@@ -17,6 +33,10 @@ Adapter 的 id 是配置的 Agent id，`providerId` 是 `native`；能力来自 
 （只是 Agent Registry 里的一个特例）、不报告用量，Adapter 身份是字面量 `native` 而不是
 配置的 Agent。新的回合/Run 审计已经能携带精确用量；让原生路径保持不可测量，就无法做
 CLI 与原生 Worker 的对比。
+**依据。** 夜间修复的轨迹中，验证器把 `fs.rename`、`os.tmpdir`、
+`consumed-traces.json` 和 `REPORT_DIR/consumed-traces.json` 当成工作区必需文件，导致
+假失败。源码检查显示旧提取器没有区分这些带点的文本。修改后的定向离线回归测试已通过；
+更广泛的覆盖效果仍属假设。本工单未运行修改前的评估。
 
 **代价。** 所有者必须配置 OpenAI 兼容端点；Worker 没有外部动作工具，`external` 仍交给受
 治理的 Connector；token 数取决于端点是否返回 usage 块。
