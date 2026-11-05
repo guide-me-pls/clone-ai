@@ -17,6 +17,16 @@ The flag-gated native Main Agent now streams SSE tokens to the interface, assemb
 `npm run bench:main` runs three fixed prompts — direct answer, authority read, plan proposal — through the Pi runtime and the native loop with the same model and an isolated clone home per task, recording duration, tokens, tool calls, created runs and whether the expectation held. First working run on Sonnet 5.5 via Magpie: both 3/3, 21,514 vs 21,160 tokens, 23.0s vs 24.9s summed. A first attempt on the broken gemini endpoint failed for both runtimes and is kept as evidence.
 
 `npm run bench:main` 用同一模型与每个任务独立的 clone home，把三条固定 Prompt——直接回答、读取权限、提案计划——分别跑过 Pi 运行时与原生循环，记录耗时、tokens、工具调用、产生的 Run 与预期是否成立。首次有效运行（Sonnet 5.5 经 Magpie）：两边均 3/3，21,514 vs 21,160 tokens，总耗时 23.0s vs 24.9s。第一次尝试因 gemini 端点故障对两个运行时都失败，保留为证据。
+### Audit renders again, and the composer accepts media
+
+The audit page no longer goes blank from a missing function brace, and the
+composer has an attachment picker for PNG/JPEG/GIF/WebP images plus video files.
+Videos are converted to a representative JPEG frame before being sent to the
+model, so a video can participate in a text/image conversation.
+
+审计页不再因为缺少函数括号而整体空白；输入区新增附件按钮，可选择
+PNG/JPEG/GIF/WebP 图片和视频。视频会先提取一张代表画面为 JPEG 再发送给模型，
+因此视频也能参与文字/图片对话。
 
 ### Self-check rebuilds the installed app
 
