@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
+import { isNativeMainAgentSelected, runNativeMainAgentTurn } from "../main-agent/native-runtime.ts";
 import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
 import {
   beginMainAgentTurn,
@@ -150,6 +151,17 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
   try {
     before = await listRunSnapshot(dataDirectory);
     await withMainAgentLock(dataDirectory, async () => {
+      if (isNativeMainAgentSelected()) {
+        const result = await runNativeMainAgentTurn({
+          dataDirectory,
+          text: query,
+          source: "cli",
+          onDelta: (delta) => process.stdout.write(delta),
+        });
+        process.stdout.write("\n");
+        if (result.error !== undefined) console.error(result.error);
+        return;
+      }
       const { SessionManager } = await import("@earendil-works/pi-coding-agent");
       const { session, prompt } = await createMainAgentSession({
         dataDirectory,
