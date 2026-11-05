@@ -19,6 +19,27 @@ made fresh audit and IME fixes invisible.
 macOS build toolchain. If development moves to a live-reload runtime, remove
 the bundle rebuild from this path.
 
+## 2026-11-05 — Native Main Agent is the default when configured
+
+**Decision.** With `CLONE_AI_MAIN_RUNTIME` unset, the Main Agent uses the native
+loop when `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are present, and
+Pi otherwise. `CLONE_AI_MAIN_RUNTIME=pi` forces Pi; `=native` forces the native
+loop and fails clearly if the endpoint is unconfigured. An explicit `native`
+never silently falls back to Pi.
+
+**Evidence.** The native loop now matches Pi on the short-task comparison (3/3
+both, tokens within ~1.6%), and passed live long-context compaction and image
+validation. It has streaming, deterministic compaction and image attachments.
+The endpoint is an explicit owner configuration, so using it when present is not
+a guess; using Pi when it is absent keeps existing installations working.
+
+**What it costs.** Two runtimes remain to maintain, and the unset case is a
+soft, environment-dependent default rather than a hard switch. An owner without
+an OpenAI-compatible endpoint stays on Pi until they configure one.
+
+**Reversal condition.** If the native loop regresses on the benchmark or the
+turn audit, restore Pi as the default and keep native strictly opt-in.
+
 ## 2026-11-05 — Native Main Agent accepts image attachments
 
 **Decision.** The native Main Agent sends image attachments as OpenAI-style

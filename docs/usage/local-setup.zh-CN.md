@@ -81,12 +81,13 @@ Clone AI 还自带进程内的 `native` 执行 Provider：把某个 Agent 的 Pr
 `native`，并设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`。它不需要
 CLI，且每次工具调用都按步骤 Scope 校验。
 
-### 原生主 Agent（实验性）
+### 主 Agent 运行时
 
-Pi 仍是默认的主 Agent 运行时。要让主 Agent 在进程内对接 OpenAI 兼容端点：
+设置了 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` 时，进程内的原生运行时
+是默认；没有它们时，主 Agent 使用 Pi。`CLONE_AI_MAIN_RUNTIME=pi` 强制 Pi；
+`=native` 强制原生，端点缺失时清晰失败。要配置原生运行时：
 
 ```bash
-export CLONE_AI_MAIN_RUNTIME=native
 export CLONE_AI_NATIVE_MODEL=<model-id>
 export CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url>
 export CLONE_AI_NATIVE_API_KEY=<key>   # 可选
@@ -97,7 +98,7 @@ clone-ai "你好"
 以回合台账作为对话记录，并从台账检索 `search_history`。它会随 token 到达流式输出，
 并对长对话做确定性压缩：最新轮次在 12,000 字符预算内保留原文，较早轮次变成有界摘要，
 全文仍留在回合台账中。图片附件以 OpenAI 风格 data URL 随当前消息发送；它们是逐回合的，
-不存入台账。取消 `CLONE_AI_MAIN_RUNTIME` 即回到 Pi。
+不存入台账。要强制旧的 Pi 运行时，设置 `CLONE_AI_MAIN_RUNTIME=pi`。
 
 ## 5. 数据都在哪里
 

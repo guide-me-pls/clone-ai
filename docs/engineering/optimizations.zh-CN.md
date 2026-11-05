@@ -375,3 +375,21 @@
 - **优点 / 缺点：** 原生开关不再移除一项能力；base64 会放大请求，本版本不做缩放，之后
   无法从台账恢复图片。
 - **推翻条件：** 见取舍条目。
+
+## 2026-11-05 — 配置了端点的原生主 Agent 成为默认
+
+- **目标 / 假设：** 让已验证的原生循环成为默认，同时不破坏没有 OpenAI 兼容端点的安装。
+- **取舍：** [默认运行时](../architecture/trade-offs.zh-CN.md#2026-11-05--配置了端点的原生主-agent-成为默认)。
+- **变更：** 用 `readMainAgentRuntime` 取代布尔开关。未设置 → 存在
+  `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` 时用原生，否则用 Pi；
+  `pi`/`legacy` 强制 Pi；`native` 强制原生，端点缺失时清晰失败；未知值抛错。对比
+  benchmark 的 Pi 列显式固定 `CLONE_AI_MAIN_RUNTIME=pi`。
+- **Eval：** `test/native-main-agent.test.ts` 的运行时选择矩阵（未设置且有/无端点、
+  显式 pi、显式 native、未知值）；全量 580 个测试 / 577 通过 / 3 跳过；typecheck、
+  gate 与双语文档通过。不设开关的实机冒烟：
+  `CLONE_AI_NATIVE_MODEL=360/anthropic/claude-sonnet-5-5 CLONE_AI_NATIVE_BASE_URL=http://127.0.0.1:3425 clone-ai "请只回复：默认运行时已生效"`
+  → 精确回复；`clone-ai audit turns --json --limit 1` 显示 `provider: "native"`。
+- **优点 / 缺点：** 配置了端点的部署现在默认使用已验证的原生循环；没有端点的安装继续
+  使用 Pi。未设置的情况依赖环境，因此当前运行时在回合记录（`provider`）里可见，而不是
+  靠一个隐含的开关。
+- **推翻条件：** 见取舍条目。

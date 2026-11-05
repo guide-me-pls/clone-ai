@@ -541,3 +541,26 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   the request, there is no downscaling, and the image cannot be recovered from
   the ledger later.
 - **Reversal condition:** see the trade-off entry.
+
+## 2026-11-05 — Native Main Agent is the default when configured
+
+- **Goal / hypothesis:** make the validated native loop the default without
+  breaking installations that have no OpenAI-compatible endpoint.
+- **Trade-off:** [default runtime](../architecture/trade-offs.md#2026-11-05--native-main-agent-is-the-default-when-configured).
+- **Change:** `readMainAgentRuntime` replaces the boolean switch. Unset → native
+  when `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are present, Pi
+  otherwise; `pi`/`legacy` force Pi; `native` forces native and fails clearly if
+  the endpoint is missing; unknown values throw. The comparison benchmark pins
+  `CLONE_AI_MAIN_RUNTIME=pi` for its Pi cells.
+- **Eval:** selection-matrix tests (unset with and without an endpoint, explicit
+  pi, explicit native, unknown value) in `test/native-main-agent.test.ts`; full
+  suite 580 tests / 577 pass / 3 skipped; typecheck, gate and bilingual docs.
+  Live smoke without the flag:
+  `CLONE_AI_NATIVE_MODEL=360/anthropic/claude-sonnet-5-5 CLONE_AI_NATIVE_BASE_URL=http://127.0.0.1:3425 clone-ai "请只回复：默认运行时已生效"`
+  → exact reply; `clone-ai audit turns --json --limit 1` reports
+  `provider: "native"`.
+- **Pros / cons:** configured deployments now use the validated native loop by
+  default; installations without an endpoint keep working on Pi. The unset case
+  is environment-dependent, so the active runtime is visible in the turn record
+  (`provider`) rather than implied by a flag.
+- **Reversal condition:** see the trade-off entry.
