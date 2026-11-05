@@ -12,6 +12,15 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 `npm run bench:main` 用同一模型与每个任务独立的 clone home，把三条固定 Prompt——直接回答、读取权限、提案计划——分别跑过 Pi 运行时与原生循环，记录耗时、tokens、工具调用、产生的 Run 与预期是否成立。首次有效运行（Sonnet 5.5 经 Magpie）：两边均 3/3，21,514 vs 21,160 tokens，总耗时 23.0s vs 24.9s。第一次尝试因 gemini 端点故障对两个运行时都失败，保留为证据。
 
+### Self-check rebuilds the installed app
+
+On macOS, `npm run selfcheck:push` now rebuilds and replaces `dist/Clone AI.app`
+after the full test suite, typecheck and gate pass, before pushing. Source edits
+no longer require a separate manual app build.
+
+macOS 上 `npm run selfcheck:push` 现在会在完整测试、类型检查和 gate 通过后、
+推送之前重新构建并替换 `dist/Clone AI.app`。修改源码后不再需要手动单独构建 App。
+
 ### A native Main Agent loop behind a flag
 
 `CLONE_AI_MAIN_RUNTIME=native` runs the Main Agent in-process against an OpenAI-compatible endpoint (`CLONE_AI_NATIVE_*`): the same charter/briefing/memory-push prompt, the same Kernel tools captured from the Pi extension, the turn ledger as transcript, and the same prompt-snapshot/turn/tool/usage audit. Pi remains the default and fallback. The first native loop is non-streaming, keeps the last 12 turns without compaction, refuses image attachments, and answers `search_history` from the turn ledger.
@@ -23,6 +32,11 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 When a read fails on a path named in the work order or step instructions, the native worker now ends the turn as `no_artifact` (`native-missing-input`) instead of accepting an invented artifact. The prompt says not to invent missing inputs, usage from failed runs is journaled, and the missing-input benchmark now behaves as expected (native set: 5/5).
 
 当读取 WorkOrder 或步骤指令点名的路径失败时，原生 Worker 现在以 `no_artifact`（`native-missing-input`）结束回合，而不是接受编造的产物。Prompt 要求不编造缺失输入，失败运行的用量也会写入 Journal，missing-input benchmark 现在按预期失败（原生套件 5/5）。
+### Desktop conversation input and layout
+
+Chinese IME candidate confirmation no longer sends the message, and multi-turn messages remain full-width in a vertical conversation.
+
+中文输入法确认候选词时不再发送消息，多轮对话中的消息保持纵向排列并占满会话宽度。
 
 ### Benchmark runs the native provider
 
