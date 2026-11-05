@@ -232,7 +232,30 @@ export async function runStatusInfo(runtime: CloneRuntime, runId: string): Promi
     ...(run.planId === undefined ? [] : [`Plan: ${run.planId}`]),
     ...(run.activeStepId === undefined ? [] : [`Active step: ${run.activeStepId}`]),
     `Subagents: ${completed}/${subagents.length} completed`,
+    ...stepProgressLines(runtime, runId),
   ].join("\n");
+}
+
+/**
+ * Where the plan actually is. "Step 2 of 3, last said: reading files" is the
+ * difference between an answer the owner can use and one they have to ask a
+ * follow-up question for.
+ * 计划究竟走到哪。"第 2 步，共 3 步，最后报告：正在读取文件"——这正是所有者可以直接使用的回答与
+ * 需要再追问一次的回答之间的区别。
+ */
+function stepProgressLines(runtime: CloneRuntime, runId: string): string[] {
+  const progress = runtime.getRunProgress(runId);
+  if (progress.steps.length === 0) return [];
+  const done = progress.steps.filter((step) => step.completed).length;
+  return [
+    `Steps: ${done}/${progress.steps.length} complete`,
+    ...progress.steps.map((step, index) => {
+      const position = `${index + 1}/${progress.steps.length}`;
+      if (step.completed) return `  ${position} ${step.stepId}: done`;
+      if (step.stepId === progress.activeStepId) return `  ${position} ${step.stepId}: in progress${step.lastMessage === undefined ? "" : ` — ${step.lastMessage}`}`;
+      return `  ${position} ${step.stepId}: pending`;
+    }),
+  ];
 }
 
 export type OwnerStateInput =
