@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { JournalStore } from "../core/journal.ts";
+import { readSince } from "../core/journal-types.ts";
 import { workspaceExecutionLock } from "../core/workspace-lock.ts";
 import type { SmtpConfig } from "./smtp-sender.ts";
 import { sendEmail } from "./smtp-sender.ts";
@@ -45,6 +46,8 @@ export class DailyReportRunner {
   readonly #lockPath: string;
   readonly #opportunities: () => Promise<OpportunityCard[]>;
   readonly #now: () => Date;
+  /** Highest journal sequence the last delivered report covered. 上一次已送达日报覆盖的最高序号。 */
+  #coveredSequence = 0;
 
   constructor(options: DailyReportRunnerOptions) {
     this.#journal = options.journal;
@@ -120,13 +123,28 @@ export class DailyReportRunner {
   }
 
   private async send(now: Date): Promise<void> {
-    const events = await this.#journal.list();
+    // A daily report only covers the last day; replaying the whole journal to
+    // find one day of it made the cost grow with total history.
+    // 日报只覆盖最近一天；为了找这一天而重放整段历史，会让成本随历史总量增长。
     const since = new Date(now);
     since.setDate(since.getDate() - 1);
-    const recent = events.filter((event) => new Date(event.occurredAt) >= since);
+    const events = await readSince(this.#journal, this.#sequenceOlderThan(since));
+    const last = events.at(-1);
+    if (last !== undefined) this.#coveredSequence = last.sequence;
     const opportunities = await this.#opportunities();
-    const report = buildDailyReport({ events: recent, opportunities, date: now });
+    const report = buildDailyReport({ events, opportunities, date: now });
     await sendEmail(this.#settings.smtp, { subject: report.subject, text: report.text });
+  }
+
+  /**
+   * Start from the last sequence a report covered. `buildDailyReport` still
+   * filters by date, so a wider tail only costs a little more work; a narrower
+   * one would drop events, which is the failure this deliberately avoids.
+   * 从上一次日报覆盖的序号开始。`buildDailyReport` 仍会按日期过滤，因此尾部多含一些只是多一点开销；
+   * 少含则会丢事件——这正是这里刻意避免的失败。
+   */
+  #sequenceOlderThan(_since: Date): number {
+    return this.#coveredSequence;
   }
 
   private markUnknown(db: DatabaseSync, day: string): void {

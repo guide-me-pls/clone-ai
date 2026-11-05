@@ -1,0 +1,261 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "file-with-required-content",
+      "title": "A promised file exists with the required content",
+      "plan": {
+        "steps": [
+          {
+            "id": "write-report",
+            "title": "Write the weekly report",
+            "instructions": "Write report.md with this week's summary.",
+            "risk": "reversible_write",
+            "acceptanceCriteria": ["report.md contains \"本周完成\""]
+          }
+        ]
+      },
+      "workspace": {
+        "report.md": "本周完成：3 项\n"
+      },
+      "evidence": [
+        { "stepId": "write-report", "kind": "artifact", "summary": "Wrote report.md.", "locator": "report.md" }
+      ],
+      "ownerVerdict": "pass",
+      "note": "The positive control: existence, non-emptiness, and the required substring all hold."
+    },
+    {
+      "id": "missing-file",
+      "title": "Evidence claims a file that does not exist",
+      "plan": {
+        "steps": [
+          {
+            "id": "write-report",
+            "title": "Write the weekly report",
+            "instructions": "Write report.md with this week's summary.",
+            "risk": "reversible_write",
+            "acceptanceCriteria": ["report.md contains \"本周完成\""]
+          }
+        ]
+      },
+      "workspace": {},
+      "evidence": [
+        { "stepId": "write-report", "kind": "artifact", "summary": "Says it wrote report.md.", "locator": "report.md" }
+      ],
+      "ownerVerdict": "fail",
+      "note": "A worker's claim is not evidence; the file is opened."
+    },
+    {
+      "id": "empty-file",
+      "title": "The promised file exists but is empty",
+      "plan": {
+        "steps": [
+          {
+            "id": "write-report",
+            "title": "Write the weekly report",
+            "instructions": "Write report.md with this week's summary.",
+            "risk": "reversible_write",
+            "acceptanceCriteria": ["report.md contains \"本周完成\""]
+          }
+        ]
+      },
+      "workspace": {
+        "report.md": "   \n"
+      },
+      "evidence": [
+        { "stepId": "write-report", "kind": "artifact", "summary": "Wrote report.md.", "locator": "report.md" }
+      ],
+      "ownerVerdict": "fail"
+    },
+    {
+      "id": "missing-required-substring",
+      "title": "The file exists but omits the required content",
+      "plan": {
+        "steps": [
+          {
+            "id": "write-report",
+            "title": "Write the weekly report",
+            "instructions": "Write report.md with this week's summary.",
+            "risk": "reversible_write",
+            "acceptanceCriteria": ["report.md contains \"本周完成\""]
+          }
+        ]
+      },
+      "workspace": {
+        "report.md": "完成了 3 项\n"
+      },
+      "evidence": [
+        { "stepId": "write-report", "kind": "artifact", "summary": "Wrote report.md.", "locator": "report.md" }
+      ],
+      "ownerVerdict": "fail"
+    },
+    {
+      "id": "no-evidence-at-all",
+      "title": "The step produced no evidence",
+      "plan": {
+        "steps": [
+          {
+            "id": "write-report",
+            "title": "Write the weekly report",
+            "instructions": "Write report.md with this week's summary.",
+            "risk": "reversible_write",
+            "acceptanceCriteria": ["report.md contains \"本周完成\""]
+          }
+        ]
+      },
+      "workspace": {
+        "report.md": "本周完成：3 项\n"
+      },
+      "evidence": [],
+      "ownerVerdict": "fail",
+      "note": "Even a correct file is not accepted when the step never reported producing it."
+    },
+    {
+      "id": "unverified-criteria-needs-review",
+      "title": "A criterion with nothing machine-checkable is deferred to the owner",
+      "plan": {
+        "steps": [
+          {
+            "id": "review-plan",
+            "title": "Review the plan",
+            "instructions": "Review the plan for consistency.",
+            "risk": "read_only",
+            "acceptanceCriteria": ["The plan is consistent"]
+          }
+        ]
+      },
+      "evidence": [
+        { "stepId": "review-plan", "kind": "artifact", "summary": "Reviewed the plan." }
+      ],
+      "ownerVerdict": "pass",
+      "note": "The system must neither claim success nor fail; it asks the owner."
+    },
+    {
+      "id": "external-step-without-receipt",
+      "title": "An external step without a receipt cannot complete",
+      "plan": {
+        "steps": [
+          {
+            "id": "send-summary",
+            "title": "Send the summary",
+            "instructions": "Send the summary to the client.",
+            "risk": "external_side_effect",
+            "acceptanceCriteria": ["The client received the summary"]
+          }
+        ]
+      },
+      "evidence": [
+        { "stepId": "send-summary", "kind": "artifact", "summary": "The worker says it sent the email." }
+      ],
+      "ownerVerdict": "fail",
+      "note": "A worker-controlled artifact cannot attest that an external action happened."
+    },
+    {
+      "id": "external-step-with-receipt",
+      "title": "An external step with a receipt and a landed file passes",
+      "plan": {
+        "steps": [
+          {
+            "id": "send-summary",
+            "title": "Send the summary",
+            "instructions": "Send the summary and save delivered.md.",
+            "risk": "external_side_effect",
+            "acceptanceCriteria": ["delivered.md contains \"已送达\""]
+          }
+        ]
+      },
+      "workspace": {
+        "delivered.md": "已送达：message-id-1\n"
+      },
+      "evidence": [
+        { "stepId": "send-summary", "kind": "receipt", "summary": "Gateway returned a message id.", "locator": "receipt:message-id-1" },
+        { "stepId": "send-summary", "kind": "artifact", "summary": "Saved delivered.md.", "locator": "delivered.md" }
+      ],
+      "ownerVerdict": "pass"
+    },
+    {
+      "id": "two-steps-one-file-missing",
+      "title": "One step's promised file is missing",
+      "plan": {
+        "steps": [
+          {
+            "id": "step-alpha",
+            "title": "Write alpha",
+            "instructions": "Write alpha.md with the result.",
+            "risk": "reversible_write",
+            "acceptanceCriteria": ["alpha.md contains \"alpha\""]
+          },
+          {
+            "id": "step-beta",
+            "title": "Write beta",
+            "instructions": "Write beta.md with the result.",
+            "risk": "reversible_write",
+            "acceptanceCriteria": ["beta.md contains \"beta\""]
+          }
+        ]
+      },
+      "workspace": {
+        "alpha.md": "alpha done\n"
+      },
+      "evidence": [
+        { "stepId": "step-alpha", "kind": "artifact", "summary": "Wrote alpha.md.", "locator": "alpha.md" },
+        { "stepId": "step-beta", "kind": "artifact", "summary": "Wrote beta.md.", "locator": "beta.md" }
+      ],
+      "ownerVerdict": "fail",
+      "note": "A run is only as complete as its weakest promised artifact."
+    },
+    {
+      "id": "second-step-without-evidence",
+      "title": "A step that produced no evidence fails the run",
+      "plan": {
+        "steps": [
+          {
+            "id": "step-alpha",
+            "title": "Write alpha",
+            "instructions": "Write alpha.md with the result.",
+            "risk": "reversible_write",
+            "acceptanceCriteria": ["alpha.md contains \"alpha\""]
+          },
+          {
+            "id": "step-beta",
+            "title": "Write beta",
+            "instructions": "Write beta.md with the result.",
+            "risk": "reversible_write",
+            "acceptanceCriteria": ["beta.md contains \"beta\""]
+          }
+        ]
+      },
+      "workspace": {
+        "alpha.md": "alpha done\n",
+        "beta.md": "beta done\n"
+      },
+      "evidence": [
+        { "stepId": "step-alpha", "kind": "artifact", "summary": "Wrote alpha.md.", "locator": "alpha.md" }
+      ],
+      "ownerVerdict": "fail"
+    },
+    {
+      "id": "partially-checkable-criteria-needs-review",
+      "title": "A checkable file plus a human judgement defers to the owner",
+      "plan": {
+        "steps": [
+          {
+            "id": "write-notes",
+            "title": "Write meeting notes",
+            "instructions": "Write notes.md for the meeting.",
+            "risk": "reversible_write",
+            "acceptanceCriteria": ["notes.md exists", "The tone is friendly"]
+          }
+        ]
+      },
+      "workspace": {
+        "notes.md": "Meeting notes.\n"
+      },
+      "evidence": [
+        { "stepId": "write-notes", "kind": "artifact", "summary": "Wrote notes.md.", "locator": "notes.md" }
+      ],
+      "ownerVerdict": "pass",
+      "note": "The machine checks the file and reports the tone criterion as unverified, rather than guessing."
+    }
+  ]
+}

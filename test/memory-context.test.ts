@@ -6,6 +6,7 @@ import test, { type TestContext } from "node:test";
 
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import { buildWorkerPrompt } from "../src/workers/black-box-cli-worker.ts";
+import { buildMemoryContextFromCandidates } from "../src/main-agent/memory-context-builder.ts";
 import type {
   ExecutionAssignment,
   ExecutionEvent,
@@ -198,4 +199,39 @@ test("memory handed to a worker without a prior recall event violates the invari
     event(2, "subagent.dispatched", dispatch),
   ] as never);
   assert.deepEqual(journaled, []);
+});
+
+test("a preference is not crowded out by a busy week of task memories", async () => {
+  const preference = { id: "p1", summary: "Prefers the blue report template", score: 0.5, type: "preference" };
+  const tasks = Array.from({ length: 6 }, (_, index) => ({ id: `t${index}`, summary: `Task ${index} finished: produced a long deliverable note`, score: 0.9, type: "decision" }));
+  const context = buildMemoryContextFromCandidates([...tasks, preference], { maxItems: 6, maxCharacters: 1200 });
+  assert.ok(context !== undefined);
+  // The preference has the lower score but the higher priority: it must be in.
+  // 偏好分数更低但优先级更高：必须在内。
+  assert.ok(context.sourceMemoryIds.includes("p1"), context.summary);
+  assert.ok(context.sourceMemoryIds.length <= 6);
+});
+
+test("an empty high-priority class passes its capacity to the rest", async () => {
+  // Distinct wording, so the near-duplicate filter has nothing to merge.
+  // 措辞彼此不同，使近似去重没有可合并的对象。
+  const facts = [
+    "Release checklist lives in docs/release.md",
+    "Rollback drill runs on the first Thursday",
+    "On-call rota is published monthly",
+    "Vendor contract renews in March",
+    "Billing cadence is quarterly",
+    "Staging hostname is preview.example.test",
+  ].map((summary, index) => ({ id: `f${index}`, summary, score: 0.8, type: "fact" }));
+  const context = buildMemoryContextFromCandidates(facts, { maxItems: 6, maxCharacters: 1200 });
+  assert.ok(context !== undefined);
+  assert.ok(context.sourceMemoryIds.length >= 4, `expected most facts admitted, got ${context.sourceMemoryIds.length}`);
+});
+
+test("nothing may exceed the hard caps", async () => {
+  const many = Array.from({ length: 20 }, (_, index) => ({ id: `m${index}`, summary: "x".repeat(300), score: 0.9, type: "preference" }));
+  const context = buildMemoryContextFromCandidates(many, { maxItems: 6, maxCharacters: 1200 });
+  assert.ok(context !== undefined);
+  assert.ok(context.sourceMemoryIds.length <= 6);
+  assert.ok(context.summary.length <= 1200 + 200);
 });

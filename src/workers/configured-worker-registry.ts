@@ -2,6 +2,7 @@ import type { WorkerProfile } from "../config/worker-settings.ts";
 import { workCapabilitiesForRole } from "./capabilities.ts";
 import { StaticAgentRegistry } from "./static-worker-registry.ts";
 import { loadProviderRegistry } from "./provider-catalog.ts";
+import { createConfiguredNativeWorker } from "./native-worker-factory.ts";
 import type { OutcomeCatalog } from "../core/failure-analysis.ts";
 import type { ProviderRegistry } from "./provider-registry.ts";
 
@@ -27,13 +28,23 @@ export async function createConfiguredAgentRegistry(
   const providers = options.providers ?? await loadProviderRegistry(options.dataDirectory);
   const adapters = settings
     .filter((agent) => agent.enabled)
-    .map((agent) => providers.createAdapter(agent.providerId, {
-      agentId: agent.id,
-      role: agent.role,
-      workCapabilities: workCapabilitiesForRole(agent.role),
-      dataDirectory: options.dataDirectory,
-      workspacePath: options.workspacePath,
-      failureCatalog: options.failureCatalog,
-    }));
+    .map((agent) => {
+      // The native worker runs the loop in-process, so its provider is the model
+      // endpoint named by CLONE_AI_NATIVE_*, not a CLI on PATH.
+      // 原生 Worker 在进程内运行循环，因此它的 Provider 是 CLONE_AI_NATIVE_* 指定的模型端点，
+      // 而不是 PATH 上的 CLI。
+      if (agent.providerId === "native") {
+        const native = createConfiguredNativeWorker(process.env, options.workspacePath ?? process.cwd());
+        if (native !== undefined) return native;
+      }
+      return providers.createAdapter(agent.providerId, {
+        agentId: agent.id,
+        role: agent.role,
+        workCapabilities: workCapabilitiesForRole(agent.role),
+        dataDirectory: options.dataDirectory,
+        workspacePath: options.workspacePath,
+        failureCatalog: options.failureCatalog,
+      });
+    });
   return new StaticAgentRegistry(adapters);
 }

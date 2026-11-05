@@ -116,6 +116,44 @@ function expandedRecallTerms(query: string, direct: ReadonlySet<string>): string
   return [...terms].slice(0, 128);
 }
 
+/** A memory admitted on cosine alone (no bigram ratio) still needs this much. 只靠余弦（没有 bigram 比例）进入结果的记忆，仍需达到这个值。 */
+export const COSINE_ONLY_FLOOR = 0.45;
+/** The match floor applied to preference memories instead of the product default. 偏好记忆使用、替代产品默认值的命中下限。 */
+export const PREFERENCE_MIN_RATIO = 0.08;
+
+/**
+ * Latin function words carry no retrieval signal, and a single shared "the"
+ * used to be enough to admit an unrelated memory (1 of 5 terms = the 0.2 floor).
+ * English LongMemEval questions made that visible. Chinese bigrams need no list:
+ * a two-character function word is already rare enough to be informative.
+ * 拉丁虚词不携带检索信号，而共享一个 "the" 过去就足以让无关记忆通过（5 个词命中 1 个即达到
+ * 0.2 下限）。LongMemEval 的英文问题让这一点暴露出来。中文 bigram 不需要词表：二字的虚词本身
+ * 已足够罕见，仍具信息量。
+ */
+/**
+ * Chinese function bigrams. The Latin list exists because a shared "the" was
+ * enough to admit an unrelated memory; the same is true of 必须, 应该 and 时候,
+ * which appear in almost any sentence. Excluding them from the "substantive"
+ * gate is what lets the preference floor be lowered without turning common
+ * phrasing into matches.
+ * 中文虚词 bigram。拉丁词表的存在是因为共享一个 "the" 就足以放进无关记忆；必须、应该、时候同理，
+ * 它们几乎出现在任何句子里。把它们排除在"实词"判定之外，正是让偏好下限可以调低、而不会把常见措辞变成
+ * 匹配的前提。
+ */
+const CJK_FUNCTION_WORDS = new Set([
+  "我们", "你们", "他们", "这个", "那个", "已经", "因为", "所以", "但是", "如果",
+  "就是", "不是", "没有", "必须", "需要", "可以", "应该", "什么", "怎么", "为什",
+  "时候", "现在", "今天", "明天", "一个", "一些", "自己",
+]);
+
+const LATIN_STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "can", "did", "do", "does", "for",
+  "from", "had", "has", "have", "he", "her", "his", "how", "i", "if", "in", "is", "it", "its", "me",
+  "my", "of", "on", "or", "our", "she", "so", "that", "the", "their", "them", "then", "there", "these",
+  "they", "this", "to", "was", "we", "were", "what", "when", "where", "which", "who", "why", "will",
+  "with", "would", "you", "your",
+]);
+
 export interface MemoryStoreOptions {
   dataDirectory: string;
   /** Name of the index database file. 索引数据库文件名。 */
@@ -158,6 +196,18 @@ export class MdMemoryStore {
         PRIMARY KEY (memory_id, term)
       );
       CREATE INDEX IF NOT EXISTS idx_terms ON memory_terms (term);
+      -- Sparse lexical vector per memory: term -> local weight, used for cosine.
+      -- Term rows answer "which memories contain this token" quickly; without the
+      -- weight an IDF-blind hit counts as much as a distinctive one.
+      -- 每条记忆的稀疏词法向量：term -> 局部权重，用于余弦相似度。term 行快速回答
+      -- "哪些记忆包含这个词"；没有权重时，一个毫无区分度的命中会与一个特征词等值。
+      CREATE TABLE IF NOT EXISTS memory_term_weights (
+        memory_id TEXT NOT NULL,
+        term TEXT NOT NULL,
+        weight REAL NOT NULL,
+        PRIMARY KEY (memory_id, term)
+      );
+      CREATE INDEX IF NOT EXISTS idx_term_weights ON memory_term_weights (term);
       CREATE INDEX IF NOT EXISTS idx_memories_status ON memories (status);
       CREATE TABLE IF NOT EXISTS memory_mutations (
         id TEXT PRIMARY KEY,
@@ -361,7 +411,7 @@ export class MdMemoryStore {
     const terms = tokenize(query).slice(0, 128);
     if (terms.length === 0) return [];
     const direct = new Set(terms);
-    const expanded = expandedRecallTerms(query, direct);
+    const expanded = new Set(expandedRecallTerms(query, direct));
     const searchTerms = [...terms, ...expanded];
     const now = new Date().toISOString();
     const placeholders = searchTerms.map(() => "?").join(", ");
@@ -381,31 +431,107 @@ export class MdMemoryStore {
       set.add(row.term);
       byId.set(row.memory_id, set);
     }
+    const { idf, df, total } = this.termDocumentFrequency(searchTerms);
+    const queryVector = new Map<string, number>();
+    for (const term of searchTerms) queryVector.set(term, 1 / Math.sqrt(searchTerms.length));
 
     const matches: MemoryRecallMatch[] = [];
     for (const [memoryId, matched] of byId) {
       const entry = await this.get(memoryId);
       if (entry === undefined) continue;
       const directMatches = [...matched].filter((term) => direct.has(term)).length;
+      // Alias-expanded terms count as substantive too: they were derived from a
+      // phrase the query did contain ("周报" -> "汇报"), not matched by accident.
+      // 别名展开的词也算实词：它们由查询里确实出现的短语推导而来（"周报" -> "汇报"），不是偶然命中。
+      const substantive = [...matched].filter((term) => (direct.has(term) || expanded.has(term))
+        && !LATIN_STOPWORDS.has(term) && !CJK_FUNCTION_WORDS.has(term)).length;
       let expandedMatches = matched.size - directMatches;
-      if (query.includes("周报") && !/(周报|每周|周[一二三四五六日天末]|星期[一二三四五六日天])/.test(`${entry.summary} ${entry.content}`)) {
+      if (query.includes("周报") && !/(周报|每周|周[一二三四五六日天末]|星期[一二三四五六日天末])/.test(`${entry.summary} ${entry.content}`)) {
         expandedMatches *= 0.5;
       }
       const ratio = Math.min(1, (directMatches + expandedMatches * 0.5) / terms.length);
-      if (ratio < (options.minRatio ?? 0.2)) continue;
+      // Hybrid: a cosine over IDF-weighted terms measures how much of the
+      // query this memory explains, which the plain hit ratio cannot: the ratio
+      // treats every matched term as equally informative. The cosine can only
+      // promote a memory that already shared a term, so it never brings in an
+      // unrelated one.
+      // 混合：对经 IDF 加权的词计算余弦，衡量这条记忆解释了查询的多大一部分，而纯命中比例做不到——
+      // 比例把每个命中词都当成同等有信息量。余弦只会提升已经共享词项的记忆，不会引入无关记忆。
+      const cosine = await this.cosine(memoryId, queryVector, idf);
+      const preferenceBoost = entry.type === "preference" ? 0.03 : 0;
+      // A memory that shares only function words was never a match, whatever the ratio says.
+      // 只共享虚词的记忆从来就不是匹配，无论比例算出多少。
+      if (substantive === 0) continue;
+      // A stated preference may be recalled on a lower floor. It is rare, it is
+      // the owner's own words, and it is the class a long natural-language
+      // question most easily buries: "这周的周报应该怎么写" shares one bigram with
+      // "我偏好周报用简洁的要点列表", a 0.1 ratio that the 0.2 product floor drops.
+      // Measured: at 0.08 it is recalled; unrelated queries ("今天天气怎么样",
+      // "帮我订一张去上海的机票") still return nothing at that floor.
+      // 所有者声明的偏好可用更低的下限召回。它罕见、出自所有者本人，也正是长自然语言问题最容易埋没的
+      // 一类："这周的周报应该怎么写"与"我偏好周报用简洁的要点列表"只共享一个 bigram，比例 0.1，会被
+      // 0.2 的产品下限丢弃。实测：0.08 时可召回；无关查询在该下限下仍返回空。
+      // The lower floor is only for a *distinctive* match: a term shared by a
+      // quarter of the library says as little as a function word, and letting it
+      // through made idle memories look used. A rare term is what a buried
+      // preference is actually recognised by.
+      // 更低的下限只给"有区分度"的命中：一个被库中四分之一记忆共享的词，信息量与虚词无异，放它进来
+      // 会让闲置记忆显得被用过。真正让被埋没的偏好被认出的，是稀有的词。
+      const distinctive = [...matched].some((term) => direct.has(term)
+        && !LATIN_STOPWORDS.has(term) && !CJK_FUNCTION_WORDS.has(term)
+        && (df.get(term) ?? total) <= Math.max(1, Math.floor(total * 0.25)));
+      const floor = entry.type === "preference" && distinctive
+        ? Math.min(options.minRatio ?? 0.2, PREFERENCE_MIN_RATIO)
+        : (options.minRatio ?? 0.2);
+      if (ratio < floor && cosine < COSINE_ONLY_FLOOR) continue;
       const recencyBoost = Math.min(1, Math.max(0, 1 - (Date.now() - Date.parse(entry.createdAt)) / (90 * 24 * 3600 * 1000)));
       const usageBoost = Math.min(0.1, entry.accessCount * 0.01);
       matches.push({
         entry,
-        score: Number((ratio + recencyBoost * 0.15 + usageBoost).toFixed(3)),
+        score: Number((ratio + cosine * 0.25 + recencyBoost * 0.15 + usageBoost + preferenceBoost).toFixed(3)),
         matchedTerms: [...matched],
       });
     }
-    matches.sort((left, right) => right.score - left.score);
+    matches.sort((left, right) => right.score - left.score || Number(right.entry.type === "preference") - Number(left.entry.type === "preference"));
     const limit = Math.max(0, Math.min(100, Math.floor(options.maxResults ?? 4)));
     const selected = matches.slice(0, limit);
     for (const match of selected) await this.touch(match.entry.id);
     return selected;
+  }
+
+  /**
+   * Cosine between the query's term vector and one memory's stored weights.
+   * The tiny floor keeps a repeated stopword from dominating a short query.
+   * 查询词向量与某条记忆存储权重之间的余弦。极小的下限防止重复的停用词主导短查询。
+   */
+  private async cosine(memoryId: string, queryVector: ReadonlyMap<string, number>, idf: ReadonlyMap<string, number>): Promise<number> {
+    const rows = this.#db.prepare("SELECT term, weight FROM memory_term_weights WHERE memory_id = ?").all(memoryId) as Array<{ term: string; weight: number }>;
+    if (rows.length === 0) return 0;
+    let intersection = 0;
+    let norm = 0;
+    for (const row of rows) {
+      const weight = (row.weight + 1e-3) * (idf.get(row.term) ?? 1);
+      norm += weight * weight;
+      const queryWeight = queryVector.get(row.term);
+      if (queryWeight !== undefined) intersection += weight * queryWeight;
+    }
+    const queryNorm = Math.sqrt([...queryVector.values()].reduce((sum, value) => sum + value * value, 0));
+    return norm === 0 || queryNorm === 0 ? 0 : intersection / (Math.sqrt(norm) * queryNorm);
+  }
+
+  /** Document frequency over the whole active library for the query's terms. 针对查询词，在整个活跃库上计算文档频率。 */
+  private termDocumentFrequency(terms: readonly string[]): { idf: Map<string, number>; df: Map<string, number>; total: number } {
+    if (terms.length === 0) return { idf: new Map(), df: new Map(), total: 0 };
+    const placeholders = terms.map(() => "?").join(", ");
+    const total = (this.#db.prepare("SELECT COUNT(*) AS count FROM memories WHERE status = 'active'").get() as { count: number }).count;
+    const rows = this.#db.prepare(`SELECT term, COUNT(*) AS count FROM memory_terms WHERE term IN (${placeholders}) GROUP BY term`).all(...terms) as Array<{ term: string; count: number }>;
+    const idf = new Map<string, number>();
+    const df = new Map<string, number>();
+    for (const row of rows) {
+      idf.set(row.term, Math.log(1 + total / Math.max(1, row.count)));
+      df.set(row.term, row.count);
+    }
+    return { idf, df, total };
   }
 
   async update(id: string, update: MemoryUpdate): Promise<MemoryEntry> {
@@ -536,6 +662,9 @@ export class MdMemoryStore {
       this.#db.prepare("DELETE FROM memory_terms WHERE memory_id = ?").run(entry.id);
       const insertTerm = this.#db.prepare("INSERT OR IGNORE INTO memory_terms (memory_id, term) VALUES (?, ?)");
       for (const term of terms) insertTerm.run(entry.id, term);
+      this.#db.prepare("DELETE FROM memory_term_weights WHERE memory_id = ?").run(entry.id);
+      const insertWeight = this.#db.prepare("INSERT INTO memory_term_weights (memory_id, term, weight) VALUES (?, ?, ?)");
+      for (const [term, weight] of termWeights(entry.summary, entry.content)) insertWeight.run(entry.id, term, weight);
 
       this.#db.prepare(`
         INSERT INTO memories (id, type, status, confidence, sensitivity, source_run_id, source_evidence_ids,
@@ -590,6 +719,21 @@ export class MdMemoryStore {
       ...(row.last_accessed_at == null ? {} : { lastAccessedAt: String(row.last_accessed_at) }),
     };
   }
+}
+
+/**
+ * Local term weights (sublinear tf over the memory's own text, plus the type as
+ * a prior). Document frequency is applied at query time over the whole library,
+ * so the index does not need to be rewritten when other memories change.
+ * 局部词权重（对记忆自身文本做次线性词频，并把类型作为先验）。文档频率在查询时对整个库计算，
+ * 因此其他记忆变化时不必重写索引。
+ */
+function termWeights(summary: string, content: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const term of tokenize(`${summary} ${summary} ${content}`)) counts.set(term, (counts.get(term) ?? 0) + 1);
+  const weights = new Map<string, number>();
+  for (const [term, count] of counts) weights.set(term, 1 + Math.log(count));
+  return weights;
 }
 
 function readOptionalFile(path: string): string | undefined {

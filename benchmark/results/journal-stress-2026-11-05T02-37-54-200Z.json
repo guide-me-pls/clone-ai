@@ -1,0 +1,11 @@
+{
+  "events": 30000,
+  "runs": 200,
+  "appendMs": 1796,
+  "listMs": 32,
+  "replayMs": 77,
+  "incrementalRefreshMs": 0,
+  "listForRunMs": 0,
+  "listTypesMs": 3,
+  "databaseBytes": 7467008
+}

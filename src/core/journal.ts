@@ -26,6 +26,17 @@ export interface JournalStore {
   cancelRun?(runId: string): Promise<void>;
   list(): Promise<JournalEvent[]>;
   /**
+   * Events after a sequence, in order. Optional: the JSONL store is a test and
+   * migration convenience, and a consumer must fall back to `list()` when it is
+   * absent.
+   * 序号之后的事件，按顺序。可选：JSONL 存储只供测试与迁移，缺失时消费者需回退到 `list()`。
+   */
+  listSince?(sequence: number): Promise<JournalEvent[]>;
+  /** Every event of one run, in order. Uses the run index instead of a full scan. 某个 Run 的全部事件，按顺序。使用 Run 索引而非全表扫描。 */
+  listForRun?(runId: string): Promise<JournalEvent[]>;
+  /** Only the named event types, after a sequence. Uses the type index. 只取指定类型、序号之后的事件。使用类型索引。 */
+  listTypesSince?(types: readonly JournalEvent["type"][], sequence: number): Promise<JournalEvent[]>;
+  /**
    * Atomically take exclusive ownership of a Run, or return undefined if
    * another live owner holds it.
    *

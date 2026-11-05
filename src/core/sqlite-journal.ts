@@ -40,7 +40,14 @@ export class SqliteJournalStore implements JournalStore {
         task_id TEXT,
         run_id TEXT,
         payload TEXT NOT NULL
-      )
+      );
+      -- Every read that is not a full replay filters by run or type; without
+      -- these the journal is a full scan. Replay still walks sequence order,
+      -- which the primary key already provides.
+      -- 所有非全量重放的读取都按 run 或 type 过滤；没有这些索引，Journal 就是全表扫描。
+      -- 重放仍按 sequence 顺序走，主键已提供该顺序。
+      CREATE INDEX IF NOT EXISTS idx_journal_events_run ON journal_events (run_id, sequence);
+      CREATE INDEX IF NOT EXISTS idx_journal_events_type ON journal_events (type, sequence)
     `);
     // Claims are mutable current-ownership rows, deliberately not events: a
     // lease is state that expires, and replaying it as history would resurrect
@@ -255,6 +262,69 @@ export class SqliteJournalStore implements JournalStore {
     }
   }
 
+  /**
+   * Events after a sequence, in order. The incremental half of `list()`: a
+   * consumer that already holds a projection replays only what it has not
+   * seen, instead of the whole history on every refresh.
+   * 序号之后的事件，按顺序。这是 `list()` 的增量版本：已经持有投影的消费者只重放没见过的部分，
+   * 而不是每次刷新都重放整段历史。
+   */
+  /**
+   * Events of the given types after a sequence, in order. Several background
+   * consumers only ever read a handful of event types (a request marker, an
+   * audit label); handing them the whole history made their cost grow with it.
+   * 给定类型中序号之后的事件，按顺序。若干后台消费者只读少数几种事件类型（一个请求标记、
+   * 一条审计标签）；把整段历史交给它们，会让它们的成本随历史一起增长。
+   */
+  async listTypesSince(types: readonly JournalEvent["type"][], sequence: number): Promise<JournalEvent[]> {
+    if (types.length === 0) return [];
+    const placeholders = types.map(() => "?").join(", ");
+    const rows = this.#db
+      .prepare(`SELECT sequence, id, type, occurred_at, task_id, run_id, payload FROM journal_events
+        WHERE type IN (${placeholders}) AND sequence > ? ORDER BY sequence`)
+      .all(...types, sequence) as Array<{
+        sequence: number | bigint;
+        id: string;
+        type: string;
+        occurred_at: string;
+        task_id: string | null;
+        run_id: string | null;
+        payload: string;
+      }>;
+    return rows.map(toJournalEvent);
+  }
+
+  async listSince(sequence: number): Promise<JournalEvent[]> {
+    const rows = this.#db
+      .prepare("SELECT sequence, id, type, occurred_at, task_id, run_id, payload FROM journal_events WHERE sequence > ? ORDER BY sequence")
+      .all(sequence) as Array<{
+        sequence: number | bigint;
+        id: string;
+        type: string;
+        occurred_at: string;
+        task_id: string | null;
+        run_id: string | null;
+        payload: string;
+      }>;
+    return rows.map(toJournalEvent);
+  }
+
+  /** One run's events, through the run index. 某个 Run 的事件，走 Run 索引。 */
+  async listForRun(runId: string): Promise<JournalEvent[]> {
+    const rows = this.#db
+      .prepare("SELECT sequence, id, type, occurred_at, task_id, run_id, payload FROM journal_events WHERE run_id = ? ORDER BY sequence")
+      .all(runId) as Array<{
+        sequence: number | bigint;
+        id: string;
+        type: string;
+        occurred_at: string;
+        task_id: string | null;
+        run_id: string | null;
+        payload: string;
+      }>;
+    return rows.map(toJournalEvent);
+  }
+
   async list(): Promise<JournalEvent[]> {
     const rows = this.#db
       .prepare("SELECT sequence, id, type, occurred_at, task_id, run_id, payload FROM journal_events ORDER BY sequence")
@@ -267,20 +337,32 @@ export class SqliteJournalStore implements JournalStore {
         run_id: string | null;
         payload: string;
       }>;
-    return rows.map((row) => ({
-      id: row.id,
-      sequence: Number(row.sequence),
-      type: row.type as JournalEvent["type"],
-      occurredAt: row.occurred_at,
-      ...(row.task_id === null ? {} : { taskId: row.task_id }),
-      ...(row.run_id === null ? {} : { runId: row.run_id }),
-      payload: JSON.parse(row.payload) as unknown,
-    }));
+    return rows.map(toJournalEvent);
   }
 
   close(): void {
     this.#db.close();
   }
+}
+
+function toJournalEvent(row: {
+  sequence: number | bigint;
+  id: string;
+  type: string;
+  occurred_at: string;
+  task_id: string | null;
+  run_id: string | null;
+  payload: string;
+}): JournalEvent {
+  return {
+    id: row.id,
+    sequence: Number(row.sequence),
+    type: row.type as JournalEvent["type"],
+    occurredAt: row.occurred_at,
+    ...(row.task_id === null ? {} : { taskId: row.task_id }),
+    ...(row.run_id === null ? {} : { runId: row.run_id }),
+    payload: JSON.parse(row.payload) as unknown,
+  };
 }
 
 /**

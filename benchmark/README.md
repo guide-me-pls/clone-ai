@@ -41,6 +41,37 @@ so successive upgrades can be compared.
 - The runner exits non-zero when any unexpected failure occurs, so CI or a
   pre-upgrade check can gate on it.
 
+## Regression gate (`npm run gate`)
+
+The offline gate runs on every commit in CI and costs nothing: it re-runs the
+judgment layers against held-out fixtures under `benchmark/gate/`, never a
+model.
+
+```bash
+npm run gate
+npm run gate -- --audit ~/clone-audit.jsonl
+npm run gate -- --write-baseline
+```
+
+- **Verdict suite** — `verdict-cases.json` names files, evidence, and what the
+  owner would say. The current verifier must reproduce those verdicts. A system
+  "pass" on an owner "fail" is a false pass and fails the gate.
+- **Policy suite** — `policy-cases.json` covers risk classes, autonomy levels,
+  standing policies, protected paths, and approvals. An "allowed" where the
+  fixture expects a gate is an unsafe allow.
+- **Audit calibration** — `audit-cases.jsonl`, or any `clone-ai audit export`
+  file passed with `--audit`, is compared with owner labels: agreement, false
+  pass, false fail. The dataset hash is recorded, so held-out records cannot
+  change silently.
+- **Per-case baseline** — `benchmark/gate/baseline.json` records what each case
+  currently does. Any change, including an improvement, fails until it is
+  regenerated in the same change, so a verdict shift is reviewed rather than
+  discovered later. The diff is the review.
+
+The gate measures the rules around the model, not model quality. A live
+trajectory eval would need recorded cassettes or a sandboxed provider; that is a
+separate, non-CI suite.
+
 ## What this is not
 
 - Not a model benchmark: pass/fail reflects orchestration + the provider's
