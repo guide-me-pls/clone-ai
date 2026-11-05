@@ -6,6 +6,31 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-05 — The native worker becomes a provider with exact usage, still opt-in
+
+**Decision.** `native` is registered in the provider catalog, so an owner can
+select it per agent like any CLI. The adapter's id is the configured agent id
+and its `providerId` is `native`; its capabilities come from the agent role,
+with external effects excluded. Its model client reports exact token usage per
+model call, which the Kernel journals as `usage.recorded` with runId and stepId.
+It still requires `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`; it does
+not become the default.
+
+**Evidence.** The worker already existed and enforced scopes at each tool call,
+but it was invisible to settings (only a special case in the agent registry),
+reported no usage, and its adapter identity was literally `native` rather than
+the configured agent. The turn/run audit can now carry exact usage; leaving the
+native path unmeasured would make any CLI-versus-native comparison impossible.
+
+**What it costs.** The owner must configure an OpenAI-compatible endpoint; the
+worker has no external-action tools, so `external` stays with governed
+connectors; token counts depend on the endpoint returning a usage block.
+
+**Reversal condition.** If endpoints rarely report usage, keep the gateway's
+time-window inference as the fallback and mark exact usage unavailable. If the
+native loop proves less reliable than a CLI on the benchmark, keep the CLI as
+the default and native as opt-in.
+
 ## 2026-11-05 — Every Main Agent turn is a journal record, not a side file
 
 **Decision.** Every entry point — CLI, `npm run main`, the companion/server, and

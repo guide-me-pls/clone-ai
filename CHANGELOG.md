@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Native worker is a first-class provider with exact usage
+
+`native` is now registered in the provider catalog, so the owner can select it per agent like any CLI: the adapter id is the configured agent id, role capabilities drive routing, and external roles are refused because there is no governed action connector. Its model client reports exact token usage per call (both OpenAI and Anthropic-style usage blocks), the Kernel journals `usage.recorded` with runId and stepId, and the audit shows the exact numbers next to the gateway's time-window estimate. It still requires `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`; defaults are unchanged.
+
+原生 Worker 现在注册进 Provider 目录，所有者可以像选择任何 CLI 一样按 Agent 选择它：Adapter id 是配置的 Agent id，角色能力决定路由，external 角色被拒绝（因为没有受治理的动作连接器）。模型客户端按调用报告精确 token 用量（兼容 OpenAI 与 Anthropic 两种 usage 块），Kernel 以带 runId 与 stepId 的 `usage.recorded` 记入 Journal，审计页在网关时间窗口估算旁显示精确数字。它仍需要 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`；默认配置不变。
+
 ### Every Main Agent turn is in the audit
 
 CLI, `npm run main`, the desktop/server companion, and WhatsApp now write the same two journal events per turn — `main_agent.turn_started` and `main_agent.turn_completed` — plus `agent.tool_started` / `agent.tool_completed` for every Main Agent tool call. Each turn carries the input and reply (PII-redacted and capped), model, provider, reasoning effort, token usage, prompt material hash, spawned run ids, and tool calls with redacted argument summaries. The audit page gains a **Main Agent turns** tab, `clone-ai audit turns` prints the same, and `GET /api/audit/turns` serves it. The existing `main-agent-turns.jsonl` ledger is written by the same module, so the conversation view and the journal cannot disagree.

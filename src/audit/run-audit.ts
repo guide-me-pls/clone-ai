@@ -37,6 +37,15 @@ export interface AuditExecution {
   failure?: { message: string; category?: string; signature?: string; exitCode?: number | null };
   /** Model-gateway view of this execution (tokens, cost, HTTP errors). Inferred by time window, never exact. 模型网关视角下的此次执行（token、费用、HTTP 错误）；按时间窗口推断，不是精确归因。 */
   gatewayUsage?: GatewayUsage;
+  /** Exact usage reported by the adapter for this execution. Adapter 为本次执行报告的精确用量。 */
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    cachedInputTokens?: number;
+    modelCalls?: number;
+    costUsd?: number;
+  };
 }
 
 export interface AuditEvidence {
@@ -240,6 +249,22 @@ function projectOne(
         record.evidence.push({ stepId: p.stepId, kind: p.kind, producedBy: p.producedBy, locator: p.locator, summary: p.summary });
         // A step that recorded evidence and reached the next state completed. 记录了证据且继续推进的步骤视为完成。
         break;
+      case "usage.recorded": {
+        if (typeof p.stepId !== "string") break;
+        const execution = (typeof p.workOrderId === "string" ? open.get(`${p.stepId}/${p.workOrderId}`) : undefined)
+          ?? open.get(p.stepId)
+          ?? record.executions.find((item) => item.stepId === p.stepId);
+        if (execution === undefined) break;
+        execution.usage = {
+          ...(typeof p.inputTokens === "number" ? { inputTokens: p.inputTokens } : {}),
+          ...(typeof p.outputTokens === "number" ? { outputTokens: p.outputTokens } : {}),
+          ...(typeof p.totalTokens === "number" ? { totalTokens: p.totalTokens } : {}),
+          ...(typeof p.cachedInputTokens === "number" ? { cachedInputTokens: p.cachedInputTokens } : {}),
+          ...(typeof p.modelCalls === "number" ? { modelCalls: p.modelCalls } : {}),
+          ...(typeof p.costUsd === "number" ? { costUsd: p.costUsd } : {}),
+        };
+        break;
+      }
       case "verification.completed":
         record.verification = {
           passed: p.passed === true,

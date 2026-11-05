@@ -134,3 +134,51 @@ test("evaluation compares only runs the system judged, and labels need a finishe
   assert.equal(labeled.label?.note, "confirmed");
   assert.equal(labeled.digest, record!.digest, "a label is judgement, so it must not change the digest");
 });
+
+class UsageAdapter implements RuntimeAdapter {
+  readonly id = "native-worker";
+  readonly providerId = "native";
+  async capabilities(): Promise<RuntimeCapabilities> {
+    return { resume: false, cancellation: false, approvalCallback: false, parallelAssignments: false, work: ["general"], evidenceKinds: ["observation"] };
+  }
+  async *execute(_input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
+    yield { type: "session_started", sessionId: "session-usage" };
+    yield { type: "evidence", evidence: { kind: "observation", summary: "did the work" } };
+    yield {
+      type: "completed",
+      summary: "done",
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, modelCalls: 2, durationMs: 12 },
+    };
+  }
+}
+
+test("exact adapter usage is journaled with run and step, and the audit shows it", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "clone-audit-usage-"));
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  const journal = new JsonlJournalStore(join(dir, "journal.jsonl"));
+  const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory: new MemoryPipeline(journal) });
+  const { run } = await runtime.acceptTrigger({ kind: "query", summary: "do the thing", payload: {} });
+  await runtime.attachPlan(run.id, {
+    summary: "s",
+    steps: [{ id: "s1", title: "work", instructions: "i", risk: "reversible_write", acceptanceCriteria: ["done"], agentId: "native-worker", requiredCapabilities: ["general"] }],
+  });
+  await runtime.execute(run.id, new StaticAgentRegistry([new UsageAdapter()]));
+
+  const events = await journal.list();
+  const usage = events.find((event) => event.type === "usage.recorded");
+  assert.ok(usage, "usage.recorded must be journaled");
+  const payload = usage.payload as Record<string, unknown>;
+  assert.equal(payload.runId, run.id);
+  assert.equal(payload.stepId, "s1");
+  assert.equal(payload.source, "native-worker");
+  assert.equal(payload.totalTokens, 15);
+  assert.equal(payload.modelCalls, 2);
+
+  const [record] = projectRunAudits(events);
+  assert.deepEqual(record!.executions[0]!.usage, {
+    inputTokens: 10,
+    outputTokens: 5,
+    totalTokens: 15,
+    modelCalls: 2,
+  });
+});

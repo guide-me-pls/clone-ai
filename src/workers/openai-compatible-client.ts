@@ -13,6 +13,7 @@
  * 它只是客户端：工具边界（有哪些工具、哪次调用被允许）在本文件之前已由 NativeAgentWorker
  * 判定。这里的循环只负责把工具结果回传给模型。
  */
+import type { ModelUsage } from "../core/contracts.ts";
 import type { NativeModelClient, NativeToolCall, NativeToolSpec } from "./native-agent-worker.ts";
 
 export interface OpenAiCompatibleClientOptions {
@@ -41,7 +42,7 @@ export class OpenAiCompatibleClient implements NativeModelClient {
     this.#fetch = options.fetchImpl ?? fetch;
   }
 
-  async run(input: Parameters<NativeModelClient["run"]>[0]): Promise<{ summary: string }> {
+  async run(input: Parameters<NativeModelClient["run"]>[0]): Promise<{ summary: string; usage?: ModelUsage }> {
     const messages: ChatMessage[] = [
       { role: "system", content: systemPrompt(input.instructions, input.tools) },
       { role: "user", content: input.instructions },
@@ -54,12 +55,36 @@ export class OpenAiCompatibleClient implements NativeModelClient {
         parameters: tool.parameters ?? { type: "object", properties: {}, additionalProperties: true },
       },
     }));
+    const totals = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, modelCalls: 0 };
+    let sawUsage = false;
+    const finish = (summary: string): { summary: string; usage: ModelUsage } => ({
+      summary,
+      usage: {
+        modelCalls: totals.modelCalls,
+        ...(sawUsage
+          ? {
+            inputTokens: totals.inputTokens,
+            outputTokens: totals.outputTokens,
+            totalTokens: totals.totalTokens,
+            ...(totals.cachedInputTokens > 0 ? { cachedInputTokens: totals.cachedInputTokens } : {}),
+          }
+          : {}),
+      },
+    });
     const maxRounds = this.#options.maxRounds ?? 12;
     for (let round = 0; round < maxRounds; round += 1) {
       if (input.signal.aborted) throw new Error("Native worker was cancelled.");
       const reply = await this.#complete(messages, tools, input.signal);
+      totals.modelCalls += 1;
+      if (reply.usage !== undefined) {
+        sawUsage = true;
+        totals.inputTokens += reply.usage.inputTokens ?? 0;
+        totals.outputTokens += reply.usage.outputTokens ?? 0;
+        totals.totalTokens += reply.usage.totalTokens ?? 0;
+        totals.cachedInputTokens += reply.usage.cachedInputTokens ?? 0;
+      }
       const calls = reply.tool_calls ?? [];
-      if (calls.length === 0) return { summary: (reply.content ?? "").trim() };
+      if (calls.length === 0) return finish((reply.content ?? "").trim());
       input.onText?.(reply.content ?? "");
       messages.push({ role: "assistant", content: reply.content, tool_calls: calls });
       for (const call of calls) {
@@ -68,10 +93,10 @@ export class OpenAiCompatibleClient implements NativeModelClient {
         messages.push({ role: "tool", tool_call_id: call.id, content: outcome.output.slice(0, 8_000) });
       }
     }
-    return { summary: "The worker reached its tool-call round limit without a final answer." };
+    return finish("The worker reached its tool-call round limit without a final answer.");
   }
 
-  async #complete(messages: ChatMessage[], tools: unknown[], signal: AbortSignal): Promise<{ content: string | null; tool_calls?: ChatMessage["tool_calls"] }> {
+  async #complete(messages: ChatMessage[], tools: unknown[], signal: AbortSignal): Promise<{ content: string | null; tool_calls?: ChatMessage["tool_calls"]; usage?: ModelUsage }> {
     const response = await this.#fetch(`${this.#options.baseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
       method: "POST",
       headers: {
@@ -90,11 +115,49 @@ export class OpenAiCompatibleClient implements NativeModelClient {
       const detail = await response.text().catch(() => "");
       throw new Error(`The provider answered ${response.status}: ${detail.slice(0, 300)}`);
     }
-    const body = await response.json() as { choices?: Array<{ message?: { content?: string | null; tool_calls?: ChatMessage["tool_calls"] } }> };
+    const body = await response.json() as {
+      choices?: Array<{ message?: { content?: string | null; tool_calls?: ChatMessage["tool_calls"] } }>;
+      usage?: unknown;
+    };
     const message = body.choices?.[0]?.message;
     if (message === undefined) throw new Error("The provider returned no message.");
-    return { content: message.content ?? null, ...(message.tool_calls === undefined ? {} : { tool_calls: message.tool_calls }) };
+    const usage = parseUsage(body.usage);
+    return {
+      content: message.content ?? null,
+      ...(message.tool_calls === undefined ? {} : { tool_calls: message.tool_calls }),
+      ...(usage === undefined ? {} : { usage }),
+    };
   }
+}
+
+/**
+ * Reads the usage block in both the OpenAI shape (`prompt_tokens`) and the
+ * Anthropic-style shape (`input_tokens`), including cache counters. Missing
+ * numbers stay absent; a provider that reports nothing must not look free.
+ * 同时读取 OpenAI 形状（`prompt_tokens`）与 Anthropic 风格（`input_tokens`）的 usage，
+ * 包括缓存计数。缺失的数字保持缺省；不报告用量的 Provider 不能被看成免费。
+ */
+export function parseUsage(value: unknown): ModelUsage | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  const details = typeof record.prompt_tokens_details === "object" && record.prompt_tokens_details !== null
+    ? record.prompt_tokens_details as Record<string, unknown>
+    : {};
+  const input = asCount(record.prompt_tokens) ?? asCount(record.input_tokens);
+  const output = asCount(record.completion_tokens) ?? asCount(record.output_tokens);
+  const total = asCount(record.total_tokens);
+  const cached = asCount(details.cached_tokens) ?? asCount(record.cache_read_input_tokens) ?? asCount(record.prompt_cache_hit_tokens);
+  const usage: ModelUsage = {
+    ...(input === undefined ? {} : { inputTokens: input }),
+    ...(output === undefined ? {} : { outputTokens: output }),
+    ...(total === undefined ? {} : { totalTokens: total }),
+    ...(cached === undefined ? {} : { cachedInputTokens: cached }),
+  };
+  return Object.keys(usage).length === 0 ? undefined : usage;
+}
+
+function asCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 /**

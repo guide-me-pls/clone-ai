@@ -9,17 +9,23 @@ import { logJson } from "./json-log.ts";
  * 时长与模型 id 始终可写。
  */
 export interface UsageRecord {
-  source: "main-agent" | "planner" | "self-review";
+  source: "main-agent" | "planner" | "self-review" | "native-worker";
   /** The Main Agent turn this call belongs to, when one exists. 本次调用所属的主 Agent 回合（若存在）。 */
   turnId?: string;
   /** The run this call belongs to, when one exists. 本次调用所属的 Run（若存在）。 */
   runId?: string;
+  /** The plan step / work order this call belongs to, for workers. 本次调用所属的计划步骤 / WorkOrder（Worker 用）。 */
+  stepId?: string;
+  workOrderId?: string;
+  /** Model round trips, when the adapter can count them. 模型往返次数（Adapter 能计数时）。 */
+  modelCalls?: number;
   durationMs: number;
   modelId?: string;
   provider?: string;
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  cachedInputTokens?: number;
   costUsd?: number;
 }
 
