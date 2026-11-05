@@ -1,0 +1,127 @@
+{
+  "ranAt": "2026-11-05T11:12:52.700Z",
+  "model": "360/anthropic/claude-sonnet-5-5",
+  "endpoint": "http://127.0.0.1:3425",
+  "tasks": [
+    {
+      "id": "direct-answer",
+      "prompt": "请只回复两个字：收到。不要提案任何计划。",
+      "expectation": "direct"
+    },
+    {
+      "id": "authority-read",
+      "prompt": "我现在允许在哪些目录写入？请先查一下权限再回答。",
+      "expectation": "authority"
+    },
+    {
+      "id": "plan-proposal",
+      "prompt": "帮我把 README.md 总结成 out/summary.md。这是一个本地可逆任务，请提案一个计划，不要自己执行。",
+      "expectation": "plan"
+    }
+  ],
+  "records": [
+    {
+      "runtime": "pi",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "passed": true,
+      "durationMs": 2895,
+      "totalTokens": 3864,
+      "modelCalls": 0,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 2,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "native",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "passed": true,
+      "durationMs": 1237,
+      "totalTokens": 3796,
+      "modelCalls": 1,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 3,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "pi",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "passed": true,
+      "durationMs": 5879,
+      "totalTokens": 8137,
+      "modelCalls": 0,
+      "toolCalls": [
+        "get_authority"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 355,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "native",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "passed": true,
+      "durationMs": 8437,
+      "totalTokens": 7996,
+      "modelCalls": 2,
+      "toolCalls": [
+        "get_authority"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 343,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "pi",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "passed": true,
+      "durationMs": 10434,
+      "totalTokens": 13174,
+      "modelCalls": 0,
+      "toolCalls": [
+        "get_authority",
+        "propose_work_plan"
+      ],
+      "runs": 1,
+      "turnStatus": "completed",
+      "replyLength": 192,
+      "journalEvents": 14
+    },
+    {
+      "runtime": "native",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "passed": true,
+      "durationMs": 11115,
+      "totalTokens": 9669,
+      "modelCalls": 2,
+      "toolCalls": [
+        "propose_work_plan"
+      ],
+      "runs": 1,
+      "turnStatus": "completed",
+      "replyLength": 347,
+      "journalEvents": 12
+    }
+  ],
+  "summary": {
+    "pi": {
+      "passed": 3,
+      "total": 3
+    },
+    "native": {
+      "passed": 3,
+      "total": 3
+    }
+  }
+}
