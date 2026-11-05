@@ -34,6 +34,7 @@ import { tokenize } from "../memory/md-memory-store.ts";
 import { isEffortLevel } from "../workers/effort.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
+import { logJson } from "../observability/json-log.ts";
 
 export interface NativeMainAgentEndpoint {
   baseUrl: string;
@@ -83,9 +84,41 @@ interface NativeReply {
   usage?: ModelUsage;
 }
 
-/** The explicit switch; anything else keeps Pi. 显式开关；其他值保持 Pi。 */
+export type MainAgentRuntime = "native" | "pi";
+
+let warnedAboutPiFallback = false;
+
+/**
+ * Which Main Agent runtime this process should use.
+ *
+ * Unset means "native when the endpoint is configured, Pi otherwise"; `pi`
+ * forces the legacy runtime and `native` forces the native one (and fails
+ * clearly later if the endpoint is missing). An explicit `native` never falls
+ * back silently.
+ *
+ * 本进程应使用哪个主 Agent 运行时。
+ *
+ * 未设置表示"配置了端点就用原生，否则用 Pi"；`pi` 强制旧运行时，`native` 强制原生
+ * （端点缺失时稍后清晰失败）。显式的 `native` 绝不静默回退。
+ */
+export function readMainAgentRuntime(environment: NodeJS.ProcessEnv = process.env): MainAgentRuntime {
+  const value = environment.CLONE_AI_MAIN_RUNTIME?.trim().toLowerCase();
+  if (value === "pi" || value === "legacy") return "pi";
+  if (value !== undefined && value !== "" && value !== "native") {
+    throw new Error(`Unknown CLONE_AI_MAIN_RUNTIME "${value}". Use "native" or "pi".`);
+  }
+  if (value === "native") return "native";
+  if (readNativeMainAgentEndpoint(environment).endpoint !== undefined) return "native";
+  if (!warnedAboutPiFallback) {
+    warnedAboutPiFallback = true;
+    logJson("warn", "Main Agent native endpoint is not configured; using Pi", {});
+  }
+  return "pi";
+}
+
+/** The explicit switch as a boolean, for existing callers. 供现有调用方使用的布尔开关。 */
 export function isNativeMainAgentSelected(environment: NodeJS.ProcessEnv = process.env): boolean {
-  return environment.CLONE_AI_MAIN_RUNTIME?.trim().toLowerCase() === "native";
+  return readMainAgentRuntime(environment) === "native";
 }
 
 /**

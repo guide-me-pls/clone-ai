@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Native Main Agent is the default when configured
+
+With `CLONE_AI_MAIN_RUNTIME` unset, the Main Agent now uses the native in-process loop when `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are present; otherwise it stays on Pi. `CLONE_AI_MAIN_RUNTIME=pi` forces Pi, `=native` forces native, and an unknown value is refused. A live smoke without the flag recorded `provider: "native"`, and the full suite still passes.
+
+`CLONE_AI_MAIN_RUNTIME` 未设置时，只要存在 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`，主 Agent 现在默认使用进程内的原生循环；否则继续使用 Pi。`CLONE_AI_MAIN_RUNTIME=pi` 强制 Pi，`=native` 强制原生，未知值会被拒绝。不设开关的实机冒烟记录了 `provider: "native"`，全量测试仍通过。
+
 ### Native Main Agent accepts images
 
 The native Main Agent now sends image attachments as OpenAI-style `image_url` data URLs in the current user message, so switching from Pi no longer removes the feature. Images are per-turn and not stored in the turn ledger. A live validation (64×64 red PNG) returned "Red." with 3,806 tokens.
