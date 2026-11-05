@@ -30,6 +30,7 @@ import {
 } from "./companion-auth.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
 import { ImprovementService } from "./improvement/improvement-service.ts";
+import { parseAttachments } from "./main-agent/attachments.ts";
 import { scanMemoryPii } from "./memory/memory-hygiene.ts";
 import { describeAuthority, StandingPolicyStore } from "./authority/standing-policy-store.ts";
 import { OpportunityService } from "./opportunity/opportunity-service.ts";
@@ -1707,11 +1708,16 @@ async function handleRequest(
   }
   if (request.method === "POST" && url.pathname === "/api/main-agent/stream") {
     const body = await readJsonBody(request);
+    const attachments = parseAttachments(body.attachments);
+    if (!attachments.ok) {
+      sendJson(response, 400, { error: attachments.error });
+      return;
+    }
     const text = normalizeMainAgentRequestText(body.text);
     const turnId = typeof body.turnId === "string" && body.turnId.trim().length > 0
       ? body.turnId.trim()
       : randomUUID();
-    if (text.length === 0) {
+    if (text.length === 0 && attachments.images.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
@@ -1736,6 +1742,7 @@ async function handleRequest(
     try {
       const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
         onDelta: (delta) => send("delta", { delta }),
+        ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
       });
       send("done", result);
     } catch (error: unknown) {
@@ -1755,11 +1762,16 @@ async function handleRequest(
 
   if (request.method === "POST" && url.pathname === "/api/main-agent/query") {
     const body = await readJsonBody(request);
+    const attachments = parseAttachments(body.attachments);
+    if (!attachments.ok) {
+      sendJson(response, 400, { error: attachments.error });
+      return;
+    }
     const text = normalizeMainAgentRequestText(body.text);
     const turnId = typeof body.turnId === "string" && body.turnId.trim().length > 0
       ? body.turnId.trim()
       : randomUUID();
-    if (text.length === 0) {
+    if (text.length === 0 && attachments.images.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
@@ -1791,7 +1803,9 @@ async function handleRequest(
       return;
     }
     try {
-      const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId);
+      const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
+        ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
+      });
       sendJson(response, 200, result);
     } catch (error: unknown) {
       if (error instanceof MainAgentBusyError) {
