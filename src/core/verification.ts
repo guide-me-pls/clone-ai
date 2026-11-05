@@ -53,19 +53,25 @@ export function extractFileExpectations(step: PlanStep): FileExpectation[] {
     // A period inside a filename is not a sentence boundary.
     // 文件名中的点不是句子边界。
     for (const sentence of assertion.split(/\n|(?<=[。！？；])|(?<=[.!?;])(?=\s|$)/)) {
-      const quoted = /[`"'"']([^`"'"'\s]+)[`"'"']/g;
-      const bare = /(?:^|[\s(（])([A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8})(?=[\s)）,，。;；:：]|$)/g;
+      const quoted = /[`"']([^`"'\s]+)[`"']/g;
+      const bare = /(?:^|[\s(（])([A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8})(?=[\s)）,.，。;；:：]|$)/g;
       for (const pattern of [quoted, bare]) {
         for (const match of sentence.matchAll(pattern)) {
           const candidate = match[1];
           if (candidate === undefined || candidate.startsWith("..")) continue;
           if (!/^[A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8}$/.test(candidate)) continue;
-          const prefix = sentence.slice(0, match.index).replace(/[`"'"']$/, "");
+          const candidateStart = match.index + match[0].indexOf(candidate);
+          const prefix = sentence.slice(0, candidateStart).replace(/[`"']$/, "");
           const suffix = sentence.slice(match.index + match[0].length);
           if (/[A-Za-z_$][\w.$]*\s*\($/.test(prefix) || /^\s*\(/.test(suffix)) continue;
           const segments = candidate.split(/[/\\]/);
           if (segments.length > 1) {
-            if (segments.slice(0, -1).some((segment) => /^(?=.*[A-Z])[A-Z0-9_]+$/.test(segment))) continue;
+            // Only SCREAMING_SNAKE_CASE segments are code constants. A single
+            // uppercase directory such as macOS's `/var/.../T/` is still a real
+            // path and must remain eligible for the workspace boundary check.
+            // 只有 SCREAMING_SNAKE_CASE 段才是代码常量；macOS `/var/.../T/`
+            // 这类单字母大写目录仍是真实路径，必须继续接受工作区边界检查。
+            if (segments.slice(0, -1).some((segment) => segment.includes("_") && /^[A-Z0-9_]+$/.test(segment))) continue;
           } else {
             const extension = candidate.slice(candidate.lastIndexOf(".") + 1).toLowerCase();
             if (!rootExtensions.has(extension) || !fileIntent.test(sentence)) continue;

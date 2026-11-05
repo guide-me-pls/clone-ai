@@ -19,6 +19,7 @@ import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resol
 import { createMainAgentSession } from "./session.ts";
 import { recordPromptSnapshot } from "./prompt-snapshot.ts";
 import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
+import { beginInvocation } from "../audit/invocation-ledger.ts";
 
 const query = process.argv.slice(2).join(" ").trim();
 if (query.length === 0) {
@@ -37,6 +38,14 @@ await migrateLegacyCloneHome({
   targetDirectory: paths.dataDirectory,
 });
 const { session, prompt } = await createMainAgentSession({ dataDirectory: paths.dataDirectory, query });
+const audit = await beginInvocation({
+  prompt: query,
+  surface: "main",
+  workspacePath: paths.workspacePath,
+  dataDirectory: paths.dataDirectory,
+  command: "main",
+});
+let reply = "";
 
 // The turn's inputs are recorded before the model sees them, so a failed run
 // can be attributed to a prompt revision instead of guessed at. Passing the
@@ -47,8 +56,15 @@ await recordPromptSnapshot(paths.dataDirectory, prompt);
 
 session.subscribe((event) => {
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+    reply += event.assistantMessageEvent.delta;
     process.stdout.write(event.assistantMessageEvent.delta);
   }
+});
+audit.note({
+  ...(session.sessionManager.getSessionFile() === undefined ? {} : { sessionFile: session.sessionManager.getSessionFile() }),
+  ...(prompt.modelId === undefined ? {} : { modelId: prompt.modelId }),
+  ...(prompt.provider === undefined ? {} : { provider: prompt.provider }),
+  ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
 });
 
 const started = Date.now();
@@ -62,6 +78,10 @@ const beforeStats = (() => {
 try {
   await session.prompt(query);
   process.stdout.write("\n");
+  await audit.complete({ reply });
+} catch (error: unknown) {
+  await audit.fail(error);
+  throw error;
 } finally {
   try {
     await recordUsage(paths.dataDirectory, collectSessionUsage(session, Date.now() - started, beforeStats));

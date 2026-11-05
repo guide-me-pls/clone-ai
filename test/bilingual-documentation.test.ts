@@ -15,6 +15,7 @@ const documentPairs = [
   ["docs/work-orders-and-pi.md", "docs/work-orders-and-pi.zh-CN.md"],
   ["docs/usage/mobile-whatsapp.md", "docs/usage/mobile-whatsapp.zh-CN.md"],
   ["docs/usage/server-deployment.md", "docs/usage/server-deployment.zh-CN.md"],
+  ["docs/usage/agent-invocations.md", "docs/usage/agent-invocations.zh-CN.md"],
   ["docs/architecture/agent-runtime-convergence.md", "docs/architecture/agent-runtime-convergence.zh-CN.md"],
   ["docs/engineering/optimizations.md", "docs/engineering/optimizations.zh-CN.md"],
   ["docs/architecture/trade-offs.md", "docs/architecture/trade-offs.zh-CN.md"],

@@ -6,6 +6,19 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Shared audit for every Agent invocation
+
+Every call into the Main Agent now writes a shared invocation record under
+`~/.clone/audit/invocations.jsonl`, independent of `CLONE_HOME`. The audit view
+has an **Agent invocations** tab showing caller, request, visible reply, error,
+model, effort, Run ids and duration. CLI, desktop and WhatsApp callers are
+labelled; secrets are redacted and private reasoning is never stored.
+
+每次 Main Agent 调用现在都会写入 `~/.clone/audit/invocations.jsonl` 下的共享调用记录，
+不受 `CLONE_HOME` 影响。审计页新增 **Agent 调用** 页签，显示调用者、请求、可见回复、
+错误、模型、强度、Run id 与耗时。CLI、桌面与 WhatsApp 调用都会标明来源；密钥会脱敏，
+模型私有推理不会保存。
+
 ### Avoid false file expectations
 
 The verifier excludes code identifiers, URLs and constant-directory paths from
