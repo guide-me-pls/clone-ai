@@ -23,6 +23,28 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+## 2026-11-05 — 所有 Agent 调用共享审计
+
+- **目标 / 假设：** 即使接入 Agent 使用隔离 `CLONE_HOME`，每次 Main Agent 调用也要
+  出现在所有者审计中。
+- **取舍：** [在 CLONE_HOME 之外审计调用](../architecture/trade-offs.zh-CN.md#2026-11-05--所有-agent-调用在-clone_home-之外审计)。
+- **变更：** `src/audit/invocation-ledger.ts` 将调用者、请求、可见回复、错误、模型、
+  强度、Workspace、会话文件、Run id 与耗时写入
+  `~/.clone/audit/invocations.jsonl`。CLI、桌面 companion、WhatsApp 与独立 Main
+  Agent 入口共用同一账本。审计页新增 **Agent 调用** 页签，CLI 新增
+  `clone-ai invocations`。
+- **Eval：** `test/invocation-ledger.test.ts` 与 companion API 测试覆盖隔离主目录、
+  脱敏、失败回合、中断开始和详情输出。使用临时 `CLONE_HOME` 的真实回合出现在默认
+  账本中，调用者 `codex`、模型 `360/deepseek/deepseek-v4.1-flash`、强度 `high`、
+  回复 `OK`（invocation `7cb576ee`）。完整套件 568 项、565 通过、3 跳过、0 失败；
+  `npm run gate` 通过。
+- **执行链路：** 自修复运行暴露临时主目录导致审计不可见后，在当前工作区实现并验证。
+  同时保留验证器文件期望的回归覆盖。
+- **优点：** 所有者现在能看到谁调用了 Clone AI、问什么、回复什么、产生哪个 Run，
+  不再依赖调用方的数据目录。
+- **缺点 / 下次：** 账本是第二个明文存储；保留期与加密策略尚未可配置。
+- **推翻条件：** 如果明文 JSONL 不再满足威胁模型，迁移到加密的、所有者作用域审计存储。
+
 ## 2026-11-05 — 记住夜间修复已消费的轨迹
 
 - **目标 / 假设：** 成功修复后不再重复处理未改变的轨迹；同一 runId 的文件内容

@@ -36,6 +36,8 @@ import { describeAuthority, StandingPolicyStore } from "../authority/standing-po
 import { MemoryGovernance } from "../memory/memory-governance.ts";
 import { ImprovementService } from "../improvement/improvement-service.ts";
 import { describeExport, EXPORT_EXCLUDES, exportOwnerData } from "../config/export.ts";
+import { beginInvocation } from "../audit/invocation-ledger.ts";
+import { readInvocation, readInvocations } from "../audit/invocation-ledger.ts";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -66,6 +68,7 @@ Usage:
   clone-ai authority revoke <policyId>
   clone-ai audit [<runId>|export [--out file]]  Why runs failed, per run; export JSONL for evals
   clone-ai audit turns [--limit N] [--json]  Main Agent turns: input, reply, tools, model usage
+  clone-ai invocations [list|show <id>]  Every Agent call, its prompt, reply and Run ids
   clone-ai traces [list|export|show <runId>|clear --yes]  Failed traces for the nightly repair job
   clone-ai model <worker> [<model>|--clear]  Show, pin or clear the model a worker CLI uses
   clone-ai effort <worker> [<level>|--clear]  Show, pin or clear the reasoning effort
@@ -118,6 +121,7 @@ async function main(): Promise<number> {
     case "review": return reviewRun(paths.dataDirectory, argv[1], argv[2]);
     case "authority": return authorityCommand(paths.dataDirectory, argv.slice(1));
     case "audit": return auditCommand(paths.dataDirectory, argv.slice(1));
+    case "invocations": return invocationsCommand(paths.dataDirectory, argv.slice(1));
     case "traces": return tracesCommand(paths.dataDirectory, argv.slice(1));
     case "model": return modelCommand(paths.dataDirectory, argv.slice(1));
     case "effort": return effortCommand(paths.dataDirectory, argv.slice(1));
@@ -133,7 +137,18 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
     console.error('Please describe what you want. Example: clone-ai "整理今天要推进的事情"');
     return 1;
   }
+  const paths = resolveClonePaths({ dataDirectory });
+  const audit = await beginInvocation({
+    prompt: query,
+    surface: "cli",
+    workspacePath: paths.workspacePath,
+    dataDirectory,
+    command: fresh ? "new" : "converse",
+  });
+  let reply = "";
+  let before: Array<{ id: string; status: string; planId?: string }> = [];
   try {
+    before = await listRunSnapshot(dataDirectory);
     await withMainAgentLock(dataDirectory, async () => {
       const { SessionManager } = await import("@earendil-works/pi-coding-agent");
       const { session, prompt } = await createMainAgentSession({
@@ -165,8 +180,13 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
         ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
         ...(snapshot === undefined ? {} : { promptMaterialHash: snapshot.materialHash }),
       });
+      audit.note({
+        ...(sessionFile === undefined ? {} : { sessionFile }),
+        ...(prompt.modelId === undefined ? {} : { modelId: prompt.modelId }),
+        ...(prompt.provider === undefined ? {} : { provider: prompt.provider }),
+        ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
+      });
       observeMainAgentSession(session, turn);
-      let reply = "";
       session.subscribe((event) => {
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
           reply += event.assistantMessageEvent.delta;
@@ -203,15 +223,31 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
         session.dispose();
       }
     });
+    await drainQueuedRuns(dataDirectory);
+    const after = await listRunSnapshot(dataDirectory);
+    const seen = new Set(before.map((run) => run.id));
+    await audit.complete({
+      reply,
+      newRuns: after.filter((run) => !seen.has(run.id)),
+    });
   } catch (error: unknown) {
+    await audit.fail(error);
     if (error instanceof MainAgentBusyError) {
       console.error(error.message);
       return 1;
     }
     throw error;
   }
-  await drainQueuedRuns(dataDirectory);
   return 0;
+}
+
+async function listRunSnapshot(dataDirectory: string): Promise<Array<{ id: string; status: string; planId?: string }>> {
+  const { runtime, close } = await createKernelRuntimeSession(dataDirectory);
+  try {
+    return runtime.listRuns().map((run) => ({ id: run.id, status: run.status, ...(run.planId === undefined ? {} : { planId: run.planId }) }));
+  } finally {
+    close();
+  }
 }
 
 /**
@@ -583,6 +619,35 @@ async function effortCommand(dataDirectory: string, args: string[]): Promise<num
   const { effort: _drop, ...rest } = existing;
   await upsertUserProviderConfig(dataDirectory, value === "--clear" ? rest : { ...rest, effort: value as never });
   console.log(value === "--clear" ? `${providerId}: effort cleared.` : `${providerId}: effort pinned to ${value}.`);
+  return 0;
+}
+
+async function invocationsCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const [first] = args;
+  if (first === "show") {
+    const id = args[1];
+    if (id === undefined) {
+      console.error("Usage: clone-ai invocations show <id>");
+      return 1;
+    }
+    const record = await readInvocation(id, { dataDirectory, limit: 500 });
+    if (record === undefined) {
+      console.error(`No invocation matches "${id}".`);
+      return 1;
+    }
+    console.log(JSON.stringify(record, null, 2));
+    return 0;
+  }
+  const records = await readInvocations({ dataDirectory, limit: 100 });
+  if (records.length === 0) {
+    console.log("No Agent invocations yet.");
+    return 0;
+  }
+  for (const record of records) {
+    const duration = record.durationMs === undefined ? "-" : `${record.durationMs}ms`;
+    const caller = record.caller.kind + (record.caller.sessionId === undefined ? "" : `:${record.caller.sessionId.slice(0, 8)}`);
+    console.log(`${record.id.slice(0, 8)}  ${record.status.padEnd(10)} ${duration.padStart(9)}  ${caller.padEnd(22)} ${record.surface.padEnd(8)} ${record.prompt.replace(/\s+/g, " ").slice(0, 60)}`);
+  }
   return 0;
 }
 

@@ -13,6 +13,20 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 `npm run bench -- --provider native` 现在不用 CLI、也不需要 `--unsafe-host`，跑同一组固定任务；报告记录精确用量、验证结果与失败原因。验证器现在会拿到基准工作区，修复了此前让 summarize 都失败的相对产物检查。2026-11-05 的首次对比：四个可解任务上原生 4/5、Claude 4/5；missing-input 两边都不符合预期，原因相反——原生伪造产物，Claude 在验证阶段干净失败。
 
 ### Native worker is a first-class provider with exact usage
+### Shared audit for every Agent invocation
+
+Every call into the Main Agent now writes a shared invocation record under
+`~/.clone/audit/invocations.jsonl`, independent of `CLONE_HOME`. The audit view
+has an **Agent invocations** tab showing caller, request, visible reply, error,
+model, effort, Run ids and duration. CLI, desktop and WhatsApp callers are
+labelled; secrets are redacted and private reasoning is never stored.
+
+每次 Main Agent 调用现在都会写入 `~/.clone/audit/invocations.jsonl` 下的共享调用记录，
+不受 `CLONE_HOME` 影响。审计页新增 **Agent 调用** 页签，显示调用者、请求、可见回复、
+错误、模型、强度、Run id 与耗时。CLI、桌面与 WhatsApp 调用都会标明来源；密钥会脱敏，
+模型私有推理不会保存。
+
+### Avoid false file expectations
 
 `native` is now registered in the provider catalog, so the owner can select it per agent like any CLI: the adapter id is the configured agent id, role capabilities drive routing, and external roles are refused because there is no governed action connector. Its model client reports exact token usage per call (both OpenAI and Anthropic-style usage blocks), the Kernel journals `usage.recorded` with runId and stepId, and the audit shows the exact numbers next to the gateway's time-window estimate. It still requires `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`; defaults are unchanged.
 

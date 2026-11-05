@@ -7,6 +7,27 @@ what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
 ## 2026-11-05 — The native worker becomes a provider with exact usage, still opt-in
+## 2026-11-05 — Every Agent invocation is audited outside CLONE_HOME
+
+**Decision.** Every Main Agent invocation writes a shared append-only record
+under `~/.clone/audit/invocations.jsonl`, independent of the invocation's
+`CLONE_HOME`. The record carries caller, surface, visible request and reply,
+error, workspace, data directory, model, effort, session file, Run ids and
+duration. An explicit `CLONE_AI_AUDIT_HOME` can relocate it for controlled
+deployments and tests.
+
+**Evidence.** Self-fix runs used a temporary `CLONE_HOME`; their journals were
+correct but invisible to the desktop audit, which reads the owner's normal
+home. After this change, a real DeepSeek V4.1 Flash `high` turn launched with
+an isolated home appeared in the shared default ledger with caller `codex` and
+reply `OK` (invocation `7cb576ee`).
+
+**Cost and reversal condition.** This is a second storage location and the
+visible reply is sensitive data; it is PII/token-redacted, truncated, and
+excludes private reasoning. Replace it with an encrypted owner-scoped store if
+the plaintext JSONL no longer meets the threat model.
+
+## 2026-11-05 — Require explicit intent for root-level file names
 
 **Decision.** `native` is registered in the provider catalog, so an owner can
 select it per agent like any CLI. The adapter's id is the configured agent id
@@ -21,6 +42,13 @@ but it was invisible to settings (only a special case in the agent registry),
 reported no usage, and its adapter identity was literally `native` rather than
 the configured agent. The turn/run audit can now carry exact usage; leaving the
 native path unmeasured would make any CLI-versus-native comparison impossible.
+**Evidence.** The nightly repair trace reported a false failure when the
+verifier interpreted `fs.rename`, `os.tmpdir`, `consumed-traces.json`, and
+`REPORT_DIR/consumed-traces.json` as required workspace files. Source
+inspection shows the previous extractor accepted dotted tokens without those
+distinctions. The targeted offline regression tests pass after the change;
+broader coverage remains a hypothesis. No before-change eval was run under
+this work order.
 
 **What it costs.** The owner must configure an OpenAI-compatible endpoint; the
 worker has no external-action tools, so `external` stays with governed
