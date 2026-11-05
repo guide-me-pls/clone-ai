@@ -26,6 +26,23 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+## 2026-11-05 — Rebuild the app as part of self-check
+
+- **Goal / hypothesis:** ensure the app the owner launches contains the exact
+  source revision that passed tests and is about to be pushed.
+- **Trade-off:** [self-check rebuilds the local app](../architecture/trade-offs.md#2026-11-05--self-check-rebuilds-the-local-macos-app).
+- **Change:** `scripts/selfcheck-push.mjs` runs the macOS app build with
+  `--replace` after tests, typecheck and gate pass.
+- **Eval:** the next selfcheck run must produce a fresh `dist/Clone AI.app`, and
+  launch verification must show the new UI. Full test/typecheck/gate results are
+  recorded by the script itself.
+- **Execution chain:** implemented after stale app bundles made completed source
+  edits appear absent.
+- **Pros:** the launched app cannot silently lag the verified source.
+- **Cons / next time:** macOS selfcheck is slower.
+- **Reversal condition:** remove the rebuild when a hot-reload runtime replaces
+  the packaged app.
+
 ## 2026-11-05 — Shared audit for every Agent invocation
 
 - **Goal / hypothesis:** make every Main Agent call visible in the owner's
