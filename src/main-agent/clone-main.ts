@@ -18,6 +18,7 @@
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { createMainAgentSession } from "./session.ts";
 import { recordPromptSnapshot } from "./prompt-snapshot.ts";
+import { beginMainAgentTurn, finishMainAgentTurn, observeMainAgentSession } from "./turn-audit.ts";
 import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
 
 const query = process.argv.slice(2).join(" ").trim();
@@ -41,10 +42,23 @@ const { session, prompt } = await createMainAgentSession({ dataDirectory: paths.
 // The turn's inputs are recorded before the model sees them, so a failed run
 // can be attributed to a prompt revision instead of guessed at.
 // 本回合的输入在模型看到之前就被记录，因此失败的运行可以归因到某一版提示词，而不是靠猜。
-await recordPromptSnapshot(paths.dataDirectory, prompt);
-
+const snapshot = await recordPromptSnapshot(paths.dataDirectory, prompt);
+const sessionFile = session.sessionManager.getSessionFile();
+const turn = await beginMainAgentTurn({
+  dataDirectory: paths.dataDirectory,
+  text: query,
+  source: "main-cli",
+  ...(sessionFile === undefined ? {} : { sessionFile }),
+  ...(prompt.modelId === undefined ? {} : { modelId: prompt.modelId }),
+  ...(prompt.provider === undefined ? {} : { provider: prompt.provider }),
+  ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
+  ...(snapshot === undefined ? {} : { promptMaterialHash: snapshot.materialHash }),
+});
+observeMainAgentSession(session, turn);
+let reply = "";
 session.subscribe((event) => {
   if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+    reply += event.assistantMessageEvent.delta;
     process.stdout.write(event.assistantMessageEvent.delta);
   }
 });
@@ -57,15 +71,28 @@ const beforeStats = (() => {
     return undefined;
   }
 })();
+let turnStatus: "completed" | "failed" = "completed";
+let turnError: string | undefined;
 try {
   await session.prompt(query);
   process.stdout.write("\n");
+} catch (error: unknown) {
+  turnStatus = "failed";
+  turnError = error instanceof Error ? error.message : String(error);
+  throw error;
 } finally {
+  const usage = collectSessionUsage(session, Date.now() - started, beforeStats);
   try {
-    await recordUsage(paths.dataDirectory, collectSessionUsage(session, Date.now() - started, beforeStats));
+    await recordUsage(paths.dataDirectory, { ...usage, turnId: turn.turnId });
   } catch {
     // Usage is telemetry; losing it must not hide the reply or the error.
     // 用量是遥测；丢掉它不能盖住回复或错误。
   }
+  await finishMainAgentTurn(turn, {
+    status: turnStatus,
+    reply,
+    ...(turnError === undefined ? {} : { error: turnError }),
+    usage: { ...usage, turnId: turn.turnId },
+  });
   session.dispose();
 }

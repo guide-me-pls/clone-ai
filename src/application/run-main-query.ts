@@ -14,6 +14,12 @@ import { shouldMine } from "../memory/mining-policy.ts";
 import { createKernelRuntimeSession } from "../main-agent/tools/kernel-tools.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
 import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
+import {
+  beginMainAgentTurn,
+  finishMainAgentTurn,
+  observeMainAgentSession,
+  type MainAgentTurnSource,
+} from "../main-agent/turn-audit.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
 
@@ -42,6 +48,8 @@ export interface MainAgentQueryOptions {
    * 桌面回合账本的 id（当本次查询来自它时），用于把提示词快照与回合记录对应起来。
    */
   turnId?: string;
+  /** Which entry point produced this turn, for the audit. 产生本回合的入口，供审计使用。 */
+  source?: MainAgentTurnSource;
 }
 
 export async function runMainAgentQuery(
@@ -56,12 +64,24 @@ export async function runMainAgentQuery(
     // Recorded before the prompt, not after: a crash mid-turn must still leave
     // the exact inputs behind, because those are what a later replay needs.
     // 在 prompt 之前记录而不是之后：中途崩溃也必须留下确切的输入，因为那正是日后回放所需的。
-    await recordPromptSnapshot(
+    const snapshot = await recordPromptSnapshot(
       dataDirectory,
       prompt,
       options.turnId === undefined ? {} : { turnId: options.turnId },
     );
     const sessionFile = session.sessionManager.getSessionFile();
+    const turn = await beginMainAgentTurn({
+      dataDirectory,
+      text,
+      source: options.source ?? "companion",
+      ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
+      ...(sessionFile === undefined ? {} : { sessionFile }),
+      ...(prompt.modelId === undefined ? {} : { modelId: prompt.modelId }),
+      ...(prompt.provider === undefined ? {} : { provider: prompt.provider }),
+      ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
+      ...(snapshot === undefined ? {} : { promptMaterialHash: snapshot.materialHash }),
+    });
+    observeMainAgentSession(session, turn);
     let conversationMemory: ConversationMemoryPipeline | undefined;
     try {
       const { createJournalStore } = await import("../core/sqlite-journal.ts");
@@ -112,15 +132,36 @@ export async function runMainAgentQuery(
     });
     const started = Date.now();
     const beforeStats = readSessionStats(session);
+    let turnStatus: "completed" | "failed" = "completed";
+    let turnError: string | undefined;
     try {
       await session.prompt(text.length === 0 ? "(see attached image)" : text, options.images === undefined || options.images.length === 0 ? undefined : { images: options.images });
+    } catch (error: unknown) {
+      turnStatus = "failed";
+      turnError = error instanceof Error ? error.message : String(error);
+      throw error;
     } finally {
+      const usage = collectSessionUsage(session, Date.now() - started, beforeStats);
       try {
-        await recordUsage(dataDirectory, collectSessionUsage(session, Date.now() - started, beforeStats));
+        await recordUsage(dataDirectory, { ...usage, turnId: turn.turnId });
       } catch {
         // Usage is telemetry; losing it must not hide the reply or the error.
         // 用量是遥测；丢掉它不能盖住回复或错误。
       }
+      if (turnStatus === "completed" && reply.trim().length === 0 && lastError !== undefined) {
+        turnStatus = "failed";
+        turnError = lastError;
+      }
+      const spawnedRunIds = (await currentRuns(dataDirectory).catch(() => []))
+        .filter((run) => !before.has(run.id))
+        .map((run) => run.id);
+      await finishMainAgentTurn(turn, {
+        status: turnStatus,
+        reply,
+        ...(turnError === undefined ? {} : { error: turnError }),
+        usage: { ...usage, turnId: turn.turnId },
+        ...(spawnedRunIds.length === 0 ? {} : { spawnedRunIds }),
+      });
       session.dispose();
     }
     // Mining runs after the reply: the owner's turn is already answered, and a

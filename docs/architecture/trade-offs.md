@@ -6,6 +6,34 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-05 — Every Main Agent turn is a journal record, not a side file
+
+**Decision.** Every entry point — CLI, `npm run main`, the companion/server, and
+WhatsApp — writes the same two journal events for a turn:
+`main_agent.turn_started` and `main_agent.turn_completed`. Each tool the Main
+Agent calls also writes `agent.tool_started` / `agent.tool_completed`. The turn
+record carries the input and reply (PII-redacted and capped), model, provider,
+reasoning effort, token usage, prompt material hash, tool calls with redacted
+argument summaries, and the terminal status. The existing
+`main-agent-turns.jsonl` ledger is written by the same module, so the UI and the
+journal cannot disagree.
+
+**Evidence.** Before this change, CLI and `npm run main` wrote only a prompt
+snapshot; the companion wrote a side JSONL that the audit never read; the Pi
+`tool_execution_*` events were never subscribed to; and `usage.recorded` had no
+turn id. A task an agent ran through `clone-ai "..."` could therefore leave no
+auditable input, reply, tool call, or model usage. The journal is the
+append-only truth, so turn data belongs there rather than in a second log.
+
+**What it costs.** Input and reply text increase journal size. They are redacted
+and capped, and the full transcript remains in the Pi session file named by the
+event. Tool arguments are stored as a redacted summary, not verbatim.
+
+**Reversal condition.** If journal growth becomes material, move the text to a
+content-addressed turn file (the prompt-snapshot pattern) and keep only its hash
+and locator in the event. If redaction proves insufficient for tool arguments,
+store the tool name and a hash only.
+
 ## 2026-11-05 — Prompt provenance is a content-addressed file plus a journal event
 
 **Decision.** Every Main Agent turn records the charter version, the compiled

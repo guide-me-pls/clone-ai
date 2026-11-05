@@ -152,3 +152,12 @@ body.empty-conversation .welcome { padding-bottom: 0; }
 .au-applied-mark { color: var(--au-ok); font-size: 11.5px; margin-right: 4px; }
 .au-btn-primary { background: #20242c; border-color: #20242c; color: #fff; }
 .au-btn-primary:hover:not(:disabled) { background: #2c323c; }
+.au-turns { display: grid; gap: 10px; }
+.au-turn-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.au-turn-head b { flex: 1 1 260px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.au-turn-head small { color: var(--au-mute); font-size: 11.5px; }
+.au-turn-body pre { margin: 4px 0 8px; padding: 8px 10px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: var(--bg, #f6f8fb); border-radius: 8px; font-size: 12px; }
+.au-turn-tools { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.au-turn-tools li { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
+.au-turn-tools li span { color: var(--au-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.au-turn-tools li em { color: var(--au-mute); font-style: normal; font-size: 11px; }
