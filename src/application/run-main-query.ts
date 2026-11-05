@@ -9,6 +9,7 @@
 import type { Run } from "../core/contracts.ts";
 import { createKernelRuntimeSession } from "../main-agent/tools/kernel-tools.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
+import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
 
@@ -29,6 +30,12 @@ export interface MainAgentQueryOptions {
    * 一次性交付，而这会让一个慢模型看起来像界面卡死。
    */
   onDelta?: (delta: string) => void;
+  /**
+   * The desktop turn ledger's id, when this query came from it, so the prompt
+   * snapshot and the turn record can be correlated.
+   * 桌面回合账本的 id（当本次查询来自它时），用于把提示词快照与回合记录对应起来。
+   */
+  turnId?: string;
 }
 
 export async function runMainAgentQuery(
@@ -39,7 +46,15 @@ export async function runMainAgentQuery(
   return withMainAgentLock(dataDirectory, async () => {
     const before = new Set((await currentRuns(dataDirectory)).map((run) => run.id));
 
-    const { session } = await createMainAgentSession({ dataDirectory });
+    const { session, prompt } = await createMainAgentSession({ dataDirectory });
+    // Recorded before the prompt, not after: a crash mid-turn must still leave
+    // the exact inputs behind, because those are what a later replay needs.
+    // 在 prompt 之前记录而不是之后：中途崩溃也必须留下确切的输入，因为那正是日后回放所需的。
+    await recordPromptSnapshot(
+      dataDirectory,
+      prompt,
+      options.turnId === undefined ? {} : { turnId: options.turnId },
+    );
     let reply = "";
     // Declared before the subscription so the callback never touches a
     // binding that is still in its temporal dead zone.

@@ -18,6 +18,7 @@
     "mobile:install": "node scripts/install-whatsapp-bridge.mjs",
     "bench": "node --experimental-strip-types benchmark/run.ts",
     "bench:memory": "node --experimental-strip-types benchmark/long-memory-eval.ts",
+    "gate": "node --experimental-strip-types benchmark/gate.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "cli": "node src/cli/clone-ai.ts"
