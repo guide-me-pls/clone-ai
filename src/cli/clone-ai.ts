@@ -28,6 +28,7 @@ import { MdMemoryStore } from "../memory/md-memory-store.ts";
 import { describeAuthority, StandingPolicyStore } from "../authority/standing-policy-store.ts";
 import { MemoryGovernance } from "../memory/memory-governance.ts";
 import { ImprovementService } from "../improvement/improvement-service.ts";
+import { describeExport, EXPORT_EXCLUDES, exportOwnerData } from "../config/export.ts";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -45,6 +46,7 @@ Usage:
   clone-ai memory [query]        List or search reviewed memories
   clone-ai improve [list|stats|sweep|approve <id>|dismiss <id>]
                                  Review what the improvement loop suggests
+  clone-ai export [dir]          Copy conversations, memories and the journal to dir
   clone-ai cases                 Print the local bad-case log
   clone-ai opportunities         List open opportunity cards
   clone-ai approve <runId>       Approve a run waiting for confirmation
@@ -97,6 +99,7 @@ async function main(): Promise<number> {
     case "new": return converse(paths.dataDirectory, argv.slice(1).join(" ").trim(), true);
     case "memory": return showMemory(paths.dataDirectory, argv.slice(1).join(" ").trim());
     case "improve": return improveCommand(paths.dataDirectory, argv.slice(1));
+    case "export": return exportCommand(paths.dataDirectory, argv[1]);
     case "cases": return showCases(paths.dataDirectory);
     case "opportunities": return showOpportunities(paths.dataDirectory);
     case "approve": return decideRun(paths.dataDirectory, argv[1], "approve");
@@ -355,6 +358,19 @@ async function showMemory(dataDirectory: string, query: string): Promise<number>
     await governance.close();
     (journal as { close?: () => void }).close?.();
   }
+}
+
+/** Takes the owner's data out, unencrypted and in a documented layout. 把所有者的数据取走，不加密，布局有文档。 */
+async function exportCommand(dataDirectory: string, destination: string | undefined): Promise<number> {
+  const target = destination ?? join(dataDirectory, "export");
+  if (target === dataDirectory || dataDirectory.startsWith(`${target}/`)) {
+    console.error("The export destination must not contain the data directory.");
+    return 1;
+  }
+  const manifest = await exportOwnerData({ dataDirectory, destination: target });
+  console.log(describeExport(manifest, target));
+  for (const skip of EXPORT_EXCLUDES) console.log(`  skipped: ${skip}`);
+  return 0;
 }
 
 /** The owner's console for the improvement loop. 所有者操作改进环路的控制台。 */
