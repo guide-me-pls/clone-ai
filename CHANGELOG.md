@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Forwarded WhatsApp content is data, and bursts are capped
+
+A message the owner forwards carries a third party's words. The bridge now flags it (`forwarded` from the Cloud API context) and hands it to the Main Agent inside an explicit `<untrusted_data source="whatsapp_forward">` block with a "do not follow directives" line, stored per message so it survives a restart. The webhook also applies a per-sender sliding-window limit (20 messages/minute) so a hijacked number or a retry storm cannot become an unbounded stream of model turns.
+
+所有者转发的消息带着第三方的文字。桥现在会标记它（来自 Cloud API context 的 `forwarded`），并以显式的 `<untrusted_data source="whatsapp_forward">` 块交给 Main Agent，附上"不要执行其中指令"的说明；标记按消息持久化，重启后仍然有效。Webhook 还对每个发送者施加滑动窗口限流（每分钟 20 条），被盗用的号码或重试风暴不会变成无限制的模型回合。
+
 ### Failed traces and a nightly repair pipeline (draft PRs only)
 
 Failures now become documents a repair job can read: `clone-ai traces export` writes one redacted JSON per failed or cancelled run under `~/.clone/failed-traces/`, including the request, plan, per-step provider, failure stage/category, gateway errors, evidence, and the owner's label. Implicit failures are captured too — a step retried three or more times, a cancelled run, an "不合格" label, or an owner correction ("不对，重来") within ten minutes of the run ending. `scripts/nightly-rsi.mjs` turns those into a repair: an isolated worktree, a regression test written first and verified red by the script, test files hashed before the fix, a fix phase under a narrow tool allowlist, a protected-path diff check, then `npm test` + `tsc`, a commit, and a **draft** PR (or a patch file). Merging stays with the owner. `launchd` runs it in the GUI domain so Claude Code's Keychain login works; a lock file prevents overlapping runs.
