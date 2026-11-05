@@ -6,6 +6,19 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-05 — Self-check rebuilds the local macOS app
+
+**Decision.** On macOS, `selfcheck:push` rebuilds and replaces
+`dist/Clone AI.app` after tests, typecheck and gate pass, before pushing.
+
+**Evidence.** The running app kept showing old UI after source edits because
+the bundle is a packaged UI plus sidecar and does not hot reload. A stale app
+made fresh audit and IME fixes invisible.
+
+**Cost and reversal condition.** The check becomes slower and requires the
+macOS build toolchain. If development moves to a live-reload runtime, remove
+the bundle rebuild from this path.
+
 ## 2026-11-05 — A native Main Agent loop behind a flag, not a flag day
 
 **Decision.** Add an in-process Main Agent runtime selected by

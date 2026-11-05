@@ -6,6 +6,15 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Self-check rebuilds the installed app
+
+On macOS, `npm run selfcheck:push` now rebuilds and replaces `dist/Clone AI.app`
+after the full test suite, typecheck and gate pass, before pushing. Source edits
+no longer require a separate manual app build.
+
+macOS 上 `npm run selfcheck:push` 现在会在完整测试、类型检查和 gate 通过后、
+推送之前重新构建并替换 `dist/Clone AI.app`。修改源码后不再需要手动单独构建 App。
+
 ### A native Main Agent loop behind a flag
 
 `CLONE_AI_MAIN_RUNTIME=native` runs the Main Agent in-process against an OpenAI-compatible endpoint (`CLONE_AI_NATIVE_*`): the same charter/briefing/memory-push prompt, the same Kernel tools captured from the Pi extension, the turn ledger as transcript, and the same prompt-snapshot/turn/tool/usage audit. Pi remains the default and fallback. The first native loop is non-streaming, keeps the last 12 turns without compaction, refuses image attachments, and answers `search_history` from the turn ledger.
