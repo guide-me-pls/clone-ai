@@ -51,6 +51,13 @@ import { extractFileExpectations } from "./verification.ts";
 import { CLONE_DIRECTORY_NAME } from "../config/clone-home.ts";
 import { parseScope } from "../authority/scope.ts";
 
+const ORPHANED_PLANNING_THRESHOLD_MS = 15 * 60 * 1000;
+
+function isOrphanedPlanningCandidate(run: Run, now: number): boolean {
+  return run.status === "planning" && run.planId === undefined
+    && Date.parse(run.updatedAt) < now - ORPHANED_PLANNING_THRESHOLD_MS;
+}
+
 export interface CloneRuntimeOptions {
   journal: JournalStore;
   policy: PolicyEngine;
@@ -261,7 +268,7 @@ export class CloneRuntime {
    * is the missing half of the crash story: liveness is decided by the claim,
    * not guessed from the status.
    *
-   * The probe is the claim, and only the claim: a run mid-execution with a
+   * For execution, the probe is the claim: a run mid-execution with a
    * live lease belongs to whoever holds it and is left alone. A run whose
    * lease is gone has no executor —
    *
@@ -273,6 +280,8 @@ export class CloneRuntime {
    *   - a run orphaned mid-verification fails the same way: the work happened,
    *     the verdict did not, and a verdict that cannot be reconstructed must
    *     not be invented.
+   *   - planning without a plan, a live claim, or a recent update fails after
+   *     a conservative grace period, guarded by a conditional fenced write.
    *
    * Only stores that support claims can be probed; a single-process store has
    * no orphans by construction, and this method leaves those runs untouched.
@@ -283,7 +292,7 @@ export class CloneRuntime {
    * `queued`，因此"租约可抢占"毫无意义——根本没有留在可领取状态里的工作可抢。这是
    * 崩溃故事的缺失一半：活性由领取判定，而不是从状态猜测。
    *
-   * 探针是领取，且只是领取：带着存活租约的执行中 Run 属于持有者，不去碰。租约已消失
+   * 执行阶段的探针是领取：带着存活租约的执行中 Run 属于持有者，不去碰。租约已消失
    * 的 Run 没有执行者——
    *
    *   - 尚未启动 Adapter 或有可信重放安全保证的工作可以回到队列；
@@ -291,6 +300,7 @@ export class CloneRuntime {
    *     一个失败的 Run，由机会引擎转成给所有者的跟进卡片；
    *   - 在验证中途被丢下的 Run 同样失败：工作发生了，结论没有，而无法重建的结论
    *     绝不能被编造。
+   *   - 规划阶段没有计划、存活领取且长时间未更新的 Run，在保守宽限期后以条件围栏写入标记失败。
    *
    * 只有支持领取的存储可被探测；单进程存储按构造没有孤儿，本方法不碰那些 Run。
    */
@@ -302,7 +312,9 @@ export class CloneRuntime {
     const recovered: Array<{ runId: string; action: "requeued" | "failed"; reason: string }> = [];
 
     for (const candidate of Object.values(this.#state.runs)) {
-      if (candidate.status !== "running" && candidate.status !== "verifying") continue;
+      const planning = isOrphanedPlanningCandidate(candidate, now);
+      if (!planning && candidate.status !== "running" && candidate.status !== "verifying") continue;
+      if (planning && this.#journal.appendClaimedIfUnchanged === undefined) continue;
       const claim = await this.#journal.readClaim(candidate.id);
       if (claim !== undefined && Date.parse(claim.leaseUntil) > now) continue;
       const ownerId = `recovery-${process.pid}-${randomUUID()}`;
@@ -311,6 +323,31 @@ export class CloneRuntime {
       try {
         await this.refresh();
         const run = this.#state.runs[candidate.id];
+        if (planning) {
+          // Use a fresh per-run snapshot: the in-memory projection may have
+          // missed events from another writer. Compare its last sequence in
+          // the same transaction as the fenced failure write.
+          // 使用最新的单 Run 快照：内存投影可能遗漏其他写入者的事件。在围栏失败写入的
+          // 同一事务中比较最后的序号。
+          const history = this.#journal.listForRun === undefined
+            ? (await this.#journal.list()).filter((event) => event.runId === candidate.id)
+            : await this.#journal.listForRun(candidate.id);
+          const state = history.filter((event) => event.type === "run.created" || event.type === "run.status_changed" || event.type === "plan.created")
+            .reduce(reduceEvent, emptyProjection());
+          const current = state.runs[candidate.id];
+          const last = history.at(-1);
+          if (current === undefined || last === undefined || !isOrphanedPlanningCandidate(current, now)) continue;
+          const reason = "orphaned planning: no plan or live claim after the planning grace period";
+          const event = await this.#journal.appendClaimedIfUnchanged!({
+            type: "run.status_changed", taskId: current.taskId, runId: current.id,
+            payload: { status: "failed", reason },
+          }, { runId: current.id, ownerId }, last.sequence);
+          if (event === undefined) continue;
+          this.#state.runs[current.id] = current;
+          this.#applyEvent(event);
+          recovered.push({ runId: current.id, action: "failed", reason });
+          continue;
+        }
         if (run === undefined || (run.status !== "running" && run.status !== "verifying")) continue;
         const external = run.planId === undefined
           ? false

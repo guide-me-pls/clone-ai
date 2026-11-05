@@ -6,6 +6,15 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Conservative recovery for orphaned planning
+
+An unplanned Run left in planning for more than 15 minutes is marked failed
+only when it has no live claim. A conditional fenced write protects concurrent
+plans and cancellations; stores without that capability leave the Run alone.
+
+没有计划的 Run 若在规划阶段超过 15 分钟未更新，只有在没有存活领取时才会被标记为失败。
+带条件的围栏写入保护并发生成的计划和取消操作；不支持该能力的存储不会处理这类 Run。
+
 ### An offline regression gate
 
 `npm run gate` now runs on every CI commit and costs nothing. It re-runs evidence verification and authority policy over held-out fixtures under `benchmark/gate/`, and calibrates the audit projection against owner labels (agreement, falsePass, falseFail) using the fixture dataset or a real `clone-ai audit export` file with `--audit`. Per-case behavior is recorded in `benchmark/gate/baseline.json`; any verdict change fails until the baseline is regenerated in the same change, so a shift is reviewed rather than discovered later. The audit dataset is hashed so held-out records cannot change silently.
