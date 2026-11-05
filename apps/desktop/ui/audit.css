@@ -73,6 +73,7 @@
 .au-row-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; } .au-row-meta small { color: var(--muted, #8791a1); font-size: 11px; }
 .au-detail { padding: 14px 16px; border: 1px solid var(--line, #e3e7ee); border-radius: 12px; background: var(--surface, #fff); max-height: 70vh; overflow: auto; position: sticky; top: 0; }
 .au-detail-head { display: flex; align-items: flex-start; gap: 8px; } .au-detail-head > div { flex: 1; min-width: 0; } .au-detail-head h4 { margin: 0; font-size: 15px; } .au-detail-head small { color: var(--muted, #8791a1); font-size: 11px; word-break: break-all; }
+.au-pre { margin: 6px 0 14px; padding: 10px 12px; border: 1px solid var(--line, #e5e5e5); border-radius: 8px; background: var(--panel-2, #fafafa); color: var(--text, #333); font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; }
 .au-facts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 12px; color: var(--subtle, #5c6675); font-size: 12px; }
 .au-stages { display: flex; gap: 6px; list-style: none; padding: 0; margin: 0 0 12px; }
 .au-stage { flex: 1; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 9px; font-size: 12px; font-weight: 600; }
