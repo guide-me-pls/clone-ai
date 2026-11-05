@@ -54,6 +54,7 @@ Usage:
   clone-ai authority grant <files|shell|network> <read|write|exec> <resource> --max <level> [--label <text>] [--until <ISO date>]
   clone-ai authority revoke <policyId>
   clone-ai audit [<runId>|export [--out file]]  Why runs failed, per run; export JSONL for evals
+  clone-ai traces [list|export|show <runId>|clear --yes]  Failed traces for the nightly repair job
   clone-ai model <worker> [<model>|--clear]  Show, pin or clear the model a worker CLI uses
   clone-ai effort <worker> [<level>|--clear]  Show, pin or clear the reasoning effort
   clone-ai bench [--provider p]  Run the reliability benchmark
@@ -103,6 +104,7 @@ async function main(): Promise<number> {
     case "review": return reviewRun(paths.dataDirectory, argv[1], argv[2]);
     case "authority": return authorityCommand(paths.dataDirectory, argv.slice(1));
     case "audit": return auditCommand(paths.dataDirectory, argv.slice(1));
+    case "traces": return tracesCommand(paths.dataDirectory, argv.slice(1));
     case "model": return modelCommand(paths.dataDirectory, argv.slice(1));
     case "effort": return effortCommand(paths.dataDirectory, argv.slice(1));
     case "bench": return runBench(argv.slice(1));
@@ -418,6 +420,46 @@ async function authorityCommand(dataDirectory: string, args: string[]): Promise<
 /** Pin the model a worker CLI uses, so it does not inherit a default the gateway cannot serve. 固定 worker CLI 使用的模型，避免它沿用网关无法正确服务的默认模型。 */
 /** Audit is a projection of the journal; nothing here writes. 审计是 Journal 的投影，这里不写任何东西。 */
 /** Pin the reasoning effort a worker CLI uses; the gateway says which levels its model supports. 固定 worker CLI 的推理强度；网关会说明其模型支持哪些档位。 */
+/**
+ * Failed traces for the repair pipeline: list what is on disk, export fresh ones
+ * from the journal, show one, or clear them. Export is redacted before writing.
+ * 供修复流水线使用的失败轨迹：列出磁盘上的、从 Journal 导出新的、查看单条、或清空。
+ * 导出在写入前完成脱敏。
+ */
+async function tracesCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const { exportFailedTraces, listFailedTraces, tracesDirectory } = await import("../audit/failed-traces.ts");
+  const journal = createJournalStore(dataDirectory);
+  try {
+    const [action = "list", ...rest] = args;
+    if (action === "export") {
+      const result = await exportFailedTraces(dataDirectory, journal);
+      console.log(`Exported ${result.written.length} trace(s) to ${result.directory}.`);
+      return 0;
+    }
+    if (action === "show") {
+      const runId = rest[0];
+      if (runId === undefined) { console.error("traces show needs a run id."); return 1; }
+      const { readFile } = await import("node:fs/promises");
+      const path = `${tracesDirectory(dataDirectory)}/${runId}.json`;
+      try { console.log(await readFile(path, "utf8")); } catch { console.error(`No trace for ${runId}.`); return 1; }
+      return 0;
+    }
+    if (action === "clear") {
+      if (!rest.includes("--yes")) { console.error("Refusing to delete traces without --yes."); return 1; }
+      const { rm } = await import("node:fs/promises");
+      await rm(tracesDirectory(dataDirectory), { recursive: true, force: true });
+      console.log("Failed traces cleared.");
+      return 0;
+    }
+    const traces = await listFailedTraces(dataDirectory);
+    if (traces.length === 0) { console.log("No failed traces. Run `clone-ai traces export` after a failure."); return 0; }
+    for (const trace of traces) console.log(`${trace.runId.slice(0, 8)}  ${trace.kind.padEnd(8)} ${trace.signals.length ? `[${trace.signals.join(", ")}] ` : ""}${trace.title}`);
+    return 0;
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
+}
+
 async function effortCommand(dataDirectory: string, args: string[]): Promise<number> {
   const { listEffectiveProviderConfigs, readUserProviderConfigs, upsertUserProviderConfig } = await import("../config/provider-config-store.ts");
   const [providerId, value] = args;
