@@ -86,7 +86,7 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
       process.env.CLONE_AI_NATIVE_MODEL = MODEL;
       process.env.CLONE_AI_NATIVE_BASE_URL = BASE_URL;
     } else {
-      delete process.env.CLONE_AI_MAIN_RUNTIME;
+      process.env.CLONE_AI_MAIN_RUNTIME = "pi";
     }
     const started = Date.now();
     const result = await runMainAgentQuery(directory, task.prompt, {

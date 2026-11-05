@@ -7,6 +7,7 @@ import test from "node:test";
 import { createJournalStore } from "../src/core/sqlite-journal.ts";
 import {
   isNativeMainAgentSelected,
+  readMainAgentRuntime,
   readNativeMainAgentEndpoint,
   runNativeMainAgentTurn,
 } from "../src/main-agent/native-runtime.ts";
@@ -118,6 +119,11 @@ test("the native main agent includes prior turns from the ledger", async (t) => 
 test("the native flag and endpoint are explicit", () => {
   assert.equal(isNativeMainAgentSelected({ CLONE_AI_MAIN_RUNTIME: "native" }), true);
   assert.equal(isNativeMainAgentSelected({}), false);
+  assert.equal(readMainAgentRuntime({}), "pi");
+  assert.equal(readMainAgentRuntime({ CLONE_AI_NATIVE_MODEL: "m", CLONE_AI_NATIVE_BASE_URL: "http://x" }), "native");
+  assert.equal(readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "pi", CLONE_AI_NATIVE_MODEL: "m", CLONE_AI_NATIVE_BASE_URL: "http://x" }), "pi");
+  assert.equal(readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "native" }), "native");
+  assert.throws(() => readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "bogus" }), /Use "native" or "pi"/);
   const missing = readNativeMainAgentEndpoint({});
   assert.equal(missing.endpoint, undefined);
   assert.deepEqual(missing.missing, ["CLONE_AI_NATIVE_BASE_URL", "CLONE_AI_NATIVE_MODEL"]);
