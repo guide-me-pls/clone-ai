@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { readCompanionEndpoint } from "../companion-auth.ts";
+import { activeRequestFor, consumeApprovalCode, issueApprovalCode, type ApprovalDecision } from "./approval-codes.ts";
 import {
   allowedWhatsAppNumbers,
   extractWhatsAppTextMessages,
@@ -120,6 +121,27 @@ export function withinRateLimit(bucket: Map<string, number[]>, from: string, now
   recent.push(now);
   bucket.set(from, recent);
   return true;
+}
+
+/**
+ * The only phone commands the bridge interprets itself. Everything else is a
+ * request for the Main Agent; an approval command is not, because a model must
+ * never be the thing that decides whether an approval happened.
+ * 桥自己解释的只有这些手机指令。其他都是给 Main Agent 的请求；审批指令不是，因为"审批是否
+ * 发生"绝不能由模型决定。
+ */
+export function parseApprovalCommand(text: string): { action: ApprovalDecision; code: string } | undefined {
+  const match = /^\s*(approve|reject|批准|同意|拒绝|驳回)\s+([A-Za-z0-9-]{4,16})\s*$/i.exec(text);
+  if (match === null) return undefined;
+  const word = (match[1] ?? "").toLowerCase();
+  const action: ApprovalDecision = word === "approve" || word === "批准" || word === "同意" ? "approve" : "reject";
+  return { action, code: match[2] ?? "" };
+}
+
+/** A forwarded message never approves anything, whatever it says. 转发消息无论写着什么都不能批准任何事。 */
+export function approvalCommandFor(message: Pick<WhatsAppTextMessage, "text" | "forwarded">): { action: ApprovalDecision; code: string; forwarded: boolean } | undefined {
+  const command = parseApprovalCommand(message.text);
+  return command === undefined ? undefined : { ...command, forwarded: message.forwarded };
 }
 
 /**
@@ -287,6 +309,12 @@ export interface WhatsAppBridgeOptions {
   log?: (event: Record<string, unknown>) => void;
   onWebhookVerified?: () => void;
   onMessageAccepted?: (messageId: string) => void;
+  /**
+   * Clone home; enables the approval channel. Without it the bridge answers
+   * messages only and never issues approval codes.
+   * Clone home；启用审批通道。没有它时桥只回答问题，不签发审批码。
+   */
+  approvalDirectory?: string;
 }
 
 /**
@@ -309,6 +337,9 @@ export class WhatsAppBridge {
   readonly #log: (event: Record<string, unknown>) => void;
   /** Sliding window per sender; the map is small because only the owner is allowed. 每个发送者的滑动窗口；只有所有者被允许，因此很小。 */
   readonly #rate = new Map<string, number[]>();
+  readonly #approvalDirectory?: string;
+  #approvalTimer?: NodeJS.Timeout;
+  #approvalBusy = false;
   readonly #onWebhookVerified: (() => void) | undefined;
   readonly #onMessageAccepted: ((messageId: string) => void) | undefined;
   #running: Promise<void> | undefined;
@@ -324,6 +355,16 @@ export class WhatsAppBridge {
     this.#log = options.log ?? (() => undefined);
     this.#onWebhookVerified = options.onWebhookVerified;
     this.#onMessageAccepted = options.onMessageAccepted;
+    this.#approvalDirectory = options.approvalDirectory;
+  }
+
+  /** Starts polling for paused runs; idempotent and safe when approvals are disabled. 开始轮询暂停的 Run；可重复调用，未启用时什么也不做。 */
+  startApprovals(intervalMs = 15_000): void {
+    if (this.#approvalDirectory === undefined || this.#approvalTimer !== undefined) return;
+    const tick = (): void => { void this.#pollApprovals().catch((error: unknown) => this.#log({ event: "whatsapp.approval.poll_failed", error: String(error) })); };
+    tick();
+    this.#approvalTimer = setInterval(tick, intervalMs);
+    this.#approvalTimer.unref();
   }
 
   verifyChallenge(searchParams: URLSearchParams): { status: number; body: string } {
@@ -359,6 +400,15 @@ export class WhatsAppBridge {
       if (!withinRateLimit(this.#rate, message.from, Date.now(), this.#config.maxMessagesPerMinute ?? 20)) {
         blocked += 1;
         this.#log({ event: "whatsapp.webhook.rate_limited", from: normalizeWhatsAppNumber(message.from) });
+        continue;
+      }
+      const approval = approvalCommandFor(message);
+      if (approval !== undefined) {
+        // Handled here, not by the model, and never stored as a chat turn.
+        // 在这里处理，不交给模型，也不作为对话回合存储。
+        void this.#handleApprovalCommand(message, approval).catch((error: unknown) => {
+          this.#log({ event: "whatsapp.approval.command_failed", messageId: message.id, error: String(error) });
+        });
         continue;
       }
       if (this.#store.insert(message)) {
@@ -397,9 +447,105 @@ export class WhatsAppBridge {
   }
 
   stop(): void {
+    if (this.#approvalTimer !== undefined) clearInterval(this.#approvalTimer);
+    this.#approvalTimer = undefined;
     if (this.#retryTimer !== undefined) clearTimeout(this.#retryTimer);
     this.#retryTimer = undefined;
     this.#scheduledRetryAt = undefined;
+  }
+
+  async #handleApprovalCommand(
+    message: { id: string; from: string },
+    command: { action: ApprovalDecision; code: string; forwarded: boolean },
+  ): Promise<void> {
+    if (command.forwarded) {
+      await this.#sender.sendText(message.from, "转发内容不能用于审批。请直接回复 APPROVE 或 REJECT 加编号。");
+      this.#log({ event: "whatsapp.approval.forwarded_rejected", messageId: message.id });
+      return;
+    }
+    const directory = this.#approvalDirectory;
+    if (directory === undefined) {
+      await this.#sender.sendText(message.from, "这台机器没有启用手机审批。请在桌面端处理。");
+      return;
+    }
+    const consumed = await consumeApprovalCode(directory, command.code);
+    if (!consumed.ok) {
+      const reason = consumed.reason === "expired" ? "已过期" : consumed.reason === "used" ? "已经用过了" : "找不到对应的待审批项";
+      await this.#sender.sendText(message.from, `这个审批编号${reason}。请以最新一条请求为准。`);
+      this.#log({ event: "whatsapp.approval.code_rejected", messageId: message.id, reason: consumed.reason });
+      return;
+    }
+    const companion = await this.#companion();
+    if (companion === undefined) {
+      await this.#sender.sendText(message.from, "桌面端当前离线，审批没有执行。稍后重试。");
+      return;
+    }
+    const path = command.action === "approve" ? "approve" : "reject";
+    const response = await fetch(new URL(`/api/runs/${encodeURIComponent(consumed.request.runId)}/${path}`, companion.url), {
+      method: "POST",
+      headers: { authorization: `Bearer ${companion.token}`, "content-type": "application/json" },
+      body: "{}",
+      signal: AbortSignal.timeout(60_000),
+    }).catch(() => undefined);
+    if (response === undefined || !response.ok) {
+      const detail = response === undefined ? "连接失败" : `HTTP ${response.status}`;
+      await this.#sender.sendText(message.from, `审批没有生效（${detail}）。可以重试，或用桌面端处理。`);
+      this.#log({ event: "whatsapp.approval.apply_failed", messageId: message.id, detail });
+      return;
+    }
+    await this.#sender.sendText(message.from, command.action === "approve"
+      ? `已批准并继续执行（Run ${consumed.request.runId.slice(0, 8)}）。`
+      : `已拒绝这次外部动作（Run ${consumed.request.runId.slice(0, 8)}）。`);
+    this.#log({ event: "whatsapp.approval.applied", messageId: message.id, runId: consumed.request.runId, action: command.action });
+  }
+
+  /** Poll paused runs, issue one code each, and ask the owner's phone. 轮询暂停的 Run，各发一个编号，向所有者手机提问。 */
+  async #pollApprovals(): Promise<void> {
+    const directory = this.#approvalDirectory;
+    if (directory === undefined || this.#approvalBusy) return;
+    this.#approvalBusy = true;
+    try {
+      const companion = await this.#companion();
+      if (companion === undefined) return;
+      const response = await fetch(new URL("/api/approvals/pending", companion.url), {
+        headers: { authorization: `Bearer ${companion.token}` },
+        signal: AbortSignal.timeout(10_000),
+      }).catch(() => undefined);
+      if (response === undefined || !response.ok) return;
+      const body = await response.json() as { approvals?: Array<{ runId: string; stepId: string; title: string; planId?: string }> };
+      const owner = [...this.#config.allowedNumbers][0];
+      if (owner === undefined) return;
+      for (const approval of body.approvals ?? []) {
+        const existing = await activeRequestFor(directory, approval.runId, approval.stepId);
+        if (existing !== undefined) continue;
+        const issued = await issueApprovalCode(directory, { runId: approval.runId, stepId: approval.stepId, ...(approval.planId === undefined ? {} : { planId: approval.planId }) });
+        await this.#sender.sendText(owner, [
+          "需要你确认一项外部动作：",
+          `「${approval.title}」`,
+          `回复 APPROVE ${issued.code} 执行，或 REJECT ${issued.code} 放弃。`,
+          "10 分钟内有效，仅一次；转发这条内容不能用于审批。",
+        ].join("\n"));
+        await fetch(new URL("/api/approvals/requested", companion.url), {
+          method: "POST",
+          headers: { authorization: `Bearer ${companion.token}`, "content-type": "application/json" },
+          body: JSON.stringify({ runId: approval.runId, stepId: approval.stepId, codeId: issued.request.id, expiresAt: issued.request.expiresAt }),
+          signal: AbortSignal.timeout(10_000),
+        }).catch(() => undefined);
+        this.#log({ event: "whatsapp.approval.requested", runId: approval.runId, stepId: approval.stepId });
+      }
+    } finally {
+      this.#approvalBusy = false;
+    }
+  }
+
+  async #companion(): Promise<{ url: URL; token: string } | undefined> {
+    const directory = this.#approvalDirectory;
+    if (directory === undefined) return undefined;
+    const endpoint = await readCompanionEndpoint(directory);
+    if (endpoint === undefined) return undefined;
+    const token = (await readFile(join(directory, "companion.token"), "utf8").catch(() => "")).trim();
+    if (token.length === 0) return undefined;
+    return { url: new URL(endpoint.url), token };
   }
 
   async #drain(): Promise<void> {

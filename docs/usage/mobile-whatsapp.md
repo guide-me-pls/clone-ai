@@ -137,6 +137,29 @@ installation, or arbitrary API proxying.
 - Only visible reply text is sent to WhatsApp. Model-private reasoning, tool
   transcripts, tokens, and local file contents are not forwarded.
 
+## Approving from the phone
+
+When a step would affect an external system, the run pauses. The bridge polls
+paused runs, issues a one-time code (eight characters), and sends it to the
+allowlisted number:
+
+```
+需要你确认一项外部动作：
+「发送周报」
+回复 APPROVE 2345ABCD 执行，或 REJECT 2345ABCD 放弃。
+10 分钟内有效，仅一次；转发这条内容不能用于审批。
+```
+
+Reply with `APPROVE <code>` or `REJECT <code>` (批准/拒绝 also work). The bridge
+handles the reply itself — it never becomes a Main Agent turn — consumes the
+code, calls the same approval endpoint the desktop uses, and answers with the
+result. Codes are bound to one run and step, expire in ten minutes, are stored
+only as a salted hash, and are replaced if a newer code is issued. A forwarded
+message can never approve anything, whatever it says.
+
+The request is journaled as `approval.requested`; the approval itself remains
+`approval.granted`, so the trace shows both the question and the answer.
+
 ## Current limitation
 
 The bridge runs on the Mac. If the Mac sleeps, the tunnel is down, or the bridge

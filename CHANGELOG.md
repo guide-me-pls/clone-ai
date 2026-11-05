@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Approve external actions from WhatsApp
+
+A run paused on `external_side_effect` or `irreversible` can now be answered from the phone. The bridge polls paused runs, issues an eight-character code bound to one run and step, sends it to the allowlisted number, and handles `APPROVE <code>` / `REJECT <code>` itself — never as a Main Agent turn. Codes expire in ten minutes, are stored only as a salted hash, are replaced when a new one is issued, and a forwarded message can never approve anything. The request is journaled as `approval.requested`; the decision stays `approval.granted`.
+
+停在 `external_side_effect` 或 `irreversible` 上的 Run 现在可以在手机上作答。桥会轮询暂停的 Run，签发绑定唯一 Run 与步骤的八位编号并发到白名单号码，并自己处理 `APPROVE <编号>` / `REJECT <编号>`——不会变成 Main Agent 的一轮。编号十分钟过期、只保存加盐哈希、签发新编号使旧编号失效，转发消息永远不能批准任何事。请求记为 `approval.requested`，决定仍是 `approval.granted`。
+
 ### An offline regression gate
 
 `npm run gate` now runs on every CI commit and costs nothing. It re-runs evidence verification and authority policy over held-out fixtures under `benchmark/gate/`, and calibrates the audit projection against owner labels (agreement, falsePass, falseFail) using the fixture dataset or a real `clone-ai audit export` file with `--audit`. Per-case behavior is recorded in `benchmark/gate/baseline.json`; any verdict change fails until the baseline is regenerated in the same change, so a shift is reviewed rather than discovered later. The audit dataset is hashed so held-out records cannot change silently.
