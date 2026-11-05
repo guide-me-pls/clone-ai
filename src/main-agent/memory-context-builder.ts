@@ -1,5 +1,6 @@
 import type { MemoryEntry, MemoryRecallMatch } from "../memory/md-memory-store.ts";
 import type { MemoryContext, MemoryEvidence, TaskIntent } from "./dispatch-contracts.ts";
+import { dedupeContext } from "../memory/conflict.ts";
 
 /**
  * Compiles the only memory a worker is ever allowed to see.
@@ -111,10 +112,15 @@ export function buildMemoryContextFromCandidates(
   const maxCharacters = options.maxCharacters ?? DEFAULT_MAX_CHARACTERS;
   const minScore = options.minScore ?? DEFAULT_MIN_SCORE;
 
-  const relevant = candidates
+  // A reworded restatement of a memory already admitted is dropped: two
+  // versions of one fact in the same context only invite the model to pick the
+  // wrong one.
+  // 与已收录记忆只是改写关系的重复项会被丢弃：同一个事实的两个版本同时在场，只会让模型选错。
+  const relevant = dedupeContext(candidates
     .filter((candidate) => candidate.score >= minScore)
     .filter((candidate) => candidate.status === undefined || candidate.status === "active")
-    .filter((candidate) => candidate.sensitivity !== "secret");
+    .filter((candidate) => candidate.sensitivity !== "secret")
+    .map((candidate) => ({ ...candidate, summary: sanitize(candidate.summary) })));
   if (relevant.length === 0) return undefined;
 
   // Fill class by class, each capped at its share of what is left, so the
