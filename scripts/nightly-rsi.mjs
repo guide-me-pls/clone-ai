@@ -24,6 +24,7 @@ import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { protectedPathViolations, stagedPaths } from "./nightly-rsi-policy.mjs";
+import { fingerprint, isConsumed, loadState, recordOutcome, saveState } from "./nightly-rsi-state.mjs";
 
 const run = promisify(execFile);
 const args = process.argv.slice(2);
@@ -54,7 +55,8 @@ async function main() {
   await mkdir(REPORT_DIR, { recursive: true });
   const release = await lock();
   try {
-    const traces = await loadTraces();
+    const state = await loadState(REPORT_DIR);
+    const traces = await loadTraces(state);
     if (traces.length === 0) {
       log("no failed traces; nothing to do");
       return;
@@ -69,15 +71,20 @@ async function main() {
     await createWorktree();
     let keep = KEEP;
     try {
-      const report = await repair(traces);
+      const report = await repair(traces.map(({ trace }) => trace));
       await finish(report);
+      const nextState = recordOutcome(state, traces.map(({ trace, sha256 }) => ({ runId: trace.runId, sha256 })), report);
+      if (nextState !== state) {
+        try { await saveState(REPORT_DIR, nextState); }
+        catch (error) { log(`warning: could not save consumed trace state: ${String(error?.message ?? error)}`); }
+      }
       keep = keep || report.status !== "pr-created";
       if (report.status === "pr-created" && !keep) await cleanupWorktree();
       await notify(report);
       await writeReport(report);
     } catch (error) {
       keep = true;
-      const report = { status: "failed", branch: BRANCH, worktree: WORKTREE, error: String(error?.message ?? error), traces: traces.map((trace) => trace.runId) };
+      const report = { status: "failed", branch: BRANCH, worktree: WORKTREE, error: String(error?.message ?? error), traces: traces.map(({ trace }) => trace.runId) };
       await writeReport(report);
       await notify(report).catch(() => undefined);
       throw error;
@@ -107,14 +114,19 @@ function isAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error?.code === "EPERM"; }
 }
 
-async function loadTraces() {
+async function loadTraces(state) {
   let names = [];
   try { names = (await readdir(TRACE_DIR)).filter((name) => name.endsWith(".json")); } catch { return []; }
   const traces = [];
-  for (const name of names.slice(0, MAX_TRACES)) {
+  for (const name of names) {
+    if (traces.length >= MAX_TRACES) break;
     try {
-      const trace = JSON.parse(await readFile(join(TRACE_DIR, name), "utf8"));
-      if (typeof trace?.runId === "string") traces.push(trace);
+      const content = await readFile(join(TRACE_DIR, name));
+      const trace = JSON.parse(content.toString("utf8"));
+      if (typeof trace?.runId !== "string") continue;
+      const sha256 = fingerprint(content);
+      if (isConsumed(state, trace.runId, sha256)) continue;
+      traces.push({ trace, sha256 });
     } catch { /* ignore a torn trace */ }
   }
   return traces;
