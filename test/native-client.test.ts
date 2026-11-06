@@ -15,6 +15,32 @@ test("configuration is explicit and never guessed", () => {
   const configured = readNativeWorkerEnvironment({ CLONE_AI_NATIVE_MODEL: "m", CLONE_AI_NATIVE_BASE_URL: "http://x" }, "/tmp");
   assert.equal(configured.model, "m");
   assert.equal(configured.baseUrl, "http://x");
+  // The repair budget is owner-controlled and a malformed value is ignored.
+  // 修复预算由所有者控制，非法值会被忽略。
+  assert.equal(readNativeWorkerEnvironment({ CLONE_AI_NATIVE_MAX_ROUNDS: "24" }, "/tmp").maxRounds, 24);
+  assert.equal(readNativeWorkerEnvironment({ CLONE_AI_NATIVE_MAX_ROUNDS: "0" }, "/tmp").maxRounds, undefined);
+  assert.equal(readNativeWorkerEnvironment({ CLONE_AI_NATIVE_MAX_ROUNDS: "1.5" }, "/tmp").maxRounds, undefined);
+  assert.equal(readNativeWorkerEnvironment({ CLONE_AI_NATIVE_MAX_ROUNDS: "many" }, "/tmp").maxRounds, undefined);
+});
+
+test("a configured round budget is what stops a model that keeps calling tools", async () => {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls += 1;
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: null, tool_calls: [{ id: `c${calls}`, type: "function", function: { name: "read_file", arguments: "{\"path\":\"a.txt\"}" } }] } }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
+  const client = new OpenAiCompatibleClient({ baseUrl: "http://gateway", model: "m", fetchImpl, maxRounds: 3 });
+  const result = await client.run({
+    instructions: "keep reading",
+    tools: [],
+    workspace: "/tmp",
+    signal: new AbortController().signal,
+    execute: async () => ({ output: "again", isError: false }),
+  });
+  assert.equal(calls, 3);
+  assert.match(result.summary, /round limit/);
 });
 
 test("the client relays tool calls and ends on a plain answer", async () => {

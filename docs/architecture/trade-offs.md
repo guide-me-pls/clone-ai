@@ -6,6 +6,37 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-06 — The native worker takes an explicit round budget
+
+**Decision.** `CLONE_AI_NATIVE_MAX_ROUNDS` sets how many model round trips one
+native step may spend before the client returns its "round limit" summary; an
+unset or malformed value keeps the built-in default of 12. The repair lane sets
+it to 24 through the worker environment, so a repair can read the failing code
+and still write the case and the patch in the same step.
+
+**Alternatives rejected.** (a) Raise the hard-coded default to 24 for every
+native call — a normal chat turn would then be allowed twice the tool calls,
+widening the blast radius of a looping model for no measured benefit.
+(b) Let the lane retry the step after a limit — the Kernel already ends a step
+at its budget, and a retry would double the model spend without teaching the
+worker anything. (c) Put "be brief" in the plan — an instruction cannot make a
+12-round budget sufficient when the model legitimately needs to read five files.
+
+**Evidence.** Repair run `1dddd6b4-a6dd-42b4-bc18-65b795b62148` (2026-11-06):
+phase 1 spent all 12 rounds on `list_directory`/`read_file`
+(89,845 input / 2,366 output tokens, 33 s) and wrote no file, so the lane
+stopped at `regression-missing`. The same trace with a 24-round budget is the
+eval: `test/native-client.test.ts` asserts the client stops at the configured
+number of model calls, and `readNativeWorkerEnvironment` ignores malformed
+values. Whether 24 is enough for a real repair is measured by the lane run that
+follows this entry, not assumed.
+
+**Cost and reversal condition.** Each extra round is one provider call; the
+budget is per step, not per run, so a repair's worst case doubles. Reverse
+this if native steps routinely finish within 12 rounds (the knob then hides a
+prompt problem), or if a 24-round step is observed looping without producing a
+file — in that case the plan, not the budget, is the thing to fix.
+
 ## 2026-11-06 — The memory library keeps a focused editor across background refreshes
 
 **Decision.** The memory library (`apps/desktop/ui/memory.js`) must not rebuild

@@ -21,15 +21,29 @@ export interface NativeWorkerEnvironment {
   model?: string;
   baseUrl?: string;
   apiKey?: string;
+  /**
+   * Model rounds one step may spend calling tools, when the owner sets it.
+   * A repair needs enough rounds to read the failing code and then write a
+   * patch; the client's built-in default is deliberately small.
+   * 设置了该值时，一个步骤可花费的模型轮次。修复需要足够的轮次先读失败代码再写补丁；
+   * 客户端内置默认值刻意很小。
+   */
+  maxRounds?: number;
   workspace: string;
 }
 
 export function readNativeWorkerEnvironment(environment: NodeJS.ProcessEnv = process.env, workspace = process.cwd()): NativeWorkerEnvironment {
+  const rounds = environment.CLONE_AI_NATIVE_MAX_ROUNDS?.trim();
+  const maxRounds = rounds === undefined || rounds.length === 0 ? undefined : Number(rounds);
   return {
     workspace,
     ...(environment.CLONE_AI_NATIVE_MODEL?.trim() ? { model: environment.CLONE_AI_NATIVE_MODEL.trim() } : {}),
     ...(environment.CLONE_AI_NATIVE_BASE_URL?.trim() ? { baseUrl: environment.CLONE_AI_NATIVE_BASE_URL.trim() } : {}),
     ...(environment.CLONE_AI_NATIVE_API_KEY?.trim() ? { apiKey: environment.CLONE_AI_NATIVE_API_KEY.trim() } : {}),
+    // A malformed value is ignored rather than turned into NaN, which would
+    // make the loop run zero rounds and look like a model that said nothing.
+    // 非法值直接忽略而不是变成 NaN：那会让循环跑零轮，看起来像模型什么都没说。
+    ...(maxRounds !== undefined && Number.isInteger(maxRounds) && maxRounds > 0 ? { maxRounds } : {}),
   };
 }
 
@@ -150,6 +164,7 @@ export function createConfiguredNativeWorker(
       baseUrl: config.baseUrl!,
       model: config.model!,
       ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
+      ...(config.maxRounds === undefined ? {} : { maxRounds: config.maxRounds }),
       timeoutMs: Number(environment.CLONE_AI_NATIVE_TIMEOUT_MS ?? 120_000),
     }),
   });
