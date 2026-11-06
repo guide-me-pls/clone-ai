@@ -25,7 +25,7 @@
     ["fact", "事实", "关于你的稳定事实与背景。"],
   ];
   const SENS = { private: "私有", public: "公开", secret: "机密" };
-  const state = { query: "", status: "active", open: new Set(), openGroups: new Set(), details: new Map(), editing: new Set() };
+  const state = { query: "", status: "active", open: new Set(), openGroups: new Set(), details: new Map(), editing: new Set(), painted: null, paintedAt: null };
 
   const host = () => document.getElementById("memory-root");
   const day = (value) => (value ? new Date(value).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }) : "—");
@@ -175,7 +175,7 @@
     const groups = grouped(visible);
     const searching = state.query.trim().length > 0;
     const conflicts = (library.conflicts || []).map((item) => `<article class="mem-row mem-conflict"><div class="mem-head"><span class="mem-title">磁盘上的改动与已验证版本冲突</span><span class="mem-meta">${escape(item.summary)}</span></div><div class="mem-body"><div class="mem-actions"><button type="button" class="mem-btn" data-memory-conflict="${escape(item.id)}">保留文件版本</button></div></div></article>`).join("");
-    root.innerHTML = `
+    const markup = `
       <div class="mem-toolbar">
         <input class="mem-search" type="search" placeholder="搜索摘要或正文" value="${escape(state.query)}" data-mem-query aria-label="搜索记忆"/>
         <select data-mem-status aria-label="按状态筛选"><option value="active"${state.status === "active" ? " selected" : ""}>使用中</option><option value="archived"${state.status === "archived" ? " selected" : ""}>已归档</option><option value="all"${state.status === "all" ? " selected" : ""}>全部</option></select>
@@ -183,6 +183,16 @@
       </div>
       ${conflicts}
       <div class="mem-groups">${groups.length ? groups.map((group) => groupBlock(group, searching)).join("") : `<div class="mem-empty">${memories.length ? "没有符合筛选的记忆。" : "记忆库还是空的。写下一条你希望分身长期记住的偏好、边界或事实——它会成为一个你随时可以打开和修改的 .md 文件。"}</div>`}</div>`;
+    // Handing the same library back to this view must not touch the DOM: a real
+    // innerHTML assignment replaces the whole subtree, detaching the input the
+    // owner is typing into and discarding an unsaved edit. Only a changed picture
+    // is worth painting.
+    // 把同一份 library 再交给本视图时不得触碰 DOM：真实的 innerHTML 赋值会替换整棵子树，
+    // 摘下所有者正在输入的输入框，并丢弃未保存的编辑。只有内容真的变了才值得重绘。
+    if (state.paintedAt === root && state.painted === markup) return;
+    state.paintedAt = root;
+    state.painted = markup;
+    root.innerHTML = markup;
   }
 
   async function loadDetail(id) {
