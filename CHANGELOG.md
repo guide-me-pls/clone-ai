@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A repair is only fixed when its case passes after the fix
+
+`clone-ai repair` now re-runs the hashed regression cases after the fix phase and stops with `regression-still-red` if any of them still fails, recording the result as `regressionAfter` in the report. Previously it ran only the top-level suite and the typecheck, and in this repository the suite does not include `test/regression/`, so a fix that changed nothing could be reported as fixed. Staging now removes the runtime scratch the lane and a worker create (`node_modules`, `.probe/`, `.rsi/`, `.clone/`, `.work-orders/`, `.verification-baseline*`, `*.log`, `*.tmp`) while still showing every other change, including a new protected file, to the protected-path gate. The native worker also gains `edit_file`, which replaces exactly one excerpt and refuses an edit that would shrink a file below a tenth of its size, so a one-line fix to a large UI script cannot replace it with a fragment.
+
+修复只有在修复后用例通过时才算 fixed。`clone-ai repair` 现在在修复阶段之后重跑已哈希的回归用例，任一仍失败就以 `regression-still-red` 停止，并在报告中记录 `regressionAfter`。此前它只跑顶层套件与类型检查，而本仓库的套件不包含 `test/regression/`，因此一个什么都没改的修复也可能被报成 fixed。暂存现在会移除通道与 Worker 创建的运行期临时物（`node_modules`、`.probe/`、`.rsi/`、`.clone/`、`.work-orders/`、`.verification-baseline*`、`*.log`、`*.tmp`），同时仍把其他所有改动——包括新的受保护文件——呈现给保护路径闸门。原生 Worker 还新增 `edit_file`：只替换一处精确片段，并拒绝把文件缩到不足十分之一的编辑，使大型 UI 脚本的一行修复不会把它替换成片段。
+
 ### Repair-lane workers get explicit budgets and a focused brief
 
 The native worker now reads `CLONE_AI_NATIVE_MAX_ROUNDS` and `CLONE_AI_NATIVE_MAX_TOKENS` (unset keeps the previous defaults), so a repair step can be given enough rounds to read the failing code and write a patch without letting one runaway completion hold the step for minutes. The phase-1 plan asks for a small failing reproduction before broad exploration and forbids probe files under `test/regression/`; phase 2 reads only the failing case and the production file it exercises, leaves no scratch files, skips the trade-off entry (the working agent wrote it) and is told it has no shell tool. The changes were measured against a real Magpie worker: a first run wrote no file at 12 rounds, a 24-round run wrote only a passing probe, and a 32-round phase 1 finally produced a red case; that run also exposed a lane gate hole (recorded in `docs/engineering/optimizations.md`).

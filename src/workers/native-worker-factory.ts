@@ -104,6 +104,47 @@ export function fileTools(): NativeToolSpec[] {
         return { output: `Wrote ${String(call.input.path)}.` };
       },
     },
+    {
+      name: "edit_file",
+      description: "Replace one exact occurrence of old_text with new_text in a UTF-8 file inside the step workspace. Prefer this over write_file for a small change to an existing file.",
+      parameters: { type: "object", properties: { path: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" } }, required: ["path", "old_text", "new_text"] },
+      risk: "write",
+      pathOf: (input) => String(input.path ?? ""),
+      run: async (call, { workspace }) => {
+        const { readFile, writeFile } = await import("node:fs/promises");
+        const target = resolveInWorkspace(workspace, String(call.input.path));
+        const oldText = String(call.input.old_text ?? "");
+        const newText = String(call.input.new_text ?? "");
+        if (oldText.length === 0) return { output: "Error: old_text must not be empty.", isError: true };
+        let source: string;
+        try {
+          source = await readFile(target, "utf8");
+        } catch (error: unknown) {
+          return { output: `Error: ${(error as Error).message}`, isError: true };
+        }
+        const first = source.indexOf(oldText);
+        if (first < 0) {
+          return { output: "Error: old_text is not present in the file; read it and retry with an exact excerpt.", isError: true };
+        }
+        if (source.indexOf(oldText, first + 1) >= 0) {
+          return { output: "Error: old_text occurs more than once; include more surrounding text.", isError: true };
+        }
+        const next = source.slice(0, first) + newText + source.slice(first + oldText.length);
+        // A one-line fix must not replace the file with a fragment. The guard is
+        // deliberately blunt: an edit that removes most of the file is a
+        // rewrite mistake, not an edit.
+        // 只改一行的修复不得把文件替换成片段。这个保护刻意粗暴：删掉文件大部分内容的"编辑"是
+        // 重写失误，不是编辑。
+        if (next.length * 10 < source.length) {
+          return {
+            output: `Error: the edit would shrink the file from ${source.length} to ${next.length} characters; that looks like a fragment, not an edit.`,
+            isError: true,
+          };
+        }
+        await writeFile(target, next, "utf8");
+        return { output: `Edited ${String(call.input.path)} (${oldText.length} -> ${newText.length} characters).` };
+      },
+    },
   ];
 }
 

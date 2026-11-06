@@ -98,7 +98,7 @@ test("a malformed mcp.json is reported instead of being silently treated as empt
 test("a worker with no enabled server receives built-in tools only", async (t) => {
   const home = await tempDir(t, "clone-mcp-builtin-");
   const tools = workerTools({ dataDirectory: home });
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["list_directory", "read_file", "write_file"]);
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["edit_file", "list_directory", "read_file", "write_file"]);
 });
 
 test("MCP tool output is framed as untrusted observation", () => {
