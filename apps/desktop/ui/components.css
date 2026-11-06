@@ -1475,3 +1475,25 @@ body.empty-conversation .composer-wrap { padding-bottom: 18px; }
   .mobile-binding-heading { flex-direction: column; gap: 4px; }
   .mobile-webhook-row { align-items: stretch; flex-direction: column; }
 }
+
+/* Settings tabs: a tab is a tab — selection, focus and a short panel entrance.
+ * 设置标签：选中、焦点与短暂的面板入场。 */
+.settings-nav [role="tab"] { transition: background-color .16s ease, color .16s ease, box-shadow .16s ease; }
+.settings-nav [role="tab"]:focus-visible { outline: 2px solid var(--accent, #3468f6); outline-offset: 2px; }
+.settings-nav [role="tab"][aria-selected="true"] { color: var(--text); background: #f8f7f3; box-shadow: 0 1px 4px rgba(32, 37, 33, .08); font-weight: 680; }
+.settings-panel.is-entering { animation: settings-panel-in .16s ease both; }
+@keyframes settings-panel-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .settings-nav [role="tab"] { transition: none; }
+  .settings-panel.is-entering { animation: none; }
+}
+
+/* Worker rows carry their provider's facts instead of a second registry list.
+ * Worker 行携带其 Provider 的事实，而不是另开第二份清单。 */
+.agent-worker-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.agent-worker-purpose { max-width: 100%; overflow: hidden; color: var(--muted, #8791a1); text-overflow: ellipsis; white-space: nowrap; }
+.agent-worker-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.agent-worker-actions .agent-effort-select { min-width: 92px; }
+
+/* Plan rows name the worker that will run the step. 计划行点名执行该步骤的 Worker。 */
+.plan-step-worker { padding: 1px 6px; border-radius: 6px; color: #3468f6; background: rgba(52, 104, 246, .08); font-size: 11px; font-style: normal; }

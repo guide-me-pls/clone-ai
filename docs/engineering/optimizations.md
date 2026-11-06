@@ -19,6 +19,18 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 - **Cons / next time:** the probes are deterministic and therefore repeatable but not creative — a model-driven red team (schema-constrained, budget-capped) is the next layer, and the suite must grow whenever an incident reveals a class it missed.
 - **Reversal condition:** see the trade-off entry — extend the suite rather than loosen it.
 
+### 2026-11-06 — Settings speak in workers, and dispatch is visible
+
+- **Goal / hypothesis:** the settings dialog felt abrupt (tab switches with no state, no keyboard flow, a second "providers" list duplicating the worker list), and nothing in the UI explained *why* a step went to a particular worker.
+- **Trade-off:** [2026-11-06 — Settings speak in workers, and dispatch is visible](../architecture/trade-offs.md).
+- **Change:** settings navigation is a real tablist (`role=tablist/tab/tabpanel`, `aria-selected`, arrow/Home/End keys, per-panel scroll memory, a 160 ms fade/slide honouring `prefers-reduced-motion`). The legacy provider registry is removed; each worker row now carries its provider's installed state, command, execution boundary, effort select, install action and host-access action. The audit run detail gained "Worker 派发": chosen agent, provider, step, routing source and reason from `dispatch.decided`. Plan rows name the worker that runs the step.
+- **Eval:** `node --experimental-strip-types --test test/ui-structure.test.ts` (new assertions: no `provider-registry`, seven tabs with tab semantics, `state.settingsScroll`, dispatch block and source labels present). Browser check against a seeded home: arrow keys move the selection (agents → mobile), Home/End jump to first/last, the provider registry is absent, worker rows show provider state and five effort selects, and the dispatch block renders two seeded decisions with translated sources. `npm test`: 591 pass; `npm run gate`: PASS.
+- **Benchmark run:** none — deterministic UI/structural eval only; no provider or dataset involved.
+- **Execution chain:** inspected the settings/audit UI and `dispatch.decided` payload; the repair lane could not run (headless `claude` reported Not logged in, and spawning `pi` with write access was blocked by the session classifier), so the working agent wrote the change by hand at the owner's direction. First HTML edit dropped the closing `>` on every settings section and the app stalled at startup; found via the startup tip (`Cannot set properties of null`), fixed, and re-verified in the browser. Cost: no model tokens for the patch (local edits), ~25 minutes.
+- **Pros:** one list instead of two, keyboard and semantics work, dispatch is answerable without reading raw payloads, and every panel keeps its place.
+- **Cons / next time:** the hand-written route skipped the repair-lane evidence; tab transitions cannot be verified headlessly beyond class toggles; scroll memory is asserted structurally but the demo home's panels were not tall enough to exercise it in the browser.
+- **Reversal condition:** see the trade-off entry.
+
 ## Template
 
 ```markdown
