@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import { resolveClonePaths, prepareCloneHome, type ClonePathOptions, type ClonePaths } from "../config/clone-home.ts";
 import { loadOutcomeCatalog, type OutcomeCatalog } from "./failure-analysis.ts";
+import type { Evidence } from "./contracts.ts";
 import type { JournalStore } from "./journal.ts";
 import { createJournalStore } from "./sqlite-journal.ts";
 import { AuthorityPolicyEngine } from "../authority/policy-engine.ts";
@@ -9,6 +10,7 @@ import { StandingPolicyStore } from "../authority/standing-policy-store.ts";
 import { CloneRuntime } from "./runtime.ts";
 import { JsonWorkspaceCheckpointStore } from "./workspace-evidence.ts";
 import { createDefaultVerifier } from "./verification.ts";
+import { DiffFileVerifier } from "./verifier-plugins.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { AgentMemoryWorker } from "../memory/agent-memory-worker.ts";
 import { ConversationMemoryPipeline } from "../memory/conversation-memory-pipeline.ts";
@@ -43,7 +45,30 @@ export interface RuntimeAssembly {
  * memory, journal, or recovery behavior. 为 Daemon、Query Workflow 和 Main Agent
  * 构建唯一的 Runtime 组装入口，避免不同入口在策略、记忆、Journal 或恢复行为上漂移。
  */
-export async function createRuntimeAssembly(options: ClonePathOptions = {}): Promise<RuntimeAssembly> {
+export interface RuntimeAssemblyOptions extends ClonePathOptions {
+  /**
+   * Evidence kinds that count as completion for this assembly's work. A
+   * black-box CLI never reports `test` evidence, so the default verifier's
+   * test plugin would fail a step whose acceptance says "tests". The repair
+   * lane, which checks its tests itself, narrows this to the kinds its workers
+   * really record.
+   * 本次组装中算作完成的 Evidence 类型。黑盒 CLI 从不报告 `test` 证据，因此默认验证器的
+   * 测试插件会让验收标准提到"测试"的步骤失败。自行检查测试的修复通道把它收窄到 Worker
+   * 真正会记录的类型。
+   */
+  evidenceKinds?: readonly Evidence["kind"][];
+  /**
+   * Executors the Kernel will accept in a plan. Omitted means "read the
+   * owner's settings"; an assembly built around an explicitly supplied
+   * registry must say so, or every plan naming one of its agents is rejected.
+   * Kernel 在计划中会接受的执行者。省略表示读取所有者设置；围绕显式提供的 Registry 构建的组装
+   * 必须声明它，否则点名其 Agent 的每个计划都会被拒。
+   */
+  knownAgentIds?: () => Set<string>;
+}
+
+export async function createRuntimeAssembly(options: RuntimeAssemblyOptions = {}): Promise<RuntimeAssembly> {
+  const { evidenceKinds } = options;
   const paths = resolveClonePaths(options);
   await prepareCloneHome(paths);
   const journal = createJournalStore(paths.dataDirectory);
@@ -57,8 +82,12 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
   // Kernel 在计划中会接受的执行者。在此读一次并缓存在可变集合中，设置变更可刷新它，
   // 使 attachPlan 内的校验保持同步，同时仍能跟随所有者的配置。
   const workerSettings = new WorkerSettingsStore(paths.legacyAgentsFile);
-  const knownAgents = new Set<string>();
+  const knownAgents = new Set<string>(options.knownAgentIds?.() ?? []);
   const refreshKnownAgents = async (): Promise<void> => {
+    // An explicitly supplied registry is the authority for what can run; the
+    // settings file must not overwrite it with a different list.
+    // 显式提供的 Registry 才是"能跑什么"的权威；设置文件不得用另一份清单覆盖它。
+    if (options.knownAgentIds !== undefined) return;
     try {
       const settings = await workerSettings.get();
       knownAgents.clear();
@@ -97,7 +126,12 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
   const runtime = new CloneRuntime({
     journal,
     policy: new AuthorityPolicyEngine({ config: () => authority.snapshot() }),
-    verifier: createDefaultVerifier({ workspacePath: paths.workspacePath }),
+    verifier: evidenceKinds === undefined
+      ? createDefaultVerifier({ workspacePath: paths.workspacePath })
+      // Only the plugins a narrowed evidence set can satisfy: the test plugin
+      // would otherwise demand evidence the worker is not allowed to record.
+      // 只保留收窄后的证据集能满足的插件；否则测试插件会索要 Worker 不允许记录的证据。
+      : new DiffFileVerifier({ workspacePath: paths.workspacePath }),
     memory,
     failureCatalog,
     // Recall comes from the governed store only: promoted memories, never raw

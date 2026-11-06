@@ -49,6 +49,8 @@ export interface NativeToolSpec {
   /** Path of a file the call reads or writes; checked against the step's grants. 调用读写文件的路径，与步骤的授权核对。 */
   pathOf?: (input: Record<string, unknown>) => string | undefined;
   run: (call: NativeToolCall, context: { workspace: string }) => Promise<{ output: string; isError?: boolean }>;
+  /** Releases whatever this tool started (an MCP child process, a socket). 释放该工具启动的东西（MCP 子进程、套接字）。 */
+  close?: () => Promise<void>;
 }
 
 export interface NativeModelClient {
@@ -276,6 +278,10 @@ export class NativeAgentWorker implements RuntimeAdapter {
       yield { type: "failed", message, report };
     } finally {
       clearTimeout(timeout);
+      // A tool that spawned a server must not outlive the step: an orphaned MCP
+      // child would keep running with the environment it was handed.
+      // 启动了服务器的工具不能活过步骤：孤立的 MCP 子进程会带着被交给它的环境继续运行。
+      await Promise.allSettled(offered.map((tool) => tool.close?.() ?? Promise.resolve()));
     }
   }
 }

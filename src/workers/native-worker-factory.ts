@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 import { NativeAgentWorker, type NativeToolSpec } from "./native-agent-worker.ts";
 import { OpenAiCompatibleClient } from "./openai-compatible-client.ts";
+import { enabledServers, loadMcpConfigSync, McpClient, mcpToolSpecs, MCP_CONFIG_FILE } from "./mcp-client.ts";
 
 export interface NativeWorkerEnvironment {
   /** Model id as the endpoint names it. 端点使用的模型 id。 */
@@ -87,11 +88,55 @@ export function fileTools(): NativeToolSpec[] {
   ];
 }
 
+/**
+ * Built-in tools plus the MCP tools the owner enabled.
+ *
+ * MCP is opt-in twice: a server must be `enabled` in `mcp.json`, and each tool
+ * it exposes must be declared there with a risk. A server whose config is
+ * malformed is reported and skipped; it never fails a worker that only needs
+ * its built-in tools.
+ * 内建工具，加上所有者已开启的 MCP 工具。
+ *
+ * MCP 需要两级开启：服务器必须在 `mcp.json` 中 `enabled`，且它暴露的每个工具都必须在其中声明
+ * 风险。配置损坏的服务器会被报告并跳过；它绝不会让只需要内建工具的 Worker 失败。
+ */
+export function workerTools(options: {
+  dataDirectory?: string;
+  environment?: NodeJS.ProcessEnv;
+  log?: (message: string) => void;
+} = {}): NativeToolSpec[] {
+  const builtIn = fileTools();
+  if (options.dataDirectory === undefined) return builtIn;
+  const loaded = loadMcpConfigSync(join(options.dataDirectory, MCP_CONFIG_FILE));
+  for (const error of loaded.errors) options.log?.(`[mcp] ${error}`);
+  const servers = enabledServers(loaded);
+  if (servers.length === 0) return builtIn;
+  const client = new McpClient({ servers, ...(options.environment === undefined ? {} : { environment: options.environment }) });
+  const mcp = servers.flatMap((server) => mcpToolSpecs(server, client));
+  if (mcp.length === 0) return builtIn;
+  // The client owns the child processes. Hanging its close on the specs means the
+  // worker releases them when the step ends, without telling the model that a
+  // "close the servers" tool exists — that would only be an invitation to
+  // shut its own tools off mid-step.
+  // 客户端持有子进程。把它的关闭挂在 spec 上，Worker 就在步骤结束时释放它们，而无需告诉模型存在
+  // 一个"关闭服务器"的工具——那只会诱使它在步骤中途关掉自己的工具。
+  const close = (): Promise<void> => client.close();
+  return [...builtIn, ...mcp.map((spec) => ({ ...spec, close }))];
+}
+
 /** A native worker when configured, otherwise undefined. 已配置时返回原生 Worker，否则 undefined。 */
 export function createConfiguredNativeWorker(
   environment: NodeJS.ProcessEnv = process.env,
   workspace = process.cwd(),
-  options: { id?: string; label?: string; workCapabilities?: readonly string[] } = {},
+  options: {
+    id?: string;
+    label?: string;
+    workCapabilities?: readonly string[];
+    /** Clone home; its mcp.json supplies the enabled MCP servers. Clone home；其 mcp.json 提供已开启的 MCP 服务器。 */
+    dataDirectory?: string;
+    /** Pre-resolved tool list; when given, MCP is not loaded here. 已解析的工具表；给出时不再在此加载 MCP。 */
+    tools?: readonly NativeToolSpec[];
+  } = {},
 ): NativeAgentWorker | undefined {
   const config = readNativeWorkerEnvironment(environment, workspace);
   if (config.model === undefined || config.baseUrl === undefined) return undefined;
@@ -100,7 +145,7 @@ export function createConfiguredNativeWorker(
     label: options.label ?? "Native worker (OpenAI-compatible)",
     providerId: "native",
     ...(options.workCapabilities === undefined ? {} : { workCapabilities: options.workCapabilities }),
-    tools: fileTools(),
+    tools: options.tools ?? fileTools(),
     createClient: () => new OpenAiCompatibleClient({
       baseUrl: config.baseUrl!,
       model: config.model!,
