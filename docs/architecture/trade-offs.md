@@ -6,6 +6,35 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-06 — The repair plan tells the worker how its step is judged
+
+**Decision.** The phase-1 instructions now say the reproduction file must be
+written before broad exploration, that the worker should read only the files
+the case needs, and that every file left under `test/regression/` must be a
+failing reproduction — diagnostic or probe files are not accepted. The
+acceptance criterion states the same rule, so a passing probe cannot satisfy it.
+
+**Alternatives rejected.** (a) Raise the round budget again — the 24-round run
+showed the model using the extra rounds to read more files, not to write;
+another increase would buy more exploration, not a patch. (b) Leave only the
+acceptance criterion — the model reads instructions, not the criteria list, in
+practice. (c) Reject probe files in the lane after the fact — the lane cannot
+tell a probe from a poor reproduction without running it, and the model can
+still spend the whole budget before the lane sees anything.
+
+**Evidence.** Two runs of the same trace with Magpie `360/deepseek/deepseek-v4.1-flash`:
+`1dddd6b4` spent 12 rounds reading and wrote nothing; `426f3d3a` spent all 24
+rounds reading (423,163 input tokens) and then wrote `probe-tmp.test.ts`, a file
+that printed the tail of `memory.js` and passed. Both stopped at gates
+(`regression-missing`, `not-red`). The eval is the next lane run: the same trace
+should produce a failing reproduction. Whether the wording is sufficient is
+measured there, not assumed.
+
+**Cost and reversal condition.** No runtime cost; the instructions are longer by
+two lines. Reverse if workers start writing shallow tests that pass and the
+"write early" pressure is the cause — in that case restore exploration guidance
+and make the acceptance check stronger instead.
+
 ## 2026-11-06 — The native worker takes an explicit round budget
 
 **Decision.** `CLONE_AI_NATIVE_MAX_ROUNDS` sets how many model round trips one
