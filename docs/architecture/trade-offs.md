@@ -13,6 +13,11 @@ written before broad exploration, that the worker should read only the files
 the case needs, and that every file left under `test/regression/` must be a
 failing reproduction — diagnostic or probe files are not accepted. The
 acceptance criterion states the same rule, so a passing probe cannot satisfy it.
+Phase 2 is told the same: read the failing case and the production file it
+exercises, leave no scratch files, do not explore READMEs or repository
+directories, and do not write a trade-off entry (the working agent did that
+before the run). Both phases are told they have no shell tool, because telling a
+worker to "run npm test" it cannot run invites exploration instead of the edit.
 
 **Alternatives rejected.** (a) Raise the round budget again — the 24-round run
 showed the model using the extra rounds to read more files, not to write;
