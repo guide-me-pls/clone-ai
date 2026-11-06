@@ -180,6 +180,10 @@ test("the system prompt names the offered tools and the boundary", () => {
   const prompt = systemPrompt("do it", tools);
   assert.match(prompt, /read_file, list_directory, write_file/);
   assert.match(prompt, /will be refused/);
+  // A summary without a successful write is a failure, so the loop cannot end
+  // on a claim of work that never reached the workspace.
+  // 没有成功写入的总结就是失败，因此循环不能以“声称做了但其实没落盘”结束。
+  assert.match(prompt, /Never answer with a summary that claims work you did not perform/);
 });
 
 test("the worker reports model and tool activity so the Kernel can count it", async () => {

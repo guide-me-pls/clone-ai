@@ -18,6 +18,10 @@ exercises, leave no scratch files, do not explore READMEs or repository
 directories, and do not write a trade-off entry (the working agent did that
 before the run). Both phases are told they have no shell tool, because telling a
 worker to "run npm test" it cannot run invites exploration instead of the edit.
+The native worker's system prompt now states that a step requiring a file is not
+complete until a write tool has succeeded, and that a summary claiming work that
+never reached the workspace is a failure; phase 1 must make its first write
+within three tool calls.
 
 **Alternatives rejected.** (a) Raise the round budget again — the 24-round run
 showed the model using the extra rounds to read more files, not to write;
@@ -31,9 +35,12 @@ still spend the whole budget before the lane sees anything.
 `1dddd6b4` spent 12 rounds reading and wrote nothing; `426f3d3a` spent all 24
 rounds reading (423,163 input tokens) and then wrote `probe-tmp.test.ts`, a file
 that printed the tail of `memory.js` and passed. Both stopped at gates
-(`regression-missing`, `not-red`). The eval is the next lane run: the same trace
-should produce a failing reproduction. Whether the wording is sufficient is
-measured there, not assumed.
+(`regression-missing`, `not-red`). A third run (`f7e07553`) read 20 files, spent
+28 rounds and 74,641 output tokens, and ended `completed` without a single
+artifact, so the system prompt now refuses a summary that claims work no write
+performed. The eval is the next lane run: the same trace should produce a
+failing reproduction. Whether the wording is sufficient is measured there, not
+assumed.
 
 **Cost and reversal condition.** No runtime cost; the instructions are longer by
 two lines. Reverse if workers start writing shallow tests that pass and the
