@@ -84,6 +84,88 @@ this if native steps routinely finish within 12 rounds (the knob then hides a
 prompt problem), or if a 24-round step is observed looping without producing a
 file — in that case the plan, not the budget, is the thing to fix.
 
+## 2026-11-06 — The repair lane re-runs the hashed regression cases after the fix
+
+**Decision.** After the fix phase and the hash comparison, `clone-ai repair` runs
+the same hashed cases once more and requires them to pass. A failing run stops
+the lane with the new `regression-still-red` gate; the result is recorded as
+`regressionAfter` in the report. The full suite and the typecheck still run
+afterwards.
+
+**Alternatives rejected.** (a) Trust the full suite — in this repository
+`npm test` is `node --test test/*.test.ts` and does not include
+`test/regression/`, so the false-fixed run passed without touching production
+code. (b) Trust the hash comparison — it proves the case was not edited, not
+that it passes. (c) Rely on the case being in the suite — that is a
+repository-specific accident, not a lane invariant.
+
+**Evidence.** Run `d8c54037` / fix run `4accee4b` (2026-11-06): phase 2 wrote no
+artifact, the staged diff held only `.probe/*`, `node_modules` and the
+regression case, and the lane reported fixed; running the case afterwards still
+failed. The lane's own `npm test` output in that report was green because the
+new case is outside its glob. `test/repair.test.ts` now has a no-op-fix case
+that expects `regression-still-red`, and a unit case for the green check.
+
+**Cost and reversal condition.** One extra invocation of the new cases (a
+fraction of a second in this repository) and a clearer failure. Reverse if the
+cases become part of the suite **and** the suite can report them separately, or
+if a regression case is too slow to run twice — then run the case once after the
+fix and drop the duplicate suite run, not the check.
+
+## 2026-11-06 — Repair staging removes known runtime scratch, not arbitrary files
+
+**Decision.** `stageRepair` stages everything, then unstages a fixed list of
+runtime scratch: `node_modules` (including the symlink), `.probe/`, `.rsi/`,
+`.clone/`, `.work-orders/`, `.verification-baseline*`, `*.log`, `*.tmp`. The
+protected-path gate then sees every other change, including new files.
+
+**Alternatives rejected.** (a) `git add -A` alone — it staged the `node_modules`
+symlink and `.probe/` in run `d8c54037`. (b) Stage only tracked files plus new
+`test/regression/` files — the first implementation of this fix; it silently
+dropped a new protected file, and the existing protected-path regression test
+caught it. (c) Extend the repository's `.gitignore` — a lane that depends on the
+target repository's ignore file fails on another repository, and a `node_modules/`
+entry still does not match a symlink.
+
+**Evidence.** `d8c54037`'s commit carried `.probe/lines.txt`, `.probe/measure.txt`,
+`.probe/one.txt`, `.probe/ten.txt`, `node_modules` and the case. The
+protected-path test in `test/repair.test.ts` fails against the "regression files
+only" variant and passes with the deny-list. A second case asserts that
+`node_modules` and `.probe/junk.txt` never appear in the staged diff.
+
+**Cost and reversal condition.** A stray scratch file under another name would
+enter the diff; it is visible in `changed` and in the owner's review, which is
+why the list is deliberately short. Reverse if scratch names proliferate: move
+the list into a shared manifest or give the worker a scratch directory outside
+the workspace, rather than widening this function.
+
+## 2026-11-06 — The native worker gets a targeted edit tool
+
+**Decision.** `fileTools()` adds `edit_file`: replace exactly one occurrence of
+`old_text` with `new_text`, refusing empty, missing or ambiguous excerpts, and
+refusing an edit that shrinks the file to less than a tenth of its size. Phase 2
+is told to prefer it for an existing file; `write_file` remains for new files or
+a full replacement the worker has read.
+
+**Alternatives rejected.** (a) Keep whole-file `write_file` only — a repair of
+one line in the 118 KB `apps/desktop/ui/app.js` replaced it with an 8 KB
+fragment (observed 2026-11-06). (b) A unified-diff or patch parser — more input
+to validate, and a malformed patch fails less legibly than one exact excerpt.
+(c) Line-number replacement — line numbers drift as the worker reads; an exact
+excerpt is self-checking.
+
+**Evidence.** In the plain-preview attempt, phase 2 wrote an 8 KB `app.js`
+containing only the functions the case slices; `npm test` and `tsc` do not load
+that browser script, so the lane was ready to call it fixed. The size guard and
+single-occurrence requirement would have refused it. `test/native-client.test.ts`
+covers replacement, missing text, ambiguity and the shrink guard.
+
+**Cost and reversal condition.** One more tool entry and one read of the target
+file per edit; a legitimate edit that removes more than 90% of a file is
+refused (a full-file replacement must use `write_file`). Reverse if exact-excerpt
+edits fail often on large files (add a diff-apply tool), or if the shrink guard
+blocks a legitimate rewrite (raise the threshold, do not remove the check).
+
 ## 2026-11-06 — Sidebar previews keep identifier underscores
 
 **Decision.** `plainPreview` treats underscores as emphasis only at word

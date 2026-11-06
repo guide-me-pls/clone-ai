@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 
-import { compareHashes, failingAssertions, hashFiles, listRegressionTests, stageAll, verifyRegressionRed } from "../src/repair/gates.ts";
+import { compareHashes, failingAssertions, hashFiles, listRegressionTests, stageAll, stageRepair, verifyRegressionGreen, verifyRegressionRed } from "../src/repair/gates.ts";
 import { createRepairWorktree, removeRepairWorktree, runCommand, type CommandRunner } from "../src/repair/worktree.ts";
 import { keepWorktree, runRepairLane } from "../src/repair/repair-lane.ts";
 import { repairPlan } from "../src/repair/repair-lane.ts";
@@ -300,6 +300,63 @@ function laneOptions(data: string, repo: string, worker: RuntimeAdapter) {
   };
 }
 
+test("the post-fix check requires the hashed cases to pass, not just the suite", async (t) => {
+  const workspace = await tempDir(t, "clone-green-");
+  await mkdir(join(workspace, "test", "regression"), { recursive: true });
+  const missing = await verifyRegressionGreen({ workspace, run: nestedRun });
+  assert.equal(missing.green, false);
+  assert.match(missing.detail, /no regression files/);
+
+  await writeFile(join(workspace, "test", "regression", "red.test.ts"), "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('red', () => assert.equal(1, 2));\n");
+  const stillRed = await verifyRegressionGreen({ workspace, run: nestedRun });
+  assert.equal(stillRed.green, false);
+  assert.match(stillRed.detail, /still fail/);
+  assert.equal(stillRed.run?.status, 1);
+
+  await writeFile(join(workspace, "test", "regression", "red.test.ts"), "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('green', () => assert.equal(1, 1));\n");
+  const green = await verifyRegressionGreen({ workspace, run: nestedRun });
+  assert.equal(green.green, true);
+  assert.equal(green.run?.status, 0);
+});
+
+test("staging a repair keeps tracked changes and regression cases, and drops scratch files", async (t) => {
+  const repo = await initRepo(t);
+  const worktree = await createRepairWorktree({ repo, stamp: "20260101T0103", run: runCommand });
+  t.after(() => removeRepairWorktree(worktree, runCommand));
+  await writeFile(join(worktree.path, "src", "bug.ts"), "export function answer(): number { return 2; }\n");
+  await mkdir(join(worktree.path, "test", "regression"), { recursive: true });
+  await writeFile(join(worktree.path, "test", "regression", "bug.test.ts"), "// regression\n");
+  await mkdir(join(worktree.path, ".probe"), { recursive: true });
+  await writeFile(join(worktree.path, ".probe", "junk.txt"), "scratch\n");
+  await writeFile(join(worktree.path, "node_modules"), "a symlink or file must not be committed\n");
+
+  const staged = await stageRepair(worktree.path, runCommand);
+  assert.deepEqual(staged.paths.sort(), ["src/bug.ts", "test/regression/bug.test.ts"]);
+  const cached = await git(["diff", "--cached", "--name-only"], worktree.path);
+  assert.doesNotMatch(cached, /node_modules|\.probe/);
+});
+
+test("a fix phase that changes nothing is refused because the case stays red", async (t) => {
+  const repo = await initRepo(t);
+  const data = await seedLane(t);
+  const worker = new FakeRepairWorker([
+    async () => [{ path: "test/regression/bug.test.ts", content: RED_TEST }],
+    // A "fix" that touches an unrelated file but leaves the bug: the case still
+    // fails, so the lane must not call it fixed. The extra file keeps the Run
+    // from ending for lack of evidence.
+    // “修复”改了一个无关文件但没修 Bug：用例仍然失败，通道不得称其为 fixed。额外文件让 Run
+    // 不因缺少证据而结束。
+    async () => [{ path: "src/notes.ts", content: "// no fix applied\n" }],
+  ]);
+  const report = await runRepairLane(laneOptions(data, repo, worker));
+  if (report.worktree !== undefined) t.after(() => removeRepairWorktree({ path: report.worktree!, branch: report.branch ?? "", repo, base: "main" }, runCommand));
+
+  assert.equal(report.status, "failed");
+  assert.equal(report.failedGate, "regression-still-red");
+  assert.equal(report.regressionAfter?.green, false);
+  assert.equal(Number((await git(["rev-list", "--count", "main.." + (report.branch ?? "main")], repo)).trim()), 0, "no commit on a no-op fix");
+});
+
 test("a full repair: phase 1 red is verified by the lane, the fix is committed, and the checkout is untouched", async (t) => {
   const repo = await initRepo(t);
   const data = await seedLane(t);
@@ -315,6 +372,7 @@ test("a full repair: phase 1 red is verified by the lane, the fix is committed, 
   assert.deepEqual(worker.phases, ["write-regression-test", "fix-production-code"], "the test phase must run before the fix phase");
   assert.equal(report.evalBefore?.red, true);
   assert.equal(report.evalBefore?.exitStatus, 1);
+  assert.equal(report.regressionAfter?.green, true, report.regressionAfter?.detail);
   assert.equal(report.evalAfter?.tests.status, 0, report.evalAfter?.tests.tail);
   assert.equal(report.evalAfter?.typecheck.status, 0, report.evalAfter?.typecheck.tail);
   assert.deepEqual(report.changed, ["src/bug.ts", "test/regression/bug.test.ts"]);

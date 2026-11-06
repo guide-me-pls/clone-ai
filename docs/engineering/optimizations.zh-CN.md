@@ -6,6 +6,18 @@
 它的目的是让**工作本身**可审计：不仅改了什么，还包括怎么做的、花了多少、链路哪里弱。
 规则见 [`AGENTS.md`](../../AGENTS.md)。
 
+### 2026-11-06 — 关闭桌面端尝试暴露的三个修复通道漏洞
+
+- **目标 / 假设：** 桌面端修复尝试暴露了通道把"未验证的东西"报成或提交成修复的三条路径：修复后从不重跑回归用例、暂存会带上运行期临时物、整文件 `write_file` 会让模型用片段替换大型 UI 脚本。堵住这三条，使 `fixed` 真正意味着记录的失败已消失、提交只携带修复与用例。
+- **取舍：** [修复后重跑已哈希用例](../architecture/trade-offs.zh-CN.md#2026-11-06--修复通道在修复后重跑已哈希的回归用例)；[只移除已知运行期临时物](../architecture/trade-offs.zh-CN.md#2026-11-06--修复暂存只移除已知的运行期临时物不丢任意文件)；[定向编辑工具](../architecture/trade-offs.zh-CN.md#2026-11-06--原生-worker-获得定向编辑工具)。
+- **变更：** `src/repair/gates.ts`（`verifyRegressionGreen`、`stageRepair`、`isRuntimeScratch`）；`src/repair/repair-lane.ts`（修复后运行用例并以 `regression-still-red` 停止、记录 `regressionAfter`、改用 `stageRepair`、第二阶段优先 `edit_file`）；`src/workers/native-worker-factory.ts`（`edit_file`：唯一一次精确替换，拒绝缺失/歧义，拒绝缩到不足十分之一）；`src/cli/clone-ai.ts` 输出修复后的回归结果；`test/repair.test.ts`、`test/native-client.test.ts`、`test/mcp.test.ts`。
+- **eval：** `node --experimental-strip-types --test test/repair.test.ts test/native-client.test.ts` —— 31 个用例通过。变更前，空操作修复用例在套件不含 `test/regression/` 的仓库里会走到套件并被报成 fixed；新用例期望 `regression-still-red`。暂存用例在 `git add -A` 上失败（会暂存 `node_modules` 与 `.probe/junk.txt`）；而"只暂存已跟踪文件 + 回归文件"的第一版实现因悄悄丢掉新的受保护文件而使既有的保护路径测试失败。`edit_file` 用例在工具表没有该工具时失败，也在无保护的替换（接受 8 KB 片段）时失败。`test/mcp.test.ts` 的内建工具清单现在包含 `edit_file`。完整套件：624 pass / 3 skipped / 0 fail（首次运行有一个无关的 WhatsApp 测试偶发失败，单独与重跑均通过）；`npx tsc --noEmit` 通过；`npm run gate` PASS（baseline unchanged）。
+- **Benchmark run：** 无——确定性、离线；不涉及 Provider、模型或数据集。
+- **执行链路：** 阅读 false-fixed 报告（`d8c54037` / `4accee4b`）与被停止的预览尝试中的 8 KB `app.js`；先实现绿色重跑；暂存先实现为"已跟踪 + `test/regression/`"，既有保护路径测试当场指出漏洞（新的受保护文件会被悄悄丢弃），随后改为 `git add -A` 加显式临时物拒绝清单；加入 `edit_file` 及唯一出现与 10 倍缩水保护；接入第二阶段措辞与 CLI 报告；运行定向测试（两个失败：空操作修复在 fake 阶段写无关文件前停在 `kernel`，以及暂存修复自身），再跑完整套件（一个无关偶发失败，重跑绿）、类型检查与 gate。成本：无模型 token；约 40 分钟本地工作。
+- **优点：** `fixed` 现在要求修复后已哈希用例通过；提交无法携带 `node_modules` 或已知临时物；大文件的小修复有了不会把它变成片段的工具。
+- **缺点 / 下次：** 清单外的临时文件名仍可能进入差异（在 `changed` 中可见）；拒绝清单是仓库形态的，若临时物名字增多应移到 manifest；`edit_file` 需要精确片段，没读过文件的模型用不了；通道仍只在 worktree 而非**服务中的检出**上重跑用例（cherry-pick 是工作 Agent 的步骤）。
+- **推翻条件：** 见三条取舍条目。
+
 ### 2026-11-06 — 把桌面端缺陷交给 Magpie Worker 的修复通道
 
 - **目标 / 假设：** 桌面应用运行逻辑中的五个可观察缺陷，可以由 `clone-ai repair` 使用指向 Magpie `360/deepseek/deepseek-v4.1-flash` 的原生 Worker 修好，每个都带失败的回归用例与经过验证的补丁。
