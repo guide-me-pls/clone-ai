@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Repair-lane workers get explicit budgets and a focused brief
+
+The native worker now reads `CLONE_AI_NATIVE_MAX_ROUNDS` and `CLONE_AI_NATIVE_MAX_TOKENS` (unset keeps the previous defaults), so a repair step can be given enough rounds to read the failing code and write a patch without letting one runaway completion hold the step for minutes. The phase-1 plan asks for a small failing reproduction before broad exploration and forbids probe files under `test/regression/`; phase 2 reads only the failing case and the production file it exercises, leaves no scratch files, skips the trade-off entry (the working agent wrote it) and is told it has no shell tool. The changes were measured against a real Magpie worker: a first run wrote no file at 12 rounds, a 24-round run wrote only a passing probe, and a 32-round phase 1 finally produced a red case; that run also exposed a lane gate hole (recorded in `docs/engineering/optimizations.md`).
+
+原生 Worker 现在读取 `CLONE_AI_NATIVE_MAX_ROUNDS` 与 `CLONE_AI_NATIVE_MAX_TOKENS`（未设置时保留原默认值），使修复步骤既能有足够轮次读失败代码并写补丁，又不会让一次失控的补全把步骤拖住数分钟。第一阶段计划要求先写一个小的失败复现再做广泛探索，并禁止在 `test/regression/` 留下探针文件；第二阶段只读失败用例与它覆盖的生产文件、不留临时文件、不写取舍条目（工作的 Agent 已写好），并被告知没有 shell 工具。这些改动用真实的 Magpie Worker 实测：第一次 12 轮没有写出文件，24 轮的运行只写了一个会通过的探针，32 轮的第一阶段终于产出了红色用例；该运行同时暴露了通道的一个闸门漏洞（记录在 `docs/engineering/optimizations.md`）。
+
 ### Settings feel like one surface, and dispatch is visible
 
 The settings navigation is now a real tab list — arrow/Home/End keys, `aria-selected`, per-panel scroll memory, a 160 ms panel entrance that respects `prefers-reduced-motion`. The historical "local providers" registry is gone; each worker row carries its provider's installed state, command, execution boundary, effort select, install action and host-access action. A run's audit detail now includes "Worker 派发": which worker each step went to, its provider, the routing source (explicit / rule / memory / description) and the reason; plan rows name the worker that runs the step.
