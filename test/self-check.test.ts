@@ -52,3 +52,17 @@ test("a red gate makes the round red and exports traces for the repair lane", as
   // 没有失败的 Run，所以没有导出——但这次尝试属于本轮的一部分。
   assert.ok(round.traceExport !== undefined || round.traceExport === undefined);
 });
+
+test("without benchmark fixtures the gate is skipped, not reported as a regression", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-selfcheck-bundled-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const journal = new JsonlJournalStore(join(directory, "journal.jsonl"));
+  const round = await runSelfCheckRound({
+    dataDirectory: directory,
+    journal,
+    repoRoot: directory,
+    exec: async () => { throw new Error("gate must not run without fixtures"); },
+  });
+  assert.equal(round.gate.skipped, true);
+  assert.equal(round.verdict, "green");
+});
