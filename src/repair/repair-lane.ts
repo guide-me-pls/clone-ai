@@ -56,6 +56,7 @@ import {
   hashFiles,
   listRegressionTests,
   stageRepair,
+  stagedDeletionCount,
   verifyRegressionGreen,
   verifyRegressionRed,
 } from "./gates.ts";
@@ -143,6 +144,12 @@ export interface RepairLaneOptions {
 
 const ALLOWED_EVIDENCE = ["artifact", "observation"] as const;
 const TEST_COMMAND = ["node", "--experimental-strip-types", "--test"];
+/**
+ * How many production lines a repair may delete. A small bug fix removes a few;
+ * the destructive rewrites observed on 2026-11-06 removed 127 and 315.
+ * 一次修复最多可删除多少行生产代码。小修复只删几行；2026-11-06 观察到的破坏性重写删了 127 与 315 行。
+ */
+const MAX_PRODUCTION_DELETIONS = 40;
 
 export async function runRepairLane(options: RepairLaneOptions): Promise<RepairReport> {
   const log = options.log ?? ((message: string) => console.log(`[repair ${new Date().toISOString()}] ${message}`));
@@ -551,6 +558,25 @@ async function repair(input: {
   await rm(join(worktree.path, ".rsi"), { recursive: true, force: true });
   await rm(join(worktree.path, ".clone"), { recursive: true, force: true });
   const staged = await stageRepair(worktree.path, run);
+  // A narrow case can pass while the fix deleted the rest of the file; the
+  // suite and typecheck do not load browser scripts, so this is the only gate
+  // that sees a rewrite.
+  // 一个窄用例可以通过，而修复已删掉文件其余部分；套件与类型检查不加载浏览器脚本，因此这是唯一
+  // 能看到"重写"的闸门。
+  const deletions = await stagedDeletionCount(worktree.path, run);
+  if (deletions.production > MAX_PRODUCTION_DELETIONS) {
+    return {
+      ...withFixRun,
+      status: "failed",
+      failedGate: "fix-too-large",
+      evalBefore,
+      evalAfter,
+      regressionAfter,
+      changed: staged.paths,
+      diffStat: staged.stat,
+      error: `the fix deletes ${deletions.production} production line(s), more than the ${MAX_PRODUCTION_DELETIONS} a repair may remove: ${deletions.paths.filter((entry) => !entry.path.startsWith("test/regression/")).map((entry) => `${entry.path} (-${entry.deleted})`).join(", ")}`,
+    };
+  }
   const forbidden = protectedPathViolations(staged.paths) as string[];
   if (forbidden.length > 0) {
     return {

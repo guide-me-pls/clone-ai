@@ -308,6 +308,49 @@ export function isRuntimeScratch(path: string): boolean {
     || /\.(?:log|tmp)$/.test(normalized);
 }
 
+export interface DeletionCount {
+  /** Deleted lines in every staged path. 所有已暂存路径删除的行数。 */
+  total: number;
+  /** Deleted lines outside test/regression. test/regression 之外删除的行数。 */
+  production: number;
+  paths: Array<{ path: string; deleted: number }>;
+}
+
+/**
+ * Counts what the staged fix removes, because a whole-file rewrite can make a
+ * narrow case pass while deleting the rest of the file.
+ *
+ * On 2026-11-06 two fix runs replaced `memory.js` and `audit.js` with the few
+ * functions their cases exercised — 127 and 315 deleted lines — and the suite
+ * and typecheck never load those browser scripts, so nothing else noticed. A
+ * small deletion is normal; a repair that removes dozens of production lines is
+ * a rewrite, and the owner should see it as one.
+ * 统计已暂存修复删除了什么，因为整文件重写可以让一个窄用例通过，同时删掉文件其余部分。
+ *
+ * 2026-11-06 有两次修复把 `memory.js` 与 `audit.js` 替换成用例覆盖的那几个函数——分别删除 127 与
+ * 315 行——而套件与类型检查都不加载这些浏览器脚本，别处不会发现。少量删除是正常的；删除数十行
+ * 生产代码的“修复”是一次重写，所有者应当按重写来看待它。
+ */
+export async function stagedDeletionCount(workspace: string, run: CommandRunner): Promise<DeletionCount> {
+  const result = await run("git", ["diff", "--cached", "--numstat", "--no-renames", "-z"], workspace);
+  if (result.status !== 0) throw new Error(`git diff --numstat failed: ${result.stderr.trim()}`);
+  const paths: Array<{ path: string; deleted: number }> = [];
+  let total = 0;
+  let production = 0;
+  for (const record of result.stdout.split("\0")) {
+    if (record.length === 0) continue;
+    const [added, deleted, ...rest] = record.split("\t");
+    const path = rest.join("\t").trim();
+    if (path.length === 0) continue;
+    const count = Number(deleted);
+    if (!Number.isFinite(count)) continue;
+    paths.push({ path, deleted: count });
+    total += count;
+    if (!path.startsWith("test/regression/")) production += count;
+  }
+  return { total, production, paths };
+}
+
 /** Commit the staged fix with the trace ids in the body. 提交已暂存的修复，轨迹 id 写在正文里。 */
 export async function commitRepair(workspace: string, run: CommandRunner, input: { traceIds: readonly string[]; tests: readonly string[] }): Promise<string> {
   const message = [

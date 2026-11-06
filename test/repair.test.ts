@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 
-import { compareHashes, failingAssertions, hashFiles, listRegressionTests, stageAll, stageRepair, verifyRegressionGreen, verifyRegressionRed } from "../src/repair/gates.ts";
+import { compareHashes, failingAssertions, hashFiles, listRegressionTests, stageAll, stageRepair, stagedDeletionCount, verifyRegressionGreen, verifyRegressionRed } from "../src/repair/gates.ts";
 import { createRepairWorktree, removeRepairWorktree, runCommand, type CommandRunner } from "../src/repair/worktree.ts";
 import { keepWorktree, runRepairLane } from "../src/repair/repair-lane.ts";
 import { repairPlan } from "../src/repair/repair-lane.ts";
@@ -355,6 +355,49 @@ test("a fix phase that changes nothing is refused because the case stays red", a
   assert.equal(report.failedGate, "regression-still-red");
   assert.equal(report.regressionAfter?.green, false);
   assert.equal(Number((await git(["rev-list", "--count", "main.." + (report.branch ?? "main")], repo)).trim()), 0, "no commit on a no-op fix");
+});
+
+test("staged deletions are counted per path, and test cases do not hide a rewrite", async (t) => {
+  const repo = await initRepo(t);
+  const worktree = await createRepairWorktree({ repo, stamp: "20260101T0104", run: runCommand });
+  t.after(() => removeRepairWorktree(worktree, runCommand));
+  const lines = Array.from({ length: 100 }, (_, index) => `// filler ${index + 1}`).join("\n");
+  await writeFile(join(worktree.path, "src", "filler.ts"), lines);
+  await git(["add", "src/filler.ts"], worktree.path);
+  await git(["commit", "-qm", "filler"], worktree.path);
+
+  // A whole-file rewrite that keeps the case green still deletes production lines.
+  // 让用例保持绿色的整文件重写仍然会删除生产行。
+  await writeFile(join(worktree.path, "src", "filler.ts"), "// one line remains\n");
+  await mkdir(join(worktree.path, "test", "regression"), { recursive: true });
+  await writeFile(join(worktree.path, "test", "regression", "case.test.ts"), "// case\n");
+  await stageRepair(worktree.path, runCommand);
+  const after = await stagedDeletionCount(worktree.path, runCommand);
+  assert.equal(after.production, 100);
+  assert.deepEqual(after.paths.filter((entry) => entry.deleted > 0), [{ path: "src/filler.ts", deleted: 100 }], "test cases must not be counted as production deletions");
+});
+
+test("a fix that deletes most of a production file is refused as a rewrite", async (t) => {
+  const repo = await initRepo(t);
+  const data = await seedLane(t);
+  const filler = Array.from({ length: 100 }, (_, index) => `// filler ${index + 1}`).join("\n");
+  await writeFile(join(repo, "src", "filler.ts"), `${filler}\n`);
+  await git(["add", "src/filler.ts"], repo);
+  await git(["commit", "-qm", "add filler"], repo);
+  const worker = new FakeRepairWorker([
+    async () => [{ path: "test/regression/bug.test.ts", content: RED_TEST }],
+    async () => [
+      { path: "src/bug.ts", content: FIXED_SOURCE },
+      { path: "src/filler.ts", content: "// one line remains\n" },
+    ],
+  ]);
+  const report = await runRepairLane(laneOptions(data, repo, worker));
+  if (report.worktree !== undefined) t.after(() => removeRepairWorktree({ path: report.worktree!, branch: report.branch ?? "", repo, base: "main" }, runCommand));
+
+  assert.equal(report.status, "failed");
+  assert.equal(report.failedGate, "fix-too-large");
+  assert.match(report.error ?? "", /src\/filler\.ts \(-100\)/);
+  assert.equal(Number((await git(["rev-list", "--count", "main.." + (report.branch ?? "main")], repo)).trim()), 0, "no commit on a rewrite");
 });
 
 test("a full repair: phase 1 red is verified by the lane, the fix is committed, and the checkout is untouched", async (t) => {

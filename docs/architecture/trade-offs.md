@@ -296,6 +296,32 @@ object) or if a model's declared levels are wrong more often than the generic
 list is useful — the fallback list must stay for models the gateway does not
 describe.
 
+## 2026-11-06 — A repair may not delete more than forty production lines
+
+**Decision.** After staging, the lane counts the deleted lines per path and
+refuses a fix that removes more than 40 lines outside `test/regression/`
+(`fix-too-large`). A small fix removes a few lines; a rewrite removes dozens.
+
+**Alternatives rejected.** (a) Raise `edit_file`'s shrink floor — a 56% and a
+90% rewrite both passed it; a floor high enough to catch them would also block
+legitimate small rewrites. (b) Restrict the size of `old_text` — a 17% block
+(audit's 127 lines) still passes, and a legitimate change can span a large
+block. (c) Trust the case and the suite — the case only exercises the functions
+the model kept, and the suite and typecheck do not load browser scripts.
+
+**Evidence.** On the 2026-11-06 rerun, `memory.js` was replaced with 2 added and
+127 deleted lines, and `audit.js` with 4 added and 315 deleted lines; the cases
+for the remaining functions went green, and nothing else in the repository
+loads those scripts. The merged memory and sidebar fixes delete 2 and 1 line.
+`test/repair.test.ts` covers a 100-line rewrite refused as `fix-too-large` and
+confirms test-case lines are excluded from the count.
+
+**Cost and reversal condition.** A legitimate repair that removes more than 40
+production lines is refused and must be applied by the owner or split into
+smaller edits. Reverse if real repairs routinely exceed 40 deletions: raise the
+threshold or let a trace declare a larger allowance, rather than dropping the
+count.
+
 ## 2026-11-06 — The memory library keeps a focused editor across background refreshes
 
 **Decision.** The memory library (`apps/desktop/ui/memory.js`) must not rebuild
