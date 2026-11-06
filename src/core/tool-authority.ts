@@ -6,16 +6,15 @@ import type { RiskClass } from "./contracts.ts";
  * Risk-classified tool authorization for in-process tools, independent of any
  * agent loop.
  *
- * Production workers are black-box CLIs (`src/workers/black-box-cli-worker.ts`).
- * Their inner tools are invisible to the Kernel, so this module is not wired
- * onto that path and must not be described as if it were. Keep it for a future
- * in-process tool surface; do not pretend the CLI workers run through it.
+ * The native worker already gates each call through the step's scopes; this
+ * module is a stricter, risk-classified layer kept for a future governed tool
+ * surface. It is not wired onto the native worker yet, and the docs must not
+ * pretend it is.
  *
  * 面向进程内 Tool 的、与任何 Agent Loop 无关的按风险分级授权层。
  *
- * 生产路径上的 Worker 是黑盒 CLI（`src/workers/black-box-cli-worker.ts`）。它们内部的
- * Tool 对 Kernel 不可见，因此本模块没有接到那条路上，文档也不得写成好像接上了。留给
- * 将来的进程内工具面；不要假装 CLI Worker 会经过这里。
+ * 原生 Worker 已经通过步骤 Scope 校验每次调用；本模块是更严格的、按风险分级的层，
+ * 留给将来的受治理工具面。它尚未接入原生 Worker，文档不得写成好像接上了。
  *
  * This is the layer that decides whether a tool may run at all, times it out,
  * cancels it by a stable id, and answers the only question that matters after

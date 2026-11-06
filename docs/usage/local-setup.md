@@ -65,31 +65,20 @@ npm run desktop:build
 # then run apps/desktop/src-tauri/target/.../clone-ai-desktop.exe
 ```
 
-## 4. Workers (the agents that do the work)
+## 4. Workers (the agent that does the work)
 
-Clone AI does not implement a coding agent; it supervises the ones you have.
+Clone AI has one execution provider: the in-process native worker. It is not a
+CLI; every tool call is checked against the step's scopes at the moment it is
+made, and its token usage is recorded exactly.
 
-| Worker | Windows command | macOS command | Install |
-| --- | --- | --- | --- |
-| Claude Code | `claude.cmd` | `claude` | `clone-ai install claude-code` |
-| Codex CLI | `codex.cmd` | `codex` | `clone-ai install codex-cli` |
-| Pi | `pi.cmd` | `pi` | `clone-ai install pi` |
-| opencode | `opencode.cmd` | `opencode` | install manually |
+| Worker | How it runs | Set up |
+| --- | --- | --- |
+| Native worker | In-process loop against an OpenAI-compatible endpoint | `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` |
 
-Recipes live in `src/workers/providers.json`; override or add your own in
-`<clone home>/providers.json`. Only environment **variable names** belong in a
-recipe — never credential values.
-
-Note: desktop apps (Claude Code Desktop, opencode Desktop) are not usable as
-workers. Clone AI needs a headless CLI it can run with a prompt and a workspace.
-
-Clone AI also ships an in-process `native` execution provider: select `native`
-for an agent and set `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`.
-It needs no CLI and checks every tool call against the step's scopes. With those
-two variables set, the default agents for `direct`, `research`, `draft` and
-`review` already use it; `external` stays on the CLI path because the native
-worker has no governed action connector. A provider you save in settings always
-wins over the default.
+Black-box CLI workers (Claude Code, Codex, the Pi CLI, opencode) were removed.
+A CLI hides its tool calls and credentials from the Kernel, so the harness can
+neither audit nor gate them. The `external` role has no provider until a
+governed action connector exists; it is not routed to a CLI.
 
 ### Main Agent runtime
 

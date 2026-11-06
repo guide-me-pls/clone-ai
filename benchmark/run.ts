@@ -1,30 +1,28 @@
 #!/usr/bin/env node
 /**
  * Reliability benchmark runner for the black-box execution path.
- * Runs the fixed task set from tasks.ts against a real provider CLI and
- * records pass/fail, duration, and artifact facts under benchmark/results/.
+ * Runs the fixed task set from tasks.ts through the native worker and records
+ * pass/fail, duration, exact usage and artifact facts under benchmark/results/.
  *
  * Usage:
- *   npm run bench -- --unsafe-host --provider pi --tasks summarize
- *   npm run bench -- --provider native --tasks summarize
+ *   npm run bench -- --tasks summarize
  *
- * The native provider runs in-process with per-call scope checks, so it does
- * not need --unsafe-host; it requires CLONE_AI_NATIVE_MODEL and
- * CLONE_AI_NATIVE_BASE_URL, and records exact token usage in the report.
+ * Runs in-process with per-call scope checks; it requires
+ * CLONE_AI_NATIVE_MODEL and CLONE_AI_NATIVE_BASE_URL, and records exact token
+ * usage in the report.
  *
  * Costs: each task is one or more real model calls (a few cents per task).
  * The "missing-input" task is intentionally expected to fail and verifies that
  * failures are classified cleanly instead of hanging.
  *
- * 黑盒执行路径的可靠性基准运行器：用真实 Provider CLI 运行 tasks.ts 中的固定任务集，
- * 把通过/失败、耗时和产物事实记录到 benchmark/results/ 下。
+ * 可靠性基准运行器：用原生 Worker 运行 tasks.ts 中的固定任务集，
+ * 把通过/失败、耗时、精确用量和产物事实记录到 benchmark/results/ 下。
  *
  * 用法：
- *   npm run bench -- --unsafe-host --provider pi --tasks summarize
- *   npm run bench -- --provider native --tasks summarize
+ *   npm run bench -- --tasks summarize
  *
- * 原生 Provider 在进程内运行、每次调用做 Scope 校验，因此不需要 --unsafe-host；
- * 它需要 CLONE_AI_NATIVE_MODEL 与 CLONE_AI_NATIVE_BASE_URL，并在报告中记录精确 token 用量。
+ * 在进程内运行、每次调用做 Scope 校验；需要 CLONE_AI_NATIVE_MODEL 与
+ * CLONE_AI_NATIVE_BASE_URL，并在报告中记录精确 token 用量。
  *
  * 成本：每个任务是一次或多次真实模型调用（每个任务几美分）。
  * missing-input 任务刻意期望失败，用来验证失败能被干净分类而不是挂死。
@@ -34,7 +32,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { BlackBoxCliWorker, type BlackBoxProviderConfig } from "../src/workers/black-box-cli-worker.ts";
 import { createConfiguredNativeWorker } from "../src/workers/native-worker-factory.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
@@ -64,33 +61,16 @@ interface BenchRecord {
   usage?: { inputTokens: number; outputTokens: number; totalTokens: number; modelCalls: number };
 }
 
-function parseArgs(): { provider: string; tasks: string[]; unsafeHost: boolean } {
+function parseArgs(): { tasks: string[] } {
   const argv = process.argv.slice(2);
-  const providerIndex = argv.indexOf("--provider");
   const tasksIndex = argv.indexOf("--tasks");
   return {
-    provider: providerIndex >= 0 && argv[providerIndex + 1] !== undefined ? argv[providerIndex + 1]! : "pi",
     tasks: tasksIndex >= 0 && argv[tasksIndex + 1] !== undefined
       ? argv[tasksIndex + 1]!.split(",").map((item) => item.trim()).filter(Boolean)
-      : BENCH_TASKS.map((task) => task.id),
-    unsafeHost: argv.includes("--unsafe-host"),
-  };
+      : BENCH_TASKS.map((task) => task.id) };
 }
 
-const PROVIDERS: Record<string, Pick<BlackBoxProviderConfig, "command" | "args" | "env">> = {
-  pi: {
-    command: process.platform === "win32" ? "pi.cmd" : "pi",
-    args: ["-p", "{{prompt}}"],
-    env: ["GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "PI_CODING_AGENT_DIR", "PI_PACKAGE_DIR"],
-  },
-  claude: {
-    command: process.platform === "win32" ? "claude.cmd" : "claude",
-    args: ["-p", "{{prompt}}"],
-    env: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "ANTHROPIC_DEFAULT_*", "ANTHROPIC_SMALL_*", "ANTHROPIC_MODEL", "ANTHROPIC_SONNET", "ANTHROPIC_OPUS", "ANTHROPIC_HAIKU"],
-  },
-};
-
-async function runTask(task: BenchTask, provider: string, unsafeHost: boolean): Promise<BenchRecord> {
+async function runTask(task: BenchTask): Promise<BenchRecord> {
   const workspace = await mkdtemp(join(tmpdir(), `clone-ai-bench-${task.id}-`));
   const startedAt = Date.now();
   const record: BenchRecord = {
@@ -106,20 +86,8 @@ async function runTask(task: BenchTask, provider: string, unsafeHost: boolean): 
     for (const [path, content] of Object.entries(task.seedFiles)) {
       await writeFile(join(workspace, path), content, "utf8");
     }
-    const workCapabilities = ["research", "drafting", "review", "implementation", "filesystem_read", "filesystem_write", "external_action"];
-    const adapter = provider === "native"
-      ? createConfiguredNativeWorker(process.env, workspace, { id: "bench-worker", workCapabilities })
-      : (() => {
-        const recipe = PROVIDERS[provider];
-        if (recipe === undefined) {
-          throw new Error(`Unknown provider "${provider}". Known providers: native, ${Object.keys(PROVIDERS).join(", ")}.`);
-        }
-        return new BlackBoxCliWorker({
-          agentId: "bench-worker",
-          config: { ...recipe, id: provider, label: provider, timeoutMs: 420_000, ...(unsafeHost ? { hostAccess: "unrestricted" as const } : {}) },
-          workCapabilities,
-        });
-      })();
+    const workCapabilities = ["research", "drafting", "review", "implementation", "filesystem_read", "filesystem_write"];
+    const adapter = createConfiguredNativeWorker(process.env, workspace, { id: "bench-worker", workCapabilities });
     if (adapter === undefined) {
       throw new Error("Native worker needs CLONE_AI_NATIVE_MODEL and CLONE_AI_NATIVE_BASE_URL.");
     }
@@ -215,11 +183,8 @@ async function runTask(task: BenchTask, provider: string, unsafeHost: boolean): 
   }
 }
 
-const { provider, tasks, unsafeHost } = parseArgs();
-if (!unsafeHost && provider !== "native") {
-  console.error("Black-box benchmark workers have no enforced sandbox. Pass --unsafe-host only if you explicitly accept unrestricted host access. The native provider enforces scopes and does not need this flag.");
-  process.exit(2);
-}
+const { tasks } = parseArgs();
+
 const selected = BENCH_TASKS.filter((task) => tasks.includes(task.id));
 if (selected.length === 0) {
   console.error(`No benchmark tasks match: ${tasks.join(", ")}.`);
@@ -227,10 +192,10 @@ if (selected.length === 0) {
 }
 
 await mkdir(resultsDirectory, { recursive: true });
-console.log(`Benchmark: provider=${provider} tasks=${selected.map((task) => task.id).join(",")}`);
+console.log(`Benchmark: provider=native tasks=${selected.map((task) => task.id).join(",")}`);
 const records: BenchRecord[] = [];
 for (const task of selected) {
-  const record = await runTask(task, provider, unsafeHost);
+  const record = await runTask(task);
   records.push(record);
   const expected = record.expectedFailure ? " (expected failure)" : "";
   console.log(
@@ -244,8 +209,8 @@ const passedCount = records.filter((record) => record.passed).length;
 const expectedFailed = records.filter((record) => record.expectedFailure && record.passed).length;
 const failed = records.filter((record) => !record.passed).length;
 const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
-const reportPath = join(resultsDirectory, `${provider}-${stamp}.json`);
-await writeFile(reportPath, `${JSON.stringify({ provider, ranAt: new Date().toISOString(), records }, null, 2)}\n`, "utf8");
+const reportPath = join(resultsDirectory, `native-${stamp}.json`);
+await writeFile(reportPath, `${JSON.stringify({ provider: "native", ranAt: new Date().toISOString(), records }, null, 2)}\n`, "utf8");
 
 console.log(`\nSummary: ${passedCount}/${records.length} passed (${failed} unexpected failures, ${expectedFailed}/${records.filter((r) => r.expectedFailure).length} expected failures behaved)`);
 console.log(`Report: ${reportPath}`);

@@ -128,33 +128,6 @@ test("a Main Agent status tool sees changes made by another runtime", async (t) 
   assert.match((await status.execute("second", { runId: proposed.runId })).content[0]?.text ?? "", /cancelled/);
 });
 
-test("install_agent reports an already-installed worker without touching npm", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "clone-ai-install-"));
-  t.after(async () => rm(directory, { recursive: true, force: true }));
-
-  const result = await installWorkerAgent(directory, "unknown-agent");
-  assert.equal(result.installed, false);
-  assert.match(result.error ?? "", /No worker is registered/);
-});
-
-test("install_agent refuses to guess installers for unknown providers", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "clone-ai-install-2-"));
-  t.after(async () => rm(directory, { recursive: true, force: true }));
-
-  // A user-declared provider without an automatic installer must be refused
-  // with a precise reason, not attempted via npm.
-  // 没有自动安装器的用户声明 Provider 必须带着精确原因被拒绝，而不是尝试 npm。
-  const fs = await import("node:fs/promises");
-  await fs.mkdir(directory, { recursive: true });
-  await fs.writeFile(join(directory, "providers.json"), JSON.stringify({
-    providers: [{ id: "my-agent", command: "my-agent", args: ["run", "{{prompt}}"] }],
-  }), "utf8");
-
-  const result = await installWorkerAgent(directory, "my-agent");
-  assert.equal(result.installed, false);
-  assert.match(result.error ?? "", /no automatic installer/);
-});
-
 test("a valid plan proposal is accepted, journaled, and returns run/plan ids", async (t) => {
   const { runtime } = await tempKernel(t);
   const result = await proposePlanToKernel(runtime, {
