@@ -187,6 +187,11 @@ test("the plan puts the red check between the test phase and the fix phase", () 
   }
   assert.match(steps[0]!.instructions, /test\/regression/);
   assert.match(steps[1]!.instructions, /docs\/architecture\/trade-offs\.md/);
+  // The phase-1 wording must steer a model with a small round budget: write the
+  // reproduction first, and never leave a probe that passes as the only file.
+  // 第一阶段的措辞必须能引导轮次预算有限的模型：先写复现，且绝不能只留下一个会通过的探针。
+  assert.match(steps[0]!.instructions, /before doing broad exploration/);
+  assert.match(steps[0]!.instructions, /do not leave diagnostic, probe or scratch files/);
   // The test plugin treats the words "test"/"npm test" as a contract; a black
   // box worker cannot report test evidence, so the acceptance text must not
   // claim that contract. The lane enforces it instead.
