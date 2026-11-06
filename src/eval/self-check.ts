@@ -14,8 +14,10 @@
  * 有效"始终可回答。
  */
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { runAdversarialProbes, type AdversarialReport } from "./adversarial-probes.ts";
 import { exportFailedTraces } from "../audit/failed-traces.ts";
@@ -29,8 +31,10 @@ export interface SelfCheckOptions {
   fullTests?: boolean;
   /** Where to write the round report. 本轮报告的写入位置。 */
   reportDirectory?: string;
-  /** Runs a command in the repository root; injectable for tests. 在仓库根目录执行命令；可注入以便测试。 */
-  exec?: (command: string, args: string[]) => Promise<{ status: number; stdout: string; stderr: string }>;
+  /** Runs a command; injectable for tests. 执行命令；可注入以便测试。 */
+  exec?: (command: string, args: string[], cwd: string) => Promise<{ status: number; stdout: string; stderr: string }>;
+  /** Repository root holding `benchmark/gate`. Defaults to this module's repository. 存放 gate 的仓库根；默认本模块所在仓库。 */
+  repoRoot?: string;
   now?: Date;
 }
 
@@ -38,7 +42,7 @@ export interface SelfCheckRound {
   id: string;
   generatedAt: string;
   probes: AdversarialReport;
-  gate: { status: number; tail: string };
+  gate: { status: number; tail: string; skipped?: boolean };
   tests?: { status: number; tail: string };
   verdict: "green" | "red";
   /** Set when the round produced material for the repair lane. 本轮为修复通道产出材料时设置。 */
@@ -49,16 +53,31 @@ export interface SelfCheckRound {
 export async function runSelfCheckRound(options: SelfCheckOptions): Promise<SelfCheckRound> {
   const now = options.now ?? new Date();
   const exec = options.exec ?? runCommand;
+  const repoRoot = options.repoRoot ?? defaultRepoRoot();
   const probes = await runAdversarialProbes(now);
-  const gate = await exec("npm", ["run", "gate"]);
-  const tests = options.fullTests === true ? await exec("npm", ["test"]) : undefined;
+  // The desktop bundle ships the runtime but not the benchmark fixtures; spawning
+  // `npm run gate` there would fail for a missing directory, not for a regression.
+  // Record it as skipped rather than red, so the loop keeps its meaning in the app.
+  // 桌面应用打包了运行时，但不包含 benchmark 夹具；在那里跑 `npm run gate` 会因为目录不存在
+  // 而失败，而不是因为回归。记为跳过而不是红色，让回路在应用里仍然有意义。
+  const gateAvailable = existsSync(join(repoRoot, "benchmark", "gate"));
+  const gate = gateAvailable
+    ? await exec("npm", ["run", "gate"], repoRoot)
+    : { status: 0, stdout: "", stderr: `gate skipped: benchmark/gate not present under ${repoRoot}` };
+  const tests = options.fullTests === true && existsSync(join(repoRoot, "package.json"))
+    ? await exec("npm", ["test"], repoRoot)
+    : undefined;
   const verdict: SelfCheckRound["verdict"] = probes.failed === 0 && gate.status === 0 && (tests?.status ?? 0) === 0 ? "green" : "red";
   const id = `round-${now.toISOString().replace(/[-:.]/g, "").slice(0, 15)}`;
   const round: SelfCheckRound = {
     id,
     generatedAt: now.toISOString(),
     probes,
-    gate: { status: gate.status, tail: tail(gate.stdout, gate.stderr) },
+    gate: {
+      status: gate.status,
+      tail: tail(gate.stdout, gate.stderr),
+      ...(gateAvailable ? {} : { skipped: true }),
+    },
     ...(tests === undefined ? {} : { tests: { status: tests.status, tail: tail(tests.stdout, tests.stderr) } }),
     verdict,
   };
@@ -124,9 +143,14 @@ function tail(stdout: string, stderr: string): string {
   return `${stdout}\n${stderr}`.trim().split("\n").slice(-12).join("\n").slice(-1_500);
 }
 
-function runCommand(command: string, args: string[]): Promise<{ status: number; stdout: string; stderr: string }> {
+function defaultRepoRoot(): string {
+  // src/eval/self-check.ts -> src -> repository root. src/eval/self-check.ts -> src -> 仓库根。
+  return resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+}
+
+function runCommand(command: string, args: string[], cwd: string): Promise<{ status: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
