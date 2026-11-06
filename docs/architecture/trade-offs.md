@@ -84,6 +84,32 @@ this if native steps routinely finish within 12 rounds (the knob then hides a
 prompt problem), or if a 24-round step is observed looping without producing a
 file — in that case the plan, not the budget, is the thing to fix.
 
+## 2026-11-06 — Archiving a memory uses the cache the memory module actually owns
+
+**Decision.** The memory library's archive/restore handler stops writing
+`state.signatures.library` on a state object that has no `signatures` field; the
+success path runs `refresh()` and the success message instead. The global
+signature cache in `app.js` is invalidated by the refreshed data itself, not by
+an assignment the module cannot make.
+
+**Alternatives rejected.** (a) Add a `signatures` object to the module's own
+state — it would silence the exception but leave a second cache that
+`renderLibrary` never reads. (b) Delete the handler's success path — the list
+would keep showing the old status. (c) Rely on the next 3-second poll — the
+owner would see a raw JS error and a stale row for at least one cycle.
+
+**Evidence.** `memory.js` declares its own `state` without `signatures`; the
+`[data-mem-status]` handler assigns `state.signatures.library` after a
+successful PATCH, so the TypeError is caught by the handler's catch, which
+announces the raw message and skips `refresh()`. A vm run of the real module
+with a stubbed `api` reproduces it: refresh count 0, announcement
+`Cannot set properties of undefined (setting 'library')`.
+
+**Cost and reversal condition.** The archive/restore path refreshes immediately
+instead of waiting for the poll; no extra request beyond the existing refresh.
+Reverse if the module grows its own signature cache for a reason (then assign
+to the field that exists and document why two caches are needed).
+
 ## 2026-11-06 — The repair lane re-runs the hashed regression cases after the fix
 
 **Decision.** After the fix phase and the hash comparison, `clone-ai repair` runs
