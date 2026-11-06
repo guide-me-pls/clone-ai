@@ -476,3 +476,25 @@
 - **限制：** 一个模型、一台机器、一个小时内、共享网关。把结论当作稳定的本地对比，
   而不是普适排名。
 - **推翻条件：** 见取舍条目。
+
+## 2026-11-06 — 从主 Agent 移除 Pi SDK（两步中的第一步）
+
+- **目标 / 假设：** 按移除取舍的決定，让主 Agent 的循环、上下文组装与工具面都属于我们，
+  没有 SDK、没有回退。
+- **取舍：** [只保留自己的 Agent](../architecture/trade-offs.zh-CN.md#2026-11-06--只保留自己的-agent去掉-pi-sdk-与黑盒-cli)。
+- **变更：** 删除 `session.ts`（Pi 会话工厂）；把 `run-main-query`、`clone-main` 与 CLI
+  对话路径改到原生运行时；把不依赖 SDK 的指针与旧会话列举移入 `conversation-store.ts`；
+  把模型/强度偏好移入 `model-preferences.ts`；把自评审的 Pi 会话替换为对已配置端点的普通
+  completion；把 Pi 模型目录替换为网关自己的列表；从 Kernel 工具宿主中移除 Pi 类型；
+  回合台账现在同时供 `search_history` 与对话视图使用；移除
+  `@earendil-works/pi-coding-agent` 依赖与仅 Pi 的 live 测试。
+- **Eval：** 全量 578 个测试 / 578 通过；typecheck、gate 与双语文档通过。被删除的 live
+  测试依赖 Pi，SDK 移除后无法运行；其确定性等价测试仍在。
+- **执行链路：** 先写取舍；再改运行时；然后自评审与目录；最后测试。每一步由编译器引导。
+  两个使用 Pi `SessionManager` 的测试种子改写为台账回合。
+- **优点 / 缺点：** 主 Agent 不再依赖 SDK，每个输入、工具调用与用量记录都是我们自己的。
+  端点现在是必需的；设置页的模型选择器列出网关模型，且只配置基础地址时使用所选 id。
+- **未完成（第二步）：** 黑盒 CLI Worker（Claude Code、Codex、Pi CLI、opencode）、它们的
+  Provider 目录、安装命令与 `install_agent` 工具仍在。移除它们是同一取舍的下一阶段；
+  在有受治理的连接器之前，外部动作将没有 Provider。
+- **推翻条件：** 见取舍条目。

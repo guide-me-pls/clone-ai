@@ -672,3 +672,34 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 - **Caveat:** one model, one machine, one hour, shared gateway. Treat this as a
   stable local comparison, not a universal ranking.
 - **Reversal condition:** see the trade-off entry.
+
+## 2026-11-06 — Removing the Pi SDK from the Main Agent (stage 1 of 2)
+
+- **Goal / hypothesis:** make the Main Agent's loop, context assembly and tool
+  surface ours, with no SDK and no fallback, as decided in the removal
+  trade-off.
+- **Trade-off:** [keep only our own agents](../architecture/trade-offs.md#2026-11-06--the-harness-keeps-only-its-own-agents-no-pi-sdk-no-black-box-clis).
+- **Change:** deleted `session.ts` (the Pi session factory); rewrote
+  `run-main-query`, `clone-main` and the CLI conversation path on the native
+  runtime; moved the SDK-free pointer and legacy-session listing into
+  `conversation-store.ts`; moved the model/effort preferences into
+  `model-preferences.ts`; replaced self-review's Pi session with a plain
+  completion against the configured endpoint; replaced the Pi model catalog with
+  the gateway's own list; removed the Pi types from the Kernel tool host; the
+  turn ledger now feeds `search_history` and the conversation view; removed the
+  `@earendil-works/pi-coding-agent` dependency and the Pi-only live tests.
+- **Eval:** full suite 578 tests / 578 pass; typecheck, gate and bilingual docs
+  pass. The removed live tests were Pi-only and could not run after the SDK was
+  gone; their deterministic equivalents remain.
+- **Execution chain:** trade-off first, then the runtime, then self-review and
+  the catalog, then tests. The compiler guided each removal. Two test seeds that
+  used Pi's `SessionManager` were rewritten to ledger turns.
+- **Pros / cons:** the Main Agent no longer depends on an SDK, and every input,
+  tool call and usage record is ours. The endpoint is now mandatory; the
+  settings model picker lists the gateway's models and the chosen id is used
+  when only the base URL is configured.
+- **Not done (stage 2):** the black-box CLI workers (Claude Code, Codex, Pi CLI,
+  opencode), their provider catalog, install commands and the `install_agent`
+  tool are still present. Removing them is the next stage of the same trade-off;
+  external actions will have no provider until a governed connector exists.
+- **Reversal condition:** see the trade-off entry.

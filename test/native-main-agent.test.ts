@@ -116,14 +116,14 @@ test("the native main agent includes prior turns from the ledger", async (t) => 
   assert.ok(body?.messages.some((message) => message.role === "assistant" && message.content === "Noted."));
 });
 
-test("the native flag and endpoint are explicit", () => {
+test("the native runtime is the only Main Agent runtime", () => {
   assert.equal(isNativeMainAgentSelected({ CLONE_AI_MAIN_RUNTIME: "native" }), true);
-  assert.equal(isNativeMainAgentSelected({}), false);
-  assert.equal(readMainAgentRuntime({}), "pi");
+  assert.equal(isNativeMainAgentSelected({}), true);
+  assert.equal(readMainAgentRuntime({}), "native");
   assert.equal(readMainAgentRuntime({ CLONE_AI_NATIVE_MODEL: "m", CLONE_AI_NATIVE_BASE_URL: "http://x" }), "native");
-  assert.equal(readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "pi", CLONE_AI_NATIVE_MODEL: "m", CLONE_AI_NATIVE_BASE_URL: "http://x" }), "pi");
   assert.equal(readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "native" }), "native");
-  assert.throws(() => readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "bogus" }), /Use "native" or "pi"/);
+  assert.throws(() => readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "pi" }), /has been removed/);
+  assert.throws(() => readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "bogus" }), /Use "native"/);
   const missing = readNativeMainAgentEndpoint({});
   assert.equal(missing.endpoint, undefined);
   assert.deepEqual(missing.missing, ["CLONE_AI_NATIVE_BASE_URL", "CLONE_AI_NATIVE_MODEL"]);

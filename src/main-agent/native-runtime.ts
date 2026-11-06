@@ -31,10 +31,7 @@ import { recordUsage, type UsageRecord } from "../observability/usage.ts";
 import { parseUsage } from "../workers/openai-compatible-client.ts";
 import { redactMemoryPii } from "../memory/memory-hygiene.ts";
 import { tokenize } from "../memory/md-memory-store.ts";
-import { isEffortLevel } from "../workers/effort.ts";
-import { CloneConfigStore } from "../config/clone-config.ts";
-import { resolveClonePaths } from "../config/clone-home.ts";
-import { logJson } from "../observability/json-log.ts";
+import { readMainAgentEffortPreference, readMainAgentModelPreference } from "./model-preferences.ts";
 
 export interface NativeMainAgentEndpoint {
   baseUrl: string;
@@ -84,36 +81,25 @@ interface NativeReply {
   usage?: ModelUsage;
 }
 
-export type MainAgentRuntime = "native" | "pi";
-
-let warnedAboutPiFallback = false;
+export type MainAgentRuntime = "native";
 
 /**
- * Which Main Agent runtime this process should use.
- *
- * Unset means "native when the endpoint is configured, Pi otherwise"; `pi`
- * forces the legacy runtime and `native` forces the native one (and fails
- * clearly later if the endpoint is missing). An explicit `native` never falls
- * back silently.
- *
- * 本进程应使用哪个主 Agent 运行时。
- *
- * 未设置表示"配置了端点就用原生，否则用 Pi"；`pi` 强制旧运行时，`native` 强制原生
- * （端点缺失时稍后清晰失败）。显式的 `native` 绝不静默回退。
+ * There is only one Main Agent runtime. The selector is kept as a named
+ * function so callers and tests have one place to read the decision, but it no
+ * longer chooses: an unconfigured endpoint is reported later, with a message
+ * that names the missing variables, instead of falling back to an SDK.
+ * 只有一个主 Agent 运行时。保留这个具名函数，使调用方与测试有唯一读取决策的地方，
+ * 但它不再做选择：端点未配置时会在稍后报出缺失变量名的错误，而不是回退到 SDK。
  */
 export function readMainAgentRuntime(environment: NodeJS.ProcessEnv = process.env): MainAgentRuntime {
   const value = environment.CLONE_AI_MAIN_RUNTIME?.trim().toLowerCase();
-  if (value === "pi" || value === "legacy") return "pi";
+  if (value === "pi" || value === "legacy") {
+    throw new Error("The Pi Main Agent runtime has been removed. Configure CLONE_AI_NATIVE_MODEL and CLONE_AI_NATIVE_BASE_URL, or set CLONE_AI_MAIN_RUNTIME=native.");
+  }
   if (value !== undefined && value !== "" && value !== "native") {
-    throw new Error(`Unknown CLONE_AI_MAIN_RUNTIME "${value}". Use "native" or "pi".`);
+    throw new Error(`Unknown CLONE_AI_MAIN_RUNTIME "${value}". Use "native".`);
   }
-  if (value === "native") return "native";
-  if (readNativeMainAgentEndpoint(environment).endpoint !== undefined) return "native";
-  if (!warnedAboutPiFallback) {
-    warnedAboutPiFallback = true;
-    logJson("warn", "Main Agent native endpoint is not configured; using Pi", {});
-  }
-  return "pi";
+  return "native";
 }
 
 /** The explicit switch as a boolean, for existing callers. 供现有调用方使用的布尔开关。 */
@@ -126,12 +112,16 @@ export function isNativeMainAgentSelected(environment: NodeJS.ProcessEnv = proce
  * variables: one OpenAI-compatible endpoint serves both.
  * 原生主 Agent 的端点。刻意复用原生 Worker 的变量：同一个 OpenAI 兼容端点服务两者。
  */
-export function readNativeMainAgentEndpoint(environment: NodeJS.ProcessEnv = process.env): {
+export function readNativeMainAgentEndpoint(
+  environment: NodeJS.ProcessEnv = process.env,
+  modelFallback?: string,
+): {
   endpoint?: NativeMainAgentEndpoint;
   missing: string[];
 } {
   const baseUrl = environment.CLONE_AI_NATIVE_BASE_URL?.trim();
-  const model = environment.CLONE_AI_NATIVE_MODEL?.trim();
+  const model = environment.CLONE_AI_NATIVE_MODEL?.trim()
+    ?? (modelFallback === undefined || modelFallback.trim().length === 0 ? undefined : modelFallback.trim());
   const missing: string[] = [];
   if (baseUrl === undefined || baseUrl.length === 0) missing.push("CLONE_AI_NATIVE_BASE_URL");
   if (model === undefined || model.length === 0) missing.push("CLONE_AI_NATIVE_MODEL");
@@ -158,11 +148,17 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
   const resolved = options.endpoint === undefined
     ? readNativeMainAgentEndpoint(environment)
     : { endpoint: options.endpoint, missing: [] as string[] };
-  if (resolved.endpoint === undefined) {
-    throw new Error(`The native Main Agent needs ${resolved.missing.join(" and ")}.`);
+  // The settings page writes a model id to config.json; when the endpoint is
+  // configured only through the environment's base URL, use that choice.
+  // 设置页把模型 id 写入 config.json；当端点只通过环境变量给出基础地址时，沿用该选择。
+  const effective = options.endpoint === undefined && resolved.endpoint === undefined
+    ? readNativeMainAgentEndpoint(environment, await readMainAgentModelPreference(options.dataDirectory, environment))
+    : resolved;
+  if (effective.endpoint === undefined) {
+    throw new Error(`The native Main Agent needs ${effective.missing.join(" and ")}.`);
   }
-  const endpoint = resolved.endpoint;
-  const effort = await readMainAgentEffort(options.dataDirectory, environment);
+  const endpoint = effective.endpoint;
+  const effort = await readMainAgentEffortPreference(options.dataDirectory, environment);
   const compiled = await compileMainAgentPrompt({
     dataDirectory: options.dataDirectory,
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
@@ -537,14 +533,6 @@ function flattenPairs(pairs: ReadonlyArray<{ user: string; assistant: string }>)
 
 function trim(text: string, limit: number): string {
   return text.replace(/\s+/g, " ").trim().slice(0, limit);
-}
-
-async function readMainAgentEffort(dataDirectory: string, environment: NodeJS.ProcessEnv): Promise<string | undefined> {
-  const fromEnv = environment.CLONE_AI_MAIN_EFFORT?.trim();
-  if (isEffortLevel(fromEnv)) return fromEnv;
-  const paths = resolveClonePaths({ dataDirectory });
-  const config = await new CloneConfigStore(paths).get();
-  return config.mainAgentEffort;
 }
 
 async function currentRuns(dataDirectory: string): Promise<Run[]> {

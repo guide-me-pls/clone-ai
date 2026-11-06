@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The Main Agent no longer uses the Pi SDK
+
+The Pi Agent SDK is gone from the Main Agent path. The native in-process loop is the only runtime: the prompt compiler, conversation pointer, transcript, self-review call and model picker are ours. `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are required; without them a turn fails with a message naming the missing variables, and `CLONE_AI_MAIN_RUNTIME=pi` is refused instead of falling back. The turn ledger is the conversation record, and `search_history` reads it alongside any legacy session files. Removing the black-box CLI workers is the next step, recorded in the same trade-off.
+
+主 Agent 路径中已移除 Pi Agent SDK。进程内的原生循环是唯一运行时：Prompt 编译器、对话指针、对话记录、自评审调用与模型选择器都是我们自己的。必须配置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`；缺少时回合会以指明缺失变量的错误失败，`CLONE_AI_MAIN_RUNTIME=pi` 会被拒绝而不是回退。回合台账成为对话记录，`search_history` 同时读取它与旧会话文件。移除黑盒 CLI Worker 是下一步，记在同一个取舍条目中。
+
 ### Main Agent comparison repeats and reports medians
 
 `npm run bench:main` now runs each task/runtime cell `--repeat N` times (default 5) and reports median and p90 duration, median tokens and pass rate, keeping every sample in the JSON. `benchmark/stats.ts` provides the median and nearest-rank percentile, and a throwing cell is recorded as a failed sample instead of aborting the report. A three-sample run on DeepSeek v4.1 Flash: both runtimes 9/9, native about 6.6% fewer tokens, median latency within about one second.
