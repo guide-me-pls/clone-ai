@@ -698,11 +698,13 @@ async function repairCommand(dataDirectory: string, args: string[]): Promise<num
     if (report.runId !== undefined) console.error(`Run: ${report.runId} — inspect with \`clone-ai audit ${report.runId}\``);
     if (report.worktree !== undefined) console.error(`Worktree kept for inspection: ${report.worktree}`);
     if (report.evalBefore !== undefined) console.error(`Eval before: ${report.evalBefore.red ? "red" : "NOT red"} — ${report.evalBefore.detail}`);
+    if (report.regressionAfter !== undefined) console.error(`Regression after: ${report.regressionAfter.green ? "green" : "NOT green"} — ${report.regressionAfter.detail}`);
     console.error(`Report: ${report.reportPath}`);
     return 1;
   }
   console.log(`Repaired ${report.traces.length} trace(s) in Run ${report.runId ?? "?"} on ${report.branch}.`);
   if (report.evalBefore !== undefined) console.log(`  eval before: ${report.evalBefore.red ? "red" : "not red"} — ${report.evalBefore.detail}`);
+  if (report.regressionAfter !== undefined) console.log(`  regression after: ${report.regressionAfter.green ? "green" : "NOT green"} — ${report.regressionAfter.detail}`);
   if (report.evalAfter !== undefined) console.log(`  eval after: tests exit ${report.evalAfter.tests.status}, typecheck exit ${report.evalAfter.typecheck.status}`);
   if (report.changed !== undefined) console.log(`  changed: ${report.changed.join(", ")}`);
   if (report.tradeOffEntry !== undefined) console.log(`  trade-off: ${report.tradeOffEntry}`);

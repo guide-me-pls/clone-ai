@@ -167,6 +167,62 @@ export function compareHashes(before: Record<string, string>, after: Record<stri
   return { unchanged: added.length === 0 && removed.length === 0 && changed.length === 0, added, removed, changed };
 }
 
+export interface GreenCheckResult {
+  /** True only when every regression file passed and the runner exited zero. 仅当所有回归文件通过且运行器退出码为零时为真。 */
+  green: boolean;
+  tests: readonly string[];
+  detail: string;
+  run?: RegressionTestRun;
+}
+
+/**
+ * Runs the hashed regression cases again after the fix.
+ *
+ * The red check proves the case reproduces the bug *before* the fix. Without a
+ * second run the lane only knows the top-level suite passed — and in this
+ * repository `npm test` does not include `test/regression/`, so a run that
+ * changed no production code at all was reported as fixed (observed in
+ * `d8c54037`, 2026-11-06). A green run here is the fact that the recorded
+ * failure is gone.
+ * 修复后再次运行已哈希的回归用例。
+ *
+ * 红色检查只证明修复前用例复现了 Bug。没有第二次运行，通道只知道顶层套件通过——而在本仓库
+ * `npm test` 不包含 `test/regression/`，于是一个完全没有改动生产代码的运行也会被报成 fixed
+ * （2026-11-06 的 `d8c54037` 就是实例）。这里的绿色运行才是"记录的失败已消失"的事实。
+ */
+export async function verifyRegressionGreen(input: {
+  workspace: string;
+  run?: CommandRunner;
+  /** Command used to run the tests; defaults to node --test. 运行测试的命令；默认 node --test。 */
+  command?: (files: readonly string[]) => readonly string[];
+}): Promise<GreenCheckResult> {
+  const tests = await listRegressionTests(input.workspace);
+  if (tests.length === 0) {
+    return { green: false, tests, detail: "no regression files exist under test/regression/ to re-run" };
+  }
+  if (input.run === undefined) {
+    return { green: false, tests, detail: "no command runner was configured for the post-fix check" };
+  }
+  const command = input.command?.(tests) ?? ["node", "--experimental-strip-types", "--test", ...tests];
+  const [binary, ...args] = command;
+  if (binary === undefined) return { green: false, tests, detail: "the configured post-fix command is empty" };
+  const result = await input.run(binary, args, input.workspace);
+  const output = `${result.stdout}\n${result.stderr}`;
+  const testRun: RegressionTestRun = { files: tests, status: result.status, stdout: result.stdout, stderr: result.stderr };
+  if (result.status !== 0) {
+    const failures = failingAssertions(output);
+    return {
+      green: false,
+      tests,
+      detail: failures > 0
+        ? `the regression cases still fail: ${failures} failing assertion(s)`
+        : `the regression case runner exited ${result.status} after the fix`,
+      run: testRun,
+    };
+  }
+  return { green: true, tests, detail: `${tests.length} regression file(s) pass after the fix`, run: testRun };
+}
+
 /** `git` output as repository-relative paths, NUL-separated so spaces are safe. git 输出解析为仓库相对路径；NUL 分隔，路径含空格也安全。 */
 export function stagedPathsFrom(output: string): string[] {
   return output
@@ -194,6 +250,62 @@ export async function stageAll(workspace: string, run: CommandRunner): Promise<{
   if (staged.status !== 0) throw new Error(`git diff --cached failed: ${staged.stderr.trim()}`);
   const stat = await run("git", ["diff", "--cached", "--stat"], workspace);
   return { paths: stagedPathsFrom(staged.stdout), stat: stat.stdout.trim() };
+}
+
+/**
+ * Stages what a repair may carry, then removes the runtime scratch that is not
+ * part of the fix.
+ *
+ * `git add -A` alone also picks up the `node_modules` symlink the lane links
+ * for the test runner and any scratch files a worker wrote. In `.gitignore` the
+ * entry is `node_modules/`, which does not match a symlink, and `.probe/` files
+ * are not ignored at all; a real repair committed both (observed in `d8c54037`,
+ * 2026-11-06). Dropping *all* untracked paths instead would silently omit a new
+ * production file — including a new protected file, which the protected-path
+ * gate must see and refuse. So everything is staged and only the known runtime
+ * scratch is unstaged; a stray file with another name still reaches the diff,
+ * where the report and the owner can see it.
+ * 暂存修复可以携带的内容，然后移除不属于修复的运行期临时物。
+ *
+ * 只用 `git add -A` 还会带走通道为测试运行器链接的 `node_modules` 符号链接，以及 Worker 写下的
+ * 临时文件。`.gitignore` 里写的是 `node_modules/`，匹配不到符号链接，而 `.probe/` 完全没有被忽略；
+ * 一次真实修复把两者都提交了（2026-11-06 的 `d8c54037`）。反过来丢弃所有未跟踪路径也不行：它会
+ * 悄悄漏掉新的生产文件——包括新的受保护文件，而保护路径闸门必须看到并拒绝它。因此这里暂存全部，
+ * 只把已知的运行期临时物取消暂存；其他名字的杂散文件仍会进入差异，报告与所有者能看到。
+ */
+export async function stageRepair(workspace: string, run: CommandRunner): Promise<{ paths: string[]; stat: string }> {
+  const added = await run("git", ["add", "-A"], workspace);
+  if (added.status !== 0) throw new Error(`git add failed: ${added.stderr.trim()}`);
+  const first = await run("git", ["diff", "--cached", "--name-only", "-z"], workspace);
+  if (first.status !== 0) throw new Error(`git diff --cached failed: ${first.stderr.trim()}`);
+  const scratch = stagedPathsFrom(first.stdout).filter(isRuntimeScratch);
+  if (scratch.length > 0) {
+    // Unstage the scratch; it stays on disk but cannot enter the commit.
+    // 取消暂存临时物；它仍留在磁盘上，但无法进入提交。
+    const reset = await run("git", ["reset", "-q", "HEAD", "--", ...scratch], workspace);
+    if (reset.status !== 0) throw new Error(`git reset failed: ${reset.stderr.trim()}`);
+  }
+  const staged = await run("git", ["diff", "--cached", "--name-only", "-z"], workspace);
+  if (staged.status !== 0) throw new Error(`git diff --cached failed: ${staged.stderr.trim()}`);
+  const stat = await run("git", ["diff", "--cached", "--stat"], workspace);
+  return { paths: stagedPathsFrom(staged.stdout), stat: stat.stdout.trim() };
+}
+
+/** Paths the repair itself creates or links; never part of a fix. 修复自身创建或链接的路径；绝不是修复的一部分。 */
+export function isRuntimeScratch(path: string): boolean {
+  const normalized = path.replace(/^\.\//, "");
+  return normalized === "node_modules"
+    || normalized.startsWith("node_modules/")
+    || normalized === ".probe"
+    || normalized.startsWith(".probe/")
+    || normalized === ".rsi"
+    || normalized.startsWith(".rsi/")
+    || normalized === ".clone"
+    || normalized.startsWith(".clone/")
+    || normalized === ".work-orders"
+    || normalized.startsWith(".work-orders/")
+    || normalized.startsWith(".verification-baseline")
+    || /\.(?:log|tmp)$/.test(normalized);
 }
 
 /** Commit the staged fix with the trace ids in the body. 提交已暂存的修复，轨迹 id 写在正文里。 */

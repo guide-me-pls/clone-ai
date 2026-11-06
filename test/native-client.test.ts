@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -173,6 +173,47 @@ test("the native provider is registered, identity follows the agent, and externa
     if (saved.baseUrl === undefined) delete process.env.CLONE_AI_NATIVE_BASE_URL;
     else process.env.CLONE_AI_NATIVE_BASE_URL = saved.baseUrl;
   }
+});
+
+test("edit_file replaces one exact excerpt and refuses ambiguity or a fragment", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-edit-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, "app.js");
+  await writeFile(file, "const a = 1;\nconst target = 2;\nconst c = 3;\n");
+  const edit = fileTools().find((tool) => tool.name === "edit_file");
+  assert.ok(edit, "the native worker must offer edit_file");
+
+  const ok = await edit.run(
+    { name: "edit_file", input: { path: "app.js", old_text: "const target = 2;", new_text: "const target = 42;" } },
+    { workspace: directory },
+  );
+  assert.equal(ok.isError, undefined);
+  assert.match(await readFile(file, "utf8"), /const target = 42;/);
+
+  const missing = await edit.run(
+    { name: "edit_file", input: { path: "app.js", old_text: "not in the file", new_text: "x" } },
+    { workspace: directory },
+  );
+  assert.equal(missing.isError, true);
+  assert.match(missing.output, /not present/);
+
+  const ambiguous = await edit.run(
+    { name: "edit_file", input: { path: "app.js", old_text: "const", new_text: "let" } },
+    { workspace: directory },
+  );
+  assert.equal(ambiguous.isError, true);
+  assert.match(ambiguous.output, /more than once/);
+
+  // A fragment smuggled through edit_file must not be able to replace the file.
+  // 通过 edit_file 偷运的片段不得替换整个文件。
+  const whole = await readFile(file, "utf8");
+  const fragment = await edit.run(
+    { name: "edit_file", input: { path: "app.js", old_text: whole, new_text: "x" } },
+    { workspace: directory },
+  );
+  assert.equal(fragment.isError, true);
+  assert.match(fragment.output, /looks like a fragment/);
+  assert.equal(await readFile(file, "utf8"), whole);
 });
 
 test("the system prompt names the offered tools and the boundary", () => {
