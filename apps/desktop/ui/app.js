@@ -200,7 +200,11 @@ function renderSessions(rawSessions) {
   if (state.signatures.sessions === signature) return;
   state.signatures.sessions = signature;
   $("session-count").textContent = String(sessions.length);
-  if (!sessions.length) { $("session-list").innerHTML = `<div class="empty-sessions">${t("empty-sessions").replace("\n", "<br/>")}</div>`; return; }
+  // An empty visible list is not an empty sidebar: a hidden conversation still
+  // needs its restore control, so the shortcut only applies when nothing is
+  // hidden either. 可见列表为空不等于侧栏为空：隐藏的对话仍需要恢复入口，
+  // 因此只有确实没有隐藏内容时才走空状态。
+  if (!sessions.length && !(state.dashboard?.deletedConversations || []).length) { $("session-list").innerHTML = `<div class="empty-sessions">${t("empty-sessions").replace("\n", "<br/>")}</div>`; return; }
   const todayKey = new Date().toDateString();
   const today = sessions.filter((session) => new Date(session.updatedAt).toDateString() === todayKey);
   const earlier = sessions.filter((session) => new Date(session.updatedAt).toDateString() !== todayKey);
