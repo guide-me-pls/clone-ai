@@ -84,7 +84,7 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
     // 模型调用，而且没装好的提炼器不该把已完成的任务变成错误。下面默认用真实提炼器的是对话提炼，
     // 因为"从所有者说的话里学习"正是这个功能的意义。
     miningMode() === "all"
-      ? new AgentMemoryWorker({ allowUnrestrictedHost: process.env.CLONE_AI_MEMORY_MINING_UNRESTRICTED === "1" })
+      ? new AgentMemoryWorker()
       : undefined,
     { lockPath: join(paths.dataDirectory, "memory-extraction-lock") },
   );

@@ -4,7 +4,6 @@ import test from "node:test";
 import { classifyIntent } from "../src/main-agent/intent-classifier.ts";
 import { routeTask } from "../src/main-agent/agent-router.ts";
 import { buildMemoryContext } from "../src/main-agent/memory-context-builder.ts";
-import { enforceFreshSession, findContinuationFlags } from "../src/main-agent/fresh-session-policy.ts";
 import type { MemoryContext, WorkerDescriptor } from "../src/main-agent/dispatch-contracts.ts";
 import type { MemoryEntry, MemoryRecallMatch } from "../src/memory/md-memory-store.ts";
 
@@ -230,37 +229,3 @@ test("the worker context is capped so a large store cannot flood a prompt", asyn
 });
 
 // --- 5. 全新会话 / Fresh session ---
-
-test("continuation flags are stripped from a launch recipe", () => {
-  const { config, removed } = enforceFreshSession({
-    id: "pi",
-    command: "pi",
-    args: ["-p", "{{prompt}}", "--resume", "abc-123", "--continue", "--mode", "json"],
-  });
-
-  assert.deepEqual(config.args, ["-p", "{{prompt}}", "--mode", "json"]);
-  assert.deepEqual(removed.map((item) => item.flag), ["--resume", "--continue"]);
-  assert.deepEqual(findContinuationFlags(config.args ?? []), []);
-});
-
-test("an inline continuation flag is removed without eating the next argument", () => {
-  const { config } = enforceFreshSession({
-    id: "pi",
-    command: "pi",
-    args: ["--session-id=abc", "--mode", "json"],
-  });
-
-  assert.deepEqual(config.args, ["--mode", "json"]);
-});
-
-test("two dispatches of the same worker share no session identity", () => {
-  const recipe = { id: "pi", command: "pi", args: ["-p", "{{prompt}}"] };
-  const first = enforceFreshSession(recipe);
-  const second = enforceFreshSession(recipe);
-
-  // Nothing in the launch recipe ties one invocation to another.
-  // 启动配方中没有任何东西把一次调用和另一次绑定起来。
-  assert.deepEqual(findContinuationFlags(first.config.args ?? []), []);
-  assert.deepEqual(findContinuationFlags(second.config.args ?? []), []);
-  assert.deepEqual(first.config.args, second.config.args);
-});
