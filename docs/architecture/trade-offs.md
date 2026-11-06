@@ -14,9 +14,9 @@ the case needs, and that every file left under `test/regression/` must be a
 failing reproduction — diagnostic or probe files are not accepted. The
 acceptance criterion states the same rule, so a passing probe cannot satisfy it.
 Phase 2 is told the same: read the failing case and the production file it
-exercises, leave no scratch files, do not explore READMEs or repository
-directories, and do not write a trade-off entry (the working agent did that
-before the run). Both phases are told they have no shell tool, because telling a
+exercises, make its first production write within four tool calls, leave no
+scratch files, do not explore READMEs or repository directories, and do not
+write a trade-off entry (the working agent did that before the run). Both phases are told they have no shell tool, because telling a
 worker to "run npm test" it cannot run invites exploration instead of the edit.
 The native worker's system prompt now states that a step requiring a file is not
 complete until a write tool has succeeded, and that a summary claiming work that
