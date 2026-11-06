@@ -6,6 +6,16 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-06 — Settings speak in workers, and dispatch is visible
+
+**Decision.** Remove the legacy "local providers" registry from the Agent settings page and fold its facts (installed, command, execution boundary, install action) into each worker row. Make the settings navigation a real tab list — `role=tablist/tab/tabpanel`, `aria-selected`, arrow/Home/End keys, focus follows selection, per-panel scroll memory, a 120 ms fade/slide that honours `prefers-reduced-motion`. Add a "Worker 派发" block to a run's audit detail showing, per step, the chosen worker, its provider, the routing source (explicit / rule / memory / description) and the reason, read from the journal's `dispatch.decided` events.
+
+**Alternatives rejected.** (a) Keep the provider list and rename it "runtime" — two lists of the same machine, and the owner still has to translate between them. (b) Move provider controls to a separate settings page — hides the install and execution-boundary facts from the worker they govern. (c) Show dispatch only in the raw trace — it exists there, but "why did this step go to that worker?" is a first-class question, not debug detail.
+
+**Evidence.** Owner feedback that the settings interactions feel abrupt and that the provider list is historical; the dispatch decision already journals `selectedAgentId`, `providerId`, `source` and `reason` (`src/main-agent/dispatch-recorder.ts`), so the new block adds no data. Deterministic checks: `test/ui-structure.test.ts` asserts there is no `provider-registry` section, that settings tabs expose tab semantics, and that the audit view renders a dispatch block.
+
+**Cost and reversal condition.** The worker row grows by one line of metadata; removing the provider section removes the only place listing a provider that has no worker bound to it. Reverse if an owner needs to manage a provider before binding any worker, or if the tab semantics break in the packaged WebKit build.
+
 ## 2026-11-05 — The agent runs its own adversarial suite and repair loop
 
 **Decision.** Add a deterministic, offline adversarial suite (injection wrapping, approval replay/expiry/forwarding, protected paths and symlink escapes, tool credentials in worker env, secret-memory recall, trace redaction, rate limits) plus a self-check loop that records every round in the journal and, on a red probe, exports the failure as a trace for the existing gated repair lane. A round runs the suite, `npm run gate`, and (optionally) `npm test`; repairs still produce a draft PR and merging stays with the owner.

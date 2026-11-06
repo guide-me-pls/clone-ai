@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Settings feel like one surface, and dispatch is visible
+
+The settings navigation is now a real tab list — arrow/Home/End keys, `aria-selected`, per-panel scroll memory, a 160 ms panel entrance that respects `prefers-reduced-motion`. The historical "local providers" registry is gone; each worker row carries its provider's installed state, command, execution boundary, effort select, install action and host-access action. A run's audit detail now includes "Worker 派发": which worker each step went to, its provider, the routing source (explicit / rule / memory / description) and the reason; plan rows name the worker that runs the step.
+
+设置导航现在是真正的 tab 列表——方向键与 Home/End、`aria-selected`、逐面板记忆滚动、160ms 面板入场并尊重 `prefers-reduced-motion`。历史的「本地 Provider」清单已移除；每个 Worker 行携带其 Provider 的安装状态、命令、执行边界、强度选择、安装与 host-access 操作。Run 审计详情新增「Worker 派发」：每步去了哪个 Worker、Provider、路由来源（显式/规则/记忆/描述）与理由；计划行点名执行该步骤的 Worker。
+
 ### The agent attacks its own boundaries and records every round
 
 `clone-ai selfcheck` runs 15 deterministic adversarial probes (untrusted WhatsApp wrapping, forwarded approval refusal, approval replay/expiry/re-issue, sender rate limit, protected paths, symlink escape, worker-env credentials, trace redaction, digest tampering, trace assembly), the deterministic gate, and optionally the full suite. Each round is journaled as `selfcheck.completed` and saved under `~/.clone/selfcheck/`; the evaluation tab shows the latest round, the red probes with the attack, the gate tail, and recent history. A red round exports its failures as traces; `--repair` hands them to the gated repair lane, which still produces a draft PR only.

@@ -18,6 +18,18 @@
 - **缺点 / 下次：** 探针确定性、可复现，但不具创造性——下一层是受 schema 约束、有预算上限的模型红队；真实事故暴露新类别时，应扩展套件。
 - **推翻条件：** 见取舍条目——扩展套件，而不是放宽。
 
+### 2026-11-06 — 设置页以 Worker 为语言，并让派发可见
+
+- **目标 / 假设：** 设置对话框生硬（切标签丢状态、没有键盘流、另有一份重复的 Provider 清单），且 UI 没有解释一步为什么给了某个 Worker。
+- **取舍：** [2026-11-06 — 设置页以 Worker 为语言，并让派发可见](../architecture/trade-offs.zh-CN.md)。
+- **变更：** 设置导航改为真正的 tablist（`role=tablist/tab/tabpanel`、`aria-selected`、方向键/Home/End、逐面板记忆滚动、160ms 淡入并尊重 `prefers-reduced-motion`）。移除历史 Provider 区块；每个 Worker 行携带其 Provider 的安装状态、命令、执行边界、强度选择、安装与 host-access 操作。审计 Run 详情新增「Worker 派发」：选中者、Provider、步骤、路由来源与理由，来自 `dispatch.decided`；计划行点名执行步骤的 Worker。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts`（新增断言：不存在 `provider-registry`、七个带 tab 语义的标签、`state.settingsScroll`、派发区块与来源文案）。浏览器对演示 home 的检查：方向键移动选中（agents → mobile）、Home/End 跳到首/尾、Provider 区块消失、Worker 行显示状态与五个强度选择、派发块渲染两条种子决定并翻译来源。`npm test`：591 通过；`npm run gate`：PASS。
+- **Benchmark run：** 无——纯确定性 UI/结构评估，不涉及 Provider 或数据集。
+- **执行链路：** 阅读设置/审计 UI 与 `dispatch.decided` 载荷；修复通道无法运行（无头 `claude` 报 Not logged in，直接启动可写的 `pi` 被会话分类器拦截），按所有者指示由工作 Agent 手写。第一次 HTML 编辑漏掉每个设置 section 的 `>`，应用停在启动页；由启动提示 `Cannot set properties of null` 定位并修复后浏览器复验。成本：补丁无模型 token（本地编辑），约 25 分钟。
+- **优点：** 一份清单取代两份；键盘与语义可用；无需读原始载荷即可回答派发；每个面板保留位置。
+- **缺点 / 下次：** 手写路线缺少修复通道证据；过渡只能通过类切换验证；滚动记忆只做了结构断言，演示 home 的面板不够高，未在浏览器中实际触发。
+- **推翻条件：** 见取舍条目。
+
 ## 模板
 
 ```markdown
