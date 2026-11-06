@@ -1,19 +1,36 @@
 # Nightly repair from failed traces / 从失败轨迹出发的夜间修复
 
 This is the part of the RSI loop that can be trusted with a machine: it turns a
-bad day into a failing test, a fix, and a **draft pull request**. It never
+bad day into a failing test, a fix, and a **branch** the owner reviews. It never
 merges, never touches the serving checkout, and never edits the rules that
 govern it.
 
+Since 2026-11-06 the repair itself is a clone-ai Run: `clone-ai repair` accepts a
+trigger, attaches a two-phase plan, and dispatches it to a configured worker, so
+the Kernel's budgets, evidence and journal cover the repair. The lane still owns
+the checks a worker cannot make about itself — the regression test must be
+observed red, the test hashes must hold after the fix, and the staged diff may
+not touch a protected path. `scripts/nightly-rsi.mjs` remains the scheduler-facing
+entry point for hosts that already run it; both share the same policy and
+consumed-trace modules.
+
 这是 RSI 回路里可以交给机器的那一部分：把一次糟糕的运行变成一条失败的测试、一个修复，和
-一个**草稿 PR**。它从不合并、不碰正在服务的检出，也不修改约束它自己的规则。
+一个由所有者审查的**分支**。它从不合并、不碰正在服务的检出，也不修改约束它自己的规则。
+
+自 2026-11-06 起，修复本身就是一个 clone-ai Run：`clone-ai repair` 接受 Trigger、挂上两阶段
+计划，并派发给已配置的 Worker，因此 Kernel 的预算、证据与 Journal 覆盖了这次修复。通道仍然
+负责 Worker 无法对自己做出的检查——回归测试必须被观察到是红的、修复后测试哈希必须不变、暂存
+差异不得触碰保护路径。`scripts/nightly-rsi.mjs` 保留给已经在运行它的调度主机；两者共用同一套
+策略与已消费轨迹模块。
 
 ```bash
 clone-ai selfcheck              # adversarial probes + gate; journals the round
 clone-ai selfcheck --full       # also npm test
 clone-ai selfcheck --repair     # a red round is handed to the repair lane
-clone-ai traces                 # list what is on disk for the night job
-node scripts/nightly-rsi.mjs --dry-run
+clone-ai traces                 # list what is on disk for the repair lane
+clone-ai repair --dry-run       # what a repair would do, creating nothing
+clone-ai repair                 # repair as a Kernel Run in an isolated worktree
+node scripts/nightly-rsi.mjs --dry-run   # the script entry point, kept for existing schedulers
 ```
 
 The nightly schedule runs `selfcheck --full --repair`: the agent attacks its
