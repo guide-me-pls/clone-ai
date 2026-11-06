@@ -6,11 +6,21 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Repair is a clone-ai Run, and tools can come from MCP
+
+`clone-ai repair` now performs the fix as a real Kernel Run instead of a script driving another CLI: it accepts a trigger from the failed traces, attaches a two-phase plan (write the regression case, then fix the code), and dispatches both phases to a configured worker, so approvals, budgets, evidence, verification and the journal apply to the repair itself. The lane keeps the nightly rules by importing `scripts/nightly-rsi-policy.mjs` and `scripts/nightly-rsi-state.mjs` — the regression case must be observed red before the fix, the case files are hashed at that moment and compared after it (a deletion counts), and the staged diff may not touch a protected path — and it creates an isolated git worktree, commits a branch, and never merges or pushes. A failed repair keeps its worktree and leaves the trace eligible.
+
+MCP servers are a second tool source, off by default: `<clone home>/mcp.json` enables a server explicitly and must declare a risk for each tool. Declared tools reach the native worker through the same `decideTool` gate as built-in tools, path-taking tools are checked per call, and output is framed as untrusted observation. CLI providers receive `--mcp-config` only when their recipe declares the flag (Claude Code does); every other provider falls back to built-in tools.
+
+`clone-ai repair` 现在把修复做成真实的 Kernel Run，而不是脚本驱动另一个 CLI：从失败轨迹接受 Trigger，挂上两阶段计划（先写回归用例，再修代码），两阶段都派发给已配置的 Worker，因此审批、预算、证据、验证与 Journal 都适用于这次修复。通道通过导入 `scripts/nightly-rsi-policy.mjs` 与 `scripts/nightly-rsi-state.mjs` 保留夜间规则——回归用例必须在修复前被观察到为红，此刻对用例文件取哈希并在修复后比较（删除也算变更），暂存差异不得触碰保护路径——同时创建隔离 git worktree、提交分支，绝不合并或推送。失败的修复会保留 worktree，并让轨迹保持可再修状态。
+
+MCP 服务器是第二个工具来源，默认关闭：`<clone home>/mcp.json` 必须显式启用服务器，并为每个工具声明风险。已声明的工具与内建工具一样经过 `decideTool` 闸门到达原生 Worker，带路径的工具逐次核对，输出按不可信观察包裹。CLI Provider 只有在其配方声明了该开关时才会收到 `--mcp-config`（Claude Code 已声明）；其余 Provider 回退到内建工具。
+
 ### The agent attacks its own boundaries and records every round
 
-`clone-ai selfcheck` runs 15 deterministic adversarial probes (untrusted WhatsApp wrapping, forwarded approval refusal, approval replay/expiry/re-issue, sender rate limit, protected paths, symlink escape, worker-env credentials, trace redaction, digest tampering, trace assembly), the deterministic gate, and optionally the full suite. Each round is journaled as `selfcheck.completed` and saved under `~/.clone/selfcheck/`; the evaluation tab shows the latest round, the red probes with the attack, the gate tail, and recent history. A red round exports its failures as traces; `--repair` hands them to the gated repair lane, which still produces a draft PR only.
+`clone-ai selfcheck` runs 15 deterministic adversarial probes (untrusted WhatsApp wrapping, forwarded approval refusal, approval replay/expiry/re-issue, sender rate limit, protected paths, symlink escape, worker-env credentials, trace redaction, digest tampering, trace assembly), the deterministic gate, and optionally the full suite. Each round is journaled as `selfcheck.completed` and saved under `~/.clone/selfcheck/`; the evaluation tab shows the latest round, the red probes with the attack, the gate tail, and recent history. A red round exports its failures as traces; `--repair` hands them to the repair lane, which now commits a branch through a real Kernel Run and still never merges.
 
-`clone-ai selfcheck` 运行 15 个确定性对抗探针（WhatsApp 非授信包裹、转发审批拒绝、审批重放/过期/重发、发送者限流、受保护路径、符号链接逃逸、Worker 环境凭据、轨迹脱敏、摘要篡改、轨迹组装）、确定性门禁，以及可选的完整测试。每一轮以 `selfcheck.completed` 写入 Journal 并保存在 `~/.clone/selfcheck/`；评估页显示最近一轮、失败探针及其攻击方式、门禁尾巴与历史。红色的一轮会导出失败轨迹；`--repair` 把它们交给带闸门的修复通道，仍然只产出草稿 PR。
+`clone-ai selfcheck` 运行 15 个确定性对抗探针（WhatsApp 非授信包裹、转发审批拒绝、审批重放/过期/重发、发送者限流、受保护路径、符号链接逃逸、Worker 环境凭据、轨迹脱敏、摘要篡改、轨迹组装）、确定性门禁，以及可选的完整测试。每一轮以 `selfcheck.completed` 写入 Journal 并保存在 `~/.clone/selfcheck/`；评估页显示最近一轮、失败探针及其攻击方式、门禁尾巴与历史。红色的一轮会导出失败轨迹；`--repair` 把它们交给修复通道，后者通过真实的 Kernel Run 提交一个分支，仍然绝不合并。
 
 ### Self-check and push command
 

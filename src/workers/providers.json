@@ -7,8 +7,14 @@
       "args": [
         "{{modelArgs}}",
         "{{effortArgs}}",
+        "{{mcpConfigArgs}}",
         "-p",
         "{{prompt}}"
+      ],
+      "mcpConfigArgs": [
+        "--strict-mcp-config",
+        "--mcp-config",
+        "{{mcpConfig}}"
       ],
       "env": [
         "ANTHROPIC_API_KEY",

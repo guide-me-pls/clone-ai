@@ -10,6 +10,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import type {
@@ -32,6 +33,8 @@ import type { EffortLevel } from "./effort.ts";
 import { resolveGrants } from "../authority/path-gateway.ts";
 import { buildSeatbeltProfile, SANDBOX_EXEC, wrapWithSandbox } from "../authority/seatbelt.ts";
 import { expandHome } from "../authority/scope.ts";
+import { enabledServers, loadMcpConfig, mcpServersForStep } from "./mcp-client.ts";
+import { decideTool } from "./native-agent-worker.ts";
 
 export interface BlackBoxProviderConfig {
   id: string;
@@ -67,6 +70,15 @@ export interface BlackBoxProviderConfig {
   effort?: EffortLevel;
   /** Levels this CLI actually accepts; the UI offers only these. 该 CLI 真正接受的档位；界面只列这些。 */
   efforts?: EffortLevel[];
+  /**
+   * Replaces `{{mcpConfigArgs}}` when the step may expose MCP servers. `{{mcpConfig}}`
+   * inside is a temporary file holding the mcpServers document. A CLI without
+   * this field never receives MCP servers — its only tools are the built-in ones
+   * its own prompt describes.
+   * 当步骤可以暴露 MCP 服务器时替换 `{{mcpConfigArgs}}`；其中的 `{{mcpConfig}}` 是保存 mcpServers
+   * 文档的临时文件。没有该字段的 CLI 永远拿不到 MCP 服务器——它唯一的工具就是自己 Prompt 描述的内建工具。
+   */
+  mcpConfigArgs?: string[];
   /** Replaces `{{effortArgs}}` when an effort is set; `{{effort}}` inside is the level. 设置了强度时替换 `{{effortArgs}}`；其中的 `{{effort}}` 是档位。 */
   effortArgs?: string[];
   /**
@@ -138,18 +150,28 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
   readonly #active = new Map<string, ChildProcess>();
   readonly #preparing = new Map<string, { cancelled: boolean }>();
 
+  readonly #dataDirectory?: string;
+
   constructor(input: {
     agentId: string;
     config: BlackBoxProviderConfig;
     workCapabilities?: string[];
     /** Owner-authored failure catalog; the built-in minimum is used when absent. 所有者自撰的失败目录；缺省时使用内建最小集合。 */
     failureCatalog?: OutcomeCatalog;
+    /**
+     * Clone home. Its `mcp.json` is the only source of MCP servers; without it
+     * the worker never offers one, whichever provider the owner configured.
+     * Clone home。它的 `mcp.json` 是 MCP 服务器的唯一来源；没有它时，无论所有者配置了哪个 Provider，
+     * Worker 都不会提供 MCP 服务器。
+     */
+    dataDirectory?: string;
   }) {
     this.id = input.agentId;
     this.providerId = input.config.id;
     this.#config = input.config;
     this.#workCapabilities = input.workCapabilities ?? input.config.work ?? DEFAULT_WORK;
     this.#catalog = input.failureCatalog ?? BUILT_IN_CATALOG;
+    this.#dataDirectory = input.dataDirectory;
   }
 
   async capabilities(): Promise<RuntimeCapabilities> {
@@ -210,6 +232,7 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
     const usesStdin = config.promptVia === "stdin";
     let before: Awaited<ReturnType<typeof snapshotWorkspace>>;
     let child: ChildProcess;
+    let mcpConfigFile: string | undefined;
     try {
       yield { type: "session_started", sessionId };
       if (preparation.cancelled) return;
@@ -219,6 +242,15 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
       before = await snapshotWorkspace(workspace);
       if (preparation.cancelled) return;
       const sandboxed = sandboxAvailable(config) && config.hostAccess !== "unrestricted";
+      // MCP servers are handed to a CLI only when this build supports them and
+      // the step's grants cover every declared tool risk. The document is built
+      // here, before the process exists, because the CLI cannot enforce a
+      // per-call gate on the other side.
+      // 只有当本构建支持、且本步骤授权覆盖每个已声明工具风险时，才把 MCP 服务器交给 CLI。文档在
+      // 进程存在之前构建，因为 CLI 无法在另一端执行逐次调用的闸门。
+      const mcp = await prepareMcpConfig(config, input, workspace, this.#dataDirectory);
+      mcpConfigFile = mcp?.file;
+      const mcpConfigPath = mcp?.path;
       const args = (config.args ?? [])
         .flatMap((argument) => {
           if (argument === "{{sandboxArgs}}") return sandboxed ? config.sandboxArgs ?? [] : [];
@@ -229,6 +261,15 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
           if (argument === "{{modelArgs}}") {
             const model = config.model;
             return model === undefined ? [] : (config.modelArgs ?? []).map((item) => item.replaceAll("{{model}}", model));
+          }
+          if (argument === "{{mcpConfigArgs}}") {
+            // A provider without mcpConfigArgs silently gets built-in tools only:
+            // passing a flag it does not know would fail the whole run, and a
+            // repair loop must keep working on a CLI that lacks MCP support.
+            // 不支持 mcpConfigArgs 的 Provider 静默地只拿内建工具：传一个它不认识的开关会让整轮失败，
+            // 而修复回路必须在没有 MCP 支持的 CLI 上继续工作。
+            if (config.mcpConfigArgs === undefined || mcpConfigPath === undefined) return [];
+            return config.mcpConfigArgs.map((item) => item.replaceAll("{{mcpConfig}}", mcpConfigPath));
           }
           return [argument];
         })
@@ -354,6 +395,7 @@ export class BlackBoxCliWorker implements RuntimeAdapter {
       yield { type: "completed", summary: truncate(detail || `${this.providerId} completed its WorkOrder.`, 2_000) };
     } finally {
       clearTimeout(timeout);
+      if (mcpConfigFile !== undefined) await rm(mcpConfigFile, { force: true }).catch(() => undefined);
       this.#active.delete(sessionId);
       // An abandoned generator must never leave the agent running unsupervised.
       // 被放弃的 Generator 绝不能留下脱管运行的 Agent。
@@ -524,6 +566,36 @@ async function* readLines(stream: NodeJS.ReadableStream | null): AsyncIterable<s
  * 而不是一个可以执行的任务。
  */
 const MAX_PROMPT_CHARS = 30_000;
+
+/**
+ * Writes the temporary `mcpServers` document when — and only when — this
+ * provider accepts one and the step's grants cover every tool its servers
+ * declare. Returns undefined otherwise, which selects built-in tools only.
+ * 仅当该 Provider 接受、且步骤授权覆盖其服务器声明的每个工具时，写出临时 `mcpServers` 文档。
+ * 其余情况返回 undefined，即只使用内建工具。
+ */
+async function prepareMcpConfig(
+  config: BlackBoxProviderConfig,
+  input: ExecutionAssignment,
+  workspace: string,
+  dataDirectory?: string,
+): Promise<{ path: string; file: string } | undefined> {
+  if (config.mcpConfigArgs === undefined || dataDirectory === undefined) return undefined;
+  const loaded = await loadMcpConfig(join(dataDirectory, "mcp.json")).catch(() => ({ servers: [], errors: [] }));
+  const servers = enabledServers(loaded);
+  if (servers.length === 0) return undefined;
+  const grants = resolveGrants(input.step.scopes, { workspace });
+  const selected = mcpServersForStep({
+    servers,
+    decide: (risk) => decideTool({ risk, grants, workspace }),
+  });
+  if (Object.keys(selected.document).length === 0) return undefined;
+  const file = join(workspace, ".clone", `mcp-step-${randomUUID()}.json`);
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify({ mcpServers: selected.document }, null, 2), "utf8");
+  return { path: file, file };
+}
+
 
 /**
  * Terminates the worker and its whole process tree. Killing only the CLI

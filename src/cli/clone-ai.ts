@@ -14,7 +14,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { createMainAgentSession } from "../main-agent/session.ts";
@@ -70,7 +70,9 @@ Usage:
   clone-ai audit [<runId>|export [--out file]]  Why runs failed, per run; export JSONL for evals
   clone-ai audit turns [--limit N] [--json]  Main Agent turns: input, reply, tools, model usage
   clone-ai invocations [list|show <id>]  Every Agent call, its prompt, reply and Run ids
-  clone-ai traces [list|export|show <runId>|clear --yes]  Failed traces for the nightly repair job
+  clone-ai traces [list|export|show <runId>|clear --yes]  Failed traces for the repair lane
+  clone-ai repair [--dry-run] [--keep] [--max-traces N] [--agent <id>] [--base <ref>]
+                                 Fix failed traces as a clone-ai Run in an isolated worktree; never merges
   clone-ai selfcheck [--full] [--repair]   Adversarial suite + gate; --repair hands a red round to the repair lane
   clone-ai model <worker> [<model>|--clear]  Show, pin or clear the model a worker CLI uses
   clone-ai effort <worker> [<level>|--clear]  Show, pin or clear the reasoning effort
@@ -125,6 +127,7 @@ async function main(): Promise<number> {
     case "audit": return auditCommand(paths.dataDirectory, argv.slice(1));
     case "invocations": return invocationsCommand(paths.dataDirectory, argv.slice(1));
     case "traces": return tracesCommand(paths.dataDirectory, argv.slice(1));
+    case "repair": return repairCommand(paths.dataDirectory, argv.slice(1));
     case "selfcheck": return selfCheckCommand(paths.dataDirectory, argv.slice(1));
     case "model": return modelCommand(paths.dataDirectory, argv.slice(1));
     case "effort": return effortCommand(paths.dataDirectory, argv.slice(1));
@@ -600,17 +603,17 @@ async function selfCheckCommand(dataDirectory: string, args: string[]): Promise<
     const round = await runSelfCheckRound({ dataDirectory, journal, fullTests: args.includes("--full") });
     let repairExit: number | undefined;
     if (round.verdict !== "green" && args.includes("--repair")) {
-      // The loop does not edit code: a red round becomes traces, and the gated
-      // repair lane turns those into a draft PR the owner reviews.
-      // 回路不改代码：红色的一轮变成轨迹，由带闸门的修复通道产出草稿 PR 交给所有者审查。
-      console.log("\n红色探针已导出为轨迹，交给修复通道运行（只产出草稿 PR）…");
-      const { spawn } = await import("node:child_process");
-      repairExit = await new Promise((resolve) => {
-        const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "nightly-rsi.mjs"), "--max-traces", "5"], { stdio: "inherit" });
-        child.on("close", (code) => resolve(code ?? 1));
-        child.on("error", () => resolve(1));
-      });
-      console.log(`修复通道退出码：${repairExit}`);
+      // The loop does not edit code: a red round becomes traces, and the repair
+      // lane turns those into a branch through a real Kernel Run. It never
+      // merges, so the owner still reviews the patch.
+      // 回路不改代码：红色的一轮变成轨迹，由修复通道通过真实的 Kernel Run 变成一个分支。通道绝不
+      // 合并，补丁仍由所有者审查。
+      console.log("\n红色探针已导出为轨迹，交给修复通道运行（提交分支，绝不合并）…");
+      const { runRepairLane } = await import("../repair/repair-lane.ts");
+      const report = await runRepairLane({ dataDirectory, repo: resolve(process.cwd()), maxTraces: 5 });
+      repairExit = report.status === "fixed" ? 0 : 1;
+      console.log(`修复通道：${report.status}${report.error === undefined ? "" : ` — ${report.error}`}`);
+      if (report.branch !== undefined) console.log(`分支：${report.branch}（未合并）`);
     }
     console.log(`
 ${round.verdict === "green" ? "绿色" : "红色"} · 探针 ${round.probes.passed}/${round.probes.total} · gate ${round.gate.status === 0 ? "ok" : `exit ${round.gate.status}`}${round.tests === undefined ? "" : ` · tests ${round.tests.status === 0 ? "ok" : `exit ${round.tests.status}`}`}`);
@@ -655,6 +658,57 @@ async function tracesCommand(dataDirectory: string, args: string[]): Promise<num
   } finally {
     (journal as { close?: () => void }).close?.();
   }
+}
+
+/**
+ * The repair lane, driven from the CLI. Every phase of the repair is a Kernel
+ * Run; this function only reads the flags and reports what the lane observed.
+ * 命令行驱动的修复通道。修复的每个阶段都是 Kernel Run；本函数只解析参数并报告通道观察到的事实。
+ */
+async function repairCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const { runRepairLane } = await import("../repair/repair-lane.ts");
+  const flagValue = (name: string): string | undefined => {
+    const index = args.indexOf(name);
+    return index === -1 ? undefined : args[index + 1];
+  };
+  const maxTraces = Number(flagValue("--max-traces") ?? "5");
+  if (!Number.isInteger(maxTraces) || maxTraces < 1) {
+    console.error("--max-traces must be a positive integer.");
+    return 1;
+  }
+  const report = await runRepairLane({
+    dataDirectory,
+    repo: resolve(flagValue("--repo") ?? process.cwd()),
+    ...(flagValue("--base") === undefined ? {} : { base: flagValue("--base") }),
+    ...(flagValue("--agent") === undefined ? {} : { agentId: flagValue("--agent") }),
+    maxTraces,
+    dryRun: args.includes("--dry-run"),
+    keep: args.includes("--keep"),
+  });
+  if (report.status === "no-traces") {
+    console.log("No failed traces. Run `clone-ai traces export` after a failure.");
+    return 0;
+  }
+  if (report.status === "dry-run") {
+    console.log(`Dry run: ${report.traces.length} trace(s) would be repaired.`);
+    return 0;
+  }
+  if (report.status === "failed") {
+    console.error(`Repair failed (${report.failedGate ?? "error"}): ${report.error ?? "unknown error"}`);
+    if (report.runId !== undefined) console.error(`Run: ${report.runId} — inspect with \`clone-ai audit ${report.runId}\``);
+    if (report.worktree !== undefined) console.error(`Worktree kept for inspection: ${report.worktree}`);
+    if (report.evalBefore !== undefined) console.error(`Eval before: ${report.evalBefore.red ? "red" : "NOT red"} — ${report.evalBefore.detail}`);
+    console.error(`Report: ${report.reportPath}`);
+    return 1;
+  }
+  console.log(`Repaired ${report.traces.length} trace(s) in Run ${report.runId ?? "?"} on ${report.branch}.`);
+  if (report.evalBefore !== undefined) console.log(`  eval before: ${report.evalBefore.red ? "red" : "not red"} — ${report.evalBefore.detail}`);
+  if (report.evalAfter !== undefined) console.log(`  eval after: tests exit ${report.evalAfter.tests.status}, typecheck exit ${report.evalAfter.typecheck.status}`);
+  if (report.changed !== undefined) console.log(`  changed: ${report.changed.join(", ")}`);
+  if (report.tradeOffEntry !== undefined) console.log(`  trade-off: ${report.tradeOffEntry}`);
+  console.log(`  branch ${report.branch} is not merged; review it, then merge or delete. Never pushed.`);
+  console.log(`Report: ${report.reportPath}`);
+  return 0;
 }
 
 async function effortCommand(dataDirectory: string, args: string[]): Promise<number> {
