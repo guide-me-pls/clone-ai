@@ -408,3 +408,57 @@ diff，只产出草稿 PR（或补丁文件）。它从不合并、部署、重�
 
 **推翻条件。** 如果需要跨机器共享的持久账本，或轨迹导出经常改变字节但有效证据不变、
 因而反复触发修复，就替换这一文件方案。
+
+## 2026-11-06 —— 修复通道是 Clone AI 自己的 Run，而不是脚本驱动另一个 CLI
+
+**决定。** `clone-ai repair` 把修复做成 Kernel 内的真实 Run：接受 Trigger、挂上两阶段计划，
+用所有者实际配置的 Worker（黑盒 CLI Worker，或其他已注册 Adapter）执行。通道保留
+`scripts/nightly-rsi.mjs` 已有的闸门（回归测试先验证为红、测试文件哈希、暂存差异不得触碰保护
+路径），做法是导入 `scripts/nightly-rsi-policy.mjs` 与 `scripts/nightly-rsi-state.mjs` 而不是
+另抄一份；worktree 隔离、红色验证与哈希由应用在 Run 周围及之后作为确定性闸门执行。
+
+**被否决的备选。**（a）继续用 `claude -p` 当执行者——那么 AGENTS.md 第 4 条描述的是系统无法满足的
+规则，且修复并非由 clone-ai 完成。（b）强制使用进程内原生 Worker（OpenAI 兼容）——它便于测试，
+但会把修复回路绑到单一 Provider，以及多数机器上并不存在的 `CLONE_AI_NATIVE_*` 配置；它仍可作为
+已配置 Worker 使用。（c）为通道另建一套策略模块——第二份保护路径清单会与夜间脚本执行的那份漂移。
+
+**依据。** 代码观察：`scripts/nightly-rsi.mjs` 自行拼 Prompt 并 spawn 二进制，Kernel 的审批、
+验证与 Journal 都不参与修复。这里原样导入其安全闸门，由既有 `test/nightly-rsi.test.ts` 断言覆盖。
+确定性测试用假 Adapter 证明每条通道闸门（`test/repair.test.ts`）。真实两阶段修复需要已配置 Worker
+与一条已授权的失败轨迹；已配置模型能否产出可接受的补丁仍是**假设**，本次未测量。
+
+**放弃了什么。** 通道现在继承 Kernel 的 Worker 配置与 Adapter 契约，因此没装任何 Worker CLI 的机器
+无法修复，而旧脚本只需 PATH 上有 `claude`。黑盒 Worker 从不报告 `test` 证据，所以"验证测试为红"
+这类检查必须由应用在 Run 周围完成，而不是交给 Verifier——Run 自身的步骤只负责写文件。
+
+**推翻条件。** 如果 Kernel 路径无法表达一次修复（步骤数远超计划能容纳的规模，或 Adapter 契约
+承载不了哈希），就把两个阶段退回脚本，但保留共享的轨迹导出与策略模块。如果测量显示已配置 Worker
+修复真实轨迹的通过率不可接受，而直连原生客户端可以，就把原生 Adapter 设为默认执行者而不是回退项。
+
+## 2026-11-06 —— MCP 工具按服务器显式开启，并与内建工具过同一道闸门
+
+**决定。** 增加一个小型 MCP 客户端（stdio，另支持 streamable HTTP），读取
+`<clone home>/mcp.json`。除非所有者为某个服务器写 `"enabled": true`，否则一律关闭。MCP 工具被转换成
+带显式风险的 `NativeToolSpec`（`read`、`write`、`network`、`external`），只有 `decideTool` 核对
+步骤授权后同意该风险，才会提供给 Worker；点名路径的调用与 `read_file` 一样逐次核对。MCP 输出走
+观察边界（`sanitizeObserved`，即 `renderObservationsAsFacts` 用的同一个清洗函数），以引用数据的形式
+到达模型。无法接受 `--mcp-config` 的 Provider（进程内原生 Worker、codex、pi）只会拿到内建工具。
+
+**被否决的备选。**（a）引入 SDK 依赖（`@modelcontextprotocol/sdk`）——我们需要的协议只是每个工具一次
+JSON-RPC 请求（`initialize`、`tools/list`、`tools/call`），走 stdio 或 HTTP；只有当 resources、prompts、
+sampling 或 OAuth 进入范围时，依赖才值得。（b）默认开启所有已配置服务器——MCP 服务器是所有者并未
+编写的工具面，默认开启等于悄悄扩大模型能做的事。（c）因为传输层是网络就默认给 MCP 工具网络权限——
+风险属于工具声明的行为，由所有者在配置里逐个写明。
+
+**依据。** 代码观察：今天的工具表只来自 `src/main-agent/tools/kernel-tools.ts` 与
+`src/workers/native-worker-factory.ts`，且原生 Worker 已会拒绝未授权的风险（`decideTool`）。测试覆盖
+默认关闭、授权不足时拒绝、授权存在时提供、以及输出包裹（`test/mcp.test.ts`）。真实第三方 MCP 服务器的
+工具在这些风险下是否好用仍是**假设**。
+
+**放弃了什么。** 服务器必须在 `mcp.json` 里声明每个工具的风险（通道从不猜测：未声明的工具按
+`external` 处理并拒绝）。工具结果只有文本——图片与结构化内容会被字符串化。服务器崩溃以工具错误
+上报，不重试。
+
+**推翻条件。** 若真实 MCP 服务器需要 resources 或 prompts（改用维护中的 SDK，而不是扩展本客户端），
+或所有者普遍把每个工具都标成 `read` 来省掉风险配置——那时风险必须来自签名的服务器清单，而不是所有者
+配置。
