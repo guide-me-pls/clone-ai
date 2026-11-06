@@ -258,14 +258,14 @@
   function selfCheckBlock() {
     const rounds = state.selfcheck || [];
     const latest = rounds[0];
-    const history = rounds.slice(1, 6).map((round) => `<li><time>${stamp(round.generatedAt)}</time>${round.verdict === "green" ? badge("绿色", "ok") : badge("红色", "bad")}<span>探针 ${round.probes.passed}/${round.probes.total} · gate ${round.gate.status === 0 ? "通过" : `exit ${round.gate.status}`}</span></li>`).join("");
+    const history = rounds.slice(1, 6).map((round) => `<li><time>${stamp(round.generatedAt)}</time>${round.verdict === "green" ? badge("绿色", "ok") : badge("红色", "bad")}<span>探针 ${round.probes.passed}/${round.probes.total} · gate ${round.gate.skipped ? "跳过" : round.gate.status === 0 ? "通过" : `exit ${round.gate.status}`}</span></li>`).join("");
     const failures = latest === undefined ? "" : latest.probes.probes.filter((probe) => !probe.passed)
       .map((probe) => `<li>${badge("红", "bad")}<div><b>${esc(probe.boundary)}</b><span>${esc(probe.attack)}</span><small>${esc(probe.detail ?? "")}</small></div></li>`).join("");
     return `<section class="au-card au-selfcheck">
       <div class="au-review-head"><div><h4>自检回路</h4><p class="au-note">对抗性探针攻击本机的边界，门禁重跑确定性行为；每一轮写入 Journal。探针变红时导出失败轨迹，交给夜间修复通道——回路自己不改代码。</p></div>
         <div class="au-actions"><label class="au-check"><input type="checkbox" data-au-selfcheck-full ${state.selfcheckFull ? "checked" : ""}/> 含全量测试</label><button type="button" class="au-btn au-btn-primary" data-au-selfcheck-run ${state.selfcheckBusy ? "disabled" : ""}>${state.selfcheckBusy ? "运行中…" : "运行一轮"}</button></div></div>
       ${latest === undefined ? `<p class="au-empty">还没有运行过自检。</p>` : `
-        <p class="au-review-summary">${latest.verdict === "green" ? badge("绿色", "ok") : badge("红色", "bad")} · ${latest.probes.passed}/${latest.probes.total} 个探针通过 · gate ${latest.gate.status === 0 ? "通过" : `失败（exit ${latest.gate.status}）`}${latest.tests === undefined ? "" : ` · 全量测试 ${latest.tests.status === 0 ? "通过" : `失败（exit ${latest.tests.status}）`}`}${latest.traceExport ? ` · 已导出 ${latest.traceExport.written.length} 条轨迹` : ""}</p>
+        <p class="au-review-summary">${latest.verdict === "green" ? badge("绿色", "ok") : badge("红色", "bad")} · ${latest.probes.passed}/${latest.probes.total} 个探针通过 · gate ${latest.gate.skipped ? "应用内跳过（未打包夹具）" : latest.gate.status === 0 ? "通过" : `失败（exit ${latest.gate.status}）`}${latest.tests === undefined ? "" : ` · 全量测试 ${latest.tests.status === 0 ? "通过" : `失败（exit ${latest.tests.status}）`}`}${latest.traceExport ? ` · 已导出 ${latest.traceExport.written.length} 条轨迹` : ""}</p>
         ${failures ? `<ul class="au-findings">${failures}</ul>` : ""}
         ${latest.gate.status !== 0 ? `<pre class="au-raw">${esc(latest.gate.tail)}</pre>` : ""}
         ${history ? `<h5>历史</h5><ul class="au-history">${history}</ul>` : ""}`}
