@@ -6,6 +6,30 @@
 它的目的是让**工作本身**可审计：不仅改了什么，还包括怎么做的、花了多少、链路哪里弱。
 规则见 [`AGENTS.md`](../../AGENTS.md)。
 
+### 2026-11-06 — 修复通道变成 clone-ai 自己的 Run（AGENTS.md 第 4 条终于可执行）
+
+- **目标 / 假设：** AGENTS.md 第 4 条要求 clone-ai 的 Bug 通过它自己的修复通道来修。此前的通道是 `scripts/nightly-rsi.mjs`：自己拼 Prompt 并 spawn `claude -p`，clone-ai 从未真正执行修复，规则描述的是系统并未做到的事。目标是把修复做成由已配置 Worker 执行的 Kernel Run，同时保留全部既有闸门。
+- **取舍：** [2026-11-06 —— 修复通道是 Clone AI 自己的 Run](../architecture/trade-offs.zh-CN.md#2026-11-06--修复通道是-clone-ai-自己的-run而不是脚本驱动另一个-cli)；[MCP 工具按服务器显式开启](../architecture/trade-offs.zh-CN.md#2026-11-06--mcp-工具按服务器显式开启并与内建工具过同一道闸门)。
+- **变更：** `src/repair/repair-lane.ts`（轨迹筛选、两个 Kernel Run、闸门、报告）、`src/repair/worktree.ts`（隔离的链接 worktree、依赖链接、清理）、`src/repair/gates.ts`（红色验证、逐路径哈希、暂存路径检查、提交）、`clone-ai repair [--dry-run] [--keep] [--max-traces N] [--agent id] [--base ref]`；`selfcheck --repair` 改为调用通道而不再 spawn 脚本。`scripts/nightly-rsi-policy.mjs` 与 `scripts/nightly-rsi-state.mjs` 是导入而非复制，保护路径清单与已消费轨迹账本因此只有一份。既有代码新增两个接缝：`createRuntimeAssembly({ evidenceKinds, knownAgentIds })`（黑盒 Worker 无法报告 `test` 证据；显式 Registry 必须是 Kernel 认可的执行者清单）与 `NativeToolSpec.close`（MCP 子进程不得活过它的步骤）。
+- **Eval：** `node --experimental-strip-types --test test/repair.test.ts` —— 16 个用例。单元：失败断言计数、崩溃不算复现、绿色套件被拒、按路径哈希（新增/删除/修改）、worktree 隔离（服务中检出的 `git status` 保持为空）、前置拒绝（路径已存在、非 git 根）、暂存中的保护路径检测、计划步骤顺序与验收措辞、worktree 保留策略（失败的保留、成功的不保留、`--keep` 覆盖两者）。用假 Adapter 的端到端：完整修复（两个 Run 按序派发、修复前验证为红、在分支上提交、轨迹不进提交、仅成功时消费轨迹）；已通过的用例在第二阶段前停下（只派发一次）；改写回归用例被哈希闸门拒绝；保护路径改动在提交前被拒；步骤失败则通道结束、无提交、轨迹保持可再修。变更前不存在进程内修复通道可测；`test/nightly-rsi.test.ts` 仍覆盖脚本的保护路径拒绝。完整套件：首次 `npm test` 617 个测试 / 613 通过 / 1 失败 / 3 跳过——失败是本切片在 `test/mcp.test.ts` 里的纯英文注释，已修复；最终运行 618 个测试 / 615 通过 / 3 跳过 / 0 失败。`npm run typecheck` 通过；`npm run gate` PASS 且 `baseline unchanged`。
+- **Benchmark run：** 无——确定性离线评估，使用假 Adapter，不涉及 Provider、模型、数据集或评分参数。
+- **执行链路：** 读脚本通道、Kernel 的计划/执行路径、验证器插件与 Worker Adapter；先写取舍条目；实现 worktree + 闸门 + 通道；在真实失败上迭代五次——（1）红色检查曾接受 import 期崩溃，因为 `node:test` 把它算作一个失败用例，现在要求输出中出现 `node:test` 断言错误；（2）最初设计把两阶段放进一个 Run，导致被禁用的假 Worker 也执行了"修复"分支、悄悄产出绿色用例，现在每个阶段各自一个 Run，红色检查夹在中间；（3）对 `~/.clone` 的冒烟运行按角色选中 `direct-responder`，随后被 Kernel 以缺少 `filesystem_write` 拒绝，现在按声明的能力选 Worker；（4）运行期临时物（`.clone/workspace-execution.sqlite3`）会被暂存，现在暂存前删除 `.rsi/` 与 `.clone/`；（5）`finally` 会删掉命令行刚刚承诺“保留供查看”的 worktree，现在保留策略跟随结果。最终状态：`npm test` 618 / 615 通过 / 3 跳过 / 0 失败，`npm run typecheck` 通过，`npm run gate` PASS 且 `baseline unchanged`。未产生任何模型调用。
+- **优点：** 每道闸门都在被测进程内运行，因此由确定性测试证明，而不是靠一次真实模型运行；保护路径清单与已消费轨迹账本只有一个所有者；报告带有修复前后 eval 以及修复新增的取舍标题。
+- **缺点 / 下次：** 通道尚未对真实模型端到端跑通——自动冒烟运行在第一阶段就因该 home 里配置的 Worker 不能写文件而停下，没有产出模型补丁。回退的套件命令（`package.json` 没有 `test` 脚本时）会跑所有 `test/**/*.test.ts`，仅在小夹具仓库上验证过。worktree 里的 `tsc --noEmit` 需要 `node_modules`，它从服务中检出符号链接而来——没有安装依赖的检出会走 `npx tsc` 回退路径并打印误导性横幅（在调试夹具中可见，本仓库中不可见）。
+- **推翻条件：** 见取舍条目——若 Kernel 路径无法表达一次修复，就把两阶段退回脚本，但保留共享的策略与轨迹模块。
+
+### 2026-11-06 — MCP 作为同一道闸门之后的第二个工具来源
+
+- **目标 / 假设：** clone-ai 的工具面此前只来自 `kernel-tools.ts` 与 `native-worker-factory.ts`。所有者要求通过 MCP 补齐缺失能力，同时不得扩大步骤可做的事。
+- **取舍：** [MCP 工具按服务器显式开启](../architecture/trade-offs.zh-CN.md#2026-11-06--mcp-工具按服务器显式开启并与内建工具过同一道闸门)。
+- **变更：** `src/workers/mcp-client.ts`（配置解析、默认关闭、风险声明、为 CLI Provider 按步骤筛选服务器、观察包裹、无依赖的 stdio 与 streamable-HTTP JSON-RPC 客户端）、`native-worker-factory.ts` 中的 `workerTools()`（内建工具加上已开启服务器声明的工具）、`NativeToolSpec.close`（步骤结束时释放子进程）、`providers.json`/`provider-catalog.ts` 中供接受 `--mcp-config` 的 Provider（Claude Code）使用的 `mcpConfigArgs`，以及不支持的 Provider 回退到内建工具。
+- **Eval：** `node --experimental-strip-types --test test/mcp.test.ts` —— 11 个用例：默认关闭（含 `"enabled": "yes"` 不算同意）、格式错误被报告而不是当作未配置、无已开启服务器时只有内建工具表、输出被包裹并清洗为观察、未声明风险按 external 拒绝、只读步骤得到只读工具而网络工具在无网络授权时不提供、带路径工具的逐次路径核对、客户端拒绝已关闭服务器、真实 stdio 子进程应答 `tools/list` 与 `tools/call`、CLI 服务器筛选（仅当每个已声明风险都被授权）、`workerTools` 从 `mcp.json` 接线。变更前完全没有 MCP 代码路径，因此"变更前"就是第三个用例断言的内建工具表。
+- **Benchmark run：** 无——确定性离线；stdio 用本地子进程，不涉及 Provider。
+- **执行链路：** 读 Worker Adapter 与 Connector 包裹模块；先写取舍条目；实现配置、闸门映射、包裹与客户端；跑测试并修正一处期望了不同错误前缀的断言。未新增依赖；取舍条目记录了原因以及改用 SDK 的条件。最终状态：`npm test` 618 / 615 通过 / 3 跳过 / 0 失败；`npm run typecheck` 通过；`npm run gate` PASS。
+- **优点：** 零新依赖；风险的权威是所有者的配置，而不是服务器的自我描述；没有 `--mcp-config` 的 Provider 仍可用内建工具继续工作，而不是让整轮失败。
+- **缺点 / 下次：** 只要服务器声明的全部工具都过闸门，CLI 路径就会把整个服务器交给 Provider——CLI 无法执行逐次路径核对，取舍条目已写明这一点。未使用真实第三方服务器；唯一用过的是本地夹具。
+- **推翻条件：** 见取舍条目——当 resources、prompts、sampling 或 OAuth 进入范围时，改用维护中的 SDK。
+
 ### 2026-11-05 — 自检回路：对抗探针、门禁、记录每一轮
 
 - **目标 / 假设：** Agent 应定时攻击自己的边界、记录每一轮，并把红色的一轮交给修复通道，而不是等所有者发现回归。
