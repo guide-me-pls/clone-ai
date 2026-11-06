@@ -26,8 +26,14 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     private var selectedNavigationIndex = 0
     private var pendingNavigationIndex: Int?
     private var pageReady = false
+    private var developerRoot: URL?
+    private var developerRestartPending = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let configuredRoot = ProcessInfo.processInfo.environment["CLONE_AI_DEV_ROOT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !configuredRoot.isEmpty {
+            developerRoot = URL(fileURLWithPath: configuredRoot, isDirectory: true).standardizedFileURL
+        }
         if activateExistingInstance() {
             DistributedNotificationCenter.default().post(name: Self.showWindowNotification, object: nil)
             NSApp.terminate(nil)
@@ -74,7 +80,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             backing: .buffered,
             defer: false
         )
-        window.title = "Clone AI"
+        window.title = developerRoot == nil ? "Clone AI" : "Clone AI · Dev"
         window.minSize = NSSize(width: 720, height: 520)
         window.isReleasedWhenClosed = false
         startupView = makeStartupView()
@@ -400,15 +406,51 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         decisionHandler(allowed ? .allow : .cancel)
     }
 
+    // Development mode reloads the process boundary in place: source edits
+    // restart the sidecar, then the existing WebView navigates to the new port.
+    // 开发模式原地重载进程边界：源码变化会重启 sidecar，现有 WebView 再跳到新端口。
+    private func reloadDeveloperRuntime() {
+        guard developerRoot != nil, !shuttingDown, !developerRestartPending else { return }
+        readyTimer?.invalidate()
+        readyTimer = nil
+        localURL = nil
+        pageReady = false
+        guard let process = daemon, process.isRunning else {
+            daemon = nil
+            startDaemon()
+            return
+        }
+        developerRestartPending = true
+        process.terminate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if self.developerRestartPending && process.isRunning {
+                process.interrupt()
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            if self.developerRestartPending && process.isRunning {
+                Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+        }
+    }
+
     private func startDaemon() {
         guard let resources = Bundle.main.resourceURL else {
             showMessage(title: "启动失败", detail: "找不到应用资源。")
             return
         }
-        let runtime = resources.appendingPathComponent("runtime", isDirectory: true)
-        let node = resources.appendingPathComponent("node")
+        let runtime = developerRoot ?? resources.appendingPathComponent("runtime", isDirectory: true)
+        let configuredNode = ProcessInfo.processInfo.environment["CLONE_AI_DEV_NODE"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let node = configuredNode.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? resources.appendingPathComponent("node")
         let entry = runtime.appendingPathComponent("src/desktop-sidecar.ts")
         let client = runtime.appendingPathComponent("apps/desktop/ui/index.html")
+        guard FileManager.default.fileExists(atPath: entry.path),
+              FileManager.default.fileExists(atPath: client.path) else {
+            showMessage(title: "开发源码不可用", detail: "找不到桌面运行时或界面源码，请检查 CLONE_AI_DEV_ROOT。")
+            return
+        }
         let process = Process()
         let stdout = Pipe()
         let stderr = Pipe()
@@ -429,6 +471,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         environment["PATH"] = ([environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"] + extraPaths).joined(separator: ":")
         environment["CLONE_AI_DESKTOP_CLIENT_PATH"] = client.path
         environment["CLONE_AI_DESKTOP_DEFAULT_WORKSPACE"] = defaultWorkspace.path
+        if developerRoot != nil { environment["CLONE_AI_DEV_MODE"] = "1" }
         environment.removeValue(forKey: "NODE_OPTIONS")
         process.executableURL = node
         process.arguments = ["--experimental-strip-types", entry.path]
@@ -452,6 +495,14 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         process.terminationHandler = { [weak self] process in
             DispatchQueue.main.async {
                 guard let self, !self.shuttingDown else { return }
+                if self.developerRestartPending {
+                    self.developerRestartPending = false
+                    self.daemon = nil
+                    self.localURL = nil
+                    self.pageReady = false
+                    self.startDaemon()
+                    return
+                }
                 self.showMessage(title: "本地运行时已停止", detail: "请关闭应用后重新打开；如果问题持续，请检查本地配置。")
                 NSLog("Clone AI sidecar exited with status %d", process.terminationStatus)
             }
@@ -460,6 +511,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             try process.run()
             daemon = process
         } catch {
+            developerRestartPending = false
             stdout.fileHandleForReading.readabilityHandler = nil
             stderr.fileHandleForReading.readabilityHandler = nil
             showMessage(title: "启动失败", detail: "无法启动应用内的本地运行时。")
@@ -693,6 +745,13 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             source.resume()
             signalSources.append(source)
         }
+        signal(SIGUSR1, SIG_IGN)
+        let reloadSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        reloadSource.setEventHandler { [weak self] in
+            self?.reloadDeveloperRuntime()
+        }
+        reloadSource.resume()
+        signalSources.append(reloadSource)
     }
 }
 

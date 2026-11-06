@@ -168,6 +168,10 @@ icon and choose **Quit**.
 Do not delete `dist/Clone AI.app` while the app is running. Close the app before replacing
 or moving that bundle.
 
+For active development, run `npm run desktop:dev`. This opens the native app against the
+workspace sources: backend and UI edits restart the sidecar and refresh the window
+automatically, while Swift shell edits rebuild and relaunch the `.app`.
+
 ## Safety commitments
 
 These commitments shape the implementation before any model or connector is added:

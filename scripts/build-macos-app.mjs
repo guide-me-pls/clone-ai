@@ -13,6 +13,7 @@ const lock = JSON.parse(await readFile(join(root, "package-lock.json"), "utf8"))
 const runtime = findNodeRuntime();
 const outputDirectory = join(root, "dist");
 const replaceExisting = process.argv.includes("--replace");
+const appOnly = process.argv.includes("--app-only");
 const scratchParent = join(root, "apps", "desktop", ".build");
 await mkdir(outputDirectory, { recursive: true });
 await mkdir(scratchParent, { recursive: true });
@@ -66,16 +67,18 @@ try {
   const finalApp = await availablePath(outputDirectory, "Clone AI", ".app", replaceExisting);
   if (replaceExisting) await rm(finalApp, { recursive: true, force: true });
   await rename(app, finalApp);
-  const finalZip = await availablePath(outputDirectory, `${basename(finalApp, ".app")}-macOS-arm64`, ".zip", replaceExisting);
-  if (replaceExisting) await rm(finalZip, { force: true });
-  execFileSync("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", finalApp, finalZip], { stdio: "inherit" });
-  const finalDmg = await availablePath(outputDirectory, `${basename(finalApp, ".app")}-macOS-arm64`, ".dmg", replaceExisting);
-  if (replaceExisting) await rm(finalDmg, { force: true });
-  execFileSync("/usr/bin/hdiutil", ["create", "-volname", "Clone AI", "-srcfolder", finalApp, "-ov", "-format", "UDZO", finalDmg], { stdio: "inherit" });
-  execFileSync("/usr/bin/hdiutil", ["verify", finalDmg], { stdio: "inherit" });
   console.log(`macOS app: ${finalApp}`);
-  console.log(`macOS zip: ${finalZip}`);
-  console.log(`macOS dmg: ${finalDmg}`);
+  if (!appOnly) {
+    const finalZip = await availablePath(outputDirectory, `${basename(finalApp, ".app")}-macOS-arm64`, ".zip", replaceExisting);
+    if (replaceExisting) await rm(finalZip, { force: true });
+    execFileSync("/usr/bin/ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", finalApp, finalZip], { stdio: "inherit" });
+    const finalDmg = await availablePath(outputDirectory, `${basename(finalApp, ".app")}-macOS-arm64`, ".dmg", replaceExisting);
+    if (replaceExisting) await rm(finalDmg, { force: true });
+    execFileSync("/usr/bin/hdiutil", ["create", "-volname", "Clone AI", "-srcfolder", finalApp, "-ov", "-format", "UDZO", finalDmg], { stdio: "inherit" });
+    execFileSync("/usr/bin/hdiutil", ["verify", finalDmg], { stdio: "inherit" });
+    console.log(`macOS zip: ${finalZip}`);
+    console.log(`macOS dmg: ${finalDmg}`);
+  }
   console.log(`Bundled Node.js: ${runtime}`);
 } finally {
   await rm(scratch, { recursive: true, force: true });
