@@ -59,16 +59,18 @@ and status.
 
 Runs three fixed prompts through the Pi runtime and the native loop with the
 same model and an isolated clone home per task: a direct answer, an authority
-read, and a plan proposal. The report records duration, tokens, tool calls,
-created runs, turn status and whether the expectation held.
+read, and a plan proposal. Each task/runtime cell runs `--repeat N` times
+(default 5); the report gives median and p90 duration, median tokens and the
+pass rate, and keeps every individual run.
 
 ```bash
-CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main
+CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main -- --repeat 5
 ```
 
 The native endpoint comes from `CLONE_AI_NATIVE_BASE_URL` (default
-`http://127.0.0.1:3425`). This is a one-run-per-cell comparison, not a
-statistical benchmark; the model itself varies between runs.
+`http://127.0.0.1:3425`). A single sample cannot rank latency: in two one-shot
+passes the same native plan cell was 45.2s and 11.1s. Prefer the median; use
+`--repeat 1` only for a quick smoke.
 
 ## Long-context validation (`npm run bench:long`)
 

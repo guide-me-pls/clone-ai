@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Main Agent comparison repeats and reports medians
+
+`npm run bench:main` now runs each task/runtime cell `--repeat N` times (default 5) and reports median and p90 duration, median tokens and pass rate, keeping every sample in the JSON. `benchmark/stats.ts` provides the median and nearest-rank percentile, and a throwing cell is recorded as a failed sample instead of aborting the report. A three-sample run on DeepSeek v4.1 Flash: both runtimes 9/9, native about 6.6% fewer tokens, median latency within about one second.
+
+`npm run bench:main` 现在对每个任务/运行时组合跑 `--repeat N` 次（默认 5），报告中位数与 p90 耗时、中位 tokens 与通过率，并在 JSON 中保留每个样本。`benchmark/stats.ts` 提供中位数与最近秩百分位；抛错的格子记为失败样本，而不是中断整份报告。DeepSeek v4.1 Flash 上的三次运行：两个运行时均 9/9，原生少约 6.6% tokens，中位延迟相差约一秒以内。
+
 ### Native worker defaults for eligible roles
 
 With `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` set, the default agents for `direct`, `research`, `draft` and `review` now use the in-process native worker; `external` stays on the CLI path because the native worker has no governed action connector. A provider saved in settings still wins, and without the endpoint the previous CLI defaults apply.
