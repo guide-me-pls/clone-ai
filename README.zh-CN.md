@@ -134,6 +134,9 @@ Apple Silicon 版本。应用默认以 `~/Documents/Clone AI` 作为工作目录
 
 应用运行时不要删除 `dist/Clone AI.app`；替换或移动应用前请先关闭应用。
 
+开发时运行 `npm run desktop:dev`。它会让原生应用直接使用工作区源码：后端与 UI 修改会
+自动重启 sidecar 并刷新窗口，Swift 原生壳修改会自动重建并重新启动 `.app`。
+
 ## 安全承诺
 
 这些承诺会在接入任何模型或连接器之前约束实现：
