@@ -16,7 +16,6 @@ import type { CloneRuntime } from "../../core/runtime.ts";
 import { createRuntimeAssembly } from "../../core/runtime-factory.ts";
 import { resolveClonePaths } from "../../config/clone-home.ts";
 import { GovernedMemorySource } from "../../memory/md-memory-store.ts";
-import { WorkerRegistry } from "../../workers/worker-registry.ts";
 import { compileBriefing } from "../situation-briefing.ts";
 import { pushRelevantMemories } from "../memory-push.ts";
 import { describeHistory, searchHistory } from "../conversation-history.ts";
@@ -367,46 +366,11 @@ export async function requestAgentInstallation(
  * 为可信调用方提供确定性、可审计的 Worker CLI 安装。模型选出的引文不是授权，
  * 因此上面的 Main Agent 工具会拒绝安装。
  */
-export async function installWorkerAgent(dataDirectory: string, agentId: string): Promise<{ installed: boolean; version?: string; error?: string }> {
-  const registry = new WorkerRegistry(dataDirectory);
-  const providers = await registry.list();
-  const provider = providers.find((candidate) => candidate.id === agentId);
-  if (provider === undefined) {
-    return { installed: false, error: `No worker is registered as "${agentId}".` };
-  }
-  if (provider.installed) {
-    return { installed: true, version: provider.version };
-  }
-  if (!provider.installable) {
-    return { installed: false, error: `Worker "${agentId}" has no automatic installer; install its command and restart Clone AI.` };
-  }
-  // One assembly for the whole operation, closed on both paths: a leaked
-  // SQLite handle keeps the clone home locked against the owner.
-  // 整个操作只用一个组装，两条路径都关闭：泄露的 SQLite 句柄会把 clone home 锁住，
-  // 连所有者自己都动不了。
-  const assembly = await createRuntimeAssembly({ dataDirectory });
-  try {
-    const after = await registry.install(agentId);
-    await assembly.journal.append({
-      type: "agent.installed",
-      payload: {
-        agentId,
-        providerId: agentId,
-        installedAt: new Date().toISOString(),
-        ...(after.version === undefined ? {} : { version: after.version }),
-      },
-    });
-    return { installed: true, ...(after.version === undefined ? {} : { version: after.version }) };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    await assembly.journal.append({
-      type: "agent.install_failed",
-      payload: { agentId, providerId: agentId, message, attemptedAt: new Date().toISOString() },
-    });
-    return { installed: false, error: message };
-  } finally {
-    assembly.close();
-  }
+export async function installWorkerAgent(_dataDirectory: string, agentId: string): Promise<{ installed: boolean; version?: string; error?: string }> {
+  return {
+    installed: false,
+    error: `No worker CLI can be installed. "${agentId}" is not a provider: the native worker runs in-process.`,
+  };
 }
 
 /**
@@ -720,20 +684,6 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
     },
   });
 
-  register({
-    name: "install_agent",
-    label: "Install Agent",
-    description:
-      "Installation from model-selected quotes is disabled. The owner must use the desktop installation control or CLI directly.",
-    parameters: Type.Object({
-      agentId: Type.String({ description: "Worker id, e.g. codex-cli, claude-code, pi." }),
-      ownerSaid: Type.String({ description: "The owner's exact words confirming this installation, quoted from this conversation." }),
-    }),
-    execute: async (_toolCallId, params) => {
-      const result = await requestAgentInstallation(options.dataDirectory, params.agentId, params.ownerSaid);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: {} };
-    },
-  });
 }
 
 export interface PlainKernelTool {

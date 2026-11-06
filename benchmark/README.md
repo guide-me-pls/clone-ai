@@ -9,51 +9,18 @@ is deliberately small and cheap so it can run before every upgrade.
 
 ## Run
 
-Real CLIs have no OS sandbox enforced by Clone AI and are blocked by default. Only
-after accepting that they can access the user's files, network, and credentials, run:
-
-```bash
-npm run bench -- --unsafe-host --provider pi --tasks summarize
-```
-
-Each task costs a few cents of real model calls and takes roughly 20-60
-seconds. Results are recorded as JSON under `benchmark/results/<provider>-<timestamp>.json`
-so successive upgrades can be compared.
-
-## Native provider
-
-The in-process worker runs the same task set without a CLI:
+The benchmark runs through the in-process native worker; there is no CLI to
+sandbox or consent to.
 
 ```bash
 CLONE_AI_NATIVE_MODEL=<model-id> CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url> \
-  npm run bench -- --provider native --tasks summarize
+  npm run bench -- --tasks summarize
 ```
 
-It does not need `--unsafe-host`: every tool call is checked against the step's
-scopes before it runs. The report records exact `usage` (tokens and model calls),
-`verification`, and `failureReason`; CLI providers usually report only duration
-and status.
-
-## Task set (`benchmark/tasks.ts`)
-
-| id | What it proves |
-| --- | --- |
-| `summarize` | Single read-only WorkOrder; artifact evidence from workspace diff |
-| `two-step-chain` | Dependency wave: draft only starts after research is verified |
-| `three-step-pipeline` | Two dependency edges; review uses both inputs |
-| `code-tool` | Agent produces two code artifacts; this does not prove an independent trusted test run |
-| `missing-input` | Expected failure: an absent file fails as `no_artifact`, not a hang |
-
-## Reading results
-
-- `passed` is true when the run reached `completed` with verification passed
-  and the expected artifacts exist on disk.
-- `expectedFailure` tasks (`missing-input`) count as green only for the expected
-  `no_artifact` category, not an authorization or launch failure.
-- `artifacts` lists every file the agent left in the workspace (excluding
-  `.clone-ai`), with sizes.
-- The runner exits non-zero when any unexpected failure occurs, so CI or a
-  pre-upgrade check can gate on it.
+Each task costs a few real model calls and takes roughly 20-60 seconds. Results
+are recorded as JSON under `benchmark/results/native-<timestamp>.json` and
+include exact `usage` (tokens and model calls), `verification`, and
+`failureReason`.
 
 ## Main Agent comparison (`npm run bench:main`)
 

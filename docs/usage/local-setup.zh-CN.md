@@ -62,26 +62,16 @@ npm run desktop:build
 
 ## 4. Worker（真正干活的 Agent）
 
-Clone AI 自己不实现 Coding Agent，它监督你已有的那些。
+Clone AI 只有一个执行 Provider：进程内的原生 Worker。它不是 CLI；每次工具调用都在发起
+的瞬间按步骤 Scope 校验，token 用量被精确记录。
 
-| Worker | Windows 命令 | macOS 命令 | 安装 |
-| --- | --- | --- | --- |
-| Claude Code | `claude.cmd` | `claude` | `clone-ai install claude-code` |
-| Codex CLI | `codex.cmd` | `codex` | `clone-ai install codex-cli` |
-| Pi | `pi.cmd` | `pi` | `clone-ai install pi` |
-| opencode | `opencode.cmd` | `opencode` | 手动安装 |
+| Worker | 运行方式 | 配置 |
+| --- | --- | --- |
+| 原生 Worker | 进程内循环，对接 OpenAI 兼容端点 | `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` |
 
-配方位于 `src/workers/providers.json`，可在 `<clone home>/providers.json` 覆盖或
-新增。配方里只放环境**变量名**，绝不放凭据值。
-
-注意：桌面应用（Claude Code Desktop、opencode Desktop）不能作为 Worker——Clone AI
-需要的是能用「一个 Prompt + 一个工作目录」运行的无头 CLI。
-
-Clone AI 还自带进程内的 `native` 执行 Provider：把某个 Agent 的 Provider 设为
-`native`，并设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`。它不需要
-CLI，且每次工具调用都按步骤 Scope 校验。设置这两个变量后，`direct`、`research`、
-`draft`、`review` 的默认 Agent 已经使用它；`external` 仍走 CLI 路径，因为原生 Worker
-没有受治理的动作连接器。在设置中保存的 Provider 始终优先于默认。
+黑盒 CLI Worker（Claude Code、Codex、Pi CLI、opencode）已移除。CLI 会把工具调用与
+凭据藏在 Kernel 看不到的地方，harness 既无法审计也无法拦截。`external` 角色在有受治理的
+动作连接器之前没有 Provider，也不会被路由到 CLI。
 
 ### 主 Agent 运行时
 

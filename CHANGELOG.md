@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The black-box CLI workers are gone
+
+Claude Code, Codex, the Pi CLI and opencode were removed as execution providers, together with their launch recipes, install commands, the `install_agent` tool and the provider settings APIs. The in-process native worker is the only executor: every tool call is checked against the step's scopes at the moment it is made, and its usage is exact. The `external` role now has no provider until a governed action connector exists — it is never routed to a CLI. The worker benchmark runs native-only; memory mining calls the same endpoint with an injected completion.
+
+Claude Code、Codex、Pi CLI 与 opencode 已被移除，连同它们的启动配方、安装命令、`install_agent` 工具与 Provider 设置接口。进程内的原生 Worker 是唯一的执行器：每次工具调用都在发起的瞬间按步骤 Scope 校验，用量精确。`external` 角色在有受治理的动作连接器之前没有 Provider，绝不会被路由到 CLI。Worker 基准只跑原生；记忆提炼用可注入的补全调用同一端点。
+
 ### The Main Agent no longer uses the Pi SDK
 
 The Pi Agent SDK is gone from the Main Agent path. The native in-process loop is the only runtime: the prompt compiler, conversation pointer, transcript, self-review call and model picker are ours. `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are required; without them a turn fails with a message naming the missing variables, and `CLONE_AI_MAIN_RUNTIME=pi` is refused instead of falling back. The turn ledger is the conversation record, and `search_history` reads it alongside any legacy session files. Removing the black-box CLI workers is the next step, recorded in the same trade-off.

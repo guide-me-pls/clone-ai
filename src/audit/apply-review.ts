@@ -1,8 +1,8 @@
 /**
  * Applying a review action: a small, reversible configuration change.
  *
- * The whitelist here is the whole safety boundary. An action may set a worker's
- * model or effort, or the Main Agent's — nothing else. Each application writes
+ * The whitelist here is the whole safety boundary. An action may set the Main
+ * Agent's model or effort — nothing else. Each application writes
  * `recommendation.applied` with the previous value first, so a revert is a
  * matter of putting one field back, and the journal can always answer who
  * changed what, on whose click, and from which review.
@@ -18,7 +18,6 @@ import { join } from "node:path";
 import type { JournalStore } from "../core/journal.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
-import { listEffectiveProviderConfigs, readUserProviderConfigs, writeUserProviderConfigs } from "../config/provider-config-store.ts";
 import type { ReviewAction, SelfReview } from "./self-review.ts";
 import { loadReview } from "./self-review.ts";
 import { writeJsonAtomic } from "../config/json-file.ts";
@@ -88,9 +87,7 @@ async function currentValue(dataDirectory: string, action: ReviewAction): Promis
     const config = await new CloneConfigStore(resolveClonePaths({ dataDirectory })).get();
     return action.kind === "main-agent-effort" ? config.mainAgentEffort : config.mainAgentModel;
   }
-  const provider = (await listEffectiveProviderConfigs(dataDirectory)).find((candidate) => candidate.id === action.providerId);
-  if (provider === undefined) throw new Error(`Unknown worker ${action.providerId}.`);
-  return action.kind === "provider-effort" ? provider.effort : provider.model;
+  throw new Error(`Unknown review action ${action.kind}.`);
 }
 
 async function writeValue(dataDirectory: string, action: ReviewAction, value: string): Promise<void> {
@@ -100,14 +97,7 @@ async function writeValue(dataDirectory: string, action: ReviewAction, value: st
     else await store.update({ mainAgentModel: value });
     return;
   }
-  const provider = (await listEffectiveProviderConfigs(dataDirectory)).find((candidate) => candidate.id === action.providerId);
-  if (provider === undefined) throw new Error(`Unknown worker ${action.providerId}.`);
-  const overrides = await readUserProviderConfigs(dataDirectory);
-  const existing = overrides.find((candidate) => candidate.id === provider.id) ?? { id: provider.id, command: provider.command };
-  const next = { ...existing };
-  if (action.kind === "provider-effort") next.effort = value as never;
-  else next.model = value;
-  await writeUserProviderConfigs(dataDirectory, [...overrides.filter((candidate) => candidate.id !== provider.id), next]);
+  throw new Error(`Unknown review action ${action.kind}.`);
 }
 
 async function clearOrRestore(dataDirectory: string, action: ReviewAction, from: string | undefined): Promise<void> {
@@ -118,22 +108,4 @@ async function clearOrRestore(dataDirectory: string, action: ReviewAction, from:
     else await store.update({ mainAgentModel: "" });
     return;
   }
-  const provider = (await listEffectiveProviderConfigs(dataDirectory)).find((candidate) => candidate.id === action.providerId);
-  if (provider === undefined) return;
-  const overrides = await readUserProviderConfigs(dataDirectory);
-  const existing = overrides.find((candidate) => candidate.id === provider.id);
-  if (existing === undefined) return;
-  const next = { ...existing };
-  delete next.effort;
-  delete next.model;
-  // An override with nothing but id and command says nothing; leaving it behind
-  // would make the provider look user-configured when it is not.
-  // 只剩 id 与 command 的覆盖项什么也没说；留着它会让该 Provider 看起来被用户配置过。
-  const meaningful = Object.keys(next).filter((key) => key !== "id" && key !== "command" && key !== "label");
-  await writeUserProviderConfigs(
-    dataDirectory,
-    meaningful.length === 0
-      ? overrides.filter((candidate) => candidate.id !== provider.id)
-      : [...overrides.filter((candidate) => candidate.id !== provider.id), next],
-  );
 }

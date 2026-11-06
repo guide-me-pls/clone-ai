@@ -13,12 +13,6 @@ import {
 } from "../src/config/clone-home.ts";
 import { CloneConfigStore } from "../src/config/clone-config.ts";
 import { writeJsonAtomic } from "../src/config/json-file.ts";
-import {
-  listEffectiveProviderConfigs,
-  readUserProviderConfigs,
-  removeUserProviderConfig,
-  upsertUserProviderConfig,
-} from "../src/config/provider-config-store.ts";
 
 async function tempDirectory(t: TestContext, prefix: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), prefix));
@@ -151,58 +145,4 @@ test("CLONE_AI_MAIN_MODEL overrides config.json for the Main Agent model", async
     await readMainAgentModelPreference(paths.dataDirectory, { CLONE_AI_MAIN_MODEL: "from-env" }),
     "from-env",
   );
-});
-
-test("a third-party provider is stored, listed with built-ins, and removed", async (t) => {
-  const dataDirectory = await tempDirectory(t, "clone-providers-");
-
-  assert.deepEqual(await readUserProviderConfigs(dataDirectory), []);
-
-  // Integrating a new agent is a config edit; no source change is involved.
-  // 接入新 Agent 是改配置，不涉及任何源码改动。
-  await upsertUserProviderConfig(dataDirectory, {
-    id: "opencode",
-    command: "opencode",
-    args: ["run", "{{prompt}}"],
-    env: ["ANTHROPIC_API_KEY"],
-  });
-
-  const effective = await listEffectiveProviderConfigs(dataDirectory);
-  assert.ok(effective.some((provider) => provider.id === "opencode"));
-  assert.ok(effective.some((provider) => provider.id === "claude-code"), "built-ins remain available");
-
-  await removeUserProviderConfig(dataDirectory, "opencode");
-  assert.deepEqual(await readUserProviderConfigs(dataDirectory), []);
-});
-
-test("a provider declaration may name environment variables but never hold a value", async (t) => {
-  const dataDirectory = await tempDirectory(t, "clone-providers-");
-
-  // The whole point of storing names only: a config file must never become a
-  // place where a credential can sit.
-  // 只存变量名的意义所在：配置文件绝不能变成凭据的存放处。
-  await assert.rejects(
-    upsertUserProviderConfig(dataDirectory, {
-      id: "leaky",
-      command: "leaky",
-      env: ["ANTHROPIC_API_KEY=sk-not-a-real-key"],
-    }),
-    /env must contain variable names only/,
-  );
-
-  await assert.rejects(
-    upsertUserProviderConfig(dataDirectory, { id: "bad id!", command: "x" }),
-    /needs a valid id/,
-  );
-  await assert.rejects(
-    upsertUserProviderConfig(dataDirectory, { id: "nocommand", command: "  " }),
-    /needs a non-empty command/,
-  );
-});
-
-test("a malformed providers file is reported instead of silently ignored", async (t) => {
-  const dataDirectory = await tempDirectory(t, "clone-providers-");
-  await writeJsonAtomic(join(dataDirectory, "providers.json"), { providers: [{ id: "dup", command: "a" }, { id: "dup", command: "b" }] });
-
-  await assert.rejects(readUserProviderConfigs(dataDirectory), /declared more than once/);
 });

@@ -703,3 +703,31 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   tool are still present. Removing them is the next stage of the same trade-off;
   external actions will have no provider until a governed connector exists.
 - **Reversal condition:** see the trade-off entry.
+
+## 2026-11-06 — Removing the black-box CLI workers (stage 2 of 2)
+
+- **Goal / hypothesis:** finish the removal: no CLI worker, no provider recipe,
+  no install path, as decided in the same trade-off.
+- **Trade-off:** [keep only our own agents](../architecture/trade-offs.md#2026-11-06--the-harness-keeps-only-its-own-agents-no-pi-sdk-no-black-box-clis).
+- **Change:** deleted `black-box-cli-worker`, `worker-registry`,
+  `executable-resolver` usage for workers, `worker-env`, `fresh-session-policy`,
+  `provider-config-store` and `providers.json`; the provider catalog is the
+  native definition only; default agents are native and the `external` profile is
+  gone (no governed connector); `install` is refused, `install_agent` removed,
+  provider settings endpoints return 409; memory mining now calls the native
+  endpoint with an injected completion; the worker benchmark runs native only;
+  routing treats configured agents as available; docs, locale strings and
+  failure copy updated.
+- **Eval:** full suite 520 tests / 520 pass; typecheck, gate and bilingual docs
+  pass. Removed tests covered only the deleted CLI surfaces (CLI recipes,
+  installers, seatbelt, worker env, provider registry); the deterministic
+  equivalents for routing, memory mining and review remain.
+- **Execution chain:** deletions first, then the compiler drove every reference
+  fix: run-query, CLI, companion, self-review, memory worker, benchmark, tests.
+  Two bulk test edits were reverted after they produced invalid files and redone
+  with targeted removals.
+- **Pros / cons:** the only execution path is now per-call gated and auditable;
+  no CLI can run with hidden tools or credentials. The cost is explicit:
+  external actions have no provider, CLI-only capabilities are gone, and an
+  install command can no longer help.
+- **Reversal condition:** see the trade-off entry.

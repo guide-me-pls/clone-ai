@@ -498,3 +498,23 @@
   Provider 目录、安装命令与 `install_agent` 工具仍在。移除它们是同一取舍的下一阶段；
   在有受治理的连接器之前，外部动作将没有 Provider。
 - **推翻条件：** 见取舍条目。
+
+## 2026-11-06 — 移除黑盒 CLI Worker（两步中的第二步）
+
+- **目标 / 假设：** 完成移除：没有 CLI Worker、没有 Provider 配方、没有安装路径，与同一
+  取舍一致。
+- **取舍：** [只保留自己的 Agent](../architecture/trade-offs.zh-CN.md#2026-11-06--只保留自己的-agent去掉-pi-sdk-与黑盒-cli)。
+- **变更：** 删除 `black-box-cli-worker`、`worker-registry`、Worker 侧的
+  `executable-resolver` 用法、`worker-env`、`fresh-session-policy`、
+  `provider-config-store` 与 `providers.json`；Provider 目录只剩原生定义；默认 Agent
+  全部为原生，`external` 配置移除（没有受治理的连接器）；`install` 被拒绝，
+  `install_agent` 工具移除，Provider 设置接口返回 409；记忆提炼改为调用原生端点并支持注入；
+  Worker 基准只跑原生；路由把已配置的 Agent 视为可用；文档、本地化文案与失败文案更新。
+- **Eval：** 全量 520 个测试 / 520 通过；typecheck、gate 与双语文档通过。删除的测试只覆盖
+  已删除的 CLI 面（CLI 配方、安装器、seatbelt、Worker 环境、Provider 注册表）；路由、
+  记忆提炼与评审的确定性等价测试仍在。
+- **执行链路：** 先删除，再让编译器驱动每处引用修正：run-query、CLI、companion、自评审、
+  记忆 Worker、benchmark、测试。两次批量测试编辑产生了无效文件，已回滚并改为逐项删除。
+- **优点 / 缺点：** 唯一的执行路径现在逐次受闸门约束且可审计，没有 CLI 能带着隐藏的工具或
+  凭据运行。代价是明确的：外部动作没有 Provider，CLI 独有能力消失，安装命令也帮不上忙。
+- **推翻条件：** 见取舍条目。

@@ -366,29 +366,3 @@ test("an owner failures.json can add diagnostic guidance without source changes"
   assert.equal(result.category, "owner_auth_failure");
   assert.equal(result.guidance, "Refresh the local login.");
 });
-
-test("a user providers.json adds a provider without source changes", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "clone-ai-provider-json-"));
-  t.after(async () => rm(directory, { recursive: true, force: true }));
-  await writeFile(join(directory, "providers.json"), JSON.stringify({
-    providers: [{
-      id: "user-agent",
-      label: "User Agent",
-      command: process.execPath,
-      args: ["-e", "process.exit(0)"],
-      env: ["USER_AGENT_HOME"],
-      work: ["research"],
-    }],
-  }), "utf8");
-
-  const registry = await loadProviderRegistry(directory);
-  const definition = registry.get("user-agent");
-  assert.equal(definition?.label, "User Agent");
-  const adapter = registry.createAdapter("user-agent", {
-    agentId: "context-researcher",
-    role: "research",
-    workCapabilities: ["research"],
-    dataDirectory: directory,
-  });
-  assert.equal(adapter.providerId, "user-agent");
-});

@@ -16,7 +16,6 @@ import { describeSchedule, ScheduleStore, type LocalSchedule, type ScheduleKind 
 import { SessionStore } from "./sessions/session-store.ts";
 import { loadProviderRegistry } from "./workers/provider-catalog.ts";
 import { WorkerSettingsStore } from "./config/worker-settings.ts";
-import { WorkerRegistry } from "./workers/worker-registry.ts";
 import { runMainAgentQuery } from "./application/run-main-query.ts";
 import {
   readMainAgentTurnRecords,
@@ -72,12 +71,6 @@ import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
 import { listMainAgentModelIds, listMainAgentModels, mainAgentModelReference } from "./main-agent/main-agent-model-catalog.ts";
 import { readInvocation, readInvocations } from "./audit/invocation-ledger.ts";
 import { WhatsAppBindingInputError, WhatsAppSetupService } from "./mobile/whatsapp-setup.ts";
-import {
-  listEffectiveProviderConfigs,
-  readUserProviderConfigs,
-  removeUserProviderConfig,
-  upsertUserProviderConfig,
-} from "./config/provider-config-store.ts";
 
 export interface CompanionServerOptions {
   host?: string;
@@ -367,7 +360,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const sessions = new SessionStore(paths.sessionsFile);
   const providers = await loadProviderRegistry(dataDirectory);
   const agentSettings = new WorkerSettingsStore(paths.legacyAgentsFile, providers);
-  const agentRegistry = new WorkerRegistry(dataDirectory);
+  const agents = [{ id: "native", title: "Native worker", command: "in-process", installed: true, installable: false }];
   // One Runtime assembly, and therefore one journal, shared by every module in
   // this process. Separate stores over the same file each keep their own
   // sequence counter and their own cached view, which is how duplicate
@@ -561,7 +554,9 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         schedules,
         sessions,
         agentSettings,
-        agentRegistry,
+        agents: [
+          { id: "native", title: "Native worker", command: "in-process", installed: true, installable: false },
+        ],
         memoryGovernance,
         improvement,
         reportRunner,
@@ -656,7 +651,7 @@ async function handleRequest(
     schedules: ScheduleStore;
     sessions: SessionStore;
     agentSettings: WorkerSettingsStore;
-    agentRegistry: WorkerRegistry;
+    agents: Array<{ id: string; title: string; command: string; installed: boolean; installable: boolean }>;
     memoryGovernance: MemoryGovernance;
     improvement: ImprovementService;
     reportRunner?: DailyReportRunner;
@@ -899,10 +894,9 @@ async function handleRequest(
   }
 
   if (request.method === "GET" && url.pathname === "/api/settings/providers") {
-    sendJson(response, 200, {
-      providers: await listEffectiveProviderConfigs(context.dataDirectory),
-      userDefined: await readUserProviderConfigs(context.dataDirectory),
-    });
+    // One in-process provider; the CLI recipe list no longer exists.
+    // 只有进程内的 Provider；CLI 配方列表已不存在。
+    sendJson(response, 200, { providers: [], userDefined: [] });
     return;
   }
 
@@ -973,27 +967,13 @@ async function handleRequest(
   }
 
   if (request.method === "PUT" && url.pathname === "/api/settings/providers") {
-    const body = await readJsonBody(request);
-    if (body.hostAccess === "unrestricted" && body.acknowledgeUnrestrictedHostAccess !== true) {
-      sendJson(response, 400, { error: "Unrestricted host access requires explicit acknowledgement; it is not a sandbox." });
-      return;
-    }
-    try {
-      // Validation lives in the store, so the GUI cannot write a declaration
-      // the Runtime would later refuse to launch.
-      // 校验在 Store 内进行，因此 GUI 无法写入 Runtime 之后会拒绝启动的声明。
-      const providers = await upsertUserProviderConfig(context.dataDirectory, body as never);
-      sendJson(response, 200, { providers });
-    } catch (error: unknown) {
-      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid provider declaration." });
-    }
+    sendJson(response, 409, { error: "Worker CLI providers were removed; the native worker runs in-process." });
     return;
   }
 
   const providerMatch = url.pathname.match(/^\/api\/settings\/providers\/([^/]+)$/);
   if (request.method === "DELETE" && providerMatch?.[1] !== undefined) {
-    const providers = await removeUserProviderConfig(context.dataDirectory, decodeURIComponent(providerMatch[1]));
-    sendJson(response, 200, { providers });
+    sendJson(response, 409, { error: "Worker CLI providers were removed; there is nothing to delete." });
     return;
   }
 
@@ -1227,25 +1207,13 @@ async function handleRequest(
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/agents") {
-    sendJson(response, 200, { providers: await context.agentRegistry.list() });
+    sendJson(response, 200, { providers: [{ id: "native", title: "Native worker", command: "in-process", installed: true, installable: false }] });
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/agents/install-missing") {
-    const body = await readJsonBody(request);
-    if (body.acknowledgeGlobalInstall !== true) {
-      sendJson(response, 400, { error: "Confirm the global software installation before continuing." });
-      return;
-    }
-    try {
-      const providers = await context.agentRegistry.list();
-      const installed = [];
-      for (const provider of providers.filter((provider) => !provider.installed && provider.installable)) {
-        installed.push(await context.agentRegistry.install(provider.id));
-      }
-      sendJson(response, 200, { installed, providers: await context.agentRegistry.list() });
-    } catch (error: unknown) {
-      sendJson(response, 500, { error: error instanceof Error ? error.message : "The local Agent installation failed." });
-    }
+    // Nothing to install: the only worker runs in-process.
+    // 没有需要安装的东西：唯一的 Worker 在进程内运行。
+    sendJson(response, 200, { installed: [], providers: [{ id: "native", title: "Native worker", command: "in-process", installed: true, installable: false }] });
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/memory/governed/recall") {
@@ -1926,21 +1894,7 @@ async function handleRequest(
 
   const agentInstallMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/install$/);
   if (request.method === "POST" && agentInstallMatch?.[1] !== undefined) {
-    const id = decodeURIComponent(agentInstallMatch[1]);
-    if (id !== "codex-cli" && id !== "claude-code" && id !== "pi") {
-      sendJson(response, 404, { error: "The requested local Agent is not supported." });
-      return;
-    }
-    const body = await readJsonBody(request);
-    if (body.acknowledgeGlobalInstall !== true) {
-      sendJson(response, 400, { error: "Confirm the global software installation before continuing." });
-      return;
-    }
-    try {
-      sendJson(response, 200, { provider: await context.agentRegistry.install(id) });
-    } catch (error: unknown) {
-      sendJson(response, 500, { error: error instanceof Error ? error.message : "The local Agent installation failed." });
-    }
+    sendJson(response, 409, { error: "No worker CLI can be installed; the native worker runs in-process." });
     return;
   }
 

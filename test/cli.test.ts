@@ -53,17 +53,6 @@ test("clone-ai --version prints the package version", async (t) => {
   assert.match(stdout.trim(), /^\d+\.\d+\.\d+/);
 });
 
-test("clone-ai workers reports install state without touching the network", async (t) => {
-  const { code, stdout } = await runCli(t, ["workers"]);
-
-  assert.equal(code, 0);
-  // Built-in recipes are always listed, installed or not.
-  // 内建配方无论是否安装都会列出。
-  for (const worker of ["claude-code", "codex-cli", "pi", "opencode"]) {
-    assert.match(stdout, new RegExp(worker));
-  }
-});
-
 test("clone-ai cases reports an empty log on a fresh home", async (t) => {
   const { code, stdout } = await runCli(t, ["cases"]);
 
