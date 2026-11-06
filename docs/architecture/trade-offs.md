@@ -53,10 +53,12 @@ and make the acceptance check stronger instead.
 native step may spend before the client returns its "round limit" summary; an
 unset or malformed value keeps the built-in default of 12. `CLONE_AI_NATIVE_MAX_TOKENS`
 does the same for one completion's token count. The repair lane sets the round
-budget to 24 through the worker environment, so a repair can read the failing
-code and still write the case and the patch in the same step; it sets the token
-cap to 16,000 after a single call was observed holding a step for over ten
-minutes.
+budget to 32 through the worker environment, so a repair can read the failing
+code and still write the case and the patch in the same step. The token cap was
+first set to 16,000 after a single call held a step for over ten minutes; that
+proved too low for the native worker's full-file `write_file`, because
+`audit.js` (44 KB) and `app.js` (118 KB) cannot be rewritten inside it, so the
+lane now uses 50,000.
 
 **Alternatives rejected.** (a) Raise the hard-coded default to 24 for every
 native call — a normal chat turn would then be allowed twice the tool calls,
