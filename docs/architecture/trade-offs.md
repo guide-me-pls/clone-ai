@@ -659,3 +659,86 @@ roll that outcome back.
 **Reversal condition.** Replace this file-based scheme if a durable shared
 ledger is needed across machines, or if trace exports change bytes without
 changing actionable evidence often enough to cause repeated repairs.
+
+## 2026-11-06 — The repair lane is a clone-ai Run, not a script driving another CLI
+
+**Decision.** `clone-ai repair` performs the repair as a real Run inside the
+Kernel: it accepts a trigger, attaches a two-phase plan, and executes it with
+the workers the owner has configured (a black-box CLI worker, or any other
+registered adapter). The lane keeps the existing gates from `scripts/nightly-rsi.mjs`
+(the regression test is verified red before the fix, test files are hashed, the
+staged diff may not touch protected paths) by importing
+`scripts/nightly-rsi-policy.mjs` and `scripts/nightly-rsi-state.mjs` rather than
+forking them, and it adds the worktree isolation, red-verification and hashing
+as deterministic gates the application applies around/after the Run.
+
+**Alternatives rejected.** (a) Keeping `claude -p` as the executor — AGENTS.md
+§4 then describes a rule the system cannot satisfy, and the repair is performed
+by a product that is not clone-ai. (b) A native (in-process, OpenAI-compatible)
+repair worker as the mandatory executor — it would make the lane cheap to test
+but bind the repair loop to one provider and to `CLONE_AI_NATIVE_*` configuration
+that is absent on most machines; it remains available as a configured worker.
+(c) A new, self-contained policy module for the lane — a second copy of the
+protected-path list would drift from the one the nightly script enforces.
+
+**Evidence.** Code inspection: `scripts/nightly-rsi.mjs` builds prompts and spawns
+a binary, so neither the Kernel's approval, verification nor journal participates
+in the repair. Its safety gates are imported here unchanged and covered by the
+existing `test/nightly-rsi.test.ts` assertions. Deterministic tests prove each
+lane gate with fake adapters (`test/repair.test.ts`). A real two-phase repair
+needs a configured worker and an authorized failing trace; whether a configured
+model produces an acceptable patch remains **assumed**, not measured here.
+
+**What was given up.** The lane now inherits the Kernel's worker configuration
+and its adapter contract, so a machine with no installed worker CLI cannot
+repair, whereas the old script only needed `claude` on PATH. Black-box workers
+never report `test` evidence, so a red-verification step that *checks* the tests
+must be performed by the application around the Run, not by the verifier — the
+Run's own steps are scoped to writing files.
+
+**Reversal condition.** If the Kernel path proves unable to express a repair
+(needs far more steps than a plan, or the adapter contract cannot carry the
+hashes), return the two phases to a script but keep the trace export and the
+policy module shared. If measurements show the configured worker cannot repair
+real traces at an acceptable rate while a direct native client can, make the
+native adapter the default executor instead of the fallback.
+
+## 2026-11-06 — MCP tools are opted in per server and pass the same gate as built-ins
+
+**Decision.** Add a small MCP client (stdio, plus streamable HTTP) that reads
+`<clone home>/mcp.json`. Every server is disabled unless the owner writes
+`"enabled": true` for it. MCP tools are converted to `NativeToolSpec`s carrying
+an explicit risk (`read`, `write`, `network`, `external`) and are offered to a
+worker only when `decideTool` accepts that risk against the step's grants; a
+tool call that names a path is checked per call exactly like `read_file`. MCP
+output crosses the observation boundary (`sanitizeObserved`, the same sanitizer
+`renderObservationsAsFacts` uses) and reaches the model as quoted data.
+Providers that cannot take `--mcp-config` (the native in-process worker, codex,
+pi) simply receive built-in tools only.
+
+**Alternatives rejected.** (a) An SDK dependency (`@modelcontextprotocol/sdk`)
+— the protocol we need is one JSON-RPC request per tool (`initialize`,
+`tools/list`, `tools/call`) over stdio or HTTP; a dependency would be justified
+only once resources, prompts, sampling, or OAuth are in scope. (b) Enabling
+every configured server by default — an MCP server is a tool surface the owner
+did not write; enabled-by-default would silently widen what a model can do.
+(c) Granting MCP tools network access by default because the transport is
+network — the risk belongs to the tool's declared behavior, and the owner's
+config states it per tool.
+
+**Evidence.** Code inspection: today's tool table is built only from
+`src/main-agent/tools/kernel-tools.ts` and `src/workers/native-worker-factory.ts`,
+and the native worker already refuses ungranted risk (`decideTool`). Tests cover
+disabled-by-default, refusal when a granted scope does not exist, offering when
+it does, and output framing (`test/mcp.test.ts`). Whether a real third-party MCP
+server's tools are useful under these risks is **assumed**.
+
+**What was given up.** A server must declare each tool's risk in `mcp.json`
+(the lane never guesses: an undeclared tool is treated as `external` and
+refused). Tool results are text only — images and structured content are
+stringified. A crashed server is reported as a tool error, not retried.
+
+**Reversal condition.** Revisit if a real MCP server needs resources or prompts
+(use a maintained SDK rather than extending this client), or if owners routinely
+mark every tool `read` to avoid configuring risks — then risk must come from a
+signed server manifest, not from owner config.

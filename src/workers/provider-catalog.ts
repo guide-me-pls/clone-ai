@@ -7,7 +7,7 @@ import { BlackBoxCliWorker, type BlackBoxProviderConfig } from "./black-box-cli-
 import { resolveExecutable } from "./executable-resolver.ts";
 import { EFFORT_LEVELS, effortChoices, isEffortLevel, type EffortLevel } from "./effort.ts";
 import { assertWorkerEnvName } from "./worker-env.ts";
-import { createConfiguredNativeWorker } from "./native-worker-factory.ts";
+import { createConfiguredNativeWorker, workerTools } from "./native-worker-factory.ts";
 import { ProviderRegistry, type ProviderDefinition } from "./provider-registry.ts";
 import type { AgentRole } from "../config/worker-settings.ts";
 
@@ -31,8 +31,11 @@ export function toProviderDefinition(config: BlackBoxProviderConfig): ProviderDe
     id: config.id,
     label: config.label ?? config.id,
     ...(config.supportedRoles === undefined ? {} : { supportedRoles: config.supportedRoles }),
+    // A recipe that names mcpConfigArgs promises its CLI can take --mcp-config.
+    // 写了 mcpConfigArgs 的配方是在声明它的 CLI 接受 --mcp-config。
+    ...(config.mcpConfigArgs === undefined ? {} : { mcpConfigArgs: config.mcpConfigArgs }),
     ...(config.roleRestrictionReason === undefined ? {} : { roleRestrictionReason: config.roleRestrictionReason }),
-    createAdapter: ({ agentId, workCapabilities, failureCatalog }) => {
+    createAdapter: ({ agentId, workCapabilities, failureCatalog, dataDirectory }) => {
       const resolution = resolveExecutable(launchConfig.command);
       return new BlackBoxCliWorker({
         agentId,
@@ -41,6 +44,7 @@ export function toProviderDefinition(config: BlackBoxProviderConfig): ProviderDe
           : { ...launchConfig, command: resolution.resolvedPath },
         workCapabilities,
         failureCatalog,
+        dataDirectory,
       });
     },
   };
@@ -59,8 +63,16 @@ export function nativeProviderDefinition(): ProviderDefinition {
     label: "Native worker (OpenAI-compatible)",
     supportedRoles: ["direct", "research", "draft", "review"],
     roleRestrictionReason: "The native worker cannot perform external side effects; use a governed action connector.",
-    createAdapter: ({ agentId, workCapabilities, workspacePath }) => {
-      const worker = createConfiguredNativeWorker(process.env, workspacePath ?? process.cwd(), { id: agentId, workCapabilities });
+    createAdapter: ({ agentId, workCapabilities, workspacePath, dataDirectory }) => {
+      // MCP tools come from the clone home's mcp.json; a malformed entry is
+      // reported once here and skipped, so built-in tools still work.
+      // MCP 工具来自 clone home 的 mcp.json；损坏的条目在此报告一次并跳过，内建工具仍可用。
+      const worker = createConfiguredNativeWorker(process.env, workspacePath ?? process.cwd(), {
+        id: agentId,
+        workCapabilities,
+        dataDirectory,
+        tools: workerTools({ dataDirectory, log: (message) => console.warn(message) }),
+      });
       if (worker === undefined) {
         throw new Error("The native worker needs CLONE_AI_NATIVE_MODEL and CLONE_AI_NATIVE_BASE_URL.");
       }
@@ -169,6 +181,14 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
   if (record.efforts !== undefined && (!Array.isArray(record.efforts) || record.efforts.some((item) => !isEffortLevel(item)))) throw new Error(`Provider ${id} efforts must list valid levels.`);
   if (record.effortArgs !== undefined && (!Array.isArray(record.effortArgs) || record.effortArgs.some((item) => typeof item !== "string"))) throw new Error(`Provider ${id} effortArgs must be strings.`);
   if (record.sandbox !== undefined && record.sandbox !== "seatbelt") throw new Error(`Provider ${id} sandbox must be "seatbelt" or omitted.`);
+  // A template that does not use the placeholder would start the CLI with an
+  // argument nobody can justify; refuse it instead of ignoring the field.
+  // 不含占位符的模板会让 CLI 带着一个无法解释的参数启动；直接拒绝，而不是忽略该字段。
+  if (record.mcpConfigArgs !== undefined && (!Array.isArray(record.mcpConfigArgs)
+    || record.mcpConfigArgs.some((item) => typeof item !== "string")
+    || !record.mcpConfigArgs.some((item) => item.includes("{{mcpConfig}}")))) {
+    throw new Error(`Provider ${id} mcpConfigArgs must be an array of strings that includes {{mcpConfig}}.`);
+  }
   if (record.sandboxWritePaths !== undefined && (!Array.isArray(record.sandboxWritePaths) || record.sandboxWritePaths.some((item) => typeof item !== "string" || item.trim().length === 0))) throw new Error(`Provider ${id} sandboxWritePaths must be non-empty strings.`);
   return {
     id,
@@ -189,6 +209,7 @@ function validateProviderConfig(value: unknown, where: string): BlackBoxProvider
     ...(Array.isArray(record.efforts) ? { efforts: effortChoices(record.efforts) } : {}),
     ...(Array.isArray(record.effortArgs) ? { effortArgs: record.effortArgs as string[] } : {}),
     ...(Array.isArray(record.sandboxArgs) ? { sandboxArgs: record.sandboxArgs as string[] } : {}),
+    ...(Array.isArray(record.mcpConfigArgs) ? { mcpConfigArgs: record.mcpConfigArgs as string[] } : {}),
     ...(record.sandboxNetwork === true ? { sandboxNetwork: true } : {}),
     ...(Array.isArray(record.sandboxWritePaths) ? { sandboxWritePaths: record.sandboxWritePaths as string[] } : {}),
   };
