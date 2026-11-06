@@ -82,6 +82,57 @@ this if native steps routinely finish within 12 rounds (the knob then hides a
 prompt problem), or if a 24-round step is observed looping without producing a
 file — in that case the plan, not the budget, is the thing to fix.
 
+## 2026-11-06 — The audit dispatch block reads the events that carry steps
+
+**Decision.** The audit view's "Worker 派发" block renders `dispatch.steps_assigned`
+payload assignments (stepId, agentId, reason) as one row per step, keeps the
+task-level `dispatch.decided` row as the authorization summary, and shows
+`dispatch.blocked` with its code and reason instead of the "no dispatch record"
+message.
+
+**Alternatives rejected.** (a) Keep reading only `dispatch.decided` and accept
+"步骤 —" — a multi-worker plan then has no view that answers which worker ran
+which step. (b) Read the raw trace payload only — the block exists to answer the
+question without opening raw JSON.
+
+**Evidence.** `JournalDispatchRecorder` writes a task-level decision with no
+`stepId`, a separate `dispatch.steps_assigned` with `assignments`, and
+`dispatch.blocked` with `code`/`reason` (`src/main-agent/dispatch-recorder.ts`).
+The UI's `dispatchBlock` only filtered `dispatch.decided` and read
+`payload.stepId` (`apps/desktop/ui/audit.js`). The regression cases run the real
+audit view in a vm with those payloads and fail on the old code with "步骤 —"
+and "这次运行没有派发记录".
+
+**Cost and reversal condition.** The block now reads up to three event types
+from the trace it already fetched; no new request. Reverse if the trace API
+stops returning `dispatch.steps_assigned` (the block would then be empty for
+multi-step plans) or if a future router records per-step assignments on
+`dispatch.decided` itself.
+
+## 2026-11-06 — The effort select reads the gateway list that exists
+
+**Decision.** `renderMainAgentEffort()` resolves the gateway from
+`state.gateways` (the array the client actually writes) and re-renders after
+`refreshGateways()`, so the reasoning levels offered are the ones the Magpie
+model declares.
+
+**Alternatives rejected.** (a) Keep the generic level list — it offers levels
+the gateway does not serve and hides the ones it does. (b) Add a second
+`state.gateway` field written alongside `state.gateways` — two names for one
+value drift, and the array is what every other view uses.
+
+**Evidence.** `state.gateway?.models` was read in `renderMainAgentEffort`,
+while the client state declares only `gateways: []` and every writer uses it
+(`apps/desktop/ui/app.js`). A vm test with `state.gateways` set and
+`reasoningLevels: ["low","high"]` shows the old select rendering
+off/minimal/low/medium/high/xhigh/max.
+
+**Cost and reversal condition.** One lookup instead of a field read; no new
+request. Reverse if the gateway data moves to a single object (then use that
+object) or if a model's declared levels are wrong more often than the generic
+list is useful — the fallback list must stay for models the gateway does not
+describe.
+
 ## 2026-11-06 — The memory library keeps a focused editor across background refreshes
 
 **Decision.** The memory library (`apps/desktop/ui/memory.js`) must not rebuild

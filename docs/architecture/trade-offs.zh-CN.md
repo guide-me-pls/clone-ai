@@ -54,6 +54,43 @@
 最坏情况翻倍。若原生步骤普遍能在 12 轮内完成（此时该开关掩盖的是提示词问题），或观察到 24 轮
 步骤在没有产出文件的情况下空转，应推翻本条——那种情况下该修的是计划，不是预算。
 
+## 2026-11-06 — 审计派发块读取真正携带步骤的事件
+
+**决定。** 审计视图的「Worker 派发」块把 `dispatch.steps_assigned` 的 assignments
+（stepId、agentId、reason）渲染为每个步骤一行，保留任务级 `dispatch.decided` 作为授权摘要，
+并在存在 `dispatch.blocked` 时显示其 code 与 reason，而不是“没有派发记录”。
+
+**被否决的备选。**（a）继续只读 `dispatch.decided` 并接受“步骤 —”——多 Worker 计划就没有任何视图
+能回答“哪个 Worker 跑了哪一步”。（b）只读原始轨迹载荷——该块存在的意义正是不用打开原始 JSON
+就能回答这个问题。
+
+**证据。** `JournalDispatchRecorder` 写入的任务级决策没有 `stepId`，另写
+`dispatch.steps_assigned`（含 assignments）与 `dispatch.blocked`（含 code/reason）
+（`src/main-agent/dispatch-recorder.ts`）。界面的 `dispatchBlock` 只筛选 `dispatch.decided` 并读取
+`payload.stepId`（`apps/desktop/ui/audit.js`）。回归用例在 vm 中用这些载荷运行真实审计视图，在旧代码
+上以“步骤 —”与“这次运行没有派发记录”失败。
+
+**成本与推翻条件。** 该块只多读已经取回的轨迹中的至多三种事件，不新增请求。若轨迹接口不再返回
+`dispatch.steps_assigned`（多步骤计划会变空），或未来的路由器把每步指派直接记在
+`dispatch.decided` 上，应推翻本条。
+
+## 2026-11-06 — 推理强度下拉读取真实存在的网关列表
+
+**决定。** `renderMainAgentEffort()` 从 `state.gateways`（客户端实际写入的数组）解析网关，并在
+`refreshGateways()` 之后重新渲染，使下拉提供的是 Magpie 模型实际声明的推理档位。
+
+**被否决的备选。**（a）保留通用档位列表——它会提供网关不支持的档位，并隐藏支持的档位。
+（b）额外维护一个 `state.gateway` 字段与 `state.gateways` 并列——同一值的两个名字会漂移，而数组是
+其他所有视图使用的那个。
+
+**证据。** `renderMainAgentEffort` 读取 `state.gateway?.models`，而客户端 state 只声明
+`gateways: []`，所有写入点都使用它（`apps/desktop/ui/app.js`）。在 vm 中设置 `state.gateways` 与
+`reasoningLevels: ["low","high"]`，旧的下拉仍渲染 off/minimal/low/medium/high/xhigh/max。
+
+**成本与推翻条件。** 只多一次查找而非字段读取，不新增请求。若网关数据改为单个对象（则使用该对象），
+或某个模型声明的档位错误率高于通用列表的实用性——网关未描述的模型仍必须保留回退列表，此时应推翻
+本条。
+
 ## 2026-11-06 — 记忆库在后台刷新时保留正在输入的编辑器
 
 **决定。** 记忆库（`apps/desktop/ui/memory.js`）在每 3 秒一次的面板刷新交来一份没有变化的
