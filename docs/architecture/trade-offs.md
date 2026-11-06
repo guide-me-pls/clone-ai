@@ -19,6 +19,27 @@ made fresh audit and IME fixes invisible.
 macOS build toolchain. If development moves to a live-reload runtime, remove
 the bundle rebuild from this path.
 
+## 2026-11-06 — The Main Agent comparison repeats each cell and reports medians
+
+**Decision.** `npm run bench:main` runs each task/runtime cell N times (default
+5), reports median and p90 duration, median tokens and pass rate, and writes
+every individual run plus the aggregates to the result JSON. `--repeat 1`
+restores the old single-sample shape.
+
+**Evidence.** Two single-run passes on 2026-11-05 disagreed on which runtime was
+faster: the native plan cell was 45.2s in one pass and 11.1s in the other, and
+Pi's plan tokens were 8,977 vs 13,174. A one-sample cell cannot rank latency;
+the median over repeats is the cheapest way to make the comparison meaningful,
+and keeping every sample exposes the spread.
+
+**What it costs.** N times the model calls and wall time (five repeats is about
+five times the cost of one pass). The median can still mislead if the endpoint
+is under load, so the report keeps every sample and a p90 alongside it.
+
+**Reversal condition.** If recorded cassettes can replay the same prompts
+deterministically, use them for latency and keep this only as a real-endpoint
+sanity check.
+
 ## 2026-11-05 — Native worker is the default for eligible roles when configured
 
 **Decision.** When `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are

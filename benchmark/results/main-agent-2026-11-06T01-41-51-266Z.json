@@ -1,0 +1,397 @@
+{
+  "ranAt": "2026-11-06T01:41:51.266Z",
+  "model": "360/deepseek/deepseek-v4.1-flash",
+  "endpoint": "http://127.0.0.1:3425",
+  "repeat": 3,
+  "tasks": [
+    {
+      "id": "direct-answer",
+      "prompt": "请只回复两个字：收到。不要提案任何计划。",
+      "expectation": "direct"
+    },
+    {
+      "id": "authority-read",
+      "prompt": "我现在允许在哪些目录写入？请先查一下权限再回答。",
+      "expectation": "authority"
+    },
+    {
+      "id": "plan-proposal",
+      "prompt": "帮我把 README.md 总结成 out/summary.md。这是一个本地可逆任务，请提案一个计划，不要自己执行。",
+      "expectation": "plan"
+    }
+  ],
+  "records": [
+    {
+      "runtime": "pi",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "passed": true,
+      "durationMs": 1246,
+      "totalTokens": 2620,
+      "modelCalls": 0,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 2,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "pi",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "passed": true,
+      "durationMs": 1279,
+      "totalTokens": 2620,
+      "modelCalls": 0,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 2,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "pi",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "passed": true,
+      "durationMs": 842,
+      "totalTokens": 2629,
+      "modelCalls": 0,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 2,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "native",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "passed": true,
+      "durationMs": 1661,
+      "totalTokens": 2560,
+      "modelCalls": 1,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 3,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "native",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "passed": true,
+      "durationMs": 1509,
+      "totalTokens": 2560,
+      "modelCalls": 1,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 3,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "native",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "passed": true,
+      "durationMs": 1363,
+      "totalTokens": 2560,
+      "modelCalls": 1,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 3,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "pi",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "passed": true,
+      "durationMs": 6218,
+      "totalTokens": 5766,
+      "modelCalls": 0,
+      "toolCalls": [
+        "get_authority"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 479,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "pi",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "passed": true,
+      "durationMs": 4498,
+      "totalTokens": 5721,
+      "modelCalls": 0,
+      "toolCalls": [
+        "get_authority"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 617,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "pi",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "passed": true,
+      "durationMs": 3852,
+      "totalTokens": 5692,
+      "modelCalls": 0,
+      "toolCalls": [
+        "get_authority"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 429,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "native",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "passed": true,
+      "durationMs": 5555,
+      "totalTokens": 5449,
+      "modelCalls": 2,
+      "toolCalls": [
+        "get_authority"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 316,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "native",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "passed": true,
+      "durationMs": 3492,
+      "totalTokens": 5431,
+      "modelCalls": 2,
+      "toolCalls": [
+        "get_authority"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 265,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "native",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "passed": true,
+      "durationMs": 4360,
+      "totalTokens": 5525,
+      "modelCalls": 2,
+      "toolCalls": [
+        "get_authority"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 416,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "pi",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "passed": true,
+      "durationMs": 15836,
+      "totalTokens": 15029,
+      "modelCalls": 0,
+      "toolCalls": [
+        "get_authority",
+        "propose_work_plan",
+        "request_approval"
+      ],
+      "runs": 1,
+      "turnStatus": "completed",
+      "replyLength": 334,
+      "journalEvents": 16
+    },
+    {
+      "runtime": "pi",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "passed": true,
+      "durationMs": 11512,
+      "totalTokens": 14145,
+      "modelCalls": 0,
+      "toolCalls": [
+        "get_authority",
+        "propose_work_plan",
+        "get_run_status"
+      ],
+      "runs": 1,
+      "turnStatus": "completed",
+      "replyLength": 415,
+      "journalEvents": 16
+    },
+    {
+      "runtime": "pi",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "passed": true,
+      "durationMs": 5971,
+      "totalTokens": 6718,
+      "modelCalls": 0,
+      "toolCalls": [
+        "propose_work_plan"
+      ],
+      "runs": 1,
+      "turnStatus": "completed",
+      "replyLength": 208,
+      "journalEvents": 12
+    },
+    {
+      "runtime": "native",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "passed": true,
+      "durationMs": 19876,
+      "totalTokens": 12994,
+      "modelCalls": 4,
+      "toolCalls": [
+        "get_authority",
+        "propose_work_plan",
+        "request_approval"
+      ],
+      "runs": 1,
+      "turnStatus": "completed",
+      "replyLength": 373,
+      "journalEvents": 16
+    },
+    {
+      "runtime": "native",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "passed": true,
+      "durationMs": 12211,
+      "totalTokens": 13037,
+      "modelCalls": 4,
+      "toolCalls": [
+        "get_authority",
+        "get_situation",
+        "propose_work_plan",
+        "request_approval"
+      ],
+      "runs": 1,
+      "turnStatus": "completed",
+      "replyLength": 449,
+      "journalEvents": 18
+    },
+    {
+      "runtime": "native",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "passed": true,
+      "durationMs": 11009,
+      "totalTokens": 12966,
+      "modelCalls": 4,
+      "toolCalls": [
+        "get_authority",
+        "propose_work_plan",
+        "request_approval"
+      ],
+      "runs": 1,
+      "turnStatus": "completed",
+      "replyLength": 260,
+      "journalEvents": 16
+    }
+  ],
+  "cells": [
+    {
+      "runtime": "pi",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "samples": 3,
+      "passed": 3,
+      "passRate": 1,
+      "medianDurationMs": 1246,
+      "p90DurationMs": 1279,
+      "medianTokens": 2620,
+      "medianModelCalls": 0
+    },
+    {
+      "runtime": "native",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "samples": 3,
+      "passed": 3,
+      "passRate": 1,
+      "medianDurationMs": 1509,
+      "p90DurationMs": 1661,
+      "medianTokens": 2560,
+      "medianModelCalls": 1
+    },
+    {
+      "runtime": "pi",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "samples": 3,
+      "passed": 3,
+      "passRate": 1,
+      "medianDurationMs": 4498,
+      "p90DurationMs": 6218,
+      "medianTokens": 5721,
+      "medianModelCalls": 0
+    },
+    {
+      "runtime": "native",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "samples": 3,
+      "passed": 3,
+      "passRate": 1,
+      "medianDurationMs": 4360,
+      "p90DurationMs": 5555,
+      "medianTokens": 5449,
+      "medianModelCalls": 2
+    },
+    {
+      "runtime": "pi",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "samples": 3,
+      "passed": 3,
+      "passRate": 1,
+      "medianDurationMs": 11512,
+      "p90DurationMs": 15836,
+      "medianTokens": 14145,
+      "medianModelCalls": 0
+    },
+    {
+      "runtime": "native",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "samples": 3,
+      "passed": 3,
+      "passRate": 1,
+      "medianDurationMs": 12211,
+      "p90DurationMs": 19876,
+      "medianTokens": 12994,
+      "medianModelCalls": 4
+    }
+  ],
+  "summary": {
+    "repeat": 3,
+    "pi": {
+      "passed": 9,
+      "samples": 9
+    },
+    "native": {
+      "passed": 9,
+      "samples": 9
+    }
+  }
+}

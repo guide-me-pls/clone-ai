@@ -51,15 +51,16 @@ CLONE_AI_NATIVE_MODEL=<model-id> CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url
 ## 主 Agent 对比（`npm run bench:main`）
 
 用同一模型与每个任务独立的 clone home，把三条固定 Prompt 分别跑过 Pi 运行时与原生循环：
-直接回答、读取权限、提案计划。报告记录耗时、tokens、工具调用、产生的 Run、回合状态，
-以及任务预期是否成立。
+直接回答、读取权限、提案计划。每个任务/运行时组合重复 `--repeat N` 次（默认 5）；报告给出
+中位数与 p90 耗时、中位 tokens 与通过率，并保留每一次运行。
 
 ```bash
-CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main
+CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main -- --repeat 5
 ```
 
-原生端点来自 `CLONE_AI_NATIVE_BASE_URL`（默认 `http://127.0.0.1:3425`）。这是每格只跑
-一次的对比，不是统计基准；模型本身在运行之间会波动。
+原生端点来自 `CLONE_AI_NATIVE_BASE_URL`（默认 `http://127.0.0.1:3425`）。单次样本无法给
+延迟排序：两次单跑中，同一个原生 plan 组合分别是 45.2s 与 11.1s。请使用中位数；
+`--repeat 1` 只用于快速冒烟。
 
 ## 长对话验证（`npm run bench:long`）
 

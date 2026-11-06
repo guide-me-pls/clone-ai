@@ -436,3 +436,25 @@
   任务恰好创建一个 Run、每个回合都完成——并说明每格只跑一次无法对延迟排序。
 - **下一步：** 要比较延迟，每格跑 N 次并报告中位数；当前脚本刻意只跑一次，并已说明。
 - **推翻条件：** 见两条取舍条目。
+
+## 2026-11-06 — 重复运行并取中位数的对比
+
+- **目标 / 假设：** 让 Pi 与原生对比能够给延迟排序——两次单跑结论相反，且原生 plan 一格
+  曾出现 45.2s。
+- **取舍：** [重复取中位数](../architecture/trade-offs.zh-CN.md#2026-11-06--主-agent-对比每格重复多次并报告中位数)。
+- **变更：** `benchmark/main-agent.ts` 每格跑 `--repeat N` 次（默认 5），报告中位数与
+  p90 耗时、中位 tokens 与通过率，并保留每个样本；`benchmark/stats.ts` 提供中位数与
+  最近秩百分位；抛错的格子记录为失败样本，而不是中断整份报告。
+- **Eval：** `test/benchmark-stats.test.ts` 覆盖奇/偶/空中位数与最近秩百分位。重复运行：
+  `CLONE_AI_BENCH_MAIN_MODEL=360/deepseek/deepseek-v4.1-flash npm run bench:main -- --repeat 3`；
+  模型 `360/deepseek/deepseek-v4.1-flash` 经 Magpie `http://127.0.0.1:3425`；每格 3 个
+  样本；结果文件 `benchmark/results/main-agent-2026-11-06T01-41-51-266Z.json`。
+- **结果（中位 / p90 / 中位 tokens）：** direct Pi 1.2s / 1.3s / 2,620 vs 原生 1.5s /
+  1.7s / 2,560；authority Pi 4.5s / 6.2s / 5,721 vs 原生 4.4s / 5.6s / 5,449；
+  plan Pi 11.5s / 15.8s / 14,145 vs 原生 12.2s / 19.9s / 12,994。两个运行时均 9/9。
+- **说明：** 三个样本下结论已经稳定。延迟接近——原生在 authority 略快，Pi 在 direct 与
+  plan 略快；原生总体少约 6.6% tokens（中位和 21,003 vs 22,486）。每个格子都满足预期。
+- **模型说明：** 之前的 Sonnet 5.5 id 在此环境的 Pi 目录中已不存在；第一次重复运行在任何
+  模型调用前就失败，已记录为发现。DeepSeek v4.1 Flash 同时存在于两个目录且支持工具调用。
+- **下一步：** 默认 5 个样本；本次为了控制运行窗口用了 3。需要 p90 时用 `--repeat 5`。
+- **推翻条件：** 见取舍条目。

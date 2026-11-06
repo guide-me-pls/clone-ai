@@ -617,3 +617,36 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 - **Next:** to compare latency meaningfully, run each cell N times and report the
   median; the current script runs once by design and says so.
 - **Reversal condition:** see both trade-off entries.
+
+## 2026-11-06 — Repeated Main Agent comparison with medians
+
+- **Goal / hypothesis:** make the Pi-versus-native comparison able to rank
+  latency, after two single-run passes disagreed and one native plan cell took
+  45.2s.
+- **Trade-off:** [repeated cells](../architecture/trade-offs.md#2026-11-06--the-main-agent-comparison-repeats-each-cell-and-reports-medians).
+- **Change:** `benchmark/main-agent.ts` runs each cell `--repeat N` times
+  (default 5), reports median and p90 duration, median tokens and pass rate, and
+  keeps every sample in the JSON. `benchmark/stats.ts` holds the median and
+  nearest-rank percentile. A cell that throws is recorded as a failed sample
+  instead of aborting the report.
+- **Eval:** `test/benchmark-stats.test.ts` covers odd, even and empty medians and
+  nearest-rank percentiles. Repeated run:
+  `CLONE_AI_BENCH_MAIN_MODEL=360/deepseek/deepseek-v4.1-flash npm run bench:main -- --repeat 3`;
+  model `360/deepseek/deepseek-v4.1-flash` via Magpie at
+  `http://127.0.0.1:3425`; three samples per cell; result file
+  `benchmark/results/main-agent-2026-11-06T01-41-51-266Z.json`.
+- **Results (median / p90 / median tokens):** direct Pi 1.2s / 1.3s / 2,620 vs
+  native 1.5s / 1.7s / 2,560; authority Pi 4.5s / 6.2s / 5,721 vs native
+  4.4s / 5.6s / 5,449; plan Pi 11.5s / 15.8s / 14,145 vs native 12.2s / 19.9s /
+  12,994. Both runtimes pass 9/9.
+- **What it shows:** with three samples the picture is stable. Latency is close —
+  native is slightly faster on authority, Pi on direct and plan — and native uses
+  about 6.6% fewer tokens overall (21,003 vs 22,486 median sums). Every cell met
+  its expectation.
+- **Model note:** the earlier Sonnet 5.5 id was no longer in the Pi catalog in
+  this environment; the first repeated attempt failed before any model call and
+  is recorded as a finding. DeepSeek v4.1 Flash exists in both catalogs and
+  supports tool calls.
+- **Next:** five samples is the default; three were used here to fit the run
+  window. Use `--repeat 5` when p90 matters.
+- **Reversal condition:** see the trade-off entry.
