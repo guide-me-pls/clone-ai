@@ -650,3 +650,25 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 - **Next:** five samples is the default; three were used here to fit the run
   window. Use `--repeat 5` when p90 matters.
 - **Reversal condition:** see the trade-off entry.
+
+## 2026-11-06 — Five-sample confirmation of the Main Agent comparison
+
+- **Goal / hypothesis:** replace the three-sample picture with the default five
+  samples, so p90 is a real tail measure rather than nearly the maximum.
+- **Trade-off:** [repeated cells](../architecture/trade-offs.md#2026-11-06--the-main-agent-comparison-repeats-each-cell-and-reports-medians).
+- **Benchmark run:** `CLONE_AI_BENCH_MAIN_MODEL=360/deepseek/deepseek-v4.1-flash npm run bench:main -- --repeat 5`;
+  model `360/deepseek/deepseek-v4.1-flash` via Magpie at
+  `http://127.0.0.1:3425`; five samples per cell; result
+  `benchmark/results/main-agent-2026-11-06T02-07-58-472Z.json`.
+- **Results (median / p90 / median tokens):** direct Pi 1.4s / 1.9s / 2,621 vs
+  native 1.1s / 2.1s / 2,563; authority Pi 4.8s / 5.5s / 5,583 vs native
+  4.7s / 5.4s / 5,488; plan Pi 13.8s / 26.9s / 10,877 vs native 11.4s / 15.8s /
+  9,922. Both runtimes pass 15/15.
+- **What changed from the three-sample run:** native now looks faster at the
+  median on every cell (17.2s vs 20.0s summed) and much better on the plan tail
+  (p90 15.8s vs 26.9s). Native uses about 5.8% fewer tokens. The plan cell still
+  varies in tool calls (Pi 1–3, native 2–4), which is model behavior rather than
+  a runtime difference.
+- **Caveat:** one model, one machine, one hour, shared gateway. Treat this as a
+  stable local comparison, not a universal ranking.
+- **Reversal condition:** see the trade-off entry.
