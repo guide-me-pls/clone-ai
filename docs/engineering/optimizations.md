@@ -7,6 +7,30 @@ written before the change; this entry is completed after it ships. The point is
 to make the *work* auditable: not only what changed, but how it was done, what
 it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 
+### 2026-11-06 — The native worker takes an explicit round budget
+
+- **Goal / hypothesis:** a repair phase must be able to read the failing code and then write a case and a patch in one step. The native client's hard-coded 12-round limit stopped the first real repair run before it wrote anything.
+- **Trade-off:** [2026-11-06 — The native worker takes an explicit round budget](../architecture/trade-offs.md#2026-11-06--the-native-worker-takes-an-explicit-round-budget).
+- **Change:** `readNativeWorkerEnvironment` reads `CLONE_AI_NATIVE_MAX_ROUNDS` and `CLONE_AI_NATIVE_MAX_TOKENS` (positive integers; an unset or malformed value keeps the client default), and `createConfiguredNativeWorker` passes both to `OpenAiCompatibleClient` (`maxRounds`, and `max_tokens` in the request). `test/native-client.test.ts` gained the parsing assertions, a client case that stops at the configured number of model calls, and a case asserting the token cap reaches the request body.
+- **Eval:** `node --experimental-strip-types --test test/native-client.test.ts` — 11 cases, all pass. Before the change the option did not exist and the client always stopped at 12; the new case would fail against the old code because `maxRounds` was not read from the environment.
+- **Benchmark run:** no benchmark; the eval is the repair lane against Magpie `360/deepseek/deepseek-v4.1-flash` (no dataset or scoring parameters). Run records: phase-1 trace `ui-memory-refresh-1`, lane report `~/.clone-repair/rsi/last-run.json`, provider `native`, model `360/deepseek/deepseek-v4.1-flash`, effort unspecified (gateway default), worker round budget 24 then 32, `CLONE_AI_NATIVE_TIMEOUT_MS=900000`.
+- **Execution chain:** read `openai-compatible-client.ts` and `native-worker-factory.ts`; edited the environment reader and the client construction; ran the targeted tests and `tsc --noEmit`; started the lane with 24 rounds. That run (`426f3d3a`, 24 calls, 423,163 input tokens, 150 s) wrote only a passing probe test, so the round budget alone did not produce a patch. The budget was raised to 32 for the next try; the wording change below addresses the actual failure mode.
+- **Pros:** the budget is explicit and owner-controlled; malformed values cannot create a zero-round loop.
+- **Cons / next time:** a bigger budget lets a model explore more without writing, so it must be paired with plan wording that makes the deliverable explicit. The eval does not measure a real repair, only the client's stopping behavior.
+- **Reversal condition:** see the trade-off entry — if native steps routinely finish within 12 rounds, remove the knob rather than keeping a misconfiguration surface.
+
+### 2026-11-06 — The repair plan tells the worker how its step is judged
+
+- **Goal / hypothesis:** the same trace produced no reproduction at 12 rounds and a passing probe at 24. The worker was reading the repository as the goal instead of treating the reproduction file as the goal.
+- **Trade-off:** [2026-11-06 — The repair plan tells the worker how its step is judged](../architecture/trade-offs.md#2026-11-06--the-repair-plan-tells-the-worker-how-its-step-is-judged).
+- **Change:** `repairPlan`'s phase-1 instructions now say to write the reproduction before broad exploration, read only the files it needs, and leave no diagnostic/probe files under `test/regression/`; the acceptance criterion states that every file there must be a reproduction. `test/repair.test.ts` asserts the wording.
+- **Eval:** `node --experimental-strip-types --test test/repair.test.ts` — 16 cases, all pass. Before the change the new assertions fail against the old instruction text; the lane run itself is the behavioral eval.
+- **Benchmark run:** the repair-lane run with the same trace and model; command, model, budget and report path are recorded in the entry above. Result: see the lane outcome recorded in the final report of this work.
+- **Execution chain:** read the two failed run audits (`1dddd6b4`, `426f3d3a`), wrote the trade-off entry, edited the plan text and the acceptance criterion, added the structural assertion, ran the targeted test, committed, and re-ran the lane. The lane stopped again before a red case; see the report for the exact gate.
+- **Pros:** the instruction now states the deliverable and forbids the failure mode observed twice, without raising the budget again; the criterion change is testable.
+- **Cons / next time:** wording is a soft control — a model can still ignore it, and the lane only learns that after spending the budget. A stronger design would reject the Run's evidence (a probe file that passes) before the red check; that requires a definition of "reproduction" the lane can evaluate, which is why it is not in this change.
+- **Reversal condition:** see the trade-off entry.
+
 ### 2026-11-06 — The repair lane becomes a clone-ai Run (AGENTS.md §4 made executable)
 
 - **Goal / hypothesis:** AGENTS.md §4 says a bug in clone-ai is fixed through clone-ai's own repair lane. Until now the lane was `scripts/nightly-rsi.mjs` building prompts and spawning `claude -p`, so clone-ai never performed the repair and the rule described something the system did not do. Make the repair a Kernel Run executed by a configured worker, keeping every existing gate.

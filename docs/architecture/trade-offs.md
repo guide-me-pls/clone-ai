@@ -39,9 +39,12 @@ and make the acceptance check stronger instead.
 
 **Decision.** `CLONE_AI_NATIVE_MAX_ROUNDS` sets how many model round trips one
 native step may spend before the client returns its "round limit" summary; an
-unset or malformed value keeps the built-in default of 12. The repair lane sets
-it to 24 through the worker environment, so a repair can read the failing code
-and still write the case and the patch in the same step.
+unset or malformed value keeps the built-in default of 12. `CLONE_AI_NATIVE_MAX_TOKENS`
+does the same for one completion's token count. The repair lane sets the round
+budget to 24 through the worker environment, so a repair can read the failing
+code and still write the case and the patch in the same step; it sets the token
+cap to 16,000 after a single call was observed holding a step for over ten
+minutes.
 
 **Alternatives rejected.** (a) Raise the hard-coded default to 24 for every
 native call — a normal chat turn would then be allowed twice the tool calls,
@@ -54,11 +57,12 @@ worker anything. (c) Put "be brief" in the plan — an instruction cannot make a
 **Evidence.** Repair run `1dddd6b4-a6dd-42b4-bc18-65b795b62148` (2026-11-06):
 phase 1 spent all 12 rounds on `list_directory`/`read_file`
 (89,845 input / 2,366 output tokens, 33 s) and wrote no file, so the lane
-stopped at `regression-missing`. The same trace with a 24-round budget is the
-eval: `test/native-client.test.ts` asserts the client stops at the configured
-number of model calls, and `readNativeWorkerEnvironment` ignores malformed
-values. Whether 24 is enough for a real repair is measured by the lane run that
-follows this entry, not assumed.
+stopped at `regression-missing`. A later run on the same trace held a single
+provider call open for more than ten minutes while a two-token request to the
+same gateway answered in 1.9 s, which is why one completion now has a ceiling as
+well. The evals are `test/native-client.test.ts` (the client stops at the
+configured round count; the configured token cap reaches the request body;
+malformed values are ignored) and the lane runs that follow each entry.
 
 **Cost and reversal condition.** Each extra round is one provider call; the
 budget is per step, not per run, so a repair's worst case doubles. Reverse
