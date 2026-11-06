@@ -20,11 +20,11 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
-
 import { loadAudits, summarizeAudits } from "./audit-service.ts";
 import type { RunAuditRecord } from "./run-audit.ts";
-import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
+import { recordUsage } from "../observability/usage.ts";
+import { readNativeMainAgentEndpoint } from "../main-agent/native-runtime.ts";
+import { parseUsage } from "../workers/openai-compatible-client.ts";
 import { listEffectiveProviderConfigs } from "../config/provider-config-store.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
@@ -146,50 +146,55 @@ const REVIEW_SYSTEM = [
   "- If the facts are too thin to justify a change, return an empty actions array and say so.",
 ].join("\n");
 
+/**
+ * Ask the configured native endpoint. There is no SDK here: the reviewer is a
+ * plain, tool-free chat completion, and a missing endpoint degrades to the
+ * facts-only review the caller already handles.
+ * 向已配置的原生端点提问。这里没有 SDK：评审就是一次无工具的普通 chat completion；
+ * 端点缺失时退化为调用方已经处理的“只给事实”评审。
+ */
 async function askModel(system: string, prompt: string, dataDirectory: string): Promise<string> {
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: dataDirectory,
-    agentDir: getAgentDir(),
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noContextFiles: true,
-    systemPromptOverride: () => system,
-  });
-  await resourceLoader.reload();
-  const { session } = await createAgentSession({
-    resourceLoader,
-    noTools: "all",
-    sessionManager: SessionManager.inMemory(dataDirectory),
-  });
-  let reply = "";
-  let failure: string | undefined;
-  session.subscribe((event) => {
-    if (event.type === "message_end" && event.message.role === "assistant") {
-      const assistant = event.message as { stopReason?: string; errorMessage?: string };
-      if (assistant.stopReason === "error") failure = assistant.errorMessage?.trim() || "The reviewer model ended with an error.";
-    }
-    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-      reply += event.assistantMessageEvent.delta;
-    }
-  });
-  const started = Date.now();
-  const beforeStats = (() => {
-    try { return session.getSessionStats(); } catch { return undefined; }
-  })();
-  try {
-    await session.prompt(prompt);
-  } finally {
-    // The reviewer is a model call like any other; the ledger must say so.
-    // 评审也是一次模型调用；账本必须如实记录。
-    await recordUsage(dataDirectory, {
-      ...collectSessionUsage(session, Date.now() - started, beforeStats),
-      source: "self-review",
-    }).catch(() => undefined);
-    session.dispose();
+  const { endpoint, missing } = readNativeMainAgentEndpoint();
+  if (endpoint === undefined) {
+    throw new Error(`AI review is unavailable: ${missing.join(" and ")} is not configured.`);
   }
-  if (reply.trim().length === 0 && failure !== undefined) throw new Error(failure);
-  return reply;
+  const started = Date.now();
+  const response = await fetch(`${endpoint.baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(endpoint.apiKey === undefined ? {} : { authorization: `Bearer ${endpoint.apiKey}` }),
+    },
+    body: JSON.stringify({
+      model: endpoint.model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: prompt },
+      ],
+      stream: false,
+    }),
+    signal: AbortSignal.timeout(endpoint.timeoutMs ?? 120_000),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`The review endpoint answered ${response.status}: ${detail.slice(0, 300)}`);
+  }
+  const body = await response.json() as {
+    choices?: Array<{ message?: { content?: string | null } }>;
+    usage?: unknown;
+  };
+  const content = body.choices?.[0]?.message?.content ?? "";
+  const usage = parseUsage(body.usage);
+  await recordUsage(dataDirectory, {
+    source: "self-review",
+    durationMs: Math.max(0, Date.now() - started),
+    modelId: endpoint.model,
+    provider: "native",
+    ...(usage?.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
+    ...(usage?.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
+    ...(usage?.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
+  }).catch(() => undefined);
+  return content;
 }
 
 function buildDigest(

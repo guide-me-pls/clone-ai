@@ -85,9 +85,9 @@ CLI，且每次工具调用都按步骤 Scope 校验。设置这两个变量后�
 
 ### 主 Agent 运行时
 
-设置了 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` 时，进程内的原生运行时
-是默认；没有它们时，主 Agent 使用 Pi。`CLONE_AI_MAIN_RUNTIME=pi` 强制 Pi；
-`=native` 强制原生，端点缺失时清晰失败。要配置原生运行时：
+进程内的原生运行时是唯一的主 Agent 运行时。它需要 `CLONE_AI_NATIVE_MODEL` 与
+`CLONE_AI_NATIVE_BASE_URL`；缺少时回合会以指明缺失变量的错误失败。Pi 运行时及其 SDK
+已不在产品中。要配置运行时：
 
 ```bash
 export CLONE_AI_NATIVE_MODEL=<model-id>
@@ -100,7 +100,7 @@ clone-ai "你好"
 以回合台账作为对话记录，并从台账检索 `search_history`。它会随 token 到达流式输出，
 并对长对话做确定性压缩：最新轮次在 12,000 字符预算内保留原文，较早轮次变成有界摘要，
 全文仍留在回合台账中。图片附件以 OpenAI 风格 data URL 随当前消息发送；它们是逐回合的，
-不存入台账。要强制旧的 Pi 运行时，设置 `CLONE_AI_MAIN_RUNTIME=pi`。
+不存入台账。
 
 ## 5. 数据都在哪里
 

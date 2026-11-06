@@ -93,10 +93,10 @@ wins over the default.
 
 ### Main Agent runtime
 
-When `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are set, the native
-in-process runtime is the default. Without them, the Main Agent uses Pi.
-`CLONE_AI_MAIN_RUNTIME=pi` forces Pi; `=native` forces native and fails clearly
-if the endpoint is missing. To configure the native runtime:
+The native in-process runtime is the only Main Agent runtime. It needs
+`CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`; without them a turn fails
+with a message naming the missing variables. The Pi runtime and its SDK are no
+longer part of the product. To configure the runtime:
 
 ```bash
 export CLONE_AI_NATIVE_MODEL=<model-id>
@@ -111,8 +111,7 @@ The native loop writes the same `main_agent.turn_*`, `agent.tool_*` and
 a long transcript deterministically: the newest turns stay verbatim within a
 12,000-character budget, older turns become a bounded summary, and the full text
 stays in the turn ledger. Image attachments are sent as OpenAI-style data URLs
-in the current message; they are per-turn and not stored in the ledger. To force
-the legacy Pi runtime, set `CLONE_AI_MAIN_RUNTIME=pi`.
+in the current message; they are per-turn and not stored in the ledger.
 
 ## 5. Where your data lives
 

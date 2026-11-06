@@ -145,7 +145,7 @@ test("CLONE_AI_MAIN_MODEL overrides config.json for the Main Agent model", async
   const workspace = await tempDirectory(t, "clone-ws-");
   const paths = resolveClonePaths({ dataDirectory: join(home, ".clone"), workspacePath: workspace });
   await new CloneConfigStore(paths).update({ mainAgentModel: "from-config" });
-  const { readMainAgentModelPreference } = await import("../src/main-agent/session.ts");
+  const { readMainAgentModelPreference } = await import("../src/main-agent/model-preferences.ts");
   assert.equal(await readMainAgentModelPreference(paths.dataDirectory, {}), "from-config");
   assert.equal(
     await readMainAgentModelPreference(paths.dataDirectory, { CLONE_AI_MAIN_MODEL: "from-env" }),

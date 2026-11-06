@@ -36,7 +36,7 @@ function repeatCount(): number {
 
 const REPEAT = repeatCount();
 
-type Runtime = "pi" | "native";
+type Runtime = "native";
 type Expectation = "direct" | "authority" | "plan";
 
 interface MainAgentTask {
@@ -90,13 +90,9 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
   try {
     await prepareCloneHome(resolveClonePaths({ dataDirectory: directory }));
     process.env.CLONE_AI_MAIN_MODEL = MODEL;
-    if (runtime === "native") {
-      process.env.CLONE_AI_MAIN_RUNTIME = "native";
-      process.env.CLONE_AI_NATIVE_MODEL = MODEL;
-      process.env.CLONE_AI_NATIVE_BASE_URL = BASE_URL;
-    } else {
-      process.env.CLONE_AI_MAIN_RUNTIME = "pi";
-    }
+    process.env.CLONE_AI_MAIN_RUNTIME = "native";
+    process.env.CLONE_AI_NATIVE_MODEL = MODEL;
+    process.env.CLONE_AI_NATIVE_BASE_URL = BASE_URL;
     const started = Date.now();
     let result: Awaited<ReturnType<typeof runMainAgentQuery>>;
     try {
@@ -212,7 +208,7 @@ const records: TaskResult[] = [];
 const cells: CellAggregate[] = [];
 console.log(`Main Agent comparison: model=${MODEL} endpoint=${BASE_URL} repeat=${REPEAT}`);
 for (const task of TASKS) {
-  for (const runtime of ["pi", "native"] as const) {
+  for (const runtime of ["native"] as const) {
     const samples: TaskResult[] = [];
     for (let index = 0; index < REPEAT; index += 1) {
       const record = await runOne(runtime, task);
@@ -249,16 +245,12 @@ for (const cell of cells) {
 
 const summary = {
   repeat: REPEAT,
-  pi: {
-    passed: records.filter((record) => record.runtime === "pi" && record.passed).length,
-    samples: records.filter((record) => record.runtime === "pi").length,
-  },
   native: {
     passed: records.filter((record) => record.runtime === "native" && record.passed).length,
     samples: records.filter((record) => record.runtime === "native").length,
   },
 };
-console.log(`\nSummary: pi ${summary.pi.passed}/${summary.pi.samples} · native ${summary.native.passed}/${summary.native.samples}`);
+console.log(`\nSummary: native ${summary.native.passed}/${summary.native.samples}`);
 
 const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
 const reportPath = join(resultsDirectory, `main-agent-${stamp}.json`);
