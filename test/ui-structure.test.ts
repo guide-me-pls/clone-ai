@@ -148,3 +148,29 @@ test("populated conversations stay vertical and empty-state flex requires no mes
   assert.match(css, /\.message\s*\{[^}]*display:\s*block[^}]*width:\s*100%/);
   assert.match(css, /\.message\.person\s*\{[^}]*width:\s*100%/);
 });
+
+test("settings are a real tab list and the provider registry is gone", async () => {
+  const html = await read("index.html");
+  const app = await read("app.js");
+  assert.match(html, /class="settings-nav" role="tablist"/);
+  assert.equal((html.match(/role="tab"/g) ?? []).length, 7);
+  assert.equal((html.match(/role="tabpanel"/g) ?? []).length, 7);
+  assert.match(html, /aria-selected="true" aria-current="true" aria-controls="settings-panel-agents"/);
+  assert.equal(/id="provider-registry"/.test(app), false, "the legacy provider registry must not be rendered");
+  assert.match(app, /classList\.add\("is-entering"\)/);
+  assert.match(app, /const moves = \{ ArrowDown/);
+  assert.match(app, /state\.settingsScroll/);
+});
+
+test("the audit view explains how each step was dispatched to a worker", async () => {
+  const audit = await read("audit.js");
+  assert.match(audit, /Worker 派发/);
+  assert.match(audit, /dispatch\.decided/);
+  assert.match(audit, /selectedAgentId/);
+  assert.match(audit, /能力与优先级规则/);
+});
+
+test("plan rows name the worker that runs the step", async () => {
+  const app = await read("app.js");
+  assert.match(app, /plan-step-worker/);
+});

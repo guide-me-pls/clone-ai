@@ -2526,6 +2526,7 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
           id: step.id,
           title: displayPlanStepTitle(step.title),
           risk: step.risk,
+          ...(step.agentId === undefined ? {} : { agentId: step.agentId }),
           delegated: step.subagents !== undefined,
         })),
       },
@@ -3080,7 +3081,7 @@ interface SessionView extends SessionSummary {
   evidenceCount: number;
   plan?: {
     summary: string;
-    steps: Array<{ id: string; title: string; risk: string; delegated: boolean }>;
+    steps: Array<{ id: string; title: string; risk: string; delegated: boolean; agentId?: string }>;
   };
   subagents: Array<{ id: string; title: string; agentId: string; role: string; providerId: string; status: string; summary?: string; updatedAt: string }>;
   approvals: Array<{ runId: string; stepId: string; description: string }>;

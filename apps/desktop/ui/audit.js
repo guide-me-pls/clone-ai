@@ -181,6 +181,34 @@
     </li>`).join("")}</ol>`;
   }
 
+  /** How each step was routed to a worker: chosen agent, provider, source, reason. 每步如何路由到 Worker：选中者、Provider、来源、理由。 */
+  function dispatchBlock(r) {
+    const trace = state.traces.get(r.runId);
+    if (trace === undefined) return `<button type="button" class="au-btn" data-au-trace="${esc(r.runId)}">加载派发详情</button>`;
+    if (trace === null) return `<p class="au-empty">正在读取派发记录…</p>`;
+    const sources = { explicit: "你明确指定", rule: "能力与优先级规则", memory: "过去的结果", description: "Worker 自述" };
+    const rows = trace.flatMap((item) => {
+      if (item.type !== "dispatch.decided") return [];
+      let payload = {};
+      try { payload = JSON.parse(item.payload); } catch { payload = {}; }
+      return [{
+        at: item.at,
+        stepId: payload.stepId ?? "—",
+        agent: payload.selectedAgentId ?? "—",
+        provider: payload.providerId ?? "—",
+        source: sources[payload.source] ?? payload.source ?? "规则",
+        reason: payload.reason ?? "",
+      }];
+    });
+    if (rows.length === 0) return `<p class="au-empty">这次运行没有派发记录（例如只做了直接对话）。</p>`;
+    return `<ul class="au-dispatch">${rows.map((row) => `<li>
+      <time>${stamp(row.at)}</time>
+      <b>${esc(row.agent)}</b>
+      <span>Provider ${esc(row.provider)} · 步骤 ${esc(row.stepId)} · 依据：${esc(row.source)}</span>
+      ${row.reason ? `<small>${esc(row.reason)}</small>` : ""}
+    </li>`).join("")}</ul>`;
+  }
+
   function policyBlock(r) {
     if (!r.policy.length) return `<p class="au-empty">没有策略判定记录。</p>`;
     return r.policy.map((p) => {
@@ -217,6 +245,7 @@
       <h5>执行时间线</h5>${timeline(r)}
       <h5>完整轨迹 <small class="au-hint">按发生顺序，每条都可展开原始数据</small></h5>${traceBlock(r)}
       <h5>策略判定</h5>${policyBlock(r)}
+      <h5>Worker 派发</h5>${dispatchBlock(r)}
       <h5>计划</h5><ul class="au-plain">${plan || `<li class="au-empty">无计划。</li>`}</ul>
       <h5>证据</h5><ul class="au-plain">${evidence}</ul>
       <h5>验证</h5>${r.verification ? `<p>${badge(r.verification.passed ? "通过" : r.verification.needsReview ? "需人工复核" : "未通过", r.verification.passed ? "ok" : r.verification.needsReview ? "warn" : "bad")} ${esc(r.verification.summary)}${r.verification.unverifiedCriteria.length ? `<br><small>未能自动验证：${esc(r.verification.unverifiedCriteria.join("；"))}</small>` : ""}</p>` : `<p class="au-empty">未进入验证。</p>`}

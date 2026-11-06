@@ -5,6 +5,16 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-06 — 设置页以 Worker 为语言，并让派发可见
+
+**决定。** 从 Agent 设置页移除历史的"本地 Provider"列表，把它的信息（是否安装、命令、执行边界、安装操作）并入每个 Worker 行。设置导航改为真正的 tab 列表——`role=tablist/tab/tabpanel`、`aria-selected`、方向键与 Home/End、焦点跟随选择、逐面板记忆滚动位置、120ms 淡入/位移并尊重 `prefers-reduced-motion`。在 Run 审计详情中增加「Worker 派发」块：逐步显示选中的 Worker、其 Provider、路由来源（显式/规则/记忆/描述）与理由，数据来自 Journal 的 `dispatch.decided` 事件。
+
+**被否决的备选。**（a）保留 Provider 列表并改名"运行时"——同一台机器的两份列表，所有者仍要自行翻译。（b）把 Provider 控件移到独立页面——把安装与执行边界的事实从它们所治理的 Worker 身边移开。（c）只在原始轨迹里显示派发——它确实在那里，但"这一步为什么给了那个 Worker"是一等公民问题，不是调试细节。
+
+**证据。** 所有者反馈设置交互生硬、Provider 列表是历史遗留；派发决定本就记录了 `selectedAgentId`、`providerId`、`source` 与 `reason`（`src/main-agent/dispatch-recorder.ts`），新块不引入新数据。确定性检查：`test/ui-structure.test.ts` 断言不再有 `provider-registry` 区块、设置标签具备 tab 语义、审计页渲染派发块。
+
+**成本与推翻条件。** Worker 行会多一行元数据；移除 Provider 区块后，没有任何 Worker 绑定的 Provider 不再出现在 UI 中。若所有者需要在绑定任何 Worker 之前管理某个 Provider，或 tab 语义在打包的 WebKit 中出问题，应推翻此决定。
+
 ## 2026-11-05 — Agent 自己运行对抗性测试与修复回路
 
 **决定。** 增加一套确定性、离线的对抗性测试（注入包裹、审批重放/过期/转发、受保护路径与符号链接逃逸、Worker 环境中的工具凭据、secret 记忆召回、轨迹脱敏、限流），并增加一个自检回路：每一轮写入 Journal；探针变红时把失败导出为轨迹，交给既有的带闸门修复通道。每轮运行对抗套件、`npm run gate`，可选 `npm test`；修复仍只产出草稿 PR，合并权在所有者。

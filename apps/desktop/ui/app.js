@@ -288,71 +288,6 @@ function renderAgentPage() {
     actions: gatewayBadge,
     body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
   });
-  const providerRows = providers.map((provider) => {
-    const unrestricted = provider.hostAccess === "unrestricted";
-    const access = provider.executionBlocked
-      ? t("worker-blocked")
-      : unrestricted
-        ? t("worker-unrestricted")
-        : provider.sandbox === "seatbelt"
-          ? t("worker-sandboxed")
-          : t("worker-runnable");
-    const accessBadge = provider.executionBlocked
-      ? ui.badge(access, "warning")
-      : unrestricted
-        ? ui.badge(access, "warning")
-        : ui.badge(access, "success", { dot: true });
-    const effortLevels = Array.isArray(provider.efforts) ? provider.efforts : [];
-    const effortSelect = effortLevels.length
-      ? `<select class="agent-effort-select" data-provider-effort="${escape(provider.id)}" aria-label="${escape(t("provider-effort"))} · ${escape(provider.title)}"><option value="">${escape(t("effort-default"))}</option>${effortLevels.map((level) => `<option value="${escape(level)}"${provider.effort === level ? " selected" : ""}>${escape(level)}</option>`).join("")}</select>`
-      : "";
-
-    const action = provider.installed
-      ? provider.executionBlocked
-        ? ui.button({
-            label: t("worker-allow"),
-            variant: "secondary",
-            className: "c-button--compact",
-            attributes: { "data-provider-access": provider.id, "data-allow": "true" },
-          })
-        : unrestricted
-          ? ui.button({
-              label: t("worker-disable"),
-              variant: "secondary",
-              className: "c-button--compact",
-              attributes: { "data-provider-access": provider.id, "data-allow": "false" },
-            })
-          : ui.badge(t("worker-default"), "success", { dot: true })
-      : provider.installable
-        ? ui.button({
-            label: t("install"),
-            variant: "primary",
-            className: "c-button--compact",
-            attributes: { "data-install-provider": provider.id },
-          })
-        : ui.badge(t("manual-install"), "neutral");
-    const status = provider.installed
-      ? ui.badge(t("detected"), "success", { dot: true })
-      : provider.installable
-        ? ui.badge(t("installable"), "warning")
-        : ui.badge(t("missing"), "danger");
-    const source = provider.resolutionSource === "path"
-      ? t("resolution-path")
-      : provider.resolutionSource === "known-directory"
-        ? t("resolution-fallback")
-        : provider.resolutionSource === "absolute"
-          ? t("resolution-explicit")
-          : "";
-    const meta = `${status}${provider.userConfigured ? ui.badge(t("user-config"), "accent") : ""}<span>${escape(provider.command)}</span>${accessBadge}${source ? `<span>${escape(source)}</span>` : ""}`;
-    return ui.listRow({
-      leading: ui.providerMark(provider.title, provider.id),
-      title: provider.title,
-      description: `${t("provider-purpose")} · ${provider.command}`,
-      meta: `<span class="c-cluster">${meta}</span>${provider.resolvedPath ? `<code class="agent-provider-path" title="${escape(provider.resolvedPath)}">${escape(provider.resolvedPath)}</code>` : ""}`,
-      actions: `${effortSelect}${action}`,
-      tone: provider.installed ? "default" : "warning",
-    });
-  }).join("");
   const agentRows = settings.agents.map((agent) => {
     const provider = providerById.get(agent.providerId);
     const options = providers.map((candidate) => ({
@@ -362,12 +297,49 @@ function renderAgentPage() {
     }));
     const description = agent.role === "external" ? t("external-unavailable") : agent.description;
     const purpose = agent.role === "external" ? t("external-unavailable-detail") : agent.purpose;
+    // Provider facts belong to the worker that uses them, not to a separate
+    // registry listing the same machine twice.
+    // Provider 的事实属于使用它的 Worker，不该另开一份"同一台机器"的清单。
+    const unrestricted = provider?.hostAccess === "unrestricted";
+    const access = provider === undefined
+      ? ""
+      : provider.executionBlocked
+        ? t("worker-blocked")
+        : unrestricted
+          ? t("worker-unrestricted")
+          : provider.sandbox === "seatbelt"
+            ? t("worker-sandboxed")
+            : t("worker-runnable");
+    const accessBadge = provider === undefined
+      ? ""
+      : ui.badge(access, provider.executionBlocked || unrestricted ? "warning" : "success", { dot: !provider.executionBlocked && !unrestricted });
+    const statusBadge = provider?.installed
+      ? ui.badge(t("detected"), "success", { dot: true })
+      : provider?.installable
+        ? ui.badge(t("installable"), "warning")
+        : ui.badge(t("missing"), "danger");
+    const effortLevels = Array.isArray(provider?.efforts) ? provider.efforts : [];
+    const effortSelect = effortLevels.length
+      ? `<select class="agent-effort-select" data-provider-effort="${escape(provider.id)}" aria-label="${escape(t("provider-effort"))} · ${escape(provider.title)}"><option value="">${escape(t("effort-default"))}</option>${effortLevels.map((level) => `<option value="${escape(level)}"${provider.effort === level ? " selected" : ""}>${escape(level)}</option>`).join("")}</select>`
+      : "";
+    const providerAction = provider === undefined
+      ? ""
+      : !provider.installed
+        ? provider.installable
+          ? ui.button({ label: t("install"), variant: "secondary", className: "c-button--compact", attributes: { "data-install-provider": provider.id } })
+          : ui.badge(t("manual-install"), "neutral")
+        : provider.executionBlocked
+          ? ui.button({ label: t("worker-allow"), variant: "secondary", className: "c-button--compact", attributes: { "data-provider-access": provider.id, "data-allow": "true" } })
+          : unrestricted
+            ? ui.button({ label: t("worker-disable"), variant: "secondary", className: "c-button--compact", attributes: { "data-provider-access": provider.id, "data-allow": "false" } })
+            : ui.badge(t("worker-default"), "success", { dot: true });
+    const command = provider === undefined ? "" : `<code class="agent-provider-path" title="${escape(provider.command)}">${escape(provider.command)}</code>`;
     return ui.listRow({
       leading: ui.providerMark(providerLabel(agent.providerId), agent.providerId),
       title: agent.title,
       description,
-      meta: `${ui.badge(agentRoleLabel(agent.role), "neutral")}${provider?.installed ? ui.badge(providerLabel(agent.providerId), "accent") : ui.badge(`${providerLabel(agent.providerId)} · ${t("missing")}`, "warning")}<span>${escape(purpose)}</span>`,
-      actions: `<div class="c-cluster">${ui.select({ options, value: agent.providerId, className: "agent-role-select", attributes: { "data-agent-provider": agent.id, "aria-label": `${t("provider-for")} ${agent.title}` } })}${ui.switchControl({ checked: agent.enabled, disabled: agent.required, label: agent.required ? t("required-role") : agent.enabled ? t("disable-role") : t("enable-role"), attributes: { "data-agent-toggle": agent.id } })}</div>`,
+      meta: `<span class="agent-worker-meta">${ui.badge(agentRoleLabel(agent.role), "neutral")}${statusBadge}${provider === undefined ? "" : ui.badge(providerLabel(agent.providerId), "accent")}${accessBadge}${command}<span class="agent-worker-purpose">${escape(purpose)}</span></span>`,
+      actions: `<div class="c-cluster agent-worker-actions">${ui.select({ options, value: agent.providerId, className: "agent-role-select", attributes: { "data-agent-provider": agent.id, "aria-label": `${t("provider-for")} ${agent.title}` } })}${effortSelect}${providerAction}${ui.switchControl({ checked: agent.enabled, disabled: agent.required, label: agent.required ? t("required-role") : agent.enabled ? t("disable-role") : t("enable-role"), attributes: { "data-agent-toggle": agent.id } })}</div>`,
       tone: provider?.installed ? "default" : "warning",
     });
   }).join("");
@@ -380,9 +352,7 @@ function renderAgentPage() {
     })}
     <div class="c-stat-grid agent-overview">${ui.stat({ label: t("stat-providers"), value: `${installed.length}/${providers.length}`, detail: t("stat-providers-detail"), tone: installed.length ? "success" : "warning" })}${ui.stat({ label: t("stat-roles"), value: `${enabledRoles}/${settings.agents.length}`, detail: t("stat-roles-detail") })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}` : t("gateway-subtitle"), tone: gateway?.running && exposedModels.length ? "success" : "warning" })}</div>
     ${gatewayCard}
-    <div class="agent-section-head"><div><h3>${t("local-providers")}</h3><p>${t("providers-section-lead")}</p></div><div class="c-segmented" aria-label="${escape(t("providers-state"))}">${ui.badge(`${installed.length} ${t("connected")}`, "success", { dot: true })}${missing.length ? ui.badge(`${missing.length} ${t("installable")}`, "warning") : ""}</div></div>
-    <div id="provider-registry" class="c-list agent-provider-list">${providerRows || ui.emptyState({ iconName: "terminal", title: t("empty-providers"), body: t("empty-providers-body") })}</div>
-    <div class="agent-section-head"><div><h3>${t("roles-bindings")}</h3><p>${t("roles-section-lead")}</p></div></div>
+    <div class="agent-section-head"><div><h3>${t("roles-bindings")}</h3><p>${t("roles-section-lead")}</p></div><div class="c-segmented" aria-label="${escape(t("providers-state"))}">${ui.badge(`${installed.length} ${t("connected")}`, "success", { dot: true })}${missing.length ? ui.badge(`${missing.length} ${t("installable")}`, "warning") : ""}</div></div>
     <div id="agent-settings-list" class="c-list agent-role-list">${agentRows}</div>
     <p class="agent-role-note">${escape(t("agents-note"))}</p>
   </div>`;
@@ -1067,7 +1037,7 @@ function messageMarkup(message) {
 function displayAgentTitle(agent) { return agent.title; }
 function displayAgentDetail(agent) { const provider = agent.providerId ? `${providerLabel(agent.providerId)} · ` : ""; return provider + (agent.status === "completed" ? "已提交可验证证据" : (agent.summary || "正在按任务边界推进")); }
 function disclosureOpen(session, name, fallback = false) { return state.openDisclosures.get(session.id)?.get(name) ?? fallback; }
-function planMarkup(session) { if (!session.plan) return ""; const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status); const open = disclosureOpen(session, "plan", fallback) ? " open" : ""; return `<details class="activity-card plan-card" data-disclosure="plan"${open}><summary class="activity-summary">${icon("spark")}<b>执行计划</b><span>${session.plan.steps.length} 步</span></summary><p class="plan-summary">${escape(session.plan.summary)}</p><div class="plan-steps">${session.plan.steps.map((step, index) => `<div class="plan-step"><span class="plan-step-index">${index + 1}</span><b>${escape(step.title)}</b><span>${step.delegated ? "委派执行" : step.risk === "read_only" ? "直接处理" : "需确认"}</span></div>`).join("")}</div></details>`; }
+function planMarkup(session) { if (!session.plan) return ""; const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status); const open = disclosureOpen(session, "plan", fallback) ? " open" : ""; return `<details class="activity-card plan-card" data-disclosure="plan"${open}><summary class="activity-summary">${icon("spark")}<b>执行计划</b><span>${session.plan.steps.length} 步</span></summary><p class="plan-summary">${escape(session.plan.summary)}</p><div class="plan-steps">${session.plan.steps.map((step, index) => `<div class="plan-step"><span class="plan-step-index">${index + 1}</span><b>${escape(step.title)}</b>${step.agentId ? `<em class="plan-step-worker">由 ${escape(step.agentId)} 执行</em>` : ""}<span>${step.delegated ? "委派执行" : step.risk === "read_only" ? "直接处理" : "需确认"}</span></div>`).join("")}</div></details>`; }
 function agentsMarkup(session) { if (!session.subagents.length) return ""; const completed = session.subagents.filter((agent) => agent.status === "completed").length; const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status); const open = disclosureOpen(session, "agents", fallback) ? " open" : ""; return `<details class="activity-card" data-disclosure="agents"${open}><summary class="activity-summary">${icon("spark")}<b>Agent 协作</b><span>${completed}/${session.subagents.length} 已完成</span></summary><div class="agent-list">${session.subagents.map((agent) => { const status = statusMeta(agent.status); return `<div class="agent-row"><span class="status-dot ${status.dot}"></span><div><strong>${escape(displayAgentTitle(agent))}</strong><small>${escape(displayAgentDetail(agent))}</small></div><span class="agent-status">${escape(status.label)}</span></div>`; }).join("")}</div></details>`; }
 function approvalMarkup(session) { if (!session.approvals.length) return ""; return `<section class="approval-card"><div class="approval-kicker">需要你的决定</div><h2>是否继续执行外部动作？</h2><p>${escape(session.approvals[0].description)}</p><div class="approval-actions"><button class="approve" type="button" data-approve="${escape(session.id)}">确认并继续</button><button class="secondary" type="button" data-reject="${escape(session.id)}">拒绝</button></div></section>`; }
 function reviewMarkup(session) { const verification = session.verification; if (session.status !== "waiting_review" || !verification?.needsReview) return ""; const criteria = (verification.unverifiedCriteria || []).map((criterion) => `<li>${escape(criterion)}</li>`).join(""); return `<section class="approval-card"><div class="approval-kicker">${escape(t("status-review"))}</div><h2>${escape(t("review-title"))}</h2><ul>${criteria}</ul><div class="approval-actions"><button class="approve" type="button" data-review="${escape(session.id)}" data-review-decision="accept">${escape(t("review-accept"))}</button><button class="secondary" type="button" data-review="${escape(session.id)}" data-review-decision="reject">${escape(t("review-reject"))}</button></div></section>`; }
@@ -1309,7 +1279,53 @@ function focusComposerIfVisible() {
   }, 40);
 }
 function closeSchedules() { $("schedule-modal").setAttribute("aria-hidden", "true"); notifyDesktopNavigation("conversation"); focusComposerIfVisible(); }
-function selectSettingsSection(section, forceReset = false) { const changed = forceReset || state.settingsSection !== section; state.settingsSection = section; document.querySelectorAll("[data-settings-section]").forEach((button) => button.setAttribute("aria-current", String(button.dataset.settingsSection === section))); document.querySelectorAll("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== section; }); if (changed) { const content = document.querySelector(".settings-content"); if (content) content.scrollTop = 0; } notifyDesktopNavigation(section === "agents" ? "agents" : section === "memory" ? "memory" : "settings"); if (section === "agents" && !state.gatewayLoading) void refreshGateways(); }
+function selectSettingsSection(section, forceReset = false, options = {}) {
+  const content = document.querySelector(".settings-content");
+  const previous = state.settingsSection;
+  const changed = forceReset || previous !== section;
+  // Each panel keeps its own scroll position, so moving between tabs does not
+  // throw away where the owner was reading.
+  // 每个分区记住自己的滚动位置，切换标签不会把所有者正在读的位置丢掉。
+  state.settingsScroll = state.settingsScroll || new Map();
+  if (changed && content && previous !== undefined) state.settingsScroll.set(previous, content.scrollTop);
+  state.settingsSection = section;
+  document.querySelectorAll("[data-settings-section]").forEach((button) => {
+    const active = button.dataset.settingsSection === section;
+    button.setAttribute("aria-selected", String(active));
+    button.setAttribute("aria-current", String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll("[data-settings-panel]").forEach((panel) => {
+    const active = panel.dataset.settingsPanel === section;
+    panel.hidden = !active;
+    panel.classList.toggle("is-active", active);
+    panel.setAttribute("aria-hidden", String(!active));
+  });
+  if (content) {
+    content.scrollTop = changed ? (state.settingsScroll.get(section) ?? 0) : content.scrollTop;
+    const panel = document.querySelector(`[data-settings-panel="${section}"]`);
+    if (changed && panel && options.animate !== false) {
+      panel.classList.remove("is-entering");
+      void panel.offsetWidth;
+      panel.classList.add("is-entering");
+    }
+  }
+  notifyDesktopNavigation(section === "agents" ? "agents" : section === "memory" ? "memory" : "settings");
+  if (section === "agents" && !state.gatewayLoading) void refreshGateways();
+}
+function settingsTabs() { return [...document.querySelectorAll("[data-settings-section]")]; }
+
+function moveSettingsFocus(direction) {
+  const tabs = settingsTabs();
+  if (tabs.length === 0) return;
+  const current = tabs.findIndex((tab) => tab.dataset.settingsSection === state.settingsSection);
+  const next = direction === "home" ? 0 : direction === "end" ? tabs.length - 1 : (current + (direction === "next" ? 1 : -1) + tabs.length) % tabs.length;
+  const target = tabs[next];
+  if (target === undefined) return;
+  selectSettingsSection(target.dataset.settingsSection);
+  target.focus();
+}
+
 function openSettings() { selectSettingsSection(state.settingsSection); $("settings-modal").setAttribute("aria-hidden", "false"); }
 function closeSettings() { $("settings-modal").setAttribute("aria-hidden", "true"); notifyDesktopNavigation("conversation"); focusComposerIfVisible(); }
 async function createSchedule(query) { const button = $("schedule-create"); const kind = $("schedule-kind").value; const body = { query, kind, time: $("schedule-time").value }; if (kind === "weekly") body.weekdays = [...document.querySelectorAll('input[name="schedule-weekday"]:checked')].map((input) => Number(input.value)); if (kind === "monthly" || kind === "yearly") body.dayOfMonth = Number($("schedule-day").value); if (kind === "yearly") body.month = Number($("schedule-month").value); if (kind === "interval") body.intervalMinutes = Math.max(1, Math.floor(Number($("schedule-interval-value").value) || 0)) * Number($("schedule-interval-unit").value); button.disabled = true; try { await api("/api/schedules", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); $("schedule-query").value = ""; await refresh(); announce("定时任务已保存到本地运行时。"); } catch (error) { announce(error.message, true); } finally { button.disabled = false; } }
@@ -1351,6 +1367,24 @@ $("session-list").addEventListener("click", (event) => { const restore = event.t
 $("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
+document.querySelector(".settings-nav")?.addEventListener("keydown", (event) => {
+  const key = event.key;
+  const moves = { ArrowDown: "next", ArrowRight: "next", ArrowUp: "previous", ArrowLeft: "previous", Home: "home", End: "end" };
+  const direction = moves[key];
+  if (direction === undefined) return;
+  event.preventDefault();
+  moveSettingsFocus(direction);
+});
+document.querySelector(".settings-nav")?.addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-settings-section]");
+  if (tab) tab.focus();
+});
+document.querySelector(".settings-content")?.addEventListener("scroll", (event) => {
+  const content = event.currentTarget;
+  if (!(content instanceof HTMLElement) || state.settingsSection === undefined) return;
+  state.settingsScroll = state.settingsScroll || new Map();
+  state.settingsScroll.set(state.settingsSection, content.scrollTop);
+}, { passive: true });
 $("config-workspace-choose").addEventListener("click", () => void chooseWorkspace());
 $("config-workspace-reveal").addEventListener("click", revealWorkspace);
 $("config-main-agent-model-save").addEventListener("click", () => void saveMainAgentModel());
