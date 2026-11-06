@@ -84,6 +84,50 @@ this if native steps routinely finish within 12 rounds (the knob then hides a
 prompt problem), or if a 24-round step is observed looping without producing a
 file — in that case the plan, not the budget, is the thing to fix.
 
+## 2026-11-06 — Sidebar previews keep identifier underscores
+
+**Decision.** `plainPreview` treats underscores as emphasis only at word
+boundaries, so `some_variable_name` survives in the sidebar and session header;
+asterisk emphasis is unchanged.
+
+**Alternatives rejected.** (a) Drop underscore emphasis entirely — `_text_` is
+a normal way to write emphasis, and dropping it would stop rendering it.
+(b) Render the previews as Markdown — the sidebar is one line; full Markdown
+there costs a parser and re-introduces the wrapping the preview exists to avoid.
+
+**Evidence.** `plainPreview` applies `/(\*|_)([^*_\n]+)\1/g` to the whole string
+(`apps/desktop/ui/app.js`), so `check some_variable_name first` becomes
+`check somevariablename first`. Agent replies about code routinely contain
+identifiers.
+
+**Cost and reversal condition.** One more boundary condition in an existing
+regex; no new dependency. Reverse if the stricter rule leaves legitimate
+emphasis unrendered in a way owners notice, or if previews move to rich text.
+
+## 2026-11-06 — A hidden conversation keeps its restore control
+
+**Decision.** `renderSessions` renders the "已隐藏" group (with its restore
+button) even when the visible session list is empty, instead of returning early
+to the empty state.
+
+**Alternatives rejected.** (a) Keep the early return and rely on the audit view
+— the audit view knows deleted run ids, not the conversation entry in
+`deletedConversations`, so it cannot restore the conversation. (b) Show the
+empty state and the hidden group side by side — the empty state's text says
+there is nothing, which is false when a hidden conversation exists; the hidden
+group replaces it.
+
+**Evidence.** `renderSessions` returns after painting `empty-sessions` when
+`sessions.length === 0`, while the hidden block is built afterwards
+(`apps/desktop/ui/app.js`). Hiding the only conversation leaves no
+`data-restore-conversation` in the sidebar. A vm run with an empty list and one
+deleted conversation reproduces it.
+
+**Cost and reversal condition.** One branch moved; no request. Reverse if the
+product decision changes to offering hidden conversations only in the audit
+view (then remove the sidebar control entirely rather than leaving it
+unreachable).
+
 ## 2026-11-06 — The audit dispatch block reads the events that carry steps
 
 **Decision.** The audit view's "Worker 派发" block renders `dispatch.steps_assigned`
