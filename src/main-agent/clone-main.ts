@@ -1,27 +1,22 @@
 /**
- * clone-main entry: a persistent Main Agent on the Pi SDK.
- * clone-main 入口：Pi SDK 上的常驻 Main Agent。
+ * clone-main entry: the persistent Main Agent on the in-process native loop.
  *
  * The agent carries the conversation, proposes work plans, requests approval
  * status, recalls memory, and inspects runs - all through proposal-only tools
  * whose other end is the Kernel. It has no built-in file, shell, or write
- * tools, mirroring the tool-free posture of the RPC adapter.
+ * tools. There is no SDK behind it: the loop, context assembly and tool surface
+ * are ours, and every turn is recorded in the turn ledger.
+ *
+ * 常驻主 Agent 的入口，运行在进程内的原生循环上。
+ *
  * 该 Agent 负责对话、提案工作计划、查询审批状态、召回记忆与查看 Run——全部经由
- * 提案型工具，工具的另一端是 Kernel。它没有任何内置文件/Shell/写入工具，
- * 与 RPC 版 Adapter 的无工具姿态保持一致。
+ * 提案型工具，工具的另一端是 Kernel。它没有任何内置文件/Shell/写入工具。它背后没有
+ * SDK：循环、上下文组装与工具面都是我们自己的，每个回合都记入回合台账。
  *
  * Run: npm run main -- "<query>"
- * Session state persists under <dataDirectory>/pi-sessions/main-agent and can
- * be resumed with the same command (same cwd + session dir).
- * 会话状态持久化在 <dataDirectory>/pi-sessions/main-agent，相同命令可续跑。
  */
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
-import { createMainAgentSession } from "./session.ts";
-import { isNativeMainAgentSelected, runNativeMainAgentTurn } from "./native-runtime.ts";
-import { recordPromptSnapshot } from "./prompt-snapshot.ts";
-import { beginMainAgentTurn, finishMainAgentTurn, observeMainAgentSession } from "./turn-audit.ts";
-import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
-import { beginInvocation } from "../audit/invocation-ledger.ts";
+import { runNativeMainAgentTurn } from "./native-runtime.ts";
 
 const query = process.argv.slice(2).join(" ").trim();
 if (query.length === 0) {
@@ -39,90 +34,15 @@ await migrateLegacyCloneHome({
   legacyDirectory: defaultLegacyDirectory(paths.workspacePath),
   targetDirectory: paths.dataDirectory,
 });
-if (isNativeMainAgentSelected()) {
-  const result = await runNativeMainAgentTurn({
-    dataDirectory: paths.dataDirectory,
-    text: query,
-    source: "main-cli",
-    onDelta: (delta) => process.stdout.write(delta),
-  });
-  process.stdout.write("\n");
-  if (result.error !== undefined) {
-    console.error(result.error);
-    process.exit(1);
-  }
-  process.exit(0);
-}
-const { session, prompt } = await createMainAgentSession({ dataDirectory: paths.dataDirectory, query });
-const audit = await beginInvocation({
-  prompt: query,
-  surface: "main",
-  workspacePath: paths.workspacePath,
-  dataDirectory: paths.dataDirectory,
-  command: "main",
-});
-let reply = "";
 
-// The turn's inputs are recorded before the model sees them, so a failed run
-// can be attributed to a prompt revision instead of guessed at.
-// 本回合的输入在模型看到之前就被记录，因此失败的运行可以归因到某一版提示词，而不是靠猜。
-const snapshot = await recordPromptSnapshot(paths.dataDirectory, prompt);
-const sessionFile = session.sessionManager.getSessionFile();
-const turn = await beginMainAgentTurn({
+const result = await runNativeMainAgentTurn({
   dataDirectory: paths.dataDirectory,
   text: query,
   source: "main-cli",
-  ...(sessionFile === undefined ? {} : { sessionFile }),
-  ...(prompt.modelId === undefined ? {} : { modelId: prompt.modelId }),
-  ...(prompt.provider === undefined ? {} : { provider: prompt.provider }),
-  ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
-  ...(snapshot === undefined ? {} : { promptMaterialHash: snapshot.materialHash }),
+  onDelta: (delta) => process.stdout.write(delta),
 });
-observeMainAgentSession(session, turn);
-audit.note({
-  ...(sessionFile === undefined ? {} : { sessionFile }),
-  ...(prompt.modelId === undefined ? {} : { modelId: prompt.modelId }),
-  ...(prompt.provider === undefined ? {} : { provider: prompt.provider }),
-  ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
-});
-session.subscribe((event) => {
-  if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-    reply += event.assistantMessageEvent.delta;
-    process.stdout.write(event.assistantMessageEvent.delta);
-  }
-});
-const started = Date.now();
-const beforeStats = (() => {
-  try {
-    return session.getSessionStats();
-  } catch {
-    return undefined;
-  }
-})();
-let turnStatus: "completed" | "failed" = "completed";
-let turnError: string | undefined;
-try {
-  await session.prompt(query);
-  process.stdout.write("\n");
-  await audit.complete({ reply });
-} catch (error: unknown) {
-  turnStatus = "failed";
-  turnError = error instanceof Error ? error.message : String(error);
-  await audit.fail(error);
-  throw error;
-} finally {
-  const usage = collectSessionUsage(session, Date.now() - started, beforeStats);
-  try {
-    await recordUsage(paths.dataDirectory, { ...usage, turnId: turn.turnId });
-  } catch {
-    // Usage is telemetry; losing it must not hide the reply or the error.
-    // 用量是遥测；丢掉它不能盖住回复或错误。
-  }
-  await finishMainAgentTurn(turn, {
-    status: turnStatus,
-    reply,
-    ...(turnError === undefined ? {} : { error: turnError }),
-    usage: { ...usage, turnId: turn.turnId },
-  });
-  session.dispose();
+process.stdout.write("\n");
+if (result.error !== undefined) {
+  console.error(result.error);
+  process.exit(1);
 }

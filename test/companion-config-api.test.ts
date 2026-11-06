@@ -69,7 +69,9 @@ test("the model options endpoint exposes only credential-blind selectable refere
   };
   assert.ok(Array.isArray(body.models));
   for (const model of body.models) {
-    assert.equal(model.reference, `${model.provider}/${model.id}`);
+    // The native loop takes the model id directly; there is no provider prefix
+    // to build any more. 原生循环直接使用模型 id，不再拼接 Provider 前缀。
+    assert.equal(model.reference, model.id);
     assert.equal(typeof model.label, "string");
     assert.ok(model.label.length > 0);
   }

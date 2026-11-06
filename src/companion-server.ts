@@ -67,9 +67,9 @@ import { compileBriefing } from "./main-agent/situation-briefing.ts";
 import { buildFallbackPlan } from "./planning/fallback-planner.ts";
 import { reconcileCommitments } from "./state/commitment-reconciler.ts";
 import { describeHistory, mainAgentSessionDirectory, readConversation, searchHistory } from "./main-agent/conversation-history.ts";
-import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
+import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/conversation-store.ts";
 import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
-import { listPiModelIds, listPiModels, piModelReference } from "./main-agent/pi-model-catalog.ts";
+import { listMainAgentModelIds, listMainAgentModels, mainAgentModelReference } from "./main-agent/main-agent-model-catalog.ts";
 import { readInvocation, readInvocations } from "./audit/invocation-ledger.ts";
 import { WhatsAppBindingInputError, WhatsAppSetupService } from "./mobile/whatsapp-setup.ts";
 import {
@@ -857,7 +857,7 @@ async function handleRequest(
 
   if (request.method === "GET" && url.pathname === "/api/options") {
     const current = await context.config.get();
-    const piModels = await listPiModels().catch(() => []);
+    const piModels = await listMainAgentModels().catch(() => []);
     sendJson(response, 200, {
       workspacePath: current.workspacePath,
       mainAgentModel: current.mainAgentModel,
@@ -912,7 +912,7 @@ async function handleRequest(
     // 这只是回环能力探测：刻意不返回任何凭据，也不改写 Magpie 自己的配置。
     const gateway = await inspectMagpieGateway();
     const piModels = gateway.running
-      ? new Set((await listPiModels("magpie").catch(() => [])).map((model) => model.id))
+      ? new Set((await listMainAgentModels("magpie").catch(() => [])).map((model) => model.id))
       : new Set<string>();
     sendJson(response, 200, {
       gateways: [{
@@ -949,14 +949,14 @@ async function handleRequest(
       sendJson(response, 400, { error: `Magpie does not expose the model "${modelId}".` });
       return;
     }
-    const reference = piModelReference(modelId);
+    const reference = mainAgentModelReference(modelId);
     try {
-      // The Pi catalog is the final capability check: writing a model Clone AI
-      // cannot construct would turn a settings success into a later chat failure.
-      // Pi 目录是最终能力校验：写入 Clone AI 无法构造的模型会把设置成功变成之后的对话失败。
-      if (!(await listPiModelIds("magpie")).includes(modelId)) {
+      // The gateway's own catalog is the capability check: writing a model the
+      // endpoint does not serve would turn a settings success into a later chat failure.
+      // 网关自己的目录就是能力校验：写入端点不提供的模型，会把设置成功变成之后的对话失败。
+      if (!(await listMainAgentModelIds("magpie")).includes(modelId)) {
         sendJson(response, 409, {
-          error: `Magpie is running, but Pi is not connected to "${modelId}". Enable Pi in Magpie, run magpie sync, then retry.`,
+          error: `Magpie is running, but it does not expose "${modelId}". Sync the model in Magpie, then retry.`,
         });
         return;
       }
@@ -966,7 +966,7 @@ async function handleRequest(
       });
     } catch (error: unknown) {
       sendJson(response, 500, {
-        error: error instanceof Error ? error.message : "Could not validate the Pi model catalog.",
+        error: error instanceof Error ? error.message : "Could not validate the gateway model catalog.",
       });
     }
     return;
