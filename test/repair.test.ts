@@ -186,7 +186,13 @@ test("the plan puts the red check between the test phase and the fix phase", () 
     assert.equal(step.agentId, "draft-maker");
   }
   assert.match(steps[0]!.instructions, /test\/regression/);
-  assert.match(steps[1]!.instructions, /docs\/architecture\/trade-offs\.md/);
+  // The working agent writes the trade-off entry before the run; the fix worker
+  // is told not to spend its budget on documentation. The test plugin note below
+  // explains why the word "test" is avoided in acceptance text.
+  // 取舍条目由工作的 Agent 在运行前写好；修复 Worker 被告知不要把预算花在文档上。下面的测试
+  // 插件说明解释了验收文本为何避免 "test" 一词。
+  assert.match(steps[1]!.instructions, /trade-off entry was written by the working agent/);
+  assert.match(steps[1]!.instructions, /no shell tool/);
   // The phase-1 wording must steer a model with a small round budget: write the
   // reproduction first, and never leave a probe that passes as the only file.
   // 第一阶段的措辞必须能引导轮次预算有限的模型：先写复现，且绝不能只留下一个会通过的探针。
