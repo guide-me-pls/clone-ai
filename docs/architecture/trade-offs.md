@@ -6,6 +6,39 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-06 — The memory library keeps a focused editor across background refreshes
+
+**Decision.** The memory library (`apps/desktop/ui/memory.js`) must not rebuild
+`#memory-root` when the periodic 3-second dashboard refresh hands it a library
+that has not changed, and must never discard a focused search field or an
+unsaved editor while the owner is typing. The background poll may update data,
+but it may not replace the DOM under the owner's caret.
+
+**Alternatives rejected.** (a) Slow the poll for this panel — the refresh is
+shared with the rest of the dashboard, and a slower poll only widens the window
+in which a keystroke is lost. (b) Remove the search/edit controls — they are the
+reason the layered view exists. (c) Keep the rebuild and restore focus after it —
+a restored caret still loses the keystroke that arrived during the rebuild and
+cannot recover unsaved textarea content.
+
+**Evidence.** `refresh()` in `apps/desktop/ui/app.js` runs every 3000 ms and
+calls `renderLibrary(library)`; the wrapper added at the end of `memory.js` calls
+`render()` unconditionally, and `render()` assigns `root.innerHTML` on every call
+(`memory.js:178`). The existing "do not redraw while typing" guard in
+`app.js:renderLibrary` only covers `#library-list`, `#library-new-*` and
+`.memory-tools`, not the newer `#memory-root`. Reproduction: open Settings →
+Memory, type in `[data-mem-query]`; within three seconds the input is replaced
+and loses focus. The same rebuild replaces an open editor's textarea with the
+stored content. This is **observed by code inspection**; the regression case is
+produced by the repair lane and run before the fix.
+
+**Cost and reversal condition.** Skipping an unchanged render costs one JSON
+comparison per poll (the same signature check `app.js:renderLibrary` already
+uses). If the panel later needs a live view that changes without a library
+change (a clock, a running job), that view must update through its own explicit
+render rather than by rebuilding the whole root — reverse this entry if the
+signature check starts hiding real updates.
+
 ## 2026-11-06 — Settings speak in workers, and dispatch is visible
 
 **Decision.** Remove the legacy "local providers" registry from the Agent settings page and fold its facts (installed, command, execution boundary, install action) into each worker row. Make the settings navigation a real tab list — `role=tablist/tab/tabpanel`, `aria-selected`, arrow/Home/End keys, focus follows selection, per-panel scroll memory, a 120 ms fade/slide that honours `prefers-reduced-motion`. Add a "Worker 派发" block to a run's audit detail showing, per step, the chosen worker, its provider, the routing source (explicit / rule / memory / description) and the reason, read from the journal's `dispatch.decided` events.
