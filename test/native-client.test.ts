@@ -21,6 +21,30 @@ test("configuration is explicit and never guessed", () => {
   assert.equal(readNativeWorkerEnvironment({ CLONE_AI_NATIVE_MAX_ROUNDS: "0" }, "/tmp").maxRounds, undefined);
   assert.equal(readNativeWorkerEnvironment({ CLONE_AI_NATIVE_MAX_ROUNDS: "1.5" }, "/tmp").maxRounds, undefined);
   assert.equal(readNativeWorkerEnvironment({ CLONE_AI_NATIVE_MAX_ROUNDS: "many" }, "/tmp").maxRounds, undefined);
+  // A completion cap is likewise owner-controlled and malformed values are ignored.
+  // 单次补全上限同样由所有者控制，非法值被忽略。
+  assert.equal(readNativeWorkerEnvironment({ CLONE_AI_NATIVE_MAX_TOKENS: "16000" }, "/tmp").maxTokens, 16000);
+  assert.equal(readNativeWorkerEnvironment({ CLONE_AI_NATIVE_MAX_TOKENS: "-1" }, "/tmp").maxTokens, undefined);
+});
+
+test("a configured completion cap reaches the provider request", async () => {
+  let body: Record<string, unknown> | undefined;
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    return new Response(JSON.stringify({ choices: [{ message: { content: "ok", tool_calls: [] } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+  const client = new OpenAiCompatibleClient({ baseUrl: "http://gateway", model: "m", fetchImpl, maxTokens: 16000 });
+  await client.run({
+    instructions: "x",
+    tools: [],
+    workspace: "/tmp",
+    signal: new AbortController().signal,
+    execute: async () => ({ output: "", isError: false }),
+  });
+  assert.equal(body?.max_tokens, 16000);
 });
 
 test("a configured round budget is what stops a model that keeps calling tools", async () => {

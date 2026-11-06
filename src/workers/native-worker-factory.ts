@@ -29,12 +29,16 @@ export interface NativeWorkerEnvironment {
    * 客户端内置默认值刻意很小。
    */
   maxRounds?: number;
+  /** Cap one completion's tokens, when the owner sets it. 设置了该值时，限制单次补全的 token。 */
+  maxTokens?: number;
   workspace: string;
 }
 
 export function readNativeWorkerEnvironment(environment: NodeJS.ProcessEnv = process.env, workspace = process.cwd()): NativeWorkerEnvironment {
   const rounds = environment.CLONE_AI_NATIVE_MAX_ROUNDS?.trim();
   const maxRounds = rounds === undefined || rounds.length === 0 ? undefined : Number(rounds);
+  const tokens = environment.CLONE_AI_NATIVE_MAX_TOKENS?.trim();
+  const maxTokens = tokens === undefined || tokens.length === 0 ? undefined : Number(tokens);
   return {
     workspace,
     ...(environment.CLONE_AI_NATIVE_MODEL?.trim() ? { model: environment.CLONE_AI_NATIVE_MODEL.trim() } : {}),
@@ -44,6 +48,7 @@ export function readNativeWorkerEnvironment(environment: NodeJS.ProcessEnv = pro
     // make the loop run zero rounds and look like a model that said nothing.
     // 非法值直接忽略而不是变成 NaN：那会让循环跑零轮，看起来像模型什么都没说。
     ...(maxRounds !== undefined && Number.isInteger(maxRounds) && maxRounds > 0 ? { maxRounds } : {}),
+    ...(maxTokens !== undefined && Number.isInteger(maxTokens) && maxTokens > 0 ? { maxTokens } : {}),
   };
 }
 
@@ -165,6 +170,7 @@ export function createConfiguredNativeWorker(
       model: config.model!,
       ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
       ...(config.maxRounds === undefined ? {} : { maxRounds: config.maxRounds }),
+      ...(config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens }),
       timeoutMs: Number(environment.CLONE_AI_NATIVE_TIMEOUT_MS ?? 120_000),
     }),
   });

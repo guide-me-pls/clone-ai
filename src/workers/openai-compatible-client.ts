@@ -22,6 +22,8 @@ export interface OpenAiCompatibleClientOptions {
   model: string;
   apiKey?: string;
   maxRounds?: number;
+  /** Cap one completion's tokens; a runaway generation must not hold the step for minutes. 单次补全的 token 上限；失控的生成不得让步骤停顿数分钟。 */
+  maxTokens?: number;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
@@ -107,6 +109,7 @@ export class OpenAiCompatibleClient implements NativeModelClient {
         model: this.#options.model,
         messages,
         ...(tools.length === 0 ? {} : { tools }),
+        ...(this.#options.maxTokens === undefined ? {} : { max_tokens: this.#options.maxTokens }),
         stream: false,
       }),
       ...(this.#options.timeoutMs === undefined ? {} : { signal: AbortSignal.any([signal, AbortSignal.timeout(this.#options.timeoutMs)]) }),

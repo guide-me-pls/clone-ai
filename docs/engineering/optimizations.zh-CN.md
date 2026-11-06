@@ -6,6 +6,30 @@
 它的目的是让**工作本身**可审计：不仅改了什么，还包括怎么做的、花了多少、链路哪里弱。
 规则见 [`AGENTS.md`](../../AGENTS.md)。
 
+### 2026-11-06 — 原生 Worker 接受显式的轮次预算
+
+- **目标 / 假设：** 修复阶段必须能先读失败代码、再在同一个步骤里写出回归用例与补丁。原生客户端硬编码的 12 轮上限让第一次真实修复运行在写出任何文件之前就停了。
+- **取舍：** [2026-11-06 —— 原生 Worker 接受显式的轮次预算](../architecture/trade-offs.zh-CN.md#2026-11-06--原生-worker-接受显式的轮次预算)。
+- **变更：** `readNativeWorkerEnvironment` 读取 `CLONE_AI_NATIVE_MAX_ROUNDS` 与 `CLONE_AI_NATIVE_MAX_TOKENS`（正整数；未设置或非法时保留客户端默认值），`createConfiguredNativeWorker` 把两者传给 `OpenAiCompatibleClient`（`maxRounds` 与请求体中的 `max_tokens`）。`test/native-client.test.ts` 增加了环境解析断言、一个在配置轮次处停止的客户端用例，以及一个断言 token 上限进入请求体的用例。
+- **eval：** `node --experimental-strip-types --test test/native-client.test.ts` —— 11 个用例全部通过。变更前该选项不存在，客户端固定停在 12 轮；新用例在旧代码上会失败，因为环境变量没有被读取。
+- **Benchmark run：** 未跑 benchmark；eval 是针对 Magpie `360/deepseek/deepseek-v4.1-flash` 的修复通道（无数据集与评分参数）。运行记录：第一阶段轨迹 `ui-memory-refresh-1`，通道报告 `~/.clone-repair/rsi/last-run.json`，Provider `native`，模型 `360/deepseek/deepseek-v4.1-flash`，强度未指定（网关默认），Worker 轮次预算先 24 后 32，`CLONE_AI_NATIVE_TIMEOUT_MS=900000`。
+- **执行链路：** 阅读 `openai-compatible-client.ts` 与 `native-worker-factory.ts`；修改环境读取与客户端构造；运行定向测试与 `tsc --noEmit`；用 24 轮启动通道。该运行（`426f3d3a`，24 次调用，423,163 输入 token，150 秒）只写了一个会通过的探针测试，说明仅提高预算并不能产出补丁。下一次尝试把预算提高到 32；下面的措辞变更针对真正的失败模式。
+- **优点：** 预算显式且由所有者控制；非法值不会造成零轮循环。
+- **缺点 / 下次：** 更大的预算会让模型探索更多而不写文件，因此必须配合明确“交付物”的计划措辞。eval 只测客户端的停止行为，不测真实修复。
+- **推翻条件：** 见取舍条目——若原生步骤普遍能在 12 轮内完成，应移除该开关，而不是保留一个可被误配的入口。
+
+### 2026-11-06 — 修复计划告诉 Worker 它的步骤如何被判定
+
+- **目标 / 假设：** 同一轨迹在 12 轮时没有产出复现，在 24 轮时产出了一个会通过的探针。Worker 把“读仓库”当成了目标，而不是把“复现文件”当成目标。
+- **取舍：** [2026-11-06 —— 修复计划告诉 Worker 它的步骤如何被判定](../architecture/trade-offs.zh-CN.md#2026-11-06--修复计划告诉-worker-它的步骤如何被判定)。
+- **变更：** `repairPlan` 的第一阶段指令现在要求先写复现再做广泛探索、只读复现需要的文件、不得在 `test/regression/` 留下诊断/探针文件；验收标准写明该目录下每个文件都必须是复现。`test/repair.test.ts` 断言这些措辞。
+- **eval：** `node --experimental-strip-types --test test/repair.test.ts` —— 16 个用例全部通过。变更前新断言在旧指令文本上会失败；行为层面的 eval 是通道运行本身。
+- **Benchmark run：** 同一轨迹、同一模型的修复通道运行；命令、模型、预算与报告路径记录在上一条。结果：见本次工作的最终报告。
+- **执行链路：** 阅读两次失败的运行审计（`1dddd6b4`、`426f3d3a`），写取舍条目，修改计划文本与验收标准，增加结构断言，运行定向测试，提交并重跑通道。通道在产出红色用例之前再次停止；具体闸门见报告。
+- **优点：** 指令现在明确交付物，并禁止已两次观察到的失败模式，且没有再次提高预算；验收标准的变化可被测试。
+- **缺点 / 下次：** 措辞是软约束——模型仍可能忽略，通道只有在花完预算后才知道。更强的设计是在红色检查之前就拒绝“会通过的探针”这类证据，但这需要通道能判定什么算“复现”，因此未纳入本次变更。
+- **推翻条件：** 见取舍条目。
+
 ### 2026-11-06 — 修复通道变成 clone-ai 自己的 Run（AGENTS.md 第 4 条终于可执行）
 
 - **目标 / 假设：** AGENTS.md 第 4 条要求 clone-ai 的 Bug 通过它自己的修复通道来修。此前的通道是 `scripts/nightly-rsi.mjs`：自己拼 Prompt 并 spawn `claude -p`，clone-ai 从未真正执行修复，规则描述的是系统并未做到的事。目标是把修复做成由已配置 Worker 执行的 Kernel Run，同时保留全部既有闸门。
