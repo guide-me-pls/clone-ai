@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Two desktop defects fixed through the repair lane
+
+The 3-second background refresh no longer rebuilds `#memory-root`: the memory library paints only when its markup actually changes, so a focused search box keeps focus and an unsaved editor keeps its text. The sidebar now renders the "已隐藏" group (with its restore control) even when no session is visible, so hiding the only conversation no longer leaves it unreachable. Both patches were produced by `clone-ai repair` with the native worker on Magpie DeepSeek V4.1 Flash; the working agent made mechanical adjustments so the generated cases satisfy the repository's typecheck and bilingual-comment rules. The native worker's `write_file` also refuses an existing path now — changes go through `edit_file` — because a whole-file rewrite turned `app.js` into an 8 KB fragment in one attempt and removed 127 lines of `audit.js` in another.
+
+每 3 秒的后台刷新不再重建 `#memory-root`：记忆库只在标记真的变化时才重绘，因此聚焦的搜索框保持焦点，未保存的编辑器保留正文。侧栏在没有可见会话时也会渲染“已隐藏”分组及其恢复入口，隐藏唯一的对话不再让它无法恢复。两个补丁都由 `clone-ai repair` 使用 Magpie DeepSeek V4.1 Flash 的原生 Worker 产出；工作 Agent 做了机械调整，使生成的用例满足仓库的类型检查与双语注释规则。原生 Worker 的 `write_file` 现在拒绝已有路径——修改必须通过 `edit_file`——因为一次尝试把 `app.js` 整文件重写成了 8 KB 片段，另一次删掉了 `audit.js` 的 127 行。
+
 ### A repair is only fixed when its case passes after the fix
 
 `clone-ai repair` now re-runs the hashed regression cases after the fix phase and stops with `regression-still-red` if any of them still fails, recording the result as `regressionAfter` in the report. Previously it ran only the top-level suite and the typecheck, and in this repository the suite does not include `test/regression/`, so a fix that changed nothing could be reported as fixed. Staging now removes the runtime scratch the lane and a worker create (`node_modules`, `.probe/`, `.rsi/`, `.clone/`, `.work-orders/`, `.verification-baseline*`, `*.log`, `*.tmp`) while still showing every other change, including a new protected file, to the protected-path gate. The native worker also gains `edit_file`, which replaces exactly one excerpt and refuses an edit that would shrink a file below a tenth of its size, so a one-line fix to a large UI script cannot replace it with a fragment.

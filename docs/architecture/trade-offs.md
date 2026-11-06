@@ -170,21 +170,30 @@ the workspace, rather than widening this function.
 **Decision.** `fileTools()` adds `edit_file`: replace exactly one occurrence of
 `old_text` with `new_text`, refusing empty, missing or ambiguous excerpts, and
 refusing an edit that shrinks the file to less than a tenth of its size. Phase 2
-is told to prefer it for an existing file; `write_file` remains for new files or
-a full replacement the worker has read.
+is told to prefer it for an existing file. `write_file` now refuses a path that
+already exists, so the only way to change an existing file is a named excerpt;
+it still creates new files.
 
 **Alternatives rejected.** (a) Keep whole-file `write_file` only — a repair of
 one line in the 118 KB `apps/desktop/ui/app.js` replaced it with an 8 KB
 fragment (observed 2026-11-06). (b) A unified-diff or patch parser — more input
 to validate, and a malformed patch fails less legibly than one exact excerpt.
 (c) Line-number replacement — line numbers drift as the worker reads; an exact
-excerpt is self-checking.
+excerpt is self-checking. (d) Let `write_file` replace existing files and rely
+on the size guard — the guard's 10% floor allowed a 127-line deletion from
+`audit.js` (36 KB) in the 2026-11-06 rerun; the patch was refused by the red
+check, but the file in the worktree had already lost functions the case never
+loaded.
 
 **Evidence.** In the plain-preview attempt, phase 2 wrote an 8 KB `app.js`
 containing only the functions the case slices; `npm test` and `tsc` do not load
-that browser script, so the lane was ready to call it fixed. The size guard and
-single-occurrence requirement would have refused it. `test/native-client.test.ts`
-covers replacement, missing text, ambiguity and the shrink guard.
+that browser script, so the lane was ready to call it fixed. In the audit rerun,
+`write_file` replaced 127 lines of `audit.js`; the post-fix case still failed, so
+the lane refused the patch, but the worktree file was already damaged. The size
+guard and single-occurrence requirement would have refused the first; refusing
+existing paths refuses both. `test/native-client.test.ts` covers replacement,
+missing text, ambiguity, the shrink guard, and `write_file` refusing an existing
+path.
 
 **Cost and reversal condition.** One more tool entry and one read of the target
 file per edit; a legitimate edit that removes more than 90% of a file is

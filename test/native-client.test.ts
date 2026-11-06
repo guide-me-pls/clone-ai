@@ -216,6 +216,31 @@ test("edit_file replaces one exact excerpt and refuses ambiguity or a fragment",
   assert.equal(await readFile(file, "utf8"), whole);
 });
 
+test("write_file creates a file but refuses to replace an existing one", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-write-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const write = fileTools().find((tool) => tool.name === "write_file");
+  assert.ok(write);
+
+  const created = await write.run(
+    { name: "write_file", input: { path: "new.js", content: "const a = 1;\n" } },
+    { workspace: directory },
+  );
+  assert.equal(created.isError, undefined);
+  assert.equal(await readFile(join(directory, "new.js"), "utf8"), "const a = 1;\n");
+
+  // An existing file must be changed through edit_file, so a one-line fix cannot
+  // become a whole-file fragment.
+  // 已有文件必须通过 edit_file 修改，使一行修复不会变成整文件片段。
+  const replaced = await write.run(
+    { name: "write_file", input: { path: "new.js", content: "x" } },
+    { workspace: directory },
+  );
+  assert.equal(replaced.isError, true);
+  assert.match(replaced.output, /use edit_file/);
+  assert.equal(await readFile(join(directory, "new.js"), "utf8"), "const a = 1;\n");
+});
+
 test("the system prompt names the offered tools and the boundary", () => {
   const tools: NativeToolSpec[] = fileTools();
   const prompt = systemPrompt("do it", tools);

@@ -96,9 +96,18 @@ export function fileTools(): NativeToolSpec[] {
       risk: "write",
       pathOf: (input) => String(input.path ?? ""),
       run: async (call, { workspace }) => {
-        const { mkdir, writeFile } = await import("node:fs/promises");
+        const { access, mkdir, writeFile } = await import("node:fs/promises");
         const { dirname } = await import("node:path");
         const target = resolveInWorkspace(workspace, String(call.input.path));
+        // Replacing an existing file wholesale is how a one-line fix becomes a
+        // fragment: an 8 KB app.js and a 36 KB audit.js both came from this in
+        // 2026-11-06. A change to an existing file must name the excerpt.
+        // 整文件替换已有文件，正是一行修复变成片段的路径：2026-11-06 出现过 8 KB 的 app.js 与
+        // 36 KB 的 audit.js。修改已有文件必须指明被替换的片段。
+        const exists = await access(target).then(() => true, () => false);
+        if (exists) {
+          return { output: `Error: ${String(call.input.path)} already exists; use edit_file with an exact old_text excerpt to change it.`, isError: true };
+        }
         await mkdir(dirname(target), { recursive: true });
         await writeFile(target, String(call.input.content ?? ""), "utf8");
         return { output: `Wrote ${String(call.input.path)}.` };
