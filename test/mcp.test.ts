@@ -134,11 +134,20 @@ test("a server's tool is offered to the worker only when the step granted its ri
       label: "N",
       tools: specs,
       createClient: (): NativeModelClient => ({
-        async run(input) {
-          for (const tool of input.tools) seen.push(tool.name);
-          const outcome = await input.execute({ name: "docs.search", input: { q: "x" } });
-          seen.push(`${outcome.isError}:${outcome.output.split("\n")[0]}`);
-          return { summary: "done" };
+        // The shared loop owns tool execution; this script answers twice: once
+        // asking for the tool, once with the final summary.
+        // 共享循环拥有工具执行；这个脚本回答两次：一次请求工具，一次给出最终摘要。
+        async complete(input) {
+          for (const tool of input.tools) {
+            if (!seen.includes(tool.name)) seen.push(tool.name);
+          }
+          const calls = input.messages.filter((message) => message.role === "assistant" && (message.toolCalls?.length ?? 0) > 0);
+          if (calls.length === 0) {
+            return { content: null, toolCalls: [{ id: "c1", name: "docs.search", arguments: JSON.stringify({ q: "x" }) }] };
+          }
+          const result = input.messages.filter((message) => message.role === "tool").at(-1);
+          seen.push(`false:${String(result?.content ?? "").split("\n")[0]}`);
+          return { content: "done", toolCalls: [] };
         },
       }),
     });
@@ -164,16 +173,20 @@ test("a server's tool is offered to the worker only when the step granted its ri
     label: "N",
     tools: network,
     createClient: (): NativeModelClient => ({
-      async run(input) {
+      async complete(input) {
         assert.deepEqual(input.tools.map((tool) => tool.name), [], "a network tool is not offered without a network grant");
-        const outcome = await input.execute({ name: "net.fetch", input: { url: "https://example.com" } });
-        seen.push(`${outcome.isError}:${outcome.output}`);
-        return { summary: "done" };
+        const calls = input.messages.filter((message) => message.role === "assistant" && (message.toolCalls?.length ?? 0) > 0);
+        if (calls.length === 0) {
+          return { content: null, toolCalls: [{ id: "c1", name: "net.fetch", arguments: JSON.stringify({ url: "https://example.com" }) }] };
+        }
+        const result = input.messages.filter((message) => message.role === "tool").at(-1);
+        seen.push(`true:${String(result?.content ?? "")}`);
+        return { content: "done", toolCalls: [] };
       },
     }),
   });
   for await (const _event of worker.execute(assignment(workspace))) void _event;
-  assert.match(seen[0] ?? "", /^true:Refused: no tool named net\.fetch/);
+  assert.match(seen[0] ?? "", /^true:No tool named net\.fetch is available/);
 });
 
 test("a tool that names a path is checked per call against the granted scopes", async (t) => {

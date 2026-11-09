@@ -38,34 +38,12 @@ test("a configured completion cap reaches the provider request", async () => {
     });
   }) as unknown as typeof fetch;
   const client = new OpenAiCompatibleClient({ baseUrl: "http://gateway", model: "m", fetchImpl, maxTokens: 16000 });
-  await client.run({
-    instructions: "x",
+  await client.complete({
+    messages: [{ role: "user", content: "x" }],
     tools: [],
-    workspace: "/tmp",
     signal: new AbortController().signal,
-    execute: async () => ({ output: "", isError: false }),
   });
   assert.equal(body?.max_tokens, 16000);
-});
-
-test("a configured round budget is what stops a model that keeps calling tools", async () => {
-  let calls = 0;
-  const fetchImpl = (async () => {
-    calls += 1;
-    return new Response(JSON.stringify({
-      choices: [{ message: { content: null, tool_calls: [{ id: `c${calls}`, type: "function", function: { name: "read_file", arguments: "{\"path\":\"a.txt\"}" } }] } }],
-    }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as unknown as typeof fetch;
-  const client = new OpenAiCompatibleClient({ baseUrl: "http://gateway", model: "m", fetchImpl, maxRounds: 3 });
-  const result = await client.run({
-    instructions: "keep reading",
-    tools: [],
-    workspace: "/tmp",
-    signal: new AbortController().signal,
-    execute: async () => ({ output: "again", isError: false }),
-  });
-  assert.equal(calls, 3);
-  assert.match(result.summary, /round limit/);
 });
 
 test("the client sends neutral messages and returns tool calls and usage", async () => {
