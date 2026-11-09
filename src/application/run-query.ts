@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 
 import { createConfiguredAgentRegistry } from "../workers/configured-worker-registry.ts";
 import { workCapabilitiesForRole } from "../workers/capabilities.ts";
-import { WorkerRegistry } from "../workers/worker-registry.ts";
 import type { AgentRegistry, MemoryCandidate, PlanStep, TriggerKind } from "../core/contracts.ts";
 import { createRuntimeAssembly } from "../core/runtime-factory.ts";
 import type { CloneRuntime, DispatchResult } from "../core/runtime.ts";
@@ -129,13 +128,12 @@ async function runQueryWithin(
   // 路由发生在规划之前：所有者显式提出的请求要么被满足要么被拒绝；若在计划已存在之后
   // 才拒绝，就会留下一个看似已规划、却永远无法合法执行的 Run。
   const intent = classifyIntent(query, { knownAgentIds: agents.map((agent) => agent.id) });
-  // An injected registry is itself the statement of what can run here, so
-  // probing the filesystem would contradict the caller. Only the production
-  // path, which resolves providers from settings, asks what is installed.
-  // 注入的 Registry 本身就声明了此处什么能运行，再去探测文件系统等于与调用方矛盾。
-  // 只有从 Settings 解析 Provider 的生产路径才需要询问安装状态。
+  // An injected registry is the statement of what can run here; the production
+  // path configures every agent in-process, so all of them are available.
+  // 注入的 Registry 是此处能运行什么的声明；生产路径把所有 Agent 都配置在进程内，
+  // 因此它们都可用。
   const workerStatuses = options.agents === undefined
-    ? await new WorkerRegistry(dataDirectory).list()
+    ? agents.map((agent) => ({ id: agent.id, installed: true }))
     : options.agents.list().map((adapter) => ({ id: adapter.id, installed: true }));
   const routed = routeTask({
     taskId: run.id,

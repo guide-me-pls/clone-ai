@@ -1,9 +1,10 @@
 import AppKit
 import Darwin
 import Foundation
+import UniformTypeIdentifiers
 import WebKit
 
-final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, NSToolbarDelegate {
+final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, NSToolbarDelegate {
     private static let showWindowNotification = Notification.Name("ai.clone.desktop.show-window")
     private var window: NSWindow!
     private var webView: WKWebView!
@@ -25,8 +26,17 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     private var selectedNavigationIndex = 0
     private var pendingNavigationIndex: Int?
     private var pageReady = false
+    private var developerRoot: URL?
+    private var developerRestartPending = false
+    private var developerReloadMarker: URL?
+    private var developerReloadStamp: Date?
+    private var developerReloadTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let configuredRoot = ProcessInfo.processInfo.environment["CLONE_AI_DEV_ROOT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !configuredRoot.isEmpty {
+            developerRoot = URL(fileURLWithPath: configuredRoot, isDirectory: true).standardizedFileURL
+        }
         if activateExistingInstance() {
             DistributedNotificationCenter.default().post(name: Self.showWindowNotification, object: nil)
             NSApp.terminate(nil)
@@ -39,6 +49,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             object: nil
         )
         installSignalHandlers()
+        installDeveloperReloadWatcher()
         installMenu()
         let webConfiguration = WKWebViewConfiguration()
         webConfiguration.userContentController.add(self, name: "cloneNavigation")
@@ -66,13 +77,14 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         ))
         webView = WKWebView(frame: .zero, configuration: webConfiguration)
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1240, height: 820),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Clone AI"
+        window.title = developerRoot == nil ? "Clone AI" : "Clone AI · Dev"
         window.minSize = NSSize(width: 720, height: 520)
         window.isReleasedWhenClosed = false
         startupView = makeStartupView()
@@ -351,6 +363,34 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         return encoded
     }
 
+    // WKWebView only raises a real file chooser when the UI delegate answers
+    // this callback; without it the composer's attach button silently does
+    // nothing. 只有实现这个 UI 委托回调，WKWebView 才会弹出真正的文件选择面板；
+    // 缺失时输入框的附件按钮会毫无反应。
+    func webView(
+        _ webView: WKWebView,
+        runOpenPanelWith parameters: WKOpenPanelParameters,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping ([URL]?) -> Void
+    ) {
+        let panel = NSOpenPanel()
+        panel.title = "添加图片或视频"
+        panel.message = "选择要发送给 Clone AI 的图片或视频。"
+        panel.prompt = "添加"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.resolvesAliases = true
+        panel.allowedContentTypes = [.image, .movie]
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, !panel.urls.isEmpty else {
+                completionHandler(nil)
+                return
+            }
+            completionHandler(panel.urls)
+        }
+    }
+
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         pageReady = false
     }
@@ -370,15 +410,84 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         decisionHandler(allowed ? .allow : .cancel)
     }
 
+    // Development mode reloads the process boundary in place: source edits
+    // restart the sidecar, then the existing WebView navigates to the new port.
+    // 开发模式原地重载进程边界：源码变化会重启 sidecar，现有 WebView 再跳到新端口。
+    private func reloadDeveloperRuntime() {
+        guard developerRoot != nil, !shuttingDown, !developerRestartPending else { return }
+        readyTimer?.invalidate()
+        readyTimer = nil
+        localURL = nil
+        pageReady = false
+        guard let process = daemon, process.isRunning else {
+            daemon = nil
+            startDaemon()
+            return
+        }
+        developerRestartPending = true
+        process.terminate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if self.developerRestartPending && process.isRunning {
+                process.interrupt()
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            if self.developerRestartPending && process.isRunning {
+                Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+        }
+    }
+
+    /**
+     * The development driver writes a marker instead of sending a signal.
+     * Signals can kill a stale app binary before it registers a handler; a
+     * modification timestamp is observable even when the shell itself is old.
+     *
+     * 开发驱动写一个标记文件，而不是发送信号。旧 App 二进制若尚未注册信号处理器会被
+     * 直接杀死；修改时间则连旧壳也能观测到。
+     */
+    private func installDeveloperReloadWatcher() {
+        guard developerRoot != nil,
+              let configured = ProcessInfo.processInfo.environment["CLONE_AI_DEV_RELOAD_FILE"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !configured.isEmpty else { return }
+        let marker = URL(fileURLWithPath: configured)
+        developerReloadMarker = marker
+        developerReloadStamp = modificationDate(of: marker)
+        developerReloadTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
+            guard let self, let marker = self.developerReloadMarker else { return }
+            guard let stamp = self.modificationDate(of: marker) else { return }
+            if let previous = self.developerReloadStamp {
+                if stamp > previous {
+                    self.developerReloadStamp = stamp
+                    self.reloadDeveloperRuntime()
+                }
+            } else {
+                self.developerReloadStamp = stamp
+            }
+        }
+    }
+
+    private func modificationDate(of url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+    }
+
     private func startDaemon() {
         guard let resources = Bundle.main.resourceURL else {
             showMessage(title: "启动失败", detail: "找不到应用资源。")
             return
         }
-        let runtime = resources.appendingPathComponent("runtime", isDirectory: true)
-        let node = resources.appendingPathComponent("node")
+        let runtime = developerRoot ?? resources.appendingPathComponent("runtime", isDirectory: true)
+        let configuredNode = ProcessInfo.processInfo.environment["CLONE_AI_DEV_NODE"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let node = configuredNode.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? resources.appendingPathComponent("node")
         let entry = runtime.appendingPathComponent("src/desktop-sidecar.ts")
         let client = runtime.appendingPathComponent("apps/desktop/ui/index.html")
+        guard FileManager.default.fileExists(atPath: entry.path),
+              FileManager.default.fileExists(atPath: client.path) else {
+            showMessage(title: "开发源码不可用", detail: "找不到桌面运行时或界面源码，请检查 CLONE_AI_DEV_ROOT。")
+            return
+        }
         let process = Process()
         let stdout = Pipe()
         let stderr = Pipe()
@@ -399,6 +508,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         environment["PATH"] = ([environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"] + extraPaths).joined(separator: ":")
         environment["CLONE_AI_DESKTOP_CLIENT_PATH"] = client.path
         environment["CLONE_AI_DESKTOP_DEFAULT_WORKSPACE"] = defaultWorkspace.path
+        if developerRoot != nil { environment["CLONE_AI_DEV_MODE"] = "1" }
         environment.removeValue(forKey: "NODE_OPTIONS")
         process.executableURL = node
         process.arguments = ["--experimental-strip-types", entry.path]
@@ -422,6 +532,14 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         process.terminationHandler = { [weak self] process in
             DispatchQueue.main.async {
                 guard let self, !self.shuttingDown else { return }
+                if self.developerRestartPending {
+                    self.developerRestartPending = false
+                    self.daemon = nil
+                    self.localURL = nil
+                    self.pageReady = false
+                    self.startDaemon()
+                    return
+                }
                 self.showMessage(title: "本地运行时已停止", detail: "请关闭应用后重新打开；如果问题持续，请检查本地配置。")
                 NSLog("Clone AI sidecar exited with status %d", process.terminationStatus)
             }
@@ -430,6 +548,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             try process.run()
             daemon = process
         } catch {
+            developerRestartPending = false
             stdout.fileHandleForReading.readabilityHandler = nil
             stderr.fileHandleForReading.readabilityHandler = nil
             showMessage(title: "启动失败", detail: "无法启动应用内的本地运行时。")
@@ -663,6 +782,13 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             source.resume()
             signalSources.append(source)
         }
+        signal(SIGUSR1, SIG_IGN)
+        let reloadSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        reloadSource.setEventHandler { [weak self] in
+            self?.reloadDeveloperRuntime()
+        }
+        reloadSource.resume()
+        signalSources.append(reloadSource)
     }
 }
 

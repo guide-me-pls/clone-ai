@@ -65,35 +65,29 @@ npm run desktop:build
 # then run apps/desktop/src-tauri/target/.../clone-ai-desktop.exe
 ```
 
-## 4. Workers (the agents that do the work)
+## 4. Workers (the agent that does the work)
 
-Clone AI does not implement a coding agent; it supervises the ones you have.
+Clone AI has one execution provider: the in-process native worker. It is not a
+CLI; every tool call is checked against the step's scopes at the moment it is
+made, and its token usage is recorded exactly.
 
-| Worker | Windows command | macOS command | Install |
-| --- | --- | --- | --- |
-| Claude Code | `claude.cmd` | `claude` | `clone-ai install claude-code` |
-| Codex CLI | `codex.cmd` | `codex` | `clone-ai install codex-cli` |
-| Pi | `pi.cmd` | `pi` | `clone-ai install pi` |
-| opencode | `opencode.cmd` | `opencode` | install manually |
+| Worker | How it runs | Set up |
+| --- | --- | --- |
+| Native worker | In-process loop against an OpenAI-compatible endpoint | `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` |
 
-Recipes live in `src/workers/providers.json`; override or add your own in
-`<clone home>/providers.json`. Only environment **variable names** belong in a
-recipe — never credential values.
+Black-box CLI workers (Claude Code, Codex, the Pi CLI, opencode) were removed.
+A CLI hides its tool calls and credentials from the Kernel, so the harness can
+neither audit nor gate them. The `external` role has no provider until a
+governed action connector exists; it is not routed to a CLI.
 
-Note: desktop apps (Claude Code Desktop, opencode Desktop) are not usable as
-workers. Clone AI needs a headless CLI it can run with a prompt and a workspace.
+### Main Agent runtime
 
-Clone AI also ships an in-process `native` execution provider: select `native`
-for an agent and set `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`.
-It needs no CLI and checks every tool call against the step's scopes.
-
-### Native Main Agent (experimental)
-
-Pi remains the default Main Agent runtime. To run the Main Agent in-process
-against an OpenAI-compatible endpoint:
+The native in-process runtime is the only Main Agent runtime. It needs
+`CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`; without them a turn fails
+with a message naming the missing variables. The Pi runtime and its SDK are no
+longer part of the product. To configure the runtime:
 
 ```bash
-export CLONE_AI_MAIN_RUNTIME=native
 export CLONE_AI_NATIVE_MODEL=<model-id>
 export CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url>
 export CLONE_AI_NATIVE_API_KEY=<key>   # optional
@@ -106,8 +100,27 @@ The native loop writes the same `main_agent.turn_*`, `agent.tool_*` and
 a long transcript deterministically: the newest turns stay verbatim within a
 12,000-character budget, older turns become a bounded summary, and the full text
 stays in the turn ledger. Image attachments are sent as OpenAI-style data URLs
-in the current message; they are per-turn and not stored in the ledger. Unset
-`CLONE_AI_MAIN_RUNTIME` to return to Pi.
+in the current message; they are per-turn and not stored in the ledger.
+
+### Worker concurrency
+
+The Kernel decides how many workers may run at once from measured machine
+capacity: CPU cores, the 1-minute load average, and free memory. You do not
+configure that, and neither does the Main Agent — it can only read it
+(`get_capacity`) to size a plan.
+
+To pin a ceiling yourself, set `maxConcurrentWorkers` in `config.json` (or
+`PATCH /api/config`). `0` or unset means auto. The pin is capped at the core
+count, and it is re-read on every dispatch, so a change applies without a
+restart.
+
+```bash
+# e.g. on a fanless laptop: never more than 2 workers at once
+curl -X PATCH http://127.0.0.1:4317/api/config \
+  -H "authorization: Bearer $CLONE_AI_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"maxConcurrentWorkers": 2}'
+```
 
 ## 5. Where your data lives
 

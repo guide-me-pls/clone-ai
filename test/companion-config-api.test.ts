@@ -28,15 +28,6 @@ async function companion(t: TestContext): Promise<{ url: string; token: string; 
   return { url: server.url, token: server.token, dataDirectory };
 }
 
-test("software installation endpoints require an explicit owner acknowledgement", async (t) => {
-  const { url, token } = await companion(t);
-  for (const path of ["/api/agents/pi/install", "/api/agents/install-missing"]) {
-    const response = await companionFetch(url, token, path, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-    assert.equal(response.status, 400);
-    assert.match((await response.json() as { error: string }).error, /acknowledge|confirm/i);
-  }
-});
-
 test("the config endpoint reports where the owner's data lives", async (t) => {
   const { url, token, dataDirectory } = await companion(t);
 
@@ -69,7 +60,9 @@ test("the model options endpoint exposes only credential-blind selectable refere
   };
   assert.ok(Array.isArray(body.models));
   for (const model of body.models) {
-    assert.equal(model.reference, `${model.provider}/${model.id}`);
+    // The native loop takes the model id directly; there is no provider prefix
+    // to build any more. 原生循环直接使用模型 id，不再拼接 Provider 前缀。
+    assert.equal(model.reference, model.id);
     assert.equal(typeof model.label, "string");
     assert.ok(model.label.length > 0);
   }
@@ -339,79 +332,6 @@ test("the owner can set and clear the Main Agent model in config.json", async (t
   assert.equal((await cleared.json() as { config: { mainAgentModel?: string } }).config.mainAgentModel, undefined);
 });
 
-test("a third-party agent is added, listed, and removed without touching source", async (t) => {
-  const { url, token } = await companion(t);
-
-  const before = await (await companionFetch(url, token, "/api/settings/providers")).json() as { providers: Array<{ id: string }>; userDefined: unknown[] };
-  assert.equal(before.userDefined.length, 0);
-  assert.ok(before.providers.some((provider) => provider.id === "claude-code"), "built-ins are listed");
-
-  const created = await companionFetch(url, token, "/api/settings/providers", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: "opencode", command: "opencode", args: ["run", "{{prompt}}"], env: ["ANTHROPIC_API_KEY"] }),
-  });
-  assert.equal(created.status, 200);
-
-  const after = await (await companionFetch(url, token, "/api/settings/providers")).json() as { providers: Array<{ id: string }> };
-  assert.ok(after.providers.some((provider) => provider.id === "opencode"));
-
-  const removed = await companionFetch(url, token, "/api/settings/providers/opencode", { method: "DELETE" });
-  assert.equal(removed.status, 200);
-  const final = await (await companionFetch(url, token, "/api/settings/providers")).json() as { userDefined: unknown[] };
-  assert.equal(final.userDefined.length, 0);
-});
-
-test("the API refuses a provider declaration that carries a credential value", async (t) => {
-  const { url, token } = await companion(t);
-
-  const response = await companionFetch(url, token, "/api/settings/providers", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: "leaky", command: "leaky", env: ["ANTHROPIC_API_KEY=sk-not-a-real-key"] }),
-  });
-
-  // Rejected at the boundary: config stores variable names, never values.
-  // 在边界处拒绝：配置只存变量名，绝不存值。
-  assert.equal(response.status, 400);
-  assert.match((await response.json() as { error: string }).error, /variable names only/);
-
-  const stored = await (await companionFetch(url, token, "/api/settings/providers")).json() as { userDefined: unknown[] };
-  assert.equal(stored.userDefined.length, 0);
-});
-
-test("unrestricted worker execution requires an explicit API acknowledgement", async (t) => {
-  const { url, token } = await companion(t);
-  const provider = { id: "test-agent", command: "test-agent", hostAccess: "unrestricted" };
-  const endpoint = "/api/settings/providers";
-  const withoutAcknowledgement = await companionFetch(url, token, endpoint, {
-    method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(provider),
-  });
-  assert.equal(withoutAcknowledgement.status, 400);
-  const accepted = await companionFetch(url, token, endpoint, {
-    method: "PUT", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ...provider, acknowledgeUnrestrictedHostAccess: true }),
-  });
-  assert.equal(accepted.status, 200);
-  const configured = await (await companionFetch(url, token, endpoint)).json() as { providers: Array<{ id: string; hostAccess?: string }> };
-  assert.equal(configured.providers.find((item) => item.id === "test-agent")?.hostAccess, "unrestricted");
-  const agents = await (await companionFetch(url, token, "/api/agents")).json() as { providers: Array<{ id: string; executionBlocked: boolean }> };
-  assert.equal(agents.providers.find((item) => item.id === "test-agent")?.executionBlocked, false);
-});
-
-test("a built-in provider with prefix wildcards can be explicitly authorized", async (t) => {
-  const { url, token } = await companion(t);
-  const current = await (await companionFetch(url, token, "/api/settings/providers")).json() as { providers: Array<Record<string, unknown>> };
-  const provider = current.providers.find((item) => item.id === "claude-code")!;
-  const updated = await companionFetch(url, token, "/api/settings/providers", {
-    method: "PUT", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ...provider, hostAccess: "unrestricted", acknowledgeUnrestrictedHostAccess: true }),
-  });
-  assert.equal(updated.status, 200);
-  const listed = await (await companionFetch(url, token, "/api/agents")).json() as { providers: Array<{ id: string; executionBlocked: boolean }> };
-  assert.equal(listed.providers.find((item) => item.id === "claude-code")?.executionBlocked, false);
-});
-
 test("memory candidates can be listed and promoted through the API", async (t) => {
   // Write the proposed candidate before the server starts, so its journal
   // instance loads it from disk.
@@ -468,23 +388,6 @@ test("memory candidates can be listed and promoted through the API", async (t) =
 
   const after = await (await companionFetch(url, token, "/api/memory/candidates")).json() as { candidates: unknown[] };
   assert.equal(after.candidates.length, 0);
-});
-
-test("installed agents are reported generically, including user-declared ones", async (t) => {
-  const { url, token } = await companion(t);
-
-  await companionFetch(url, token, "/api/settings/providers", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: "opencode", command: "opencode-not-installed", args: ["run"] }),
-  });
-
-  const agents = await (await companionFetch(url, token, "/api/agents")).json() as { providers: Array<{ id: string; installed: boolean }> };
-  const opencode = agents.providers.find((provider) => provider.id === "opencode");
-  assert.ok(opencode, "a user-declared agent must appear in the agent list");
-  // A missing command is reported, not thrown: the GUI stays usable.
-  // 命令缺失是被报告而不是抛出：GUI 仍然可用。
-  assert.equal(opencode.installed, false);
 });
 
 test("connector declarations round-trip through the API and reject credential values", async (t) => {

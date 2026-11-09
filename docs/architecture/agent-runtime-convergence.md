@@ -2,12 +2,18 @@
 
 **English** · [简体中文](agent-runtime-convergence.zh-CN.md)
 
+> **Historical design note (2026-11-06).** The Pi runtime has been removed; the
+> native loop in `src/main-agent/native-runtime.ts` is the only Main Agent. This
+> document preserves the earlier convergence reasoning. For the current
+> Claude Code comparison and the 95% roadmap, see
+> [Claude Code parity plan](../study/claude-code-parity.md).
+
 ## Outcome
 
 Clone AI has two different loops and they must not be mixed:
 
 ```text
-Main reasoning loop (Pi Agent Core)
+Main reasoning loop (native Main Agent)
   -> understands the request and calls kernel tools
 
 Durable task loop (Clone AI)
@@ -18,9 +24,9 @@ Durable task loop (Clone AI)
   -> reaches a terminal task state
 ```
 
-Pi Agent Core may power Main's reasoning. Pi CLI, Claude Code, Codex, and
-OpenCode are black-box Workers. Using Pi inside Main must never imply that Pi
-is the default Worker.
+The native loop powers Main's reasoning. Claude Code, Codex, OpenCode, and the
+native worker are executors. Sharing a loop contract with Main never makes an
+executor the default or gives it Main's authority.
 
 ## Non-negotiable invariants
 
@@ -29,8 +35,9 @@ is the default Worker.
    silently fall back to another Worker.
 3. Main owns long-term memory. Workers receive only a bounded `MemoryContext`.
 4. Every Worker invocation uses `sessionPolicy: "fresh"`.
-5. Pi invocations use `--no-session` and never use `--continue`, `--resume`, or
-   `--session`.
+5. Every executor invocation is fresh: Claude Code, Codex, and OpenCode use
+   their no-resume flags, and the native worker starts a new in-process session.
+   Pi has been removed.
 6. A `DispatchDecision` is persisted before spawning the Worker.
 7. A task finishes only through objective verification, not because the Worker
    claims it is finished.

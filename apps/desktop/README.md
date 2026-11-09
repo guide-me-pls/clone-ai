@@ -49,6 +49,12 @@ The machine currently needs an arm64 Node.js 24+ runtime for the build; set
 `CLONE_AI_MAC_NODE` to an explicit executable when it is not available at the default
 local runtime path.
 
+For development, run `npm run desktop:dev`. It still opens the real native `.app`, but the
+app reads TypeScript and WebView assets directly from this workspace. Changes under `src/`
+or `apps/desktop/ui/` automatically restart only the supervised sidecar and reload the
+window. Changes to the Swift shell rebuild the `.app` and relaunch it. Keep the command
+running while editing; press `Ctrl+C` to stop both the watcher and the app.
+
 The title bar uses a native segmented navigation control for Conversation, Schedules,
 Agents, Memory, and Settings. The macOS menu bar provides File, Edit, View, and Window
 menus, with keyboard shortcuts for the same destinations. No browser window is exposed.

@@ -3,13 +3,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { fileURLToPath } from "node:url";
 
 import { AgentMemoryWorker, miningPrompt, parseJsonArray, validateCandidates } from "../src/memory/agent-memory-worker.ts";
 import type { Evidence, MemoryCandidate } from "../src/core/contracts.ts";
 import type { PendingMemoryJob } from "../src/memory/memory-pipeline.ts";
 
-const fakeAgent = fileURLToPath(new URL("./fixtures/fake-agent.cjs", import.meta.url));
 
 function miningJob(evidenceIds: string[] = ["ev-1", "ev-2"]): PendingMemoryJob {
   const createdAt = "2026-08-19T00:00:00.000Z";
@@ -30,40 +28,23 @@ function miningJob(evidenceIds: string[] = ["ev-1", "ev-2"]): PendingMemoryJob {
   };
 }
 
-function workerOptions(overrides: Record<string, string> = {}): ConstructorParameters<typeof AgentMemoryWorker>[0] {
-  return {
-    config: {
-      id: "fake-miner",
-      command: process.execPath,
-      args: [fakeAgent, "{{prompt}}"],
-      env: ["FAKE_AGENT_MODE", "FAKE_MEMORY_CANDIDATES_JSON"],
-      hostAccess: "unrestricted",
-      timeoutMs: 30_000,
-    },
-    ...overrides,
-  };
+function workerOptions(overrides: { complete?: (prompt: string) => Promise<string>; maxCandidates?: number } = {}): ConstructorParameters<typeof AgentMemoryWorker>[0] {
+  return { complete: overrides.complete ?? (async () => "[]"), ...(overrides.maxCandidates === undefined ? {} : { maxCandidates: overrides.maxCandidates }) };
 }
 
 async function mine(
   t: TestContext,
-  options: { mode?: string; json?: string; evidenceIds?: string[] } = {},
+  options: { mode?: "fail" | "empty"; json?: string; evidenceIds?: string[]; maxCandidates?: number } = {},
 ): Promise<MemoryCandidate[]> {
-  const mode = options.mode ?? (options.json === undefined ? undefined : "memory-candidates");
-  const previous = process.env.FAKE_AGENT_MODE;
-  const previousJson = process.env.FAKE_MEMORY_CANDIDATES_JSON;
-  if (mode === undefined) delete process.env.FAKE_AGENT_MODE;
-  else process.env.FAKE_AGENT_MODE = mode;
-  if (options.json === undefined) delete process.env.FAKE_MEMORY_CANDIDATES_JSON;
-  else process.env.FAKE_MEMORY_CANDIDATES_JSON = options.json;
-  try {
-    const worker = new AgentMemoryWorker(workerOptions());
-    return await worker.extract(miningJob(options.evidenceIds));
-  } finally {
-    if (previous === undefined) delete process.env.FAKE_AGENT_MODE;
-    else process.env.FAKE_AGENT_MODE = previous;
-    if (previousJson === undefined) delete process.env.FAKE_MEMORY_CANDIDATES_JSON;
-    else process.env.FAKE_MEMORY_CANDIDATES_JSON = previousJson;
-  }
+  const worker = new AgentMemoryWorker(workerOptions({
+    ...(options.maxCandidates === undefined ? {} : { maxCandidates: options.maxCandidates }),
+    complete: async () => {
+      if (options.mode === "fail") throw new Error("endpoint unreachable");
+      if (options.mode === "empty") return "";
+      return options.json ?? "[]";
+    },
+  }));
+  return await worker.extract(miningJob(options.evidenceIds));
 }
 
 test("the mining prompt lists evidence as the only input facts", () => {
@@ -139,17 +120,25 @@ test("markdown-fenced JSON is parsed", async (t) => {
 });
 
 test("a failed mining run is reported so the pipeline can retry it", async (t) => {
-  await assert.rejects(mine(t, { mode: "memory-mine-fail", json: "[]" }), /memory mining failed/i);
+  await assert.rejects(mine(t, { mode: "fail" }), /memory mining failed/i);
 });
 
 test("missing or malformed candidate files are reported as extraction failures", async (t) => {
-  await assert.rejects(mine(t, { mode: "talks-but-writes-nothing" }), /memory mining failed|did not produce/i);
+  await assert.rejects(mine(t, { mode: "empty" }), /did not produce/i);
   await assert.rejects(mine(t, { json: "not json at all" }), /invalid JSON/i);
 });
 
-test("the default miner refuses to run on the host without a separate opt-in", async () => {
-  const worker = new AgentMemoryWorker({ config: { id: "blocked-miner", command: process.execPath } });
-  await assert.rejects(worker.extract(miningJob()), /memory mining failed.*permission_denied/i);
+test("the default miner fails clearly when the endpoint is not configured", async () => {
+  const worker = new AgentMemoryWorker();
+  const previous = { model: process.env.CLONE_AI_NATIVE_MODEL, base: process.env.CLONE_AI_NATIVE_BASE_URL };
+  delete process.env.CLONE_AI_NATIVE_MODEL;
+  delete process.env.CLONE_AI_NATIVE_BASE_URL;
+  try {
+    await assert.rejects(worker.extract(miningJob()), /memory mining failed.*endpoint is not configured/i);
+  } finally {
+    if (previous.model !== undefined) process.env.CLONE_AI_NATIVE_MODEL = previous.model;
+    if (previous.base !== undefined) process.env.CLONE_AI_NATIVE_BASE_URL = previous.base;
+  }
 });
 
 test("candidates are capped per task", async (t) => {

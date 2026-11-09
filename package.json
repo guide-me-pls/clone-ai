@@ -10,7 +10,7 @@
   "scripts": {
     "desktop:sidecar": "node scripts/build-sidecar.mjs",
     "desktop:mac:build": "node scripts/build-macos-app.mjs",
-    "desktop:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-desktop.ps1",
+    "desktop:dev": "node scripts/desktop-dev.mjs",
     "desktop:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1",
     "main": "node --experimental-strip-types src/main-agent/clone-main.ts",
     "server": "node --experimental-strip-types src/server-main.ts",
@@ -27,7 +27,8 @@
     "typecheck": "tsc --noEmit",
     "cli": "node src/cli/clone-ai.ts",
     "bench:journal": "node --experimental-strip-types benchmark/journal-stress.ts",
-    "bench:consistency": "node --experimental-strip-types benchmark/memory-consistency.ts"
+    "bench:consistency": "node --experimental-strip-types benchmark/memory-consistency.ts",
+    "companion:dev": "node --experimental-strip-types scripts/companion-dev.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
@@ -37,7 +38,6 @@
     "typescript": "5.8.3"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.2",
     "typebox": "1.3.7"
   },
   "bin": {

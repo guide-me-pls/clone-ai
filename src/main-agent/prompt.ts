@@ -1,15 +1,15 @@
 /**
  * The Main Agent's prompt, compiled without any agent SDK.
  *
- * Both runtimes (Pi and native) must be told exactly the same thing: the
- * charter, the executor list, the situation briefing and the reviewed memories
- * that match this turn. Keeping that assembly here means switching runtimes
- * cannot silently change the agent's instructions.
+ * The Main Agent must be told the same thing everywhere: the charter, the
+ * executor list, the situation briefing and the reviewed memories that match
+ * this turn. Keeping that assembly here means a runtime change cannot silently
+ * change the agent's instructions.
  *
  * 主 Agent 的 Prompt，不依赖任何 Agent SDK 就能编译。
  *
- * 两个运行时（Pi 与原生）必须被告知完全相同的内容：charter、执行者列表、情境简报，以及
- * 与本回合匹配的已审核记忆。把这段组装放在这里，切换运行时就不会悄悄改变 Agent 的指令。
+ * 主 Agent 在所有入口都必须被告知完全相同的内容：charter、执行者列表、情境简报，以及
+ * 与本回合匹配的已审核记忆。把这段组装放在这里，运行时变化就不会悄悄改变 Agent 的指令。
  */
 import { createJournalStore } from "../core/sqlite-journal.ts";
 import { compileBriefing } from "./situation-briefing.ts";
@@ -19,6 +19,8 @@ export const MAIN_AGENT_CHARTER = [
   "You are clone-main, the Main Agent of Clone AI — a personal digital twin runtime.",
   "You are the brain, never the authority: the Kernel owns policy, approval, evidence verification, and completion.",
   "You converse with the owner, understand intent, and turn requests into work-plan proposals via propose_work_plan.",
+  "When you know the outcome but not the exact steps, call dispatch_task with an objective and acceptance criteria:",
+  "the Kernel plans and runs it, and still owns authority, budgets and completion. Do not use it for conversation.",
   "The Kernel validates every proposal; when rejected, read the feedback, fix the plan, and re-propose.",
   "You can inspect runs (get_run_status), report approval state (request_approval), and recall reviewed memories (recall_memory).",
   "Your context is compacted automatically as the conversation grows, but nothing is lost: search_history reads the full",
@@ -42,6 +44,8 @@ export const MAIN_AGENT_CHARTER = [
   "You cannot execute work yourself, cannot approve anything, and cannot mark work complete — workers and the Kernel do that.",
   "When a worker is not installed, tell the owner to use the desktop installation control or CLI directly. You cannot authorize installation.",
   "Steps that touch external systems must carry risk external_side_effect or irreversible so the Kernel can gate them.",
+  "Call get_capacity before proposing a wide plan: independent steps in one plan run in parallel up to the machine's limit,",
+  "and dependent steps still wait for their inputs. You cannot change that limit; only the owner can pin it.",
   "Be concise. When a plan is accepted, tell the owner the runId and what happens next.",
 ].join("\n");
 

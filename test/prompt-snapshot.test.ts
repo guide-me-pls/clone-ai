@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { createJournalStore } from "../src/core/sqlite-journal.ts";
 import { createKernelToolsExtension } from "../src/main-agent/tools/kernel-tools.ts";
@@ -118,15 +117,15 @@ test("every registered Kernel tool is visible to provenance", async (t) => {
       // The extension registers through this method; nothing else is needed.
       // 扩展只通过这个方法注册工具，除此之外不需要别的东西。
     },
-  } as unknown as ExtensionAPI;
+  };
   createKernelToolsExtension(pi, { dataDirectory: directory, onRegister: (tool) => registered.push(tool) });
 
   const names = registered.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
     "get_authority",
+    "get_capacity",
     "get_run_status",
     "get_situation",
-    "install_agent",
     "propose_work_plan",
     "read_memory",
     "recall_memory",

@@ -3,26 +3,32 @@
  * chat-completions protocol so it works with a local gateway, an OpenAI key, or
  * any endpoint that implements the same shape.
  *
- * It is only a client: the tool boundary (which tools exist, which call is
- * allowed) is decided by NativeAgentWorker before anything reaches this file.
- * The loop here merely relays tool results back to the model.
+ * It is a single model call, not a loop: the shared agent kernel owns the
+ * rounds, budgets, abort, and tool scheduling. The tool boundary (which tools
+ * exist, which call is allowed) is decided by NativeAgentWorker before a call
+ * reaches this file.
  *
  * 原生 Worker 的 Provider 客户端，使用 OpenAI 兼容的 chat-completions 协议，因此可对接本地
  * 网关、OpenAI 密钥，或任何实现同样形状的端点。
  *
- * 它只是客户端：工具边界（有哪些工具、哪次调用被允许）在本文件之前已由 NativeAgentWorker
- * 判定。这里的循环只负责把工具结果回传给模型。
+ * 它只做一次模型调用，不拥有循环：回合、预算、abort 与工具调度都由共享 Agent 内核负责。
+ * 工具边界（有哪些工具、哪次调用被允许）在本文件之前已由 NativeAgentWorker 判定。
  */
+import type {
+  AgentContentPart,
+  AgentMessage,
+  AgentModel,
+  AgentModelRequest,
+  AgentModelResponse,
+} from "../agent/loop.ts";
 import type { ModelUsage } from "../core/contracts.ts";
-import type { NativeModelClient, NativeToolCall, NativeToolSpec } from "./native-agent-worker.ts";
 
 export interface OpenAiCompatibleClientOptions {
   /** Base URL without a trailing /v1, e.g. http://127.0.0.1:3425. 不带结尾 /v1 的基础地址。 */
   baseUrl: string;
   model: string;
   apiKey?: string;
-  maxRounds?: number;
-  /** Cap one completion's tokens; a runaway generation must not hold the step for minutes. 单次补全的 token 上限；失控的生成不得让步骤停顿数分钟。 */
+  /** One completion's output cap; the shared loop owns the rounds. 单次补全的输出上限；回合由共享内核拥有。 */
   maxTokens?: number;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
@@ -30,12 +36,12 @@ export interface OpenAiCompatibleClientOptions {
 
 interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | AgentContentPart[] | null;
   tool_call_id?: string;
   tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>;
 }
 
-export class OpenAiCompatibleClient implements NativeModelClient {
+export class OpenAiCompatibleClient implements AgentModel {
   readonly #options: OpenAiCompatibleClientOptions;
   readonly #fetch: typeof fetch;
 
@@ -44,61 +50,10 @@ export class OpenAiCompatibleClient implements NativeModelClient {
     this.#fetch = options.fetchImpl ?? fetch;
   }
 
-  async run(input: Parameters<NativeModelClient["run"]>[0]): Promise<{ summary: string; usage?: ModelUsage }> {
-    const messages: ChatMessage[] = [
-      { role: "system", content: systemPrompt(input.instructions, input.tools) },
-      { role: "user", content: input.instructions },
-    ];
-    const tools = input.tools.map((tool) => ({
-      type: "function" as const,
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters ?? { type: "object", properties: {}, additionalProperties: true },
-      },
-    }));
-    const totals = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cachedInputTokens: 0, modelCalls: 0 };
-    let sawUsage = false;
-    const finish = (summary: string): { summary: string; usage: ModelUsage } => ({
-      summary,
-      usage: {
-        modelCalls: totals.modelCalls,
-        ...(sawUsage
-          ? {
-            inputTokens: totals.inputTokens,
-            outputTokens: totals.outputTokens,
-            totalTokens: totals.totalTokens,
-            ...(totals.cachedInputTokens > 0 ? { cachedInputTokens: totals.cachedInputTokens } : {}),
-          }
-          : {}),
-      },
-    });
-    const maxRounds = this.#options.maxRounds ?? 12;
-    for (let round = 0; round < maxRounds; round += 1) {
-      if (input.signal.aborted) throw new Error("Native worker was cancelled.");
-      const reply = await this.#complete(messages, tools, input.signal);
-      totals.modelCalls += 1;
-      if (reply.usage !== undefined) {
-        sawUsage = true;
-        totals.inputTokens += reply.usage.inputTokens ?? 0;
-        totals.outputTokens += reply.usage.outputTokens ?? 0;
-        totals.totalTokens += reply.usage.totalTokens ?? 0;
-        totals.cachedInputTokens += reply.usage.cachedInputTokens ?? 0;
-      }
-      const calls = reply.tool_calls ?? [];
-      if (calls.length === 0) return finish((reply.content ?? "").trim());
-      input.onText?.(reply.content ?? "");
-      messages.push({ role: "assistant", content: reply.content, tool_calls: calls });
-      for (const call of calls) {
-        const parsed = parseArguments(call.function.arguments);
-        const outcome = await input.execute({ name: call.function.name, input: parsed } satisfies NativeToolCall);
-        messages.push({ role: "tool", tool_call_id: call.id, content: outcome.output.slice(0, 8_000) });
-      }
-    }
-    return finish("The worker reached its tool-call round limit without a final answer.");
-  }
-
-  async #complete(messages: ChatMessage[], tools: unknown[], signal: AbortSignal): Promise<{ content: string | null; tool_calls?: ChatMessage["tool_calls"]; usage?: ModelUsage }> {
+  async complete(input: AgentModelRequest): Promise<AgentModelResponse> {
+    if (input.signal.aborted) throw new Error("Native worker was cancelled.");
+    const timeout = AbortSignal.timeout(this.#options.timeoutMs ?? 120_000);
+    const signal = AbortSignal.any([input.signal, timeout]);
     const response = await this.#fetch(`${this.#options.baseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
       method: "POST",
       headers: {
@@ -107,30 +62,95 @@ export class OpenAiCompatibleClient implements NativeModelClient {
       },
       body: JSON.stringify({
         model: this.#options.model,
-        messages,
-        ...(tools.length === 0 ? {} : { tools }),
+        messages: toChatMessages(input.messages),
+        ...(input.tools.length === 0
+          ? {}
+          : {
+            tools: input.tools.map((tool) => ({
+              type: "function" as const,
+              function: {
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.parameters ?? { type: "object", properties: {}, additionalProperties: true },
+              },
+            })),
+          }),
         ...(this.#options.maxTokens === undefined ? {} : { max_tokens: this.#options.maxTokens }),
         stream: false,
       }),
-      ...(this.#options.timeoutMs === undefined ? {} : { signal: AbortSignal.any([signal, AbortSignal.timeout(this.#options.timeoutMs)]) }),
+      signal,
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
-      throw new Error(`The provider answered ${response.status}: ${detail.slice(0, 300)}`);
+      throw Object.assign(
+        new Error(`The provider answered ${response.status}: ${detail.slice(0, 300)}`),
+        { status: response.status },
+      );
     }
     const body = await response.json() as {
-      choices?: Array<{ message?: { content?: string | null; tool_calls?: ChatMessage["tool_calls"] } }>;
+      choices?: Array<{
+        message?: {
+          content?: string | null;
+          tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+        };
+      }>;
       usage?: unknown;
     };
     const message = body.choices?.[0]?.message;
     if (message === undefined) throw new Error("The provider returned no message.");
+    const content = message.content ?? null;
+    if (typeof content === "string" && content.length > 0) input.onDelta?.(content);
+    const toolCalls = (message.tool_calls ?? []).map((call, index) => ({
+      id: typeof call.id === "string" && call.id.length > 0 ? call.id : `call-${index + 1}`,
+      name: call.function?.name ?? "",
+      arguments: call.function?.arguments ?? "{}",
+    }));
     const usage = parseUsage(body.usage);
     return {
-      content: message.content ?? null,
-      ...(message.tool_calls === undefined ? {} : { tool_calls: message.tool_calls }),
+      content,
+      toolCalls,
       ...(usage === undefined ? {} : { usage }),
     };
   }
+}
+
+/** Convert provider-neutral messages into the OpenAI chat shape. 把 Provider 无关的消息转成 OpenAI chat 形状。 */
+function toChatMessages(messages: readonly AgentMessage[]): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.role === "tool") {
+      return {
+        role: "tool",
+        tool_call_id: message.toolCallId ?? "",
+        content: typeof message.content === "string" ? message.content : "",
+      };
+    }
+    if (message.role === "assistant") {
+      return {
+        role: "assistant",
+        content: typeof message.content === "string" ? message.content : null,
+        ...(message.toolCalls === undefined
+          ? {}
+          : {
+            tool_calls: message.toolCalls.map((call) => ({
+              id: call.id,
+              type: "function" as const,
+              function: { name: call.name, arguments: call.arguments },
+            })),
+          }),
+      };
+    }
+    if (message.role === "user") {
+      return {
+        role: "user",
+        content: Array.isArray(message.content)
+          ? message.content.map((part) => part.type === "text"
+            ? { type: "text" as const, text: part.text }
+            : { type: "image_url" as const, image_url: part.image_url })
+          : message.content ?? "",
+      };
+    }
+    return { role: "system", content: typeof message.content === "string" ? message.content : "" };
+  });
 }
 
 /**
@@ -163,26 +183,10 @@ function asCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-/**
- * The boundary is restated in the system prompt as well as enforced in code:
- * the model is told not to attempt paths outside the workspace, so a refusal is
- * the exception rather than the normal path.
- * 边界既在代码中强制执行，也在 System Prompt 中重申：模型被告知不要尝试工作区之外的路径，
- * 使拒绝成为例外而非常态。
- */
-export function systemPrompt(instructions: string, tools: readonly NativeToolSpec[]): string {
-  return [
-    "You are a worker inside Clone AI. The Kernel, not you, decides what is allowed.",
-    "Call only the tools provided. Paths outside the workspace granted to this step will be refused and the refusal returned to you.",
-    "If a required input file is missing, say so and stop; never invent its contents.",
-    "If the step requires a file to be created or changed, call a write tool and wait for its success before answering.",
-    "Never answer with a summary that claims work you did not perform with a successful tool call.",
-    "When the acceptance criteria are met, answer with a short summary of what you did and stop calling tools.",
-    "",
-    `Available tools: ${tools.map((tool) => tool.name).join(", ") || "(none)"}.`,
-  ].join("\n");
-}
+/** Re-exported for callers that build the worker prompt directly. 重新导出，供直接构建 Worker Prompt 的调用方使用。 */
+export { systemPrompt } from "./native-worker-prompt.ts";
 
+/** Parse the model's tool arguments; prose or a non-object becomes {}. 解析模型的工具参数；散文或非对象变为 {}。 */
 export function parseArguments(source: string): Record<string, unknown> {
   if (source.trim().length === 0) return {};
   try {

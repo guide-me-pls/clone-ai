@@ -6,9 +6,10 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": [
         "run",
-        "companion:debug"
+        "companion:dev"
       ],
-      "port": 4317
+      "port": 4319,
+      "url": "http://localhost:4319"
     }
   ]
 }

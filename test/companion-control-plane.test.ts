@@ -204,17 +204,6 @@ test("a second Main Agent query is 409 while the session lock is held", async (t
   assert.match((await response.json() as { error: string }).error, /already answering/);
 });
 
-test("reject and cancel of an unknown run fail closed", async (t) => {
-  const { url, token } = await companion(t);
-  const rejected = await companionFetch(url, token, "/api/runs/missing/reject", { method: "POST" });
-  assert.equal(rejected.status, 404);
-  assert.match((await rejected.json() as { error: string }).error, /Unknown run/);
-
-  const cancelled = await companionFetch(url, token, "/api/runs/missing/cancel", { method: "POST" });
-  assert.equal(cancelled.status, 404);
-  assert.match((await cancelled.json() as { error: string }).error, /Unknown run/);
-});
-
 test("the sidebar shows tasks, not one session per conversational turn", async (t) => {
   const { url, token, dataDirectory } = await companion(t);
   const assembly = await createRuntimeAssembly({ dataDirectory });

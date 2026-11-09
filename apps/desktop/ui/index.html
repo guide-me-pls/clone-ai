@@ -43,9 +43,10 @@
             <input id="attachments" type="file" accept="image/png,image/jpeg,image/gif,image/webp,video/*" multiple hidden />
             <textarea id="query" rows="1" autocomplete="off" placeholder="告诉 clone-ai 你想推进什么…" aria-label="输入你的任务" data-i18n="query-placeholder" data-i18n-attr="placeholder"></textarea>
             <button class="send" id="submit" type="submit" aria-label="发送" data-i18n="send" data-i18n-attr="aria-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m5 12 14-7-5 14-2.7-5.3L5 12Z"/><path d="m11.3 13.7 3-3"/></svg></button>
+            <button class="stop" id="stop-turn" type="button" aria-label="停止本次回答" data-i18n="stop-turn" data-i18n-attr="aria-label" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
           </form>
           <div class="attachment-preview" id="attachment-preview" hidden></div>
-          <div class="composer-hint" data-i18n="composer-hint">Enter 发送 · Shift + Enter 换行 · 计划中的外部动作需要确认</div>
+          <div class="composer-hint" data-i18n="composer-hint">Enter 发送 · Shift + Enter 换行 · 截图可直接粘贴</div>
         </div>
       </main>
     </div>
@@ -178,7 +179,7 @@
               <div class="agent-section-label" data-i18n="working-directory">工作目录</div>
               <div class="memory-tool-row path-picker-row"><div class="path-display" id="config-workspace"></div><button class="primary" id="config-workspace-choose" type="button" data-i18n="choose-directory">选择目录…</button><button class="secondary" id="config-workspace-reveal" type="button" data-i18n="reveal">在 Finder 中显示</button></div>
               <div class="agent-section-label" data-i18n="main-agent-model">Main Agent 模型</div>
-              <div class="memory-tool-row"><select id="config-main-agent-model" aria-label="Main Agent 模型" data-i18n="model-label" data-i18n-attr="aria-label"><option value="">使用 Pi 默认模型</option></select><button class="primary" id="config-main-agent-model-save" type="button" data-i18n="save">保存</button></div>
+              <div class="memory-tool-row"><select id="config-main-agent-model" aria-label="Main Agent 模型" data-i18n="model-label" data-i18n-attr="aria-label"><option value="">使用默认模型</option></select><button class="primary" id="config-main-agent-model-save" type="button" data-i18n="save">保存</button></div>
               <div class="agent-section-label" data-i18n="main-agent-effort">推理强度</div>
               <div class="memory-tool-row"><select id="config-main-agent-effort" aria-label="推理强度"></select><button class="primary" id="config-main-agent-effort-save" type="button" data-i18n="save">保存</button></div>
               <div class="agent-section-label"><span data-i18n="observation-sources">观察来源</span> <button class="provider-install" id="connector-add" type="button" data-i18n="choose-directory">选择目录…</button></div>
