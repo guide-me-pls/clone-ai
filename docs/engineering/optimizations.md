@@ -7,6 +7,18 @@ written before the change; this entry is completed after it ships. The point is
 to make the *work* auditable: not only what changed, but how it was done, what
 it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 
+### 2026-11-09 — Close the three review findings from the desktop repair round
+
+- **Goal / hypothesis:** the two merged desktop fixes are correct, but the review found three gaps that would let the same class of failure return: the regression cases never ran in CI, the memory fix only covered unchanged polls, and `write_file` refusing existing paths removed a normal capability.
+- **Trade-off:** [regression cases in the default suite](../architecture/trade-offs.md#2026-11-09--regression-cases-run-in-the-default-suite); [background repaint yields to a focused editor](../architecture/trade-offs.md#2026-11-09--a-background-repaint-yields-to-a-focused-editor); [write_file mode per worker](../architecture/trade-offs.md#2026-11-09--write_files-overwrite-mode-is-per-worker-and-only-the-repair-lane-refuses).
+- **Change:** (a) `package.json` `test` includes `test/regression/*.test.ts`, so the two merged cases and every later one run in `npm test` and therefore in CI; (b) the memory panel's poll path calls `render({ background: true })`, which skips the paint when focus is inside an `INPUT`/`TEXTAREA` under `#memory-root` — the markup cache alone could not cover a changed payload; (c) `fileTools()` takes `writeFileMode`, defaults to `overwrite`, and the repair lane sets `CLONE_AI_NATIVE_WRITE_FILE=refuse-existing` for its own process.
+- **Eval:** `npm test` 633 pass / 3 skipped / 0 fail (up from 626; the two regression files and the new overwrite case are now included); `npx tsc --noEmit` pass; `npm run gate` PASS, baseline unchanged. A probe against the memory-panel sandbox that failed before the change (textarea detached on an unrelated `updatedAt` change) now passes and is part of `test/regression/memory-refresh-focus.test.ts`.
+- **Benchmark run:** none — this entry changes tool defaults and test wiring, not model behavior; no provider was invoked.
+- **Execution chain:** reviewed the two merged patches against their parent commits (both reproduced red), wrote a probe that exposed the changed-payload case, then made the three changes in one pass on main, added the probe as a permanent case, and updated the trade-off pair. No repair-lane run: these are corrections to the lane itself, not product bugs the lane should produce.
+- **Pros:** the review findings are now enforced rather than remembered; the residual focus bug cannot silently return; ordinary tasks can regenerate files again.
+- **Cons / next time:** the focus guard trades freshness while typing for edit safety; a detail that finishes loading during typing appears late. The `write_file` mode is an environment variable read in the repair process — if a future entry point builds the registry elsewhere, it must set the same variable.
+- **Reversal condition:** stated in each trade-off entry above.
+
 ### 2026-11-06 — Second pass: the lane runs the five desktop traces again
 
 - **Goal / hypothesis:** with the three holes closed, the same five traces can produce patches whose case is green after the fix, and the lane refuses anything that is not.
