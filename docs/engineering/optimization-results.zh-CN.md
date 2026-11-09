@@ -1,0 +1,99 @@
+# 优化成果
+
+[English](optimization-results.md) · **简体中文**
+
+本文件记录**真正有效的优化**，每条对应一次经过验证的改进，新的在前。每条写明主张、支撑
+它的证据（命令、数字、结果文件），以及完整过程记录在哪里。
+
+**负优化**——eval 显示没有收益、出现回退，或被撤销的——**不写在这里**。它的取舍条目仍保留在
+[`docs/architecture/trade-offs.md`](../architecture/trade-offs.md)，作为决定与推翻条件的记录。
+推理过程与执行链路留在 [`optimizations.md`](optimizations.md)；本文件只保留值得引用的成果。
+
+规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
+
+## 2026-11-07 — Worker 并发跟随实测机器容量
+
+- **主张：** 派发并发由实测的 CPU、负载与空闲内存约束，而不是计划形状；队列与每个子 Agent
+  波次共享一份预算，模型可以读上限但不能设置它。
+- **证据：** `test/capacity.test.ts`（6 个用例：CPU 受限、内存受限、负载敏感、所有者固定值
+  受核数约束、闸门不超限且按序唤醒、取消等待释放槽位）。全量 525/525；typecheck 与
+  `npm run gate` 通过。大主机上的端到端吞吐尚未测量；已验证的主张是"任何执行都不会超过
+  上限"。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-06--worker-并发跟随实测机器容量硬上限由-kernel-掌握)、
+  [执行链路](optimizations.zh-CN.md#2026-11-06--worker-并发跟随实测机器容量)。
+
+## 2026-11-06 — 唯一可审计的执行路径
+
+- **主张：** 主 Agent 与每个 Worker 都是我们自己写的进程内循环。Pi SDK 与所有黑盒 CLI Worker
+  已移除，因此每个回合、每次工具调用都被 Kernel 记录并放行；没有 CLI 能带着隐藏的工具或
+  凭据运行。
+- **证据：** `package.json` 移除 `@earendil-works/pi-coding-agent`；删除
+  `black-box-cli-worker`、`worker-registry`、`worker-env`、`providers.json` 及其测试；
+  移除后全量 519/519；typecheck、`npm run gate` 与双语文档通过。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-06--只保留自己的-agent去掉-pi-sdk-与黑盒-cli)、
+  [执行链路](optimizations.zh-CN.md#2026-11-06--移除黑盒-cli-worker两步中的第二步)。
+
+## 2026-11-06 — 原生主 Agent 与 Pi 持平，tokens 更少
+
+- **主张：** 在固定的主 Agent 任务集上，原生循环的结果与 Pi 一致，且 tokens 略少。
+- **证据：** 每格 5 个样本，`360/deepseek/deepseek-v4.1-flash` 经 Magpie，结果文件
+  `benchmark/results/main-agent-2026-11-06T02-07-58-472Z.json`：两边均 **15/15**；中位
+  耗时合计 **原生 17.2s vs Pi 20.0s**；中位 tokens **17,973 vs 19,081**（少约 5.8%）；
+  plan 的 p90 **15.8s vs 26.9s**。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-05--原生主-agent-循环放在开关后而不是一次性切换)、
+  [执行链路](optimizations.zh-CN.md#2026-11-06--五次样本确认)。
+
+## 2026-11-06 — 原生主 Agent 支持流式、压缩与图片
+
+- **主张：** 原生循环随 token 到达输出，长对话在预算内保留且不丢全文，并接受图片附件。
+- **证据：** 长对话实机运行——24 条种子轮次、4,000 字符预算、2,121 字符摘要到达端点、
+  最老一轮的针保留、回复恰好是 `BLUE-FALCON`、7,842 tokens、五项检查全为真
+  （`benchmark/results/native-main-long-context-2026-11-05T09-43-52-438Z.json`）。
+  图片实机运行——64×64 红色 PNG，回复 `Red.`，3,806 tokens
+  （`benchmark/results/native-main-images-2026-11-05T10-01-47-161Z.json`）。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-05--原生主-agent-流式输出并做确定性压缩)、
+  [执行链路](optimizations.zh-CN.md#2026-11-06--原生压缩的长对话验证)。
+
+## 2026-11-05 — 原生 Worker 完成可靠性任务集
+
+- **主张：** 进程内 Worker 完成固定的可靠性任务，报告精确 token 用量，并对声明为缺失的
+  输入干净失败，而不是编造产物。
+- **证据：** `npm run bench -- --provider native`（CLI 移除之前），模型
+  `360/moonshotai/kimi-k3.1-pro` 经 Magpie：**5/5**，包含作为预期失败的
+  `missing-input`；逐任务用量已记录（summarize 2,252 tokens，三步管道 12,420，合计
+  约 27k）（`benchmark/results/native-2026-11-05T11-09-55-300Z.json`）。加入缺失输入守卫后，
+  该任务以 `no_artifact` / `native-missing-input` 失败，消耗 1,397 tokens
+  （`benchmark/results/native-2026-11-05T08-10-22-910Z.json`）。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-05--命名输入缺失时原生-worker-失败而不是允许编造)、
+  [执行链路](optimizations.zh-CN.md#2026-11-05--命名输入缺失时原生-worker-失败)。
+
+## 2026-11-05 — 每个主 Agent 回合都可归因
+
+- **主张：** 来自 CLI、`npm run main`、桌面/服务器 companion 或 WhatsApp 的每个主 Agent
+  回合，都在 Journal 中记录输入、回复、工具调用、模型、强度与精确用量；没有生成 Run 的
+  回合同样留痕。
+- **证据：** `test/main-agent-turn-audit.test.ts`（4 个用例：脱敏、工具事件、失败回合、
+  中断幂等、新的在前加载）；当时全量 544/544；`clone-ai audit turns` 与
+  `GET /api/audit/turns` 读取同一份记录。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-05--每个主-agent-回合都是一条-journal-记录而不是旁路文件)、
+  [执行链路](optimizations.zh-CN.md#2026-11-05--所有主-agent-入口的回合级审计)。
+
+## 2026-11-05 — 回归门禁守住判断层
+
+- **主张：** 证据验证、权限策略与审计校准在每次提交时无需模型即可重跑，任何判定变化都是
+  可审查的 diff。
+- **证据：** `npm run gate`——11 个判定用例、14 个策略用例、5 条审计记录；一致率 100%、
+  假通过 0、不安全放行 0；CI 在 `npm test` 与 `npm run typecheck` 之后运行它
+  （`benchmark/gate/baseline.json`）。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-05--回归门禁离线逐用例只衡量行为)、
+  [执行链路](optimizations.zh-CN.md#2026-11-05--提示词溯源与离线回归门禁)。
+
+## 2026-11-05 — 提示词改版可识别
+
+- **主张：** 失败的一轮可以归因到它读到的确切提示词：charter 版本、编译后的简报、
+  已注册工具表、模型与强度，按内容寻址并逐回合记入 Journal。
+- **证据：** `test/prompt-snapshot.test.ts`（哈希稳定性、相同材料复用、简报与工具变化命中
+  不同哈希、Journal 事件与定位符、所有注册工具可见、写失败只记日志不抛出）；
+  `GET /api/main-agent/prompt-snapshots` 列出最近的回合。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-05--提示词溯源--内容寻址文件--一条-journal-事件)、
+  [执行链路](optimizations.zh-CN.md#2026-11-05--提示词溯源与离线回归门禁)。

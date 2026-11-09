@@ -100,6 +100,23 @@ without that block is an anecdote, not evidence.
 **Why:** the project's decisions are supposed to rest on measurements; a
 measurement nobody can rerun is indistinguishable from a guess.
 
+## 6. Successful optimizations get a result entry; negative ones do not
+
+When an optimization's eval shows a real gain, add an entry to
+[`docs/engineering/optimization-results.md`](docs/engineering/optimization-results.md)
+(and its zh-CN pair) with the claim, the evidence (command, numbers, result file),
+and links to the trade-off and the execution chain. Newest first.
+
+A negative optimization — no measurable gain, a regression, or a revert — gets
+**no result entry**. Its trade-off entry stays in
+`docs/architecture/trade-offs.md` and its execution chain stays in
+`docs/engineering/optimizations.md`; those two are where the reasons and the
+history live. Do not delete them.
+
+**Why:** the results file is the short list of things that are known to work,
+kept free of experiments that did not. Mixing failed attempts into it makes a
+reader treat an abandoned idea as a proven one.
+
 ## Checklist
 
 - [ ] Trade-off entry written before implementation.
@@ -108,6 +125,8 @@ measurement nobody can rerun is indistinguishable from a guess.
 - [ ] Bug fix came from the repair lane and was functionally verified by the
   working agent.
 - [ ] Every benchmark run records command, inputs, parameters, and result path.
+- [ ] A successful optimization has a result entry in
+  `docs/engineering/optimization-results.md`; a negative one does not.
 - [ ] `npm test`, `npm run typecheck`, `npm run gate` pass.
 - [ ] CHANGELOG updated (bilingual).
 
@@ -198,6 +217,20 @@ measurement nobody can rerun is indistinguishable from a guess.
 
 **为什么：** 项目的决定应当建立在测量之上；没人能重跑的测量与猜测无法区分。
 
+## 6. 成功的优化写成果条目，负优化不写
+
+当某个优化的 eval 显示出真实收益时，在
+[`docs/engineering/optimization-results.md`](docs/engineering/optimization-results.md)
+（及其中文版）追加一条，写明主张、证据（命令、数字、结果文件），以及取舍条目与执行链路的
+链接。新的在前。
+
+**负优化**——没有可测收益、出现回退，或被撤销的——**不写成果条目**。它的取舍条目留在
+`docs/architecture/trade-offs.md`，执行链路留在 `docs/engineering/optimizations.md`；
+理由与历史都在那两处。不要删除它们。
+
+**为什么：** 成果文件是"已知有效"的短名单，不掺杂未成功的实验。把失败尝试混进去，会让
+读者把一个已被放弃的想法当成已验证的结论。
+
 ## 检查清单
 
 - [ ] 实现之前已写取舍条目。
@@ -205,5 +238,6 @@ measurement nobody can rerun is indistinguishable from a guess.
 - [ ] 变更完成后已补全优化日志。
 - [ ] Bug 修复由修复通道产出，并由工作的 Agent 做功能验证。
 - [ ] 每次 benchmark 都记录了命令、输入、参数与结果路径。
+- [ ] 成功的优化在 `docs/engineering/optimization-results.md` 里有成果条目；负优化没有。
 - [ ] `npm test`、`npm run typecheck`、`npm run gate` 通过。
 - [ ] CHANGELOG 已更新（双语）。
