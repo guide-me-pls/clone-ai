@@ -17,15 +17,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
-import { createMainAgentSession } from "../main-agent/session.ts";
-import { isNativeMainAgentSelected, runNativeMainAgentTurn } from "../main-agent/native-runtime.ts";
-import { recordPromptSnapshot } from "../main-agent/prompt-snapshot.ts";
-import {
-  beginMainAgentTurn,
-  finishMainAgentTurn,
-  observeMainAgentSession,
-} from "../main-agent/turn-audit.ts";
-import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
+import { runNativeMainAgentTurn } from "../main-agent/native-runtime.ts";
 import { createKernelRuntimeSession } from "../main-agent/tools/kernel-tools.ts";
 import { MainAgentBusyError, withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { BadCaseLog } from "../reporting/bad-case-log.ts";
@@ -134,6 +126,7 @@ async function main(): Promise<number> {
 
 /** Default path: a conversation turn with the Main Agent. 默认路径：与 Main Agent 的一轮对话。 */
 async function converse(dataDirectory: string, query: string, fresh = false): Promise<number> {
+  void fresh;
   if (query.trim().length === 0) {
     console.error('Please describe what you want. Example: clone-ai "整理今天要推进的事情"');
     return 1;
@@ -146,94 +139,21 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
     dataDirectory,
     command: fresh ? "new" : "converse",
   });
-  let reply = "";
   let before: Array<{ id: string; status: string; planId?: string }> = [];
   try {
     before = await listRunSnapshot(dataDirectory);
+    let reply = "";
     await withMainAgentLock(dataDirectory, async () => {
-      if (isNativeMainAgentSelected()) {
-        const result = await runNativeMainAgentTurn({
-          dataDirectory,
-          text: query,
-          source: "cli",
-          onDelta: (delta) => process.stdout.write(delta),
-        });
-        process.stdout.write("\n");
-        if (result.error !== undefined) console.error(result.error);
-        return;
-      }
-      const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-      const { session, prompt } = await createMainAgentSession({
-        dataDirectory,
-        query,
-        // A fresh conversation is explicit; the default continues the last one.
-        // 新会话是显式选择；默认续上一次对话。
-        ...(fresh ? { sessionManager: SessionManager.create(dataDirectory, join(dataDirectory, "pi-sessions", "main-agent")) } : {}),
-      });
-      if (fresh) {
-        const file = session.sessionManager.getSessionFile();
-        if (file !== undefined) {
-          const { writeCurrentSessionPointer } = await import("../main-agent/session.ts");
-          await writeCurrentSessionPointer(join(dataDirectory, "pi-sessions", "main-agent"), file);
-        }
-      }
-      // Record the inputs before the prompt runs: a failed turn is only
-      // debuggable if the prompt it read is still on disk.
-      // 在 prompt 运行前记录输入：失败的一轮只有在它读过的提示词仍在磁盘上时才可调试。
-      const snapshot = await recordPromptSnapshot(dataDirectory, prompt);
-      const sessionFile = session.sessionManager.getSessionFile();
-      const turn = await beginMainAgentTurn({
+      const result = await runNativeMainAgentTurn({
         dataDirectory,
         text: query,
         source: "cli",
-        ...(sessionFile === undefined ? {} : { sessionFile }),
-        ...(prompt.modelId === undefined ? {} : { modelId: prompt.modelId }),
-        ...(prompt.provider === undefined ? {} : { provider: prompt.provider }),
-        ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
-        ...(snapshot === undefined ? {} : { promptMaterialHash: snapshot.materialHash }),
+        onDelta: (delta) => process.stdout.write(delta),
       });
-      audit.note({
-        ...(sessionFile === undefined ? {} : { sessionFile }),
-        ...(prompt.modelId === undefined ? {} : { modelId: prompt.modelId }),
-        ...(prompt.provider === undefined ? {} : { provider: prompt.provider }),
-        ...(prompt.effort === undefined ? {} : { effort: prompt.effort }),
-      });
-      observeMainAgentSession(session, turn);
-      session.subscribe((event) => {
-        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-          reply += event.assistantMessageEvent.delta;
-          process.stdout.write(event.assistantMessageEvent.delta);
-        }
-      });
-      const started = Date.now();
-      const beforeStats = (() => {
-        try { return session.getSessionStats(); } catch { return undefined; }
-      })();
-      let turnStatus: "completed" | "failed" = "completed";
-      let turnError: string | undefined;
-      try {
-        await session.prompt(query);
-        process.stdout.write("\n");
-      } catch (error: unknown) {
-        turnStatus = "failed";
-        turnError = error instanceof Error ? error.message : String(error);
-        throw error;
-      } finally {
-        const usage = collectSessionUsage(session, Date.now() - started, beforeStats);
-        try {
-          await recordUsage(dataDirectory, { ...usage, turnId: turn.turnId });
-        } catch {
-          // Usage is telemetry; losing it must not hide the reply or the error.
-          // 用量是遥测；丢掉它不能盖住回复或错误。
-        }
-        await finishMainAgentTurn(turn, {
-          status: turnStatus,
-          reply,
-          ...(turnError === undefined ? {} : { error: turnError }),
-          usage: { ...usage, turnId: turn.turnId },
-        });
-        session.dispose();
-      }
+      process.stdout.write("\n");
+      reply = result.reply;
+      audit.note({ modelId: "native", provider: "native" });
+      if (result.error !== undefined) console.error(result.error);
     });
     await drainQueuedRuns(dataDirectory);
     const after = await listRunSnapshot(dataDirectory);

@@ -63,7 +63,7 @@ Agent。clone-ai 负责个人连续性、策略、记忆、规划和验证；被
 ```text
 你
   -> clone-ai：状态、规划、策略、验证
-       -> Claude Code / Codex / Pi / 未来 Runtime
+       -> Claude Code / Codex / opencode / 未来 Runtime
        -> 日历 / 文件 / 邮件 / 浏览器 / 应用 / API
        -> 本地自动化和专用 Python Worker
 ```
@@ -77,9 +77,8 @@ Agent。clone-ai 负责个人连续性、策略、记忆、规划和验证；被
 | --- | --- | --- |
 | **Claude Code** | 实现、审查、本地 Tool 调用与产物生成。 | 黑盒启动配方 |
 | **Codex** | 编码、审查、仓库操作与产物生成。 | 黑盒启动配方 |
-| **Pi** | 拥有自身 Skill 与 MCP 的可替换终端 Agent。 | 黑盒启动配方 |
 | **opencode** | 可选的替代 Coding Agent。 | 黑盒启动配方 |
-| **原生 Worker** | 进程内循环，每次工具调用按 Scope 放行；仅文件工具，报告精确 token 用量。 | 内建；需设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` |
+| **原生 Worker** | 进程内循环，每次工具调用按 Scope 放行；工具集由角色/配置决定，报告精确 token 用量。 | 内建；需设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` |
 | **自定义 Runtime** | 用户或组织专属的命令与本地工具。 | 增加一条 `providers.json` 配方 |
 | **Python Worker** | 信息提取、排序、预测、评估和本地 ML 提案。 | 未来的黑盒配方 |
 
@@ -106,10 +105,12 @@ npm run main
 当前从用户请求到完成验证的整条链路见 [Query 执行流程](docs/query-execution-flow.zh-CN.md)；显式开启的模型 Planner 及其安全边界见 [LLM Planner](docs/llm-planner.zh-CN.md)。
 真实 Codex CLI 与 Claude Code 执行 Provider 的边界见 [受监督的 Worker 边界](docs/coding-cli-adapters.zh-CN.md)。
 架构、已经走过的路线与下一阶段见 [Runtime 架构与路线](docs/runtime-architecture-and-route.zh-CN.md)。
+与 Claude Code 的逆向对照、12 维对齐评分卡与 95% 路线见
+[Claude Code 对齐路线](docs/study/claude-code-parity.zh-CN.md)。
 
 CLI 演示仍使用确定性的 Adapter，便于学习、测试和重放；桌面 Runtime 根据本地设置，把有边界的
 WorkOrder 交给统一的黑盒边界。WorkOrder 包含输入、能力要求、产物合同、风险、预算和无环依赖图。
-Claude Code、Codex、Pi、opencode 与未来 Agent 每次都从全新的进程开始；Clone AI 的 Kernel 状态、
+Claude Code、Codex、opencode 与未来 Agent 每次都从全新的进程开始；Clone AI 的 Kernel 状态、
 记忆、Workspace 证据、崩溃恢复和最终完成判定都在 Provider 之外。Provider 自己的 `--resume` 只能
 是可选优化，不能成为事实来源。
 
@@ -338,7 +339,7 @@ interface RuntimeAdapter {
 }
 ```
 
-Runtime 通过同一个黑盒边界接入 Claude Code、Codex、Pi、opencode 和未来独立的 Runtime。**Skill** 仍是
+Runtime 通过同一个黑盒边界接入 Claude Code、Codex、opencode 和未来独立的 Runtime。**Skill** 仍是
 Provider 自己拥有的能力；Clone AI 只提供有边界的 Prompt 与 Workspace，再根据可观察事实判断结果。
 Provider 的 Session 记忆、Tool 协议和完成话语都不是 Kernel 权威。
 
@@ -390,8 +391,7 @@ packages/
 |-- connectors/                  calendar、mail、files、browser、APIs
 |-- adapters/
 |   |-- claude-code/
-|   |-- codex/
-|   `-- pi/
+|   `-- codex/
 |-- observability/               Trace、审计、指标
 `-- testkit/                     Fake Connector、Runtime、故障
 

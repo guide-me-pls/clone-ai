@@ -6,6 +6,42 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Desktop CSP and test isolation
+
+The Tauri shell no longer sets `csp: null`; it now restricts scripts, styles, images, fonts, objects, frames and form targets to the app, with loopback connections allowed for the local daemon. The black-box worker test now pins the fake agent's output to `out/report.md` inside its throwaway workspace instead of letting a run leave `out/report.md` in the checkout.
+
+Tauri 外壳不再设置 `csp: null`；现在限制脚本、样式、图片、字体、object、frame 与表单目标为应用自身，并允许连接本机 daemon 的 loopback。黑盒 Worker 测试现在把假 Agent 的输出固定到其临时工作区内的 `out/report.md`，而不是让一次运行在检出里留下 `out/report.md`。
+
+### MCP host and skills
+
+`src/mcp/mcp-host.ts` is an MCP client over stdio: JSON-RPC 2.0, `initialize`, `tools/list`, `tools/call`, a per-request timeout, an output cap, and `mcp__<server>__<tool>` names. A server that cannot start is recorded in `failures` and contributes no tools; one broken server never blocks the others. `src/skills/skill-loader.ts` loads `<root>/<name>/SKILL.md` with frontmatter (`name`, `description`, `allowed-tools`, `disable-model-invocation`, `user-invocable`) and progressive disclosure: only a capped one-line listing enters the system prompt, and the body is injected when the model invokes `Skill(<name>)`. Both are opt-in per Main Agent turn (`skillRoots`, `mcpServers`); skill bodies and MCP output are treated as data, and the Kernel gate still decides what may run. Fifteen deterministic tests cover the host, the loader, and an end-to-end turn that exposes and invokes both.
+
+`src/mcp/mcp-host.ts` 是基于 stdio 的 MCP 客户端：JSON-RPC 2.0、`initialize`、`tools/list`、`tools/call`、每请求超时、输出上限，以及 `mcp__<server>__<tool>` 命名。启动失败的服务器记入 `failures` 且不贡献工具；一个坏服务器绝不阻塞其他服务器。`src/skills/skill-loader.ts` 加载 `<root>/<name>/SKILL.md`，支持 frontmatter（`name`、`description`、`allowed-tools`、`disable-model-invocation`、`user-invocable`）与渐进披露：只有有上限的单行列表进入 System Prompt，正文在模型调用 `Skill(<name>)` 时注入。两者都按主 Agent 回合显式开启（`skillRoots`、`mcpServers`）；技能正文与 MCP 输出按数据处理，真正的闸门仍由 Kernel 决定。15 个确定性测试覆盖宿主、加载器，以及一个同时暴露并调用两者的端到端回合。
+
+### Token-aware context compaction
+
+`src/main-agent/context-window.ts` derives the compact/warn/blocked levels from a context window (`effective = window - min(maxOutputTokens, 20000)`, compact at `min(80%, effective - 13000)`, warn at `compact - 20000`, blocked at `effective - 3000`), estimates tokens, and compacts a transcript into a bounded summary plus a verbatim tail. The native Main Agent enables it when `contextWindow` is supplied; each compaction writes `main_agent.context_compacted` with the estimated size, threshold, dropped/kept counts and the summary, so the desktop context view can show what happened. A blocked level ends the turn as `budget_exhausted` instead of sending an over-window request. Eight deterministic tests cover the levels, pressure, preservation, bounded summaries, and the estimator.
+
+`src/main-agent/context-window.ts` 从上下文窗口推导压缩/警告/阻断三档水位（`effective = window - min(maxOutputTokens, 20000)`，压缩线 `min(80%, effective - 13000)`，警告线 `compact - 20000`，阻断线 `effective - 3000`），估算 token，并把转录压成有界摘要加逐字尾部。原生主 Agent 在提供 `contextWindow` 时启用；每次压缩写入 `main_agent.context_compacted`，带估算大小、阈值、丢弃/保留数量与摘要，桌面上下文视图因此能显示发生了什么。达到阻断线会以 `budget_exhausted` 结束回合，而不是发出超窗口请求。8 个确定性测试覆盖水位、压力、保留、有界摘要与估算器。
+
+### Shared agent loop kernel
+
+The Main Agent now runs through `src/agent/loop.ts`: typed terminal reasons, safe tools scheduled together with unsafe tools as barriers, abort propagation, round/tool/token/duration budgets, bounded retries, middle-truncated tool results, and a compaction hook. `src/main-agent/native-runtime.ts` adapts its streaming chat client and Kernel tools to the kernel; read-only tools run in parallel and proposals stay serial, and tool start/completion events still reach the turn audit. Sixteen new deterministic tests cover completion, tool pairing, the concurrency barrier, max rounds, tool-call budgets, abort, retry, truncation, compaction, unknown tools, an interrupted-turn audit case, and a client-disconnect cancellation path. `npm test` is 622 tests, 619 pass, 0 fail, 3 skipped; `npm run typecheck` and `npm run gate` pass. The native worker now uses the same kernel: its OpenAI-compatible client is a single completion, and the worker owns the rounds and tool gate.
+
+主 Agent 现在通过 `src/agent/loop.ts` 运行：带类型的终止原因、安全工具并行/非安全工具屏障、abort 传播、回合/工具/token/时长预算、有界重试、中间截断的工具结果，以及压缩钩子。`src/main-agent/native-runtime.ts` 把流式 chat 客户端与 Kernel 工具适配到内核；只读工具并行，提案保持串行，工具开始/完成事件仍写入回合审计。新增 16 个确定性测试，覆盖完成、工具配对、并发屏障、最大回合、工具调用预算、abort、重试、截断、压缩、未知工具、中断回合的审计记录，以及客户端断开时的取消路径。`npm test` 为 622 个测试、619 通过、0 失败、3 跳过；`npm run typecheck` 与 `npm run gate` 通过。原生 Worker 现在也使用同一内核：OpenAI 兼容客户端只做一次 completion，Worker 拥有回合与工具闸门。
+
+### Pi runtime removed; native is the only Main Agent
+
+The Pi provider and its model catalog are gone from the default catalog. `CLONE_AI_MAIN_RUNTIME=pi` now fails explicitly, the review role defaults to `claude-code`, and the stale tests and benchmark cells that still forced Pi were updated. `npm test` is green again: 585 tests, 582 pass, 3 skipped, 0 fail; `npm run gate` and `npm run typecheck` pass. The Main Agent benchmark is native-only and its report keeps every sample.
+
+Pi 运行时及其模型目录已从默认目录移除。`CLONE_AI_MAIN_RUNTIME=pi` 现在显式失败，review 角色默认使用 `claude-code`，仍强制 Pi 的过期测试与基准格已更新。`npm test` 重新变绿：585 个测试、582 通过、3 跳过、0 失败；`npm run gate` 与 `npm run typecheck` 通过。主 Agent 基准只跑原生循环，并保留每个样本。
+
+### Claude Code parity analysis and 95% roadmap
+
+Added a bilingual reverse-engineering analysis of Claude Code 2.1.317 and Claude Desktop 4.16336.0, a 12-dimension weighted parity scorecard, and a nine-phase roadmap to 95%. The analysis covers the typed loop state machine, streaming tool scheduler, six-mode permission ladder, 33 hook events, token-aware compaction, MCP/skills/subagents, and the Desktop Agent-SDK control protocol. clone-ai's audited baseline is 58.5/100; the roadmap starts by repairing the four red tests left by the Pi removal, then adds the shared loop kernel, per-call permissions, execution-worker tool profiles (coding is one profile), context engineering, MCP/skills, subagents/sessions, and desktop feedback. See [docs/study/claude-code-parity.md](docs/study/claude-code-parity.md).
+
+新增双语版 Claude Code 2.1.317 / Claude Desktop 4.16336.0 逆向分析与 12 维加权对齐评分卡，以及到达 95% 的九阶段路线。分析覆盖带类型的循环状态机、流式工具调度、六模式权限阶梯、33 个 hook 事件、token 感知压缩、MCP/Skills/子 Agent，以及桌面端 Agent-SDK 控制协议。clone-ai 审计基线为 58.5/100；路线先修复移除 Pi 后留下的 4 个红测试，再加入共享循环内核、逐次权限、执行 Worker 的工具配置（编码只是其中一种）、上下文工程、MCP/Skills、子 Agent/会话与桌面反馈。见 [docs/study/claude-code-parity.zh-CN.md](docs/study/claude-code-parity.zh-CN.md)。
+
 ### Main Agent comparison repeats and reports medians
 
 `npm run bench:main` now runs each task/runtime cell `--repeat N` times (default 5) and reports median and p90 duration, median tokens and pass rate, keeping every sample in the JSON. `benchmark/stats.ts` provides the median and nearest-rank percentile, and a throwing cell is recorded as a failed sample instead of aborting the report. A three-sample run on DeepSeek v4.1 Flash: both runtimes 9/9, native about 6.6% fewer tokens, median latency within about one second.
@@ -20,9 +56,9 @@ With `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` set, the default age
 
 ### Native Main Agent is the default when configured
 
-With `CLONE_AI_MAIN_RUNTIME` unset, the Main Agent now uses the native in-process loop when `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are present; otherwise it stays on Pi. `CLONE_AI_MAIN_RUNTIME=pi` forces Pi, `=native` forces native, and an unknown value is refused. A live smoke without the flag recorded `provider: "native"`, and the full suite still passes.
+With `CLONE_AI_MAIN_RUNTIME` unset, the Main Agent now uses the native in-process loop when `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are present. `=native` is the only supported value; `pi` and unknown values are refused. The Pi runtime has since been removed. A live smoke without the flag recorded `provider: "native"`, and the full suite still passes.
 
-`CLONE_AI_MAIN_RUNTIME` 未设置时，只要存在 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`，主 Agent 现在默认使用进程内的原生循环；否则继续使用 Pi。`CLONE_AI_MAIN_RUNTIME=pi` 强制 Pi，`=native` 强制原生，未知值会被拒绝。不设开关的实机冒烟记录了 `provider: "native"`，全量测试仍通过。
+`CLONE_AI_MAIN_RUNTIME` 未设置时，只要存在 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`，主 Agent 现在默认使用进程内的原生循环。`=native` 是唯一支持的值；`pi` 与未知值会被拒绝。Pi 运行时此后已移除。不设开关的实机冒烟记录了 `provider: "native"`，全量测试仍通过。
 
 ### Native Main Agent accepts images
 

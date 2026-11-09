@@ -6,6 +6,174 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-06 — Adopt Claude Code's harness mechanics, not its source or prompts
+
+**Decision.** Use the reverse-engineered Claude Code 2.1.317 mechanisms as a
+reference specification for clone-ai's own agent loop: typed terminal reasons,
+streaming tool scheduling with per-tool concurrency flags, a per-call
+permission pipeline, token-aware compaction, hooks, MCP, and skills. Do not copy
+source code, prompt text, or Anthropic-internal configuration into this
+repository.
+
+**Evidence.** The extracted Bun module graph contains 2,942 modules and a
+copyright notice (`cli`: "(c) Anthropic PBC. All rights reserved."). The
+mechanisms are visible as string constants and control flow
+(`BUILTIN_TOOL_NAMES`, the six-mode permission enum, 33 hook event names, the
+`effectiveWindow - 13000` compaction math). clone-ai's README states that it
+does not embed another runtime and that Claude Code is a black-box worker.
+Copying the prompt would also replace the personal-twin charter with a
+coding-CLI identity.
+
+**What it costs.** Reimplementation is slower than embedding
+`@anthropic-ai/claude-agent-sdk`; parity must be proved by clone-ai's own evals
+rather than inherited from Anthropic.
+
+**Reversal condition.** If the owner explicitly chooses time-to-parity over
+independence and accepts an Anthropic-only credential and provider path, add the
+Agent SDK as a temporary reference/benchmark path, not as the product
+architecture.
+
+## 2026-11-06 — Execution workers are general; coding is one tool profile
+
+**Decision.** Keep the Main Agent's proposal/authority boundary and add a
+model-invocable `Task`/subagent path plus read-only inspection tools. Treat
+workers as general execution surfaces: their tool set is selected by role and
+capability profile, not hardwired to coding. A coding profile (Read, Write,
+Edit, Glob, Grep, Bash) is one profile; research, review, drafting, and external
+connectors get their own. Do not give the Main Agent Bash/Edit/Write directly.
+
+**Evidence.** `src/workers/native-agent-worker.ts` already takes an arbitrary
+`NativeToolSpec[]` and a `workCapabilities` list; `fileTools()` is only the
+current default profile, not a type-level constraint. `decideTool` gates every
+call by risk, path, and network scope, so a larger or different profile does not
+widen authority. The README's invariant is "the Main Agent is the brain, never
+the authority." Claude Code's coordinator prompt also separates a coordinator
+from workers (`chunk-mas5an83.js`), which matches clone-ai's split.
+
+**What it costs.** Profiles need ownership, versioning, and tests; a role that
+gets the wrong profile can be over- or under-powered. The Main Agent cannot
+inspect files itself without a new read-only tool set.
+
+**Reversal condition.** If a single universal tool set proves simpler and every
+role needs the same tools, collapse the profiles — but keep the per-call gate
+and the capability declaration. If a same-model benchmark shows the orchestrator
+round-trip loses more than 20% task success or doubles median latency, allow the
+Main Agent to execute read-only tools directly under the same gate.
+
+## 2026-11-06 — One shared agent loop kernel serves the Main Agent and the native worker
+
+**Decision.** Extract one `src/agent/loop.ts` state machine with typed terminal
+reasons, tool scheduling, budget checks, abort propagation, retry policy, and
+compaction hooks. `runNativeMainAgentTurn` and `OpenAiCompatibleClient` become
+adapters over it.
+
+**Evidence.** Both current loops duplicate SSE/non-streaming request handling,
+usage accounting, and an 8,000-character tool-result cut
+(`native-runtime.ts:270-315`, `openai-compatible-client.ts:74-96`); both lack the
+same features. The native-runtime header says "no compaction" while the file
+compacts at `:515-558`, which is the kind of drift duplication produces. Claude
+Code has one query loop for its terminal, SDK, and desktop surfaces
+(`chunk-8ntpzya9.js`).
+
+**What it costs.** A refactor of two hot paths and a period where behavior must
+be pinned by tests; the loop must not grow provider-specific branches.
+
+**Reversal condition.** If the Main Agent and worker diverge in transport or
+streaming requirements (for example, a provider that cannot stream tool calls),
+keep separate model adapters but share the scheduler, budget, and tool-result
+layers.
+
+## 2026-11-06 — Every in-process tool call goes through a per-call decision
+
+**Decision.** Route every in-process tool call through `ToolAuthority` (or a
+successor policy broker) that returns
+`{behavior: allow | deny | ask, reason, updatedInput?}`. Plan-time policy
+remains the outer gate; hooks may add context or deny, but may not silently
+widen authority.
+
+**Evidence.** `src/core/tool-authority.ts` exists and is referenced only by
+`test/tool-authority.test.ts`; `runNativeMainAgentTurn` executes any tool the
+model names (`native-runtime.ts:292-308`). Claude Code decides each call through
+rules, mode, and `canUseTool`, and a denied call is returned to the model while
+the turn continues (`chunk-q8qwkppc.js`). The audit ranks this as gap #2.
+
+**What it costs.** More events and latency per call; the desktop and CLI need an
+`ask` path, and every tool needs a risk classification.
+
+**Reversal condition.** If per-call gating adds more than 10% latency on
+read-only batches and no real incident is prevented in a red-team exercise,
+allow read-only batches under one plan-time grant while keeping the gate for
+writes, shell, network, and external actions.
+
+## 2026-11-06 — Compaction is token-aware and recorded; deterministic summaries first
+
+**Decision.** Estimate tokens against a configured context window, compact at
+the Claude Code-derived threshold (`effective = window - min(maxOutputTokens,
+20000)`, threshold `min(floor(effective * (1 - 0.2)), effective - 13000)`,
+warning at `threshold - 20000`, blocked at `effective - 3000`), write a
+`compaction` record with preserved message ids, and default to a deterministic
+summary. Add a model-written summary only after an eval shows it preserves
+task-critical facts better.
+
+**Evidence.** The native loop compacts history by characters
+(`historyChars ?? 12000`, newest 66% verbatim) and never writes a `compaction`
+record (`native-runtime.ts:238-241,515-558`); the desktop context panel reads
+legacy Pi JSONL (`conversation-history.ts:241`). Claude Code records a
+`compact_boundary` with `preservedMessages.uuids`, a nine-section summary, and a
+restored tail. Deterministic summaries are private, cheap, and testable; model
+summaries add cost and nondeterminism.
+
+**What it costs.** Token estimation is approximate; deterministic summaries can
+lose nuance; a compaction record adds a new persisted event type.
+
+**Reversal condition.** If the long-context benchmark shows deterministic
+summaries lose a fact that a model summary preserves in at least 20% of seeded
+cases, make model summaries the default for sessions above the threshold.
+
+## 2026-11-06 — MCP and skills first; plugins, cloud, VM, and computer-use deferred
+
+**Decision.** Implement an in-process MCP host (stdio first, then HTTP/SSE) and a
+`SKILL.md` loader with progressive disclosure as P1. Defer plugin marketplaces,
+cloud sessions, VM sandboxes, Chrome integration, and computer-use until the
+weighted harness score is at least 90 and a concrete workflow requires them.
+
+**Evidence.** clone-ai has no MCP or skills code (audit: extensibility 10/100).
+MCP and skills are Claude Code's extension on-ramps; every third-party
+integration arrives through them. Plugins and cloud/VM are product surfaces with
+infrastructure cost; the macOS Seatbelt profile already isolates CLI workers
+(`authority/seatbelt.ts`), and Claude Desktop's VM is a 26 MB image plus
+platform-specific hypervisor code. Deferring them avoids spending the parity
+budget on infrastructure that does not move the harness score.
+
+**What it costs.** Users cannot install third-party plugins or run remote/browser
+tools until those phases; MCP adds an attack surface, and skills can inject
+instructions.
+
+**Reversal condition.** If the owner's real workflows depend on a specific
+plugin/marketplace or remote MCP, promote that integration; if a red-team test
+bypasses Seatbelt, promote the VM sandbox.
+
+## 2026-11-06 — The 95% target is a weighted harness-parity score
+
+**Decision.** Define parity as the 12-dimension weighted score ≥ 95, every
+dimension ≥ 80, and a same-model live benchmark that does not regress against a
+Claude Code reference run. Model quality is measured and reported separately; it
+is never blended into the harness score.
+
+**Evidence.** clone-ai supports arbitrary OpenAI-compatible endpoints; the model
+behind it may be weaker or stronger than Claude Code's default. Conflating model
+quality with harness quality makes the score incomparable and lets a weak model
+be blamed on the loop. The extracted harness mechanisms are the controllable
+variable.
+
+**What it costs.** The score needs a maintained eval suite and a live reference
+run; weights can be gamed, so the rubric requires executable evidence per level
+and a minimum per dimension.
+
+**Reversal condition.** If a same-model head-to-head shows clone-ai passes at
+least 95% of tasks while scoring below 85 on the checklist, reweight toward task
+success; the checklist is then measuring things users do not value.
+
 ## 2026-11-05 — Self-check rebuilds the local macOS app
 
 **Decision.** On macOS, `selfcheck:push` rebuilds and replaces

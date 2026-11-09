@@ -67,9 +67,8 @@ import { compileBriefing } from "./main-agent/situation-briefing.ts";
 import { buildFallbackPlan } from "./planning/fallback-planner.ts";
 import { reconcileCommitments } from "./state/commitment-reconciler.ts";
 import { describeHistory, mainAgentSessionDirectory, readConversation, searchHistory } from "./main-agent/conversation-history.ts";
-import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
+import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/conversation-files.ts";
 import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
-import { listPiModelIds, listPiModels, piModelReference } from "./main-agent/pi-model-catalog.ts";
 import { readInvocation, readInvocations } from "./audit/invocation-ledger.ts";
 import { WhatsAppBindingInputError, WhatsAppSetupService } from "./mobile/whatsapp-setup.ts";
 import {
@@ -366,7 +365,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const schedules = new ScheduleStore(paths.schedulesFile);
   const sessions = new SessionStore(paths.sessionsFile);
   const providers = await loadProviderRegistry(dataDirectory);
-  const agentSettings = new WorkerSettingsStore(paths.legacyAgentsFile, providers);
+  const agentSettings = new WorkerSettingsStore(paths.legacyAgentsFile);
   const agentRegistry = new WorkerRegistry(dataDirectory);
   // One Runtime assembly, and therefore one journal, shared by every module in
   // this process. Separate stores over the same file each keep their own
@@ -857,24 +856,47 @@ async function handleRequest(
 
   if (request.method === "GET" && url.pathname === "/api/options") {
     const current = await context.config.get();
-    const piModels = await listPiModels().catch(() => []);
+    const gateway = await inspectMagpieGateway();
     sendJson(response, 200, {
       workspacePath: current.workspacePath,
+      mainAgentBaseUrl: current.mainAgentBaseUrl,
       mainAgentModel: current.mainAgentModel,
       mainAgentEffort: current.mainAgentEffort,
       effortLevels: EFFORT_LEVELS,
-      models: piModels,
+      models: gateway.models.map((model) => ({
+        id: model.id,
+        provider: "magpie",
+        reference: model.id,
+        label: model.name,
+      })),
     });
     return;
   }
 
   if (request.method === "PATCH" && url.pathname === "/api/config") {
     const body = await readJsonBody(request);
-    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined } = {};
+    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentBaseUrl?: string; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined } = {};
     if (typeof body.workspacePath === "string" && body.workspacePath.trim().length > 0) {
       update.workspacePath = body.workspacePath.trim();
     }
     if (body.locale === "zh-CN" || body.locale === "en") update.locale = body.locale;
+    if ("mainAgentBaseUrl" in body) {
+      if (typeof body.mainAgentBaseUrl !== "string") {
+        sendJson(response, 400, { error: "mainAgentBaseUrl must be a string (empty clears it)." });
+        return;
+      }
+      const value = body.mainAgentBaseUrl.trim();
+      if (value.length > 0) {
+        try {
+          const endpoint = new URL(value);
+          if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:") throw new Error("unsupported protocol");
+        } catch {
+          sendJson(response, 400, { error: "mainAgentBaseUrl must be an http(s) URL." });
+          return;
+        }
+      }
+      update.mainAgentBaseUrl = value;
+    }
     if ("mainAgentModel" in body) {
       if (typeof body.mainAgentModel !== "string") {
         sendJson(response, 400, { error: "mainAgentModel must be a string (empty clears it)." });
@@ -891,7 +913,7 @@ async function handleRequest(
       }
     }
     if (Object.keys(update).length === 0) {
-      sendJson(response, 400, { error: "Provide a workspacePath, locale, mainAgentModel, or mainAgentEffort to change." });
+      sendJson(response, 400, { error: "Provide a workspacePath, locale, mainAgentBaseUrl, mainAgentModel, or mainAgentEffort to change." });
       return;
     }
     sendJson(response, 200, { config: await context.config.update(update) });
@@ -911,19 +933,11 @@ async function handleRequest(
     // credential material and does not write Magpie's own configuration.
     // 这只是回环能力探测：刻意不返回任何凭据，也不改写 Magpie 自己的配置。
     const gateway = await inspectMagpieGateway();
-    const piModels = gateway.running
-      ? new Set((await listPiModels("magpie").catch(() => [])).map((model) => model.id))
-      : new Set<string>();
     sendJson(response, 200, {
       gateways: [{
         ...gateway,
-        models: gateway.models.map((model) => ({
-          ...model,
-          compatible: piModels.has(model.id),
-        })),
-        compatibleModelCount: piModels.size === 0
-          ? 0
-          : gateway.models.filter((model) => piModels.has(model.id)).length,
+        models: gateway.models.map((model) => ({ ...model, compatible: true })),
+        compatibleModelCount: gateway.models.length,
       }],
     });
     return;
@@ -949,26 +963,13 @@ async function handleRequest(
       sendJson(response, 400, { error: `Magpie does not expose the model "${modelId}".` });
       return;
     }
-    const reference = piModelReference(modelId);
-    try {
-      // The Pi catalog is the final capability check: writing a model Clone AI
-      // cannot construct would turn a settings success into a later chat failure.
-      // Pi 目录是最终能力校验：写入 Clone AI 无法构造的模型会把设置成功变成之后的对话失败。
-      if (!(await listPiModelIds("magpie")).includes(modelId)) {
-        sendJson(response, 409, {
-          error: `Magpie is running, but Pi is not connected to "${modelId}". Enable Pi in Magpie, run magpie sync, then retry.`,
-        });
-        return;
-      }
-      sendJson(response, 200, {
-        config: await context.config.update({ mainAgentModel: reference }),
-        gateway: await inspectMagpieGateway(),
-      });
-    } catch (error: unknown) {
-      sendJson(response, 500, {
-        error: error instanceof Error ? error.message : "Could not validate the Pi model catalog.",
-      });
-    }
+    sendJson(response, 200, {
+      config: await context.config.update({
+        mainAgentBaseUrl: gateway.endpoint,
+        mainAgentModel: modelId,
+      }),
+      gateway: await inspectMagpieGateway(),
+    });
     return;
   }
 
@@ -1699,6 +1700,11 @@ async function handleRequest(
     // must remain a readable 409, not an already-open stream.
     // 等到拿到 Main Agent 锁再发 SSE 头。会话正忙时必须仍是可读的 409，而不是已经打开的流。
     let streamOpen = false;
+    const abortController = new AbortController();
+    const abortOnClose = (): void => {
+      if (!response.writableEnded) abortController.abort(new Error("The client disconnected."));
+    };
+    response.on("close", abortOnClose);
     const ensureStream = (): void => {
       if (streamOpen) return;
       streamOpen = true;
@@ -1710,6 +1716,7 @@ async function handleRequest(
       });
     };
     const send = (event: string, data: unknown): void => {
+      if (response.writableEnded || response.destroyed) return;
       ensureStream();
       response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
@@ -1718,6 +1725,7 @@ async function handleRequest(
         onDelta: (delta) => send("delta", { delta }),
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
         ...invocation,
+        signal: abortController.signal,
       });
       send("done", result);
     } catch (error: unknown) {
@@ -1730,6 +1738,7 @@ async function handleRequest(
       }
       send("failed", { error: error instanceof Error ? error.message : "The Main Agent failed." });
     } finally {
+      response.off("close", abortOnClose);
       if (streamOpen) response.end();
     }
     return;
@@ -2379,7 +2388,7 @@ async function buildMainAgentConversation(dataDirectory: string): Promise<Sessio
   };
 }
 
-async function buildSession(dataDirectory: string, runId: string, settings: { agents: Array<{ id: string; providerId: string }> }): Promise<SessionView> {
+async function buildSession(dataDirectory: string, runId: string, settings: { agents: Array<{ id: string }> }): Promise<SessionView> {
   const { events, state, tasks, runs } = await loadRuntimeView(dataDirectory);
   const run = runs.find((candidate) => candidate.id === runId);
   if (run === undefined) {
@@ -2389,7 +2398,8 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
   const task = tasks[run.taskId];
   const trigger = events.find((event) => event.type === "trigger.received" && asRecord(event.payload).id === task?.triggerId);
   const query = typeof asRecord(trigger?.payload).summary === "string" ? String(asRecord(trigger?.payload).summary) : titleFor(run, tasks);
-  const providerByRole = new Map(settings.agents.map((agent) => [agent.id, agent.providerId]));
+  // Every role now runs on Clone AI's own Agent; the executor kind is one fact. 所有角色现在都跑在 Clone AI 自己的 Agent 上，执行器类型只有一个事实。
+  const providerByRole = new Map(settings.agents.map((agent) => [agent.id, "native"]));
   const subagents = Object.values(state.subagents)
     .filter((subagent) => subagent.runId === run.id)
     .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))

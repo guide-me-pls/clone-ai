@@ -23,6 +23,78 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+## 2026-11-09 — 逐次权限、上下文压缩、MCP 与技能
+
+- **目标 / 假设：** 补齐决定 harness 是否完整的四个 Claude Code 缺口：每次工具调用（而不是每个
+  计划步骤）都被授权；长会话按 token 压力压缩并留下记录；第三方工具经 MCP 进入；可复用流程
+  以技能而非硬编码 Prompt 的形式进入。
+- **取舍：** [每个进程内工具调用都经过逐次决定](../architecture/trade-offs.zh-CN.md#2026-11-06--每个进程内工具调用都经过逐次决定)、
+  [压缩按 token 计算并落记录](../architecture/trade-offs.zh-CN.md#2026-11-06--压缩按-token-计算并落记录先确定性摘要)、
+  [先做 MCP 与 Skills](../architecture/trade-offs.zh-CN.md#2026-11-06--先做-mcp-与-skills插件云vmcomputer-use-延后)
+  与 [执行 Worker 是通用的](../architecture/trade-offs.zh-CN.md#2026-11-06--执行-worker-是通用的编码只是其中一种工具配置)。
+- **变更：**
+  - `src/agent/loop.ts` 增加 `authorize`、`requestApproval`、`hooks.preToolUse` /
+    `postToolUse` 与 `tool_decision` 事件。deny 胜过 ask，ask 胜过 allow；hook 可以改写
+    输入但不能扩大权威；被拒绝的调用是一条配对的工具结果，回合继续。
+  - `src/workers/native-agent-worker.ts` 现在运行在 `runAgentLoop` 上：客户端只做一次
+    completion，`decideTool` 是 `authorize` 回调，读工具并行安全，预算失败带可比较签名。
+  - `src/main-agent/context-window.ts` 推导压缩/警告/阻断三档、估算 token、确定性压缩；
+    `main_agent.context_compacted` 把每次压缩记在回合与 Journal 上。
+  - `src/mcp/mcp-host.ts` 是 stdio MCP 宿主，工具带命名空间；失败的服务器记入记录且不贡献工具。
+  - `src/skills/skill-loader.ts` 加载 `SKILL.md` 并渐进披露；主 Agent 回合接受 `skillRoots`
+    与 `mcpServers`，暴露 `Skill(<name>)` 与 `mcp__server__tool`。
+  - `apps/desktop/src-tauri/tauri.conf.json` 现在设置限制性 CSP，而不是 `null`。
+- **Eval：** `npm test` → **622 个测试、619 通过、0 失败、3 跳过**（本批之前：
+  601/598/0/3）。`npm run typecheck` → 退出 0。`npm run gate` → PASS，基线未变。
+  内核套件 14/14；上下文 8/8；MCP 5/5；技能 5/5；原生 Worker/客户端 17/17；
+  一个端到端主 Agent 回合同时使用技能与 MCP 工具。没有实机模型调用。
+- **Benchmark run：** 无。变更属于契约层；实机基准无法区分授权、压缩或加载逻辑。
+- **执行链路：** 内核权限路径 → 原生 Worker 迁移 → 上下文模块与记录 → MCP 宿主与假 stdio
+  服务器 → 技能加载器与夹具 → 端到端回合 → CSP。就地修复的失败：TypeScript 参数属性
+  （strip-only 模式）、Worker 类的闭合括号、两处测试辅助签名、一处字符数断言，以及一个
+  单独运行与重跑都通过的 WhatsApp 偶发测试。
+- **优点：** 权限现在逐次且有原因；压缩有记录且可见；MCP 与技能按回合显式开启，不改变
+  既有回合；Worker 与 Main Agent 共享一套循环契约。
+- **缺点 / 下次：** MCP 还没有 HTTP 传输、resources、prompts 或 OAuth；技能自身还不缩小
+  工具表（真正的闸门仍由 Kernel 执行），插件与延迟工具搜索也还没有。额外的编码工具
+  （edit/glob/grep/bash）仍只是配置，没有实现。
+- **推翻条件：** 见各取舍条目；对 MCP/技能而言，如果攻击面增长快于能力，或真实工作流需要
+  本宿主没有的传输，就推翻。
+
+## 2026-11-07 — 共享 Agent 循环内核与绿色基线
+
+- **目标 / 假设：** Main Agent 需要 Claude Code 已经证明重要的 harness 机制：带类型的终止
+  原因、安全工具并行/非安全工具屏障、abort 传播、回合/工具/token/时长预算、有界重试与
+  结构化工具结果。单一内核也能阻止 Main Agent 与执行 Worker 长出两套不同的循环。
+- **取舍：** [共享 Agent 循环内核](../architecture/trade-offs.zh-CN.md#2026-11-06--main-agent-与原生-worker-共享一个-agent-循环内核)
+  与 [执行 Worker 是通用的](../architecture/trade-offs.zh-CN.md#2026-11-06--执行-worker-是通用的编码只是其中一种工具配置)。
+- **变更：** 新增 `src/agent/loop.ts` 与 `test/agent-loop.test.ts`，并把
+  `src/main-agent/native-runtime.ts` 接上去。Kernel 工具表适配到循环；只读工具并行安全，
+  提案保持串行。工具开始/完成事件仍写入回合审计；客户端断开时 companion 流会取消回合。
+  阶段 0 同时移除了最后一个 `pi` 默认值
+  （`evidence-reviewer` 改用 `claude-code`）、更新了过期 Pi 测试、把主 Agent 基准改为仅原生，
+  并从基准配方与文档中移除 Pi。
+- **Eval：** `node --experimental-strip-types --test test/agent-loop.test.ts` →
+  **10/10 通过**；`test/native-main-agent.test.ts` → **6/6 通过**；客户端断开路径由
+  `test/companion-main-agent.test.ts` 覆盖。`npm test` →
+  **609 个测试、606 通过、0 失败、3 跳过**（变更前：
+  585 个测试、578 通过、4 失败、3 跳过）。`npm run typecheck` → 退出 0。
+  `npm run gate` → **PASS**，基线未变。本次没有实机模型调用；eval 是确定性的。
+- **Benchmark run：** 无。本次变更由确定性循环契约与既有测试判定；实机 Main Agent 运行会
+  增加成本，却不能区分内核的调度与预算逻辑。
+- **执行链路：** 八路并行分析（采用七份报告；工具目录一路持续重复扫描后被停止），直接核对
+  源码中的工具清单，阶段 0 修测试，实现内核，接适配器，最后跑全量测试。过程中的失败：strip-only
+  模式不支持一个 TypeScript 参数属性、测试里两处类型错误、以及一个仍假设默认 Provider 是 CLI
+  的基准安全测试；均已就地修复。耗时与成本未单独测量；没有调用 Provider。
+- **优点：** Main Agent 现在拥有带类型的终止原因、并行安全工具调度、abort 传播、重试、预算与
+  中间截断，且公共入口不变。基线重新变绿，循环可被原生 Worker 复用。
+- **缺点 / 下次：** 第一版内核仍缺 token 感知的实时压缩、逐次权限检查与总 token 计费账本；
+  这些属于阶段 2–4。部分流式响应之后的重试会把 delta 重放给 UI；阶段 2 应发出模型调用
+  重试/重置事件。工具目录分析应从开始就设硬性的调用/时间预算。
+- **推翻条件：** 如果 Main Agent 与 Worker 在传输或流式要求上分叉，保留不同的模型适配器，
+  但共享调度、预算与工具结果层；如果内核增加的复杂度大于它消除的复杂度，就恢复单一用途的
+  Main Agent 循环。
+
 ## 2026-11-05 — 自检时重建 App
 
 - **目标 / 假设：** 所有者启动的 App 必须包含刚刚通过测试、即将推送的源码版本。

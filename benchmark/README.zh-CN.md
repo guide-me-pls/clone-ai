@@ -12,7 +12,7 @@
 的文件、网络与凭据，并明确接受该风险，才使用：
 
 ```bash
-npm run bench -- --unsafe-host --provider pi --tasks summarize
+npm run bench -- --unsafe-host --provider claude-code --tasks summarize
 ```
 
 每个任务只花几美分的真实模型调用，耗时约 20-60 秒。结果以 JSON 记录在
@@ -48,11 +48,12 @@ CLONE_AI_NATIVE_MODEL=<model-id> CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url
 - `artifacts`：Agent 在工作区留下的全部文件（不含 `.clone-ai`）及大小。
 - 运行器在任何意外失败时以非零退出码结束，可挂进 CI 或升级前检查。
 
-## 主 Agent 对比（`npm run bench:main`）
+## 主 Agent 基准（`npm run bench:main`）
 
-用同一模型与每个任务独立的 clone home，把三条固定 Prompt 分别跑过 Pi 运行时与原生循环：
-直接回答、读取权限、提案计划。每个任务/运行时组合重复 `--repeat N` 次（默认 5）；报告给出
-中位数与 p90 耗时、中位 tokens 与通过率，并保留每一次运行。
+用同一模型与每个任务独立的 clone home，把三条固定 Prompt 跑过原生循环：直接回答、读取
+权限、提案计划。每个任务组合重复 `--repeat N` 次（默认 5）；报告给出中位数与 p90 耗时、
+中位 tokens 与通过率，并保留每一次运行。运行时列表是显式的：只有已注册且能启动的运行时
+才会被加进来。
 
 ```bash
 CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main -- --repeat 5
