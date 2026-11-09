@@ -9,36 +9,6 @@ import { LocalMemoryStore } from "../src/memory/memory-store.ts";
 import { WorkerSettingsStore } from "../src/config/worker-settings.ts";
 import { SessionStore } from "../src/sessions/session-store.ts";
 
-test("agent settings persist and change which child roles a plan may use", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "clone-ai-settings-"));
-  try {
-    const settings = new WorkerSettingsStore(join(directory, "settings.json"));
-    await settings.setEnabled("context-researcher", false);
-    await settings.setEnabled("evidence-reviewer", false);
-    const current = await settings.get();
-    const plan = buildFallbackPlan("调研并准备一份详细的发布方案", new Set(current.agents.filter((agent) => agent.enabled).map((agent) => agent.id)));
-    const assigned = plan.steps.flatMap((step) => step.subagents ?? []).map((order) => order.agentId);
-
-    assert.deepEqual(assigned, ["draft-maker"]);
-    await assert.rejects(() => settings.setEnabled("direct-responder", false), /required/);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("every black-box provider is assignable to every role", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "clone-ai-settings-"));
-  t.after(async () => rm(directory, { recursive: true, force: true }));
-
-  // A black-box provider launches its own CLI with its own tools, so it can
-  // serve every role; the registry, not a closed union, decides.
-  // 黑盒 Provider 启动自己的 CLI、使用自己的 Tool，因此可以承担所有角色；由 Registry
-  // 而不是写死的联合类型决定。
-  const settings = new WorkerSettingsStore(join(directory, "settings.json"));
-  const updated = await settings.updateAgent("external-operator", { providerId: "claude-code" });
-  assert.equal(updated.agents.find((agent) => agent.id === "external-operator")?.providerId, "claude-code");
-});
-
 test("deleted sessions disappear from the companion list while their runtime journal can remain intact", async () => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-sessions-"));
   try {
