@@ -19,6 +19,37 @@ made fresh audit and IME fixes invisible.
 macOS build toolchain. If development moves to a live-reload runtime, remove
 the bundle rebuild from this path.
 
+## 2026-11-06 — Worker concurrency follows measured machine capacity, capped by the Kernel
+
+**Decision.** The Kernel samples CPU parallelism, load average and free memory,
+computes a concurrent-worker limit, and gates every worker execution through a
+shared limiter. The Main Agent can read the same snapshot through a read-only
+`get_capacity` tool so it can size a plan, but it cannot raise the limit. An
+owner may pin a ceiling with `maxConcurrentWorkers`; `0` or unset means auto.
+
+**Why.** The owner asked for dispatch concurrency to follow memory and CPU so the
+machine is used fully. Letting the model choose the number directly would make
+concurrency depend on a sampled token rather than on the machine: it could
+oversubscribe a laptop into swap or serialize a large workstation by mistake.
+Measured capacity is deterministic, testable, and the same answer for every
+caller; the model's role stays what it already is — deciding how much work to
+propose.
+
+**Evidence.** Before this change, `executeSubagents` ran every ready work order
+with `Promise.all` and the queue started every queued Run in a tick, so the
+degree of parallelism came from the plan shape alone. A 16-core host and a
+2-core host behaved the same.
+
+**What it costs.** A limiter adds queueing: a run can sit waiting for a slot
+instead of starting immediately. Read-only subagents in one workspace still
+share the workspace lock for writes, so same-workspace write steps stay serial
+even when capacity is available.
+
+**Reversal condition.** If runtime measurement proves wrong on the owner's
+hardware (cgroups, container limits, or a noisy neighbour), let the owner pin
+`maxConcurrentWorkers` and treat auto as advisory; or replace the formula with
+an observed-throughput feedback loop. Never let the model set the hard cap.
+
 ## 2026-11-06 — The harness keeps only its own agents: no Pi SDK, no black-box CLIs
 
 **Decision.** Remove the Pi Agent SDK and every black-box CLI worker (Claude

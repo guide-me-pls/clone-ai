@@ -92,6 +92,24 @@ clone-ai "你好"
 全文仍留在回合台账中。图片附件以 OpenAI 风格 data URL 随当前消息发送；它们是逐回合的，
 不存入台账。
 
+### Worker 并发
+
+Kernel 根据实测的机器容量决定同时运行多少个 Worker：CPU 核数、1 分钟负载均值与空闲
+内存。这不是你配置的，也不是主 Agent 配置的——主 Agent 只能读取它（`get_capacity`）
+来决定计划规模。
+
+要自己固定上限，在 `config.json` 里设置 `maxConcurrentWorkers`（或调用
+`PATCH /api/config`）。`0` 或未设置表示自动。固定值会被核数上限约束，并在每次派发时
+重新读取，因此改动无需重启即可生效。
+
+```bash
+# 例如无风扇笔记本：最多同时 2 个 Worker
+curl -X PATCH http://127.0.0.1:4317/api/config \
+  -H "authorization: Bearer $CLONE_AI_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"maxConcurrentWorkers": 2}'
+```
+
 ## 5. 数据都在哪里
 
 | 项目 | 位置 |

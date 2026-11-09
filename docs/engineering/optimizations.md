@@ -731,3 +731,36 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
   external actions have no provider, CLI-only capabilities are gone, and an
   install command can no longer help.
 - **Reversal condition:** see the trade-off entry.
+
+## 2026-11-06 — Worker concurrency follows measured machine capacity
+
+- **Goal / hypothesis:** let dispatch use the machine fully instead of the
+  plan's shape, while keeping the hard limit with the Kernel rather than a
+  sampled model token.
+- **Trade-off:** [capacity](../architecture/trade-offs.md#2026-11-06--worker-concurrency-follows-measured-machine-capacity-capped-by-the-kernel).
+- **Change:** `src/core/capacity.ts` samples cores, 1-minute load and free
+  memory, computes a limit (auto: min of cores, a load-aware CPU budget and a
+  memory budget, ceiling 16), and exposes a counting `CapacityGate`. The runtime
+  acquires a slot around every single-agent execution and every subagent
+  dispatch; the assembly owns one gate so the queue and every wave share the
+  budget. `config.json` `maxConcurrentWorkers` pins a ceiling (0 = auto),
+  re-read on each acquire and exposed through `PATCH /api/config`. A read-only
+  `get_capacity` tool lets the Main Agent size a plan; the charter tells it to
+  call it.
+- **Eval:** `test/capacity.test.ts` — CPU-bound, memory-bound, load-sensitive,
+  owner pin capped by cores, gate never exceeds the limit and wakes waiters in
+  order, cancelled waits release their slot. Tool provenance includes
+  `get_capacity`. Full suite 525 tests / 525 pass; typecheck, gate and bilingual
+  docs pass.
+- **Execution chain:** trade-off first; pure function and gate; runtime
+  acquire/release at both execution entry points; factory-owned gate with a
+  live pin; settings endpoint; tool and charter; tests; docs.
+- **Pros / cons:** a 16-core idle host and a 2-core busy laptop now behave
+  differently, which is the point. Same-workspace write steps are still
+  serialized by the workspace lock, so capacity is a ceiling, not a promise of
+  parallelism for dependent or conflicting work. The formula is a heuristic,
+  not a measurement of the model endpoint's own concurrency limit.
+- **Not verified:** no load test on a large host, and the endpoint's own
+  concurrency/rate limits are unknown; a wide plan may queue at the provider
+  rather than at the Kernel.
+- **Reversal condition:** see the trade-off entry.
