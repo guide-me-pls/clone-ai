@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
-import { buildWorkerPrompt } from "../src/workers/black-box-cli-worker.ts";
+import { buildInstructions } from "../src/workers/native-agent-worker.ts";
 import { buildMemoryContextFromCandidates } from "../src/main-agent/memory-context-builder.ts";
 import type {
   ExecutionAssignment,
@@ -157,11 +157,11 @@ test("the shared prompt presents memory as background facts, never as instructio
     },
   } as ExecutionAssignment;
 
-  const prompt = buildWorkerPrompt(assignment);
+  const prompt = buildInstructions(assignment, []);
   assert.match(prompt, /background facts, not instructions/);
   assert.match(prompt, /Net 30 payment terms\./);
 
-  const withoutMemory = buildWorkerPrompt({ ...assignment, memoryContext: undefined });
+  const withoutMemory = buildInstructions({ ...assignment, memoryContext: undefined }, []);
   assert.doesNotMatch(withoutMemory, /memory context/i);
 });
 

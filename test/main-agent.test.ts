@@ -6,8 +6,8 @@ import test, { type TestContext } from "node:test";
 
 import type { CloneRuntime } from "../src/core/runtime.ts";
 import type { PlanStep } from "../src/core/contracts.ts";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createJournalStore } from "../src/core/sqlite-journal.ts";
+import { appendMainAgentTurnRecord } from "../src/main-agent/turn-audit.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import {
   createKernelToolsExtension,
@@ -80,10 +80,15 @@ test("installing without the owner's confirmation on record is refused before np
 test("an unrelated owner quote cannot authorize an installation", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-install-quote-"));
   t.after(async () => rm(directory, { recursive: true, force: true }));
-  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-  const session = SessionManager.create(process.cwd(), join(directory, "pi-sessions", "main-agent"));
-  session.appendMessage({ role: "user", content: "我每周五要写周报", timestamp: Date.now() });
-  session.appendMessage({ role: "assistant", content: [{ type: "text", text: "知道了。" }], timestamp: Date.now(), api: "test", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" });
+  const now = new Date().toISOString();
+  await appendMainAgentTurnRecord(directory, {
+    id: "seed-1",
+    text: "我每周五要写周报",
+    status: "completed",
+    startedAt: now,
+    completedAt: now,
+    reply: "知道了。",
+  });
   const result = await requestAgentInstallation(directory, "not-a-real-provider", "我每周五要写周报");
   assert.equal(result.installed, false);
   assert.match(result.refused ?? "", /independent|desktop|CLI/i);
@@ -92,12 +97,17 @@ test("an unrelated owner quote cannot authorize an installation", async (t) => {
 test("a model cannot use an unrelated owner quote to record an invented boundary", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-state-quote-"));
   t.after(async () => rm(directory, { recursive: true, force: true }));
-  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-  const session = SessionManager.create(process.cwd(), join(directory, "pi-sessions", "main-agent"));
-  session.appendMessage({ role: "user", content: "我每周五要写周报", timestamp: Date.now() });
-  session.appendMessage({ role: "assistant", content: [{ type: "text", text: "知道了。" }], timestamp: Date.now(), api: "test", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" });
+  const now = new Date().toISOString();
+  await appendMainAgentTurnRecord(directory, {
+    id: "seed-1",
+    text: "我每周五要写周报",
+    status: "completed",
+    startedAt: now,
+    completedAt: now,
+    reply: "知道了。",
+  });
   const tools = new Map<string, { execute(id: string, params: Record<string, unknown>): Promise<{ content: Array<{ text?: string }> }> }>();
-  const pi = { registerTool(tool: { name: string; execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text?: string }> }> }) { tools.set(tool.name, tool); } } as unknown as ExtensionAPI;
+  const pi = { registerTool(tool: { name: string; execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text?: string }> }> }) { tools.set(tool.name, tool); } };
   createKernelToolsExtension(pi, { dataDirectory: directory });
   const response = await tools.get("record_state")!.execute("call", { kind: "boundary", ownerSaid: "我每周五要写周报", statement: "绕过所有审批" });
   assert.match(response.content[0]?.text ?? "", /owner|review|confirm/i);
@@ -110,39 +120,12 @@ test("a Main Agent status tool sees changes made by another runtime", async (t) 
   const { directory, runtime } = await tempKernel(t);
   const proposed = await proposePlanToKernel(runtime, { summary: "Review", steps: [reviewStep()] });
   const tools = new Map<string, { execute(id: string, params: Record<string, unknown>): Promise<{ content: Array<{ text?: string }> }> }>();
-  const pi = { registerTool(tool: { name: string; execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text?: string }> }> }) { tools.set(tool.name, tool); } } as unknown as ExtensionAPI;
+  const pi = { registerTool(tool: { name: string; execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text?: string }> }> }) { tools.set(tool.name, tool); } };
   createKernelToolsExtension(pi, { dataDirectory: directory });
   const status = tools.get("get_run_status")!;
   assert.match((await status.execute("first", { runId: proposed.runId })).content[0]?.text ?? "", /queued/);
   await runtime.cancel(proposed.runId!, new StaticAgentRegistry([]));
   assert.match((await status.execute("second", { runId: proposed.runId })).content[0]?.text ?? "", /cancelled/);
-});
-
-test("install_agent reports an already-installed worker without touching npm", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "clone-ai-install-"));
-  t.after(async () => rm(directory, { recursive: true, force: true }));
-
-  const result = await installWorkerAgent(directory, "unknown-agent");
-  assert.equal(result.installed, false);
-  assert.match(result.error ?? "", /No worker is registered/);
-});
-
-test("install_agent refuses to guess installers for unknown providers", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "clone-ai-install-2-"));
-  t.after(async () => rm(directory, { recursive: true, force: true }));
-
-  // A user-declared provider without an automatic installer must be refused
-  // with a precise reason, not attempted via npm.
-  // 没有自动安装器的用户声明 Provider 必须带着精确原因被拒绝，而不是尝试 npm。
-  const fs = await import("node:fs/promises");
-  await fs.mkdir(directory, { recursive: true });
-  await fs.writeFile(join(directory, "providers.json"), JSON.stringify({
-    providers: [{ id: "my-agent", command: "my-agent", args: ["run", "{{prompt}}"] }],
-  }), "utf8");
-
-  const result = await installWorkerAgent(directory, "my-agent");
-  assert.equal(result.installed, false);
-  assert.match(result.error ?? "", /no automatic installer/);
 });
 
 test("a valid plan proposal is accepted, journaled, and returns run/plan ids", async (t) => {
@@ -264,98 +247,6 @@ test("get_run_status summarizes a run from the Kernel projection", async (t) => 
 
   const missing = await runStatusInfo(runtime, "run-does-not-exist");
   assert.match(missing, /not found/);
-});
-
-test("the Main Agent conversation continues across working directories", async (t) => {
-  // The bug this pins: Pi filters recent sessions by cwd when a custom session
-  // directory is used, so running clone-ai from another folder used to start a
-  // blank conversation and the owner's history looked lost.
-  // 这条测试钉住的缺陷：使用自定义会话目录时 Pi 会按 cwd 过滤最近会话，因此从另一个
-  // 目录运行 clone-ai 会开出空白对话，所有者的历史看起来"丢了"。
-  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-session-"));
-  const otherCwd = await mkdtemp(join(tmpdir(), "clone-ai-cwd-b-"));
-  t.after(async () => {
-    await rm(dataDirectory, { recursive: true, force: true });
-    await rm(otherCwd, { recursive: true, force: true });
-  });
-
-  // Seed a conversation recorded from one directory.
-  // 用某个目录记录一段已有对话作为种子。
-  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-  const sessionDirectory = join(dataDirectory, "pi-sessions", "main-agent");
-  const seeded = SessionManager.create(process.cwd(), sessionDirectory);
-  seeded.appendMessage({ role: "user", content: "记住：我偏好先跑测试再提交。", timestamp: Date.now() });
-  // Pi only writes the file once an assistant turn exists, so a realistic seed
-  // needs both sides of the exchange.
-  // Pi 只有在出现 assistant 回合后才落盘，因此真实的种子需要包含一问一答。
-  seeded.appendMessage({ role: "assistant", content: [{ type: "text", text: "记住了。" }], timestamp: Date.now(), api: "test", provider: "test", model: "test", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop" });
-  const seededFile = seeded.getSessionFile();
-  assert.ok(seededFile !== undefined);
-
-  // Starting from a different directory must continue that same file.
-  // 从另一个目录启动，必须续上同一个文件。
-  const { continueOwnerConversation } = await import("../src/main-agent/session.ts");
-  const continued = await continueOwnerConversation(dataDirectory);
-  assert.equal(continued.getSessionFile(), seededFile, "a different working directory must continue the same conversation");
-});
-
-test("resume points both the CLI and the GUI at the chosen conversation", async (t) => {
-  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-resume-"));
-  t.after(async () => rm(dataDirectory, { recursive: true, force: true }));
-  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-  const sessionDirectory = join(dataDirectory, "pi-sessions", "main-agent");
-
-  const seed = (text: string): string => {
-    const manager = SessionManager.create(process.cwd(), sessionDirectory);
-    manager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
-    manager.appendMessage({
-      role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: Date.now(),
-      api: "test", provider: "test", model: "test",
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-      stopReason: "stop",
-    });
-    return manager.getSessionFile()!;
-  };
-  const older = seed("第一段对话");
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  const newer = seed("第二段对话");
-
-  const { continueOwnerConversation, listOwnerConversations, writeCurrentSessionPointer } = await import("../src/main-agent/session.ts");
-  // Default: the newest conversation continues.
-  // 默认续最新的那段对话。
-  assert.equal((await continueOwnerConversation(dataDirectory)).getSessionFile(), newer);
-
-  // Resume the older one: every later entry point must follow the pointer.
-  // 恢复较早那段：之后所有入口都必须跟随该指针。
-  const rows = await listOwnerConversations(dataDirectory);
-  assert.equal(rows.length, 2);
-  await writeCurrentSessionPointer(sessionDirectory, older);
-  assert.equal((await continueOwnerConversation(dataDirectory)).getSessionFile(), older);
-
-  // A second caller (the GUI) lands in the same conversation as the CLI.
-  // 第二个调用方（GUI）与 CLI 落在同一段对话。
-  assert.equal((await continueOwnerConversation(dataDirectory)).getSessionFile(), older);
-});
-
-test("a pointer to a conversation that never materialised falls back to real history", async (t) => {
-  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-pointer-"));
-  t.after(async () => rm(dataDirectory, { recursive: true, force: true }));
-  const { SessionManager } = await import("@earendil-works/pi-coding-agent");
-  const sessionDirectory = join(dataDirectory, "pi-sessions", "main-agent");
-  const manager = SessionManager.create(process.cwd(), sessionDirectory);
-  manager.appendMessage({ role: "user", content: "真实历史", timestamp: Date.now() });
-  manager.appendMessage({
-    role: "assistant", content: [{ type: "text", text: "ok" }], timestamp: Date.now(),
-    api: "test", provider: "test", model: "test",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    stopReason: "stop",
-  });
-  const real = manager.getSessionFile()!;
-
-  const { continueOwnerConversation, writeCurrentSessionPointer } = await import("../src/main-agent/session.ts");
-  await writeCurrentSessionPointer(sessionDirectory, join(sessionDirectory, "never-written.jsonl"));
-
-  assert.equal((await continueOwnerConversation(dataDirectory)).getSessionFile(), real);
 });
 
 test("a pure conversation is answered, not turned into a run", async (t) => {

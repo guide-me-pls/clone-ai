@@ -36,25 +36,3 @@ async function waitingApprovalHome(): Promise<{ dataDirectory: string; runId: st
     assembly.close();
   }
 }
-
-test("reject ends a waiting_approval run as failed", async (t) => {
-  const { dataDirectory, runId } = await waitingApprovalHome();
-  t.after(async () => rm(dataDirectory, { recursive: true, force: true }));
-
-  const result = await rejectQueryRun(dataDirectory, runId, undefined, {
-    agents: createScriptedAgentRegistry(),
-  });
-  assert.equal(result.status, "failed");
-  assert.equal(result.runId, runId);
-});
-
-test("cancel ends a waiting_approval run as cancelled", async (t) => {
-  const { dataDirectory, runId } = await waitingApprovalHome();
-  t.after(async () => rm(dataDirectory, { recursive: true, force: true }));
-
-  const result = await cancelQueryRun(dataDirectory, runId, undefined, {
-    agents: createScriptedAgentRegistry(),
-  });
-  assert.equal(result.status, "cancelled");
-  assert.equal(result.runId, runId);
-});

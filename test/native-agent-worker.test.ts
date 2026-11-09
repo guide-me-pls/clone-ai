@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
-import { buildInstructions, decideTool, NativeAgentWorker, type NativeModelClient, type NativeToolCall } from "../src/workers/native-agent-worker.ts";
+import { buildInstructions, decideTool, NativeAgentWorker, type NativeModelClient } from "../src/workers/native-agent-worker.ts";
+import type { AgentModelRequest, AgentModelResponse } from "../src/agent/loop.ts";
 import { fileTools } from "../src/workers/native-worker-factory.ts";
 import type { ExecutionAssignment, ExecutionEvent } from "../src/core/contracts.ts";
 import { resolveGrants } from "../src/authority/path-gateway.ts";
@@ -26,8 +27,20 @@ function assignment(path: string, scopes: ExecutionAssignment["step"]["scopes"] 
   };
 }
 
-function fakeClient(script: (call: (name: string, input?: Record<string, unknown>) => Promise<{ output: string; isError: boolean }>) => Promise<{ summary: string }>): NativeModelClient {
-  return { run: ({ execute }) => script((name, input = {}) => execute({ name, input })) };
+function fakeClient(
+  responses: Array<AgentModelResponse | ((request: AgentModelRequest) => AgentModelResponse)>,
+  requests: AgentModelRequest[] = [],
+): NativeModelClient {
+  let index = 0;
+  return {
+    async complete(request) {
+      requests.push(request);
+      const next = responses[Math.min(index, responses.length - 1)];
+      index += 1;
+      if (next === undefined) throw new Error("No scripted response.");
+      return typeof next === "function" ? next(request) : next;
+    },
+  };
 }
 
 test("the gate refuses paths outside the grants, network without a scope, and external effects", async (t) => {
@@ -48,16 +61,21 @@ test("the gate refuses paths outside the grants, network without a scope, and ex
 test("a refused call returns a tool error to the model instead of killing the run", async (t) => {
   const directory = await workspace(t);
   await writeFile(join(directory, "note.md"), "remember the blue template", "utf8");
-  const calls: Array<{ output: string; isError: boolean }> = [];
+  const requests: AgentModelRequest[] = [];
   const worker = new NativeAgentWorker({
     id: "native",
     label: "Native",
-    createClient: () => fakeClient(async (call) => {
-      calls.push(await call("read_file", { path: "note.md" }));
-      calls.push(await call("write_file", { path: "../escape.md" }));
-      calls.push(await call("fetch_url", { url: "https://example.com" }));
-      return { summary: "read the note" };
-    }),
+    createClient: () => fakeClient([
+      {
+        content: null,
+        toolCalls: [
+          { id: "r", name: "read_file", arguments: JSON.stringify({ path: "note.md" }) },
+          { id: "w", name: "write_file", arguments: JSON.stringify({ path: "../escape.md" }) },
+          { id: "f", name: "fetch_url", arguments: JSON.stringify({ url: "https://example.com" }) },
+        ],
+      },
+      { content: "read the note", toolCalls: [] },
+    ], requests),
     tools: [
       { name: "read_file", description: "read", risk: "read", pathOf: (input) => String(input.path), run: async (c) => ({ output: await readFile(join(directory, String(c.input.path)), "utf8") }) },
       { name: "write_file", description: "write", risk: "write", pathOf: (input) => String(input.path), run: async () => ({ output: "written" }) },
@@ -69,13 +87,13 @@ test("a refused call returns a tool error to the model instead of killing the ru
 
   const events: ExecutionEvent[] = [];
   for await (const event of worker.execute(assignment(directory))) events.push(event);
-  assert.equal(calls[0]!.isError, false);
+  const toolMessages = requests[1]!.messages.filter((message) => message.role === "tool");
+  assert.equal(toolMessages.length, 3);
+  assert.match(String(toolMessages[0]!.content), /blue template/);
   // The write is refused because its path escapes; the network tool is not offered.
   // 写入因路径逃逸被拒；网络工具根本不会被提供。
-  assert.equal(calls[1]!.isError, true);
-  assert.match(calls[1]!.output, /outside the step's granted scopes/);
-  assert.equal(calls[2]!.isError, true);
-  assert.match(calls[2]!.output, /no tool named fetch_url/);
+  assert.match(String(toolMessages[1]!.content), /outside the step's granted scopes/);
+  assert.match(String(toolMessages[2]!.content), /No tool named fetch_url/);
   assert.equal(events.at(-1)?.type, "completed");
 });
 
@@ -111,11 +129,9 @@ test("exact usage from the model client reaches the completed event", async (t) 
     providerId: "native",
     workCapabilities: ["drafting", "external_action"],
     tools: [],
-    createClient: () => ({
-      async run() {
-        return { summary: "done", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, modelCalls: 2 } };
-      },
-    }),
+    createClient: () => fakeClient([
+      { content: "done", toolCalls: [], usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } },
+    ]),
   });
   const events: ExecutionEvent[] = [];
   for await (const event of worker.execute(assignment(directory))) events.push(event);
@@ -126,7 +142,7 @@ test("exact usage from the model client reaches the completed event", async (t) 
   assert.equal(usage.inputTokens, 10);
   assert.equal(usage.outputTokens, 5);
   assert.equal(usage.totalTokens, 15);
-  assert.equal(usage.modelCalls, 2);
+  assert.equal(usage.modelCalls, 1);
   assert.equal(typeof usage.durationMs, "number");
 
   const capabilities = await worker.capabilities();
@@ -141,12 +157,10 @@ test("successful writes become artifact evidence the verifier can check", async 
     id: "n",
     label: "N",
     tools: fileTools(),
-    createClient: () => ({
-      async run(input) {
-        await input.execute({ name: "write_file", input: { path: "out/note.md", content: "hi" } });
-        return { summary: "wrote it" };
-      },
-    }),
+    createClient: () => fakeClient([
+      { content: null, toolCalls: [{ id: "w", name: "write_file", arguments: JSON.stringify({ path: "out/note.md", content: "hi" }) }] },
+      { content: "wrote it", toolCalls: [] },
+    ]),
   });
   const events: ExecutionEvent[] = [];
   for await (const event of worker.execute(assignment(directory))) events.push(event);
@@ -161,13 +175,17 @@ test("a missing input named in the instructions fails instead of allowing invent
     id: "n",
     label: "N",
     tools: fileTools(),
-    createClient: () => ({
-      async run(input) {
-        await input.execute({ name: "read_file", input: { path: "docs/absent.md" } });
-        await input.execute({ name: "write_file", input: { path: "out/summary.md", content: "invented" } });
-        return { summary: "done", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15, modelCalls: 1 } };
+    createClient: () => fakeClient([
+      {
+        content: null,
+        toolCalls: [
+          { id: "r", name: "read_file", arguments: JSON.stringify({ path: "docs/absent.md" }) },
+          { id: "w", name: "write_file", arguments: JSON.stringify({ path: "out/summary.md", content: "invented" }) },
+        ],
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       },
-    }),
+      { content: "done", toolCalls: [] },
+    ]),
   });
   const base = assignment(directory);
   const events: ExecutionEvent[] = [];
@@ -189,15 +207,79 @@ test("a failed read the instructions do not name is returned to the model, not f
     id: "n",
     label: "N",
     tools: fileTools(),
-    createClient: () => ({
-      async run(input) {
-        const outcome = await input.execute({ name: "read_file", input: { path: "wrong/guess.md" } });
-        assert.equal(outcome.isError, true);
-        return { summary: "recovered" };
-      },
-    }),
+    createClient: () => fakeClient([
+      { content: null, toolCalls: [{ id: "r", name: "read_file", arguments: JSON.stringify({ path: "wrong/guess.md" }) }] },
+      { content: "recovered", toolCalls: [] },
+    ]),
   });
   const events: ExecutionEvent[] = [];
   for await (const event of worker.execute(assignment(directory))) events.push(event);
   assert.equal(events.some((event) => event.type === "completed"), true);
+});
+
+test("a budget-exhausted worker reports a comparable budget category", async (t) => {
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: fileTools(),
+    createClient: () => fakeClient([
+      { content: null, toolCalls: [{ id: "r", name: "read_file", arguments: JSON.stringify({ path: "a.md" }) }] },
+    ]),
+  });
+  const base = assignment(directory);
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute({
+    ...base,
+    workOrder: {
+      id: "w",
+      role: "custom",
+      title: "t",
+      objective: "read",
+      inputs: [],
+      requiredCapabilities: [],
+      expectedArtifacts: [],
+      acceptanceCriteria: [],
+      risk: "read_only",
+      budget: { maxDurationMs: 10_000, maxAttempts: 1, maxToolCalls: 1 },
+    },
+  })) events.push(event);
+  const failed = events.find((event) => event.type === "failed");
+  assert.ok(failed?.type === "failed");
+  assert.equal(failed.report?.category, "budget_exceeded");
+  assert.equal(failed.report?.signature, "budget-tool-calls");
+});
+
+test("a model-call budget is reported when the loop cannot finish in time", async (t) => {
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: [],
+    createClient: () => fakeClient([
+      { content: null, toolCalls: [{ id: "a", name: "missing", arguments: "{}" }] },
+      { content: null, toolCalls: [{ id: "b", name: "missing", arguments: "{}" }] },
+    ]),
+  });
+  const base = assignment(directory);
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute({
+    ...base,
+    workOrder: {
+      id: "w",
+      role: "custom",
+      title: "t",
+      objective: "loop",
+      inputs: [],
+      requiredCapabilities: [],
+      expectedArtifacts: [],
+      acceptanceCriteria: [],
+      risk: "read_only",
+      budget: { maxDurationMs: 10_000, maxAttempts: 1, maxModelCalls: 1 },
+    },
+  })) events.push(event);
+  const failed = events.find((event) => event.type === "failed");
+  assert.ok(failed?.type === "failed");
+  assert.equal(failed.report?.category, "budget_exceeded");
+  assert.equal(failed.report?.signature, "budget-model-calls");
 });

@@ -312,7 +312,58 @@ async function loadEntries(dataDirectory: string): Promise<LoadedHistory> {
   }
 
   compactions.sort((left, right) => left.at.localeCompare(right.at));
-  return { entries, outOfContext, compactions, sessions: withTimes.map((item) => basename(item.name, ".jsonl")) };
+  const ledgerEntries = await loadLedgerEntries(dataDirectory);
+  return {
+    entries: [...entries, ...ledgerEntries],
+    outOfContext,
+    compactions,
+    sessions: [
+      ...withTimes.map((item) => basename(item.name, ".jsonl")),
+      ...(ledgerEntries.length > 0 ? ["main-agent-turns"] : []),
+    ],
+  };
+}
+
+/**
+ * The native Main Agent's transcript is the turn ledger, not a session file.
+ * Each completed turn becomes one user entry and one assistant entry so search
+ * and the conversation view see native turns without a second code path.
+ * 原生主 Agent 的对话记录是回合台账，而不是会话文件。每个完成的回合变成一条 user
+ * 与一条 assistant 条目，使检索与对话视图无需第二条代码路径就能看到原生回合。
+ */
+async function loadLedgerEntries(dataDirectory: string): Promise<ParsedEntry[]> {
+  const { readMainAgentTurnRecords } = await import("./turn-audit.ts");
+  const records = await readMainAgentTurnRecords(dataDirectory).catch(() => []);
+  const entries: ParsedEntry[] = [];
+  let index = 0;
+  for (const record of records) {
+    if (record.status !== "completed") continue;
+    const session = "main-agent-turns";
+    entries.push({
+      session,
+      index: index++,
+      id: `${record.id}:user`,
+      type: "message",
+      at: record.startedAt,
+      speaker: "user",
+      text: record.text.slice(0, MAX_TEXT_PER_ENTRY),
+      visibleText: record.text.slice(0, MAX_TEXT_PER_ENTRY),
+    });
+    const reply = record.reply?.trim();
+    if (reply !== undefined && reply.length > 0) {
+      entries.push({
+        session,
+        index: index++,
+        id: `${record.id}:assistant`,
+        type: "message",
+        at: record.completedAt ?? record.startedAt,
+        speaker: "assistant",
+        text: reply.slice(0, MAX_TEXT_PER_ENTRY),
+        visibleText: reply.slice(0, MAX_TEXT_PER_ENTRY),
+      });
+    }
+  }
+  return entries;
 }
 
 function timestampOf(raw: Record<string, unknown>): string {

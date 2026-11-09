@@ -7,19 +7,24 @@ export interface CloneConfig {
   workspacePath: string;
   locale: "zh-CN" | "en";
   /**
-   * Pi model reference for the Main Agent, e.g. `anthropic/claude-sonnet-4-5`.
-   * When omitted, the Pi SDK default (settings / first available) is used.
+   * Model id for the Main Agent, as the OpenAI-compatible endpoint names it.
+   * When omitted, CLONE_AI_NATIVE_MODEL is used; without either, a turn fails.
    * `CLONE_AI_MAIN_MODEL` overrides this for one-off runs.
-   * 主 Agent 的 Pi 模型引用，例如 `anthropic/claude-sonnet-4-5`。省略时使用 Pi SDK
-   * 默认（设置 / 第一个可用模型）。`CLONE_AI_MAIN_MODEL` 可覆盖本次运行。
+   * 主 Agent 的模型 id，采用 OpenAI 兼容端点的命名。省略时使用 CLONE_AI_NATIVE_MODEL；
+   * 没有两者时回合会失败。`CLONE_AI_MAIN_MODEL` 可覆盖本次运行。
    */
   mainAgentModel?: string;
   /**
-   * Reasoning effort for the Main Agent, passed to the model provider (Pi's
-   * thinking level). Only levels the model offers should be chosen.
-   * 主 Agent 的推理强度，传给模型供应商（Pi 的 thinking level）。应只选择模型支持的档位。
+   * Reasoning effort for the Main Agent, passed to the model provider. Only levels the model offers should be chosen.
+   * 主 Agent 的推理强度，传给模型供应商。应只选择模型支持的档位。
    */
   mainAgentEffort?: EffortLevel;
+  /**
+   * Owner-pinned ceiling on concurrent worker executions. Omitted or 0 means
+   * auto: the Kernel measures CPU and free memory each time it dispatches.
+   * 所有者固定的并发 Worker 上限。省略或 0 表示自动：Kernel 每次派发时测量 CPU 与空闲内存。
+   */
+  maxConcurrentWorkers?: number;
 }
 
 export class CloneConfigStore {
@@ -37,7 +42,7 @@ export class CloneConfigStore {
     return normalizeConfig(value, this.#defaultWorkspace);
   }
 
-  async update(update: Partial<Pick<CloneConfig, "workspacePath" | "locale" | "mainAgentModel" | "mainAgentEffort">>): Promise<CloneConfig> {
+  async update(update: Partial<Pick<CloneConfig, "workspacePath" | "locale" | "mainAgentModel" | "mainAgentEffort" | "maxConcurrentWorkers">>): Promise<CloneConfig> {
     const current = await this.get();
     const next = normalizeConfig({ ...current, ...update }, this.#defaultWorkspace);
     const write = this.#writes.then(() => writeJsonAtomic(this.#paths.configFile, next));
@@ -59,5 +64,8 @@ function normalizeConfig(value: Partial<CloneConfig> | undefined, defaultWorkspa
     locale: value?.locale === "en" ? "en" : "zh-CN",
     ...(mainAgentModel === undefined ? {} : { mainAgentModel }),
     ...(isEffortLevel(value?.mainAgentEffort) ? { mainAgentEffort: value.mainAgentEffort } : {}),
+    ...(typeof value?.maxConcurrentWorkers === "number" && Number.isFinite(value.maxConcurrentWorkers) && value.maxConcurrentWorkers > 0
+      ? { maxConcurrentWorkers: Math.trunc(value.maxConcurrentWorkers) }
+      : {}),
   };
 }
