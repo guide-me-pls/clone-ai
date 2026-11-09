@@ -31,6 +31,41 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+## 2026-11-09 — A live tool timeline in the chat
+
+- **Goal / hypothesis:** the desktop streamed the answer but showed nothing
+  about what the agent was doing. A tool timeline that arrives over the same
+  SSE stream makes refusals and slow tools visible while the answer is still
+  forming.
+- **Trade-off:** [the model can dispatch a task, but only the Kernel plans and
+  finishes it](../architecture/trade-offs.md#2026-11-09--the-model-can-dispatch-a-task-but-only-the-kernel-plans-and-finishes-it)
+  covers the tool this timeline surfaces; the UI change itself follows the
+  desktop control-surface decision.
+- **Change:** `NativeMainAgentOptions.onToolEvent` emits `started`/`completed`
+  with tool name, error/denied and duration; `runMainAgentQuery` passes it
+  through; the companion stream sends it as a `tool` event; the chat renders a
+  `tool-timeline` with running/done/error/refused states, a right-aligned
+  duration, and a reduced-motion fallback. Locale strings are bilingual.
+- **Eval:** `test/companion-main-agent.test.ts` asserts the stream carries
+  `event: tool` with `"phase":"started"` and the tool name;
+  `test/ui-structure.test.ts` asserts the handler, the timeline element and the
+  styles (including the reduced-motion rule). `npm test` → **565 tests, 565
+  pass, 0 fail**; typecheck and gate pass. Rendered in the browser preview: four
+  rows showed done/error/refused/running with the expected colors and layout.
+- **Benchmark run:** none. This is a UI and event-wiring change.
+- **Execution chain:** runtime event → query option → SSE frame → renderer;
+  verified first by a structural test, then by injecting the same markup into
+  the live preview and reading computed styles and a screenshot. Two
+  corrections along the way: the preview launch config pointed at a script that
+  did not exist, and the dev server ignored the `PORT` variable.
+- **Pros:** the owner can see refusals and slow tools without opening the audit;
+  the same events already reach the turn audit, so the two views cannot disagree.
+- **Cons / next time:** identical tool names collapse into one row, so a
+  repeated call updates the previous row rather than adding a new one; a stop
+  button is still absent.
+- **Reversal condition:** if the timeline crowds the answer, make it collapsed
+  by default behind a summary line.
+
 ## 2026-11-09 — A model-invocable dispatch_task tool
 
 - **Goal / hypothesis:** the Main Agent could describe work but could not start

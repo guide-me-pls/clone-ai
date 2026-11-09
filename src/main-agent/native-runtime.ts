@@ -79,9 +79,20 @@ export interface NativeMainAgentOptions {
   skillRoots?: readonly string[];
   /** MCP servers to connect for this turn. 本回合要连接的 MCP 服务器。 */
   mcpServers?: readonly McpServerConfig[];
+  /** Progress for each tool call, for a live timeline. 每次工具调用的进度，用于实时时间线。 */
+  onToolEvent?: (event: NativeToolEvent) => void;
   /** Images attached to this turn, sent as OpenAI-style data URLs. 本回合附带的图片，以 OpenAI 风格 data URL 发送。 */
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
   cwd?: string;
+}
+
+/** One tool-call progress event for the interface. 面向界面的单次工具调用进度事件。 */
+export interface NativeToolEvent {
+  phase: "started" | "completed";
+  tool: string;
+  isError?: boolean;
+  denied?: boolean;
+  durationMs?: number;
 }
 
 export interface NativeMainAgentResult {
@@ -303,12 +314,20 @@ ${listing}`;
       onEvent: async (event) => {
         if (event.type === "tool_started") {
           const inputSummary = summarizeArguments(event.arguments);
+          options.onToolEvent?.({ phase: "started", tool: event.tool });
           await recordNativeToolStarted(turn, {
             toolCallId: event.toolCallId,
             tool: event.tool,
             ...(inputSummary.length === 0 ? {} : { inputSummary }),
           });
         } else if (event.type === "tool_completed") {
+          options.onToolEvent?.({
+            phase: "completed",
+            tool: event.tool,
+            isError: event.isError,
+            ...(event.denied === true ? { denied: true } : {}),
+            durationMs: event.durationMs,
+          });
           await recordNativeToolCompleted(turn, {
             toolCallId: event.toolCallId,
             tool: event.tool,

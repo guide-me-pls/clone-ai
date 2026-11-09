@@ -527,3 +527,20 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .candidates-hint { margin: 0 0 10px; font-size: 12px; color: var(--ink-3, #8b949e); }
 .candidate-card textarea[readonly] { background: var(--panel-soft, #f6f7fb); cursor: default; }
 .candidate-actions { display: flex; gap: 8px; margin-top: 8px; }
+
+/* Live tool timeline inside a streaming answer. 流式回答中的实时工具时间线。 */
+.tool-timeline { display: grid; gap: 4px; margin: 0 0 10px; }
+.tool-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #5a6472; }
+.tool-row b { font-weight: 600; color: #303845; }
+.tool-row .tool-state { color: #8a93a0; }
+.tool-row .tool-time { margin-left: auto; font-variant-numeric: tabular-nums; color: #8a93a0; }
+.tool-dot { width: 7px; height: 7px; border-radius: 50%; background: #b8c0cc; flex: 0 0 auto; }
+.tool-row[data-state="running"] .tool-dot { background: #3d7dd8; animation: tool-pulse 1.1s ease-in-out infinite; }
+.tool-row[data-state="done"] .tool-dot { background: #2f9e6a; }
+.tool-row[data-state="error"] .tool-dot { background: #c2553f; }
+.tool-row[data-state="denied"] .tool-dot { background: #b8862d; }
+.tool-row[data-state="denied"] b { color: #8a6320; }
+@keyframes tool-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .tool-row[data-state="running"] .tool-dot { animation: none; }
+}

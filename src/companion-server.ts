@@ -1715,6 +1715,7 @@ async function handleRequest(
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
         ...invocation,
         signal: abortController.signal,
+        onToolEvent: (event) => send("tool", event),
       });
       send("done", result);
     } catch (error: unknown) {

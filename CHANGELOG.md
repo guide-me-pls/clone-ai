@@ -6,6 +6,15 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A live tool timeline in the chat
+
+While the Main Agent works, the desktop now shows each tool call as it happens: a row with the tool name, a running/done/failed/refused dot, and its duration, delivered over the same SSE stream as the answer. The events come from the turn's own tool lifecycle, so the timeline and the turn audit cannot disagree. Locale strings are bilingual and the running pulse respects `prefers-reduced-motion`. `npm test` is 565 tests, 565 pass, 0 fail; typecheck and gate pass.
+
+主 Agent 工作时，桌面端现在会实时显示每次工具调用：一行包含工具名、运行中/完成/失败/拒绝的
+状态点与耗时，通过与回答相同的 SSE 流送达。事件来自回合本身的工具生命周期，因此时间线与
+回合审计不会互相矛盾。文案中英双语，运行中的脉冲遵循 `prefers-reduced-motion`。
+`npm test` 为 565 个测试、565 通过、0 失败；typecheck 与 gate 通过。
+
 ### A model-invocable dispatch_task tool
 
 The Main Agent can now start bounded work instead of only describing it: `dispatch_task` takes an objective and 1–12 acceptance criteria, validates them before any planning round, and calls the same `runQuery` path the companion uses. The Kernel still plans, applies authority and budgets, verifies evidence and decides completion, so this adds an entry point rather than a second authority. The charter tells the model to answer conversation directly and to use `propose_work_plan` when it already knows the steps. Three deterministic tests cover the validation rules. `npm test` is 563 tests, 563 pass, 0 fail; `npm run typecheck` and `npm run gate` pass.

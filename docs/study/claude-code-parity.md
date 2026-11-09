@@ -435,7 +435,10 @@ exhaustion, malformed tool recovery, deterministic result order.
 
 **Projected:** loop 55→90, model layer 55→75, reliability 75→85.
 
-**Status (2026-11-09):** Phase 1 and 2 are implemented. `src/agent/loop.ts`
+**Status (2026-11-09):** Phase 6 has begun: the Main Agent can dispatch a
+bounded task through the Kernel (`dispatch_task`), and Phase 7 has begun: the
+chat renders a live tool timeline from the same SSE stream. Phase 1 and 2 are
+implemented. `src/agent/loop.ts`
 carries the typed terminal reasons, per-call `authorize`, pre/post hooks, budgets,
 and abort; the Main Agent and the native worker both run on it. Phase 3 is
 partial: the worker's tool set is a profile (coding is one), but the additional

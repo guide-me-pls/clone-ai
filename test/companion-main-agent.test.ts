@@ -103,3 +103,50 @@ test("a client disconnect cancels the native turn", async (t) => {
     clearTimeout(timeout);
   }
 });
+
+test("the stream forwards tool progress before it forwards the answer", async (t) => {
+  const modelServer = createServer((request, response) => {
+    if (request.url !== "/v1/chat/completions") { response.writeHead(404); response.end(); return; }
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "a", type: "function", function: { name: "get_authority", arguments: "{}" } }] } }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise<void>((resolve) => modelServer.listen(0, "127.0.0.1", resolve));
+  const address = modelServer.address();
+  if (address === null || typeof address === "string") throw new Error("The fake model did not bind a port.");
+  const saved = { model: process.env.CLONE_AI_NATIVE_MODEL, base: process.env.CLONE_AI_NATIVE_BASE_URL };
+  process.env.CLONE_AI_NATIVE_MODEL = "test-model";
+  process.env.CLONE_AI_NATIVE_BASE_URL = `http://127.0.0.1:${address.port}`;
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-companion-tools-"));
+  const server = await startCompanionServer({ port: 0, dataDirectory });
+  t.after(async () => {
+    await server.close();
+    modelServer.closeAllConnections?.();
+    await new Promise<void>((resolve) => modelServer.close(() => resolve()));
+    if (saved.model === undefined) delete process.env.CLONE_AI_NATIVE_MODEL;
+    else process.env.CLONE_AI_NATIVE_MODEL = saved.model;
+    if (saved.base === undefined) delete process.env.CLONE_AI_NATIVE_BASE_URL;
+    else process.env.CLONE_AI_NATIVE_BASE_URL = saved.base;
+    await rm(dataDirectory, { recursive: true, force: true });
+  });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
+  try {
+    const response = await companionFetch(server.url, server.token, "/api/main-agent/stream", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "what am I allowed to do?" }),
+      signal: controller.signal,
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    const started = text.indexOf("event: tool");
+    assert.ok(started >= 0, "the stream carries a tool event");
+    assert.match(text.slice(started), /"phase":"started"/);
+    assert.match(text.slice(started), /get_authority/);
+  } finally {
+    clearTimeout(timeout);
+  }
+});
