@@ -260,28 +260,16 @@ function renderAgentPage() {
   const host = $("agent-page");
   if (!host || !state.settings) return;
   const settings = state.settings;
-  const providers = state.providers || [];
   const gateway = state.gateways.find((candidate) => candidate.id === "magpie");
   const mainAgentModel = state.config?.config?.mainAgentModel || "";
-  const signature = JSON.stringify([settings, providers, gateway, mainAgentModel, state.gatewayLoading]);
+  const signature = JSON.stringify([settings.agents, gateway, mainAgentModel, state.gatewayLoading]);
   if (state.signatures.agentPage === signature) return;
   state.signatures.agentPage = signature;
-  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-  const missing = providers.filter((provider) => !provider.installed && provider.installable);
-  const installed = providers.filter((provider) => provider.installed);
-  const enabledRoles = settings.agents.filter((agent) => agent.enabled).length;
   const gatewayState = gateway?.running
     ? { label: t("gateway-running"), tone: "success" }
     : gateway?.installed
       ? { label: t("gateway-stopped"), tone: "warning" }
       : { label: t("gateway-not-found"), tone: "neutral" };
-  const installButton = ui.button({
-    label: missing.length ? `${t("install-missing")} (${missing.length})` : providers.some((provider) => !provider.installed) ? t("no-auto-install") : t("providers-ready"),
-    iconName: missing.length ? "plus" : "check",
-    variant: missing.length ? "primary" : "secondary",
-    disabled: missing.length === 0,
-    attributes: { "data-install-missing": "", id: "install-missing-providers" },
-  });
   const gatewayBadge = ui.badge(
     state.gatewayLoading && gateway === undefined ? t("gateway-checking") : gatewayState.label,
     state.gatewayLoading && gateway === undefined ? "neutral" : gatewayState.tone,
@@ -303,119 +291,45 @@ function renderAgentPage() {
   const gatewayControls = gateway?.running && exposedModels.length
     ? `<div class="gateway-controls">
         <div class="gateway-controls__row">${modelSelect}${ui.button({ label: t("gateway-use"), iconName: "arrow", variant: "primary", disabled: !selectedModel, attributes: { "data-gateway-apply": "" } })}</div>
-        <div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}${mainAgentModel.startsWith("magpie/") ? ui.button({ label: t("gateway-clear"), variant: "ghost", attributes: { "data-gateway-clear": "" } }) : ""}</div>
+        <div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}${mainAgentModel ? ui.button({ label: t("gateway-clear"), variant: "ghost", attributes: { "data-gateway-clear": "" } }) : ""}</div>
       </div>`
     : `<div class="gateway-controls"><div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}</div><span class="gateway-hint">${escape(gateway?.running && gateway.modelCount > 0 ? t("gateway-pi-hint") : gateway?.error || t("gateway-start-hint"))}</span></div>`;
   const gatewayCard = ui.card({
     title: "Magpie Gateway",
-    subtitle: t("gateway-subtitle"),
+    subtitle: "Clone AI 内置 Agent 的模型端点；不再通过 Pi 或其他 Agent SDK 转发。",
     tone: gateway?.running ? "accent" : "warning",
     className: "agent-gateway",
     actions: gatewayBadge,
-    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
+    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
   });
-  const providerRows = providers.map((provider) => {
-    const unrestricted = provider.hostAccess === "unrestricted";
-    const access = provider.executionBlocked
-      ? t("worker-blocked")
-      : unrestricted
-        ? t("worker-unrestricted")
-        : provider.sandbox === "seatbelt"
-          ? t("worker-sandboxed")
-          : t("worker-runnable");
-    const accessBadge = provider.executionBlocked
-      ? ui.badge(access, "warning")
-      : unrestricted
-        ? ui.badge(access, "warning")
-        : ui.badge(access, "success", { dot: true });
-    const effortLevels = Array.isArray(provider.efforts) ? provider.efforts : [];
-    const effortSelect = effortLevels.length
-      ? `<select class="agent-effort-select" data-provider-effort="${escape(provider.id)}" aria-label="${escape(t("provider-effort"))} · ${escape(provider.title)}"><option value="">${escape(t("effort-default"))}</option>${effortLevels.map((level) => `<option value="${escape(level)}"${provider.effort === level ? " selected" : ""}>${escape(level)}</option>`).join("")}</select>`
-      : "";
-
-    const action = provider.installed
-      ? provider.executionBlocked
-        ? ui.button({
-            label: t("worker-allow"),
-            variant: "secondary",
-            className: "c-button--compact",
-            attributes: { "data-provider-access": provider.id, "data-allow": "true" },
-          })
-        : unrestricted
-          ? ui.button({
-              label: t("worker-disable"),
-              variant: "secondary",
-              className: "c-button--compact",
-              attributes: { "data-provider-access": provider.id, "data-allow": "false" },
-            })
-          : ui.badge(t("worker-default"), "success", { dot: true })
-      : provider.installable
-        ? ui.button({
-            label: t("install"),
-            variant: "primary",
-            className: "c-button--compact",
-            attributes: { "data-install-provider": provider.id },
-          })
-        : ui.badge(t("manual-install"), "neutral");
-    const status = provider.installed
-      ? ui.badge(t("detected"), "success", { dot: true })
-      : provider.installable
-        ? ui.badge(t("installable"), "warning")
-        : ui.badge(t("missing"), "danger");
-    const source = provider.resolutionSource === "path"
-      ? t("resolution-path")
-      : provider.resolutionSource === "known-directory"
-        ? t("resolution-fallback")
-        : provider.resolutionSource === "absolute"
-          ? t("resolution-explicit")
-          : "";
-    const meta = `${status}${provider.userConfigured ? ui.badge(t("user-config"), "accent") : ""}<span>${escape(provider.command)}</span>${accessBadge}${source ? `<span>${escape(source)}</span>` : ""}`;
-    return ui.listRow({
-      leading: ui.providerMark(provider.title, provider.id),
-      title: provider.title,
-      description: `${t("provider-purpose")} · ${provider.command}`,
-      meta: `<span class="c-cluster">${meta}</span>${provider.resolvedPath ? `<code class="agent-provider-path" title="${escape(provider.resolvedPath)}">${escape(provider.resolvedPath)}</code>` : ""}`,
-      actions: `${effortSelect}${action}`,
-      tone: provider.installed ? "default" : "warning",
-    });
-  }).join("");
   const agentRows = settings.agents.map((agent) => {
-    const provider = providerById.get(agent.providerId);
-    const options = providers.map((candidate) => ({
-      value: candidate.id,
-      label: `${providerLabel(candidate.id)}${candidate.installed ? "" : ` · ${t("missing")}`}`,
-      disabled: !candidate.installed,
-    }));
     const description = agent.role === "external" ? t("external-unavailable") : agent.description;
     const purpose = agent.role === "external" ? t("external-unavailable-detail") : agent.purpose;
     return ui.listRow({
-      leading: ui.providerMark(providerLabel(agent.providerId), agent.providerId),
+      leading: ui.providerMark("Built-in", "native"),
       title: agent.title,
       description,
-      meta: `${ui.badge(agentRoleLabel(agent.role), "neutral")}${provider?.installed ? ui.badge(providerLabel(agent.providerId), "accent") : ui.badge(`${providerLabel(agent.providerId)} · ${t("missing")}`, "warning")}<span>${escape(purpose)}</span>`,
-      actions: `<div class="c-cluster">${ui.select({ options, value: agent.providerId, className: "agent-role-select", attributes: { "data-agent-provider": agent.id, "aria-label": `${t("provider-for")} ${agent.title}` } })}${ui.switchControl({ checked: agent.enabled, disabled: agent.required, label: agent.required ? t("required-role") : agent.enabled ? t("disable-role") : t("enable-role"), attributes: { "data-agent-toggle": agent.id } })}</div>`,
-      tone: provider?.installed ? "default" : "warning",
+      meta: `${ui.badge(agentRoleLabel(agent.role), "neutral")}${ui.badge("内置 Agent", "accent")}<span>${escape(purpose)}</span>`,
+      actions: ui.switchControl({ checked: agent.enabled, disabled: agent.required, label: agent.required ? t("required-role") : agent.enabled ? t("disable-role") : t("enable-role"), attributes: { "data-agent-toggle": agent.id } }),
+      tone: agent.role === "external" ? "warning" : "default",
     });
   }).join("");
   host.innerHTML = `<div class="agent-page">
     ${ui.sectionHeader({
       eyebrow: t("agent-page-eyebrow"),
       title: t("agents-title"),
-      description: t("agents-lead"),
-      actions: `${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-settings-refresh": "" } })}${installButton}`,
+      description: "Main Agent 由 Clone AI 自己持有；模型只提供推理能力，不再由 Pi 或外部 Provider 驱动。",
+      actions: ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-settings-refresh": "" } }),
     })}
-    <div class="c-stat-grid agent-overview">${ui.stat({ label: t("stat-providers"), value: `${installed.length}/${providers.length}`, detail: t("stat-providers-detail"), tone: installed.length ? "success" : "warning" })}${ui.stat({ label: t("stat-roles"), value: `${enabledRoles}/${settings.agents.length}`, detail: t("stat-roles-detail") })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}` : t("gateway-subtitle"), tone: gateway?.running && exposedModels.length ? "success" : "warning" })}</div>
+    <div class="c-stat-grid agent-overview">${ui.stat({ label: "Main Agent", value: "内置", detail: "Clone AI 原生工具循环", tone: "success" })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length} ${t("gateway-models-usable")}` : "等待模型端点", tone: gateway?.running && exposedModels.length ? "success" : "warning" })}${ui.stat({ label: "当前模型", value: mainAgentModel || "未选择", detail: gateway?.running ? "通过 Magpie Gateway" : "选择模型后开始对话" })}</div>
     ${gatewayCard}
-    <div class="agent-section-head"><div><h3>${t("local-providers")}</h3><p>${t("providers-section-lead")}</p></div><div class="c-segmented" aria-label="${escape(t("providers-state"))}">${ui.badge(`${installed.length} ${t("connected")}`, "success", { dot: true })}${missing.length ? ui.badge(`${missing.length} ${t("installable")}`, "warning") : ""}</div></div>
-    <div id="provider-registry" class="c-list agent-provider-list">${providerRows || ui.emptyState({ iconName: "terminal", title: t("empty-providers"), body: t("empty-providers-body") })}</div>
-    <div class="agent-section-head"><div><h3>${t("roles-bindings")}</h3><p>${t("roles-section-lead")}</p></div></div>
+    <div class="agent-section-head"><div><h3>内置执行角色</h3><p>这些角色由同一个 Clone AI Runtime 管理，不再绑定 Pi、Codex 或 Claude 等外部 Provider。</p></div></div>
     <div id="agent-settings-list" class="c-list agent-role-list">${agentRows}</div>
     <p class="agent-role-note">${escape(t("agents-note"))}</p>
   </div>`;
 }
 function selectedGatewayModel(current, models) {
-  const selected = current.startsWith("magpie/") ? current.slice("magpie/".length) : "";
-  return models.some((model) => model.id === selected) ? selected : models[0]?.id || "";
+  return models.some((model) => model.id === current) ? current : models[0]?.id || "";
 }
 async function refreshGateways({ announceFailure = false } = {}) {
   state.gatewayLoading = true;
@@ -446,7 +360,10 @@ async function useGatewayModel() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model }),
     });
-    if (state.config?.config) state.config.config.mainAgentModel = result.config?.mainAgentModel;
+    if (state.config?.config) {
+      state.config.config.mainAgentBaseUrl = result.config?.mainAgentBaseUrl;
+      state.config.config.mainAgentModel = result.config?.mainAgentModel;
+    }
     await refresh({ preserveScroll: true });
     await refreshGateways();
     announce(t("gateway-model-applied"));
@@ -840,7 +757,7 @@ function renderMainAgentEffort() {
   const select = $("config-main-agent-effort");
   if (!select) return;
   const current = state.config?.config?.mainAgentEffort || "";
-  const model = String(state.config?.config?.mainAgentModel || "").replace(/^magpie\//, "");
+  const model = String(state.config?.config?.mainAgentModel || "");
   // The gateway knows which levels this exact model offers; without it, fall back
   // to the levels the CLIs understand so the choice is never invented.
   // 网关知道这个模型具体支持哪些档位；拿不到时退回 CLI 通用档位，绝不凭空编造。

@@ -13,7 +13,7 @@ Real CLIs have no OS sandbox enforced by Clone AI and are blocked by default. On
 after accepting that they can access the user's files, network, and credentials, run:
 
 ```bash
-npm run bench -- --unsafe-host --provider pi --tasks summarize
+npm run bench -- --unsafe-host --provider claude-code --tasks summarize
 ```
 
 Each task costs a few cents of real model calls and takes roughly 20-60
@@ -55,13 +55,14 @@ and status.
 - The runner exits non-zero when any unexpected failure occurs, so CI or a
   pre-upgrade check can gate on it.
 
-## Main Agent comparison (`npm run bench:main`)
+## Main Agent benchmark (`npm run bench:main`)
 
-Runs three fixed prompts through the Pi runtime and the native loop with the
-same model and an isolated clone home per task: a direct answer, an authority
-read, and a plan proposal. Each task/runtime cell runs `--repeat N` times
-(default 5); the report gives median and p90 duration, median tokens and the
-pass rate, and keeps every individual run.
+Runs three fixed prompts through the native loop with the same model and an
+isolated clone home per task: a direct answer, an authority read, and a plan
+proposal. Each task cell runs `--repeat N` times (default 5); the report gives
+median and p90 duration, median tokens and the pass rate, and keeps every
+individual run. The runtime list is explicit; a runtime is added only after it
+is registered and can start.
 
 ```bash
 CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main -- --repeat 5

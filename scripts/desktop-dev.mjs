@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { watch } from "node:fs";
-import { stat } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -9,6 +11,10 @@ const app = join(root, "dist", "Clone AI.app");
 const executable = join(app, "Contents", "MacOS", "CloneAI");
 const buildScript = join(root, "scripts", "build-macos-app.mjs");
 const mainSwift = join(root, "apps", "desktop", "macos", "main.swift");
+const reloadMarker = join(
+  tmpdir(),
+  `clone-ai-dev-reload-${createHash("sha1").update(root).digest("hex").slice(0, 10)}`,
+);
 
 let appProcess = null;
 let stopping = false;
@@ -40,25 +46,34 @@ function buildApp() {
 }
 
 function stopOtherInstances() {
-  try {
-    execFileSync("/usr/bin/pkill", ["-x", "CloneAI"], { stdio: "ignore" });
-  } catch {
-    // No running instance is the normal case.
-    // 没有正在运行的实例才是正常情况。
+  for (const pattern of [
+    join(app, "Contents", "MacOS", "CloneAI"),
+    join(app, "Contents", "Resources", "runtime", "src", "desktop-sidecar.ts"),
+    join(root, "src", "desktop-sidecar.ts"),
+  ]) {
+    try {
+      execFileSync("/usr/bin/pkill", ["-f", pattern], { stdio: "ignore" });
+    } catch {
+      // No matching process is the normal case.
+      // 没有匹配进程才是正常情况。
+    }
   }
 }
 
-function launchApp() {
+async function launchApp() {
   if (stopping) return;
   stopOtherInstances();
+  await writeFile(reloadMarker, `${Date.now()}\n`, "utf8");
   console.log("[desktop:dev] launching live source from", root);
   const child = spawn(executable, [], {
     cwd: root,
+    detached: true,
     stdio: "inherit",
     env: {
       ...process.env,
       CLONE_AI_DEV_ROOT: root,
       CLONE_AI_DEV_NODE: process.execPath,
+      CLONE_AI_DEV_RELOAD_FILE: reloadMarker,
     },
   });
   appProcess = child;
@@ -83,7 +98,11 @@ async function stopApp() {
       clearTimeout(timer);
       resolveExit();
     });
-    child.kill("SIGTERM");
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch {
+      child.kill("SIGTERM");
+    }
   });
   if (appProcess === child) appProcess = null;
 }
@@ -91,13 +110,13 @@ async function stopApp() {
 function scheduleRuntimeReload(name) {
   if (stopping) return;
   clearTimeout(reloadTimer);
-  reloadTimer = setTimeout(() => {
+  reloadTimer = setTimeout(async () => {
     if (appProcess === null) {
-      launchApp();
+      await launchApp();
       return;
     }
     console.log(`[desktop:dev] ${name} changed; refreshing the running app`);
-    appProcess.kill("SIGUSR1");
+    await writeFile(reloadMarker, `${Date.now()}\n`, "utf8");
   }, 350);
 }
 
@@ -111,7 +130,7 @@ function scheduleNativeRebuild(name) {
       console.log(`[desktop:dev] ${name} changed; rebuilding the native shell`);
       await stopApp();
       buildApp();
-      launchApp();
+      await launchApp();
     } catch (error) {
       console.error(`[desktop:dev] native rebuild failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -140,7 +159,7 @@ async function shutdown() {
 
 async function main() {
   if (await appNeedsBuild()) buildApp();
-  launchApp();
+  await launchApp();
 
   watchTree(join(root, "src"), (name) => /\.(?:ts|js|json)$/.test(name), scheduleRuntimeReload);
   watchTree(join(root, "apps", "desktop", "ui"), (name) => /\.(?:html|css|js|svg|png)$/.test(name), scheduleRuntimeReload);

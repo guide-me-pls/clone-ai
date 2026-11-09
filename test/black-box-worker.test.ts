@@ -61,8 +61,15 @@ async function runAgent(
   const workspace = await mkdtemp(join(tmpdir(), "clone-ai-blackbox-"));
   t.after(async () => rm(workspace, { recursive: true, force: true }));
   const previous = process.env.FAKE_AGENT_MODE;
+  const previousOutput = process.env.FAKE_AGENT_OUTPUT;
   if (options.mode === undefined) delete process.env.FAKE_AGENT_MODE;
   else process.env.FAKE_AGENT_MODE = options.mode;
+  // The fake agent resolves its target from cwd; the test process cwd is the
+  // repository, so name an explicit path inside the throwaway workspace or a
+  // run leaves `out/report.md` in the checkout.
+  // 假 Agent 从 cwd 解析目标；测试进程的 cwd 是仓库，因此必须给出去向临时工作区的
+  // 显式路径，否则每次运行都会在检出里留下 `out/report.md`。
+  process.env.FAKE_AGENT_OUTPUT = "out/report.md";
   try {
     const adapter = new BlackBoxCliWorker({
       agentId: "worker",
@@ -79,6 +86,8 @@ async function runAgent(
   } finally {
     if (previous === undefined) delete process.env.FAKE_AGENT_MODE;
     else process.env.FAKE_AGENT_MODE = previous;
+    if (previousOutput === undefined) delete process.env.FAKE_AGENT_OUTPUT;
+    else process.env.FAKE_AGENT_OUTPUT = previousOutput;
   }
 }
 

@@ -86,47 +86,6 @@
       ]
     },
     {
-      "id": "pi",
-      "label": "Pi",
-      "command": "pi",
-      "args": [
-        "{{modelArgs}}",
-        "{{effortArgs}}",
-        "-p",
-        "{{prompt}}"
-      ],
-      "env": [
-        "GEMINI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY",
-        "OPENROUTER_API_KEY",
-        "PI_CODING_AGENT_DIR",
-        "PI_PACKAGE_DIR"
-      ],
-      "sandbox": "seatbelt",
-      "sandboxNetwork": true,
-      "sandboxWritePaths": [
-        "~/.pi"
-      ],
-      "modelArgs": [
-        "--model",
-        "{{model}}"
-      ],
-      "efforts": [
-        "off",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
-      "effortArgs": [
-        "--thinking",
-        "{{effort}}"
-      ]
-    },
-    {
       "id": "opencode",
       "label": "opencode",
       "command": "opencode",

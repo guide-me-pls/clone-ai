@@ -39,6 +39,17 @@ export interface MainAgentTurnRecord {
   completedAt?: string;
   reply?: string;
   error?: string;
+  /** Context compactions that happened during this turn. 本回合发生的上下文压缩。 */
+  compactions?: MainAgentCompactionRecord[];
+}
+
+export interface MainAgentCompactionRecord {
+  at: string;
+  estimatedTokens: number;
+  compactAt: number;
+  droppedMessages: number;
+  keptMessages: number;
+  summary: string;
 }
 
 export interface MainAgentToolCall {
@@ -56,6 +67,7 @@ export interface MainAgentTurnContext {
   text: string;
   startedAt: string;
   toolCalls: MainAgentToolCall[];
+  compactions?: MainAgentCompactionRecord[];
   /** Journal appends are chained so tool events land before the turn completes. Journal 追加串行化，确保工具事件先于回合完成落盘。 */
   pending: Promise<void>;
   journal?: JournalStore;
@@ -251,6 +263,46 @@ export function observeMainAgentSession(
       }));
     }
   });
+}
+
+/**
+ * Records a deterministic context compaction on the turn and in the journal.
+ * The record is what the desktop context panel reads; the full text stays in
+ * the ledger and `search_history`.
+ * 在回合与 Journal 上记录一次确定性上下文压缩。桌面上下文面板读这条记录；全文仍在台账与
+ * `search_history` 中。
+ */
+export async function recordContextCompaction(
+  turn: MainAgentTurnContext,
+  compaction: {
+    estimatedTokens: number;
+    compactAt: number;
+    droppedMessages: number;
+    keptMessages: number;
+    summary: string;
+  },
+): Promise<void> {
+  const summary = redactAndCap(compaction.summary, 4_000);
+  turn.compactions = [...(turn.compactions ?? []), {
+    at: new Date().toISOString(),
+    estimatedTokens: compaction.estimatedTokens,
+    compactAt: compaction.compactAt,
+    droppedMessages: compaction.droppedMessages,
+    keptMessages: compaction.keptMessages,
+    summary: summary.text,
+  }];
+  await appendSafely(turn.journal, turn.turnId, {
+    type: "main_agent.context_compacted",
+    payload: {
+      turnId: turn.turnId,
+      estimatedTokens: compaction.estimatedTokens,
+      compactAt: compaction.compactAt,
+      droppedMessages: compaction.droppedMessages,
+      keptMessages: compaction.keptMessages,
+      summary: summary.text,
+    },
+  });
+  await turn.pending;
 }
 
 /**

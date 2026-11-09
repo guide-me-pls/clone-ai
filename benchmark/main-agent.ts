@@ -1,18 +1,19 @@
 #!/usr/bin/env node
 /**
- * Main Agent comparison: the Pi runtime versus the native loop on the same
- * prompts, model and isolated clone home.
+ * Main Agent benchmark: the native loop on fixed prompts, model and an
+ * isolated clone home.
  *
- * Each task/runtime cell runs N times (default 5) in a fresh temporary clone
- * home, and the report gives the median and p90 duration, median tokens and the
- * pass rate. Every individual run is kept alongside the aggregates. `--repeat 1`
- * restores a single-sample run.
+ * Each task cell runs N times (default 5) in a fresh temporary clone home, and
+ * the report gives the median and p90 duration, median tokens and the pass
+ * rate. Every individual run is kept alongside the aggregates. `--repeat 1`
+ * restores a single-sample run. The runtime list is explicit: a new runtime is
+ * added here only after it is registered and can start.
  *
- * 主 Agent 对比：Pi 运行时与原生循环，在相同 Prompt、模型与隔离 clone home 上运行。
+ * 主 Agent 基准：原生循环在固定 Prompt、模型与隔离 clone home 上运行。
  *
- * 每个任务/运行时组合跑 N 次（默认 5），每次使用全新的临时 clone home；报告给出中位数
- * 与 p90 耗时、中位 tokens 与通过率，并把每一次运行与聚合结果一起保留。`--repeat 1`
- * 恢复单次运行。
+ * 每个任务组合跑 N 次（默认 5），每次使用全新的临时 clone home；报告给出中位数与 p90
+ * 耗时、中位 tokens 与通过率，并把每一次运行与聚合结果一起保留。`--repeat 1` 恢复单次
+ * 运行。运行时列表是显式的：只有已注册且能启动的运行时才会被加进来。
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -36,7 +37,7 @@ function repeatCount(): number {
 
 const REPEAT = repeatCount();
 
-type Runtime = "pi" | "native";
+type Runtime = "native";
 type Expectation = "direct" | "authority" | "plan";
 
 interface MainAgentTask {
@@ -90,13 +91,9 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
   try {
     await prepareCloneHome(resolveClonePaths({ dataDirectory: directory }));
     process.env.CLONE_AI_MAIN_MODEL = MODEL;
-    if (runtime === "native") {
-      process.env.CLONE_AI_MAIN_RUNTIME = "native";
-      process.env.CLONE_AI_NATIVE_MODEL = MODEL;
-      process.env.CLONE_AI_NATIVE_BASE_URL = BASE_URL;
-    } else {
-      process.env.CLONE_AI_MAIN_RUNTIME = "pi";
-    }
+    process.env.CLONE_AI_MAIN_RUNTIME = "native";
+    process.env.CLONE_AI_NATIVE_MODEL = MODEL;
+    process.env.CLONE_AI_NATIVE_BASE_URL = BASE_URL;
     const started = Date.now();
     let result: Awaited<ReturnType<typeof runMainAgentQuery>>;
     try {
@@ -212,7 +209,7 @@ const records: TaskResult[] = [];
 const cells: CellAggregate[] = [];
 console.log(`Main Agent comparison: model=${MODEL} endpoint=${BASE_URL} repeat=${REPEAT}`);
 for (const task of TASKS) {
-  for (const runtime of ["pi", "native"] as const) {
+  for (const runtime of ["native"] as const) {
     const samples: TaskResult[] = [];
     for (let index = 0; index < REPEAT; index += 1) {
       const record = await runOne(runtime, task);
@@ -249,16 +246,12 @@ for (const cell of cells) {
 
 const summary = {
   repeat: REPEAT,
-  pi: {
-    passed: records.filter((record) => record.runtime === "pi" && record.passed).length,
-    samples: records.filter((record) => record.runtime === "pi").length,
-  },
   native: {
     passed: records.filter((record) => record.runtime === "native" && record.passed).length,
     samples: records.filter((record) => record.runtime === "native").length,
   },
 };
-console.log(`\nSummary: pi ${summary.pi.passed}/${summary.pi.samples} · native ${summary.native.passed}/${summary.native.samples}`);
+console.log(`\nSummary: native ${summary.native.passed}/${summary.native.samples}`);
 
 const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
 const reportPath = join(resultsDirectory, `main-agent-${stamp}.json`);

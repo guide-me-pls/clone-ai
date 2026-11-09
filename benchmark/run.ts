@@ -5,7 +5,7 @@
  * records pass/fail, duration, and artifact facts under benchmark/results/.
  *
  * Usage:
- *   npm run bench -- --unsafe-host --provider pi --tasks summarize
+ *   npm run bench -- --provider native --tasks summarize
  *   npm run bench -- --provider native --tasks summarize
  *
  * The native provider runs in-process with per-call scope checks, so it does
@@ -20,7 +20,7 @@
  * 把通过/失败、耗时和产物事实记录到 benchmark/results/ 下。
  *
  * 用法：
- *   npm run bench -- --unsafe-host --provider pi --tasks summarize
+ *   npm run bench -- --provider native --tasks summarize
  *   npm run bench -- --provider native --tasks summarize
  *
  * 原生 Provider 在进程内运行、每次调用做 Scope 校验，因此不需要 --unsafe-host；
@@ -69,7 +69,7 @@ function parseArgs(): { provider: string; tasks: string[]; unsafeHost: boolean }
   const providerIndex = argv.indexOf("--provider");
   const tasksIndex = argv.indexOf("--tasks");
   return {
-    provider: providerIndex >= 0 && argv[providerIndex + 1] !== undefined ? argv[providerIndex + 1]! : "pi",
+    provider: providerIndex >= 0 && argv[providerIndex + 1] !== undefined ? argv[providerIndex + 1]! : "native",
     tasks: tasksIndex >= 0 && argv[tasksIndex + 1] !== undefined
       ? argv[tasksIndex + 1]!.split(",").map((item) => item.trim()).filter(Boolean)
       : BENCH_TASKS.map((task) => task.id),
@@ -78,12 +78,7 @@ function parseArgs(): { provider: string; tasks: string[]; unsafeHost: boolean }
 }
 
 const PROVIDERS: Record<string, Pick<BlackBoxProviderConfig, "command" | "args" | "env">> = {
-  pi: {
-    command: process.platform === "win32" ? "pi.cmd" : "pi",
-    args: ["-p", "{{prompt}}"],
-    env: ["GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "PI_CODING_AGENT_DIR", "PI_PACKAGE_DIR"],
-  },
-  claude: {
+  "claude-code": {
     command: process.platform === "win32" ? "claude.cmd" : "claude",
     args: ["-p", "{{prompt}}"],
     env: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "ANTHROPIC_DEFAULT_*", "ANTHROPIC_SMALL_*", "ANTHROPIC_MODEL", "ANTHROPIC_SONNET", "ANTHROPIC_OPUS", "ANTHROPIC_HAIKU"],

@@ -26,6 +26,110 @@ it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+## 2026-11-09 — Per-call permissions, context compaction, MCP, and skills
+
+- **Goal / hypothesis:** close the four Claude Code gaps that decide whether a
+  harness feels complete: every tool call is authorized instead of every plan
+  step; long sessions compact by token pressure and record it; third-party tools
+  arrive through MCP; and reusable procedures arrive as skills instead of
+  hard-coded prompts.
+- **Trade-off:** [every in-process tool call goes through a per-call
+  decision](../architecture/trade-offs.md#2026-11-06--every-in-process-tool-call-goes-through-a-per-call-decision),
+  [compaction is token-aware and recorded](../architecture/trade-offs.md#2026-11-06--compaction-is-token-aware-and-recorded-deterministic-summaries-first),
+  [MCP and skills first](../architecture/trade-offs.md#2026-11-06--mcp-and-skills-first-plugins-cloud-vm-and-computer-use-deferred),
+  and [execution workers are general](../architecture/trade-offs.md#2026-11-06--execution-workers-are-general-coding-is-one-tool-profile).
+- **Change:**
+  - `src/agent/loop.ts` gained `authorize`, `requestApproval`, `hooks.preToolUse`
+    / `postToolUse`, and a `tool_decision` event. Deny beats ask beats allow,
+    a hook may rewrite input but cannot widen authority, and a denied call is a
+    paired tool result that the turn survives.
+  - `src/workers/native-agent-worker.ts` now runs on `runAgentLoop`: its client
+    is one completion, `decideTool` is the `authorize` callback, read tools are
+    parallel-safe, and budget failures carry a comparable signature.
+  - `src/main-agent/context-window.ts` derives compact/warn/blocked levels,
+    estimates tokens, and compacts deterministically; `main_agent.context_compacted`
+    records each compaction on the turn and in the journal.
+  - `src/mcp/mcp-host.ts` is a stdio MCP host with namespaced tools; a failed
+    server is recorded and contributes nothing.
+  - `src/skills/skill-loader.ts` loads `SKILL.md` with progressive disclosure;
+    the Main Agent turn accepts `skillRoots` and `mcpServers` and exposes
+    `Skill(<name>)` plus `mcp__server__tool` tools.
+  - `apps/desktop/src-tauri/tauri.conf.json` now sets a restrictive CSP instead
+    of `null`.
+- **Eval:** `npm test` → **622 tests, 619 pass, 0 fail, 3 skipped** (before this
+  batch: 601/598/0/3). `npm run typecheck` → exit 0. `npm run gate` → PASS,
+  baseline unchanged. Kernel suite 14/14; context suite 8/8; MCP 5/5; skills
+  5/5; native worker/client 17/17; an end-to-end Main Agent turn exercises both
+  a skill and an MCP tool. No live model call was made.
+- **Benchmark run:** none. The changes are contract-level; a live benchmark
+  would not distinguish the authorization, compaction, or loader logic.
+- **Execution chain:** kernel permission path → native worker migration →
+  context module and record → MCP host with a fake stdio server → skill loader
+  with fixtures → end-to-end turn → CSP. Failures fixed in place: TypeScript
+  parameter properties (strip-only mode), the worker class closing brace, two
+  test helper signatures, a char-count assertion, and one flaky WhatsApp test
+  that passes in isolation and on rerun.
+- **Pros:** permission is now per call and reason-bearing; compaction is
+  recorded and visible; MCP and skills are opt-in without changing existing
+  turns; the worker and Main Agent share one loop contract.
+- **Cons / next time:** MCP has no HTTP transport, resources, prompts, or OAuth;
+  skills do not yet narrow the tool table themselves (the Kernel gate still
+  governs), and plugins/deferred tool search are absent. The extra coding tools
+  (edit/glob/grep/bash) are still a profile without implementations.
+- **Reversal condition:** see each trade-off entry; for MCP/skills, reverse if
+  the attack surface grows faster than the capability, or if a real workflow
+  needs a transport this host does not have.
+
+## 2026-11-07 — Shared agent loop kernel and a green baseline
+
+- **Goal / hypothesis:** the Main Agent needs the harness mechanics Claude Code
+  proves matter: a typed terminal reason, safe tools scheduled together with
+  unsafe tools as barriers, abort propagation, round/tool/token/duration
+  budgets, bounded retries, and structured tool results. A single kernel also
+  stops the Main Agent and execution workers from growing two different loops.
+- **Trade-off:** [one shared agent loop kernel](../architecture/trade-offs.md#2026-11-06--one-shared-agent-loop-kernel-serves-the-main-agent-and-the-native-worker)
+  and [execution workers are general](../architecture/trade-offs.md#2026-11-06--execution-workers-are-general-coding-is-one-tool-profile).
+- **Change:** added `src/agent/loop.ts` and `test/agent-loop.test.ts`, then
+  wired `src/main-agent/native-runtime.ts` through it. The Kernel tool table is
+  adapted to the loop; read-only tools are parallel-safe and proposals stay
+  serial. Tool start/completion events still feed the turn audit, and the
+  companion stream aborts the turn when the client disconnects. Phase 0 also
+  removed the last `pi` default (`evidence-reviewer` now uses `claude-code`),
+  updated the stale Pi tests, made the Main Agent benchmark native-only, and
+  removed Pi from the benchmark recipes and docs.
+- **Eval:** `node --experimental-strip-types --test test/agent-loop.test.ts` →
+  **10/10 pass**; `test/native-main-agent.test.ts` → **6/6 pass**; the
+  client-disconnect path is covered in `test/companion-main-agent.test.ts`. `npm test` →
+  **609 tests, 606 pass, 0 fail, 3 skipped**
+  (before: 585 tests, 578 pass, 4 fail, 3 skipped). `npm run typecheck` → exit
+  0. `npm run gate` → **PASS**, baseline unchanged. No live model call was made
+  for this change; the eval is deterministic.
+- **Benchmark run:** none. The change is judged by the deterministic loop
+  contract and the existing suite; a live Main Agent run would add cost without
+  distinguishing the kernel's scheduling and budget logic.
+- **Execution chain:** eight parallel analysis readers (seven reports used;
+  the tool-catalog reader was stopped after it kept re-scanning), direct source
+  checks for the tool list, Phase 0 test repair, kernel implementation, adapter
+  wiring, then the full suite. Failures along the way: one unsupported
+  TypeScript parameter property in strip-only mode, two type errors in the
+  tests, and one benchmark-safety test that assumed the default provider was a
+  CLI. Each was fixed in place. Duration and cost were not separately measured;
+  no provider was called.
+- **Pros:** the Main Agent now has a typed terminal reason, parallel-safe tool
+  scheduling, abort propagation, retries, budgets, and middle truncation without
+  changing its public entry point. The baseline is green again, and the loop is
+  reusable by the native worker.
+- **Cons / next time:** the first kernel still lacks a token-aware live
+  compaction path, a per-call permission check, and a total-token billing
+  ledger; those are Phase 2–4. A retry after a partially streamed response can
+  replay deltas to the UI; Phase 2 should emit a model-call retry/reset event.
+  The tool-catalog reader should have had a hard call/time budget from the
+  start.
+- **Reversal condition:** if the Main Agent and worker diverge in transport or
+  streaming requirements, keep separate model adapters but share the scheduler,
+  budget, and tool-result layers; if the kernel adds more complexity than it
+  removes, restore a single-purpose Main Agent loop.
+
 ## 2026-11-05 — Rebuild the app as part of self-check
 
 - **Goal / hypothesis:** ensure the app the owner launches contains the exact

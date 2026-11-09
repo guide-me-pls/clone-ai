@@ -34,10 +34,10 @@ test("a missing settings file gets the native defaults, while saved choices stil
 
   const file = join(directory, "settings.json");
   await writeFile(file, JSON.stringify({
-    agents: [{ id: "draft-maker", providerId: "pi", enabled: true }],
+    agents: [{ id: "draft-maker", providerId: "claude-code", enabled: true }],
   }), "utf8");
   const store = new WorkerSettingsStore(file, builtInProviders, NATIVE_ENV);
   const settings = await store.get();
-  assert.equal(settings.agents.find((agent) => agent.id === "draft-maker")?.providerId, "pi");
+  assert.equal(settings.agents.find((agent) => agent.id === "draft-maker")?.providerId, "claude-code");
   assert.equal(settings.agents.find((agent) => agent.id === "context-researcher")?.providerId, "native");
 });

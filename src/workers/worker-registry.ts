@@ -36,7 +36,6 @@ export interface WorkerProviderStatus {
 const installers: Readonly<Record<string, { command: string; args: string[] }>> = {
   "codex-cli": { command: "npm", args: ["install", "-g", "@openai/codex"] },
   "claude-code": { command: "npm", args: ["install", "-g", "@anthropic-ai/claude-code"] },
-  pi: { command: "npm", args: ["install", "-g", "--ignore-scripts", "@earendil-works/pi-coding-agent"] },
 };
 
 /**

@@ -28,6 +28,9 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     private var pageReady = false
     private var developerRoot: URL?
     private var developerRestartPending = false
+    private var developerReloadMarker: URL?
+    private var developerReloadStamp: Date?
+    private var developerReloadTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let configuredRoot = ProcessInfo.processInfo.environment["CLONE_AI_DEV_ROOT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -46,6 +49,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             object: nil
         )
         installSignalHandlers()
+        installDeveloperReloadWatcher()
         installMenu()
         let webConfiguration = WKWebViewConfiguration()
         webConfiguration.userContentController.add(self, name: "cloneNavigation")
@@ -432,6 +436,39 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
                 Darwin.kill(process.processIdentifier, SIGKILL)
             }
         }
+    }
+
+    /**
+     * The development driver writes a marker instead of sending a signal.
+     * Signals can kill a stale app binary before it registers a handler; a
+     * modification timestamp is observable even when the shell itself is old.
+     *
+     * 开发驱动写一个标记文件，而不是发送信号。旧 App 二进制若尚未注册信号处理器会被
+     * 直接杀死；修改时间则连旧壳也能观测到。
+     */
+    private func installDeveloperReloadWatcher() {
+        guard developerRoot != nil,
+              let configured = ProcessInfo.processInfo.environment["CLONE_AI_DEV_RELOAD_FILE"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !configured.isEmpty else { return }
+        let marker = URL(fileURLWithPath: configured)
+        developerReloadMarker = marker
+        developerReloadStamp = modificationDate(of: marker)
+        developerReloadTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
+            guard let self, let marker = self.developerReloadMarker else { return }
+            guard let stamp = self.modificationDate(of: marker) else { return }
+            if let previous = self.developerReloadStamp {
+                if stamp > previous {
+                    self.developerReloadStamp = stamp
+                    self.reloadDeveloperRuntime()
+                }
+            } else {
+                self.developerReloadStamp = stamp
+            }
+        }
+    }
+
+    private func modificationDate(of url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
     }
 
     private func startDaemon() {
