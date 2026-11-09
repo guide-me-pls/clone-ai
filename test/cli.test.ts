@@ -53,18 +53,6 @@ test("clone-ai --version prints the package version", async (t) => {
   assert.match(stdout.trim(), /^\d+\.\d+\.\d+/);
 });
 
-test("clone-ai workers reports install state without touching the network", async (t) => {
-  const { code, stdout } = await runCli(t, ["workers"]);
-
-  assert.equal(code, 0);
-  // Built-in legacy CLI recipes remain visible for diagnostics; Pi has been removed.
-  // 内置旧版 CLI 配方仍用于诊断；Pi 已被移除。
-  for (const worker of ["claude-code", "codex-cli", "opencode"]) {
-    assert.match(stdout, new RegExp(worker));
-  }
-  assert.doesNotMatch(stdout, /\bpi\b/);
-});
-
 test("clone-ai cases reports an empty log on a fresh home", async (t) => {
   const { code, stdout } = await runCli(t, ["cases"]);
 

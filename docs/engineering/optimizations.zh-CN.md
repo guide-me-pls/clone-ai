@@ -548,3 +548,68 @@
 - **限制：** 一个模型、一台机器、一个小时内、共享网关。把结论当作稳定的本地对比，
   而不是普适排名。
 - **推翻条件：** 见取舍条目。
+
+## 2026-11-06 — 从主 Agent 移除 Pi SDK（两步中的第一步）
+
+- **目标 / 假设：** 按移除取舍的決定，让主 Agent 的循环、上下文组装与工具面都属于我们，
+  没有 SDK、没有回退。
+- **取舍：** [只保留自己的 Agent](../architecture/trade-offs.zh-CN.md#2026-11-06--只保留自己的-agent去掉-pi-sdk-与黑盒-cli)。
+- **变更：** 删除 `session.ts`（Pi 会话工厂）；把 `run-main-query`、`clone-main` 与 CLI
+  对话路径改到原生运行时；把不依赖 SDK 的指针与旧会话列举移入 `conversation-store.ts`；
+  把模型/强度偏好移入 `model-preferences.ts`；把自评审的 Pi 会话替换为对已配置端点的普通
+  completion；把 Pi 模型目录替换为网关自己的列表；从 Kernel 工具宿主中移除 Pi 类型；
+  回合台账现在同时供 `search_history` 与对话视图使用；移除
+  `@earendil-works/pi-coding-agent` 依赖与仅 Pi 的 live 测试。
+- **Eval：** 全量 578 个测试 / 578 通过；typecheck、gate 与双语文档通过。被删除的 live
+  测试依赖 Pi，SDK 移除后无法运行；其确定性等价测试仍在。
+- **执行链路：** 先写取舍；再改运行时；然后自评审与目录；最后测试。每一步由编译器引导。
+  两个使用 Pi `SessionManager` 的测试种子改写为台账回合。
+- **优点 / 缺点：** 主 Agent 不再依赖 SDK，每个输入、工具调用与用量记录都是我们自己的。
+  端点现在是必需的；设置页的模型选择器列出网关模型，且只配置基础地址时使用所选 id。
+- **未完成（第二步）：** 黑盒 CLI Worker（Claude Code、Codex、Pi CLI、opencode）、它们的
+  Provider 目录、安装命令与 `install_agent` 工具仍在。移除它们是同一取舍的下一阶段；
+  在有受治理的连接器之前，外部动作将没有 Provider。
+- **推翻条件：** 见取舍条目。
+
+## 2026-11-06 — 移除黑盒 CLI Worker（两步中的第二步）
+
+- **目标 / 假设：** 完成移除：没有 CLI Worker、没有 Provider 配方、没有安装路径，与同一
+  取舍一致。
+- **取舍：** [只保留自己的 Agent](../architecture/trade-offs.zh-CN.md#2026-11-06--只保留自己的-agent去掉-pi-sdk-与黑盒-cli)。
+- **变更：** 删除 `black-box-cli-worker`、`worker-registry`、Worker 侧的
+  `executable-resolver` 用法、`worker-env`、`fresh-session-policy`、
+  `provider-config-store` 与 `providers.json`；Provider 目录只剩原生定义；默认 Agent
+  全部为原生，`external` 配置移除（没有受治理的连接器）；`install` 被拒绝，
+  `install_agent` 工具移除，Provider 设置接口返回 409；记忆提炼改为调用原生端点并支持注入；
+  Worker 基准只跑原生；路由把已配置的 Agent 视为可用；文档、本地化文案与失败文案更新。
+- **Eval：** 全量 520 个测试 / 520 通过；typecheck、gate 与双语文档通过。删除的测试只覆盖
+  已删除的 CLI 面（CLI 配方、安装器、seatbelt、Worker 环境、Provider 注册表）；路由、
+  记忆提炼与评审的确定性等价测试仍在。
+- **执行链路：** 先删除，再让编译器驱动每处引用修正：run-query、CLI、companion、自评审、
+  记忆 Worker、benchmark、测试。两次批量测试编辑产生了无效文件，已回滚并改为逐项删除。
+- **优点 / 缺点：** 唯一的执行路径现在逐次受闸门约束且可审计，没有 CLI 能带着隐藏的工具或
+  凭据运行。代价是明确的：外部动作没有 Provider，CLI 独有能力消失，安装命令也帮不上忙。
+- **推翻条件：** 见取舍条目。
+
+## 2026-11-06 — Worker 并发跟随实测机器容量
+
+- **目标 / 假设：** 让派发按机器实际能力并行，而不是按计划形状；硬上限留在 Kernel，而不是
+  一次采样出的模型 token。
+- **取舍：** [容量](../architecture/trade-offs.zh-CN.md#2026-11-06--worker-并发跟随实测机器容量硬上限由-kernel-掌握)。
+- **变更：** `src/core/capacity.ts` 采样核数、1 分钟负载与空闲内存，计算上限（自动：核数、
+  负载感知的 CPU 预算与内存预算取最小，上限 16），并提供计数式 `CapacityGate`。运行时在
+  每次单 Agent 执行与每次子 Agent 派发前后获取/释放槽位；组装层共用一个闸门，使队列与每个
+  波次共享预算。`config.json` 的 `maxConcurrentWorkers` 固定上限（0 = 自动），每次获取时
+  重新读取，并通过 `PATCH /api/config` 暴露。只读的 `get_capacity` 工具让主 Agent 决定
+  计划规模；charter 要求它先调用。
+- **Eval：** `test/capacity.test.ts`——CPU 受限、内存受限、负载敏感、所有者固定值受核数
+  约束、闸门不超限且按序唤醒、取消等待会释放槽位。工具溯源包含 `get_capacity`。全量
+  525 个测试 / 525 通过；typecheck、gate 与双语文档通过。
+- **执行链路：** 先写取舍；纯函数与闸门；在两个执行入口获取/释放；工厂持有闸门与实时固定值；
+  设置接口；工具与 charter；测试；文档。
+- **优点 / 缺点：** 16 核空闲主机与 2 核忙碌笔记本现在表现不同，这正是目的。同 Workspace
+  的写步骤仍被 Workspace 锁串行化，因此容量是天花板，不保证依赖或冲突工作一定并行。公式是
+  启发式，不是对模型端点自身并发限制的测量。
+- **未验证：** 没有在大主机上做负载测试；端点自身的并发/限流未知，宽计划可能在 Provider 侧
+  排队，而不是在 Kernel 侧。
+- **推翻条件：** 见取舍条目。

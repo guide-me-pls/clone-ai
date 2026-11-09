@@ -14,14 +14,14 @@
 
 ## 当前安全边界
 
-- 黑盒 CLI Worker **默认禁止运行**：当前没有由 Clone AI 强制的操作系统沙箱。桌面设置可在明确风险确认后允许某个 Provider 不受限地使用本机权限；这不是沙箱，内部工具也不受逐项审批。
-- 黑盒 Worker 不承接已标记的外部或不可逆动作。安全的外部动作 Connector 尚未实现。
+- 唯一的执行 Provider 是进程内的原生 Worker：每次工具调用都由 Kernel 按步骤 Scope 校验，没有不受限的 CLI 通道。
+- 原生 Worker 不承接已标记的外部或不可逆动作。安全的外部动作 Connector 尚未实现。
 - 无法自动核验的验收标准进入 `waiting_review`，由所有者查看证据并接受或拒绝；可用 `clone-ai review <runId>` 查看。
 - 定时实例保存在 `schedules.sqlite3`；旧 `schedules.json` 只导入一次并保留为备份。启动后中断、结果不明的实例需要人工核对，不能自动重试。
 - 记忆与审计数据仍以本地 Markdown/SQLite 保存，未实现应用层加密或完整擦除。隐藏会话和归档记忆不等于删除数据；远程模型请求可能把相关上下文发送给服务商。
 - 可选的 CLI 记忆提炼需要 `CLONE_AI_MEMORY_MINING=1`，并额外设置 `CLONE_AI_MEMORY_MINING_UNRESTRICTED=1` 明确允许主机权限；这不是沙箱。提炼失败会保留待重试任务，不会伪装成“没有候选”。
 - 取消会阻止旧执行者继续写入日志，并尝试停止 Worker；进程终止只是尽力而为，不能证明未隔离进程没有产生外部影响。
-- 不受限黑盒任务中断或失败后不会自动重跑：工作区没有变化，也不能证明它没有产生外部动作。
+- 涉及外部动作的任务中断或失败后不会自动重跑：工作区没有变化，也不能证明它没有产生外部动作。
 - 可选的 SMTP 日报记录持久发送状态；结果未知时应先核对邮箱，再决定重试或忽略。SMTP 接收不等于最终送达；远程 SMTP 必须使用 TLS，`reporting.json` 中的凭据仍是明文。
 - Main Agent 不能用对话引文自行授权软件安装，也不能直接保存模型推断的目标、承诺或边界；这些结构化提议的独立用户审核尚未实现。已审核的记忆仍可在界面手动填写。
 
@@ -63,7 +63,7 @@ Agent。clone-ai 负责个人连续性、策略、记忆、规划和验证；被
 ```text
 你
   -> clone-ai：状态、规划、策略、验证
-       -> Claude Code / Codex / opencode / 未来 Runtime
+       -> 原生 Worker（进程内，逐次 Scope 校验）
        -> 日历 / 文件 / 邮件 / 浏览器 / 应用 / API
        -> 本地自动化和专用 Python Worker
 ```
@@ -75,12 +75,10 @@ Agent。clone-ai 负责个人连续性、策略、记忆、规划和验证；被
 
 | 提供方 | 预期职责 | 集成状态 |
 | --- | --- | --- |
-| **Claude Code** | 实现、审查、本地 Tool 调用与产物生成。 | 黑盒启动配方 |
-| **Codex** | 编码、审查、仓库操作与产物生成。 | 黑盒启动配方 |
-| **opencode** | 可选的替代 Coding Agent。 | 黑盒启动配方 |
-| **原生 Worker** | 进程内循环，每次工具调用按 Scope 放行；工具集由角色/配置决定，报告精确 token 用量。 | 内建；需设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` |
-| **自定义 Runtime** | 用户或组织专属的命令与本地工具。 | 增加一条 `providers.json` 配方 |
-| **Python Worker** | 信息提取、排序、预测、评估和本地 ML 提案。 | 未来的黑盒配方 |
+| **原生 Worker** | 进程内循环，每次工具调用按 Scope 放行；仅文件工具，报告精确 token 用量。 | 内建；需设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` |
+
+黑盒 CLI Worker（Claude Code、Codex、Pi CLI、opencode）已移除：CLI 会把工具调用与凭据藏在 Kernel 之外。新增 Provider 意味着实现同等保证，而不是增加一条命令行。
+
 
 ## 从这里开始
 
@@ -103,14 +101,12 @@ npm run main
 ```
 
 当前从用户请求到完成验证的整条链路见 [Query 执行流程](docs/query-execution-flow.zh-CN.md)；显式开启的模型 Planner 及其安全边界见 [LLM Planner](docs/llm-planner.zh-CN.md)。
-真实 Codex CLI 与 Claude Code 执行 Provider 的边界见 [受监督的 Worker 边界](docs/coding-cli-adapters.zh-CN.md)。
+原生 Worker 的边界见 [本地设置](docs/usage/local-setup.zh-CN.md)。
 架构、已经走过的路线与下一阶段见 [Runtime 架构与路线](docs/runtime-architecture-and-route.zh-CN.md)。
-与 Claude Code 的逆向对照、12 维对齐评分卡与 95% 路线见
-[Claude Code 对齐路线](docs/study/claude-code-parity.zh-CN.md)。
 
 CLI 演示仍使用确定性的 Adapter，便于学习、测试和重放；桌面 Runtime 根据本地设置，把有边界的
-WorkOrder 交给统一的黑盒边界。WorkOrder 包含输入、能力要求、产物合同、风险、预算和无环依赖图。
-Claude Code、Codex、opencode 与未来 Agent 每次都从全新的进程开始；Clone AI 的 Kernel 状态、
+WorkOrder 交给统一的受治理边界。WorkOrder 包含输入、能力要求、产物合同、风险、预算和无环依赖图。
+每次指派都从全新的进程内会话开始；Clone AI 的 Kernel 状态、
 记忆、Workspace 证据、崩溃恢复和最终完成判定都在 Provider 之外。Provider 自己的 `--resume` 只能
 是可选优化，不能成为事实来源。
 
@@ -339,11 +335,11 @@ interface RuntimeAdapter {
 }
 ```
 
-Runtime 通过同一个黑盒边界接入 Claude Code、Codex、opencode 和未来独立的 Runtime。**Skill** 仍是
-Provider 自己拥有的能力；Clone AI 只提供有边界的 Prompt 与 Workspace，再根据可观察事实判断结果。
-Provider 的 Session 记忆、Tool 协议和完成话语都不是 Kernel 权威。
+Runtime 通过同一条受治理边界接入进程内的原生 Worker。每次工具调用都在发起的瞬间按步骤 Scope
+校验；Kernel 保留 Prompt、Workspace 与完成判定。Worker 的会话状态、工具协议与完成话语都不是
+Kernel 权威。
 
-默认黑盒 Adapter 会在执行前后对 Workspace 拍快照，使用硬截止，并只透传环境白名单。持久 JSON 检查点
+原生 Worker 会在执行前后对 Workspace 拍快照，使用硬截止，并记录精确 token 用量。持久 JSON 检查点
 让 Kernel 可以安全重跑无变化的中断、接受完整的观察型产物，或在副作用不明确时阻塞。同一个 Workspace
 使用独占 lease，避免并发 Worker 互相覆盖。
 
@@ -391,7 +387,8 @@ packages/
 |-- connectors/                  calendar、mail、files、browser、APIs
 |-- adapters/
 |   |-- claude-code/
-|   `-- codex/
+|   |-- codex/
+|   `-- pi/
 |-- observability/               Trace、审计、指标
 `-- testkit/                     Fake Connector、Runtime、故障
 

@@ -23,7 +23,6 @@ import { MainAgentBusyError, withMainAgentLock } from "../main-agent/prompt-lock
 import { BadCaseLog } from "../reporting/bad-case-log.ts";
 import { OpportunityService } from "../opportunity/opportunity-service.ts";
 import { createJournalStore } from "../core/sqlite-journal.ts";
-import { WorkerRegistry } from "../workers/worker-registry.ts";
 import { MdMemoryStore } from "../memory/md-memory-store.ts";
 import { describeAuthority, StandingPolicyStore } from "../authority/standing-policy-store.ts";
 import { MemoryGovernance } from "../memory/memory-governance.ts";
@@ -126,7 +125,6 @@ async function main(): Promise<number> {
 
 /** Default path: a conversation turn with the Main Agent. 默认路径：与 Main Agent 的一轮对话。 */
 async function converse(dataDirectory: string, query: string, fresh = false): Promise<number> {
-  void fresh;
   if (query.trim().length === 0) {
     console.error('Please describe what you want. Example: clone-ai "整理今天要推进的事情"');
     return 1;
@@ -139,47 +137,31 @@ async function converse(dataDirectory: string, query: string, fresh = false): Pr
     dataDirectory,
     command: fresh ? "new" : "converse",
   });
-  let before: Array<{ id: string; status: string; planId?: string }> = [];
+  let reply = "";
   try {
-    before = await listRunSnapshot(dataDirectory);
-    let reply = "";
-    await withMainAgentLock(dataDirectory, async () => {
-      const result = await runNativeMainAgentTurn({
-        dataDirectory,
-        text: query,
-        source: "cli",
-        onDelta: (delta) => process.stdout.write(delta),
-      });
-      process.stdout.write("\n");
-      reply = result.reply;
-      audit.note({ modelId: "native", provider: "native" });
-      if (result.error !== undefined) console.error(result.error);
-    });
+    const result = await withMainAgentLock(dataDirectory, () => runNativeMainAgentTurn({
+      dataDirectory,
+      text: query,
+      source: "cli",
+      onDelta: (delta) => {
+        reply += delta;
+        process.stdout.write(delta);
+      },
+    }));
+    process.stdout.write("\n");
+    if (result.error !== undefined) throw new Error(result.error);
     await drainQueuedRuns(dataDirectory);
-    const after = await listRunSnapshot(dataDirectory);
-    const seen = new Set(before.map((run) => run.id));
-    await audit.complete({
-      reply,
-      newRuns: after.filter((run) => !seen.has(run.id)),
-    });
+    await audit.complete({ reply: result.reply, newRuns: result.newRuns });
   } catch (error: unknown) {
     await audit.fail(error);
     if (error instanceof MainAgentBusyError) {
       console.error(error.message);
       return 1;
     }
-    throw error;
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
   }
   return 0;
-}
-
-async function listRunSnapshot(dataDirectory: string): Promise<Array<{ id: string; status: string; planId?: string }>> {
-  const { runtime, close } = await createKernelRuntimeSession(dataDirectory);
-  try {
-    return runtime.listRuns().map((run) => ({ id: run.id, status: run.status, ...(run.planId === undefined ? {} : { planId: run.planId }) }));
-  } finally {
-    close();
-  }
 }
 
 /**
@@ -284,7 +266,6 @@ async function showStatus(dataDirectory: string): Promise<number> {
   let runs: ReturnType<typeof runtime.listRuns>;
   try { runs = runtime.listRuns(); } finally { close(); }
   const recent = runs.slice(-5).reverse();
-  const workers = await new WorkerRegistry(dataDirectory).list();
   const store = new MdMemoryStore({ dataDirectory });
   const journal = createJournalStore(dataDirectory);
   const governance = new MemoryGovernance({ store, journal });
@@ -299,35 +280,26 @@ async function showStatus(dataDirectory: string): Promise<number> {
 
   console.log(`Runs: ${runs.length} total`);
   for (const run of recent) console.log(`  ${run.id.slice(0, 8)}  ${run.status.padEnd(16)} ${run.updatedAt}`);
-  console.log(`Workers: ${workers.filter((worker) => worker.installed).map((worker) => worker.id).join(", ") || "none installed"}`);
+  console.log("Workers: native (in-process)");
   console.log(`Memory: ${memory.active} active, ${memory.archived} archived`);
   console.log(`Bad cases logged: ${cases}`);
   return 0;
 }
 
-async function listWorkers(dataDirectory: string): Promise<number> {
-  for (const worker of await new WorkerRegistry(dataDirectory).list()) {
-    const mark = worker.installed ? "✓" : worker.installable ? "·" : "✗";
-    console.log(`${mark} ${worker.id.padEnd(14)} ${worker.command.padEnd(16)} ${worker.version ?? (worker.installed ? "" : "not installed")}`);
-  }
-  console.log("\n✓ installed · installable (clone-ai install <id>) ✗ no automatic installer");
+async function listWorkers(_dataDirectory: string): Promise<number> {
+  console.log("✓ native         in-process      the only execution provider");
+  console.log("\nBlack-box CLI workers were removed: their tool calls were invisible to the Kernel.");
   return 0;
 }
 
-async function installWorker(dataDirectory: string, id: string | undefined): Promise<number> {
-  if (id === undefined) {
-    console.error("Usage: clone-ai install <worker-id>");
-    return 1;
-  }
-  const { installWorkerAgent } = await import("../main-agent/tools/kernel-tools.ts");
-  const result = await installWorkerAgent(dataDirectory, id);
-  console.log(result.installed ? `Installed ${id}${result.version ? ` (${result.version})` : ""}.` : `Failed: ${result.error}`);
-  return result.installed ? 0 : 1;
+async function installWorker(_dataDirectory: string, _id: string | undefined): Promise<number> {
+  console.error("No worker CLI can be installed: the native worker runs in-process. Configure CLONE_AI_NATIVE_MODEL and CLONE_AI_NATIVE_BASE_URL.");
+  return 1;
 }
 
 /** Lists persisted Main Agent conversations, newest first. 列出已持久化的 Main Agent 对话，新的在前。 */
 async function listSessions(dataDirectory: string): Promise<number> {
-  const { listOwnerConversations, readCurrentSessionPointer } = await import("../main-agent/session.ts");
+  const { listOwnerConversations, readCurrentSessionPointer } = await import("../main-agent/conversation-store.ts");
   const rows = await listOwnerConversations(dataDirectory);
   if (rows.length === 0) {
     console.log('No conversations yet. Start one: clone-ai "你好"');
@@ -346,7 +318,7 @@ async function listSessions(dataDirectory: string): Promise<number> {
 
 /** Points every entry point (CLI and GUI) at the chosen conversation. 把所有入口（CLI 与 GUI）指向所选对话。 */
 async function resumeSession(dataDirectory: string, choice: string | undefined): Promise<number> {
-  const { listOwnerConversations, writeCurrentSessionPointer } = await import("../main-agent/session.ts");
+  const { listOwnerConversations, writeCurrentSessionPointer } = await import("../main-agent/conversation-store.ts");
   const rows = await listOwnerConversations(dataDirectory);
   const index = Number(choice);
   if (!Number.isInteger(index) || index < 1 || index > rows.length) {
@@ -532,26 +504,9 @@ async function tracesCommand(dataDirectory: string, args: string[]): Promise<num
   }
 }
 
-async function effortCommand(dataDirectory: string, args: string[]): Promise<number> {
-  const { listEffectiveProviderConfigs, readUserProviderConfigs, upsertUserProviderConfig } = await import("../config/provider-config-store.ts");
-  const [providerId, value] = args;
-  const effective = await listEffectiveProviderConfigs(dataDirectory);
-  if (providerId === undefined) {
-    for (const provider of effective) console.log(`${provider.id}: ${provider.effort ?? "(CLI default)"}${provider.efforts ? ` · levels ${provider.efforts.join(", ")}` : ""}`);
-    return 0;
-  }
-  const provider = effective.find((candidate) => candidate.id === providerId);
-  if (provider === undefined) { console.error(`Unknown worker "${providerId}".`); return 1; }
-  if (value === undefined) { console.log(`${provider.id}: ${provider.effort ?? "(CLI default)"}${provider.efforts ? ` · levels ${provider.efforts.join(", ")}` : ""}`); return 0; }
-  if (value !== "--clear" && provider.efforts !== undefined && !provider.efforts.includes(value as never)) {
-    console.error(`${providerId} accepts: ${provider.efforts.join(", ")}.`);
-    return 1;
-  }
-  const existing = (await readUserProviderConfigs(dataDirectory)).find((candidate) => candidate.id === providerId) ?? { id: provider.id, command: provider.command };
-  const { effort: _drop, ...rest } = existing;
-  await upsertUserProviderConfig(dataDirectory, value === "--clear" ? rest : { ...rest, effort: value as never });
-  console.log(value === "--clear" ? `${providerId}: effort cleared.` : `${providerId}: effort pinned to ${value}.`);
-  return 0;
+async function effortCommand(_dataDirectory: string, _args: string[]): Promise<number> {
+  console.error("Worker CLIs are gone; the Main Agent effort comes from CLONE_AI_MAIN_EFFORT or config.json.");
+  return 1;
 }
 
 async function invocationsCommand(dataDirectory: string, args: string[]): Promise<number> {
@@ -643,22 +598,9 @@ async function auditCommand(dataDirectory: string, args: string[]): Promise<numb
   }
 }
 
-async function modelCommand(dataDirectory: string, args: string[]): Promise<number> {
-  const { listEffectiveProviderConfigs, readUserProviderConfigs, upsertUserProviderConfig } = await import("../config/provider-config-store.ts");
-  const [providerId, value] = args;
-  const effective = await listEffectiveProviderConfigs(dataDirectory);
-  if (providerId === undefined) {
-    for (const provider of effective) console.log(`${provider.id}: ${provider.model ?? "(CLI default)"}`);
-    return 0;
-  }
-  const provider = effective.find((candidate) => candidate.id === providerId);
-  if (provider === undefined) { console.error(`Unknown worker "${providerId}".`); return 1; }
-  if (value === undefined) { console.log(`${provider.id}: ${provider.model ?? "(CLI default)"}`); return 0; }
-  const existing = (await readUserProviderConfigs(dataDirectory)).find((candidate) => candidate.id === providerId) ?? { id: provider.id, command: provider.command };
-  const { model: _drop, ...rest } = existing;
-  await upsertUserProviderConfig(dataDirectory, value === "--clear" ? rest : { ...rest, model: value });
-  console.log(value === "--clear" ? `${providerId}: model cleared.` : `${providerId}: model pinned to ${value}.`);
-  return 0;
+async function modelCommand(_dataDirectory: string, _args: string[]): Promise<number> {
+  console.error("Worker CLIs are gone; the Main Agent model comes from CLONE_AI_NATIVE_MODEL or config.json.");
+  return 1;
 }
 
 async function showOpportunities(dataDirectory: string): Promise<number> {
@@ -723,14 +665,12 @@ async function runBench(args: string[]): Promise<number> {
 async function doctor(dataDirectory: string): Promise<number> {
   console.log(`clone home: ${dataDirectory}`);
   console.log(`node: ${process.version} (${process.platform})`);
-  const workers = await new WorkerRegistry(dataDirectory).list();
-  const installed = workers.filter((worker) => worker.installed);
-  console.log(`workers installed: ${installed.length}/${workers.length}`);
-  for (const worker of workers) {
-    console.log(`  ${worker.installed ? "✓" : "✗"} ${worker.id} → ${worker.command}`);
-  }
-  if (installed.length === 0) {
-    console.log("\nNo worker CLI found. Install one, e.g.: clone-ai install pi");
+  const model = process.env.CLONE_AI_NATIVE_MODEL?.trim();
+  const baseUrl = process.env.CLONE_AI_NATIVE_BASE_URL?.trim();
+  console.log(`main agent: native${model ? ` · ${model}` : ""}${baseUrl ? ` · ${baseUrl}` : ""}`);
+  console.log("workers: native (in-process)");
+  if (model === undefined || baseUrl === undefined) {
+    console.log("\nCLONE_AI_NATIVE_MODEL and CLONE_AI_NATIVE_BASE_URL are required.");
     return 1;
   }
   console.log("\nReady. Try: clone-ai \"读一下 README 并总结三点\"");
