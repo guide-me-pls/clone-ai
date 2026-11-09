@@ -567,6 +567,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         runtime: queueRuntime,
         runQueue,
         authority: assembly.authority,
+        refreshCapacityPin: assembly.refreshCapacityPin,
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "The local runtime encountered an unexpected error.";
@@ -662,6 +663,8 @@ async function handleRequest(
     runtime: CloneRuntime;
     runQueue: RunQueueConsumer;
     authority: StandingPolicyStore;
+    /** Re-reads the owner's pinned worker concurrency after a settings change. 设置变更后重新读取所有者固定的 Worker 并发上限。 */
+    refreshCapacityPin: () => Promise<void>;
   },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host === "::1" ? "[::1]" : context.host}`);
@@ -865,7 +868,7 @@ async function handleRequest(
 
   if (request.method === "PATCH" && url.pathname === "/api/config") {
     const body = await readJsonBody(request);
-    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined } = {};
+    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined; maxConcurrentWorkers?: number } = {};
     if (typeof body.workspacePath === "string" && body.workspacePath.trim().length > 0) {
       update.workspacePath = body.workspacePath.trim();
     }
@@ -885,11 +888,27 @@ async function handleRequest(
         return;
       }
     }
+    if ("maxConcurrentWorkers" in body) {
+      const value = body.maxConcurrentWorkers;
+      if (value !== 0 && value !== null) {
+        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+          sendJson(response, 400, { error: "maxConcurrentWorkers must be a non-negative number (0 means auto)." });
+          return;
+        }
+        update.maxConcurrentWorkers = Math.trunc(value);
+      }
+    }
     if (Object.keys(update).length === 0) {
-      sendJson(response, 400, { error: "Provide a workspacePath, locale, mainAgentModel, or mainAgentEffort to change." });
+      sendJson(response, 400, { error: "Provide a workspacePath, locale, mainAgentModel, mainAgentEffort, or maxConcurrentWorkers to change." });
       return;
     }
-    sendJson(response, 200, { config: await context.config.update(update) });
+    const config = await context.config.update(update);
+    // The pin is re-read on every dispatch, so this refresh is belt-and-braces;
+    // it also makes an auto-mode change visible immediately in capacity reads.
+    // 每次派发都会重新读取固定值，因此这里刷新只是双保险；它也自动模式的变化立即体现在
+    // 容量读取中。
+    await context.refreshCapacityPin().catch(() => undefined);
+    sendJson(response, 200, { config });
     return;
   }
 
