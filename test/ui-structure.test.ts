@@ -176,3 +176,17 @@ test("populated conversations stay vertical and empty-state flex requires no mes
   assert.match(css, /\.message\s*\{[^}]*display:\s*block[^}]*width:\s*100%/);
   assert.match(css, /\.message\.person\s*\{[^}]*width:\s*100%/);
 });
+
+test("the streaming answer has a tool timeline with its own styles and strings", async () => {
+  const app = await read("app.js");
+  const css = await read("style.css");
+  // The SSE handler must render the `tool` event, and the card must give it a place.
+  // SSE 处理器必须渲染 `tool` 事件，卡片必须给它一个位置。
+  assert.match(app, /event === "tool"/);
+  assert.match(app, /data-tool-timeline/);
+  assert.match(css, /\.tool-timeline\s*\{/);
+  assert.match(css, /\.tool-row\[data-state="denied"\]/);
+  // The dot animation must be switchable off for reduced motion.
+  // 点的动画必须能在 prefers-reduced-motion 下关闭。
+  assert.match(css, /prefers-reduced-motion: reduce[\s\S]{0,200}tool-row/);
+});

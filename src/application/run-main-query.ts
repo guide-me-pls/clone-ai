@@ -12,7 +12,7 @@
  */
 import type { Run } from "../core/contracts.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
-import { runNativeMainAgentTurn } from "../main-agent/native-runtime.ts";
+import { runNativeMainAgentTurn, type NativeToolEvent } from "../main-agent/native-runtime.ts";
 import { beginInvocation, type InvocationCaller, type InvocationSurface } from "../audit/invocation-ledger.ts";
 
 export interface MainAgentQueryResult {
@@ -52,6 +52,8 @@ export interface MainAgentQueryOptions {
   source?: "cli" | "main-cli" | "companion" | "server" | "whatsapp" | "unknown";
   /** Cancels the model call and every in-flight tool. 取消模型调用与所有在途工具。 */
   signal?: AbortSignal;
+  /** Progress for each tool call, for a live timeline. 每次工具调用的进度，用于实时时间线。 */
+  onToolEvent?: (event: NativeToolEvent) => void;
 }
 
 export async function runMainAgentQuery(
@@ -77,6 +79,7 @@ export async function runMainAgentQuery(
       ...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
       ...(options.images === undefined ? {} : { images: options.images }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.onToolEvent === undefined ? {} : { onToolEvent: options.onToolEvent }),
       onMetadata: (metadata) => audit.note(metadata),
     }));
     if (result.error === undefined) {

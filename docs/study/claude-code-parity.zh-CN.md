@@ -344,7 +344,8 @@ abort、429 重试、预算耗尽、非法工具恢复、结果顺序确定。
 
 **预计：** 循环 55→90，模型层 55→75，可靠性 75→85。
 
-**状态（2026-11-09）：** 阶段 1 与 2 已实现。`src/agent/loop.ts` 拥有带类型的终止原因、
+**状态（2026-11-09）：** 阶段 6 已开始：Main Agent 可以通过 Kernel 派发有界任务
+（`dispatch_task`）；阶段 7 已开始：对话从同一 SSE 流渲染实时工具时间线。阶段 1 与 2 已实现。`src/agent/loop.ts` 拥有带类型的终止原因、
 逐次 `authorize`、前置/后置 hook、预算与 abort；Main Agent 与原生 Worker 都运行在它上面。
 阶段 3 部分完成：Worker 的工具集是配置（编码只是其中一种），但额外的编码工具尚未编写。
 阶段 4 已实现为 `src/main-agent/context-window.ts` 加 `main_agent.context_compacted`。

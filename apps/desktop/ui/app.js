@@ -1092,7 +1092,7 @@ async function createSession(query) { const button = $("submit"); button.disable
   const attachmentMarkup = outgoingAttachments.map((item) => `<img src="${item.previewUrl}" alt="${escape(item.name)}" />`).join("");
   inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${escape(query || "（已发送图片/视频）")}</div>${attachmentMarkup ? `<div class="message-attachments">${attachmentMarkup}</div>` : ""}</div></div>`);
   const card = document.createElement("div"); card.className = "message clone";
-  card.innerHTML = `<div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="clone-text" data-streaming="1" hidden></div></div>`;
+  card.innerHTML = `<div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="tool-timeline" data-tool-timeline hidden></div><div class="clone-text" data-streaming="1" hidden></div></div>`;
   inner.appendChild(card);
   const target = card.querySelector(".clone-text");
   const pending = card.querySelector("[data-response-pending]");
@@ -1118,6 +1118,26 @@ async function createSession(query) { const button = $("submit"); button.disable
       pending.dataset.phase = String(nextStage);
     }
     pendingElapsed.textContent = t("pending-elapsed").replace("{seconds}", String(seconds));
+  };
+  // A live tool timeline: the owner sees which tool ran, whether it was
+  // refused, and how long it took, while the answer is still streaming.
+  // 实时工具时间线：回答仍在流式输出时，所有者就能看到跑了哪个工具、是否被拒绝、耗时多少。
+  const timeline = card.querySelector("[data-tool-timeline]");
+  const timelineRows = new Map();
+  const renderTimeline = () => {
+    if (!timeline || timelineRows.size === 0) return;
+    timeline.hidden = false;
+    timeline.innerHTML = [...timelineRows.values()].map((row) => {
+      const state = row.denied ? "denied" : row.isError ? "error" : row.phase === "completed" ? "done" : "running";
+      const detail = row.durationMs === undefined ? "" : `${(row.durationMs / 1000).toFixed(1)}s`;
+      return `<div class="tool-row" data-state="${state}"><span class="tool-dot" aria-hidden="true"></span><b>${escape(row.tool)}</b><span class="tool-state">${escape(t(`tool-state-${state}`))}</span><span class="tool-time">${escape(detail)}</span></div>`;
+    }).join("");
+  };
+  const noteTool = (payload) => {
+    const key = `${payload.tool}`;
+    const previous = timelineRows.get(key) ?? { tool: payload.tool, phase: "started" };
+    timelineRows.set(key, { ...previous, ...payload });
+    renderTimeline();
   };
   const revealResponse = () => {
     if (pendingTimer !== null) {
@@ -1166,6 +1186,7 @@ async function createSession(query) { const button = $("submit"); button.disable
         if (!event || !data) continue;
         const payload = JSON.parse(data);
         if (event === "delta") { revealResponse(); reply += payload.delta; target.textContent = reply; $("conversation").scrollTop = $("conversation").scrollHeight; }
+        else if (event === "tool") { noteTool(payload); }
         else if (event === "done") { result = payload; }
         else if (event === "failed") { failure = payload.error || "Main Agent 调用失败。"; throw new Error(failure); }
       }
