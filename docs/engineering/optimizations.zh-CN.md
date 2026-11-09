@@ -6,6 +6,9 @@
 它的目的是让**工作本身**可审计：不仅改了什么，还包括怎么做的、花了多少、链路哪里弱。
 规则见 [`AGENTS.md`](../../AGENTS.md)。
 
+**值得引用的成果放在 [`optimization-results.md`](optimization-results.zh-CN.md)**——每次验证
+成立的收益一条短记录，eval 没有收益的优化不写。本文件保留每一次尝试，包括没有成功的那些。
+
 ## 模板
 
 ```markdown

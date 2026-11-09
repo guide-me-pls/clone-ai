@@ -7,6 +7,11 @@ written before the change; this entry is completed after it ships. The point is
 to make the *work* auditable: not only what changed, but how it was done, what
 it cost, and where the chain was weak. See [`AGENTS.md`](../../AGENTS.md).
 
+**Outcomes worth citing live in
+[`optimization-results.md`](optimization-results.md)** — one short entry per
+verified gain, and nothing for an optimization whose eval showed no gain. This
+file keeps every attempt, including the ones that did not work.
+
 ## Template
 
 ```markdown
