@@ -75,6 +75,13 @@ export interface NativeAgentWorkerConfig {
   createClient: () => NativeModelClient;
   tools: readonly NativeToolSpec[];
   timeoutMs?: number;
+  /**
+   * Owner-configured model rounds for one step. It raises the hard-coded
+   * default but never overrides an explicit plan budget, and a malformed value
+   * has already been discarded by the factory.
+   * 所有者配置的单步模型轮次。它提高硬编码默认值，但不覆盖计划里显式的预算；非法值已被工厂丢弃。
+   */
+  maxRounds?: number;
 }
 
 const DEFAULT_NATIVE_WORK = ["research", "filesystem_read", "filesystem_write"] as const;
@@ -188,7 +195,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
         model: this.#config.createClient(),
         tools: offered.map((tool) => agentTool(tool, workspace, produced, missingInputs, requiredText)),
         messages,
-        maxRounds: budget?.maxModelCalls ?? 12,
+        maxRounds: budget?.maxModelCalls ?? this.#config.maxRounds ?? 12,
         ...(budget?.maxToolCalls === undefined ? {} : { maxToolCalls: budget.maxToolCalls }),
         maxDurationMs: timeoutMs,
         signal: controller.signal,

@@ -232,7 +232,13 @@ export function createConfiguredNativeWorker(
 function createWorker(
   config: NativeWorkerEnvironment,
   environment: NodeJS.ProcessEnv,
-  options: { id?: string; label?: string; workCapabilities?: readonly string[] },
+  options: {
+    id?: string;
+    label?: string;
+    workCapabilities?: readonly string[];
+    dataDirectory?: string;
+    tools?: readonly NativeToolSpec[];
+  },
 ): NativeAgentWorker | undefined {
   if (config.model === undefined || config.baseUrl === undefined) return undefined;
   return new NativeAgentWorker({
@@ -241,11 +247,11 @@ function createWorker(
     providerId: "native",
     ...(options.workCapabilities === undefined ? {} : { workCapabilities: options.workCapabilities }),
     tools: options.tools ?? fileTools({ writeFileMode: environment.CLONE_AI_NATIVE_WRITE_FILE === "refuse-existing" ? "refuse-existing" : "overwrite" }),
+    ...(config.maxRounds === undefined ? {} : { maxRounds: config.maxRounds }),
     createClient: () => new OpenAiCompatibleClient({
       baseUrl: config.baseUrl!,
       model: config.model!,
       ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
-      ...(config.maxRounds === undefined ? {} : { maxRounds: config.maxRounds }),
       ...(config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens }),
       timeoutMs: Number(environment.CLONE_AI_NATIVE_TIMEOUT_MS ?? 120_000),
     }),

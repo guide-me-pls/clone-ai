@@ -205,7 +205,17 @@ export async function runRepairLane(options: RepairLaneOptions): Promise<RepairR
     // Scoped to this process, which exists only to run the repair.
     // 修复只通过片段修改已有文件，绝不整文件重写。作用域限定在本进程——它只为运行修复而存在。
     process.env.CLONE_AI_NATIVE_WRITE_FILE = "refuse-existing";
-    const registry = options.registry ?? await createConfiguredAgentRegistry((await new WorkerSettingsStore(assembly.paths.legacyAgentsFile).get()).agents, {
+    const settings = (await new WorkerSettingsStore(assembly.paths.legacyAgentsFile).get()).agents;
+    // Resolve the requested worker before building adapters: constructing a
+    // provider can fail for its own reasons (an unconfigured endpoint), and that
+    // error would hide the owner's actual mistake — asking for a worker that
+    // does not exist.
+    // 先确认请求的 Worker 再构建适配器：构建 Provider 可能因自身原因失败（例如端点未配置），
+    // 那个错误会掩盖所有者真正的错误——请求了一个不存在的 Worker。
+    if (options.agentId !== undefined && !settings.some((agent) => agent.id === options.agentId && agent.enabled)) {
+      throw new Error(`No enabled worker "${options.agentId}" can run the repair; configure one in ${join(dataDirectory, "settings.json")}.`);
+    }
+    const registry = options.registry ?? await createConfiguredAgentRegistry(settings, {
       dataDirectory,
       workspacePath: worktree.path,
       failureCatalog: assembly.failureCatalog,
