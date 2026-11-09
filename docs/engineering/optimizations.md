@@ -31,6 +31,46 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-09 — Merging the repair line with the shared-loop line
+
+- **Goal / hypothesis:** local `main` and `origin/main` had diverged from the
+  same base: one carried the repair lane, self-check loop and settings surface,
+  the other the shared agent loop, native-only workers, capacity gate, MCP host
+  and skills. Both are wanted; the merge should keep both and drop only what
+  the owner explicitly rejected.
+- **Trade-off:** the merge itself follows the existing decisions; the two
+  choices taken here (local MCP client over the remote host, accepting the CLI
+  removal) were confirmed by the owner in this session.
+- **Change:** fourteen conflicted paths. Docs (CHANGELOG, trade-offs both
+  languages, optimization logs both languages) were unioned section by section
+  so neither line's entries were lost. Code took the remote architecture
+  (native-only, no Pi SDK, no CLI workers) plus the local MCP wiring
+  (`workerTools` in the provider catalog). Restored after the merge: the
+  credential-name policy `worker-env.ts` (the adversarial probe reads it), the
+  owner-configured round budget on the shared loop, the write-before-answer
+  rule in the worker prompt, and a repair-lane check that reports an unknown
+  worker before provider construction can fail for its own reason. Client tests
+  were converted to the single-completion contract; the MCP test's client stub
+  now answers twice (request the tool, then summarise).
+- **Eval:** `npm test` → **616 tests, 616 pass, 0 fail**; `npm run typecheck` →
+  exit 0; `npm run gate` → PASS, baseline unchanged. No conflict markers remain.
+- **Benchmark run:** none. This is a merge, not a behaviour change; the suite is
+  the check.
+- **Execution chain:** fetched, found an in-progress merge, listed unmerged
+  paths, compared stage 1/2/3 per file, asked the owner the two genuine design
+  questions (MCP implementation, CLI removal), resolved docs by union and code
+  by architecture, then fixed the compile and test fallout in six passes.
+- **Pros:** no side's history or entries were discarded; the merged tree is
+  green and both feature lines still work.
+- **Cons / next time:** the first merge attempt resolved code files to the
+  remote side and lost this branch's loop integration, which cost a full
+  re-application. A merge of two long diverged lines should resolve code
+  file-by-file with an explicit "which side owns this file" note, not
+  wholesale.
+- **Reversal condition:** if the local MCP client's stricter model blocks a
+  workflow the remote host supported, revisit that one decision; the rest of
+  the merge is structural.
+
 ### 2026-11-09 — Stop a running answer
 
 - **Goal / hypothesis:** the server could already cancel a turn, but the UI had
