@@ -226,6 +226,14 @@ export function createConfiguredNativeWorker(
   } = {},
 ): NativeAgentWorker | undefined {
   const config = readNativeWorkerEnvironment(environment, workspace);
+  return createWorker(config, environment, options);
+}
+
+function createWorker(
+  config: NativeWorkerEnvironment,
+  environment: NodeJS.ProcessEnv,
+  options: { id?: string; label?: string; workCapabilities?: readonly string[] },
+): NativeAgentWorker | undefined {
   if (config.model === undefined || config.baseUrl === undefined) return undefined;
   return new NativeAgentWorker({
     id: options.id ?? "native",

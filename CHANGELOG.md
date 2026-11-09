@@ -269,6 +269,171 @@ Promoting a candidate now refuses an active memory with the same folded summary,
 
 提升候选时，若已有折叠后摘要相同的活跃记忆则拒绝；对邮箱 / token / 密钥 / 明显电话与卡号做脱敏；含 PII 的记忆存为 `secret`，默认召回不会把它交给 Worker。`GET /api/memory/candidates` 带上 `piiFindings`。
 
+### Stop a running answer from the composer
+
+The send slot now becomes a stop control while a turn is running: clicking it, or pressing Escape, aborts the request and the server cancels the model call and every in-flight tool. A user stop reads differently from the three-minute stall timeout, and the typed text is still restored if no answer arrived. `npm test` is 566 tests, 566 pass, 0 fail.
+
+回合运行时，发送槽位会变成停止控件：点击它或按 Escape 会中止请求，服务端随即取消模型调用与
+所有在途工具。用户停止的提示与三分钟静默超时不同；若没有收到回答，已输入的文本仍会恢复。
+`npm test` 为 566 个测试、566 通过、0 失败。
+
+### A live tool timeline in the chat
+
+While the Main Agent works, the desktop now shows each tool call as it happens: a row with the tool name, a running/done/failed/refused dot, and its duration, delivered over the same SSE stream as the answer. The events come from the turn's own tool lifecycle, so the timeline and the turn audit cannot disagree. Locale strings are bilingual and the running pulse respects `prefers-reduced-motion`. `npm test` is 565 tests, 565 pass, 0 fail; typecheck and gate pass.
+
+主 Agent 工作时，桌面端现在会实时显示每次工具调用：一行包含工具名、运行中/完成/失败/拒绝的
+状态点与耗时，通过与回答相同的 SSE 流送达。事件来自回合本身的工具生命周期，因此时间线与
+回合审计不会互相矛盾。文案中英双语，运行中的脉冲遵循 `prefers-reduced-motion`。
+`npm test` 为 565 个测试、565 通过、0 失败；typecheck 与 gate 通过。
+
+### A model-invocable dispatch_task tool
+
+The Main Agent can now start bounded work instead of only describing it: `dispatch_task` takes an objective and 1–12 acceptance criteria, validates them before any planning round, and calls the same `runQuery` path the companion uses. The Kernel still plans, applies authority and budgets, verifies evidence and decides completion, so this adds an entry point rather than a second authority. The charter tells the model to answer conversation directly and to use `propose_work_plan` when it already knows the steps. Three deterministic tests cover the validation rules. `npm test` is 563 tests, 563 pass, 0 fail; `npm run typecheck` and `npm run gate` pass.
+
+主 Agent 现在可以启动有界工作，而不只是描述它：`dispatch_task` 接受目标与 1–12 条验收标准，在任何规划轮之前完成校验，并调用与 companion 相同的 `runQuery` 路径。规划、权威与预算、证据验证与完成判定仍归 Kernel，因此这只是增加入口，而不是第二个权威。charter 会告诉模型：对话直接回答，已知步骤时使用 `propose_work_plan`。三个确定性测试覆盖校验规则。`npm test` 为 563 个测试、563 通过、0 失败；`npm run typecheck` 与 `npm run gate` 通过。
+
+### Desktop CSP and test isolation
+
+The Tauri shell no longer sets `csp: null`; it now restricts scripts, styles, images, fonts, objects, frames and form targets to the app, with loopback connections allowed for the local daemon.
+
+Tauri 外壳不再设置 `csp: null`；现在限制脚本、样式、图片、字体、object、frame 与表单目标为应用自身，并允许连接本机 daemon 的 loopback。
+
+### MCP host and skills
+
+`src/mcp/mcp-host.ts` is an MCP client over stdio: JSON-RPC 2.0, `initialize`, `tools/list`, `tools/call`, a per-request timeout, an output cap, and `mcp__<server>__<tool>` names. A server that cannot start is recorded in `failures` and contributes no tools; one broken server never blocks the others. `src/skills/skill-loader.ts` loads `<root>/<name>/SKILL.md` with frontmatter (`name`, `description`, `allowed-tools`, `disable-model-invocation`, `user-invocable`) and progressive disclosure: only a capped one-line listing enters the system prompt, and the body is injected when the model invokes `Skill(<name>)`. Both are opt-in per Main Agent turn (`skillRoots`, `mcpServers`); skill bodies and MCP output are treated as data, and the Kernel gate still decides what may run. Fifteen deterministic tests cover the host, the loader, and an end-to-end turn that exposes and invokes both.
+
+`src/mcp/mcp-host.ts` 是基于 stdio 的 MCP 客户端：JSON-RPC 2.0、`initialize`、`tools/list`、`tools/call`、每请求超时、输出上限，以及 `mcp__<server>__<tool>` 命名。启动失败的服务器记入 `failures` 且不贡献工具；一个坏服务器绝不阻塞其他服务器。`src/skills/skill-loader.ts` 加载 `<root>/<name>/SKILL.md`，支持 frontmatter（`name`、`description`、`allowed-tools`、`disable-model-invocation`、`user-invocable`）与渐进披露：只有有上限的单行列表进入 System Prompt，正文在模型调用 `Skill(<name>)` 时注入。两者都按主 Agent 回合显式开启（`skillRoots`、`mcpServers`）；技能正文与 MCP 输出按数据处理，真正的闸门仍由 Kernel 决定。15 个确定性测试覆盖宿主、加载器，以及一个同时暴露并调用两者的端到端回合。
+
+### Token-aware context compaction
+
+`src/main-agent/context-window.ts` derives the compact/warn/blocked levels from a context window (`effective = window - min(maxOutputTokens, 20000)`, compact at `min(80%, effective - 13000)`, warn at `compact - 20000`, blocked at `effective - 3000`), estimates tokens, and compacts a transcript into a bounded summary plus a verbatim tail. The native Main Agent enables it when `contextWindow` is supplied; each compaction writes `main_agent.context_compacted` with the estimated size, threshold, dropped/kept counts and the summary, so the desktop context view can show what happened. A blocked level ends the turn as `budget_exhausted` instead of sending an over-window request. Eight deterministic tests cover the levels, pressure, preservation, bounded summaries, and the estimator.
+
+`src/main-agent/context-window.ts` 从上下文窗口推导压缩/警告/阻断三档水位（`effective = window - min(maxOutputTokens, 20000)`，压缩线 `min(80%, effective - 13000)`，警告线 `compact - 20000`，阻断线 `effective - 3000`），估算 token，并把转录压成有界摘要加逐字尾部。原生主 Agent 在提供 `contextWindow` 时启用；每次压缩写入 `main_agent.context_compacted`，带估算大小、阈值、丢弃/保留数量与摘要，桌面上下文视图因此能显示发生了什么。达到阻断线会以 `budget_exhausted` 结束回合，而不是发出超窗口请求。8 个确定性测试覆盖水位、压力、保留、有界摘要与估算器。
+
+### Shared agent loop kernel
+
+The Main Agent now runs through `src/agent/loop.ts`: typed terminal reasons, safe tools scheduled together with unsafe tools as barriers, abort propagation, round/tool/token/duration budgets, bounded retries, middle-truncated tool results, and a compaction hook. `src/main-agent/native-runtime.ts` adapts its streaming chat client and Kernel tools to the kernel; read-only tools run in parallel and proposals stay serial, and tool start/completion events still reach the turn audit. Sixteen new deterministic tests cover completion, tool pairing, the concurrency barrier, max rounds, tool-call budgets, abort, retry, truncation, compaction, unknown tools, an interrupted-turn audit case, and a client-disconnect cancellation path. `npm test` is 622 tests, 619 pass, 0 fail, 3 skipped; `npm run typecheck` and `npm run gate` pass. The native worker now uses the same kernel: its OpenAI-compatible client is a single completion, and the worker owns the rounds and tool gate.
+
+主 Agent 现在通过 `src/agent/loop.ts` 运行：带类型的终止原因、安全工具并行/非安全工具屏障、abort 传播、回合/工具/token/时长预算、有界重试、中间截断的工具结果，以及压缩钩子。`src/main-agent/native-runtime.ts` 把流式 chat 客户端与 Kernel 工具适配到内核；只读工具并行，提案保持串行，工具开始/完成事件仍写入回合审计。新增 16 个确定性测试，覆盖完成、工具配对、并发屏障、最大回合、工具调用预算、abort、重试、截断、压缩、未知工具、中断回合的审计记录，以及客户端断开时的取消路径。`npm test` 为 622 个测试、619 通过、0 失败、3 跳过；`npm run typecheck` 与 `npm run gate` 通过。原生 Worker 现在也使用同一内核：OpenAI 兼容客户端只做一次 completion，Worker 拥有回合与工具闸门。
+
+### Claude Code parity analysis and 95% roadmap
+
+Added a bilingual reverse-engineering analysis of Claude Code 2.1.317 and Claude Desktop 4.16336.0, a 12-dimension weighted parity scorecard, and a nine-phase roadmap to 95%. The analysis covers the typed loop state machine, streaming tool scheduler, six-mode permission ladder, 33 hook events, token-aware compaction, MCP/skills/subagents, and the Desktop Agent-SDK control protocol. clone-ai's audited baseline is 58.5/100; the roadmap starts by repairing the four red tests left by the Pi removal, then adds the shared loop kernel, per-call permissions, execution-worker tool profiles (coding is one profile), context engineering, MCP/skills, subagents/sessions, and desktop feedback. See [docs/study/claude-code-parity.md](docs/study/claude-code-parity.md).
+
+新增双语版 Claude Code 2.1.317 / Claude Desktop 4.16336.0 逆向分析与 12 维加权对齐评分卡，以及到达 95% 的九阶段路线。分析覆盖带类型的循环状态机、流式工具调度、六模式权限阶梯、33 个 hook 事件、token 感知压缩、MCP/Skills/子 Agent，以及桌面端 Agent-SDK 控制协议。clone-ai 审计基线为 58.5/100；路线先修复移除 Pi 后留下的 4 个红测试，再加入共享循环内核、逐次权限、执行 Worker 的工具配置（编码只是其中一种）、上下文工程、MCP/Skills、子 Agent/会话与桌面反馈。见 [docs/study/claude-code-parity.zh-CN.md](docs/study/claude-code-parity.zh-CN.md)。
+
+### Optimization results are a separate, curated file
+
+`docs/engineering/optimization-results.md` (and its Chinese pair) now lists only optimizations whose eval showed a real gain: the claim, the evidence, and links to the trade-off and the execution chain. A negative optimization — no gain, a regression, or a revert — gets no entry there; its trade-off and execution-chain entries remain the record. `AGENTS.md` rule 6 and the optimization log's header point to the new file.
+
+`docs/engineering/optimization-results.md`（及中文版）现在只列 eval 显示出真实收益的优化：主张、证据，以及取舍与执行链路的链接。负优化——没有收益、出现回退或被撤销——不写条目；它的取舍与执行链路条目仍是记录。`AGENTS.md` 第 6 条与优化日志的抬头都指向新文件。
+
+### Worker concurrency follows the machine
+
+The Kernel now samples CPU cores, the 1-minute load average and free memory, computes how many workers may run at once, and gates every execution through one shared limiter — so a 16-core idle host and a 2-core busy laptop no longer behave the same. The Main Agent can read the snapshot with a read-only `get_capacity` tool to size a plan, but cannot raise the limit. Owners can pin a ceiling with `maxConcurrentWorkers` (0 = auto), re-read on every dispatch.
+
+Kernel 现在采样 CPU 核数、1 分钟负载与空闲内存，计算同时运行多少个 Worker，并通过共享限流器约束每次执行——16 核空闲主机与 2 核忙碌笔记本不再表现相同。主 Agent 可以用只读的 `get_capacity` 工具读取快照来决定计划规模，但不能提高上限。所有者可以用 `maxConcurrentWorkers` 固定上限（0 = 自动），每次派发时重新读取。
+
+### The black-box CLI workers are gone
+
+Claude Code, Codex, the Pi CLI and opencode were removed as execution providers, together with their launch recipes, install commands, the `install_agent` tool and the provider settings APIs. The in-process native worker is the only executor: every tool call is checked against the step's scopes at the moment it is made, and its usage is exact. The `external` role now has no provider until a governed action connector exists — it is never routed to a CLI. The worker benchmark runs native-only; memory mining calls the same endpoint with an injected completion.
+
+Claude Code、Codex、Pi CLI 与 opencode 已被移除，连同它们的启动配方、安装命令、`install_agent` 工具与 Provider 设置接口。进程内的原生 Worker 是唯一的执行器：每次工具调用都在发起的瞬间按步骤 Scope 校验，用量精确。`external` 角色在有受治理的动作连接器之前没有 Provider，绝不会被路由到 CLI。Worker 基准只跑原生；记忆提炼用可注入的补全调用同一端点。
+
+### The Main Agent no longer uses the Pi SDK
+
+The Pi Agent SDK is gone from the Main Agent path. The native in-process loop is the only runtime: the prompt compiler, conversation pointer, transcript, self-review call and model picker are ours. `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are required; without them a turn fails with a message naming the missing variables, and `CLONE_AI_MAIN_RUNTIME=pi` is refused instead of falling back. The turn ledger is the conversation record, and `search_history` reads it alongside any legacy session files. Removing the black-box CLI workers is the next step, recorded in the same trade-off.
+
+主 Agent 路径中已移除 Pi Agent SDK。进程内的原生循环是唯一运行时：Prompt 编译器、对话指针、对话记录、自评审调用与模型选择器都是我们自己的。必须配置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`；缺少时回合会以指明缺失变量的错误失败，`CLONE_AI_MAIN_RUNTIME=pi` 会被拒绝而不是回退。回合台账成为对话记录，`search_history` 同时读取它与旧会话文件。移除黑盒 CLI Worker 是下一步，记在同一个取舍条目中。
+
+### Main Agent comparison repeats and reports medians
+
+`npm run bench:main` now runs each task/runtime cell `--repeat N` times (default 5) and reports median and p90 duration, median tokens and pass rate, keeping every sample in the JSON. `benchmark/stats.ts` provides the median and nearest-rank percentile, and a throwing cell is recorded as a failed sample instead of aborting the report. A three-sample run on DeepSeek v4.1 Flash: both runtimes 9/9, native about 6.6% fewer tokens, median latency within about one second.
+
+`npm run bench:main` 现在对每个任务/运行时组合跑 `--repeat N` 次（默认 5），报告中位数与 p90 耗时、中位 tokens 与通过率，并在 JSON 中保留每个样本。`benchmark/stats.ts` 提供中位数与最近秩百分位；抛错的格子记为失败样本，而不是中断整份报告。DeepSeek v4.1 Flash 上的三次运行：两个运行时均 9/9，原生少约 6.6% tokens，中位延迟相差约一秒以内。
+
+### Native worker defaults for eligible roles
+
+With `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` set, the default agents for `direct`, `research`, `draft` and `review` now use the in-process native worker; `external` stays on the CLI path because the native worker has no governed action connector. A provider saved in settings still wins, and without the endpoint the previous CLI defaults apply.
+
+设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` 后，`direct`、`research`、`draft`、`review` 的默认 Agent 现在使用进程内的原生 Worker；`external` 仍走 CLI 路径，因为原生 Worker 没有受治理的动作连接器。设置中保存的 Provider 仍然优先，未配置端点时沿用之前的 CLI 默认。
+
+### Native Main Agent is the default when configured
+
+With `CLONE_AI_MAIN_RUNTIME` unset, the Main Agent now uses the native in-process loop when `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are present; otherwise it stays on Pi. `CLONE_AI_MAIN_RUNTIME=pi` forces Pi, `=native` forces native, and an unknown value is refused. A live smoke without the flag recorded `provider: "native"`, and the full suite still passes.
+
+`CLONE_AI_MAIN_RUNTIME` 未设置时，只要存在 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`，主 Agent 现在默认使用进程内的原生循环；否则继续使用 Pi。`CLONE_AI_MAIN_RUNTIME=pi` 强制 Pi，`=native` 强制原生，未知值会被拒绝。不设开关的实机冒烟记录了 `provider: "native"`，全量测试仍通过。
+
+### Native Main Agent accepts images
+
+The native Main Agent now sends image attachments as OpenAI-style `image_url` data URLs in the current user message, so switching from Pi no longer removes the feature. Images are per-turn and not stored in the turn ledger. A live validation (64×64 red PNG) returned "Red." with 3,806 tokens.
+
+原生主 Agent 现在把图片附件以 OpenAI 风格 `image_url` data URL 放进当前 user 消息，因此从 Pi 切换过来不再丢失该功能。图片是逐回合的，不写入回合台账。实机验证（64×64 红色 PNG）返回 "Red."，消耗 3,806 tokens。
+
+### Native Main Agent streams and compacts
+
+The flag-gated native Main Agent now streams SSE tokens to the interface, assembles streamed tool-call fragments, parses the final usage chunk, and compacts long transcripts deterministically: the newest turns stay verbatim within `historyChars` (12,000), older turns become a bounded summary, and the full text remains in the turn ledger for `search_history`. The Pi-versus-native comparison still passes 3/3 on both after the change. A live long-context validation (24 seeded turns, 4,000-char budget) confirmed the endpoint accepts the summary and a fact from the oldest turn survives it.
+
+开关后的原生主 Agent 现在会向界面流式输出 SSE token、组装分片的工具调用、解析最后的 usage 块，并对长对话做确定性压缩：最新轮次在 `historyChars`（12,000）内保留原文，较早轮次变成有界摘要，全文仍留在回合台账中供 `search_history` 检索。改动后 Pi 与原生对比两边仍为 3/3。一次实机长对话验证（24 条种子轮次、4,000 字符预算）确认端点接受摘要，且最老一轮中的事实能够保留。
+
+### Main Agent comparison benchmark
+
+`npm run bench:main` runs three fixed prompts — direct answer, authority read, plan proposal — through the Pi runtime and the native loop with the same model and an isolated clone home per task, recording duration, tokens, tool calls, created runs and whether the expectation held. First working run on Sonnet 5.5 via Magpie: both 3/3, 21,514 vs 21,160 tokens, 23.0s vs 24.9s summed. A first attempt on the broken gemini endpoint failed for both runtimes and is kept as evidence.
+
+`npm run bench:main` 用同一模型与每个任务独立的 clone home，把三条固定 Prompt——直接回答、读取权限、提案计划——分别跑过 Pi 运行时与原生循环，记录耗时、tokens、工具调用、产生的 Run 与预期是否成立。首次有效运行（Sonnet 5.5 经 Magpie）：两边均 3/3，21,514 vs 21,160 tokens，总耗时 23.0s vs 24.9s。第一次尝试因 gemini 端点故障对两个运行时都失败，保留为证据。
+
+### Audit renders again, and the composer accepts media
+
+The audit page no longer goes blank from a missing function brace, and the
+composer has an attachment picker for PNG/JPEG/GIF/WebP images plus video files.
+Videos are converted to a representative JPEG frame before being sent to the
+model, so a video can participate in a text/image conversation.
+
+审计页不再因为缺少函数括号而整体空白；输入区新增附件按钮，可选择
+PNG/JPEG/GIF/WebP 图片和视频。视频会先提取一张代表画面为 JPEG 再发送给模型，
+因此视频也能参与文字/图片对话。
+
+### Self-check rebuilds the installed app
+
+On macOS, `npm run selfcheck:push` now rebuilds and replaces `dist/Clone AI.app`
+after the full test suite, typecheck and gate pass, before pushing. Source edits
+no longer require a separate manual app build.
+
+macOS 上 `npm run selfcheck:push` 现在会在完整测试、类型检查和 gate 通过后、
+推送之前重新构建并替换 `dist/Clone AI.app`。修改源码后不再需要手动单独构建 App。
+
+### A native Main Agent loop behind a flag
+
+`CLONE_AI_MAIN_RUNTIME=native` runs the Main Agent in-process against an OpenAI-compatible endpoint (`CLONE_AI_NATIVE_*`): the same charter/briefing/memory-push prompt, the same Kernel tools captured from the Pi extension, the turn ledger as transcript, and the same prompt-snapshot/turn/tool/usage audit. Pi remains the default and fallback. The first native loop is non-streaming, keeps the last 12 turns without compaction, refuses image attachments, and answers `search_history` from the turn ledger.
+
+`CLONE_AI_MAIN_RUNTIME=native` 让主 Agent 在进程内运行，对接 OpenAI 兼容端点（`CLONE_AI_NATIVE_*`）：相同的 charter/简报/记忆推送 Prompt、从 Pi 扩展捕获的同一组 Kernel 工具、以回合台账作为对话记录，以及相同的提示词快照/回合/工具/用量审计。Pi 仍是默认与回退。第一版原生循环非流式、保留最近 12 轮且不做压缩、拒绝图片附件，`search_history` 从回合台账检索。
+
+### A missing named input fails the native worker
+
+When a read fails on a path named in the work order or step instructions, the native worker now ends the turn as `no_artifact` (`native-missing-input`) instead of accepting an invented artifact. The prompt says not to invent missing inputs, usage from failed runs is journaled, and the missing-input benchmark now behaves as expected (native set: 5/5).
+
+当读取 WorkOrder 或步骤指令点名的路径失败时，原生 Worker 现在以 `no_artifact`（`native-missing-input`）结束回合，而不是接受编造的产物。Prompt 要求不编造缺失输入，失败运行的用量也会写入 Journal，missing-input benchmark 现在按预期失败（原生套件 5/5）。
+
+### Desktop conversation input and layout
+
+Chinese IME candidate confirmation no longer sends the message, and multi-turn messages remain full-width in a vertical conversation.
+
+中文输入法确认候选词时不再发送消息，多轮对话中的消息保持纵向排列并占满会话宽度。
+
+### Benchmark runs the native provider
+
+`npm run bench -- --provider native` runs the same fixed task set in-process without `--unsafe-host`, and the report records exact usage, verification and failure reason. The verifier now receives the benchmark workspace, fixing relative artifact checks that made even `summarize` fail. First comparison on 2026-11-05: native 4/5 and Claude 4/5 on the four solvable tasks; both miss the missing-input expectation for opposite reasons — native invents the artifact, Claude fails cleanly at verification.
+
+`npm run bench -- --provider native` 现在不用 CLI、也不需要 `--unsafe-host`，跑同一组固定任务；报告记录精确用量、验证结果与失败原因。验证器现在会拿到基准工作区，修复了此前让 summarize 都失败的相对产物检查。2026-11-05 的首次对比：四个可解任务上原生 4/5、Claude 4/5；missing-input 两边都不符合预期，原因相反——原生伪造产物，Claude 在验证阶段干净失败。
+
+### Native worker is a first-class provider with exact usage
+
+### Every Main Agent turn is in the audit
+
+CLI, `npm run main`, the desktop/server companion, and WhatsApp now write the same two journal events per turn — `main_agent.turn_started` and `main_agent.turn_completed` — plus `agent.tool_started` / `agent.tool_completed` for every Main Agent tool call. Each turn carries the input and reply (PII-redacted and capped), model, provider, reasoning effort, token usage, prompt material hash, spawned run ids, and tool calls with redacted argument summaries. The audit page gains a **Main Agent turns** tab, `clone-ai audit turns` prints the same, and `GET /api/audit/turns` serves it. The existing `main-agent-turns.jsonl` ledger is written by the same module, so the conversation view and the journal cannot disagree.
+
+CLI、`npm run main`、桌面/服务器 companion 与 WhatsApp 现在为每个回合写同样两条 Journal 事件——`main_agent.turn_started` 与 `main_agent.turn_completed`——并为每次主 Agent 工具调用写 `agent.tool_started` / `agent.tool_completed`。每个回合携带输入与回复（PII 脱敏并截断）、模型、Provider、推理强度、token 用量、提示词材料哈希、产生的 Run id，以及带脱敏参数摘要的工具调用。审计页新增 **主 Agent 回合** 标签页，`clone-ai audit turns` 打印同样的内容，`GET /api/audit/turns` 提供数据。既有的 `main-agent-turns.jsonl` 台账由同一模块写入，因此对话视图与 Journal 不会互相矛盾。
+
 ## 0.1.0
 
 Shipped on `origin/main` before this slice:

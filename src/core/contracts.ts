@@ -390,7 +390,13 @@ export type JournalEventType =
   // 来自任意入口的一次主 Agent 回合：模型看到之前的输入，以及之后的回复/工具调用/用量。
   // 没有它们，CLI 或 WhatsApp 的任务不会留下"问过什么、做过什么"的可审计轨迹。
   | "main_agent.turn_started"
-  | "main_agent.turn_completed";
+  | "main_agent.turn_completed"
+  // A deterministic context compaction: the estimated size, the threshold, how
+  // many messages were summarised away and kept, and the summary the model saw
+  // next. The desktop context panel reads this record.
+  // 一次确定性上下文压缩：估算大小、阈值、被摘要掉与保留下来的消息数，以及模型随后看到的
+  // 摘要。桌面上下文面板读这条记录。
+  | "main_agent.context_compacted";
 
 export interface JournalEvent {
   id: string;

@@ -16,7 +16,6 @@ import { describeSchedule, ScheduleStore, type LocalSchedule, type ScheduleKind 
 import { SessionStore } from "./sessions/session-store.ts";
 import { loadProviderRegistry } from "./workers/provider-catalog.ts";
 import { WorkerSettingsStore } from "./config/worker-settings.ts";
-import { WorkerRegistry } from "./workers/worker-registry.ts";
 import { runMainAgentQuery } from "./application/run-main-query.ts";
 import {
   readMainAgentTurnRecords,
@@ -67,17 +66,11 @@ import { compileBriefing } from "./main-agent/situation-briefing.ts";
 import { buildFallbackPlan } from "./planning/fallback-planner.ts";
 import { reconcileCommitments } from "./state/commitment-reconciler.ts";
 import { describeHistory, mainAgentSessionDirectory, readConversation, searchHistory } from "./main-agent/conversation-history.ts";
-import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/session.ts";
+import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/conversation-store.ts";
 import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
-import { listPiModelIds, listPiModels, piModelReference } from "./main-agent/pi-model-catalog.ts";
+import { listMainAgentModelIds, listMainAgentModels, mainAgentModelReference } from "./main-agent/main-agent-model-catalog.ts";
 import { readInvocation, readInvocations } from "./audit/invocation-ledger.ts";
 import { WhatsAppBindingInputError, WhatsAppSetupService } from "./mobile/whatsapp-setup.ts";
-import {
-  listEffectiveProviderConfigs,
-  readUserProviderConfigs,
-  removeUserProviderConfig,
-  upsertUserProviderConfig,
-} from "./config/provider-config-store.ts";
 
 export interface CompanionServerOptions {
   host?: string;
@@ -367,7 +360,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const sessions = new SessionStore(paths.sessionsFile);
   const providers = await loadProviderRegistry(dataDirectory);
   const agentSettings = new WorkerSettingsStore(paths.legacyAgentsFile, providers);
-  const agentRegistry = new WorkerRegistry(dataDirectory);
+  const agents = [{ id: "native", title: "Native worker", command: "in-process", installed: true, installable: false }];
   // One Runtime assembly, and therefore one journal, shared by every module in
   // this process. Separate stores over the same file each keep their own
   // sequence counter and their own cached view, which is how duplicate
@@ -561,7 +554,9 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         schedules,
         sessions,
         agentSettings,
-        agentRegistry,
+        agents: [
+          { id: "native", title: "Native worker", command: "in-process", installed: true, installable: false },
+        ],
         memoryGovernance,
         improvement,
         reportRunner,
@@ -572,6 +567,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         runtime: queueRuntime,
         runQueue,
         authority: assembly.authority,
+        refreshCapacityPin: assembly.refreshCapacityPin,
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "The local runtime encountered an unexpected error.";
@@ -656,7 +652,7 @@ async function handleRequest(
     schedules: ScheduleStore;
     sessions: SessionStore;
     agentSettings: WorkerSettingsStore;
-    agentRegistry: WorkerRegistry;
+    agents: Array<{ id: string; title: string; command: string; installed: boolean; installable: boolean }>;
     memoryGovernance: MemoryGovernance;
     improvement: ImprovementService;
     reportRunner?: DailyReportRunner;
@@ -667,6 +663,8 @@ async function handleRequest(
     runtime: CloneRuntime;
     runQueue: RunQueueConsumer;
     authority: StandingPolicyStore;
+    /** Re-reads the owner's pinned worker concurrency after a settings change. 设置变更后重新读取所有者固定的 Worker 并发上限。 */
+    refreshCapacityPin: () => Promise<void>;
   },
 ): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${context.host === "::1" ? "[::1]" : context.host}`);
@@ -857,7 +855,7 @@ async function handleRequest(
 
   if (request.method === "GET" && url.pathname === "/api/options") {
     const current = await context.config.get();
-    const piModels = await listPiModels().catch(() => []);
+    const piModels = await listMainAgentModels().catch(() => []);
     sendJson(response, 200, {
       workspacePath: current.workspacePath,
       mainAgentModel: current.mainAgentModel,
@@ -870,7 +868,7 @@ async function handleRequest(
 
   if (request.method === "PATCH" && url.pathname === "/api/config") {
     const body = await readJsonBody(request);
-    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined } = {};
+    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined; maxConcurrentWorkers?: number } = {};
     if (typeof body.workspacePath === "string" && body.workspacePath.trim().length > 0) {
       update.workspacePath = body.workspacePath.trim();
     }
@@ -890,19 +888,34 @@ async function handleRequest(
         return;
       }
     }
+    if ("maxConcurrentWorkers" in body) {
+      const value = body.maxConcurrentWorkers;
+      if (value !== 0 && value !== null) {
+        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+          sendJson(response, 400, { error: "maxConcurrentWorkers must be a non-negative number (0 means auto)." });
+          return;
+        }
+        update.maxConcurrentWorkers = Math.trunc(value);
+      }
+    }
     if (Object.keys(update).length === 0) {
-      sendJson(response, 400, { error: "Provide a workspacePath, locale, mainAgentModel, or mainAgentEffort to change." });
+      sendJson(response, 400, { error: "Provide a workspacePath, locale, mainAgentModel, mainAgentEffort, or maxConcurrentWorkers to change." });
       return;
     }
-    sendJson(response, 200, { config: await context.config.update(update) });
+    const config = await context.config.update(update);
+    // The pin is re-read on every dispatch, so this refresh is belt-and-braces;
+    // it also makes an auto-mode change visible immediately in capacity reads.
+    // 每次派发都会重新读取固定值，因此这里刷新只是双保险；它也自动模式的变化立即体现在
+    // 容量读取中。
+    await context.refreshCapacityPin().catch(() => undefined);
+    sendJson(response, 200, { config });
     return;
   }
 
   if (request.method === "GET" && url.pathname === "/api/settings/providers") {
-    sendJson(response, 200, {
-      providers: await listEffectiveProviderConfigs(context.dataDirectory),
-      userDefined: await readUserProviderConfigs(context.dataDirectory),
-    });
+    // One in-process provider; the CLI recipe list no longer exists.
+    // 只有进程内的 Provider；CLI 配方列表已不存在。
+    sendJson(response, 200, { providers: [], userDefined: [] });
     return;
   }
 
@@ -912,7 +925,7 @@ async function handleRequest(
     // 这只是回环能力探测：刻意不返回任何凭据，也不改写 Magpie 自己的配置。
     const gateway = await inspectMagpieGateway();
     const piModels = gateway.running
-      ? new Set((await listPiModels("magpie").catch(() => [])).map((model) => model.id))
+      ? new Set((await listMainAgentModels("magpie").catch(() => [])).map((model) => model.id))
       : new Set<string>();
     sendJson(response, 200, {
       gateways: [{
@@ -949,14 +962,14 @@ async function handleRequest(
       sendJson(response, 400, { error: `Magpie does not expose the model "${modelId}".` });
       return;
     }
-    const reference = piModelReference(modelId);
+    const reference = mainAgentModelReference(modelId);
     try {
-      // The Pi catalog is the final capability check: writing a model Clone AI
-      // cannot construct would turn a settings success into a later chat failure.
-      // Pi 目录是最终能力校验：写入 Clone AI 无法构造的模型会把设置成功变成之后的对话失败。
-      if (!(await listPiModelIds("magpie")).includes(modelId)) {
+      // The gateway's own catalog is the capability check: writing a model the
+      // endpoint does not serve would turn a settings success into a later chat failure.
+      // 网关自己的目录就是能力校验：写入端点不提供的模型，会把设置成功变成之后的对话失败。
+      if (!(await listMainAgentModelIds("magpie")).includes(modelId)) {
         sendJson(response, 409, {
-          error: `Magpie is running, but Pi is not connected to "${modelId}". Enable Pi in Magpie, run magpie sync, then retry.`,
+          error: `Magpie is running, but it does not expose "${modelId}". Sync the model in Magpie, then retry.`,
         });
         return;
       }
@@ -966,34 +979,20 @@ async function handleRequest(
       });
     } catch (error: unknown) {
       sendJson(response, 500, {
-        error: error instanceof Error ? error.message : "Could not validate the Pi model catalog.",
+        error: error instanceof Error ? error.message : "Could not validate the gateway model catalog.",
       });
     }
     return;
   }
 
   if (request.method === "PUT" && url.pathname === "/api/settings/providers") {
-    const body = await readJsonBody(request);
-    if (body.hostAccess === "unrestricted" && body.acknowledgeUnrestrictedHostAccess !== true) {
-      sendJson(response, 400, { error: "Unrestricted host access requires explicit acknowledgement; it is not a sandbox." });
-      return;
-    }
-    try {
-      // Validation lives in the store, so the GUI cannot write a declaration
-      // the Runtime would later refuse to launch.
-      // 校验在 Store 内进行，因此 GUI 无法写入 Runtime 之后会拒绝启动的声明。
-      const providers = await upsertUserProviderConfig(context.dataDirectory, body as never);
-      sendJson(response, 200, { providers });
-    } catch (error: unknown) {
-      sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid provider declaration." });
-    }
+    sendJson(response, 409, { error: "Worker CLI providers were removed; the native worker runs in-process." });
     return;
   }
 
   const providerMatch = url.pathname.match(/^\/api\/settings\/providers\/([^/]+)$/);
   if (request.method === "DELETE" && providerMatch?.[1] !== undefined) {
-    const providers = await removeUserProviderConfig(context.dataDirectory, decodeURIComponent(providerMatch[1]));
-    sendJson(response, 200, { providers });
+    sendJson(response, 409, { error: "Worker CLI providers were removed; there is nothing to delete." });
     return;
   }
 
@@ -1259,25 +1258,13 @@ async function handleRequest(
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/agents") {
-    sendJson(response, 200, { providers: await context.agentRegistry.list() });
+    sendJson(response, 200, { providers: [{ id: "native", title: "Native worker", command: "in-process", installed: true, installable: false }] });
     return;
   }
   if (request.method === "POST" && url.pathname === "/api/agents/install-missing") {
-    const body = await readJsonBody(request);
-    if (body.acknowledgeGlobalInstall !== true) {
-      sendJson(response, 400, { error: "Confirm the global software installation before continuing." });
-      return;
-    }
-    try {
-      const providers = await context.agentRegistry.list();
-      const installed = [];
-      for (const provider of providers.filter((provider) => !provider.installed && provider.installable)) {
-        installed.push(await context.agentRegistry.install(provider.id));
-      }
-      sendJson(response, 200, { installed, providers: await context.agentRegistry.list() });
-    } catch (error: unknown) {
-      sendJson(response, 500, { error: error instanceof Error ? error.message : "The local Agent installation failed." });
-    }
+    // Nothing to install: the only worker runs in-process.
+    // 没有需要安装的东西：唯一的 Worker 在进程内运行。
+    sendJson(response, 200, { installed: [], providers: [{ id: "native", title: "Native worker", command: "in-process", installed: true, installable: false }] });
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/memory/governed/recall") {
@@ -1731,6 +1718,14 @@ async function handleRequest(
     // must remain a readable 409, not an already-open stream.
     // 等到拿到 Main Agent 锁再发 SSE 头。会话正忙时必须仍是可读的 409，而不是已经打开的流。
     let streamOpen = false;
+    // A client that goes away must not leave the model running. The abort is
+    // passed to the turn, which cancels the stream and every in-flight tool.
+    // 客户端断开后不能让模型继续跑。这个 abort 会传给回合，取消流与所有在途工具。
+    const abortController = new AbortController();
+    const abortOnClose = (): void => {
+      if (!response.writableEnded) abortController.abort(new Error("The client disconnected."));
+    };
+    response.on("close", abortOnClose);
     const ensureStream = (): void => {
       if (streamOpen) return;
       streamOpen = true;
@@ -1742,6 +1737,7 @@ async function handleRequest(
       });
     };
     const send = (event: string, data: unknown): void => {
+      if (response.writableEnded || response.destroyed) return;
       ensureStream();
       response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
@@ -1750,6 +1746,8 @@ async function handleRequest(
         onDelta: (delta) => send("delta", { delta }),
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
         ...invocation,
+        signal: abortController.signal,
+        onToolEvent: (event) => send("tool", event),
       });
       send("done", result);
     } catch (error: unknown) {
@@ -1762,6 +1760,7 @@ async function handleRequest(
       }
       send("failed", { error: error instanceof Error ? error.message : "The Main Agent failed." });
     } finally {
+      response.off("close", abortOnClose);
       if (streamOpen) response.end();
     }
     return;
@@ -1958,21 +1957,7 @@ async function handleRequest(
 
   const agentInstallMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/install$/);
   if (request.method === "POST" && agentInstallMatch?.[1] !== undefined) {
-    const id = decodeURIComponent(agentInstallMatch[1]);
-    if (id !== "codex-cli" && id !== "claude-code" && id !== "pi") {
-      sendJson(response, 404, { error: "The requested local Agent is not supported." });
-      return;
-    }
-    const body = await readJsonBody(request);
-    if (body.acknowledgeGlobalInstall !== true) {
-      sendJson(response, 400, { error: "Confirm the global software installation before continuing." });
-      return;
-    }
-    try {
-      sendJson(response, 200, { provider: await context.agentRegistry.install(id) });
-    } catch (error: unknown) {
-      sendJson(response, 500, { error: error instanceof Error ? error.message : "The local Agent installation failed." });
-    }
+    sendJson(response, 409, { error: "No worker CLI can be installed; the native worker runs in-process." });
     return;
   }
 

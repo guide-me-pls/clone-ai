@@ -1,136 +1,103 @@
 /**
- * AgentMemoryWorker: memory mining by a background black-box agent.
+ * AgentMemoryWorker: memory mining by our own model client.
  *
- * After a user task completes, this worker dispatches a read-only mining
- * WorkOrder to a real provider CLI (pi by default). The provider reads the
- * task's evidence summaries and writes candidate memory entries as JSON to
- * out/candidates.json. The Kernel then validates every candidate: the type
- * must be a known class, the summary must be non-trivial, and every cited
- * evidence id must actually exist in the job — a hallucinated memory never
- * reaches the proposal queue.
+ * After a task or a conversation turn, this worker asks the configured
+ * OpenAI-compatible endpoint for candidate memories as JSON, then validates
+ * every candidate against facts the Kernel already holds: the type must be a
+ * known class, the summary must be non-trivial, and every cited evidence id must
+ * exist in the job. A hallucinated memory never reaches the proposal queue.
  *
- * Mining failures are reported to the pipeline so it can retain the job;
- * callers keep the already-completed user task separate from that failure.
+ * There is no provider CLI any more. The model call is injected, so the
+ * validation and prompt are testable without a network, and a missing endpoint
+ * fails the mining job instead of silently skipping it.
  *
- * AgentMemoryWorker：由后台黑盒 Agent 完成的记忆提炼。
+ * AgentMemoryWorker：用我们自己的模型客户端提炼记忆。
  *
- * 一轮用户任务结束后，本 Worker 把一个只读提炼 WorkOrder 派发给真实 Provider CLI
- * （默认 pi）。Provider 阅读任务的 Evidence 摘要，把候选记忆条目以 JSON 写入
- * out/candidates.json。Kernel 随后校验每一条候选：类型必须是已知分类、摘要不能
- * 空泛、引用的每条 Evidence ID 必须真实存在于任务中——幻觉记忆永远进不了提案队列。
+ * 一个任务或一轮对话结束后，本 Worker 向已配置的 OpenAI 兼容端点索取 JSON 形式的候选
+ * 记忆，再用 Kernel 已有的事实校验每一条：类型必须是已知分类、摘要不能空泛、引用的每条
+ * Evidence ID 必须存在于任务中。幻觉记忆永远进不了提案队列。
  *
- * 提炼失败会告知流水线以保留任务；调用方不会因此撤销已完成的用户工作。
+ * 不再有 Provider CLI。模型调用是注入的，因此校验与 Prompt 无需网络即可测试；端点缺失
+ * 会让提炼作业失败，而不是静默跳过。
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
-import { BlackBoxCliWorker, type BlackBoxProviderConfig } from "../workers/black-box-cli-worker.ts";
 import type { Evidence, MemoryCandidate, MemorySensitivity, MemoryType } from "../core/contracts.ts";
+import { readNativeMainAgentEndpoint } from "../main-agent/native-runtime.ts";
 import type { MemoryWorker, PendingMemoryJob } from "./memory-pipeline.ts";
 
 export interface AgentMemoryWorkerOptions {
-  /** Launch recipe for the mining provider. Defaults to the built-in pi recipe. 提炼 Provider 的启动配方，默认内建 pi 配方。 */
-  config?: BlackBoxProviderConfig;
-  timeoutMs?: number;
-  /** Explicitly permits the default miner to run without a sandbox. 明确允许默认提炼器无沙箱运行。 */
-  allowUnrestrictedHost?: boolean;
+  /** Injected completion; defaults to the configured native endpoint. 注入的补全；默认使用已配置的原生端点。 */
+  complete?: (prompt: string) => Promise<string>;
   /** Hard cap on candidates per task. 每个任务候选条数上限。 */
   maxCandidates?: number;
 }
-
-const DEFAULT_CONFIG: BlackBoxProviderConfig = {
-  id: "memory-miner",
-  label: "Memory Miner",
-  command: process.platform === "win32" ? "pi.cmd" : "pi",
-  args: ["-p", "{{prompt}}"],
-  env: ["GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "PI_CODING_AGENT_DIR", "PI_PACKAGE_DIR"],
-  timeoutMs: 60_000,
-};
 
 const MEMORY_TYPES = new Set<MemoryType>(["fact", "preference", "procedure", "decision", "commitment"]);
 const SENSITIVITIES = new Set<MemorySensitivity>(["public", "private", "secret"]);
 
 export class AgentMemoryWorker implements MemoryWorker {
-  readonly #config: BlackBoxProviderConfig;
-  readonly #timeoutMs: number;
+  readonly #complete: (prompt: string) => Promise<string>;
   readonly #maxCandidates: number;
 
   constructor(options: AgentMemoryWorkerOptions = {}) {
-    this.#config = options.config ?? { ...DEFAULT_CONFIG, ...(options.allowUnrestrictedHost === true ? { hostAccess: "unrestricted" as const } : {}) };
-    this.#timeoutMs = options.timeoutMs ?? 60_000;
+    this.#complete = options.complete ?? completeWithNativeEndpoint;
     this.#maxCandidates = options.maxCandidates ?? 3;
   }
 
-  /** The provider's raw output, before validation; used by workers that need their own prompt. 校验前的 Provider 原始输出；供需要自己 Prompt 的 Worker 使用。 */
+  /** The model's raw output, before validation; used by workers that need their own prompt. 校验前的模型原始输出；供需要自己 Prompt 的 Worker 使用。 */
   async extractRaw(job: PendingMemoryJob): Promise<string | undefined> {
-    const workspace = await mkdtemp(join(tmpdir(), "clone-ai-memory-mine-"));
-    try {
-      return await this.runMiner(job, workspace);
-    } finally {
-      await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
-    }
+    const prompt = job.promptOverride ?? miningPrompt(job);
+    const raw = await this.#complete(prompt).catch((error: unknown) => {
+      throw new Error(`Memory mining failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    return raw.trim().length === 0 ? undefined : raw;
   }
 
   async extract(job: PendingMemoryJob): Promise<MemoryCandidate[]> {
-    const workspace = await mkdtemp(join(tmpdir(), "clone-ai-memory-mine-"));
-    try {
-      const source = await this.runMiner(job, workspace);
-      if (source === undefined) throw new Error("Memory mining did not produce a candidate file.");
-      if (parseJsonArray(source) === undefined) throw new Error("Memory mining produced invalid JSON.");
-      return validateCandidates(source, job, this.#maxCandidates);
-    } finally {
-      await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
-    }
-  }
-
-  private async runMiner(job: PendingMemoryJob, workspace: string): Promise<string | undefined> {
-    {
-      const adapter = new BlackBoxCliWorker({
-        agentId: "memory-miner",
-        config: { ...this.#config, timeoutMs: this.#timeoutMs },
-        workCapabilities: ["research", "filesystem_read", "filesystem_write"],
-      });
-      const createdAt = new Date().toISOString();
-      for await (const event of adapter.execute({
-        run: { id: job.run.id, taskId: job.task.id, status: "running", createdAt, updatedAt: createdAt },
-        task: job.task,
-        step: {
-          id: "mine-memory",
-          title: "Mine memory candidates",
-          instructions: "Extract durable memory candidates from the task evidence.",
-          risk: "reversible_write",
-          acceptanceCriteria: ["out/candidates.json exists"],
-          agentId: "memory-miner",
-          requiredCapabilities: ["research", "filesystem_read", "filesystem_write"],
-        },
-        executor: { agentId: "memory-miner", providerId: this.#config.id },
-        workOrder: {
-          id: "mine-memory",
-          role: "researcher",
-          title: "Mine memory candidates",
-          objective: job.promptOverride ?? miningPrompt(job),
-          inputs: [],
-          requiredCapabilities: ["research", "filesystem_read", "filesystem_write"],
-          expectedArtifacts: [{ id: "candidates", kind: "artifact", description: "out/candidates.json", required: true }],
-          acceptanceCriteria: ["out/candidates.json contains a JSON array"],
-          risk: "read_only",
-          budget: { maxDurationMs: this.#timeoutMs, maxModelCalls: 6, maxToolCalls: 10, maxAttempts: 1 },
-        },
-        workspacePath: workspace,
-      })) {
-        if (event.type === "failed") throw new Error(`Memory mining failed: ${event.report?.category ?? event.message}`);
-      }
-      return await readFile(join(workspace, "out", "candidates.json"), "utf8").catch(() => undefined);
-    }
+    const source = await this.extractRaw(job);
+    if (source === undefined) throw new Error("Memory mining did not produce a candidate list.");
+    if (parseJsonArray(source) === undefined) throw new Error("Memory mining produced invalid JSON.");
+    return validateCandidates(source, job, this.#maxCandidates);
   }
 }
 
 /**
+ * The default completion: a tool-free chat call to the same endpoint the Main
+ * Agent uses. A missing endpoint is a mining failure, reported as such.
+ * 默认补全：向主 Agent 使用的同一端点发起一次无工具的 chat 调用。端点缺失即为提炼失败，
+ * 并如实报告。
+ */
+async function completeWithNativeEndpoint(prompt: string): Promise<string> {
+  const { endpoint, missing } = readNativeMainAgentEndpoint();
+  if (endpoint === undefined) {
+    throw new Error(`the endpoint is not configured (${missing.join(", ")})`);
+  }
+  const response = await fetch(`${endpoint.baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(endpoint.apiKey === undefined ? {} : { authorization: `Bearer ${endpoint.apiKey}` }),
+    },
+    body: JSON.stringify({
+      model: endpoint.model,
+      messages: [{ role: "user", content: prompt }],
+      stream: false,
+    }),
+    signal: AbortSignal.timeout(endpoint.timeoutMs ?? 60_000),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`the endpoint answered ${response.status}: ${detail.slice(0, 300)}`);
+  }
+  const body = await response.json() as { choices?: Array<{ message?: { content?: string | null } }> };
+  return body.choices?.[0]?.message?.content ?? "";
+}
+
+/**
  * The single mining prompt. Evidence summaries are the only input facts; the
- * provider must cite them, not invent.
- * 唯一的提炼 Prompt。Evidence 摘要是仅有的输入事实；Provider 必须引用它们，不得编造。
+ * model must cite them, not invent.
+ * 唯一的提炼 Prompt。Evidence 摘要是仅有的输入事实；模型必须引用它们，不得编造。
  */
 export function miningPrompt(job: PendingMemoryJob): string {
   const evidenceLines = job.evidence.map((item) => (
@@ -138,7 +105,7 @@ export function miningPrompt(job: PendingMemoryJob): string {
   )).join("\n");
   return [
     "You are the memory miner for Clone AI. Extract durable memory candidates from the task evidence below.",
-    "Write the result as JSON to out/candidates.json: an array of at most 3 objects.",
+    "Answer with JSON only (an array of at most 3 objects, no prose, no code fence) to out/candidates.json: the worker writes that file from your answer.",
     "Each object: { \"type\": \"fact|preference|procedure|decision|commitment\", \"summary\": string,",
     "  \"confidence\": \"low|medium|high\", \"sensitivity\": \"public|private|secret\",",
     "  \"sourceEvidenceIds\": [ids you actually cite], \"expiresAt\": optional ISO-8601 date }",

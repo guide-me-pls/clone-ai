@@ -38,6 +38,11 @@ ad-hoc 签名，不是经过 Apple notarization 的 App Store 或互联网分发
 arm64 Node.js 24+；如果运行时不在默认本地缓存路径，可通过 `CLONE_AI_MAC_NODE` 指向
 显式可执行文件。
 
+开发时运行 `npm run desktop:dev`。它打开的仍然是真实的原生 `.app`，但会直接读取当前
+工作区的 TypeScript 和 WebView 资源。修改 `src/` 或 `apps/desktop/ui/` 后，受监督的
+sidecar 会自动重启并刷新窗口；修改 Swift 原生壳时会自动重建 `.app` 并重新启动。编辑
+期间保持该命令运行，按 `Ctrl+C` 会同时停止监听和应用。
+
 macOS 原生壳采用常驻应用语义：关闭最后一个窗口不会退出，本地运行时继续工作；再次点击
 Dock 图标会显示原有窗口。只有显式选择 Dock 菜单中的“退出”（或操作系统关机）才会停止
 受监督的本地运行时。

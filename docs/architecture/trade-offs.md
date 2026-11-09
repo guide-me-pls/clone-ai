@@ -6,6 +6,33 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-09 — The model can dispatch a task, but only the Kernel plans and finishes it
+
+**Decision.** Add one model-invocable `dispatch_task` tool that turns an
+objective and acceptance criteria into the same `runQuery` path the companion
+uses. It is not a second execution surface: the Kernel still plans, applies
+authority and budgets, verifies evidence and decides completion. A conversation
+must still be answered directly, and a plan whose steps are already known still
+goes through `propose_work_plan`.
+
+**Evidence.** The audit found the Main Agent could propose plans but could not
+start work on its own (`docs/study/claude-code-parity.md`, gap #6). `runQuery`
+already owns trigger → recall → plan → execute → verify, so reusing it keeps one
+completion path. The alternative — letting the Main Agent spawn workers
+directly — would create a second authority and a second place where a task can
+be declared finished.
+
+**What it costs.** The first dispatch is synchronous from the model's point of
+view, so a long task holds the turn; background dispatch and a completion
+notification are the next step, not this one. The tool also accepts only an
+objective and criteria, so the model cannot express per-step scopes; it must use
+`propose_work_plan` when it needs that precision.
+
+**Reversal condition.** If real tasks routinely need per-step authority or
+background completion, extend `dispatch_task` with a background option and
+return a run id immediately; if the synchronous call proves to be the source of
+timeouts, make background the default.
+
 ## 2026-11-09 — Regression cases run in the default suite
 
 **Decision.** `npm test` now runs `test/*.test.ts` **and** `test/regression/*.test.ts`.
@@ -63,6 +90,265 @@ that is the intended restriction.
 **Reversal condition.** If repairs frequently need a full-file replacement, add
 an explicit `replace_file` tool gated to the repair lane with its own size check,
 rather than loosening `write_file` for everyone.
+
+## 2026-11-06 — Adopt Claude Code's harness mechanics, not its source or prompts
+
+**Decision.** Use the reverse-engineered Claude Code 2.1.317 mechanisms as a
+reference specification for clone-ai's own agent loop: typed terminal reasons,
+streaming tool scheduling with per-tool concurrency flags, a per-call
+permission pipeline, token-aware compaction, hooks, MCP, and skills. Do not copy
+source code, prompt text, or Anthropic-internal configuration into this
+repository.
+
+**Evidence.** The extracted Bun module graph contains 2,942 modules and a
+copyright notice (`cli`: "(c) Anthropic PBC. All rights reserved."). The
+mechanisms are visible as string constants and control flow
+(`BUILTIN_TOOL_NAMES`, the six-mode permission enum, 33 hook event names, the
+`effectiveWindow - 13000` compaction math). clone-ai's README states that it
+does not embed another runtime and that Claude Code is a black-box worker.
+Copying the prompt would also replace the personal-twin charter with a
+coding-CLI identity.
+
+**What it costs.** Reimplementation is slower than embedding
+`@anthropic-ai/claude-agent-sdk`; parity must be proved by clone-ai's own evals
+rather than inherited from Anthropic.
+
+**Reversal condition.** If the owner explicitly chooses time-to-parity over
+independence and accepts an Anthropic-only credential and provider path, add the
+Agent SDK as a temporary reference/benchmark path, not as the product
+architecture.
+
+## 2026-11-06 — Execution workers are general; coding is one tool profile
+
+**Decision.** Keep the Main Agent's proposal/authority boundary and add a
+model-invocable `Task`/subagent path plus read-only inspection tools. Treat
+workers as general execution surfaces: their tool set is selected by role and
+capability profile, not hardwired to coding. A coding profile (Read, Write,
+Edit, Glob, Grep, Bash) is one profile; research, review, drafting, and external
+connectors get their own. Do not give the Main Agent Bash/Edit/Write directly.
+
+**Evidence.** `src/workers/native-agent-worker.ts` already takes an arbitrary
+`NativeToolSpec[]` and a `workCapabilities` list; `fileTools()` is only the
+current default profile, not a type-level constraint. `decideTool` gates every
+call by risk, path, and network scope, so a larger or different profile does not
+widen authority. The README's invariant is "the Main Agent is the brain, never
+the authority." Claude Code's coordinator prompt also separates a coordinator
+from workers (`chunk-mas5an83.js`), which matches clone-ai's split.
+
+**What it costs.** Profiles need ownership, versioning, and tests; a role that
+gets the wrong profile can be over- or under-powered. The Main Agent cannot
+inspect files itself without a new read-only tool set.
+
+**Reversal condition.** If a single universal tool set proves simpler and every
+role needs the same tools, collapse the profiles — but keep the per-call gate
+and the capability declaration. If a same-model benchmark shows the orchestrator
+round-trip loses more than 20% task success or doubles median latency, allow the
+Main Agent to execute read-only tools directly under the same gate.
+
+## 2026-11-06 — One shared agent loop kernel serves the Main Agent and the native worker
+
+**Decision.** Extract one `src/agent/loop.ts` state machine with typed terminal
+reasons, tool scheduling, budget checks, abort propagation, retry policy, and
+compaction hooks. `runNativeMainAgentTurn` and `OpenAiCompatibleClient` become
+adapters over it.
+
+**Evidence.** Both current loops duplicate SSE/non-streaming request handling,
+usage accounting, and an 8,000-character tool-result cut
+(`native-runtime.ts:270-315`, `openai-compatible-client.ts:74-96`); both lack the
+same features. The native-runtime header says "no compaction" while the file
+compacts at `:515-558`, which is the kind of drift duplication produces. Claude
+Code has one query loop for its terminal, SDK, and desktop surfaces
+(`chunk-8ntpzya9.js`).
+
+**What it costs.** A refactor of two hot paths and a period where behavior must
+be pinned by tests; the loop must not grow provider-specific branches.
+
+**Reversal condition.** If the Main Agent and worker diverge in transport or
+streaming requirements (for example, a provider that cannot stream tool calls),
+keep separate model adapters but share the scheduler, budget, and tool-result
+layers.
+
+## 2026-11-06 — Every in-process tool call goes through a per-call decision
+
+**Decision.** Route every in-process tool call through `ToolAuthority` (or a
+successor policy broker) that returns
+`{behavior: allow | deny | ask, reason, updatedInput?}`. Plan-time policy
+remains the outer gate; hooks may add context or deny, but may not silently
+widen authority.
+
+**Evidence.** `src/core/tool-authority.ts` exists and is referenced only by
+`test/tool-authority.test.ts`; `runNativeMainAgentTurn` executes any tool the
+model names (`native-runtime.ts:292-308`). Claude Code decides each call through
+rules, mode, and `canUseTool`, and a denied call is returned to the model while
+the turn continues (`chunk-q8qwkppc.js`). The audit ranks this as gap #2.
+
+**What it costs.** More events and latency per call; the desktop and CLI need an
+`ask` path, and every tool needs a risk classification.
+
+**Reversal condition.** If per-call gating adds more than 10% latency on
+read-only batches and no real incident is prevented in a red-team exercise,
+allow read-only batches under one plan-time grant while keeping the gate for
+writes, shell, network, and external actions.
+
+## 2026-11-06 — Compaction is token-aware and recorded; deterministic summaries first
+
+**Decision.** Estimate tokens against a configured context window, compact at
+the Claude Code-derived threshold (`effective = window - min(maxOutputTokens,
+20000)`, threshold `min(floor(effective * (1 - 0.2)), effective - 13000)`,
+warning at `threshold - 20000`, blocked at `effective - 3000`), write a
+`compaction` record with preserved message ids, and default to a deterministic
+summary. Add a model-written summary only after an eval shows it preserves
+task-critical facts better.
+
+**Evidence.** The native loop compacts history by characters
+(`historyChars ?? 12000`, newest 66% verbatim) and never writes a `compaction`
+record (`native-runtime.ts:238-241,515-558`); the desktop context panel reads
+legacy Pi JSONL (`conversation-history.ts:241`). Claude Code records a
+`compact_boundary` with `preservedMessages.uuids`, a nine-section summary, and a
+restored tail. Deterministic summaries are private, cheap, and testable; model
+summaries add cost and nondeterminism.
+
+**What it costs.** Token estimation is approximate; deterministic summaries can
+lose nuance; a compaction record adds a new persisted event type.
+
+**Reversal condition.** If the long-context benchmark shows deterministic
+summaries lose a fact that a model summary preserves in at least 20% of seeded
+cases, make model summaries the default for sessions above the threshold.
+
+## 2026-11-06 — MCP and skills first; plugins, cloud, VM, and computer-use deferred
+
+**Decision.** Implement an in-process MCP host (stdio first, then HTTP/SSE) and a
+`SKILL.md` loader with progressive disclosure as P1. Defer plugin marketplaces,
+cloud sessions, VM sandboxes, Chrome integration, and computer-use until the
+weighted harness score is at least 90 and a concrete workflow requires them.
+
+**Evidence.** clone-ai has no MCP or skills code (audit: extensibility 10/100).
+MCP and skills are Claude Code's extension on-ramps; every third-party
+integration arrives through them. Plugins and cloud/VM are product surfaces with
+infrastructure cost; the macOS Seatbelt profile already isolates CLI workers
+(`authority/seatbelt.ts`), and Claude Desktop's VM is a 26 MB image plus
+platform-specific hypervisor code. Deferring them avoids spending the parity
+budget on infrastructure that does not move the harness score.
+
+**What it costs.** Users cannot install third-party plugins or run remote/browser
+tools until those phases; MCP adds an attack surface, and skills can inject
+instructions.
+
+**Reversal condition.** If the owner's real workflows depend on a specific
+plugin/marketplace or remote MCP, promote that integration; if a red-team test
+bypasses Seatbelt, promote the VM sandbox.
+
+## 2026-11-06 — The 95% target is a weighted harness-parity score
+
+**Decision.** Define parity as the 12-dimension weighted score ≥ 95, every
+dimension ≥ 80, and a same-model live benchmark that does not regress against a
+Claude Code reference run. Model quality is measured and reported separately; it
+is never blended into the harness score.
+
+**Evidence.** clone-ai supports arbitrary OpenAI-compatible endpoints; the model
+behind it may be weaker or stronger than Claude Code's default. Conflating model
+quality with harness quality makes the score incomparable and lets a weak model
+be blamed on the loop. The extracted harness mechanisms are the controllable
+variable.
+
+**What it costs.** The score needs a maintained eval suite and a live reference
+run; weights can be gamed, so the rubric requires executable evidence per level
+and a minimum per dimension.
+
+**Reversal condition.** If a same-model head-to-head shows clone-ai passes at
+least 95% of tasks while scoring below 85 on the checklist, reweight toward task
+success; the checklist is then measuring things users do not value.
+
+## 2026-11-06 — Worker concurrency follows measured machine capacity, capped by the Kernel
+
+**Decision.** The Kernel samples CPU parallelism, load average and free memory,
+computes a concurrent-worker limit, and gates every worker execution through a
+shared limiter. The Main Agent can read the same snapshot through a read-only
+`get_capacity` tool so it can size a plan, but it cannot raise the limit. An
+owner may pin a ceiling with `maxConcurrentWorkers`; `0` or unset means auto.
+
+**Why.** The owner asked for dispatch concurrency to follow memory and CPU so the
+machine is used fully. Letting the model choose the number directly would make
+concurrency depend on a sampled token rather than on the machine: it could
+oversubscribe a laptop into swap or serialize a large workstation by mistake.
+Measured capacity is deterministic, testable, and the same answer for every
+caller; the model's role stays what it already is — deciding how much work to
+propose.
+
+**Evidence.** Before this change, `executeSubagents` ran every ready work order
+with `Promise.all` and the queue started every queued Run in a tick, so the
+degree of parallelism came from the plan shape alone. A 16-core host and a
+2-core host behaved the same.
+
+**What it costs.** A limiter adds queueing: a run can sit waiting for a slot
+instead of starting immediately. Read-only subagents in one workspace still
+share the workspace lock for writes, so same-workspace write steps stay serial
+even when capacity is available.
+
+**Reversal condition.** If runtime measurement proves wrong on the owner's
+hardware (cgroups, container limits, or a noisy neighbour), let the owner pin
+`maxConcurrentWorkers` and treat auto as advisory; or replace the formula with
+an observed-throughput feedback loop. Never let the model set the hard cap.
+
+## 2026-11-06 — The harness keeps only its own agents: no Pi SDK, no black-box CLIs
+
+**Decision.** Remove the Pi Agent SDK and every black-box CLI worker (Claude
+Code, Codex, the Pi CLI, opencode) from the code path. The Main Agent runs only
+on the in-process native loop; every executing role runs only on the native
+worker. The external role has no provider until a governed action connector
+exists, instead of falling back to a CLI.
+
+**Why — the owner's reasoning.** A sub-agent behind a CLI is not controllable:
+its tool calls are invisible to the Kernel, its credentials live in that
+process, and its safety rules are prompt text rather than gates. The Main Agent
+is special: it must only dispatch tasks and assemble context, never execute, so
+its loop, context assembly and tool surface must be ours and auditable rather
+than delegated to an SDK. Keeping the CLI path as a fallback would preserve
+exactly the behavior this change exists to remove.
+
+**Alternatives rejected.** (1) Keep Pi as a fallback: the fallback becomes the
+de facto path whenever the native endpoint is down, and the uncontrolled
+behavior returns. (2) Keep CLIs only for external actions: external effects
+would run with no receipt and no per-call gate, the highest-risk path. (3) Wrap
+the CLIs in a policy proxy: still no per-call tool visibility.
+
+**Evidence.** The native worker passes the full 5/5 reliability set with exact
+usage; the native Main Agent matched Pi 15/15 across five samples and used fewer
+tokens; both native paths stream, compact and record turn/tool/usage events. The
+black-box path's audit stops at the process boundary.
+
+**What it costs.** The Main Agent requires an OpenAI-compatible endpoint
+(`CLONE_AI_NATIVE_*`); without it, turns fail clearly instead of degrading to
+Pi. External actions are unavailable until a governed connector exists. CLI-only
+capabilities (a coding agent's own tools, network access) are gone. Existing Pi
+sessions and CLI worker settings are no longer usable; the turn ledger becomes
+the conversation record.
+
+**Reversal condition.** Add a replacement adapter only when it provides per-call
+tool visibility, Kernel-gated execution and trusted receipts; a raw CLI, or an
+SDK that owns the loop, is not a valid reversal. If the native endpoint cannot
+be made reliable, the product is blocked rather than silently degraded.
+
+## 2026-11-06 — The Main Agent comparison repeats each cell and reports medians
+
+**Decision.** `npm run bench:main` runs each task/runtime cell N times (default
+5), reports median and p90 duration, median tokens and pass rate, and writes
+every individual run plus the aggregates to the result JSON. `--repeat 1`
+restores the old single-sample shape.
+
+**Evidence.** Two single-run passes on 2026-11-05 disagreed on which runtime was
+faster: the native plan cell was 45.2s in one pass and 11.1s in the other, and
+Pi's plan tokens were 8,977 vs 13,174. A one-sample cell cannot rank latency;
+the median over repeats is the cheapest way to make the comparison meaningful,
+and keeping every sample exposes the spread.
+
+**What it costs.** N times the model calls and wall time (five repeats is about
+five times the cost of one pass). The median can still mislead if the endpoint
+is under load, so the report keeps every sample and a p90 alongside it.
+
+**Reversal condition.** If recorded cassettes can replay the same prompts
+deterministically, use them for latency and keep this only as a real-endpoint
+sanity check.
 
 ## 2026-11-06 — The repair plan tells the worker how its step is judged
 
@@ -423,15 +709,243 @@ signature check starts hiding real updates.
 
 **Cost and reversal condition.** The worker row grows by one line of metadata; removing the provider section removes the only place listing a provider that has no worker bound to it. Reverse if an owner needs to manage a provider before binding any worker, or if the tab semantics break in the packaged WebKit build.
 
-## 2026-11-05 — The agent runs its own adversarial suite and repair loop
+## 2026-11-06 — The repair lane is a clone-ai Run, not a script driving another CLI
 
-**Decision.** Add a deterministic, offline adversarial suite (injection wrapping, approval replay/expiry/forwarding, protected paths and symlink escapes, tool credentials in worker env, secret-memory recall, trace redaction, rate limits) plus a self-check loop that records every round in the journal and, on a red probe, exports the failure as a trace for the existing gated repair lane. A round runs the suite, `npm run gate`, and (optionally) `npm test`; repairs still produce a draft PR and merging stays with the owner.
+**Decision.** `clone-ai repair` performs the repair as a real Run inside the
+Kernel: it accepts a trigger, attaches a two-phase plan, and executes it with
+the workers the owner has configured (a black-box CLI worker, or any other
+registered adapter). The lane keeps the existing gates from `scripts/nightly-rsi.mjs`
+(the regression test is verified red before the fix, test files are hashed, the
+staged diff may not touch protected paths) by importing
+`scripts/nightly-rsi-policy.mjs` and `scripts/nightly-rsi-state.mjs` rather than
+forking them, and it adds the worktree isolation, red-verification and hashing
+as deterministic gates the application applies around/after the Run.
 
-**Alternatives rejected.** (a) Model-driven red teaming as the primary loop — nondeterministic, costs tokens per round, and cannot be compared across runs; kept as a later layer. (b) Letting the loop edit code directly — violates the existing repair gates and makes "did it improve?" unanswerable. (c) A separate test runner — the repository already has `npm run gate` and `node --test`; a second runner would drift.
+**Alternatives rejected.** (a) Keeping `claude -p` as the executor — AGENTS.md
+§4 then describes a rule the system cannot satisfy, and the repair is performed
+by a product that is not clone-ai. (b) A native (in-process, OpenAI-compatible)
+repair worker as the mandatory executor — it would make the lane cheap to test
+but bind the repair loop to one provider and to `CLONE_AI_NATIVE_*` configuration
+that is absent on most machines; it remains available as a configured worker.
+(c) A new, self-contained policy module for the lane — a second copy of the
+protected-path list would drift from the one the nightly script enforces.
 
-**Evidence.** Every probe corresponds to a boundary that already exists in code and has a unit test or prior incident: forwarded WhatsApp content (shipped with `forwarded` + `<untrusted_data>`), approval codes (one-time, hashed, TTL), `forbiddenRoots`, `assertWorkerEnvName`, secret-memory exclusion, `digestEvents`. The suite turns those into one measured, recorded signal instead of scattered assumptions. Deterministic probes pass on this revision; the loop's repair branch is exercised with `--dry-run`.
+**Evidence.** Code inspection: `scripts/nightly-rsi.mjs` builds prompts and spawns
+a binary, so neither the Kernel's approval, verification nor journal participates
+in the repair. Its safety gates are imported here unchanged and covered by the
+existing `test/nightly-rsi.test.ts` assertions. Deterministic tests prove each
+lane gate with fake adapters (`test/repair.test.ts`). A real two-phase repair
+needs a configured worker and an authorized failing trace; whether a configured
+model produces an acceptable patch remains **assumed**, not measured here.
 
-**Cost and reversal condition.** Each round is CPU-only and adds one journal event plus a report file; repairs cost model tokens only when a probe is red and `--repair` is passed. Reverse this if the suite stops distinguishing a regression from noise (probes start passing regardless of code), or if a real incident shows the probe set missing the class that failed — extend the suite rather than loosening it.
+**What was given up.** The lane now inherits the Kernel's worker configuration
+and its adapter contract, so a machine with no installed worker CLI cannot
+repair, whereas the old script only needed `claude` on PATH. Black-box workers
+never report `test` evidence, so a red-verification step that *checks* the tests
+must be performed by the application around the Run, not by the verifier — the
+Run's own steps are scoped to writing files.
+
+**Reversal condition.** If the Kernel path proves unable to express a repair
+(needs far more steps than a plan, or the adapter contract cannot carry the
+hashes), return the two phases to a script but keep the trace export and the
+policy module shared. If measurements show the configured worker cannot repair
+real traces at an acceptable rate while a direct native client can, make the
+native adapter the default executor instead of the fallback.
+
+## 2026-11-06 — MCP tools are opted in per server and pass the same gate as built-ins
+
+**Decision.** Add a small MCP client (stdio, plus streamable HTTP) that reads
+`<clone home>/mcp.json`. Every server is disabled unless the owner writes
+`"enabled": true` for it. MCP tools are converted to `NativeToolSpec`s carrying
+an explicit risk (`read`, `write`, `network`, `external`) and are offered to a
+worker only when `decideTool` accepts that risk against the step's grants; a
+tool call that names a path is checked per call exactly like `read_file`. MCP
+output crosses the observation boundary (`sanitizeObserved`, the same sanitizer
+`renderObservationsAsFacts` uses) and reaches the model as quoted data.
+Providers that cannot take `--mcp-config` (the native in-process worker, codex,
+pi) simply receive built-in tools only.
+
+**Alternatives rejected.** (a) An SDK dependency (`@modelcontextprotocol/sdk`)
+— the protocol we need is one JSON-RPC request per tool (`initialize`,
+`tools/list`, `tools/call`) over stdio or HTTP; a dependency would be justified
+only once resources, prompts, sampling, or OAuth are in scope. (b) Enabling
+every configured server by default — an MCP server is a tool surface the owner
+did not write; enabled-by-default would silently widen what a model can do.
+(c) Granting MCP tools network access by default because the transport is
+network — the risk belongs to the tool's declared behavior, and the owner's
+config states it per tool.
+
+**Evidence.** Code inspection: today's tool table is built only from
+`src/main-agent/tools/kernel-tools.ts` and `src/workers/native-worker-factory.ts`,
+and the native worker already refuses ungranted risk (`decideTool`). Tests cover
+disabled-by-default, refusal when a granted scope does not exist, offering when
+it does, and output framing (`test/mcp.test.ts`). Whether a real third-party MCP
+server's tools are useful under these risks is **assumed**.
+
+**What was given up.** A server must declare each tool's risk in `mcp.json`
+(the lane never guesses: an undeclared tool is treated as `external` and
+refused). Tool results are text only — images and structured content are
+stringified. A crashed server is reported as a tool error, not retried.
+
+**Reversal condition.** Revisit if a real MCP server needs resources or prompts
+(use a maintained SDK rather than extending this client), or if owners routinely
+mark every tool `read` to avoid configuring risks — then risk must come from a
+signed server manifest, not from owner config.
+
+## 2026-11-05 — Self-check rebuilds the local macOS app
+
+**Decision.** On macOS, `selfcheck:push` rebuilds and replaces
+`dist/Clone AI.app` after tests, typecheck and gate pass, before pushing.
+
+**Evidence.** The running app kept showing old UI after source edits because
+the bundle is a packaged UI plus sidecar and does not hot reload. A stale app
+made fresh audit and IME fixes invisible.
+
+**Cost and reversal condition.** The check becomes slower and requires the
+macOS build toolchain. If development moves to a live-reload runtime, remove
+the bundle rebuild from this path.
+
+## 2026-11-05 — Native worker is the default for eligible roles when configured
+
+**Decision.** When `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are
+set, the default agent catalog uses `providerId: "native"` for direct, research,
+draft and review. `external` keeps the CLI default because the native worker has
+no governed action connector. Without the endpoint, the CLI defaults remain. A
+provider id the owner has saved in settings always wins over the default.
+
+**Evidence.** The native worker passed the 5/5 reliability benchmark (including
+the expected `no_artifact` failure), enforces scopes at each tool call and
+reports exact usage. The default catalog is used only when no settings file
+exists or for agents the owner has not changed; saved choices are preserved.
+
+**What it costs.** Default agents now depend on the native endpoint being up;
+the native worker has file tools only (no network or external actions); an owner
+who relied on the implicit Claude/Codex/Pi default for these roles will see a
+different worker unless they save a choice.
+
+**Reversal condition.** If the native worker regresses on the benchmark, or a
+role needs a tool it does not have, restore the CLI default for that role.
+
+## 2026-11-05 — Native Main Agent is the default when configured
+
+**Decision.** With `CLONE_AI_MAIN_RUNTIME` unset, the Main Agent uses the native
+loop when `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` are present, and
+Pi otherwise. `CLONE_AI_MAIN_RUNTIME=pi` forces Pi; `=native` forces the native
+loop and fails clearly if the endpoint is unconfigured. An explicit `native`
+never silently falls back to Pi.
+
+**Evidence.** The native loop now matches Pi on the short-task comparison (3/3
+both, tokens within ~1.6%), and passed live long-context compaction and image
+validation. It has streaming, deterministic compaction and image attachments.
+The endpoint is an explicit owner configuration, so using it when present is not
+a guess; using Pi when it is absent keeps existing installations working.
+
+**What it costs.** Two runtimes remain to maintain, and the unset case is a
+soft, environment-dependent default rather than a hard switch. An owner without
+an OpenAI-compatible endpoint stays on Pi until they configure one.
+
+**Reversal condition.** If the native loop regresses on the benchmark or the
+turn audit, restore Pi as the default and keep native strictly opt-in.
+
+## 2026-11-05 — Native Main Agent accepts image attachments
+
+**Decision.** The native Main Agent sends image attachments as OpenAI-style
+`image_url` data URLs in the current user message, alongside the text part. The
+Pi-versus-native switch therefore no longer removes a capability. Images are
+per-turn: they are not persisted in the turn ledger, so `search_history` finds
+the text, not the pixels. No downscaling is done in this version; an endpoint
+that rejects a large payload fails the turn with its own error.
+
+**Evidence.** The main branch added media attachments to the Main Agent, while
+the native branch explicitly refused images; switching `CLONE_AI_MAIN_RUNTIME`
+silently removed a feature. Magpie's catalog advertises image input for the
+models used here, and the OpenAI-compatible content-parts format is what the
+native client already speaks.
+
+**What it costs.** Base64 images inflate the request and the prompt token count;
+a very large image can exceed an endpoint's body limit. The full image is not
+recoverable from the ledger later.
+
+**Reversal condition.** If payload size becomes a practical limit, store
+attachments as content-addressed files under the clone home and send file URLs
+when the endpoint supports them, or downscale before encoding. If image history
+must be searchable, persist attachment locators in the turn event.
+
+## 2026-11-05 — Native Main Agent streams and compacts deterministically
+
+**Decision.** The native Main Agent requests SSE streaming with
+`stream_options.include_usage`, forwards content deltas to `onDelta`, assembles
+tool-call deltas by index, and parses the final usage chunk. When the transcript
+exceeds `historyChars` (default 12,000), older turns are replaced by a bounded
+deterministic summary; the newest turns stay verbatim. Full text remains in the
+turn ledger and is reachable through `search_history`.
+
+**Evidence.** The flag-gated native loop was non-streaming, so the interface
+looked frozen until a whole round finished, and it kept only the last 12 turns
+with no compaction. Magpie returns OpenAI-style SSE chunks and a final usage
+chunk when `include_usage` is set, so both fit the existing client.
+
+**What it costs.** The summary is extractive and truncated rather than
+model-written, so it preserves topics and decisions less well than Pi's
+generated summary. Streaming tool-call fragments add parser complexity, and a
+malformed stream fails the turn with a clear error instead of guessing.
+
+**Reversal condition.** If long-conversation quality suffers, replace the
+deterministic summary with a model-written compaction step (one extra call) and
+keep the deterministic one as the fallback when that call fails.
+
+## 2026-11-05 — A native Main Agent loop behind a flag, not a flag day
+
+**Decision.** Add an in-process Main Agent runtime selected by
+`CLONE_AI_MAIN_RUNTIME=native`. It compiles the same charter, situation
+briefing, executor list and memory push; offers the same Kernel tools through a
+plain descriptor list; talks to an OpenAI-compatible endpoint named by
+`CLONE_AI_NATIVE_*`; uses the turn ledger as its transcript; and writes the same
+prompt snapshot, turn events, tool events and usage records. Pi remains the
+default and the fallback. The first native loop is non-streaming and keeps the
+last N turns without compaction.
+
+**Evidence.** Pi is the Main Agent's last hard SDK dependency: it owns the loop,
+the session file, compaction and `search_history`, while the Kernel already owns
+tools, policy and completion. The native worker proved the same in-process,
+per-call scope model works. A flag lets the two runtimes be compared on the
+benchmark and through the turn records before any default changes.
+
+**What it costs.** No streaming or compaction in the first phase; images are
+refused under the native flag; the transcript is the turn ledger, so
+`search_history` searches the ledger instead of Pi session files; the model must
+be an OpenAI-compatible endpoint; native turns are not resumable as Pi sessions.
+
+**Reversal condition.** If the native loop cannot match Pi on the benchmark and
+the turn audit, keep Pi as the default and remove the native path. If streaming
+or compaction is the blocker, add it before flipping the default.
+
+## 2026-11-05 — A missing named input fails the native worker instead of allowing invention
+
+**Decision.** If a read tool fails on a path named in the work order's objective
+or the step's instructions, the worker ends the turn as `no_artifact` with
+signature `native-missing-input`; artifacts produced after that read are not
+accepted. A failed read on a path the instructions do not name is still returned
+to the model so it can retry. The worker's prompt also tells the model to stop
+and report a missing required input instead of inventing its contents.
+
+**Evidence.** The `missing-input` benchmark task asks the worker to read
+`docs/absent.md` and write `out/summary.md`. On 2026-11-05 the native worker read
+the absent file, received ENOENT, then wrote an invented 90-byte summary and
+passed verification; Claude failed cleanly at verification. The loop's
+resilience to one bad call is right for a retry, but wrong for an input the task
+declared as required.
+
+**What it costs.** A task that names a path that is legitimately optional and
+absent now fails. Instructions must name required inputs; the model may still
+spend tokens before the guard fires.
+
+**Reversal condition.** If real tasks routinely name optional paths, narrow the
+rule to declared work-order inputs or an explicit `requiredInputs` field; do not
+remove the failure on a required input.
+
+## 2026-11-05 — The native worker becomes a provider with exact usage, still opt-in
+
 
 ## 2026-11-05 — Every Agent invocation is audited outside CLONE_HOME
 
@@ -455,13 +969,19 @@ the plaintext JSONL no longer meets the threat model.
 
 ## 2026-11-05 — Require explicit intent for root-level file names
 
-**Decision.** Keep extracting ordinary paths with directory separators, but
-exclude URLs, code expressions, and paths with constant-like uppercase directory
-segments. Extract a root-level filename only when the same sentence or
-assertion contains an explicit file-intent word and its extension belongs to a
-conservative allowlist. Reject treating every dotted token as a file and reject
-requiring intent words for paths that already have directory separators.
+**Decision.** `native` is registered in the provider catalog, so an owner can
+select it per agent like any CLI. The adapter's id is the configured agent id
+and its `providerId` is `native`; its capabilities come from the agent role,
+with external effects excluded. Its model client reports exact token usage per
+model call, which the Kernel journals as `usage.recorded` with runId and stepId.
+It still requires `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`; it does
+not become the default.
 
+**Evidence.** The worker already existed and enforced scopes at each tool call,
+but it was invisible to settings (only a special case in the agent registry),
+reported no usage, and its adapter identity was literally `native` rather than
+the configured agent. The turn/run audit can now carry exact usage; leaving the
+native path unmeasured would make any CLI-versus-native comparison impossible.
 **Evidence.** The nightly repair trace reported a false failure when the
 verifier interpreted `fs.rename`, `os.tmpdir`, `consumed-traces.json`, and
 `REPORT_DIR/consumed-traces.json` as required workspace files. Source
@@ -470,11 +990,42 @@ distinctions. The targeted offline regression tests pass after the change;
 broader coverage remains a hypothesis. No before-change eval was run under
 this work order.
 
-**Cost and reversal condition.** Real root-level deliverables without an intent
-word in the same sentence or assertion, or with an unlisted extension, will be
-missed. Revisit the rule when representative real deliverables show those
-misses matter, and only widen the vocabulary or allowlist with regression cases
-that also preserve the exclusions.
+**What it costs.** The owner must configure an OpenAI-compatible endpoint; the
+worker has no external-action tools, so `external` stays with governed
+connectors; token counts depend on the endpoint returning a usage block.
+
+**Reversal condition.** If endpoints rarely report usage, keep the gateway's
+time-window inference as the fallback and mark exact usage unavailable. If the
+native loop proves less reliable than a CLI on the benchmark, keep the CLI as
+the default and native as opt-in.
+
+## 2026-11-05 — Every Main Agent turn is a journal record, not a side file
+
+**Decision.** Every entry point — CLI, `npm run main`, the companion/server, and
+WhatsApp — writes the same two journal events for a turn:
+`main_agent.turn_started` and `main_agent.turn_completed`. Each tool the Main
+Agent calls also writes `agent.tool_started` / `agent.tool_completed`. The turn
+record carries the input and reply (PII-redacted and capped), model, provider,
+reasoning effort, token usage, prompt material hash, tool calls with redacted
+argument summaries, and the terminal status. The existing
+`main-agent-turns.jsonl` ledger is written by the same module, so the UI and the
+journal cannot disagree.
+
+**Evidence.** Before this change, CLI and `npm run main` wrote only a prompt
+snapshot; the companion wrote a side JSONL that the audit never read; the Pi
+`tool_execution_*` events were never subscribed to; and `usage.recorded` had no
+turn id. A task an agent ran through `clone-ai "..."` could therefore leave no
+auditable input, reply, tool call, or model usage. The journal is the
+append-only truth, so turn data belongs there rather than in a second log.
+
+**What it costs.** Input and reply text increase journal size. They are redacted
+and capped, and the full transcript remains in the Pi session file named by the
+event. Tool arguments are stored as a redacted summary, not verbatim.
+
+**Reversal condition.** If journal growth becomes material, move the text to a
+content-addressed turn file (the prompt-snapshot pattern) and keep only its hash
+and locator in the event. If redaction proves insufficient for tool arguments,
+store the tool name and a hash only.
 
 ## 2026-11-05 — Recover planning orphans only after a conservative grace period
 
@@ -585,6 +1136,172 @@ configured by inheritance; it must go through the broker.
 **Reversal condition.** If a trusted, narrowly scoped operation needs a tool
 credential, add per-call broker injection after Kernel authorization; do not
 re-enable inheritance.
+
+## 2026-11-05 — Consistency is measured, and the first run failed three of four
+
+**Decided:** `npm run bench:consistency` runs four consistency scenarios and two
+restraint scenarios against the real recall + context + attention path.
+
+**What the first run measured.** 1/4 consistency scenarios passed and 100% of
+irrelevant observations became interruptions. The three failures were real:
+
+- a moved meeting and the old time both reached the context;
+- a changed preference competed with the previous one;
+- a stated preference was not recalled at all against a long question.
+
+**What was changed in response.**
+
+- Preferences may be recalled below the product floor (0.08 instead of 0.2),
+  but only on a *distinctive* match — a term shared by at most a quarter of the
+  library. Measured: without the distinctiveness check the lower floor made an
+  idle memory look used and defeated idle archival. Function-word bigrams
+  (必须, 应该, 时候) were added to the same exclusion the Latin stopword list
+  already applied.
+- A newer memory using an explicit replacement verb (改到, 改用, 不再, "changed
+  to") retires an older memory of the same type that shares a substantive term,
+  **in the context only**. Similarity alone does not do it: "周五下午三点开会" and
+  "周五的会改到周四下午" share two tokens of a dozen, so the verb is the signal.
+- Observations earn an interruption only when their text asks for a decision
+  (截止, 确认, due, invoice …). Everything else is background.
+
+**What was given up.** A memory that supersedes another without saying so
+("会改期了" with no verb) still leaves both in the context. An urgent-looking
+message with none of the signal words is missed. Both are recorded, not hidden.
+
+**Reversal condition.** Any of the three scenarios regressing is the signal to
+revisit its fix; a semantic comparator would let the supersede rule drop the
+verb requirement.
+
+## 2026-11-05 — In-step resume: deliberately not built
+
+**Decided:** a worker that dies mid-step is restarted whole (when replay-safe)
+or failed; no adapter resumes inside a step.
+
+**Why.** The two boundaries that matter are already enforceable — the step and
+the run. Resuming *inside* a step means trusting a worker's claim about how far
+it got, which a black-box CLI cannot make and a native worker would have to
+commit to a checkpoint protocol before every side effect. The current policy
+(re-queue only when replay-safe; fail when the work was external or
+mid-verification) is the conservative reading of the same facts.
+
+**What was given up.** A long step that dies at 90% is paid for again. For the
+native worker this is bounded by its duration budget, not by correctness.
+
+**Reversal condition.** If long steps become common and re-running them is
+expensive, add an explicit checkpoint to `NativeModelClient` — a resumable
+conversation state the worker itself wrote and can validate — never a guess
+from workspace state.
+
+## 2026-11-05 — Calendar and email arrive as read-only connectors
+
+**Decided:** `CalendarConnector` reads ICS from a file or an https URL;
+`EmailConnector` reads an IMAP INBOX. Neither can write, accept an invite or
+send mail. Credentials are named (`env`) and read from the process environment
+at build time; a missing variable leaves the connector disabled and says why.
+
+**Why ICS and IMAP rather than vendor APIs.** One reader covers Apple, Google,
+Outlook and Nextcloud exports without OAuth, a vendor SDK, or storing a token
+refresh flow. IMAP is the one protocol every mailbox speaks.
+
+**What was given up.** No push: both poll on the maintenance sweep, so a
+calendar change is seen within one interval, not immediately. No thread bodies
+beyond a snippet, and no attachments. Mail is read-only, so "reply for me"
+remains a separate work order the owner must approve — deliberate, but it means
+the twin cannot yet answer an email end to end.
+
+**Reversal condition.** If replies become a product requirement, add an action
+connector with receipts; do not add a write method to this observation
+connector.
+
+## 2026-11-05 — The memory context budget is spent per class
+
+**Decided:** preferences may claim 50% of the remaining budget, task outcomes
+25%, project facts 20%, agent outcomes 5%, filled in that order, with unused
+capacity rolling forward.
+
+**Why.** A flat 1200-character cap let a week of finished-task logs crowd out
+the one preference that would change an answer; preference questions were the
+worst slice on LongMemEval, at 56.7% context hit rate against 92-99% elsewhere.
+
+**What was given up.** Ranking is no longer purely by relevance score: a
+high-scoring task memory can be dropped for a lower-scoring preference. That is
+the intended trade, but it means a debugging question about a recent task may
+see less of that task than before.
+
+**Reversal condition.** If the context-boundary benchmark shows a regression on
+task-shaped questions, raise the task-outcome share or make the weights depend
+on the intent.
+
+## 2026-11-05 — Conflict detection is token overlap, and says so
+
+**Decided:** `findConflicts` compares token overlap (overlap coefficient) among
+active memories of the same type; ≥0.55 is a near-duplicate, ≥0.35 a subject
+worth reviewing. Matched restatements are dropped from the recalled set before
+the context is built.
+
+**Measured limits.** Reworded statements score 0.57-0.93; unrelated ones 0.0-0.4.
+A *changed value* in Chinese ("蓝色" -> "绿色") scores only 0.29 and is therefore
+**not reliably caught** — the differing value replaces a bigram at both ends.
+The tests assert the cases that work and say so in the comment; they do not
+assert the case that does not.
+
+**What was given up.** Contradictions phrased differently remain undetected, and
+may both be recalled. Mitigation: only one is dropped when they *are* detected,
+and the owner sees conflicts as review suggestions rather than automatic
+deletion.
+
+**Reversal condition.** An embedding-based comparison, measured on the same
+pairs, that catches the value-change case above.
+
+## 2026-11-05 — Supersedes: conversation mining defaults to a cheap local filter
+
+**Decided:** `CLONE_AI_MEMORY_MINING` is now a three-way switch.
+Unset = `filtered`: a turn is mined when it contains a durable-statement
+signal (`src/memory/mining-policy.ts`), `off` silences both conversation and
+task mining, `all` mines every turn. Task mining keeps the deterministic worker
+unless the mode is `all`.
+
+**Why the earlier entry changed.** "Opt-in" meant the feature a personal agent
+needs most — learning without being asked — was off out of the box. The filter
+is local, has no model call, and errs toward mining: a missed statement is a
+memory never learned, an extra call is a few cents.
+
+**What was given up.** Turns without a signal are never mined, so a fact stated
+plainly but without any of the matched patterns ("杭州今天下雨" followed later by
+a request) can be missed. `all` is the escape hatch.
+
+**Reversal condition.** If the filter's miss rate is visible in practice, widen
+the signal list or make `all` the default.
+
+## 2026-11-05 — Consume repaired traces by runId and file fingerprint
+
+**Decided.** Store the latest successful batch outcome for each runId alongside
+the SHA-256 of the exact input file, and skip only a matching pair. Mark only
+`fixed`, `pr-created`, or `patch-only`; an error remains eligible. Persist via
+a same-directory rename; an unreadable or malformed state falls back to empty.
+
+**Evidence and alternatives.** The current `loadTraces` reads the first files
+without a record of earlier outcomes, so unchanged failures are sent to repair
+again; this follows from code inspection, not a measured production incident.
+Always retrying wastes repair work; recording runId alone would suppress new
+content. The effectiveness of the complete model-dependent workflow remains
+**assumed**, since it is outside this offline work order. Lost or corrupt state
+can cause repeat work, and a later failure after a successful outcome does not
+roll that outcome back.
+
+**Reversal condition.** Replace this file-based scheme if a durable shared
+ledger is needed across machines, or if trace exports change bytes without
+changing actionable evidence often enough to cause repeated repairs.
+
+## 2026-11-05 — The agent runs its own adversarial suite and repair loop
+
+**Decision.** Add a deterministic, offline adversarial suite (injection wrapping, approval replay/expiry/forwarding, protected paths and symlink escapes, tool credentials in worker env, secret-memory recall, trace redaction, rate limits) plus a self-check loop that records every round in the journal and, on a red probe, exports the failure as a trace for the existing gated repair lane. A round runs the suite, `npm run gate`, and (optionally) `npm test`; repairs still produce a draft PR and merging stays with the owner.
+
+**Alternatives rejected.** (a) Model-driven red teaming as the primary loop — nondeterministic, costs tokens per round, and cannot be compared across runs; kept as a later layer. (b) Letting the loop edit code directly — violates the existing repair gates and makes "did it improve?" unanswerable. (c) A separate test runner — the repository already has `npm run gate` and `node --test`; a second runner would drift.
+
+**Evidence.** Every probe corresponds to a boundary that already exists in code and has a unit test or prior incident: forwarded WhatsApp content (shipped with `forwarded` + `<untrusted_data>`), approval codes (one-time, hashed, TTL), `forbiddenRoots`, `assertWorkerEnvName`, secret-memory exclusion, `digestEvents`. The suite turns those into one measured, recorded signal instead of scattered assumptions. Deterministic probes pass on this revision; the loop's repair branch is exercised with `--dry-run`.
+
+**Cost and reversal condition.** Each round is CPU-only and adds one journal event plus a report file; repairs cost model tokens only when a probe is red and `--repair` is passed. Reverse this if the suite stops distinguishing a regression from noise (probes start passing regardless of code), or if a real incident shows the probe set missing the class that failed — extend the suite rather than loosening it.
 
 ## 2026-11-04 — Failed traces and repair run only in a gated, draft-PR lane
 
@@ -809,142 +1526,6 @@ the system prompt changes between turns, which weakens prompt caching.
 **Reversal condition.** If per-turn latency becomes visible, or if prompt
 caching savings outweigh push accuracy.
 
-## 2026-11-05 — Consistency is measured, and the first run failed three of four
-
-**Decided:** `npm run bench:consistency` runs four consistency scenarios and two
-restraint scenarios against the real recall + context + attention path.
-
-**What the first run measured.** 1/4 consistency scenarios passed and 100% of
-irrelevant observations became interruptions. The three failures were real:
-
-- a moved meeting and the old time both reached the context;
-- a changed preference competed with the previous one;
-- a stated preference was not recalled at all against a long question.
-
-**What was changed in response.**
-
-- Preferences may be recalled below the product floor (0.08 instead of 0.2),
-  but only on a *distinctive* match — a term shared by at most a quarter of the
-  library. Measured: without the distinctiveness check the lower floor made an
-  idle memory look used and defeated idle archival. Function-word bigrams
-  (必须, 应该, 时候) were added to the same exclusion the Latin stopword list
-  already applied.
-- A newer memory using an explicit replacement verb (改到, 改用, 不再, "changed
-  to") retires an older memory of the same type that shares a substantive term,
-  **in the context only**. Similarity alone does not do it: "周五下午三点开会" and
-  "周五的会改到周四下午" share two tokens of a dozen, so the verb is the signal.
-- Observations earn an interruption only when their text asks for a decision
-  (截止, 确认, due, invoice …). Everything else is background.
-
-**What was given up.** A memory that supersedes another without saying so
-("会改期了" with no verb) still leaves both in the context. An urgent-looking
-message with none of the signal words is missed. Both are recorded, not hidden.
-
-**Reversal condition.** Any of the three scenarios regressing is the signal to
-revisit its fix; a semantic comparator would let the supersede rule drop the
-verb requirement.
-
-## 2026-11-05 — In-step resume: deliberately not built
-
-**Decided:** a worker that dies mid-step is restarted whole (when replay-safe)
-or failed; no adapter resumes inside a step.
-
-**Why.** The two boundaries that matter are already enforceable — the step and
-the run. Resuming *inside* a step means trusting a worker's claim about how far
-it got, which a black-box CLI cannot make and a native worker would have to
-commit to a checkpoint protocol before every side effect. The current policy
-(re-queue only when replay-safe; fail when the work was external or
-mid-verification) is the conservative reading of the same facts.
-
-**What was given up.** A long step that dies at 90% is paid for again. For the
-native worker this is bounded by its duration budget, not by correctness.
-
-**Reversal condition.** If long steps become common and re-running them is
-expensive, add an explicit checkpoint to `NativeModelClient` — a resumable
-conversation state the worker itself wrote and can validate — never a guess
-from workspace state.
-
-## 2026-11-05 — Calendar and email arrive as read-only connectors
-
-**Decided:** `CalendarConnector` reads ICS from a file or an https URL;
-`EmailConnector` reads an IMAP INBOX. Neither can write, accept an invite or
-send mail. Credentials are named (`env`) and read from the process environment
-at build time; a missing variable leaves the connector disabled and says why.
-
-**Why ICS and IMAP rather than vendor APIs.** One reader covers Apple, Google,
-Outlook and Nextcloud exports without OAuth, a vendor SDK, or storing a token
-refresh flow. IMAP is the one protocol every mailbox speaks.
-
-**What was given up.** No push: both poll on the maintenance sweep, so a
-calendar change is seen within one interval, not immediately. No thread bodies
-beyond a snippet, and no attachments. Mail is read-only, so "reply for me"
-remains a separate work order the owner must approve — deliberate, but it means
-the twin cannot yet answer an email end to end.
-
-**Reversal condition.** If replies become a product requirement, add an action
-connector with receipts; do not add a write method to this observation
-connector.
-
-## 2026-11-05 — The memory context budget is spent per class
-
-**Decided:** preferences may claim 50% of the remaining budget, task outcomes
-25%, project facts 20%, agent outcomes 5%, filled in that order, with unused
-capacity rolling forward.
-
-**Why.** A flat 1200-character cap let a week of finished-task logs crowd out
-the one preference that would change an answer; preference questions were the
-worst slice on LongMemEval, at 56.7% context hit rate against 92-99% elsewhere.
-
-**What was given up.** Ranking is no longer purely by relevance score: a
-high-scoring task memory can be dropped for a lower-scoring preference. That is
-the intended trade, but it means a debugging question about a recent task may
-see less of that task than before.
-
-**Reversal condition.** If the context-boundary benchmark shows a regression on
-task-shaped questions, raise the task-outcome share or make the weights depend
-on the intent.
-
-## 2026-11-05 — Conflict detection is token overlap, and says so
-
-**Decided:** `findConflicts` compares token overlap (overlap coefficient) among
-active memories of the same type; ≥0.55 is a near-duplicate, ≥0.35 a subject
-worth reviewing. Matched restatements are dropped from the recalled set before
-the context is built.
-
-**Measured limits.** Reworded statements score 0.57-0.93; unrelated ones 0.0-0.4.
-A *changed value* in Chinese ("蓝色" -> "绿色") scores only 0.29 and is therefore
-**not reliably caught** — the differing value replaces a bigram at both ends.
-The tests assert the cases that work and say so in the comment; they do not
-assert the case that does not.
-
-**What was given up.** Contradictions phrased differently remain undetected, and
-may both be recalled. Mitigation: only one is dropped when they *are* detected,
-and the owner sees conflicts as review suggestions rather than automatic
-deletion.
-
-**Reversal condition.** An embedding-based comparison, measured on the same
-pairs, that catches the value-change case above.
-
-## 2026-11-05 — Supersedes: conversation mining defaults to a cheap local filter
-
-**Decided:** `CLONE_AI_MEMORY_MINING` is now a three-way switch.
-Unset = `filtered`: a turn is mined when it contains a durable-statement
-signal (`src/memory/mining-policy.ts`), `off` silences both conversation and
-task mining, `all` mines every turn. Task mining keeps the deterministic worker
-unless the mode is `all`.
-
-**Why the earlier entry changed.** "Opt-in" meant the feature a personal agent
-needs most — learning without being asked — was off out of the box. The filter
-is local, has no model call, and errs toward mining: a missed statement is a
-memory never learned, an extra call is a few cents.
-
-**What was given up.** Turns without a signal are never mined, so a fact stated
-plainly but without any of the matched patterns ("杭州今天下雨" followed later by
-a request) can be missed. `all` is the escape hatch.
-
-**Reversal condition.** If the filter's miss rate is visible in practice, widen
-the signal list or make `all` the default.
-
 ## 2026-11-04 — Conversation mining is opt-in (`CLONE_AI_MEMORY_MINING=1`)
 
 **Decided:** off by default, same as task mining.
@@ -1046,106 +1627,3 @@ flood of approvals trains the owner to approve blindly, which defeats the gate.
 ones are decided.
 
 **Status:** the bucket size and the cap of 10 are assumed, not tuned.
-
-## 2026-11-05 — Consume repaired traces by runId and file fingerprint
-
-**Decided.** Store the latest successful batch outcome for each runId alongside
-the SHA-256 of the exact input file, and skip only a matching pair. Mark only
-`fixed`, `pr-created`, or `patch-only`; an error remains eligible. Persist via
-a same-directory rename; an unreadable or malformed state falls back to empty.
-
-**Evidence and alternatives.** The current `loadTraces` reads the first files
-without a record of earlier outcomes, so unchanged failures are sent to repair
-again; this follows from code inspection, not a measured production incident.
-Always retrying wastes repair work; recording runId alone would suppress new
-content. The effectiveness of the complete model-dependent workflow remains
-**assumed**, since it is outside this offline work order. Lost or corrupt state
-can cause repeat work, and a later failure after a successful outcome does not
-roll that outcome back.
-
-**Reversal condition.** Replace this file-based scheme if a durable shared
-ledger is needed across machines, or if trace exports change bytes without
-changing actionable evidence often enough to cause repeated repairs.
-
-## 2026-11-06 — The repair lane is a clone-ai Run, not a script driving another CLI
-
-**Decision.** `clone-ai repair` performs the repair as a real Run inside the
-Kernel: it accepts a trigger, attaches a two-phase plan, and executes it with
-the workers the owner has configured (a black-box CLI worker, or any other
-registered adapter). The lane keeps the existing gates from `scripts/nightly-rsi.mjs`
-(the regression test is verified red before the fix, test files are hashed, the
-staged diff may not touch protected paths) by importing
-`scripts/nightly-rsi-policy.mjs` and `scripts/nightly-rsi-state.mjs` rather than
-forking them, and it adds the worktree isolation, red-verification and hashing
-as deterministic gates the application applies around/after the Run.
-
-**Alternatives rejected.** (a) Keeping `claude -p` as the executor — AGENTS.md
-§4 then describes a rule the system cannot satisfy, and the repair is performed
-by a product that is not clone-ai. (b) A native (in-process, OpenAI-compatible)
-repair worker as the mandatory executor — it would make the lane cheap to test
-but bind the repair loop to one provider and to `CLONE_AI_NATIVE_*` configuration
-that is absent on most machines; it remains available as a configured worker.
-(c) A new, self-contained policy module for the lane — a second copy of the
-protected-path list would drift from the one the nightly script enforces.
-
-**Evidence.** Code inspection: `scripts/nightly-rsi.mjs` builds prompts and spawns
-a binary, so neither the Kernel's approval, verification nor journal participates
-in the repair. Its safety gates are imported here unchanged and covered by the
-existing `test/nightly-rsi.test.ts` assertions. Deterministic tests prove each
-lane gate with fake adapters (`test/repair.test.ts`). A real two-phase repair
-needs a configured worker and an authorized failing trace; whether a configured
-model produces an acceptable patch remains **assumed**, not measured here.
-
-**What was given up.** The lane now inherits the Kernel's worker configuration
-and its adapter contract, so a machine with no installed worker CLI cannot
-repair, whereas the old script only needed `claude` on PATH. Black-box workers
-never report `test` evidence, so a red-verification step that *checks* the tests
-must be performed by the application around the Run, not by the verifier — the
-Run's own steps are scoped to writing files.
-
-**Reversal condition.** If the Kernel path proves unable to express a repair
-(needs far more steps than a plan, or the adapter contract cannot carry the
-hashes), return the two phases to a script but keep the trace export and the
-policy module shared. If measurements show the configured worker cannot repair
-real traces at an acceptable rate while a direct native client can, make the
-native adapter the default executor instead of the fallback.
-
-## 2026-11-06 — MCP tools are opted in per server and pass the same gate as built-ins
-
-**Decision.** Add a small MCP client (stdio, plus streamable HTTP) that reads
-`<clone home>/mcp.json`. Every server is disabled unless the owner writes
-`"enabled": true` for it. MCP tools are converted to `NativeToolSpec`s carrying
-an explicit risk (`read`, `write`, `network`, `external`) and are offered to a
-worker only when `decideTool` accepts that risk against the step's grants; a
-tool call that names a path is checked per call exactly like `read_file`. MCP
-output crosses the observation boundary (`sanitizeObserved`, the same sanitizer
-`renderObservationsAsFacts` uses) and reaches the model as quoted data.
-Providers that cannot take `--mcp-config` (the native in-process worker, codex,
-pi) simply receive built-in tools only.
-
-**Alternatives rejected.** (a) An SDK dependency (`@modelcontextprotocol/sdk`)
-— the protocol we need is one JSON-RPC request per tool (`initialize`,
-`tools/list`, `tools/call`) over stdio or HTTP; a dependency would be justified
-only once resources, prompts, sampling, or OAuth are in scope. (b) Enabling
-every configured server by default — an MCP server is a tool surface the owner
-did not write; enabled-by-default would silently widen what a model can do.
-(c) Granting MCP tools network access by default because the transport is
-network — the risk belongs to the tool's declared behavior, and the owner's
-config states it per tool.
-
-**Evidence.** Code inspection: today's tool table is built only from
-`src/main-agent/tools/kernel-tools.ts` and `src/workers/native-worker-factory.ts`,
-and the native worker already refuses ungranted risk (`decideTool`). Tests cover
-disabled-by-default, refusal when a granted scope does not exist, offering when
-it does, and output framing (`test/mcp.test.ts`). Whether a real third-party MCP
-server's tools are useful under these risks is **assumed**.
-
-**What was given up.** A server must declare each tool's risk in `mcp.json`
-(the lane never guesses: an undeclared tool is treated as `external` and
-refused). Tool results are text only — images and structured content are
-stringified. A crashed server is reported as a tool error, not retried.
-
-**Reversal condition.** Revisit if a real MCP server needs resources or prompts
-(use a maintained SDK rather than extending this client), or if owners routinely
-mark every tool `read` to avoid configuring risks — then risk must come from a
-signed server manifest, not from owner config.

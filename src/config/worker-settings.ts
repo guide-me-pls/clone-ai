@@ -36,7 +36,7 @@ const DEFAULT_AGENTS: WorkerProfile[] = [
     role: "direct",
     description: "处理无需拆分的本地请求。",
     purpose: "让简单问题不被不必要地拆成子任务。",
-    providerId: "codex-cli",
+    providerId: "native",
     enabled: true,
     required: true,
   },
@@ -46,7 +46,7 @@ const DEFAULT_AGENTS: WorkerProfile[] = [
     role: "research",
     description: "收集约束、已有信息和待确认事项。",
     purpose: "用于调研、比较、分析和需要先理解背景的任务。",
-    providerId: "claude-code",
+    providerId: "native",
     enabled: true,
   },
   {
@@ -55,7 +55,7 @@ const DEFAULT_AGENTS: WorkerProfile[] = [
     role: "draft",
     description: "把上下文转化为可编辑的本地交付物。",
     purpose: "用于计划、文档、代码、邮件和其他可回退产物。",
-    providerId: "codex-cli",
+    providerId: "native",
     enabled: true,
   },
   {
@@ -64,48 +64,46 @@ const DEFAULT_AGENTS: WorkerProfile[] = [
     role: "review",
     description: "检查计划、产物和证据是否足以支持下一步。",
     purpose: "用于复杂任务和外部动作前的独立复核。",
-    providerId: "pi",
-    enabled: true,
-  },
-  {
-    id: "external-operator",
-    title: "外部执行 Agent",
-    role: "external",
-    description: "执行会影响外部世界的最后一步。",
-    purpose: "用于发送、发布、提交、预约或购买；始终逐步等待你的确认。",
-    providerId: "codex-cli",
+    providerId: "native",
     enabled: true,
   },
 ];
 
 /**
  * Return a fresh default catalog so callers never mutate the module-level
- * settings. The catalog is planning metadata, not an execution grant.
+ * settings. There is one provider, the native worker; the external role has no
+ * default agent until a governed action connector exists.
  *
- * 返回一份全新的默认 Agent 目录，避免调用方修改模块级设置。这个目录只是规划元数据，
- * 不是执行授权。
+ * 返回一份全新的默认 Agent 目录，避免调用方修改模块级设置。只有一个 Provider——
+ * 原生 Worker；external 角色在有受治理的动作连接器之前没有默认 Agent。
  */
-export function defaultWorkerProfiles(): WorkerProfile[] {
+export function defaultWorkerProfiles(_environment: NodeJS.ProcessEnv = process.env): WorkerProfile[] {
+  return defaultAgents();
+}
+
+function defaultAgents(): WorkerProfile[] {
   return DEFAULT_AGENTS.map((agent) => ({ ...agent }));
 }
 
 export class WorkerSettingsStore {
   readonly #path: string;
   readonly #providers: ProviderRegistry;
+  readonly #environment: NodeJS.ProcessEnv;
   #writes: Promise<void> = Promise.resolve();
 
-  constructor(path: string, providers: ProviderRegistry = builtInProviders) {
+  constructor(path: string, providers: ProviderRegistry = builtInProviders, environment: NodeJS.ProcessEnv = process.env) {
     this.#path = path;
     this.#providers = providers;
+    this.#environment = environment;
   }
 
   async get(): Promise<CloneSettings> {
     try {
       const source = await readFile(this.#path, "utf8");
-      return normalize(JSON.parse(source) as Partial<CloneSettings>, this.#providers);
+      return normalize(JSON.parse(source) as Partial<CloneSettings>, this.#providers, this.#environment);
     } catch (error: unknown) {
       if (isMissingFile(error)) {
-        return { agents: defaultWorkerProfiles() };
+        return { agents: defaultWorkerProfiles(this.#environment) };
       }
       throw error;
     }
@@ -153,10 +151,10 @@ export class WorkerSettingsStore {
   }
 }
 
-function normalize(input: Partial<CloneSettings>, providers: ProviderRegistry): CloneSettings {
+function normalize(input: Partial<CloneSettings>, providers: ProviderRegistry, environment: NodeJS.ProcessEnv): CloneSettings {
   const configured = new Map((input.agents ?? []).map((agent) => [agent.id, agent]));
   return {
-    agents: DEFAULT_AGENTS.map((agent) => {
+    agents: defaultAgents().map((agent) => {
       const saved = configured.get(agent.id);
       const savedProvider = saved?.providerId;
       // An unknown or role-incompatible saved provider falls back to the

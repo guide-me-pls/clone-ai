@@ -2,12 +2,16 @@
 
 [English](agent-runtime-convergence.md) · **简体中文**
 
+> **历史设计说明（2026-11-06）。** Pi 运行时已移除；`src/main-agent/native-runtime.ts`
+> 中的原生循环是唯一的 Main Agent。本文保留早期的收敛推理。当前的 Claude Code 对照与
+> 95% 路线见 [Claude Code 对齐路线](../study/claude-code-parity.zh-CN.md)。
+
 ## 目标
 
 Clone AI 存在两种不同的 Loop，必须明确分层：
 
 ```text
-主推理 Loop（Pi Agent Core）
+主推理 Loop（原生 Main Agent）
   -> 理解请求并调用 Kernel 工具
 
 持久任务 Loop（Clone AI）
@@ -18,8 +22,8 @@ Clone AI 存在两种不同的 Loop，必须明确分层：
   -> 到达终态任务状态
 ```
 
-Pi Agent Core 可以作为 Main 的推理引擎；Pi CLI、Claude Code、Codex、
-OpenCode 都属于黑盒 Worker。Main 使用 Pi 不代表任务默认派发给 Pi。
+原生循环作为 Main 的推理引擎；Claude Code、Codex、OpenCode 与原生 Worker 都属于执行者。
+与 Main 共享循环契约，不代表执行者会成为默认派发对象，也不代表它获得 Main 的权威。
 
 ## 不变量
 
@@ -27,7 +31,8 @@ OpenCode 都属于黑盒 Worker。Main 使用 Pi 不代表任务默认派发给 
 2. 指定 Agent 不可用时必须进入 `blocked`，不能静默切换到其他 Agent。
 3. 长期记忆归 Main 管理，Worker 只能收到有限的 `MemoryContext`。
 4. 每次 Worker 调用都必须是 `sessionPolicy: "fresh"`。
-5. Pi 必须使用 `--no-session`，不能使用续聊参数。
+5. 每次执行者调用都是全新的：Claude Code、Codex、OpenCode 使用各自的禁止续聊参数，
+   原生 Worker 启动新的进程内会话。Pi 已移除。
 6. 启动 Worker 前必须持久化 `DispatchDecision`。
 7. 只有客观验证通过才算任务完成，不能因为 Worker 声称完成就算完成。
 

@@ -82,22 +82,48 @@ async function videoFrame(file) {
 }
 
 async function addAttachmentFiles(files) {
+  let added = 0;
   for (const file of files) {
     if (state.attachments.length >= MAX_ATTACHMENTS) { announce(`最多添加 ${MAX_ATTACHMENTS} 个图片或视频。`, true); break; }
     try {
       if (file.type.startsWith("video/")) {
         state.attachments.push(await videoFrame(file));
+        added += 1;
         continue;
       }
       if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { announce("只支持 PNG、JPEG、GIF、WebP 图片或视频。", true); continue; }
       if (file.size > MAX_ATTACHMENT_BYTES) { announce(`${file.name} 超过 5MB。`, true); continue; }
       const previewUrl = await readDataUrl(file);
       state.attachments.push({ name: file.name, mimeType: file.type, data: previewUrl.split(",")[1], previewUrl });
+      added += 1;
     } catch (error) {
       announce(error.message || "附件读取失败。", true);
     }
   }
   renderAttachments();
+  return added;
+}
+
+function clipboardAttachmentFiles(clipboardData) {
+  if (!clipboardData) return [];
+  const files = [];
+  const add = (file) => {
+    if (!file || !/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return;
+    const extension = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
+    // Clipboard images often have a generic name. Give each paste a visible,
+    // stable name without rewriting the bytes.
+    // 剪贴板图片通常只有通用文件名；给每次粘贴一个可见、稳定的名称，但不改写图片内容。
+    files.push(new File([file], `剪贴板截图-${files.length + 1}.${extension}`, { type: file.type }));
+  };
+
+  for (let index = 0; index < (clipboardData.items?.length || 0); index += 1) {
+    const item = clipboardData.items[index];
+    if (item?.kind === "file" && item.type.startsWith("image/")) add(item.getAsFile());
+  }
+  if (files.length === 0) {
+    for (let index = 0; index < (clipboardData.files?.length || 0); index += 1) add(clipboardData.files[index]);
+  }
+  return files;
 }
 const icon = (name) => name === "spark"
   ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 1.8 7.2L21 11l-7.2 1.8L12 20l-1.8-7.2L3 11l7.2-1.8L12 2Z"/></svg>`
@@ -238,28 +264,16 @@ function renderAgentPage() {
   const host = $("agent-page");
   if (!host || !state.settings) return;
   const settings = state.settings;
-  const providers = state.providers || [];
   const gateway = state.gateways.find((candidate) => candidate.id === "magpie");
   const mainAgentModel = state.config?.config?.mainAgentModel || "";
-  const signature = JSON.stringify([settings, providers, gateway, mainAgentModel, state.gatewayLoading]);
+  const signature = JSON.stringify([settings.agents, gateway, mainAgentModel, state.gatewayLoading]);
   if (state.signatures.agentPage === signature) return;
   state.signatures.agentPage = signature;
-  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-  const missing = providers.filter((provider) => !provider.installed && provider.installable);
-  const installed = providers.filter((provider) => provider.installed);
-  const enabledRoles = settings.agents.filter((agent) => agent.enabled).length;
   const gatewayState = gateway?.running
     ? { label: t("gateway-running"), tone: "success" }
     : gateway?.installed
       ? { label: t("gateway-stopped"), tone: "warning" }
       : { label: t("gateway-not-found"), tone: "neutral" };
-  const installButton = ui.button({
-    label: missing.length ? `${t("install-missing")} (${missing.length})` : providers.some((provider) => !provider.installed) ? t("no-auto-install") : t("providers-ready"),
-    iconName: missing.length ? "plus" : "check",
-    variant: missing.length ? "primary" : "secondary",
-    disabled: missing.length === 0,
-    attributes: { "data-install-missing": "", id: "install-missing-providers" },
-  });
   const gatewayBadge = ui.badge(
     state.gatewayLoading && gateway === undefined ? t("gateway-checking") : gatewayState.label,
     state.gatewayLoading && gateway === undefined ? "neutral" : gatewayState.tone,
@@ -281,17 +295,82 @@ function renderAgentPage() {
   const gatewayControls = gateway?.running && exposedModels.length
     ? `<div class="gateway-controls">
         <div class="gateway-controls__row">${modelSelect}${ui.button({ label: t("gateway-use"), iconName: "arrow", variant: "primary", disabled: !selectedModel, attributes: { "data-gateway-apply": "" } })}</div>
-        <div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}${mainAgentModel.startsWith("magpie/") ? ui.button({ label: t("gateway-clear"), variant: "ghost", attributes: { "data-gateway-clear": "" } }) : ""}</div>
+        <div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}${mainAgentModel ? ui.button({ label: t("gateway-clear"), variant: "ghost", attributes: { "data-gateway-clear": "" } }) : ""}</div>
       </div>`
     : `<div class="gateway-controls"><div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}</div><span class="gateway-hint">${escape(gateway?.running && gateway.modelCount > 0 ? t("gateway-pi-hint") : gateway?.error || t("gateway-start-hint"))}</span></div>`;
   const gatewayCard = ui.card({
     title: "Magpie Gateway",
-    subtitle: t("gateway-subtitle"),
+    subtitle: "Clone AI 内置 Agent 的模型端点；不再通过 Pi 或其他 Agent SDK 转发。",
     tone: gateway?.running ? "accent" : "warning",
     className: "agent-gateway",
     actions: gatewayBadge,
-    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
+    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
   });
+  const providerRows = providers.map((provider) => {
+    const unrestricted = provider.hostAccess === "unrestricted";
+    const access = provider.executionBlocked
+      ? t("worker-blocked")
+      : unrestricted
+        ? t("worker-unrestricted")
+        : provider.sandbox === "seatbelt"
+          ? t("worker-sandboxed")
+          : t("worker-runnable");
+    const accessBadge = provider.executionBlocked
+      ? ui.badge(access, "warning")
+      : unrestricted
+        ? ui.badge(access, "warning")
+        : ui.badge(access, "success", { dot: true });
+    const effortLevels = Array.isArray(provider.efforts) ? provider.efforts : [];
+    const effortSelect = effortLevels.length
+      ? `<select class="agent-effort-select" data-provider-effort="${escape(provider.id)}" aria-label="${escape(t("provider-effort"))} · ${escape(provider.title)}"><option value="">${escape(t("effort-default"))}</option>${effortLevels.map((level) => `<option value="${escape(level)}"${provider.effort === level ? " selected" : ""}>${escape(level)}</option>`).join("")}</select>`
+      : "";
+
+    const action = provider.installed
+      ? provider.executionBlocked
+        ? ui.button({
+            label: t("worker-allow"),
+            variant: "secondary",
+            className: "c-button--compact",
+            attributes: { "data-provider-access": provider.id, "data-allow": "true" },
+          })
+        : unrestricted
+          ? ui.button({
+              label: t("worker-disable"),
+              variant: "secondary",
+              className: "c-button--compact",
+              attributes: { "data-provider-access": provider.id, "data-allow": "false" },
+            })
+          : ui.badge(t("worker-default"), "success", { dot: true })
+      : provider.installable
+        ? ui.button({
+            label: t("install"),
+            variant: "primary",
+            className: "c-button--compact",
+            attributes: { "data-install-provider": provider.id },
+          })
+        : ui.badge(t("manual-install"), "neutral");
+    const status = provider.installed
+      ? ui.badge(t("detected"), "success", { dot: true })
+      : provider.installable
+        ? ui.badge(t("installable"), "warning")
+        : ui.badge(t("missing"), "danger");
+    const source = provider.resolutionSource === "path"
+      ? t("resolution-path")
+      : provider.resolutionSource === "known-directory"
+        ? t("resolution-fallback")
+        : provider.resolutionSource === "absolute"
+          ? t("resolution-explicit")
+          : "";
+    const meta = `${status}${provider.userConfigured ? ui.badge(t("user-config"), "accent") : ""}<span>${escape(provider.command)}</span>${accessBadge}${source ? `<span>${escape(source)}</span>` : ""}`;
+    return ui.listRow({
+      leading: ui.providerMark(provider.title, provider.id),
+      title: provider.title,
+      description: `${t("provider-purpose")} · ${provider.command}`,
+      meta: `<span class="c-cluster">${meta}</span>${provider.resolvedPath ? `<code class="agent-provider-path" title="${escape(provider.resolvedPath)}">${escape(provider.resolvedPath)}</code>` : ""}`,
+      actions: `${effortSelect}${action}`,
+      tone: provider.installed ? "default" : "warning",
+    });
+  }).join("");
   const agentRows = settings.agents.map((agent) => {
     const provider = providerById.get(agent.providerId);
     const options = providers.map((candidate) => ({
@@ -301,49 +380,12 @@ function renderAgentPage() {
     }));
     const description = agent.role === "external" ? t("external-unavailable") : agent.description;
     const purpose = agent.role === "external" ? t("external-unavailable-detail") : agent.purpose;
-    // Provider facts belong to the worker that uses them, not to a separate
-    // registry listing the same machine twice.
-    // Provider 的事实属于使用它的 Worker，不该另开一份"同一台机器"的清单。
-    const unrestricted = provider?.hostAccess === "unrestricted";
-    const access = provider === undefined
-      ? ""
-      : provider.executionBlocked
-        ? t("worker-blocked")
-        : unrestricted
-          ? t("worker-unrestricted")
-          : provider.sandbox === "seatbelt"
-            ? t("worker-sandboxed")
-            : t("worker-runnable");
-    const accessBadge = provider === undefined
-      ? ""
-      : ui.badge(access, provider.executionBlocked || unrestricted ? "warning" : "success", { dot: !provider.executionBlocked && !unrestricted });
-    const statusBadge = provider?.installed
-      ? ui.badge(t("detected"), "success", { dot: true })
-      : provider?.installable
-        ? ui.badge(t("installable"), "warning")
-        : ui.badge(t("missing"), "danger");
-    const effortLevels = Array.isArray(provider?.efforts) ? provider.efforts : [];
-    const effortSelect = effortLevels.length
-      ? `<select class="agent-effort-select" data-provider-effort="${escape(provider.id)}" aria-label="${escape(t("provider-effort"))} · ${escape(provider.title)}"><option value="">${escape(t("effort-default"))}</option>${effortLevels.map((level) => `<option value="${escape(level)}"${provider.effort === level ? " selected" : ""}>${escape(level)}</option>`).join("")}</select>`
-      : "";
-    const providerAction = provider === undefined
-      ? ""
-      : !provider.installed
-        ? provider.installable
-          ? ui.button({ label: t("install"), variant: "secondary", className: "c-button--compact", attributes: { "data-install-provider": provider.id } })
-          : ui.badge(t("manual-install"), "neutral")
-        : provider.executionBlocked
-          ? ui.button({ label: t("worker-allow"), variant: "secondary", className: "c-button--compact", attributes: { "data-provider-access": provider.id, "data-allow": "true" } })
-          : unrestricted
-            ? ui.button({ label: t("worker-disable"), variant: "secondary", className: "c-button--compact", attributes: { "data-provider-access": provider.id, "data-allow": "false" } })
-            : ui.badge(t("worker-default"), "success", { dot: true });
-    const command = provider === undefined ? "" : `<code class="agent-provider-path" title="${escape(provider.command)}">${escape(provider.command)}</code>`;
     return ui.listRow({
-      leading: ui.providerMark(providerLabel(agent.providerId), agent.providerId),
+      leading: ui.providerMark("Built-in", "native"),
       title: agent.title,
       description,
-      meta: `<span class="agent-worker-meta">${ui.badge(agentRoleLabel(agent.role), "neutral")}${statusBadge}${provider === undefined ? "" : ui.badge(providerLabel(agent.providerId), "accent")}${accessBadge}${command}<span class="agent-worker-purpose">${escape(purpose)}</span></span>`,
-      actions: `<div class="c-cluster agent-worker-actions">${ui.select({ options, value: agent.providerId, className: "agent-role-select", attributes: { "data-agent-provider": agent.id, "aria-label": `${t("provider-for")} ${agent.title}` } })}${effortSelect}${providerAction}${ui.switchControl({ checked: agent.enabled, disabled: agent.required, label: agent.required ? t("required-role") : agent.enabled ? t("disable-role") : t("enable-role"), attributes: { "data-agent-toggle": agent.id } })}</div>`,
+      meta: `${ui.badge(agentRoleLabel(agent.role), "neutral")}${provider?.installed ? ui.badge(providerLabel(agent.providerId), "accent") : ui.badge(`${providerLabel(agent.providerId)} · ${t("missing")}`, "warning")}<span>${escape(purpose)}</span>`,
+      actions: `<div class="c-cluster">${ui.select({ options, value: agent.providerId, className: "agent-role-select", attributes: { "data-agent-provider": agent.id, "aria-label": `${t("provider-for")} ${agent.title}` } })}${ui.switchControl({ checked: agent.enabled, disabled: agent.required, label: agent.required ? t("required-role") : agent.enabled ? t("disable-role") : t("enable-role"), attributes: { "data-agent-toggle": agent.id } })}</div>`,
       tone: provider?.installed ? "default" : "warning",
     });
   }).join("");
@@ -351,19 +393,20 @@ function renderAgentPage() {
     ${ui.sectionHeader({
       eyebrow: t("agent-page-eyebrow"),
       title: t("agents-title"),
-      description: t("agents-lead"),
-      actions: `${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-settings-refresh": "" } })}${installButton}`,
+      description: "Main Agent 由 Clone AI 自己持有；模型只提供推理能力，不再由 Pi 或外部 Provider 驱动。",
+      actions: ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-settings-refresh": "" } }),
     })}
-    <div class="c-stat-grid agent-overview">${ui.stat({ label: t("stat-providers"), value: `${installed.length}/${providers.length}`, detail: t("stat-providers-detail"), tone: installed.length ? "success" : "warning" })}${ui.stat({ label: t("stat-roles"), value: `${enabledRoles}/${settings.agents.length}`, detail: t("stat-roles-detail") })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length}/${gateway.modelCount} ${t("gateway-models-usable")}` : t("gateway-subtitle"), tone: gateway?.running && exposedModels.length ? "success" : "warning" })}</div>
+    <div class="c-stat-grid agent-overview">${ui.stat({ label: "Main Agent", value: "内置", detail: "Clone AI 原生工具循环", tone: "success" })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length} ${t("gateway-models-usable")}` : "等待模型端点", tone: gateway?.running && exposedModels.length ? "success" : "warning" })}${ui.stat({ label: "当前模型", value: mainAgentModel || "未选择", detail: gateway?.running ? "通过 Magpie Gateway" : "选择模型后开始对话" })}</div>
     ${gatewayCard}
-    <div class="agent-section-head"><div><h3>${t("roles-bindings")}</h3><p>${t("roles-section-lead")}</p></div><div class="c-segmented" aria-label="${escape(t("providers-state"))}">${ui.badge(`${installed.length} ${t("connected")}`, "success", { dot: true })}${missing.length ? ui.badge(`${missing.length} ${t("installable")}`, "warning") : ""}</div></div>
+    <div class="agent-section-head"><div><h3>${t("local-providers")}</h3><p>${t("providers-section-lead")}</p></div><div class="c-segmented" aria-label="${escape(t("providers-state"))}">${ui.badge(`${installed.length} ${t("connected")}`, "success", { dot: true })}${missing.length ? ui.badge(`${missing.length} ${t("installable")}`, "warning") : ""}</div></div>
+    <div id="provider-registry" class="c-list agent-provider-list">${providerRows || ui.emptyState({ iconName: "terminal", title: t("empty-providers"), body: t("empty-providers-body") })}</div>
+    <div class="agent-section-head"><div><h3>${t("roles-bindings")}</h3><p>${t("roles-section-lead")}</p></div></div>
     <div id="agent-settings-list" class="c-list agent-role-list">${agentRows}</div>
     <p class="agent-role-note">${escape(t("agents-note"))}</p>
   </div>`;
 }
 function selectedGatewayModel(current, models) {
-  const selected = current.startsWith("magpie/") ? current.slice("magpie/".length) : "";
-  return models.some((model) => model.id === selected) ? selected : models[0]?.id || "";
+  return models.some((model) => model.id === current) ? current : models[0]?.id || "";
 }
 async function refreshGateways({ announceFailure = false } = {}) {
   state.gatewayLoading = true;
@@ -394,7 +437,10 @@ async function useGatewayModel() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model }),
     });
-    if (state.config?.config) state.config.config.mainAgentModel = result.config?.mainAgentModel;
+    if (state.config?.config) {
+      state.config.config.mainAgentBaseUrl = result.config?.mainAgentBaseUrl;
+      state.config.config.mainAgentModel = result.config?.mainAgentModel;
+    }
     await refresh({ preserveScroll: true });
     await refreshGateways();
     announce(t("gateway-model-applied"));
@@ -788,7 +834,7 @@ function renderMainAgentEffort() {
   const select = $("config-main-agent-effort");
   if (!select) return;
   const current = state.config?.config?.mainAgentEffort || "";
-  const model = String(state.config?.config?.mainAgentModel || "").replace(/^magpie\//, "");
+  const model = String(state.config?.config?.mainAgentModel || "");
   // The gateway knows which levels this exact model offers; without it, fall back
   // to the levels the CLIs understand so the choice is never invented.
   // 网关知道这个模型具体支持哪些档位；拿不到时退回 CLI 通用档位，绝不凭空编造。
@@ -1106,6 +1152,8 @@ function restoreDisclosureScrolls(id) {
 function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || session.messages.length === 0); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
 async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (state.streaming) return; const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.composingNew && (!state.selectedId || !sessions.some((session) => session.id === state.selectedId))) state.selectedId = sessions.find((session) => session.id === MAIN_CONVERSATION_ID)?.id ?? sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
+let activeTurn = null;
+function stopActiveTurn() { if (activeTurn === null) return; activeTurn.stop(); }
 async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
   state.streaming = true;
   // The message and a live reply card appear before the request is sent. A model
@@ -1123,7 +1171,7 @@ async function createSession(query) { const button = $("submit"); button.disable
   const attachmentMarkup = outgoingAttachments.map((item) => `<img src="${item.previewUrl}" alt="${escape(item.name)}" />`).join("");
   inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${escape(query || "（已发送图片/视频）")}</div>${attachmentMarkup ? `<div class="message-attachments">${attachmentMarkup}</div>` : ""}</div></div>`);
   const card = document.createElement("div"); card.className = "message clone";
-  card.innerHTML = `<div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="clone-text" data-streaming="1" hidden></div></div>`;
+  card.innerHTML = `<div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="tool-timeline" data-tool-timeline hidden></div><div class="clone-text" data-streaming="1" hidden></div></div>`;
   inner.appendChild(card);
   const target = card.querySelector(".clone-text");
   const pending = card.querySelector("[data-response-pending]");
@@ -1150,6 +1198,26 @@ async function createSession(query) { const button = $("submit"); button.disable
     }
     pendingElapsed.textContent = t("pending-elapsed").replace("{seconds}", String(seconds));
   };
+  // A live tool timeline: the owner sees which tool ran, whether it was
+  // refused, and how long it took, while the answer is still streaming.
+  // 实时工具时间线：回答仍在流式输出时，所有者就能看到跑了哪个工具、是否被拒绝、耗时多少。
+  const timeline = card.querySelector("[data-tool-timeline]");
+  const timelineRows = new Map();
+  const renderTimeline = () => {
+    if (!timeline || timelineRows.size === 0) return;
+    timeline.hidden = false;
+    timeline.innerHTML = [...timelineRows.values()].map((row) => {
+      const state = row.denied ? "denied" : row.isError ? "error" : row.phase === "completed" ? "done" : "running";
+      const detail = row.durationMs === undefined ? "" : `${(row.durationMs / 1000).toFixed(1)}s`;
+      return `<div class="tool-row" data-state="${state}"><span class="tool-dot" aria-hidden="true"></span><b>${escape(row.tool)}</b><span class="tool-state">${escape(t(`tool-state-${state}`))}</span><span class="tool-time">${escape(detail)}</span></div>`;
+    }).join("");
+  };
+  const noteTool = (payload) => {
+    const key = `${payload.tool}`;
+    const previous = timelineRows.get(key) ?? { tool: payload.tool, phase: "started" };
+    timelineRows.set(key, { ...previous, ...payload });
+    renderTimeline();
+  };
   const revealResponse = () => {
     if (pendingTimer !== null) {
       clearInterval(pendingTimer);
@@ -1167,6 +1235,20 @@ async function createSession(query) { const button = $("submit"); button.disable
   const turnStartedAt = new Date().toISOString();
   let reply = ""; let result = null; let failed = false; let failure = "";
   const controller = new AbortController();
+  // A user stop is not a timeout: the message says who ended the turn.
+  // 用户停止不是超时：提示会说明是谁结束了回合。
+  let stoppedByOwner = false;
+  const stopTurn = () => {
+    stoppedByOwner = true;
+    controller.abort();
+  };
+  activeTurn = { stop: stopTurn };
+  const stopButton = $("stop-turn");
+  // One control occupies the send slot at a time; a second button would widen the
+  // composer mid-turn and shift the textarea under the owner's cursor.
+  // 发送槽位同时只有一个控件；两个按钮会在回合中途撑宽输入区，让光标下的文本跳位。
+  if (stopButton) stopButton.hidden = false;
+  if (stopButton) button.hidden = true;
   let stallTimer = null;
   const armStallTimer = () => {
     if (stallTimer !== null) clearTimeout(stallTimer);
@@ -1197,6 +1279,7 @@ async function createSession(query) { const button = $("submit"); button.disable
         if (!event || !data) continue;
         const payload = JSON.parse(data);
         if (event === "delta") { revealResponse(); reply += payload.delta; target.textContent = reply; $("conversation").scrollTop = $("conversation").scrollHeight; }
+        else if (event === "tool") { noteTool(payload); }
         else if (event === "done") { result = payload; }
         else if (event === "failed") { failure = payload.error || "Main Agent 调用失败。"; throw new Error(failure); }
       }
@@ -1233,7 +1316,7 @@ async function createSession(query) { const button = $("submit"); button.disable
   } catch (error) {
     failed = true;
     failure = error instanceof Error && error.name === "AbortError"
-      ? "Main Agent 在 3 分钟内没有返回任何内容，已停止等待。"
+      ? stoppedByOwner ? t("turn-stopped") : "Main Agent 在 3 分钟内没有返回任何内容，已停止等待。"
       : error instanceof Error ? error.message : String(error);
     // The typed text is restored so a failed send never loses what was written.
     // 恢复已输入的文本，使一次失败的发送绝不丢失所写内容。
@@ -1258,6 +1341,9 @@ async function createSession(query) { const button = $("submit"); button.disable
     target.removeAttribute("data-streaming");
     target.classList.remove("is-streaming");
     button.disabled = false;
+    if (stopButton) stopButton.hidden = true;
+    button.hidden = false;
+    activeTurn = null;
   }
   if (failed) {
     await api("/api/main-agent/interruptions", {
@@ -1443,8 +1529,22 @@ $("opportunity-strip").addEventListener("click", (event) => { const settings = e
 $("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
 $("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
+$("stop-turn").addEventListener("click", () => stopActiveTurn());
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && activeTurn !== null) { event.preventDefault(); stopActiveTurn(); }
+});
 $("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0 && state.attachments.length === 0) { announce("请输入你想推进的事情，或添加图片/视频。", true); return; } void createSession(query); });
 $("query").addEventListener("input", resizeComposer);
+$("query").addEventListener("paste", async (event) => {
+  const files = clipboardAttachmentFiles(event.clipboardData);
+  if (files.length === 0) return;
+  event.preventDefault();
+  const added = await addAttachmentFiles(files);
+  if (added > 0) {
+    announce(`已从剪贴板添加 ${added} 张图片。`);
+    $("query").focus();
+  }
+});
 $("attach").addEventListener("click", () => $("attachments").click());
 $("attachments").addEventListener("change", async (event) => { const input = event.target; await addAttachmentFiles(input.files || []); input.value = ""; });
 $("attachment-preview").addEventListener("click", (event) => { const remove = event.target.closest("[data-remove-attachment]"); if (!remove) return; state.attachments.splice(Number(remove.dataset.removeAttachment), 1); renderAttachments(); });
