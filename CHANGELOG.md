@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Optimization results are a separate, curated file
+
+`docs/engineering/optimization-results.md` (and its Chinese pair) now lists only optimizations whose eval showed a real gain: the claim, the evidence, and links to the trade-off and the execution chain. A negative optimization — no gain, a regression, or a revert — gets no entry there; its trade-off and execution-chain entries remain the record. `AGENTS.md` rule 6 and the optimization log's header point to the new file.
+
+`docs/engineering/optimization-results.md`（及中文版）现在只列 eval 显示出真实收益的优化：主张、证据，以及取舍与执行链路的链接。负优化——没有收益、出现回退或被撤销——不写条目；它的取舍与执行链路条目仍是记录。`AGENTS.md` 第 6 条与优化日志的抬头都指向新文件。
+
 ### Worker concurrency follows the machine
 
 The Kernel now samples CPU cores, the 1-minute load average and free memory, computes how many workers may run at once, and gates every execution through one shared limiter — so a 16-core idle host and a 2-core busy laptop no longer behave the same. The Main Agent can read the snapshot with a read-only `get_capacity` tool to size a plan, but cannot raise the limit. Owners can pin a ceiling with `maxConcurrentWorkers` (0 = auto), re-read on every dispatch.
