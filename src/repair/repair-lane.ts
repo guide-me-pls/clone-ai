@@ -201,6 +201,10 @@ export async function runRepairLane(options: RepairLaneOptions): Promise<RepairR
         ? {}
         : { knownAgentIds: () => new Set(options.registry!.list().map((adapter) => adapter.id)) }),
     });
+    // A repair changes an existing file by excerpt, never by rewriting it.
+    // Scoped to this process, which exists only to run the repair.
+    // 修复只通过片段修改已有文件，绝不整文件重写。作用域限定在本进程——它只为运行修复而存在。
+    process.env.CLONE_AI_NATIVE_WRITE_FILE = "refuse-existing";
     const registry = options.registry ?? await createConfiguredAgentRegistry((await new WorkerSettingsStore(assembly.paths.legacyAgentsFile).get()).agents, {
       dataDirectory,
       workspacePath: worktree.path,

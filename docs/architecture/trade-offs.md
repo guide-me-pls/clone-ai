@@ -6,6 +6,64 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-09 — Regression cases run in the default suite
+
+**Decision.** `npm test` now runs `test/*.test.ts` **and** `test/regression/*.test.ts`.
+
+**Evidence.** The two desktop fixes merged on 2026-11-06 shipped with cases the
+lane ran, but neither `npm test` nor `npm run gate` nor CI ever ran them again:
+the glob was `test/*.test.ts`, which does not match the subdirectory. A future
+change could reintroduce either defect and every automatic check would stay
+green.
+
+**What was given up.** `npm test` is slightly slower (two more files) and a
+regression case that is intentionally red cannot be merged without failing the
+default suite. That is the point.
+
+**Reversal condition.** If the regression directory grows large enough to slow
+the default loop, move it to a second script that CI runs alongside `npm test`,
+never out of CI.
+
+## 2026-11-09 — A background repaint yields to a focused editor
+
+**Decision.** `render()` in the memory panel takes `{ background: true }`, used
+only by the poll wrapper; when the focused element is an `INPUT` or `TEXTAREA`
+inside `#memory-root`, a background repaint is skipped.
+
+**Evidence.** The 2026-11-06 fix compared the whole markup and skipped only when
+nothing changed. A probe against the same sandbox showed that any real change
+(another memory's `updatedAt`, or an `accessCount` bumped by a recall) rebuilt
+the DOM and detached the unsaved editor. Since every recall changes counts, the
+original bug would still fire in normal use, just less often.
+
+**What was given up.** While the owner types, the panel's own content does not
+update (a detail that finished loading appears after focus leaves). That matches
+`renderLibrary`'s guard in `app.js` and is preferable to losing an edit.
+
+**Reversal condition.** If stale content while typing becomes a complaint, the
+fix is to preserve the focused node across repaint (patch in place), not to
+remove the guard.
+
+## 2026-11-09 — write_file's overwrite mode is per worker, and only the repair lane refuses
+
+**Decision.** `fileTools({ writeFileMode })` defaults to `overwrite`;
+`createConfiguredNativeWorker` reads `CLONE_AI_NATIVE_WRITE_FILE`, and the repair
+lane sets it to `refuse-existing` for its own process.
+
+**Evidence.** The 2026-11-06 change made `write_file` refuse existing paths in
+`fileTools()` unconditionally. That protected the repair lane, which only ever
+needs excerpt edits, but it also removed the ability to regenerate an existing
+file from every ordinary task — and there is no delete tool, so the task had no
+way to recover.
+
+**What was given up.** Two modes to reason about, and an environment variable in
+the repair process. A repair can no longer legitimately replace a file wholesale;
+that is the intended restriction.
+
+**Reversal condition.** If repairs frequently need a full-file replacement, add
+an explicit `replace_file` tool gated to the repair lane with its own size check,
+rather than loosening `write_file` for everyone.
+
 ## 2026-11-06 — The repair plan tells the worker how its step is judged
 
 **Decision.** The phase-1 instructions now say the reproduction file must be

@@ -59,7 +59,25 @@ export function readNativeWorkerEnvironment(environment: NodeJS.ProcessEnv = pro
  * 以步骤工作区为根、带 Scope 风险等级的文件工具。路径检查全部在 NativeAgentWorker 中完成；
  * 这些函数假定路径已被允许。
  */
-export function fileTools(): NativeToolSpec[] {
+export type WriteFileMode = "overwrite" | "refuse-existing";
+
+/**
+ * Whether `write_file` may replace an existing file.
+ *
+ * The repair lane wants `refuse-existing`: a whole-file rewrite turned a
+ * one-line fix into an 8 KB fragment, and a repair only ever needs an excerpt
+ * change. Ordinary tasks want `overwrite`, because regenerating a report or
+ * rewriting a config is normal work and a create-only tool cannot do it.
+ * The mode is a per-worker setting, not a global one, so the safety net does
+ * not become a capability regression.
+ * `write_file` 是否可以替换已有文件。
+ *
+ * 修复通道需要 `refuse-existing`：整文件重写曾把一行修复变成 8 KB 片段，而修复只需要片段级修改。
+ * 普通任务需要 `overwrite`：重新生成报告或改写配置是正常操作，只允许新建的工具做不到。
+ * 模式是每个 Worker 的设置而非全局设置，因此安全网不会变成能力倒退。
+ */
+export function fileTools(options: { writeFileMode?: WriteFileMode } = {}): NativeToolSpec[] {
+  const writeFileMode = options.writeFileMode ?? "overwrite";
   const resolveInWorkspace = (workspace: string, path: string): string => join(workspace, path);
   return [
     {
@@ -104,7 +122,7 @@ export function fileTools(): NativeToolSpec[] {
         // 2026-11-06. A change to an existing file must name the excerpt.
         // 整文件替换已有文件，正是一行修复变成片段的路径：2026-11-06 出现过 8 KB 的 app.js 与
         // 36 KB 的 audit.js。修改已有文件必须指明被替换的片段。
-        const exists = await access(target).then(() => true, () => false);
+        const exists = writeFileMode === "refuse-existing" && await access(target).then(() => true, () => false);
         if (exists) {
           return { output: `Error: ${String(call.input.path)} already exists; use edit_file with an exact old_text excerpt to change it.`, isError: true };
         }
@@ -214,7 +232,7 @@ export function createConfiguredNativeWorker(
     label: options.label ?? "Native worker (OpenAI-compatible)",
     providerId: "native",
     ...(options.workCapabilities === undefined ? {} : { workCapabilities: options.workCapabilities }),
-    tools: options.tools ?? fileTools(),
+    tools: options.tools ?? fileTools({ writeFileMode: environment.CLONE_AI_NATIVE_WRITE_FILE === "refuse-existing" ? "refuse-existing" : "overwrite" }),
     createClient: () => new OpenAiCompatibleClient({
       baseUrl: config.baseUrl!,
       model: config.model!,

@@ -219,7 +219,7 @@ test("edit_file replaces one exact excerpt and refuses ambiguity or a fragment",
 test("write_file creates a file but refuses to replace an existing one", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-write-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const write = fileTools().find((tool) => tool.name === "write_file");
+  const write = fileTools({ writeFileMode: "refuse-existing" }).find((tool) => tool.name === "write_file");
   assert.ok(write);
 
   const created = await write.run(
@@ -239,6 +239,17 @@ test("write_file creates a file but refuses to replace an existing one", async (
   assert.equal(replaced.isError, true);
   assert.match(replaced.output, /use edit_file/);
   assert.equal(await readFile(join(directory, "new.js"), "utf8"), "const a = 1;\n");
+});
+
+test("write_file replaces an existing file by default, because ordinary tasks regenerate files", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-write-overwrite-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const write = fileTools().find((tool) => tool.name === "write_file");
+  assert.ok(write);
+  await write.run({ name: "write_file", input: { path: "report.md", content: "first" } }, { workspace: directory });
+  const replaced = await write.run({ name: "write_file", input: { path: "report.md", content: "second" } }, { workspace: directory });
+  assert.equal(replaced.isError, undefined);
+  assert.equal(await readFile(join(directory, "report.md"), "utf8"), "second");
 });
 
 test("the system prompt names the offered tools and the boundary", () => {

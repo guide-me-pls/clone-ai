@@ -166,9 +166,24 @@
     </details>`;
   }
 
-  function render() {
+  function render(options = {}) {
     const root = ensureHost();
     if (!root || !state.library) return;
+    // A background repaint must not steal an edit. The markup cache below only
+    // helps when the data is unchanged; this guard covers the other half — data
+    // did change (another memory was updated, or every recall bumps access
+    // counts) while the owner is typing. Skipping the paint leaves the DOM as
+    // it is; the next user action or a later poll repaints it.
+    // 后台重绘不得抢走正在进行的编辑。下面的标记缓存只在数据未变时有帮助；这个守卫覆盖另一半——
+    // 所有者正在输入，而数据确实变了（另一条记忆被更新，或每次召回都会增加计数）。跳过重绘会保持
+    // DOM 原样；下一次用户操作或后续轮询再重绘。
+    if (options.background === true) {
+      const active = document.activeElement;
+      const typing = active !== null && active !== undefined
+        && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")
+        && typeof root.contains === "function" && root.contains(active);
+      if (typing) return;
+    }
     const library = state.library;
     const memories = library.memories || [];
     const visible = filtered(memories);
@@ -215,7 +230,7 @@
     renderLibrary = (library) => {
       original(library);
       state.library = library;
-      render();
+      render({ background: true });
     };
   }
 

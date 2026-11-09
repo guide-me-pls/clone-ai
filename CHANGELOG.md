@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Regression cases run in the default checks
+
+`npm test` now includes `test/regression/*.test.ts`, so the cases produced by the repair lane run in CI instead of only inside a repair run. The memory panel also stops repainting while the owner is typing, even when the poll carries changed data (an unrelated memory's timestamp, or a recall count); previously only an unchanged payload was skipped. `write_file` once again replaces existing files for ordinary tasks — the refusal that protects the repair lane is now a per-worker mode (`CLONE_AI_NATIVE_WRITE_FILE=refuse-existing`), because create-only had removed the ability to regenerate a file.
+
+`npm test` 现在包含 `test/regression/*.test.ts`，修复通道产出的用例因此进入 CI，而不再只在修复运行时执行。记忆面板在所有者输入期间也不再重绘，即使轮询带来了变化的数据（另一条记忆的时间戳或召回计数）；此前只有数据完全未变时才会跳过。`write_file` 对普通任务重新可以替换已有文件——保护修复通道的拒绝逻辑改为按 Worker 的模式（`CLONE_AI_NATIVE_WRITE_FILE=refuse-existing`），因为只允许新建曾使重新生成文件变得不可能。
+
 ### Two desktop defects fixed through the repair lane
 
 The 3-second background refresh no longer rebuilds `#memory-root`: the memory library paints only when its markup actually changes, so a focused search box keeps focus and an unsaved editor keeps its text. The sidebar now renders the "已隐藏" group (with its restore control) even when no session is visible, so hiding the only conversation no longer leaves it unreachable. Both patches were produced by `clone-ai repair` with the native worker on Magpie DeepSeek V4.1 Flash; the working agent made mechanical adjustments so the generated cases satisfy the repository's typecheck and bilingual-comment rules. The native worker's `write_file` also refuses an existing path now — changes go through `edit_file` — because a whole-file rewrite turned `app.js` into an 8 KB fragment in one attempt and removed 127 lines of `audit.js` in another. A repair may also not delete more than 40 production lines: `fix-too-large` refuses a rewrite that keeps a narrow case green while deleting the rest of the file, which is exactly what two retry runs did to `memory.js` (127 lines) and `audit.js` (315 lines).

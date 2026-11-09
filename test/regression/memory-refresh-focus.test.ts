@@ -221,3 +221,23 @@ test("an unsaved editor textarea inside #memory-root survives the background pol
   assert.equal(textarea.value, "未保存的正文改动", "the poll overwrote the unsaved edit with the stored content");
   assert.equal(paints.length, painted, "the background poll rebuilt #memory-root although the data did not change");
 });
+
+test("an unrelated data change during the poll keeps the unsaved editor", async () => {
+  const { root, documentStub, poll } = openMemoryPanel();
+  await poll(library);
+  const textarea: any = { isConnected: true, tagName: "TEXTAREA", dataset: { libraryContent: "mem-1" }, value: "未保存的正文改动" };
+  root.appendChild(textarea);
+  documentStub.activeElement = textarea;
+
+  // The poll carries a real change (another memory's timestamp moved), so the
+  // markup cache cannot help; only the typing guard can keep this edit.
+  // 轮询带着真实变化（另一条记忆的时间戳变了），标记缓存帮不上忙；只有输入守卫能保住这次编辑。
+  const changed = makeLibrary([
+    { ...library.memories[0], updatedAt: "2026-11-07T00:00:00.000Z" },
+    library.memories[1],
+  ]);
+  await poll(changed);
+
+  assert.equal(textarea.isConnected, true, "a changed poll replaced the editor textarea the owner was typing in");
+  assert.equal(textarea.value, "未保存的正文改动", "a changed poll overwrote the unsaved edit");
+});
