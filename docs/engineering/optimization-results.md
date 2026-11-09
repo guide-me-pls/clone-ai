@@ -15,6 +15,27 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-09 — A shared loop kernel with per-call authorization and recorded compaction
+
+- **Claim:** the Main Agent and the native worker run one loop contract, every
+  tool call is decided before it executes, long transcripts compact on token
+  pressure and record what was dropped, and MCP and skills are opt-in without
+  changing a turn that does not ask for them.
+- **Evidence:** the deterministic suite went from 585 tests / 4 failures
+  (migration fallout) to **560 tests, 560 pass, 0 fail** after the upstream
+  native-only migration merged; `test/agent-loop.test.ts` 14/14 covers terminal
+  reasons, the concurrency barrier, tool pairing, budgets, abort, retry,
+  truncation and deny/ask/allow; `test/context-window.test.ts` 8/8;
+  `test/mcp-host.test.ts` 5/5 against a real stdio child; `test/skill-loader.test.ts`
+  5/5; native worker/client 17/17; an end-to-end Main Agent turn invokes both a
+  skill and an MCP tool. `npm run typecheck` and `npm run gate` pass. No live
+  model call was made, so the gain is a harness-contract gain, not a quality
+  measurement.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-06--every-in-process-tool-call-goes-through-a-per-call-decision),
+  [compaction trade-off](../architecture/trade-offs.md#2026-11-06--compaction-is-token-aware-and-recorded-deterministic-summaries-first),
+  [MCP and skills trade-off](../architecture/trade-offs.md#2026-11-06--mcp-and-skills-first-plugins-cloud-vm-and-computer-use-deferred),
+  [execution chain](optimizations.md#2026-11-09--per-call-permissions-context-compaction-mcp-and-skills).
+
 ## 2026-11-07 — Worker concurrency follows measured machine capacity
 
 - **Claim:** dispatch concurrency is bounded by measured CPU, load and free

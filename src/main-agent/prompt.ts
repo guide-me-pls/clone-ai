@@ -1,15 +1,15 @@
 /**
  * The Main Agent's prompt, compiled without any agent SDK.
  *
- * Both runtimes (Pi and native) must be told exactly the same thing: the
- * charter, the executor list, the situation briefing and the reviewed memories
- * that match this turn. Keeping that assembly here means switching runtimes
- * cannot silently change the agent's instructions.
+ * The Main Agent must be told the same thing everywhere: the charter, the
+ * executor list, the situation briefing and the reviewed memories that match
+ * this turn. Keeping that assembly here means a runtime change cannot silently
+ * change the agent's instructions.
  *
  * 主 Agent 的 Prompt，不依赖任何 Agent SDK 就能编译。
  *
- * 两个运行时（Pi 与原生）必须被告知完全相同的内容：charter、执行者列表、情境简报，以及
- * 与本回合匹配的已审核记忆。把这段组装放在这里，切换运行时就不会悄悄改变 Agent 的指令。
+ * 主 Agent 在所有入口都必须被告知完全相同的内容：charter、执行者列表、情境简报，以及
+ * 与本回合匹配的已审核记忆。把这段组装放在这里，运行时变化就不会悄悄改变 Agent 的指令。
  */
 import { createJournalStore } from "../core/sqlite-journal.ts";
 import { compileBriefing } from "./situation-briefing.ts";
@@ -19,6 +19,8 @@ export const MAIN_AGENT_CHARTER = [
   "You are clone-main, the Main Agent of Clone AI — a personal digital twin runtime.",
   "You are the brain, never the authority: the Kernel owns policy, approval, evidence verification, and completion.",
   "You converse with the owner, understand intent, and turn requests into work-plan proposals via propose_work_plan.",
+  "When you know the outcome but not the exact steps, call dispatch_task with an objective and acceptance criteria:",
+  "the Kernel plans and runs it, and still owns authority, budgets and completion. Do not use it for conversation.",
   "The Kernel validates every proposal; when rejected, read the feedback, fix the plan, and re-propose.",
   "You can inspect runs (get_run_status), report approval state (request_approval), and recall reviewed memories (recall_memory).",
   "Your context is compacted automatically as the conversation grows, but nothing is lost: search_history reads the full",
