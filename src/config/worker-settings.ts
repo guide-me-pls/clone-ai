@@ -64,7 +64,7 @@ const DEFAULT_AGENTS: WorkerProfile[] = [
     role: "review",
     description: "检查计划、产物和证据是否足以支持下一步。",
     purpose: "用于复杂任务和外部动作前的独立复核。",
-    providerId: "pi",
+    providerId: "claude-code",
     enabled: true,
   },
   {

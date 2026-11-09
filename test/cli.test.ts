@@ -57,11 +57,12 @@ test("clone-ai workers reports install state without touching the network", asyn
   const { code, stdout } = await runCli(t, ["workers"]);
 
   assert.equal(code, 0);
-  // Built-in recipes are always listed, installed or not.
-  // 内建配方无论是否安装都会列出。
-  for (const worker of ["claude-code", "codex-cli", "pi", "opencode"]) {
+  // Built-in legacy CLI recipes remain visible for diagnostics; Pi has been removed.
+  // 内置旧版 CLI 配方仍用于诊断；Pi 已被移除。
+  for (const worker of ["claude-code", "codex-cli", "opencode"]) {
     assert.match(stdout, new RegExp(worker));
   }
+  assert.doesNotMatch(stdout, /\bpi\b/);
 });
 
 test("clone-ai cases reports an empty log on a fresh home", async (t) => {

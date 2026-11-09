@@ -69,7 +69,8 @@ test("the model options endpoint exposes only credential-blind selectable refere
   };
   assert.ok(Array.isArray(body.models));
   for (const model of body.models) {
-    assert.equal(model.reference, `${model.provider}/${model.id}`);
+    assert.equal(model.reference, model.id);
+    assert.equal(model.provider, "magpie");
     assert.equal(typeof model.label, "string");
     assert.ok(model.label.length > 0);
   }

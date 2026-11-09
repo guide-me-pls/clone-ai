@@ -5,6 +5,126 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-06 — 采纳 Claude Code 的 harness 机制，不采纳其源码与 Prompt
+
+**决定。** 把逆向得到的 Claude Code 2.1.317 机制当作 clone-ai 自己的 Agent 循环的参考规格：
+带类型的终止原因、流式工具调度与逐工具并发标记、逐次权限管线、token 感知压缩、hook、MCP、
+Skills。不把源码、Prompt 原文或 Anthropic 内部配置复制进本仓库。
+
+**依据。** 提取出的 Bun 模块图有 2,942 个模块，并带有版权声明（`cli`：
+“(c) Anthropic PBC. All rights reserved.”）。机制以字符串常量与控制流可见
+（`BUILTIN_TOOL_NAMES`、六模式权限枚举、33 个 hook 事件名、`effectiveWindow - 13000`
+压缩数学）。clone-ai 的 README 声明它不嵌入其他 runtime，Claude Code 是黑盒 Worker。
+复制 Prompt 还会把个人分身的 charter 换成编码 CLI 的身份。
+
+**代价。** 重写比嵌入 `@anthropic-ai/claude-agent-sdk` 慢；对齐必须由 clone-ai 自己的 eval
+证明，不能从 Anthropic 继承。
+
+**推翻条件。** 如果所有者明确选择“先要速度、后要独立”，并接受仅 Anthropic 的凭据与
+Provider 路径，可以把 Agent SDK 作为临时参照/基准路径，而不是产品架构。
+
+## 2026-11-06 — 执行 Worker 是通用的，编码只是其中一种工具配置
+
+**决定。** 保留 Main Agent 的提案/权威边界，增加模型可调用的 `Task`/子 Agent 路径与只读
+检查工具。把 Worker 当作通用执行面：工具集由角色与能力配置决定，不硬编码成编码。编码配置
+（Read、Write、Edit、Glob、Grep、Bash）只是其中一种；research、review、draft 与外部连接器
+各有自己的配置。不直接给 Main Agent Bash/Edit/Write。
+
+**依据。** `src/workers/native-agent-worker.ts` 已经接受任意 `NativeToolSpec[]` 与
+`workCapabilities` 列表；`fileTools()` 只是当前默认配置，不是类型层约束。`decideTool` 按
+风险、路径与网络 scope 逐次放行，因此更大或不同的配置不会扩大权威。README 的不变量是
+“Main Agent 是大脑，永远不是权威”。Claude Code 自己的 coordinator prompt 也把 coordinator
+与 worker 分开（`chunk-mas5an83.js`），与 clone-ai 的现有拆分一致。
+
+**代价。** 配置需要所有权、版本与测试；角色拿错配置会过强或过弱。Main Agent 不能自己检查
+文件，除非新增只读工具。
+
+**推翻条件。** 如果同模型基准显示 orchestrator 往返让任务成功率下降超过 20%，或让中位
+延迟翻倍，就在同一逐次闸门下允许 Main Agent 直接执行只读工具。
+
+## 2026-11-06 — Main Agent 与原生 Worker 共享一个 Agent 循环内核
+
+**决定。** 抽出 `src/agent/loop.ts` 状态机，带类型终止原因、工具调度、预算检查、abort 传播、
+重试策略与压缩钩子。`runNativeMainAgentTurn` 与 `OpenAiCompatibleClient` 变成它的适配器。
+
+**依据。** 现有两个循环重复了 SSE/非流式请求处理、用量统计与 8,000 字符工具结果截断
+（`native-runtime.ts:270-315`、`openai-compatible-client.ts:74-96`）；两者都缺同样的能力。
+`native-runtime.ts` 的头注释说“no compaction”，文件却在 `:515-558` 压缩——这正是重复会
+产生的漂移。Claude Code 的终端、SDK 与桌面共用一个查询循环（`chunk-8ntpzya9.js`）。
+
+**代价。** 重构两条热路径，期间行为必须由测试钉住；循环不能长出 Provider 专属分支。
+
+**推翻条件。** 如果 Main Agent 与 Worker 在传输或流式要求上分叉（例如某个 Provider 不能
+流式返回工具调用），保留不同的模型适配器，但共享调度、预算与工具结果层。
+
+## 2026-11-06 — 每个进程内工具调用都经过逐次决定
+
+**决定。** 所有进程内工具调用都经过 `ToolAuthority`（或后继策略 broker），返回
+`{behavior: allow | deny | ask, reason, updatedInput?}`。计划时策略仍是外层闸门；hook 可以
+添加上下文或拒绝，但不能静默扩大权限。
+
+**依据。** `src/core/tool-authority.ts` 存在，但只被 `test/tool-authority.test.ts` 引用；
+`runNativeMainAgentTurn` 会执行模型点名的任何工具（`native-runtime.ts:292-308`）。
+Claude Code 逐次经过规则、模式与 `canUseTool` 决定，被拒绝的调用作为工具结果返回模型，
+回合继续（`chunk-q8qwkppc.js`）。审计把它列为缺口 #2。
+
+**代价。** 每次调用有更多事件与延迟；桌面与 CLI 需要 `ask` 路径，每个工具需要风险分类。
+
+**推翻条件。** 如果逐次闸门让只读批次的延迟增加超过 10%，且红队演练没有阻止任何真实事故，
+就允许只读批次在一份计划时授权下运行，但写入、shell、网络与外部动作仍保留逐次闸门。
+
+## 2026-11-06 — 压缩按 token 计算并落记录；先确定性摘要
+
+**决定。** 按配置的上下文窗口估算 token，用 Claude Code 推导的阈值压缩
+（`effective = window - min(maxOutputTokens, 20000)`，
+threshold `min(floor(effective * (1 - 0.2)), effective - 13000)`，
+`threshold - 20000` 警告，`effective - 3000` 阻断），写入带保留消息 id 的 `compaction`
+记录，默认使用确定性摘要。只有在 eval 证明模型摘要更能保留任务关键事实后，才加入模型摘要。
+
+**依据。** 原生循环按字符压缩历史（`historyChars ?? 12000`，最新 66% 原文），且从不写
+`compaction` 记录（`native-runtime.ts:238-241,515-558`）；桌面上下文面板读的是遗留 Pi
+JSONL（`conversation-history.ts:241`）。Claude Code 写入带 `preservedMessages.uuids` 的
+`compact_boundary`、九段摘要与保留尾部。确定性摘要私密、便宜、可测试；模型摘要增加成本与
+非确定性。
+
+**代价。** token 估算近似；确定性摘要可能丢细节；`compaction` 记录增加一种持久事件。
+
+**推翻条件。** 如果长上下文基准显示，在至少 20% 的种子用例中确定性摘要丢掉的事实能被
+模型摘要保留，就对超过阈值的会话默认使用模型摘要。
+
+## 2026-11-06 — 先做 MCP 与 Skills；插件、云、VM、computer-use 延后
+
+**决定。** 先实现进程内 MCP host（stdio，然后 HTTP/SSE）与带渐进披露的 `SKILL.md` 加载器
+（P1）。把插件市场、云会话、VM 沙箱、Chrome 集成与 computer-use 延后，直到加权 harness
+分至少 90 且真实工作流需要它们。
+
+**依据。** clone-ai 没有 MCP 或 Skills 代码（审计：扩展点 10/100）。MCP 与 Skills 是
+Claude Code 的扩展入口，第三方集成几乎都从这里进来。插件与云/VM 是有基础设施成本的产品面；
+macOS Seatbelt 已经隔离 CLI Worker（`authority/seatbelt.ts`），而 Claude Desktop 的 VM 是
+26 MB 镜像加平台相关 hypervisor 代码。延后它们，避免把对齐预算花在不动 harness 分数的
+基础设施上。
+
+**代价。** 在这些阶段之前，用户不能安装第三方插件或运行远程/浏览器工具；MCP 增加攻击面，
+Skills 可以注入指令。
+
+**推翻条件。** 如果所有者的真实工作流依赖某个插件/市场或远程 MCP，就提前该集成；如果红队
+测试绕过 Seatbelt，就提前 VM 沙箱。
+
+## 2026-11-06 — 95% 是加权 harness 对齐分
+
+**决定。** 把对齐定义为 12 维加权分 ≥ 95、每维 ≥ 80，并且同模型实机基准不低于 Claude Code
+参照运行。模型质量单独测量、单独报告，绝不混进 harness 分数。
+
+**依据。** clone-ai 支持任意 OpenAI 兼容端点；其模型可能比 Claude Code 默认模型弱或强。
+把模型质量与 harness 质量混在一起，分数不可比，还会让弱模型替循环背锅。提取出的 harness
+机制才是可控变量。
+
+**代价。** 分数需要维护 eval 套件与实机参照；权重可以被操纵，因此评分细则要求每级有可执行
+证据，并设置每维下限。
+
+**推翻条件。** 如果同模型对比显示 clone-ai 任务通过率至少 95%，而清单分低于 85，就按任务
+成功率重新加权；那时的清单测的是用户不在乎的东西。
+
 ## 2026-11-05 — 自检后重建本地 macOS App
 
 **决定。** macOS 上 `selfcheck:push` 在测试、类型检查和 gate 通过后、推送前，

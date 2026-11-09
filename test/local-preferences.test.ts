@@ -30,14 +30,13 @@ test("every black-box provider is assignable to every role", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-settings-"));
   t.after(async () => rm(directory, { recursive: true, force: true }));
 
-  // Pi used to be restricted to tool-free roles because it ran without tools.
-  // As a black box it launches its own CLI with its own tools, so the
-  // restriction no longer describes reality.
-  // Pi 曾因无 Tool 运行而被限制在无 Tool 角色。作为黑盒，它启动自己的 CLI、使用自己的
-  // Tool，因此该限制已不再符合事实。
+  // A black-box provider launches its own CLI with its own tools, so it can
+  // serve every role; the registry, not a closed union, decides.
+  // 黑盒 Provider 启动自己的 CLI、使用自己的 Tool，因此可以承担所有角色；由 Registry
+  // 而不是写死的联合类型决定。
   const settings = new WorkerSettingsStore(join(directory, "settings.json"));
-  const updated = await settings.updateAgent("external-operator", { providerId: "pi" });
-  assert.equal(updated.agents.find((agent) => agent.id === "external-operator")?.providerId, "pi");
+  const updated = await settings.updateAgent("external-operator", { providerId: "claude-code" });
+  assert.equal(updated.agents.find((agent) => agent.id === "external-operator")?.providerId, "claude-code");
 });
 
 test("deleted sessions disappear from the companion list while their runtime journal can remain intact", async () => {

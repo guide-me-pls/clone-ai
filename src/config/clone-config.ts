@@ -7,17 +7,15 @@ export interface CloneConfig {
   workspacePath: string;
   locale: "zh-CN" | "en";
   /**
-   * Pi model reference for the Main Agent, e.g. `anthropic/claude-sonnet-4-5`.
-   * When omitted, the Pi SDK default (settings / first available) is used.
-   * `CLONE_AI_MAIN_MODEL` overrides this for one-off runs.
-   * 主 Agent 的 Pi 模型引用，例如 `anthropic/claude-sonnet-4-5`。省略时使用 Pi SDK
-   * 默认（设置 / 第一个可用模型）。`CLONE_AI_MAIN_MODEL` 可覆盖本次运行。
+   * OpenAI-compatible endpoint used by the built-in Main Agent.
+   * 内置主 Agent 使用的 OpenAI 兼容端点。
    */
+  mainAgentBaseUrl?: string;
+  /** Model id served by the endpoint. 端点提供的模型 ID。 */
   mainAgentModel?: string;
   /**
-   * Reasoning effort for the Main Agent, passed to the model provider (Pi's
-   * thinking level). Only levels the model offers should be chosen.
-   * 主 Agent 的推理强度，传给模型供应商（Pi 的 thinking level）。应只选择模型支持的档位。
+   * Reasoning effort for the Main Agent. Only levels the model offers should be chosen.
+   * 主 Agent 的推理强度。应只选择模型实际支持的档位。
    */
   mainAgentEffort?: EffortLevel;
 }
@@ -37,7 +35,7 @@ export class CloneConfigStore {
     return normalizeConfig(value, this.#defaultWorkspace);
   }
 
-  async update(update: Partial<Pick<CloneConfig, "workspacePath" | "locale" | "mainAgentModel" | "mainAgentEffort">>): Promise<CloneConfig> {
+  async update(update: Partial<Pick<CloneConfig, "workspacePath" | "locale" | "mainAgentBaseUrl" | "mainAgentModel" | "mainAgentEffort">>): Promise<CloneConfig> {
     const current = await this.get();
     const next = normalizeConfig({ ...current, ...update }, this.#defaultWorkspace);
     const write = this.#writes.then(() => writeJsonAtomic(this.#paths.configFile, next));
@@ -48,8 +46,12 @@ export class CloneConfigStore {
 }
 
 function normalizeConfig(value: Partial<CloneConfig> | undefined, defaultWorkspace: string): CloneConfig {
-  const mainAgentModel = typeof value?.mainAgentModel === "string" && value.mainAgentModel.trim().length > 0
-    ? value.mainAgentModel.trim()
+  const mainAgentBaseUrl = typeof value?.mainAgentBaseUrl === "string" && value.mainAgentBaseUrl.trim().length > 0
+    ? value.mainAgentBaseUrl.trim().replace(/\/$/, "")
+    : undefined;
+  const modelValue = typeof value?.mainAgentModel === "string" ? value.mainAgentModel.trim() : "";
+  const mainAgentModel = modelValue.length > 0
+    ? modelValue.replace(/^magpie\//, "")
     : undefined;
   return {
     version: 1,
@@ -57,6 +59,7 @@ function normalizeConfig(value: Partial<CloneConfig> | undefined, defaultWorkspa
       ? value.workspacePath
       : defaultWorkspace,
     locale: value?.locale === "en" ? "en" : "zh-CN",
+    ...(mainAgentBaseUrl === undefined ? {} : { mainAgentBaseUrl }),
     ...(mainAgentModel === undefined ? {} : { mainAgentModel }),
     ...(isEffortLevel(value?.mainAgentEffort) ? { mainAgentEffort: value.mainAgentEffort } : {}),
   };

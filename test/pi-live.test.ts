@@ -7,7 +7,6 @@ import test from "node:test";
 import { runQuery } from "../src/application/run-query.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { defaultWorkerProfiles } from "../src/config/worker-settings.ts";
-import { findContinuationFlags } from "../src/main-agent/fresh-session-policy.ts";
 
 // Drives a real local Pi process end to end. It costs a model call, so it is
 // opt-in:
@@ -66,15 +65,11 @@ test("live: an explicit Pi request runs a real worker and lands a verified run",
   assert.ok(evidence.length > 0, "the workspace diff must have produced evidence");
 });
 
-test("the shipped Pi recipe starts a fresh session every time", async () => {
+test("the built-in catalog no longer ships a Pi worker", async () => {
   const recipe = JSON.parse(
     await readFile(new URL("../src/workers/providers.json", import.meta.url), "utf8"),
   ) as { providers: Array<{ id: string; args?: string[] }> };
   const pi = recipe.providers.find((provider) => provider.id === "pi");
 
-  assert.ok(pi, "the built-in catalog must still ship a Pi recipe");
-  // A resumed conversation would make the Kernel's memory context redundant
-  // and tie two tasks together that the owner kept separate.
-  // 续接对话会让 Kernel 的记忆上下文变得多余，也会把所有者刻意分开的两个任务绑在一起。
-  assert.deepEqual(findContinuationFlags(pi.args ?? []), []);
+  assert.equal(pi, undefined);
 });

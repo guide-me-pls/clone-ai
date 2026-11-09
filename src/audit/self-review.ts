@@ -20,16 +20,16 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { createAgentSession, DefaultResourceLoader, getAgentDir, SessionManager } from "@earendil-works/pi-coding-agent";
-
 import { loadAudits, summarizeAudits } from "./audit-service.ts";
 import type { RunAuditRecord } from "./run-audit.ts";
-import { collectSessionUsage, recordUsage } from "../observability/usage.ts";
+import { recordUsage } from "../observability/usage.ts";
 import { listEffectiveProviderConfigs } from "../config/provider-config-store.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
 import { EFFORT_LEVELS, isEffortLevel, type EffortLevel } from "../workers/effort.ts";
 import type { JournalStore } from "../core/journal.ts";
+import { resolveNativeMainAgentEndpoint } from "../main-agent/native-runtime.ts";
+import { parseUsage } from "../workers/openai-compatible-client.ts";
 
 export type ReviewActionKind = "provider-effort" | "provider-model" | "main-agent-effort" | "main-agent-model";
 
@@ -147,48 +147,47 @@ const REVIEW_SYSTEM = [
 ].join("\n");
 
 async function askModel(system: string, prompt: string, dataDirectory: string): Promise<string> {
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: dataDirectory,
-    agentDir: getAgentDir(),
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noContextFiles: true,
-    systemPromptOverride: () => system,
-  });
-  await resourceLoader.reload();
-  const { session } = await createAgentSession({
-    resourceLoader,
-    noTools: "all",
-    sessionManager: SessionManager.inMemory(dataDirectory),
-  });
-  let reply = "";
-  let failure: string | undefined;
-  session.subscribe((event) => {
-    if (event.type === "message_end" && event.message.role === "assistant") {
-      const assistant = event.message as { stopReason?: string; errorMessage?: string };
-      if (assistant.stopReason === "error") failure = assistant.errorMessage?.trim() || "The reviewer model ended with an error.";
-    }
-    if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-      reply += event.assistantMessageEvent.delta;
-    }
-  });
-  const started = Date.now();
-  const beforeStats = (() => {
-    try { return session.getSessionStats(); } catch { return undefined; }
-  })();
-  try {
-    await session.prompt(prompt);
-  } finally {
-    // The reviewer is a model call like any other; the ledger must say so.
-    // 评审也是一次模型调用；账本必须如实记录。
-    await recordUsage(dataDirectory, {
-      ...collectSessionUsage(session, Date.now() - started, beforeStats),
-      source: "self-review",
-    }).catch(() => undefined);
-    session.dispose();
+  const resolved = await resolveNativeMainAgentEndpoint(dataDirectory);
+  if (resolved.endpoint === undefined) {
+    throw new Error(`The reviewer needs ${resolved.missing.join(" and ")}.`);
   }
-  if (reply.trim().length === 0 && failure !== undefined) throw new Error(failure);
+  const endpoint = resolved.endpoint;
+  const started = Date.now();
+  const response = await fetch(`${endpoint.baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(endpoint.apiKey === undefined ? {} : { authorization: `Bearer ${endpoint.apiKey}` }),
+    },
+    body: JSON.stringify({
+      model: endpoint.model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: prompt },
+      ],
+      stream: false,
+    }),
+    signal: AbortSignal.timeout(endpoint.timeoutMs ?? 120_000),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`The reviewer model answered ${response.status}: ${detail.slice(0, 300)}`);
+  }
+  const body = await response.json() as {
+    choices?: Array<{ message?: { content?: string | null } }>;
+    usage?: unknown;
+  };
+  const reply = body.choices?.[0]?.message?.content ?? "";
+  const usage = parseUsage(body.usage);
+  await recordUsage(dataDirectory, {
+    source: "self-review",
+    modelId: endpoint.model,
+    provider: "native",
+    durationMs: Math.max(0, Date.now() - started),
+    modelCalls: 1,
+    ...(usage ?? {}),
+  }).catch(() => undefined);
+  if (reply.trim().length === 0) throw new Error("The reviewer returned no visible reply.");
   return reply;
 }
 
