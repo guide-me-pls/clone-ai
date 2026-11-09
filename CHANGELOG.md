@@ -6,6 +6,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Stop a running answer from the composer
+
+The send slot now becomes a stop control while a turn is running: clicking it, or pressing Escape, aborts the request and the server cancels the model call and every in-flight tool. A user stop reads differently from the three-minute stall timeout, and the typed text is still restored if no answer arrived. `npm test` is 566 tests, 566 pass, 0 fail.
+
+回合运行时，发送槽位会变成停止控件：点击它或按 Escape 会中止请求，服务端随即取消模型调用与
+所有在途工具。用户停止的提示与三分钟静默超时不同；若没有收到回答，已输入的文本仍会恢复。
+`npm test` 为 566 个测试、566 通过、0 失败。
+
 ### A live tool timeline in the chat
 
 While the Main Agent works, the desktop now shows each tool call as it happens: a row with the tool name, a running/done/failed/refused dot, and its duration, delivered over the same SSE stream as the answer. The events come from the turn's own tool lifecycle, so the timeline and the turn audit cannot disagree. Locale strings are bilingual and the running pulse respects `prefers-reduced-motion`. `npm test` is 565 tests, 565 pass, 0 fail; typecheck and gate pass.
