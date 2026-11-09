@@ -174,6 +174,33 @@ and a minimum per dimension.
 least 95% of tasks while scoring below 85 on the checklist, reweight toward task
 success; the checklist is then measuring things users do not value.
 
+## 2026-11-09 — The model can dispatch a task, but only the Kernel plans and finishes it
+
+**Decision.** Add one model-invocable `dispatch_task` tool that turns an
+objective and acceptance criteria into the same `runQuery` path the companion
+uses. It is not a second execution surface: the Kernel still plans, applies
+authority and budgets, verifies evidence and decides completion. A conversation
+must still be answered directly, and a plan whose steps are already known still
+goes through `propose_work_plan`.
+
+**Evidence.** The audit found the Main Agent could propose plans but could not
+start work on its own (`docs/study/claude-code-parity.md`, gap #6). `runQuery`
+already owns trigger → recall → plan → execute → verify, so reusing it keeps one
+completion path. The alternative — letting the Main Agent spawn workers
+directly — would create a second authority and a second place where a task can
+be declared finished.
+
+**What it costs.** The first dispatch is synchronous from the model's point of
+view, so a long task holds the turn; background dispatch and a completion
+notification are the next step, not this one. The tool also accepts only an
+objective and criteria, so the model cannot express per-step scopes; it must use
+`propose_work_plan` when it needs that precision.
+
+**Reversal condition.** If real tasks routinely need per-step authority or
+background completion, extend `dispatch_task` with a background option and
+return a run id immediately; if the synchronous call proves to be the source of
+timeouts, make background the default.
+
 ## 2026-11-05 — Self-check rebuilds the local macOS app
 
 **Decision.** On macOS, `selfcheck:push` rebuilds and replaces

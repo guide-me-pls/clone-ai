@@ -31,6 +31,32 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+## 2026-11-09 — A model-invocable dispatch_task tool
+
+- **Goal / hypothesis:** the Main Agent could describe work but could not start
+  it. One tool that takes an objective and acceptance criteria and calls the
+  existing `runQuery` path closes that gap without creating a second authority.
+- **Trade-off:** [the model can dispatch a task, but only the Kernel plans and
+  finishes it](../architecture/trade-offs.md#2026-11-09--the-model-can-dispatch-a-task-but-only-the-kernel-plans-and-finishes-it).
+- **Change:** added `src/main-agent/tools/dispatch-task.ts` and registered it in
+  `nativeTools`; the charter now tells the model when to use it instead of
+  `propose_work_plan`. Validation runs before any planning round: a non-empty
+  objective, 1–12 trimmed criteria, and a 4,000-character cap.
+- **Eval:** `test/dispatch-task.test.ts` → 3/3. `npm test` → **563 tests, 563
+  pass, 0 fail**. `npm run typecheck` → exit 0. `npm run gate` → PASS.
+- **Benchmark run:** none. The tool is a wiring change over `runQuery`; a live
+  run would exercise the planner and worker, not this binding.
+- **Execution chain:** read the audit gap and `runQuery`; write the tool; fix
+  two relative imports and drop an unsupported `signal` option rather than cast
+  it away; register it; add the charter line; write the validation tests; record
+  the trade-off and this entry.
+- **Pros:** the model now has a governed way to start work, and the completion
+  path stays single.
+- **Cons / next time:** dispatch is synchronous, so a long task holds the turn;
+  the model cannot set per-step scopes through this tool; background dispatch,
+  cancellation propagation and a completion notification are still ahead.
+- **Reversal condition:** see the trade-off entry.
+
 ## 2026-11-09 — Per-call permissions, context compaction, MCP, and skills
 
 - **Goal / hypothesis:** close the four Claude Code gaps that decide whether a

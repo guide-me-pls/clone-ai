@@ -28,6 +28,7 @@ import { createKernelRuntimeSession, kernelToolDefinitions, type PlainKernelTool
 import { compileMainAgentPrompt } from "./prompt.ts";
 import { loadSkills, skillInvocation, skillListing, type SkillDefinition } from "../skills/skill-loader.ts";
 import { McpHost, type McpServerConfig } from "../mcp/mcp-host.ts";
+import { dispatchTaskTool } from "./tools/dispatch-task.ts";
 import { compactTranscript, contextLevels, contextPressure } from "./context-window.ts";
 import { recordPromptSnapshot } from "./prompt-snapshot.ts";
 import {
@@ -626,7 +627,7 @@ async function chat(
  * 这一个工具为台账检索。
  */
 function nativeTools(dataDirectory: string): PlainKernelTool[] {
-  return kernelToolDefinitions({ dataDirectory }).map((tool) => tool.name === "search_history"
+  return [...kernelToolDefinitions({ dataDirectory }), dispatchTaskTool({ dataDirectory })].map((tool) => tool.name === "search_history"
     ? {
       ...tool,
       execute: async (_toolCallId: string, params: Record<string, unknown>) => ({
