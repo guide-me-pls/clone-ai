@@ -43,9 +43,7 @@ import { recordUsage, type UsageRecord } from "../observability/usage.ts";
 import { parseUsage } from "../workers/openai-compatible-client.ts";
 import { redactMemoryPii } from "../memory/memory-hygiene.ts";
 import { tokenize } from "../memory/md-memory-store.ts";
-import { isEffortLevel } from "../workers/effort.ts";
-import { CloneConfigStore } from "../config/clone-config.ts";
-import { resolveClonePaths } from "../config/clone-home.ts";
+import { readMainAgentEffortPreference, readMainAgentModelPreference } from "./model-preferences.ts";
 
 export interface NativeMainAgentEndpoint {
   baseUrl: string;
@@ -121,10 +119,10 @@ export type MainAgentRuntime = "native";
 export function readMainAgentRuntime(environment: NodeJS.ProcessEnv = process.env): MainAgentRuntime {
   const value = environment.CLONE_AI_MAIN_RUNTIME?.trim().toLowerCase();
   if (value === "pi" || value === "legacy") {
-    throw new Error("The Pi Main Agent runtime has been removed. Use the built-in native runtime.");
+    throw new Error("The Pi Main Agent runtime has been removed. Configure CLONE_AI_NATIVE_MODEL and CLONE_AI_NATIVE_BASE_URL, or set CLONE_AI_MAIN_RUNTIME=native.");
   }
   if (value !== undefined && value !== "" && value !== "native") {
-    throw new Error(`Unknown CLONE_AI_MAIN_RUNTIME "${value}". The only supported runtime is "native".`);
+    throw new Error(`Unknown CLONE_AI_MAIN_RUNTIME "${value}". Use "native".`);
   }
   return "native";
 }
@@ -139,12 +137,16 @@ export function isNativeMainAgentSelected(environment: NodeJS.ProcessEnv = proce
  * variables: one OpenAI-compatible endpoint serves both.
  * 原生主 Agent 的端点。刻意复用原生 Worker 的变量：同一个 OpenAI 兼容端点服务两者。
  */
-export function readNativeMainAgentEndpoint(environment: NodeJS.ProcessEnv = process.env): {
+export function readNativeMainAgentEndpoint(
+  environment: NodeJS.ProcessEnv = process.env,
+  modelFallback?: string,
+): {
   endpoint?: NativeMainAgentEndpoint;
   missing: string[];
 } {
   const baseUrl = environment.CLONE_AI_NATIVE_BASE_URL?.trim();
-  const model = environment.CLONE_AI_NATIVE_MODEL?.trim();
+  const model = environment.CLONE_AI_NATIVE_MODEL?.trim()
+    ?? (modelFallback === undefined || modelFallback.trim().length === 0 ? undefined : modelFallback.trim());
   const missing: string[] = [];
   if (baseUrl === undefined || baseUrl.length === 0) missing.push("CLONE_AI_NATIVE_BASE_URL");
   if (model === undefined || model.length === 0) missing.push("CLONE_AI_NATIVE_MODEL");
@@ -153,53 +155,12 @@ export function readNativeMainAgentEndpoint(environment: NodeJS.ProcessEnv = pro
   return {
     missing,
     endpoint: {
-      baseUrl: normalizeOpenAiBaseUrl(baseUrl!),
+      baseUrl: baseUrl!.replace(/\/$/, ""),
       model: model!,
       ...(environment.CLONE_AI_NATIVE_API_KEY?.trim() ? { apiKey: environment.CLONE_AI_NATIVE_API_KEY.trim() } : {}),
       timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 120_000,
     },
   };
-}
-
-/**
- * Resolve the built-in Agent endpoint from environment overrides first, then
- * the owner's saved endpoint. The local Magpie URL is the practical default so
- * selecting a gateway model is enough to make the native loop work.
- * 先读取环境变量覆盖，再读取所有者保存的端点。本机 Magpie 地址是实际默认值，
- * 因此选中一个网关模型就足以让原生循环工作。
- */
-export async function resolveNativeMainAgentEndpoint(
-  dataDirectory: string,
-  environment: NodeJS.ProcessEnv = process.env,
-): Promise<{ endpoint?: NativeMainAgentEndpoint; missing: string[] }> {
-  const fromEnvironment = readNativeMainAgentEndpoint(environment);
-  if (fromEnvironment.endpoint !== undefined) return fromEnvironment;
-
-  const config = await new CloneConfigStore(resolveClonePaths({ dataDirectory })).get();
-  const baseUrl = environment.CLONE_AI_NATIVE_BASE_URL?.trim()
-    || config.mainAgentBaseUrl
-    || "http://127.0.0.1:3425";
-  const model = environment.CLONE_AI_NATIVE_MODEL?.trim() || config.mainAgentModel;
-  const missing: string[] = [];
-  if (model === undefined || model.length === 0) missing.push("mainAgentModel");
-  if (missing.length > 0) return { missing };
-  const timeout = Number(environment.CLONE_AI_NATIVE_TIMEOUT_MS ?? 120_000);
-  return {
-    missing,
-    endpoint: {
-      baseUrl: normalizeOpenAiBaseUrl(baseUrl),
-      model: model!,
-      ...(environment.CLONE_AI_NATIVE_API_KEY?.trim()
-        ? { apiKey: environment.CLONE_AI_NATIVE_API_KEY.trim() }
-        : {}),
-      timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 120_000,
-    },
-  };
-}
-
-/** Accept both gateway roots and URLs that already include `/v1`. 同时接受网关根地址和已包含 `/v1` 的地址。 */
-function normalizeOpenAiBaseUrl(value: string): string {
-  return value.trim().replace(/\/+$/, "").replace(/\/v1$/, "");
 }
 
 /**
@@ -210,13 +171,19 @@ function normalizeOpenAiBaseUrl(value: string): string {
 export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): Promise<NativeMainAgentResult> {
   const environment = options.environment ?? process.env;
   const resolved = options.endpoint === undefined
-    ? await resolveNativeMainAgentEndpoint(options.dataDirectory, environment)
+    ? readNativeMainAgentEndpoint(environment)
     : { endpoint: options.endpoint, missing: [] as string[] };
-  if (resolved.endpoint === undefined) {
-    throw new Error(`The native Main Agent needs ${resolved.missing.join(" and ")}.`);
+  // The settings page writes a model id to config.json; when the endpoint is
+  // configured only through the environment's base URL, use that choice.
+  // 设置页把模型 id 写入 config.json；当端点只通过环境变量给出基础地址时，沿用该选择。
+  const effective = options.endpoint === undefined && resolved.endpoint === undefined
+    ? readNativeMainAgentEndpoint(environment, await readMainAgentModelPreference(options.dataDirectory, environment))
+    : resolved;
+  if (effective.endpoint === undefined) {
+    throw new Error(`The native Main Agent needs ${effective.missing.join(" and ")}.`);
   }
-  const endpoint = resolved.endpoint;
-  const effort = await readMainAgentEffort(options.dataDirectory, environment);
+  const endpoint = effective.endpoint;
+  const effort = await readMainAgentEffortPreference(options.dataDirectory, environment);
   const compiled = await compileMainAgentPrompt({
     dataDirectory: options.dataDirectory,
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
@@ -752,14 +719,6 @@ function flattenPairs(pairs: ReadonlyArray<{ user: string; assistant: string }>)
 
 function trim(text: string, limit: number): string {
   return text.replace(/\s+/g, " ").trim().slice(0, limit);
-}
-
-async function readMainAgentEffort(dataDirectory: string, environment: NodeJS.ProcessEnv): Promise<string | undefined> {
-  const fromEnv = environment.CLONE_AI_MAIN_EFFORT?.trim();
-  if (isEffortLevel(fromEnv)) return fromEnv;
-  const paths = resolveClonePaths({ dataDirectory });
-  const config = await new CloneConfigStore(paths).get();
-  return config.mainAgentEffort;
 }
 
 async function currentRuns(dataDirectory: string): Promise<Run[]> {

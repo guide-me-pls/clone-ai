@@ -62,32 +62,22 @@ npm run desktop:build
 
 ## 4. Worker（真正干活的 Agent）
 
-Clone AI 自己不实现 Coding Agent，它监督你已有的那些。
+Clone AI 只有一个执行 Provider：进程内的原生 Worker。它不是 CLI；每次工具调用都在发起
+的瞬间按步骤 Scope 校验，token 用量被精确记录。
 
-| Worker | Windows 命令 | macOS 命令 | 安装 |
-| --- | --- | --- | --- |
-| Claude Code | `claude.cmd` | `claude` | `clone-ai install claude-code` |
-| Codex CLI | `codex.cmd` | `codex` | `clone-ai install codex-cli` |
-| Pi | `pi.cmd` | `pi` | `clone-ai install pi` |
-| opencode | `opencode.cmd` | `opencode` | 手动安装 |
+| Worker | 运行方式 | 配置 |
+| --- | --- | --- |
+| 原生 Worker | 进程内循环，对接 OpenAI 兼容端点 | `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` |
 
-配方位于 `src/workers/providers.json`，可在 `<clone home>/providers.json` 覆盖或
-新增。配方里只放环境**变量名**，绝不放凭据值。
-
-注意：桌面应用（Claude Code Desktop、opencode Desktop）不能作为 Worker——Clone AI
-需要的是能用「一个 Prompt + 一个工作目录」运行的无头 CLI。
-
-Clone AI 还自带进程内的 `native` 执行 Provider：把某个 Agent 的 Provider 设为
-`native`，并设置 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL`。它不需要
-CLI，且每次工具调用都按步骤 Scope 校验。设置这两个变量后，`direct`、`research`、
-`draft`、`review` 的默认 Agent 已经使用它；`external` 仍走 CLI 路径，因为原生 Worker
-没有受治理的动作连接器。在设置中保存的 Provider 始终优先于默认。
+黑盒 CLI Worker（Claude Code、Codex、Pi CLI、opencode）已移除。CLI 会把工具调用与
+凭据藏在 Kernel 看不到的地方，harness 既无法审计也无法拦截。`external` 角色在有受治理的
+动作连接器之前没有 Provider，也不会被路由到 CLI。
 
 ### 主 Agent 运行时
 
-设置了 `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` 时，进程内的原生运行时
-是默认；没有它们时，主 Agent 使用 Pi。`CLONE_AI_MAIN_RUNTIME=pi` 强制 Pi；
-`=native` 强制原生，端点缺失时清晰失败。要配置原生运行时：
+进程内的原生运行时是唯一的主 Agent 运行时。它需要 `CLONE_AI_NATIVE_MODEL` 与
+`CLONE_AI_NATIVE_BASE_URL`；缺少时回合会以指明缺失变量的错误失败。Pi 运行时及其 SDK
+已不在产品中。要配置运行时：
 
 ```bash
 export CLONE_AI_NATIVE_MODEL=<model-id>
@@ -100,7 +90,25 @@ clone-ai "你好"
 以回合台账作为对话记录，并从台账检索 `search_history`。它会随 token 到达流式输出，
 并对长对话做确定性压缩：最新轮次在 12,000 字符预算内保留原文，较早轮次变成有界摘要，
 全文仍留在回合台账中。图片附件以 OpenAI 风格 data URL 随当前消息发送；它们是逐回合的，
-不存入台账。要强制旧的 Pi 运行时，设置 `CLONE_AI_MAIN_RUNTIME=pi`。
+不存入台账。
+
+### Worker 并发
+
+Kernel 根据实测的机器容量决定同时运行多少个 Worker：CPU 核数、1 分钟负载均值与空闲
+内存。这不是你配置的，也不是主 Agent 配置的——主 Agent 只能读取它（`get_capacity`）
+来决定计划规模。
+
+要自己固定上限，在 `config.json` 里设置 `maxConcurrentWorkers`（或调用
+`PATCH /api/config`）。`0` 或未设置表示自动。固定值会被核数上限约束，并在每次派发时
+重新读取，因此改动无需重启即可生效。
+
+```bash
+# 例如无风扇笔记本：最多同时 2 个 Worker
+curl -X PATCH http://127.0.0.1:4317/api/config \
+  -H "authorization: Bearer $CLONE_AI_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"maxConcurrentWorkers": 2}'
+```
 
 ## 5. 数据都在哪里
 

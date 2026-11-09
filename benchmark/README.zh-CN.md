@@ -8,52 +8,22 @@
 
 ## 运行
 
-真实 CLI 没有由 Clone AI 强制的系统沙箱，默认拒绝运行。如果你已理解它可能访问和修改当前用户
-的文件、网络与凭据，并明确接受该风险，才使用：
-
-```bash
-npm run bench -- --unsafe-host --provider claude-code --tasks summarize
-```
-
-每个任务只花几美分的真实模型调用，耗时约 20-60 秒。结果以 JSON 记录在
-`benchmark/results/<provider>-<时间戳>.json`，供升级前后对比。
-
-## 原生 Provider
-
-进程内 Worker 不需要 CLI，也能跑同一组任务：
+基准通过进程内的原生 Worker 运行；没有需要沙箱或额外同意的 CLI。
 
 ```bash
 CLONE_AI_NATIVE_MODEL=<model-id> CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url> \
-  npm run bench -- --provider native --tasks summarize
+  npm run bench -- --tasks summarize
 ```
 
-它不需要 `--unsafe-host`：每次工具调用都在运行前按步骤 Scope 校验。报告会记录精确的
-`usage`（tokens 与模型调用次数）、`verification` 与 `failureReason`；CLI Provider 通常
-只报告耗时与状态。
+每个任务只花几次真实模型调用，耗时约 20-60 秒。结果以 JSON 记录在
+`benchmark/results/native-<时间戳>.json`，包含精确的 `usage`（tokens 与模型调用次数）、
+`verification` 与 `failureReason`。
 
-## 任务集（`benchmark/tasks.ts`）
+## 主 Agent 对比（`npm run bench:main`）
 
-| id | 它证明什么 |
-| --- | --- |
-| `summarize` | 单个只读 WorkOrder；产物证据来自工作区 diff |
-| `two-step-chain` | 依赖波次：draft 在 research 验证通过后才启动 |
-| `three-step-pipeline` | 两条依赖边；review 使用两个输入 |
-| `code-tool` | Agent 产生两个代码产物；不证明测试由可信验证器独立执行 |
-| `missing-input` | 期望失败：缺失文件应干净地归为 `no_artifact`，而不是挂死 |
-
-## 读结果
-
-- `passed`：run 到达 `completed` 且验证通过、预期产物真实存在时为 true。
-- `expectedFailure` 任务（`missing-input`）只在失败类别为 `no_artifact` 时为绿；权限拒绝或启动失败不能冒充预期失败。
-- `artifacts`：Agent 在工作区留下的全部文件（不含 `.clone-ai`）及大小。
-- 运行器在任何意外失败时以非零退出码结束，可挂进 CI 或升级前检查。
-
-## 主 Agent 基准（`npm run bench:main`）
-
-用同一模型与每个任务独立的 clone home，把三条固定 Prompt 跑过原生循环：直接回答、读取
-权限、提案计划。每个任务组合重复 `--repeat N` 次（默认 5）；报告给出中位数与 p90 耗时、
-中位 tokens 与通过率，并保留每一次运行。运行时列表是显式的：只有已注册且能启动的运行时
-才会被加进来。
+用同一模型与每个任务独立的 clone home，把三条固定 Prompt 分别跑过 Pi 运行时与原生循环：
+直接回答、读取权限、提案计划。每个任务/运行时组合重复 `--repeat N` 次（默认 5）；报告给出
+中位数与 p90 耗时、中位 tokens 与通过率，并保留每一次运行。
 
 ```bash
 CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main -- --repeat 5

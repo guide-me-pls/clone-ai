@@ -21,7 +21,7 @@ Deployment: [Mac app](apps/desktop/README.md) · [Linux server](docs/usage/serve
 - Memory and audit data remain in local Markdown/SQLite without application-layer encryption or complete erasure. Hiding a session or archiving memory is not deletion; remote model requests can send context to the model provider.
 - Optional CLI-based memory mining also needs `CLONE_AI_MEMORY_MINING=1` and a separate `CLONE_AI_MEMORY_MINING_UNRESTRICTED=1` host-access opt-in. This is not sandboxed; failed extraction stays pending instead of being treated as an empty result.
 - Cancellation fences later journal writes and asks the worker to stop, but process termination is best effort, not proof that an unisolated process made no external changes.
-- Interrupted or failed unrestricted black-box work is not automatically replayed, because an unchanged workspace cannot prove that no external action happened.
+- Interrupted or failed work is not automatically replayed when an external step was involved, because an unchanged workspace cannot prove that no external action happened.
 - Optional SMTP daily reports use a durable delivery record; unknown outcomes require checking the mailbox before a retry or dismissal. SMTP acceptance is not proof of delivery. Remote SMTP requires TLS; credentials in `reporting.json` are still stored in plaintext.
 - The Main Agent cannot authorize software installation or directly save model-proposed goals, commitments, or boundaries from a quoted conversation. Independent owner review for those structured proposals is not implemented; reviewed memories can still be entered manually.
 
@@ -68,7 +68,7 @@ bounded execution capability only.
 ```text
 You
   -> clone-ai: state, planning, policy, verification
-       -> Claude Code / Codex / opencode / future runtimes
+       -> native worker (in-process, per-call scope gates)
        -> calendar / files / mail / browser / apps / APIs
        -> local automation and specialized Python workers
 ```
@@ -81,12 +81,10 @@ context and capability grant necessary for an assignment.
 
 | Provider | Intended responsibility | Integration status |
 | --- | --- | --- |
-| **Claude Code** | Implementation, review, local tools, and artifact creation. | Black-box launch recipe |
-| **Codex** | Coding, review, repository operations, and artifact creation. | Black-box launch recipe |
-| **opencode** | An optional alternative coding Agent. | Black-box launch recipe |
-| **Native worker** | In-process loop with per-call scope gates; the tool set is role/profile-driven, and it reports exact token usage. | Built in; set `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` |
-| **Custom runtimes** | User- or organization-specific commands and local tools. | Add a `providers.json` recipe |
-| **Python workers** | Extraction, ranking, forecasting, evaluation, and local ML proposals. | Future black-box recipe |
+| **Native worker** | In-process loop with per-call scope gates; filesystem tools only, reports exact token usage. | Built in; set `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` |
+
+Black-box CLI workers (Claude Code, Codex, Pi CLI, opencode) were removed: a CLI hides its tool calls and credentials from the Kernel. Adding another provider means implementing the same guarantees, not adding a command line.
+
 
 ## Start here
 
@@ -114,20 +112,17 @@ npm run main
 For the complete current path from a user request to verified completion, see
 [Query execution flow](docs/query-execution-flow.md). The opt-in model planner
 and its safety boundary are documented in [LLM Planner](docs/llm-planner.md).
-The real Codex CLI and Claude Code provider boundary is documented in
-[Supervised worker boundary](docs/coding-cli-adapters.md). The architecture, the
+The native worker boundary is documented in
+[Local setup](docs/usage/local-setup.md). The architecture, the
 route already walked, and the next phase are in
-[Runtime architecture and route](docs/runtime-architecture-and-route.md). The
-reverse-engineered comparison with Claude Code, the 12-dimension parity
-scorecard, and the 95% roadmap are in
-[Claude Code parity plan](docs/study/claude-code-parity.md).
+[Runtime architecture and route](docs/runtime-architecture-and-route.md).
 
 The first implementation is a local, inspectable trust loop—not a broad autonomous
 assistant. The CLI demo remains deterministic for repeatable learning and tests; the
-configured desktop runtime routes bounded WorkOrders through a common black-box boundary.
+configured desktop runtime routes bounded WorkOrders through the native worker.
 Work orders carry inputs, capability requirements, artifact contracts, risk, budgets,
-and an acyclic dependency graph. Claude Code, Codex, opencode, and future agents
-start as fresh processes with no Clone AI-owned long-term memory. Kernel state, memory,
+and an acyclic dependency graph. Each assignment starts a fresh in-process session with no Clone AI-owned long-term
+memory. Kernel state, memory,
 Workspace evidence, crash recovery, and final completion remain outside the provider.
 A provider's own `--resume` behavior is optional and never the source of truth.
 
@@ -401,16 +396,16 @@ interface RuntimeAdapter {
 }
 ```
 
-The runtime connects Claude Code, Codex, opencode, and future independent runtimes
-through one black-box boundary. A **Skill** remains a provider-owned capability; Clone AI
-only supplies a bounded prompt and workspace, then judges the result from observable facts.
-Provider session memory, tool protocols, and completion prose are not Kernel authority.
+The runtime connects the in-process native worker through one governed boundary. Each
+tool call is checked against the step's scopes at the moment it is made; the Kernel keeps
+the prompt, workspace and completion verdict. Worker session state, tool protocols and
+completion prose are not Kernel authority.
 
-The default black-box adapter snapshots the Workspace before and after execution, uses a
-hard deadline, and exposes only an environment allowlist. A durable JSON checkpoint lets
-the Kernel rerun a clean interruption, reconcile complete observed artifacts, or block when
-side effects are ambiguous. Same-Workspace assignments use an exclusive lease so concurrent
-workers cannot overwrite one another.
+The native worker snapshots the Workspace before and after execution, uses a hard deadline,
+and records exact token usage. A durable JSON checkpoint lets the Kernel rerun a clean
+interruption, reconcile complete observed artifacts, or block when side effects are
+ambiguous. Same-Workspace assignments use an exclusive lease so concurrent workers cannot
+overwrite one another.
 
 ## Implementation architecture
 
@@ -459,7 +454,8 @@ packages/
 |-- connectors/                  calendar, mail, files, browser, APIs
 |-- adapters/
 |   |-- claude-code/
-|   `-- codex/
+|   |-- codex/
+|   `-- pi/
 |-- observability/               traces, audit, metrics
 `-- testkit/                     fake connectors, runtimes, failures
 

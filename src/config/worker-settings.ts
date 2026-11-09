@@ -36,7 +36,7 @@ const DEFAULT_AGENTS: WorkerProfile[] = [
     role: "direct",
     description: "处理无需拆分的本地请求。",
     purpose: "让简单问题不被不必要地拆成子任务。",
-    providerId: "codex-cli",
+    providerId: "native",
     enabled: true,
     required: true,
   },
@@ -46,7 +46,7 @@ const DEFAULT_AGENTS: WorkerProfile[] = [
     role: "research",
     description: "收集约束、已有信息和待确认事项。",
     purpose: "用于调研、比较、分析和需要先理解背景的任务。",
-    providerId: "claude-code",
+    providerId: "native",
     enabled: true,
   },
   {
@@ -55,7 +55,7 @@ const DEFAULT_AGENTS: WorkerProfile[] = [
     role: "draft",
     description: "把上下文转化为可编辑的本地交付物。",
     purpose: "用于计划、文档、代码、邮件和其他可回退产物。",
-    providerId: "codex-cli",
+    providerId: "native",
     enabled: true,
   },
   {
@@ -64,40 +64,25 @@ const DEFAULT_AGENTS: WorkerProfile[] = [
     role: "review",
     description: "检查计划、产物和证据是否足以支持下一步。",
     purpose: "用于复杂任务和外部动作前的独立复核。",
-    providerId: "claude-code",
-    enabled: true,
-  },
-  {
-    id: "external-operator",
-    title: "外部执行 Agent",
-    role: "external",
-    description: "执行会影响外部世界的最后一步。",
-    purpose: "用于发送、发布、提交、预约或购买；始终逐步等待你的确认。",
-    providerId: "codex-cli",
+    providerId: "native",
     enabled: true,
   },
 ];
 
 /**
  * Return a fresh default catalog so callers never mutate the module-level
- * settings. When the native endpoint is configured, the roles it can serve
- * default to the in-process worker; external stays on the CLI path because the
- * native worker has no governed action connector.
+ * settings. There is one provider, the native worker; the external role has no
+ * default agent until a governed action connector exists.
  *
- * 返回一份全新的默认 Agent 目录，避免调用方修改模块级设置。配置了原生端点时，它可承担的
- * 角色默认使用进程内 Worker；external 保留 CLI 路径，因为原生 Worker 没有受治理的动作
- * 连接器。
+ * 返回一份全新的默认 Agent 目录，避免调用方修改模块级设置。只有一个 Provider——
+ * 原生 Worker；external 角色在有受治理的动作连接器之前没有默认 Agent。
  */
-export function defaultWorkerProfiles(environment: NodeJS.ProcessEnv = process.env): WorkerProfile[] {
-  return defaultAgents(environment);
+export function defaultWorkerProfiles(_environment: NodeJS.ProcessEnv = process.env): WorkerProfile[] {
+  return defaultAgents();
 }
 
-function defaultAgents(environment: NodeJS.ProcessEnv): WorkerProfile[] {
-  const nativeAvailable = Boolean(environment.CLONE_AI_NATIVE_MODEL?.trim()) && Boolean(environment.CLONE_AI_NATIVE_BASE_URL?.trim());
-  return DEFAULT_AGENTS.map((agent) => ({
-    ...agent,
-    providerId: nativeAvailable && agent.role !== "external" ? "native" : agent.providerId,
-  }));
+function defaultAgents(): WorkerProfile[] {
+  return DEFAULT_AGENTS.map((agent) => ({ ...agent }));
 }
 
 export class WorkerSettingsStore {
@@ -169,7 +154,7 @@ export class WorkerSettingsStore {
 function normalize(input: Partial<CloneSettings>, providers: ProviderRegistry, environment: NodeJS.ProcessEnv): CloneSettings {
   const configured = new Map((input.agents ?? []).map((agent) => [agent.id, agent]));
   return {
-    agents: defaultAgents(environment).map((agent) => {
+    agents: defaultAgents().map((agent) => {
       const saved = configured.get(agent.id);
       const savedProvider = saved?.providerId;
       // An unknown or role-incompatible saved provider falls back to the

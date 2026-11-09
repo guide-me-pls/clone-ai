@@ -23,15 +23,14 @@ import { join } from "node:path";
 import { loadAudits, summarizeAudits } from "./audit-service.ts";
 import type { RunAuditRecord } from "./run-audit.ts";
 import { recordUsage } from "../observability/usage.ts";
-import { listEffectiveProviderConfigs } from "../config/provider-config-store.ts";
+import { readNativeMainAgentEndpoint } from "../main-agent/native-runtime.ts";
+import { parseUsage } from "../workers/openai-compatible-client.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
 import { EFFORT_LEVELS, isEffortLevel, type EffortLevel } from "../workers/effort.ts";
 import type { JournalStore } from "../core/journal.ts";
-import { resolveNativeMainAgentEndpoint } from "../main-agent/native-runtime.ts";
-import { parseUsage } from "../workers/openai-compatible-client.ts";
 
-export type ReviewActionKind = "provider-effort" | "provider-model" | "main-agent-effort" | "main-agent-model";
+export type ReviewActionKind = "main-agent-effort" | "main-agent-model";
 
 export interface ReviewFinding {
   severity: "high" | "medium" | "low";
@@ -79,9 +78,8 @@ export async function runSelfReview(
 ): Promise<SelfReview> {
   const records = await loadAudits(journal, { gateway: true });
   const summary = summarizeAudits(records);
-  const providers = await listEffectiveProviderConfigs(dataDirectory);
   const config = await new CloneConfigStore(resolveClonePaths({ dataDirectory })).get();
-  const digest = buildDigest(records, summary, providers, config);
+  const digest = buildDigest(records, summary, config);
 
   let reply: string | undefined;
   let error: string | undefined;
@@ -109,7 +107,7 @@ export async function runSelfReview(
         generatedAt: (options.now ?? new Date()).toISOString(),
         summary: parsed.summary,
         findings: parsed.findings,
-        actions: validateActions(parsed.actions, providers, model),
+        actions: validateActions(parsed.actions, model),
         ...(model === undefined ? {} : { model }),
         ai: true,
       };
@@ -136,22 +134,28 @@ const REVIEW_SYSTEM = [
   "model-gateway errors, durations, costs, and the owner's own pass/fail labels.",
   "Reply with ONE JSON object and nothing else:",
   '{"summary": string, "findings": [{"severity":"high|medium|low","area":string,"evidence":string,"recommendation":string}],',
-  ' "actions": [{"kind":"provider-effort|provider-model|main-agent-effort|main-agent-model","providerId":string?,"value":string,"title":string,"reason":string}]}',
+  ' "actions": [{"kind":"main-agent-effort|main-agent-model","providerId":string?,"value":string,"title":string,"reason":string}]}',
   "Rules:",
   "- Base every finding on the supplied facts, not on guesses. Quote the number or error you used.",
   "- Actions are configuration only and are applied by the owner with one click; propose at most 4.",
-  "- provider-effort values must be in that provider's effortLevels; main-agent-effort likewise.",
-  "- provider-model / main-agent-model only when a concrete model id appears in the facts.",
+  "- main-agent-effort values must be one of the supported levels.",
+  "- main-agent-model only when a concrete model id appears in the facts.",
   "- Never propose code, prompt, policy, permission or evidence changes.",
   "- If the facts are too thin to justify a change, return an empty actions array and say so.",
 ].join("\n");
 
+/**
+ * Ask the configured native endpoint. There is no SDK here: the reviewer is a
+ * plain, tool-free chat completion, and a missing endpoint degrades to the
+ * facts-only review the caller already handles.
+ * 向已配置的原生端点提问。这里没有 SDK：评审就是一次无工具的普通 chat completion；
+ * 端点缺失时退化为调用方已经处理的“只给事实”评审。
+ */
 async function askModel(system: string, prompt: string, dataDirectory: string): Promise<string> {
-  const resolved = await resolveNativeMainAgentEndpoint(dataDirectory);
-  if (resolved.endpoint === undefined) {
-    throw new Error(`The reviewer needs ${resolved.missing.join(" and ")}.`);
+  const { endpoint, missing } = readNativeMainAgentEndpoint();
+  if (endpoint === undefined) {
+    throw new Error(`AI review is unavailable: ${missing.join(" and ")} is not configured.`);
   }
-  const endpoint = resolved.endpoint;
   const started = Date.now();
   const response = await fetch(`${endpoint.baseUrl}/v1/chat/completions`, {
     method: "POST",
@@ -171,30 +175,29 @@ async function askModel(system: string, prompt: string, dataDirectory: string): 
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw new Error(`The reviewer model answered ${response.status}: ${detail.slice(0, 300)}`);
+    throw new Error(`The review endpoint answered ${response.status}: ${detail.slice(0, 300)}`);
   }
   const body = await response.json() as {
     choices?: Array<{ message?: { content?: string | null } }>;
     usage?: unknown;
   };
-  const reply = body.choices?.[0]?.message?.content ?? "";
+  const content = body.choices?.[0]?.message?.content ?? "";
   const usage = parseUsage(body.usage);
   await recordUsage(dataDirectory, {
     source: "self-review",
+    durationMs: Math.max(0, Date.now() - started),
     modelId: endpoint.model,
     provider: "native",
-    durationMs: Math.max(0, Date.now() - started),
-    modelCalls: 1,
-    ...(usage ?? {}),
+    ...(usage?.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
+    ...(usage?.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
+    ...(usage?.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
   }).catch(() => undefined);
-  if (reply.trim().length === 0) throw new Error("The reviewer returned no visible reply.");
-  return reply;
+  return content;
 }
 
 function buildDigest(
   records: readonly RunAuditRecord[],
   summary: ReturnType<typeof summarizeAudits>,
-  providers: Awaited<ReturnType<typeof listEffectiveProviderConfigs>>,
   config: Awaited<ReturnType<CloneConfigStore["get"]>>,
 ): string {
   const failures = records
@@ -226,13 +229,6 @@ function buildDigest(
     byFailureCategory: summary.byFailureCategory,
     byProvider: summary.byProvider,
     evaluation: summary.evaluation,
-    providerConfig: providers.map((provider) => ({
-      id: provider.id,
-      model: provider.model ?? null,
-      effort: provider.effort ?? null,
-      effortLevels: provider.efforts ?? null,
-      sandbox: provider.sandbox ?? null,
-    })),
     mainAgent: { model: config.mainAgentModel ?? null, effort: config.mainAgentEffort ?? null },
     failures,
     labels: labelled,
@@ -282,7 +278,7 @@ function parseReview(reply: string): ParsedReview | undefined {
     ? record.actions.flatMap((entry) => {
         if (typeof entry !== "object" || entry === null) return [];
         const item = entry as Record<string, unknown>;
-        const kind: ReviewActionKind | undefined = item.kind === "provider-effort" || item.kind === "provider-model" || item.kind === "main-agent-effort" || item.kind === "main-agent-model"
+        const kind: ReviewActionKind | undefined = item.kind === "main-agent-effort" || item.kind === "main-agent-model"
           ? item.kind
           : undefined;
         if (kind === undefined) return [];
@@ -303,7 +299,6 @@ function parseReview(reply: string): ParsedReview | undefined {
 /** Drops anything the machine cannot actually do, then de-duplicates. 丢弃机器实际做不到的项，然后去重。 */
 function validateActions(
   actions: ParsedReview["actions"],
-  providers: Awaited<ReturnType<typeof listEffectiveProviderConfigs>>,
   mainAgentModel?: string,
 ): ReviewAction[] {
   const seen = new Set<string>();
@@ -312,11 +307,6 @@ function validateActions(
     if (valid.length >= 4) break;
     const key = `${action.kind}:${action.providerId ?? "main"}`;
     if (seen.has(key)) continue;
-    if (action.kind === "provider-effort" || action.kind === "provider-model") {
-      const provider = providers.find((candidate) => candidate.id === action.providerId);
-      if (provider === undefined) continue;
-      if (action.kind === "provider-effort" && !(provider.efforts ?? EFFORT_LEVELS).includes(action.value as EffortLevel)) continue;
-    }
     if (action.kind === "main-agent-effort" && !isEffortLevel(action.value)) continue;
     if (action.kind === "main-agent-model" && mainAgentModel === undefined && !action.value.includes("/")) continue;
     seen.add(key);

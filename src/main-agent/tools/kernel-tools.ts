@@ -9,16 +9,13 @@
  */
 import { join } from "node:path";
 
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { TSchema } from "typebox";
 
 import type { PlanStep } from "../../core/contracts.ts";
 import type { CloneRuntime } from "../../core/runtime.ts";
 import { createRuntimeAssembly } from "../../core/runtime-factory.ts";
 import { resolveClonePaths } from "../../config/clone-home.ts";
 import { GovernedMemorySource } from "../../memory/md-memory-store.ts";
-import { WorkerRegistry } from "../../workers/worker-registry.ts";
 import { compileBriefing } from "../situation-briefing.ts";
 import { pushRelevantMemories } from "../memory-push.ts";
 import { describeHistory, searchHistory } from "../conversation-history.ts";
@@ -28,6 +25,8 @@ import { describeAuthority, StandingPolicyStore } from "../../authority/standing
 import { MdMemoryStore } from "../../memory/md-memory-store.ts";
 import { MemoryGovernance } from "../../memory/memory-governance.ts";
 import type { RegisteredToolSnapshot } from "../prompt-snapshot.ts";
+import { sampleCapacity, type CapacitySnapshot } from "../../core/capacity.ts";
+import { CloneConfigStore } from "../../config/clone-config.ts";
 
 export interface KernelToolsOptions {
   dataDirectory: string;
@@ -369,46 +368,11 @@ export async function requestAgentInstallation(
  * 为可信调用方提供确定性、可审计的 Worker CLI 安装。模型选出的引文不是授权，
  * 因此上面的 Main Agent 工具会拒绝安装。
  */
-export async function installWorkerAgent(dataDirectory: string, agentId: string): Promise<{ installed: boolean; version?: string; error?: string }> {
-  const registry = new WorkerRegistry(dataDirectory);
-  const providers = await registry.list();
-  const provider = providers.find((candidate) => candidate.id === agentId);
-  if (provider === undefined) {
-    return { installed: false, error: `No worker is registered as "${agentId}".` };
-  }
-  if (provider.installed) {
-    return { installed: true, version: provider.version };
-  }
-  if (!provider.installable) {
-    return { installed: false, error: `Worker "${agentId}" has no automatic installer; install its command and restart Clone AI.` };
-  }
-  // One assembly for the whole operation, closed on both paths: a leaked
-  // SQLite handle keeps the clone home locked against the owner.
-  // 整个操作只用一个组装，两条路径都关闭：泄露的 SQLite 句柄会把 clone home 锁住，
-  // 连所有者自己都动不了。
-  const assembly = await createRuntimeAssembly({ dataDirectory });
-  try {
-    const after = await registry.install(agentId);
-    await assembly.journal.append({
-      type: "agent.installed",
-      payload: {
-        agentId,
-        providerId: agentId,
-        installedAt: new Date().toISOString(),
-        ...(after.version === undefined ? {} : { version: after.version }),
-      },
-    });
-    return { installed: true, ...(after.version === undefined ? {} : { version: after.version }) };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    await assembly.journal.append({
-      type: "agent.install_failed",
-      payload: { agentId, providerId: agentId, message, attemptedAt: new Date().toISOString() },
-    });
-    return { installed: false, error: message };
-  } finally {
-    assembly.close();
-  }
+export async function installWorkerAgent(_dataDirectory: string, agentId: string): Promise<{ installed: boolean; version?: string; error?: string }> {
+  return {
+    installed: false,
+    error: `No worker CLI can be installed. "${agentId}" is not a provider: the native worker runs in-process.`,
+  };
 }
 
 /**
@@ -456,48 +420,51 @@ export async function describeExecutors(dataDirectory: string): Promise<{ text: 
   }
 }
 
-export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelToolsOptions): void {
+/**
+ * A tool that can be executed by our own loop, with no SDK type in the way.
+ * Parameters arrive parsed from JSON, exactly as the native runtime receives
+ * them, so they are typed loosely here and validated by the Kernel.
+ * 可由我们自己的循环执行的工具，不经过任何 SDK 类型。参数是解析后的 JSON，正是原生
+ * 运行时收到的形状，因此这里类型宽松，由 Kernel 做校验。
+ */
+export interface PlainKernelTool {
+  name: string;
+  label: string;
+  description: string;
+  parameters: unknown;
+  execute: (toolCallId: string, params: any) => Promise<{ content: Array<{ type: string; text?: string }>; details?: unknown }>;
+}
+
+/**
+ * The host the tool table is registered into. The native runtime passes a
+ * capturing collector; tests pass a map. There is no SDK event bus any more,
+ * and the per-turn memory push moved into the prompt compiler.
+ * 工具表注册进的目标。原生运行时传入捕获收集器；测试传入 Map。不再有 SDK 事件总线，
+ * 逐回合记忆推送已移入 Prompt 编译器。
+ */
+export interface KernelToolHost {
+  registerTool(tool: PlainKernelTool): void;
+}
+
+export function createKernelToolsExtension(host: KernelToolHost, options: KernelToolsOptions): void {
   // One choke point for registration: provenance sees every tool, including
   // ones added later, without a second list to keep in sync.
   // 注册的唯一入口：溯源能看到每一个工具（包括以后新增的），不需要维护第二份清单。
-  const register = <TParams extends TSchema, TDetails = unknown, TState = any>(
-    tool: ToolDefinition<TParams, TDetails, TState>,
-  ): void => {
+  const register = (tool: PlainKernelTool): void => {
     options.onRegister?.({
       name: tool.name,
       label: tool.label,
       description: tool.description,
       parameters: tool.parameters,
     });
-    pi.registerTool(tool);
+    host.registerTool(tool);
   };
 
-  // Per-turn memory push. before_agent_start fires on every user turn of a long
-  // desktop conversation, not once per session, so a memory approved five turns
-  // ago can reach the model on the turn it becomes relevant. The base prompt is
-  // the one already compiled at session start (charter + situation); this only
-  // appends, and never accumulates, so the prompt cannot grow turn after turn.
-  // 逐回合记忆推送。before_agent_start 在长桌面会话的每个用户回合触发，而不是每个会话一次，
-  // 因此在五回合前获批的记忆，能在它变得相关的那一回合到达模型。基础 Prompt 是会话启动时已编译
-  // 的那份（守则 + 现场简报）；这里只追加、从不累积，Prompt 不会逐回合变大。
-  pi.on?.("before_agent_start", async (event) => {
-    const query = event.prompt.trim();
-    if (query.length === 0) return undefined;
-    try {
-      const journal = createJournalStore(options.dataDirectory);
-      try {
-        const pushed = await pushRelevantMemories({ dataDirectory: options.dataDirectory, query, journal });
-        if (pushed === undefined) return undefined;
-        return { systemPrompt: `${event.systemPrompt}\n\n${pushed.text}` };
-      } finally {
-        (journal as { close?: () => void }).close?.();
-      }
-    } catch {
-      // Recall is an enhancement; a broken index must not silence the agent.
-      // 召回是增强项；索引损坏不能让 Agent 失声。
-      return undefined;
-    }
-  });
+  // Per-turn memory push lives in the prompt compiler now; there is no SDK
+  // event bus to hook. The compiler runs on every turn, so a memory approved
+  // five turns ago still reaches the model on the turn it becomes relevant.
+  // 逐回合记忆推送现在位于 Prompt 编译器中；不再有可挂钩的 SDK 事件总线。编译器每回合
+  // 运行，因此在五回合前获批的记忆仍能在它变得相关的那一回合到达模型。
 
   const withKernel = async <T>(operation: (runtime: CloneRuntime) => Promise<T>): Promise<T> => {
     const { runtime, close } = await createKernelRuntimeSession(options.dataDirectory);
@@ -652,6 +619,32 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
   });
 
   register({
+    name: "get_capacity",
+    label: "Get Capacity",
+    description:
+      "Read how many worker executions this machine can run at once right now: CPU cores, load average, free memory, "
+      + "and the limit the Kernel enforces. Read-only. Use it to size a plan — a wide plan of independent steps runs in "
+      + "parallel up to this limit. You cannot change the limit; only the owner can pin it.",
+    parameters: Type.Object({}),
+    execute: async () => {
+      const capacity = await sampleCapacityForOwner(options.dataDirectory);
+      return {
+        content: [{
+          type: "text",
+          text: [
+            `Concurrent worker slots: ${capacity.limit}${capacity.pinned ? " (pinned by the owner)" : " (auto)"}`,
+            `CPU cores: ${capacity.cpuCount} · load (1m): ${capacity.loadAverage1m}`,
+            `Free memory: ${capacity.freeMemoryMb} MB of ${capacity.totalMemoryMb} MB`,
+            `Why: ${capacity.reason}`,
+            "Independent steps in one plan run in parallel up to this limit; dependent steps still wait for their inputs.",
+          ].join("\n"),
+        }],
+        details: capacity,
+      };
+    },
+  });
+
+  register({
     name: "search_history",
     label: "Search History",
     description:
@@ -719,20 +712,6 @@ export function createKernelToolsExtension(pi: ExtensionAPI, options: KernelTool
     },
   });
 
-  register({
-    name: "install_agent",
-    label: "Install Agent",
-    description:
-      "Installation from model-selected quotes is disabled. The owner must use the desktop installation control or CLI directly.",
-    parameters: Type.Object({
-      agentId: Type.String({ description: "Worker id, e.g. codex-cli, claude-code, pi." }),
-      ownerSaid: Type.String({ description: "The owner's exact words confirming this installation, quoted from this conversation." }),
-    }),
-    execute: async (_toolCallId, params) => {
-      const result = await requestAgentInstallation(options.dataDirectory, params.agentId, params.ownerSaid);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: {} };
-    },
-  });
 }
 
 export interface PlainKernelTool {
@@ -740,23 +719,34 @@ export interface PlainKernelTool {
   label: string;
   description: string;
   parameters: unknown;
-  execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }>; details?: unknown }>;
+  execute: (toolCallId: string, params: any) => Promise<{ content: Array<{ type: string; text?: string }>; details?: unknown }>;
 }
 
 /**
- * The same tool table as a plain array, with no Pi runtime involved. The
- * extension is invoked with a capturing stub, so the native Main Agent and the
- * Pi session cannot drift apart.
- * 同一张工具表，以普通数组返回，不涉及 Pi 运行时。用捕获桩调用扩展，因此原生主 Agent
- * 与 Pi 会话不会各自漂移。
+ * The same tool table as a plain array, with no SDK runtime involved. The
+ * extension is invoked with a capturing collector, so the native Main Agent and
+ * tests cannot drift apart.
+ * 同一张工具表，以普通数组返回，不涉及 SDK 运行时。用捕获收集器调用扩展，因此原生主
+ * Agent 与测试不会各自漂移。
  */
 export function kernelToolDefinitions(options: KernelToolsOptions): PlainKernelTool[] {
   const tools: PlainKernelTool[] = [];
-  const capture = {
-    registerTool(tool: PlainKernelTool): void {
-      tools.push(tool);
-    },
-  } as unknown as ExtensionAPI;
-  createKernelToolsExtension(capture, options);
+  createKernelToolsExtension({ registerTool: (tool) => tools.push(tool) }, options);
   return tools;
+}
+
+/**
+ * The owner's pinned limit, read on demand. The tool is read-only by design:
+ * the Kernel's gate owns the effective limit, and the model may only see it.
+ * 所有者的固定上限，按需读取。该工具刻意只读：生效上限由 Kernel 的闸门掌握，模型只能看。
+ */
+async function sampleCapacityForOwner(dataDirectory: string): Promise<CapacitySnapshot> {
+  let pinned: number | undefined;
+  try {
+    const config = await new CloneConfigStore(resolveClonePaths({ dataDirectory })).get();
+    pinned = config.maxConcurrentWorkers;
+  } catch {
+    pinned = undefined;
+  }
+  return sampleCapacity(pinned === undefined ? {} : { pinnedLimit: pinned });
 }

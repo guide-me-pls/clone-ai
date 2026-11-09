@@ -84,13 +84,6 @@ export function describeFailureForOwner(
     };
   }
   if (text.length === 0) {
-    if (provider === "codex-cli" || provider === "claude-code") {
-      return {
-        summary: "旧版本没有记录失败原因；本机黑盒 Worker 默认禁止不受限运行。",
-        guidance: "打开「设置 → Agent」，明确允许该 Provider，或改绑其他已允许的 Worker。",
-        permissionBlocked: true,
-      };
-    }
     return {
       summary: "这次任务没有完成，但没有记录到具体原因。",
       guidance: "查看下方“本地执行轨迹”里最后一次动作，确认 Worker 是否安装、登录并拥有所需权限。",

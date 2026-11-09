@@ -12,8 +12,6 @@
  */
 import { join } from "node:path";
 
-import { CloneConfigStore } from "../config/clone-config.ts";
-import { resolveClonePaths } from "../config/clone-home.ts";
 import { NativeAgentWorker, type NativeToolSpec } from "./native-agent-worker.ts";
 import { OpenAiCompatibleClient } from "./openai-compatible-client.ts";
 
@@ -97,31 +95,6 @@ export function createConfiguredNativeWorker(
 ): NativeAgentWorker | undefined {
   const config = readNativeWorkerEnvironment(environment, workspace);
   return createWorker(config, environment, options);
-}
-
-/**
- * Resolve the native worker from the owner's saved endpoint as well as process
- * environment variables. This is the production path now that Main and child
- * roles share Clone AI's own Agent runtime.
- * 同时从所有者保存的端点和进程环境变量解析内置 Worker。Main 与子角色现在共享
- * Clone AI 自己的 Agent Runtime，因此这是生产路径。
- */
-export async function createConfiguredNativeWorkerForDataDirectory(
-  dataDirectory: string,
-  environment: NodeJS.ProcessEnv = process.env,
-  workspace = process.cwd(),
-  options: { id?: string; label?: string; workCapabilities?: readonly string[] } = {},
-): Promise<NativeAgentWorker | undefined> {
-  const backend = await new CloneConfigStore(resolveClonePaths({ dataDirectory })).get();
-  const config = readNativeWorkerEnvironment(environment, workspace);
-  const baseUrl = config.baseUrl ?? backend.mainAgentBaseUrl ?? "http://127.0.0.1:3425";
-  const model = config.model ?? backend.mainAgentModel;
-  return createWorker({
-    workspace,
-    baseUrl: baseUrl.replace(/\/+$/, "").replace(/\/v1$/, ""),
-    ...(model === undefined ? {} : { model }),
-    ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
-  }, environment, options);
 }
 
 function createWorker(

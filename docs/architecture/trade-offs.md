@@ -187,6 +187,76 @@ made fresh audit and IME fixes invisible.
 macOS build toolchain. If development moves to a live-reload runtime, remove
 the bundle rebuild from this path.
 
+## 2026-11-06 — Worker concurrency follows measured machine capacity, capped by the Kernel
+
+**Decision.** The Kernel samples CPU parallelism, load average and free memory,
+computes a concurrent-worker limit, and gates every worker execution through a
+shared limiter. The Main Agent can read the same snapshot through a read-only
+`get_capacity` tool so it can size a plan, but it cannot raise the limit. An
+owner may pin a ceiling with `maxConcurrentWorkers`; `0` or unset means auto.
+
+**Why.** The owner asked for dispatch concurrency to follow memory and CPU so the
+machine is used fully. Letting the model choose the number directly would make
+concurrency depend on a sampled token rather than on the machine: it could
+oversubscribe a laptop into swap or serialize a large workstation by mistake.
+Measured capacity is deterministic, testable, and the same answer for every
+caller; the model's role stays what it already is — deciding how much work to
+propose.
+
+**Evidence.** Before this change, `executeSubagents` ran every ready work order
+with `Promise.all` and the queue started every queued Run in a tick, so the
+degree of parallelism came from the plan shape alone. A 16-core host and a
+2-core host behaved the same.
+
+**What it costs.** A limiter adds queueing: a run can sit waiting for a slot
+instead of starting immediately. Read-only subagents in one workspace still
+share the workspace lock for writes, so same-workspace write steps stay serial
+even when capacity is available.
+
+**Reversal condition.** If runtime measurement proves wrong on the owner's
+hardware (cgroups, container limits, or a noisy neighbour), let the owner pin
+`maxConcurrentWorkers` and treat auto as advisory; or replace the formula with
+an observed-throughput feedback loop. Never let the model set the hard cap.
+
+## 2026-11-06 — The harness keeps only its own agents: no Pi SDK, no black-box CLIs
+
+**Decision.** Remove the Pi Agent SDK and every black-box CLI worker (Claude
+Code, Codex, the Pi CLI, opencode) from the code path. The Main Agent runs only
+on the in-process native loop; every executing role runs only on the native
+worker. The external role has no provider until a governed action connector
+exists, instead of falling back to a CLI.
+
+**Why — the owner's reasoning.** A sub-agent behind a CLI is not controllable:
+its tool calls are invisible to the Kernel, its credentials live in that
+process, and its safety rules are prompt text rather than gates. The Main Agent
+is special: it must only dispatch tasks and assemble context, never execute, so
+its loop, context assembly and tool surface must be ours and auditable rather
+than delegated to an SDK. Keeping the CLI path as a fallback would preserve
+exactly the behavior this change exists to remove.
+
+**Alternatives rejected.** (1) Keep Pi as a fallback: the fallback becomes the
+de facto path whenever the native endpoint is down, and the uncontrolled
+behavior returns. (2) Keep CLIs only for external actions: external effects
+would run with no receipt and no per-call gate, the highest-risk path. (3) Wrap
+the CLIs in a policy proxy: still no per-call tool visibility.
+
+**Evidence.** The native worker passes the full 5/5 reliability set with exact
+usage; the native Main Agent matched Pi 15/15 across five samples and used fewer
+tokens; both native paths stream, compact and record turn/tool/usage events. The
+black-box path's audit stops at the process boundary.
+
+**What it costs.** The Main Agent requires an OpenAI-compatible endpoint
+(`CLONE_AI_NATIVE_*`); without it, turns fail clearly instead of degrading to
+Pi. External actions are unavailable until a governed connector exists. CLI-only
+capabilities (a coding agent's own tools, network access) are gone. Existing Pi
+sessions and CLI worker settings are no longer usable; the turn ledger becomes
+the conversation record.
+
+**Reversal condition.** Add a replacement adapter only when it provides per-call
+tool visibility, Kernel-gated execution and trusted receipts; a raw CLI, or an
+SDK that owns the loop, is not a valid reversal. If the native endpoint cannot
+be made reliable, the product is blocked rather than silently degraded.
+
 ## 2026-11-06 — The Main Agent comparison repeats each cell and reports medians
 
 **Decision.** `npm run bench:main` runs each task/runtime cell N times (default

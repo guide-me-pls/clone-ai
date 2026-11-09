@@ -1,14 +1,19 @@
 /**
- * One companion-facing query through Clone AI's built-in Main Agent.
- * 面向 companion 的一次查询，统一经过 Clone AI 内置 Main Agent。
+ * One companion-facing query through the Main Agent.
+ *
+ * There is one runtime: the in-process native loop. It dispatches work to the
+ * Kernel and assembles context; it never executes. Removing the Pi branch means
+ * a missing endpoint fails clearly instead of silently falling back to an SDK.
+ *
+ * 面向 companion 的一次 Main Agent 查询。
+ *
+ * 只有一个运行时：进程内的原生循环。它向 Kernel 派发工作并组装上下文，绝不执行。
+ * 移除 Pi 分支意味着端点缺失会清晰失败，而不是静默回退到某个 SDK。
  */
 import type { Run } from "../core/contracts.ts";
-import { join } from "node:path";
-import type { MainAgentTurnSource } from "../main-agent/turn-audit.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { runNativeMainAgentTurn } from "../main-agent/native-runtime.ts";
 import { beginInvocation, type InvocationCaller, type InvocationSurface } from "../audit/invocation-ledger.ts";
-import { shouldMine } from "../memory/mining-policy.ts";
 
 export interface MainAgentQueryResult {
   reply: string;
@@ -44,7 +49,7 @@ export interface MainAgentQueryOptions {
    */
   turnId?: string;
   /** Which entry point produced this turn, for the audit. 产生本回合的入口，供审计使用。 */
-  source?: MainAgentTurnSource;
+  source?: "cli" | "main-cli" | "companion" | "server" | "whatsapp" | "unknown";
   /** Cancels the model call and every in-flight tool. 取消模型调用与所有在途工具。 */
   signal?: AbortSignal;
 }
@@ -64,44 +69,16 @@ export async function runMainAgentQuery(
     ...(options.auditHome === undefined ? {} : { auditHome: options.auditHome }),
   });
   try {
-    const result = await withMainAgentLock(dataDirectory, async () => {
-      return runNativeMainAgentTurn({
-        dataDirectory,
-        text,
-        source: options.source ?? "companion",
-        ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
-        ...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
-        ...(options.images === undefined ? {} : { images: options.images }),
-        ...(options.signal === undefined ? {} : { signal: options.signal }),
-        onMetadata: (metadata) => audit.note(metadata),
-      });
-    });
-    if (shouldMine(text)) {
-      try {
-        const { createJournalStore } = await import("../core/sqlite-journal.ts");
-        const { MemoryPipeline } = await import("../memory/memory-pipeline.ts");
-        const { NativeMemoryWorker } = await import("../memory/native-memory-worker.ts");
-        const { ConversationMemoryPipeline } = await import("../memory/conversation-memory-pipeline.ts");
-        const journal = createJournalStore(dataDirectory);
-        const conversationMemory = new ConversationMemoryPipeline(
-          journal,
-          new MemoryPipeline(
-            journal,
-            new NativeMemoryWorker({ dataDirectory }),
-            { lockPath: join(dataDirectory, "memory-extraction-lock") },
-          ),
-        );
-        await conversationMemory.record({
-          session: "main-agent",
-          turns: [{ at: new Date().toISOString(), speaker: "user", text }],
-          objective: text,
-        });
-        (journal as { close?: () => void }).close?.();
-      } catch {
-        // Memory mining is asynchronous and must never delay or replace the reply.
-        // 记忆提炼是异步增强，绝不能延迟或替换刚刚生成的回复。
-      }
-    }
+    const result = await withMainAgentLock(dataDirectory, () => runNativeMainAgentTurn({
+      dataDirectory,
+      text,
+      source: options.source ?? "companion",
+      ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
+      ...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
+      ...(options.images === undefined ? {} : { images: options.images }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      onMetadata: (metadata) => audit.note(metadata),
+    }));
     if (result.error === undefined) {
       await audit.complete(result);
     } else {

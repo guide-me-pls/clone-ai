@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { createJournalStore } from "../src/core/sqlite-journal.ts";
@@ -117,17 +116,14 @@ test("the native main agent includes prior turns from the ledger", async (t) => 
   assert.ok(body?.messages.some((message) => message.role === "assistant" && message.content === "Noted."));
 });
 
-test("the native flag and endpoint are explicit", () => {
+test("the native runtime is the only Main Agent runtime", () => {
   assert.equal(isNativeMainAgentSelected({ CLONE_AI_MAIN_RUNTIME: "native" }), true);
   assert.equal(isNativeMainAgentSelected({}), true);
   assert.equal(readMainAgentRuntime({}), "native");
   assert.equal(readMainAgentRuntime({ CLONE_AI_NATIVE_MODEL: "m", CLONE_AI_NATIVE_BASE_URL: "http://x" }), "native");
-  assert.throws(
-    () => readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "pi", CLONE_AI_NATIVE_MODEL: "m", CLONE_AI_NATIVE_BASE_URL: "http://x" }),
-    /Pi Main Agent runtime has been removed/,
-  );
   assert.equal(readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "native" }), "native");
-  assert.throws(() => readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "bogus" }), /only supported runtime is "native"/);
+  assert.throws(() => readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "pi" }), /has been removed/);
+  assert.throws(() => readMainAgentRuntime({ CLONE_AI_MAIN_RUNTIME: "bogus" }), /Use "native"/);
   const missing = readNativeMainAgentEndpoint({});
   assert.equal(missing.endpoint, undefined);
   assert.deepEqual(missing.missing, ["CLONE_AI_NATIVE_BASE_URL", "CLONE_AI_NATIVE_MODEL"]);
@@ -201,91 +197,4 @@ test("image attachments become OpenAI-style data URLs", async (t) => {
   const parts = user!.content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
   assert.ok(parts.some((part) => part.type === "text" && part.text === "What color is this image?"));
   assert.ok(parts.some((part) => part.type === "image_url" && part.image_url?.url === "data:image/png;base64,AAAA"));
-});
-
-test("a cancelled native turn is recorded as interrupted", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "clone-ai-native-cancel-"));
-  t.after(async () => rm(directory, { recursive: true, force: true }));
-  let started: () => void = () => undefined;
-  const startedPromise = new Promise<void>((resolve) => { started = resolve; });
-  const fetchImpl = (async (_url: string, init: RequestInit) => {
-    started();
-    await new Promise<never>((_resolve, reject) => {
-      init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
-    });
-    throw new Error("unreachable");
-  }) as unknown as typeof fetch;
-  const controller = new AbortController();
-  const running = runNativeMainAgentTurn({
-    dataDirectory: directory,
-    text: "keep going",
-    source: "cli",
-    endpoint: { baseUrl: "http://gateway", model: "m" },
-    fetchImpl,
-    signal: controller.signal,
-  });
-  await startedPromise;
-  controller.abort();
-  const result = await running;
-  assert.equal(result.error, "The turn was cancelled.");
-
-  const journal = createJournalStore(directory);
-  try {
-    const events = await journal.list();
-    const completed = events.find((event) => event.type === "main_agent.turn_completed");
-    assert.ok(completed);
-    assert.equal((completed.payload as Record<string, unknown>).status, "interrupted");
-  } finally {
-    (journal as { close?: () => void }).close?.();
-  }
-});
-
-test("skills and MCP tools appear in the turn's tool table", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "clone-ai-native-extra-"));
-  t.after(async () => rm(directory, { recursive: true, force: true }));
-  const skillRoot = fileURLToPath(new URL("./fixtures/skills", import.meta.url));
-  const serverPath = fileURLToPath(new URL("./fixtures/fake-mcp-server.mjs", import.meta.url));
-  const requests: Array<{ messages: Array<{ role: string; content: unknown }>; tools?: Array<{ function: { name: string } }> }> = [];
-  const fetchImpl = (async (_url: string, init: RequestInit) => {
-    const body = JSON.parse(String(init.body)) as { messages: Array<{ role: string; content: unknown }>; tools?: Array<{ function: { name: string } }> };
-    requests.push(body);
-    if (requests.length === 1) {
-      return sseResponse([
-        { choices: [{ delta: { tool_calls: [{ index: 0, id: "s", type: "function", function: { name: "Skill(release-notes)", arguments: "{}" } }] } }] },
-        { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
-      ]);
-    }
-    if (requests.length === 2) {
-      return sseResponse([
-        { choices: [{ delta: { tool_calls: [{ index: 0, id: "m", type: "function", function: { name: "mcp__fake__echo", arguments: "{\"text\":\"hi\"}" } }] } }] },
-        { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
-      ]);
-    }
-    return sseResponse([
-      { choices: [{ delta: { content: "done" } }] },
-      { choices: [{ delta: {}, finish_reason: "stop" }] },
-    ]);
-  }) as unknown as typeof fetch;
-
-  const result = await runNativeMainAgentTurn({
-    dataDirectory: directory,
-    text: "use the skill",
-    source: "cli",
-    endpoint: { baseUrl: "http://gateway", model: "m" },
-    fetchImpl,
-    skillRoots: [skillRoot],
-    mcpServers: [{ name: "fake", command: process.execPath, args: [serverPath], timeoutMs: 10_000 }],
-  });
-  assert.equal(result.error, undefined);
-  const names = requests[0]!.tools?.map((tool) => tool.function.name) ?? [];
-  assert.ok(names.includes("Skill(release-notes)"));
-  assert.ok(names.includes("mcp__fake__echo"));
-  assert.equal(names.includes("Skill(hidden)"), false);
-  const system = String(requests[0]!.messages[0]!.content);
-  assert.match(system, /Skills available/);
-  assert.match(system, /release-notes/);
-  assert.equal(system.includes("hidden"), false);
-  const toolMessages = requests[2]!.messages.filter((message) => message.role === "tool").map((message) => String(message.content));
-  assert.ok(toolMessages.some((content) => content.includes("Never invent a change")));
-  assert.ok(toolMessages.some((content) => content.includes("hi")));
 });

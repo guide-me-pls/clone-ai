@@ -1,0 +1,16 @@
+{
+  "provider": "native",
+  "ranAt": "2026-11-06T10:22:38.856Z",
+  "records": [
+    {
+      "taskId": "missing-input",
+      "title": "Missing input fails with the right category",
+      "passed": false,
+      "expectedFailure": true,
+      "status": "error",
+      "durationMs": 0,
+      "artifacts": [],
+      "error": "Native worker needs CLONE_AI_NATIVE_MODEL and CLONE_AI_NATIVE_BASE_URL."
+    }
+  ]
+}

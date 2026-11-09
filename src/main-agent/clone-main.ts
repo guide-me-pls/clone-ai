@@ -1,13 +1,19 @@
 /**
- * CLI entry for Clone AI's built-in Main Agent.
+ * clone-main entry: the persistent Main Agent on the in-process native loop.
  *
- * There is no Pi SDK, external Agent process, or provider-selected reasoning
- * loop here: the same native runtime used by the desktop owns the turn.
+ * The agent carries the conversation, proposes work plans, requests approval
+ * status, recalls memory, and inspects runs - all through proposal-only tools
+ * whose other end is the Kernel. It has no built-in file, shell, or write
+ * tools. There is no SDK behind it: the loop, context assembly and tool surface
+ * are ours, and every turn is recorded in the turn ledger.
  *
- * Clone AI 内置 Main Agent 的 CLI 入口。
+ * 常驻主 Agent 的入口，运行在进程内的原生循环上。
  *
- * 这里没有 Pi SDK、外部 Agent 进程或按 Provider 选择的推理循环：桌面端使用的同一个
- * 原生运行时拥有本回合。
+ * 该 Agent 负责对话、提案工作计划、查询审批状态、召回记忆与查看 Run——全部经由
+ * 提案型工具，工具的另一端是 Kernel。它没有任何内置文件/Shell/写入工具。它背后没有
+ * SDK：循环、上下文组装与工具面都是我们自己的，每个回合都记入回合台账。
+ *
+ * Run: npm run main -- "<query>"
  */
 import { defaultLegacyDirectory, migrateLegacyCloneHome, prepareCloneHome, resolveClonePaths } from "../config/clone-home.ts";
 import { runNativeMainAgentTurn } from "./native-runtime.ts";
@@ -18,6 +24,10 @@ if (query.length === 0) {
   process.exit(1);
 }
 
+// The CLI resolves the owner's home exactly as the daemon does, so running a
+// query from a terminal and from the desktop reach the same state.
+// CLI 与 Daemon 用完全相同的方式解析所有者主目录，因此从终端和桌面发起的查询
+// 到达同一份状态。
 const paths = resolveClonePaths();
 await prepareCloneHome(paths);
 await migrateLegacyCloneHome({
