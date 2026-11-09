@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Worker concurrency follows the machine
+
+The Kernel now samples CPU cores, the 1-minute load average and free memory, computes how many workers may run at once, and gates every execution through one shared limiter — so a 16-core idle host and a 2-core busy laptop no longer behave the same. The Main Agent can read the snapshot with a read-only `get_capacity` tool to size a plan, but cannot raise the limit. Owners can pin a ceiling with `maxConcurrentWorkers` (0 = auto), re-read on every dispatch.
+
+Kernel 现在采样 CPU 核数、1 分钟负载与空闲内存，计算同时运行多少个 Worker，并通过共享限流器约束每次执行——16 核空闲主机与 2 核忙碌笔记本不再表现相同。主 Agent 可以用只读的 `get_capacity` 工具读取快照来决定计划规模，但不能提高上限。所有者可以用 `maxConcurrentWorkers` 固定上限（0 = 自动），每次派发时重新读取。
+
 ### The black-box CLI workers are gone
 
 Claude Code, Codex, the Pi CLI and opencode were removed as execution providers, together with their launch recipes, install commands, the `install_agent` tool and the provider settings APIs. The in-process native worker is the only executor: every tool call is checked against the step's scopes at the moment it is made, and its usage is exact. The `external` role now has no provider until a governed action connector exists — it is never routed to a CLI. The worker benchmark runs native-only; memory mining calls the same endpoint with an injected completion.

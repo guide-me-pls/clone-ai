@@ -29,6 +29,7 @@ import type {
 } from "./contracts.ts";
 import type { JournalStore } from "./journal.ts";
 import { approvalKey, assertTransition, emptyProjection, reduceEvent, subagentKey, type RuntimeProjection } from "./run-state.ts";
+import { CapacityGate, type CapacitySnapshot } from "./capacity.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { CapabilityDispatcher } from "../workers/capability-dispatcher.ts";
 import { BUILT_IN_CATALOG, corroborateFailures, failureSignature, type FailureCategory, type FailureReport, type OutcomeCatalog } from "./failure-analysis.ts";
@@ -104,6 +105,14 @@ export interface CloneRuntimeOptions {
    * 未来失败变成即时且可修复的拒绝。
    */
   knownAgentIds?: () => Set<string>;
+  /**
+   * Shared concurrency gate for worker executions. One gate per process, so the
+   * queue and every subagent wave draw from the same machine budget. Omitted
+   * means an unlimited gate (tests that do not care about capacity).
+   * Worker 执行的共享并发闸门。每进程一个，使队列与每个子 Agent 波次从同一份机器预算里
+   * 取用。省略表示不限制（不关心容量的测试）。
+   */
+  capacityGate?: CapacityGate;
 }
 
 export interface DispatchResult {
@@ -162,6 +171,7 @@ export class CloneRuntime {
   readonly #memorySource?: WorkerMemorySource;
   readonly #failureCatalog: OutcomeCatalog;
   readonly #workspacePath?: string;
+  readonly #capacityGate: CapacityGate;
   readonly #workspaceCheckpoints?: WorkspaceCheckpointStore;
   readonly #isolatedWorkspaceRoot: string;
   readonly #knownAgentIds?: () => Set<string>;
@@ -178,6 +188,7 @@ export class CloneRuntime {
     this.#memorySource = options.memorySource;
     this.#failureCatalog = options.failureCatalog ?? BUILT_IN_CATALOG;
     this.#knownAgentIds = options.knownAgentIds;
+    this.#capacityGate = options.capacityGate ?? new CapacityGate();
     this.#workspacePath = options.workspacePath === undefined ? undefined : resolve(options.workspacePath);
     this.#workspaceCheckpoints = this.#workspacePath === undefined
       ? undefined
@@ -708,11 +719,21 @@ export class CloneRuntime {
     });
   }
 
+  /** What the machine can take right now; the Main Agent may read it, never set it. 机器此刻能承受多少；主 Agent 可以读，不能设置。 */
+  capacity(): CapacitySnapshot {
+    return this.#capacityGate.snapshot();
+  }
+
   private async executeSingleAgent(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry }): Promise<void> {
-    if (this.#workspacePath === undefined) {
-      return this.executeSingleAgentUnlocked(input);
+    const release = await this.#capacityGate.acquire();
+    try {
+      if (this.#workspacePath === undefined) {
+        return await this.executeSingleAgentUnlocked(input);
+      }
+      return await workspaceExecutionLock.run(this.#workspacePath, () => this.executeSingleAgentUnlocked(input));
+    } finally {
+      release();
     }
-    return workspaceExecutionLock.run(this.#workspacePath, () => this.executeSingleAgentUnlocked(input));
   }
 
   private async executeSingleAgentUnlocked(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry }): Promise<void> {
@@ -799,10 +820,21 @@ export class CloneRuntime {
   }
 
   private async dispatchSubagent(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry }): Promise<void> {
-    if (this.#workspacePath === undefined) {
-      return this.dispatchSubagentUnlocked(input);
+    // One slot per subagent, so a wide dependency wave cannot exceed what the
+    // machine can take. The slot is held through the workspace lock too: a
+    // waiting subagent must not hold a capacity slot while it queues for the
+    // workspace.
+    // 每个子 Agent 一个槽位，因此再宽的依赖波次也不会超过机器承受能力。槽位在 Workspace
+    // 锁之外持有：排队等 Workspace 的子 Agent 不能占着容量槽位。
+    const release = await this.#capacityGate.acquire();
+    try {
+      if (this.#workspacePath === undefined) {
+        return await this.dispatchSubagentUnlocked(input);
+      }
+      return await workspaceExecutionLock.run(this.#workspacePath, () => this.dispatchSubagentUnlocked(input));
+    } finally {
+      release();
     }
-    return workspaceExecutionLock.run(this.#workspacePath, () => this.dispatchSubagentUnlocked(input));
   }
 
   private async dispatchSubagentUnlocked(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry }): Promise<void> {

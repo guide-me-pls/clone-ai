@@ -102,6 +102,26 @@ a long transcript deterministically: the newest turns stay verbatim within a
 stays in the turn ledger. Image attachments are sent as OpenAI-style data URLs
 in the current message; they are per-turn and not stored in the ledger.
 
+### Worker concurrency
+
+The Kernel decides how many workers may run at once from measured machine
+capacity: CPU cores, the 1-minute load average, and free memory. You do not
+configure that, and neither does the Main Agent — it can only read it
+(`get_capacity`) to size a plan.
+
+To pin a ceiling yourself, set `maxConcurrentWorkers` in `config.json` (or
+`PATCH /api/config`). `0` or unset means auto. The pin is capped at the core
+count, and it is re-read on every dispatch, so a change applies without a
+restart.
+
+```bash
+# e.g. on a fanless laptop: never more than 2 workers at once
+curl -X PATCH http://127.0.0.1:4317/api/config \
+  -H "authorization: Bearer $CLONE_AI_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"maxConcurrentWorkers": 2}'
+```
+
 ## 5. Where your data lives
 
 | Item | Location |

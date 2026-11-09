@@ -25,6 +25,8 @@ import { describeAuthority, StandingPolicyStore } from "../../authority/standing
 import { MdMemoryStore } from "../../memory/md-memory-store.ts";
 import { MemoryGovernance } from "../../memory/memory-governance.ts";
 import type { RegisteredToolSnapshot } from "../prompt-snapshot.ts";
+import { sampleCapacity, type CapacitySnapshot } from "../../core/capacity.ts";
+import { CloneConfigStore } from "../../config/clone-config.ts";
 
 export interface KernelToolsOptions {
   dataDirectory: string;
@@ -617,6 +619,32 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
   });
 
   register({
+    name: "get_capacity",
+    label: "Get Capacity",
+    description:
+      "Read how many worker executions this machine can run at once right now: CPU cores, load average, free memory, "
+      + "and the limit the Kernel enforces. Read-only. Use it to size a plan — a wide plan of independent steps runs in "
+      + "parallel up to this limit. You cannot change the limit; only the owner can pin it.",
+    parameters: Type.Object({}),
+    execute: async () => {
+      const capacity = await sampleCapacityForOwner(options.dataDirectory);
+      return {
+        content: [{
+          type: "text",
+          text: [
+            `Concurrent worker slots: ${capacity.limit}${capacity.pinned ? " (pinned by the owner)" : " (auto)"}`,
+            `CPU cores: ${capacity.cpuCount} · load (1m): ${capacity.loadAverage1m}`,
+            `Free memory: ${capacity.freeMemoryMb} MB of ${capacity.totalMemoryMb} MB`,
+            `Why: ${capacity.reason}`,
+            "Independent steps in one plan run in parallel up to this limit; dependent steps still wait for their inputs.",
+          ].join("\n"),
+        }],
+        details: capacity,
+      };
+    },
+  });
+
+  register({
     name: "search_history",
     label: "Search History",
     description:
@@ -705,4 +733,20 @@ export function kernelToolDefinitions(options: KernelToolsOptions): PlainKernelT
   const tools: PlainKernelTool[] = [];
   createKernelToolsExtension({ registerTool: (tool) => tools.push(tool) }, options);
   return tools;
+}
+
+/**
+ * The owner's pinned limit, read on demand. The tool is read-only by design:
+ * the Kernel's gate owns the effective limit, and the model may only see it.
+ * 所有者的固定上限，按需读取。该工具刻意只读：生效上限由 Kernel 的闸门掌握，模型只能看。
+ */
+async function sampleCapacityForOwner(dataDirectory: string): Promise<CapacitySnapshot> {
+  let pinned: number | undefined;
+  try {
+    const config = await new CloneConfigStore(resolveClonePaths({ dataDirectory })).get();
+    pinned = config.maxConcurrentWorkers;
+  } catch {
+    pinned = undefined;
+  }
+  return sampleCapacity(pinned === undefined ? {} : { pinnedLimit: pinned });
 }

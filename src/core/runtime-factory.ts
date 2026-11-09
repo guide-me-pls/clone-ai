@@ -15,6 +15,8 @@ import { ConversationMemoryPipeline } from "../memory/conversation-memory-pipeli
 import { miningModeFromEnvironment as miningMode } from "../memory/mining-policy.ts";
 import { GovernedMemorySource } from "../memory/md-memory-store.ts";
 import { WorkerSettingsStore } from "../config/worker-settings.ts";
+import { CloneConfigStore } from "../config/clone-config.ts";
+import { CapacityGate, sampleCapacity } from "./capacity.ts";
 
 export interface RuntimeAssembly {
   paths: ClonePaths;
@@ -35,6 +37,10 @@ export interface RuntimeAssembly {
    * clone home 的调用方必须能够放手。
    */
   close: () => void;
+  /** The live capacity gate, for the Main Agent's read-only tool and the audit. 实时容量闸门，供主 Agent 的只读工具与审计使用。 */
+  capacityGate: CapacityGate;
+  /** Re-reads the owner's pinned concurrency limit. 重新读取所有者固定的并发上限。 */
+  refreshCapacityPin: () => Promise<void>;
 }
 
 /**
@@ -94,7 +100,28 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
   const conversationMemory = miningMode() !== "off"
     ? new ConversationMemoryPipeline(journal, memory)
     : undefined;
+  // One gate for this assembly: the queue and every subagent wave draw from the
+  // same measured budget. The pin is re-read on each acquire, so an owner
+  // setting change lands without a restart.
+  // 本组装共用一个闸门：队列与每个子 Agent 波次从同一份实测预算里取用。固定值在每次
+  // 获取时重新读取，因此所有者改设置无需重启即可生效。
+  const configStore = new CloneConfigStore(paths);
+  let currentPinnedLimit: number | undefined;
+  const capacityGate = new CapacityGate(() => {
+    const pinned = currentPinnedLimit;
+    return sampleCapacity(pinned === undefined ? {} : { pinnedLimit: pinned });
+  });
+  currentPinnedLimit = (await configStore.get()).maxConcurrentWorkers;
+  async function refreshCapacityPin(): Promise<void> {
+    try {
+      currentPinnedLimit = (await configStore.get()).maxConcurrentWorkers;
+    } catch {
+      // An unreadable config must not stop dispatch; keep the last value.
+      // 读不了配置不能让派发停摆；沿用上一次的值。
+    }
+  }
   const runtime = new CloneRuntime({
+    capacityGate,
     journal,
     policy: new AuthorityPolicyEngine({ config: () => authority.snapshot() }),
     verifier: createDefaultVerifier({ workspacePath: paths.workspacePath }),
@@ -113,5 +140,11 @@ export async function createRuntimeAssembly(options: ClonePathOptions = {}): Pro
   const close = (): void => {
     (journal as { close?: () => void }).close?.();
   };
-  return { paths, journal, runtime, memory, ...(conversationMemory === undefined ? {} : { conversationMemory }), failureCatalog, authority, refreshKnownAgents, close };
+  return {
+    paths, journal, runtime, memory,
+    ...(conversationMemory === undefined ? {} : { conversationMemory }),
+    failureCatalog, authority, refreshKnownAgents, close,
+    capacityGate,
+    refreshCapacityPin,
+  };
 }
