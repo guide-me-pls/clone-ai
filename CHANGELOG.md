@@ -6,6 +6,16 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The two lines merged: repair lane plus the shared loop
+
+Local `main` (repair lane, self-check loop, settings surface, WhatsApp approvals) and `origin/main` (shared agent loop, native-only workers, capacity gate, MCP host, skills) were developed from the same base and had diverged. The merge keeps both: the repair lane now reports an unknown worker before provider construction, the owner-configured round budget reaches the shared loop, the credential-name policy and the write-before-answer rule are restored, and the local MCP client (explicit `mcp.json` enablement, per-tool risk, undeclared tools refused) is the one that remains. The black-box CLI workers are gone as agreed. `npm test` is 616 tests, 616 pass, 0 fail.
+
+本地 `main`（修复通道、自检回路、设置页、WhatsApp 审批）与 `origin/main`（共享 Agent 循环、
+仅原生 Worker、容量闸门、MCP 宿主、技能）从同一基座出发后分叉。合并保留了两者：修复通道现在
+在构建 Provider 之前报告未知 Worker；所有者配置的轮次预算接入共享循环；凭据名策略与"先写再答"
+规则已恢复；保留本地 MCP 客户端（`mcp.json` 显式开启、逐工具声明风险、未声明工具拒绝）。
+黑盒 CLI Worker 按约定移除。`npm test` 为 616 个测试、616 通过、0 失败。
+
 ### Regression cases run in the default checks
 
 `npm test` now includes `test/regression/*.test.ts`, so the cases produced by the repair lane run in CI instead of only inside a repair run. The memory panel also stops repainting while the owner is typing, even when the poll carries changed data (an unrelated memory's timestamp, or a recall count); previously only an unchanged payload was skipped. `write_file` once again replaces existing files for ordinary tasks — the refusal that protects the repair lane is now a per-worker mode (`CLONE_AI_NATIVE_WRITE_FILE=refuse-existing`), because create-only had removed the ability to regenerate a file.
