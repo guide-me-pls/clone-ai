@@ -1075,6 +1075,8 @@ function restoreDisclosureScrolls(id) {
 function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || session.messages.length === 0); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
 async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (state.streaming) return; const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.composingNew && (!state.selectedId || !sessions.some((session) => session.id === state.selectedId))) state.selectedId = sessions.find((session) => session.id === MAIN_CONVERSATION_ID)?.id ?? sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
+let activeTurn = null;
+function stopActiveTurn() { if (activeTurn === null) return; activeTurn.stop(); }
 async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
   state.streaming = true;
   // The message and a live reply card appear before the request is sent. A model
@@ -1156,6 +1158,20 @@ async function createSession(query) { const button = $("submit"); button.disable
   const turnStartedAt = new Date().toISOString();
   let reply = ""; let result = null; let failed = false; let failure = "";
   const controller = new AbortController();
+  // A user stop is not a timeout: the message says who ended the turn.
+  // 用户停止不是超时：提示会说明是谁结束了回合。
+  let stoppedByOwner = false;
+  const stopTurn = () => {
+    stoppedByOwner = true;
+    controller.abort();
+  };
+  activeTurn = { stop: stopTurn };
+  const stopButton = $("stop-turn");
+  // One control occupies the send slot at a time; a second button would widen the
+  // composer mid-turn and shift the textarea under the owner's cursor.
+  // 发送槽位同时只有一个控件；两个按钮会在回合中途撑宽输入区，让光标下的文本跳位。
+  if (stopButton) stopButton.hidden = false;
+  if (stopButton) button.hidden = true;
   let stallTimer = null;
   const armStallTimer = () => {
     if (stallTimer !== null) clearTimeout(stallTimer);
@@ -1223,7 +1239,7 @@ async function createSession(query) { const button = $("submit"); button.disable
   } catch (error) {
     failed = true;
     failure = error instanceof Error && error.name === "AbortError"
-      ? "Main Agent 在 3 分钟内没有返回任何内容，已停止等待。"
+      ? stoppedByOwner ? t("turn-stopped") : "Main Agent 在 3 分钟内没有返回任何内容，已停止等待。"
       : error instanceof Error ? error.message : String(error);
     // The typed text is restored so a failed send never loses what was written.
     // 恢复已输入的文本，使一次失败的发送绝不丢失所写内容。
@@ -1248,6 +1264,9 @@ async function createSession(query) { const button = $("submit"); button.disable
     target.removeAttribute("data-streaming");
     target.classList.remove("is-streaming");
     button.disabled = false;
+    if (stopButton) stopButton.hidden = true;
+    button.hidden = false;
+    activeTurn = null;
   }
   if (failed) {
     await api("/api/main-agent/interruptions", {
@@ -1369,6 +1388,10 @@ $("opportunity-strip").addEventListener("click", (event) => { const settings = e
 $("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
 $("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
+$("stop-turn").addEventListener("click", () => stopActiveTurn());
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && activeTurn !== null) { event.preventDefault(); stopActiveTurn(); }
+});
 $("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0 && state.attachments.length === 0) { announce("请输入你想推进的事情，或添加图片/视频。", true); return; } void createSession(query); });
 $("query").addEventListener("input", resizeComposer);
 $("query").addEventListener("paste", async (event) => {

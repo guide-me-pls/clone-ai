@@ -31,6 +31,37 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+## 2026-11-09 — Stop a running answer
+
+- **Goal / hypothesis:** the server could already cancel a turn, but the UI had
+  no way to ask. Making the send slot a stop control while a turn runs turns an
+  existing capability into something the owner can reach in one click.
+- **Trade-off:** [every in-process tool call goes through a per-call
+  decision](../architecture/trade-offs.md#2026-11-06--every-in-process-tool-call-goes-through-a-per-call-decision)
+  is the gate that makes a mid-turn cancellation meaningful; the UI change is
+  the desktop control-surface decision.
+- **Change:** the composer renders a `stop-turn` control in the same slot as
+  send; clicking it or pressing Escape aborts the fetch, which closes the SSE
+  connection and triggers the server-side abort that was added earlier. A user
+  stop is labelled separately from the stall timeout, the send button returns
+  when the turn ends, and the typed text is restored when no answer arrived.
+- **Eval:** `test/ui-structure.test.ts` checks the control, its hidden state,
+  the Escape binding and the distinct stop copy. `npm test` → **566 tests, 566
+  pass, 0 fail**; typecheck and gate pass. In the browser preview the control
+  renders in the send slot with its own styling.
+- **Benchmark run:** none. This is a UI affordance over an existing endpoint.
+- **Execution chain:** markup → stylesheet → send path → locale → structure
+  test; the browser preview showed the stop control 2 px taller than send, so
+  both now share the same fixed box in one slot. The preview was stopped and
+  restarted once to confirm the stylesheet reload.
+- **Pros:** the owner can end a runaway turn; the visible label distinguishes a
+  deliberate stop from a network stall.
+- **Cons / next time:** the two controls shared a slot but not a box until the
+  shared-size rule was added; the preview caught the 38 px vs 30 px difference.
+  Keep one shared size rule for anything that can occupy that slot.
+- **Reversal condition:** if owners prefer a persistent send button beside a
+  separate stop, split the controls again but keep the same abort path.
+
 ## 2026-11-09 — A live tool timeline in the chat
 
 - **Goal / hypothesis:** the desktop streamed the answer but showed nothing

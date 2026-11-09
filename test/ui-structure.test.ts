@@ -190,3 +190,19 @@ test("the streaming answer has a tool timeline with its own styles and strings",
   // 点的动画必须能在 prefers-reduced-motion 下关闭。
   assert.match(css, /prefers-reduced-motion: reduce[\s\S]{0,200}tool-row/);
 });
+
+test("a running turn can be stopped from the composer", async () => {
+  const html = await read("index.html");
+  const app = await read("app.js");
+  const css = await read("style.css");
+  // The control exists, starts hidden, and the script reveals it only per turn.
+  // 控件存在、默认隐藏，脚本只在回合期间显示它。
+  assert.match(html, /id="stop-turn"[^>]*\bhidden\b/);
+  assert.match(app, /button\.hidden = false|\$?\("?stop-turn"?\)/);
+  assert.match(app, /stopActiveTurn/);
+  assert.match(app, /event\.key === "Escape"[\s\S]{0,80}stopActiveTurn/);
+  // A user stop must read differently from a stall timeout.
+  // 用户停止的提示必须与超时不同。
+  assert.match(app, /stoppedByOwner/);
+  assert.match(css, /\.composer \.stop\s*\{/);
+});
