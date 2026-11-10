@@ -99,6 +99,9 @@ export class McpServerConnection {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.#child = child;
+    // An EPIPE on stdin must fail this server, not the process.
+    // stdin 上的 EPIPE 应让这个服务器失败，而不是进程。
+    child.stdin.on("error", (error: Error) => this.#fail(`stdin failed: ${error.message}`));
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => this.#onData(chunk));
     child.stderr.setEncoding("utf8");

@@ -12,7 +12,7 @@
  * 表达，于是计划、常设策略与沙箱 profile 可以用同一条求交规则比较，而不是各自发明
  * "允许"的含义。
  */
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 
@@ -112,6 +112,38 @@ export function canonicalPath(path: string, home = homedir()): string {
   }
 }
 
+/**
+ * Whether the volume holding `path` compares names case-sensitively.
+ *
+ * macOS and Windows default to case-insensitive volumes, so `~/.SSH` and
+ * `~/.ssh` open the same directory there. A protected-root check that compares
+ * strings would let the other spelling through.
+ * `path` 所在卷是否区分大小写。
+ *
+ * macOS 与 Windows 默认不区分大小写，因此在那里 `~/.SSH` 与 `~/.ssh` 打开同一目录。
+ * 用字符串比较的受保护根检查会让另一种拼写通过。
+ */
+export function isCaseSensitive(path: string): boolean {
+  if (process.platform === "win32") return false;
+  if (process.platform !== "darwin") return true;
+  try {
+    // Compare the directory listing against its own case-folded spelling: a
+    // case-insensitive volume answers the folded name, a case-sensitive one
+    // does not. macOS APFS volumes are mixed, so this asks the volume instead
+    // of assuming from the platform.
+    // 把目录清单与它自己的大小写折叠拼写比较：不区分大小写的卷会应答折叠名，
+    // 区分大小写的卷不会。macOS 的 APFS 卷是混合的，因此要问卷本身而不是按平台假设。
+    const real = realpathSync(path);
+    const base = real.split("/").pop() ?? real;
+    const directory = real.slice(0, real.length - base.length) || "/";
+    const folded = base.toUpperCase();
+    if (folded === base) return true;
+    return !existsSync(join(directory, folded));
+  } catch {
+    return false;
+  }
+}
+
 /** True when `candidate` is `root` itself or lies inside it. candidate 是 root 本身或位于其内。 */
 export function pathWithin(root: string, candidate: string): boolean {
   if (candidate === root) return true;
@@ -173,5 +205,6 @@ export function forbiddenRoots(home = homedir()): string[] {
 
 export function isForbiddenPath(path: string, home = homedir()): boolean {
   const target = canonicalPath(path, home);
-  return forbiddenRoots(home).some((root) => pathWithin(root, target));
+  const fold = isCaseSensitive(target) ? (value: string) => value : (value: string) => value.toLowerCase();
+  return forbiddenRoots(home).some((root) => pathWithin(fold(root), fold(target)));
 }

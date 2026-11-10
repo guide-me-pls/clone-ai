@@ -71,6 +71,57 @@ file keeps every attempt, including the ones that did not work.
   workflow the remote host supported, revisit that one decision; the rest of
   the merge is structural.
 
+### 2026-11-10 — Closing the audit's verified defects
+
+- **Goal / hypothesis:** a six-dimension audit against Claude Code 2.1.319 found
+  78 confirmed defects. The security ones were not hypothetical: several were
+  reproduced against this repository's own modules. Closing the high-severity
+  set makes the boundary the code claims match the boundary it enforces.
+- **Trade-off:** [scope checks compare resolved paths, and the repair lane's
+  guards are real](../architecture/trade-offs.md#2026-11-10--scope-checks-compare-resolved-paths-and-the-repair-lanes-guards-are-real).
+- **Change:** `src/authority/path-contains.ts` (new: `realTarget`,
+  `containsPath`, `samePath`); `isCaseSensitive` and a case-folded
+  `isForbiddenPath` in `src/authority/scope.ts`; ancestor-grant refusal in
+  `src/authority/path-gateway.ts`; `decideTool` now resolves both sides, splits
+  read/write roots, refuses writes into `.git`, and refusal when a path tool
+  yields no readable path; a step's declared risk caps its offered tools;
+  `workerTools` takes `writeFileMode` and `provider-catalog` threads the repair
+  lane's value through; `linkDependencies` copies instead of symlinking;
+  `max_turns` is always a failure with one `effectiveRoundLimit`;
+  `toProviderToolName` maps names at both client boundaries; compaction keeps
+  tool pairs together; the body cap is above the attachment cap and reports
+  413; the capacity gate transfers the released slot synchronously; the worker
+  implements `cancel(sessionId)`; both MCP clients listen for stdin errors;
+  shutdown destroys live connections.
+- **Eval:** `npm test` → **626 tests, 626 pass, 0 fail** (before: 616 pass).
+  New deterministic coverage: `test/path-gate.test.ts` 4/4 (symlink escape,
+  read-vs-write roots, ancestor grant, case folding), a round-limit regression
+  in `test/native-agent-worker.test.ts`, a worker-cancel test, a capacity
+  transfer test, an EPIPE test, a realistic-image body-cap test, and a
+  shutdown-with-open-stream test. `npm run typecheck` → exit 0;
+  `npm run gate` → PASS, baseline unchanged. Every security case was also
+  reproduced by hand before the fix (`/tmp/sym-test`, `/tmp/ancestor-check.ts`,
+  `/tmp/repair-guard.ts`, `/tmp/gate-race2.ts`, `/tmp/attach-body.ts`).
+- **Benchmark run:** none. These are contract and correctness fixes; a live
+  model run would not distinguish the gate's behaviour.
+- **Execution chain:** audit workflow (6 dimension readers, 74 findings
+  adversarially verified) → manual reproduction of each high finding → fixes in
+  four groups (security, correctness, reliability, honesty) → one test per
+  fixed defect. Failures along the way: three existing tests assumed a
+  `read_only` step could write (updated to `reversible_write`), the case probe
+  needed a listing-based test rather than a `realpath` comparison, and one
+  attachment test used a PNG the signature check rejected (replaced with a
+  genuinely valid one).
+- **Pros:** the same code path now enforces what the docs claimed; each fix has
+  a deterministic test, so a regression fails loudly.
+- **Cons / next time:** the honesty items (the 58.5 baseline, "Phase 2
+  implemented", Seatbelt evidence, MCP/skills reachability) are still open;
+  `contextWindow` is still never passed in production, so token compaction
+  remains unreachable; `dispatch_task` is still uncancellable because
+  `runQuery` takes no signal; the repair lane still executes without a claim.
+  Those need their own change.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-09 — Stop a running answer
 
 - **Goal / hypothesis:** the server could already cancel a turn, but the UI had

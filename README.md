@@ -14,12 +14,12 @@ Deployment: [Mac app](apps/desktop/README.md) · [Linux server](docs/usage/serve
 
 ## Current Safety Boundary
 
-- Black-box CLI workers are **blocked by default**: Clone AI does not enforce an OS sandbox. In desktop settings the owner may explicitly allow unrestricted host execution for a provider; this is not a sandbox and its internal tools are not individually approved.
-- Black-box workers cannot be assigned declared external or irreversible actions. A governed external-action connector is not implemented yet.
+- The only executor is the in-process native worker. Its tools are gated per call against the step's scopes, and a step's declared risk caps which tools it is offered: a `read_only` step is never given a write tool. Path checks resolve symlinks, so a link inside the workspace that points outside it is refused. Clone AI does **not** enforce an OS sandbox for this worker: its tools are the boundary.
+- External or irreversible actions cannot be executed at all. A governed external-action connector is not implemented yet.
 - Acceptance criteria that cannot be checked automatically enter `waiting_review` for the owner to inspect and accept or reject. Use `clone-ai review <runId>` to inspect them.
 - Scheduled occurrences live in `schedules.sqlite3`; an existing `schedules.json` is imported once and retained as a backup. Interrupted occurrences with unknown effects require review rather than automatic retry.
 - Memory and audit data remain in local Markdown/SQLite without application-layer encryption or complete erasure. Hiding a session or archiving memory is not deletion; remote model requests can send context to the model provider.
-- Optional CLI-based memory mining also needs `CLONE_AI_MEMORY_MINING=1` and a separate `CLONE_AI_MEMORY_MINING_UNRESTRICTED=1` host-access opt-in. This is not sandboxed; failed extraction stays pending instead of being treated as an empty result.
+- Memory mining runs after a completed task through the same configured endpoint and costs one model call; a failed extraction stays pending instead of being treated as an empty result.
 - Cancellation fences later journal writes and asks the worker to stop, but process termination is best effort, not proof that an unisolated process made no external changes.
 - Interrupted or failed work is not automatically replayed when an external step was involved, because an unchanged workspace cannot prove that no external action happened.
 - Optional SMTP daily reports use a durable delivery record; unknown outcomes require checking the mailbox before a retry or dismissal. SMTP acceptance is not proof of delivery. Remote SMTP requires TLS; credentials in `reporting.json` are still stored in plaintext.
@@ -81,7 +81,7 @@ context and capability grant necessary for an assignment.
 
 | Provider | Intended responsibility | Integration status |
 | --- | --- | --- |
-| **Native worker** | In-process loop with per-call scope gates; filesystem tools only, reports exact token usage. | Built in; set `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` |
+| **Native worker** | In-process loop with per-call scope gates; filesystem tools plus any enabled MCP servers, reporting exact token usage. | Built in; set `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` |
 
 Black-box CLI workers (Claude Code, Codex, Pi CLI, opencode) were removed: a CLI hides its tool calls and credentials from the Kernel. Adding another provider means implementing the same guarantees, not adding a command line.
 

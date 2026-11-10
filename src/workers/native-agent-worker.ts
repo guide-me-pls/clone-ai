@@ -29,6 +29,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { ExecutionAssignment, ExecutionEvent, ModelUsage, RuntimeAdapter, RuntimeCapabilities } from "../core/contracts.ts";
 import type { FailureReport } from "../core/failure-analysis.ts";
 import { resolveGrants } from "../authority/path-gateway.ts";
+import { containsPath, realTarget } from "../authority/path-contains.ts";
+import { isCaseSensitive } from "../authority/scope.ts";
 import {
   runAgentLoop,
   type AgentMessage,
@@ -106,20 +108,33 @@ export function decideTool(input: {
   if (input.risk === "external") return { allowed: false, reason: "External side effects require a governed action connector; this worker cannot perform them." };
   if (input.risk === "network" && !input.grants.network) return { allowed: false, reason: "The step was not granted a network scope." };
   if (input.path !== undefined) {
-    // Lexical, not canonical: a path that escapes through `..` or a symlink
-    // must be refused, not silently resolved back inside.
-    // 按字面而非 canonical：通过 `..` 或符号链接逃逸的路径必须被拒绝，而不是被静默解析回内部。
-    // Root first, then resolve: the workspace may itself sit behind a symlink
-    // (/tmp -> /private/tmp on macOS), and canonicalising the target but not the
-    // workspace would refuse every path inside it.
-    // 先规范化根再解析：工作区本身可能位于符号链接之后（macOS 上 /tmp -> /private/tmp），
-    // 只规范化目标而不规范化工作区，会把其中每条路径都拒掉。
-    const root = canonical(input.workspace);
-    const target = resolve(root, input.path);
-    const roots = (input.risk === "write" ? [...input.grants.writeRoots, ...input.grants.readRoots] : [...input.grants.readRoots, ...input.grants.writeRoots])
-      .map((grantRoot) => canonical(resolve(canonical(input.workspace), grantRoot)));
-    const inside = roots.some((root) => target === root || target.startsWith(`${root}/`));
+    // Resolve, do not compare. A path is allowed only when the file the OS
+    // would open lies inside the granted roots: a symlink inside the workspace
+    // that points outside it is outside, and a read grant never authorizes a
+    // write. Both sides go through realpath, so the workspace being behind a
+    // symlink (/tmp -> /private/tmp on macOS) still admits its own files.
+    // 解析而不是比较。只有当操作系统实际会打开的文件位于授权根之内时才放行：工作区内指向外部的
+    // 符号链接算外部，读授权绝不授权写。两侧都走 realpath，因此工作区本身位于符号链接之后
+    // （macOS 上 /tmp -> /private/tmp）时，它自己的文件仍然被放行。
+    const root = realTarget(input.workspace);
+    const target = realTarget(resolve(root, input.path));
+    // Write implies read (the same rule `accessCovers` states for scopes), never
+    // the reverse: a read grant must not authorize a write.
+    // 写蕴含读（与 `accessCovers` 对 Scope 的规则一致），绝不可反过来：读授权不得授权写。
+    const roots = (input.risk === "write"
+      ? input.grants.writeRoots
+      : [...input.grants.readRoots, ...input.grants.writeRoots])
+      .map((grantRoot) => realTarget(resolve(root, grantRoot)));
+    const inside = roots.some((grantRoot) => containsPath(grantRoot, target, { caseSensitive: isCaseSensitive(target) }));
     if (!inside) return { allowed: false, reason: `The path ${target} is outside the step's granted scopes.` };
+    // A repository's `.git` is the commit mechanism; a write there can alter or
+    // add commits in the checkout a repair is supposed to leave untouched. It is
+    // never a legitimate edit target for a worker, wherever the workspace is.
+    // 仓库的 `.git` 是提交机制；写入它可以改动或新增检出中的提交，而修复本应不碰那个检出。
+    // 无论工作区在哪里，它都不是 Worker 的合法编辑目标。
+    if (input.risk !== "read" && (target === join(root, ".git") || target.startsWith(join(root, ".git") + "/"))) {
+      return { allowed: false, reason: `The path ${target} is inside the repository's .git directory, which a worker may not write.` };
+    }
   }
   return { allowed: true };
 }
@@ -148,12 +163,27 @@ export class NativeAgentWorker implements RuntimeAdapter {
     parallelAssignments: false,
   };
   readonly #config: NativeAgentWorkerConfig;
+  /** Live executions by session id, so cancel() can stop the one the Kernel named. 按会话 id 记录在途执行，使 cancel() 能停掉 Kernel 指定的那一个。 */
+  readonly #executions = new Map<string, AbortController>();
 
   constructor(config: NativeAgentWorkerConfig) {
     this.#config = config;
     this.id = config.id;
     this.label = config.label;
     this.providerId = config.providerId ?? config.id;
+  }
+
+  /**
+   * Stop one execution. The Kernel records a cancellation and then asks the
+   * adapter; without this the worker kept calling the model and writing files
+   * for the rest of its timeout while the run read as cancelled.
+   * 停止一次执行。Kernel 记录取消后会询问 Adapter；没有这个方法时，Worker 会继续调模型、
+   * 继续写文件直到超时，而 Run 已经显示为已取消。
+   */
+  async cancel(sessionId: string): Promise<void> {
+    const controller = this.#executions.get(sessionId);
+    if (controller === undefined) return;
+    controller.abort(new Error("The run was cancelled."));
   }
 
   capabilities(): Promise<RuntimeCapabilities> {
@@ -166,11 +196,25 @@ export class NativeAgentWorker implements RuntimeAdapter {
   async *execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
     const workspace = resolve(input.workspacePath ?? process.cwd());
     const grants = resolveGrants(input.step.scopes, { workspace });
-    const offered = this.#config.tools.filter((tool) => decideTool({ risk: tool.risk, grants, workspace }).allowed);
+    // A step's declared risk caps what it may be offered: a read_only step has
+    // no business holding a write tool, even though its workspace is writable.
+    // The Kernel's policy says read_only is "allowed", not "read-only" — this
+    // is where that distinction becomes real.
+    // 步骤声明的风险等级决定它能拿到什么工具：read_only 步骤不该持有写工具，即使工作区可写。
+    // Kernel 的策略说 read_only 是"允许"，不是"只读"——这个区别在这里变成事实。
+    const stepAllows = (risk: NativeToolRisk): boolean => {
+      if (input.step.risk === "read_only") return risk === "read";
+      if (input.step.risk === "reversible_write") return risk === "read" || risk === "write";
+      return true;
+    };
+    const offered = this.#config.tools.filter(
+      (tool) => stepAllows(tool.risk) && decideTool({ risk: tool.risk, grants, workspace }).allowed,
+    );
     const sessionId = randomUUID();
     yield { type: "session_started", sessionId };
 
     const controller = new AbortController();
+    this.#executions.set(sessionId, controller);
     const timeoutMs = this.#config.timeoutMs ?? (input.workOrder?.budget.maxDurationMs ?? 20 * 60_000);
     const timeout = setTimeout(() => controller.abort(new Error("Native worker timed out.")), timeoutMs);
     const budget = input.workOrder?.budget;
@@ -195,7 +239,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
         model: this.#config.createClient(),
         tools: offered.map((tool) => agentTool(tool, workspace, produced, missingInputs, requiredText)),
         messages,
-        maxRounds: budget?.maxModelCalls ?? this.#config.maxRounds ?? 12,
+        maxRounds: effectiveRoundLimit(budget?.maxModelCalls, this.#config.maxRounds),
         ...(budget?.maxToolCalls === undefined ? {} : { maxToolCalls: budget.maxToolCalls }),
         maxDurationMs: timeoutMs,
         signal: controller.signal,
@@ -204,11 +248,20 @@ export class NativeAgentWorker implements RuntimeAdapter {
           if (tool === undefined) {
             return { behavior: "deny" as const, reason: `No tool named ${request.call.name} is available to this step.` };
           }
+          // A tool that names a path but produced no readable value must be
+          // refused: `pathOf` returning undefined used to skip the containment
+          // check entirely, so an object-valued path argument bypassed the gate.
+          // 点名了路径却解析不出值的工具必须被拒绝：`pathOf` 返回 undefined 曾让包含检查
+          // 被完全跳过，因此对象形态的路径参数可以绕过闸门。
+          const path = tool.pathOf === undefined ? undefined : tool.pathOf(request.input);
+          if (tool.pathOf !== undefined && (typeof path !== "string" || path.length === 0)) {
+            return { behavior: "deny" as const, reason: `The ${tool.name} call did not name a readable path.` };
+          }
           const decision = decideTool({
             risk: tool.risk,
             grants,
             workspace,
-            ...(tool.pathOf === undefined ? {} : { path: tool.pathOf(request.input) }),
+            ...(path === undefined ? {} : { path }),
           });
           return decision.allowed
             ? { behavior: "allow" as const }
@@ -282,8 +335,14 @@ export class NativeAgentWorker implements RuntimeAdapter {
         };
         return;
       }
-      if (result.terminalReason === "max_turns" && budget?.maxModelCalls !== undefined) {
-        const message = result.error ?? `The worker reached its ${budget.maxModelCalls}-model-call budget.`;
+      // A round limit is a limit whether it came from the plan or from the
+      // worker's own default. Reporting it as `completed` published a fragment
+      // of an unfinished investigation as the step's answer.
+      // 轮次上限就是上限，无论它来自计划还是 Worker 自己的默认值。把它报成 `completed`
+      // 会把一次没做完的调查的片段当成步骤答案发布出去。
+      if (result.terminalReason === "max_turns") {
+        const limit = effectiveRoundLimit(budget?.maxModelCalls, this.#config.maxRounds);
+        const message = result.error ?? `The worker reached its ${limit}-model-call budget.`;
         yield {
           type: "failed",
           message,
@@ -320,6 +379,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
       };
       yield { type: "failed", message, report };
     } finally {
+      this.#executions.delete(sessionId);
       clearTimeout(timeout);
       // A tool that spawned a server must not outlive the step: an orphaned MCP
       // child would keep running with the environment it was handed.
@@ -375,6 +435,11 @@ function budgetSignature(message: string): string {
   if (/duration|ms budget|timed? out/i.test(message)) return "budget-duration";
   if (/round|model[- ]call/i.test(message)) return "budget-model-calls";
   return "budget-exceeded";
+}
+
+/** The rounds one step actually gets: plan budget, then owner setting, then the default. 一个步骤实际获得的轮次：计划预算、所有者设置、默认值。 */
+export function effectiveRoundLimit(planBudget: number | undefined, ownerRounds: number | undefined): number {
+  return planBudget ?? ownerRounds ?? 12;
 }
 
 /** Instructions plus the boundary the model must work within. 指令，以及模型必须遵守的边界。 */

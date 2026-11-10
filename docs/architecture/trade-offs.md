@@ -6,6 +6,47 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-10 — Scope checks compare resolved paths, and the repair lane's guards are real
+
+**Decision.** The per-call path gate resolves both sides with `realpath` (following
+symlinks, resolving a missing suffix against its nearest existing ancestor),
+folds case on case-insensitive volumes, and checks read and write roots
+separately: write implies read, never the reverse. A grant on a directory that
+contains a protected root is refused, and a worker may not write inside a
+repository's `.git`. The repair lane's `refuse-existing` mode is threaded into
+`workerTools`, its worktree copies `node_modules` instead of symlinking it, and
+a round limit is reported as a budget failure whether it came from the plan or
+from the worker's default. Body caps clear the attachment cap, and the
+capacity gate transfers a released slot to the waiter in the same synchronous
+step that frees it.
+
+**Evidence.** A six-dimension audit against Claude Code 2.1.319, with every
+high finding verified adversarially and several reproduced against this
+repository's own modules: a symlink inside the workspace pointing outside
+returned `allowed: true` for reads and writes (Claude Code refuses that shape
+outright: `Path contains '..' traversal after a directory segment, which may
+follow a symlink outside the working directory`); a `files: read` grant
+authorized a write; a grant on `~/Library` was accepted and handed over
+`Library/Keychains`; `isRuntimeScratch` hid a write made through the worktree's
+`node_modules` symlink; the `refuse-existing` guard never reached `fileTools`
+because `workerTools` ignored it; `max_turns` fell through to `completed` when
+the step had no work order; `Skill(name)` and `server.tool` are not legal
+provider function names; compaction could keep a tool result without its call;
+a 300 KB image produced HTTP 500 on the old 32 KB body cap; and a synchronous
+acquire after `release()` put `limit + 1` executions in flight.
+
+**What it costs.** Every path check now performs filesystem work (`realpath`),
+so a step with many file tools pays a few syscalls per call; the capacity gate
+counts a slot for a waiter before it resumes, so `active` includes queued
+holders; a `node_modules` copy makes a repair worktree slower to prepare.
+
+**Reversal condition.** If path resolution becomes a measurable cost on large
+trees, cache resolved roots per step rather than reverting to lexical compare.
+If copying `node_modules` makes a repair worktree too slow or too large, replace
+the symlink with a read-only bind mount, not with a writable link into the
+served checkout. Revert the `.git` refusal only if a legitimate workflow needs
+a worker to write repository metadata.
+
 ## 2026-11-09 — The model can dispatch a task, but only the Kernel plans and finishes it
 
 **Decision.** Add one model-invocable `dispatch_task` tool that turns an
@@ -225,9 +266,12 @@ weighted harness score is at least 90 and a concrete workflow requires them.
 **Evidence.** clone-ai has no MCP or skills code (audit: extensibility 10/100).
 MCP and skills are Claude Code's extension on-ramps; every third-party
 integration arrives through them. Plugins and cloud/VM are product surfaces with
-infrastructure cost; the macOS Seatbelt profile already isolates CLI workers
-(`authority/seatbelt.ts`), and Claude Desktop's VM is a 26 MB image plus
-platform-specific hypervisor code. Deferring them avoids spending the parity
+infrastructure cost. The macOS Seatbelt profile in `authority/seatbelt.ts` was
+written for the black-box CLI workers, which no longer exist, so it is currently
+unused; the in-process native worker has no OS sandbox. Claude Desktop's VM is a
+26 MB image plus platform-specific hypervisor code. Deferring the VM is
+therefore a deliberate bet that per-call path gating plus a single trusted worker
+is enough for now — not a claim that an OS sandbox is already in place. Deferring them avoids spending the parity
 budget on infrastructure that does not move the harness score.
 
 **What it costs.** Users cannot install third-party plugins or run remote/browser
@@ -236,7 +280,7 @@ instructions.
 
 **Reversal condition.** If the owner's real workflows depend on a specific
 plugin/marketplace or remote MCP, promote that integration; if a red-team test
-bypasses Seatbelt, promote the VM sandbox.
+shows that per-call path gating is insufficient for a workflow, promote the VM sandbox.
 
 ## 2026-11-06 — The 95% target is a weighted harness-parity score
 

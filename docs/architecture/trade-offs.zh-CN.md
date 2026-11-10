@@ -5,6 +5,33 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-10 — Scope 检查比较解析后的路径，修复通道的闸门真正生效
+
+**决定。** 逐次路径闸门用 `realpath` 解析两侧（跟随符号链接；不存在的后缀按最近的已存在
+祖先解析），在不区分大小写的卷上折叠大小写，并把读、写根分开检查：写蕴含读，绝不反过来。
+覆盖受保护根的授权被拒绝，Worker 不得写入仓库的 `.git`。修复通道的 `refuse-existing`
+模式传入 `workerTools`，worktree 改为复制 `node_modules` 而不是符号链接，轮次上限无论来自
+计划还是 Worker 默认值都报为预算失败。请求体上限高于附件上限，容量闸门在释放的同一同步步骤
+把槽位移交给等待者。
+
+**依据。** 对照 Claude Code 2.1.319 的六维审计，每条高危都做过对抗性核实，其中多条在本仓库
+自己的模块上复现：工作区内指向外部的符号链接对读和写都返回 `allowed: true`（Claude Code 直接
+拒绝该形态：`Path contains '..' traversal after a directory segment, which may follow a
+symlink outside the working directory`）；`files: read` 授权能授权写；`~/Library` 的授权被
+接受并连带交出 `Library/Keychains`；`isRuntimeScratch` 把经由 worktree `node_modules`
+符号链接的写入藏了起来；`refuse-existing` 从未到达 `fileTools`，因为 `workerTools` 忽略了
+它；没有 WorkOrder 时 `max_turns` 落到 `completed`；`Skill(name)` 与 `server.tool` 不是
+合法的 Provider 函数名；压缩可能留下没有对应调用的工具结果；一张 300 KB 的图片在旧的
+32 KB 请求体上限下得到 HTTP 500；`release()` 之后的同步 acquire 让 `limit + 1` 个执行在跑。
+
+**代价。** 每次路径检查现在都做文件系统解析（`realpath`），文件工具多的步骤每次调用多几个
+系统调用；容量闸门在等待者恢复前就计入槽位，因此 `active` 包含排队中的持有者；复制
+`node_modules` 让修复 worktree 的准备更慢。
+
+**推翻条件。** 如果路径解析在大目录树上成为可测成本，按步骤缓存解析后的根，而不是退回字面
+比较。如果复制 `node_modules` 让修复 worktree 过慢或过大，改用只读 bind mount，而不是重新
+指回服务检出的可写链接。只有当确有工作流需要 Worker 写仓库元数据时，才撤销 `.git` 拒绝。
+
 ## 2026-11-09 — 模型可以派发任务，但只有 Kernel 规划与判定完成
 
 **决定。** 增加一个模型可调用的 `dispatch_task` 工具，把目标与验收标准转成与 companion
@@ -155,17 +182,16 @@ JSONL（`conversation-history.ts:241`）。Claude Code 写入带 `preservedMessa
 （P1）。把插件市场、云会话、VM 沙箱、Chrome 集成与 computer-use 延后，直到加权 harness
 分至少 90 且真实工作流需要它们。
 
-**依据。** clone-ai 没有 MCP 或 Skills 代码（审计：扩展点 10/100）。MCP 与 Skills 是
-Claude Code 的扩展入口，第三方集成几乎都从这里进来。插件与云/VM 是有基础设施成本的产品面；
-macOS Seatbelt 已经隔离 CLI Worker（`authority/seatbelt.ts`），而 Claude Desktop 的 VM 是
-26 MB 镜像加平台相关 hypervisor 代码。延后它们，避免把对齐预算花在不动 harness 分数的
-基础设施上。
+插件与云/VM 是有基础设施成本的产品面。`authority/seatbelt.ts` 里的 macOS Seatbelt profile 是
+为已不存在的黑盒 CLI Worker 写的，当前没有调用方；进程内的原生 Worker 没有 OS 沙箱。Claude
+Desktop 的 VM 是 26 MB 镜像加平台相关 hypervisor 代码。因此推迟 VM 是一个刻意的赌注：逐次
+路径闸门加单个可信 Worker 目前够用——而不是声称系统级沙箱已经就位。
 
 **代价。** 在这些阶段之前，用户不能安装第三方插件或运行远程/浏览器工具；MCP 增加攻击面，
 Skills 可以注入指令。
 
 **推翻条件。** 如果所有者的真实工作流依赖某个插件/市场或远程 MCP，就提前该集成；如果红队
-测试绕过 Seatbelt，就提前 VM 沙箱。
+显示逐次路径闸门不足以支撑某个工作流，就提前 VM 沙箱。
 
 ## 2026-11-06 — 95% 是加权 harness 对齐分
 
