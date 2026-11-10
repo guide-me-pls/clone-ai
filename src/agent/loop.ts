@@ -85,6 +85,28 @@ export interface AgentHooks {
   }) => void | Promise<void>;
 }
 
+/** The character set every OpenAI-compatible provider accepts for a function name. 所有 OpenAI 兼容 Provider 接受的函数名字符集。 */
+const PROVIDER_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/**
+ * The name a provider will accept, derived from the tool's own name.
+ *
+ * Tools are named for humans (`Skill(release-notes)`, `docs.search`), but a
+ * provider rejects anything outside `[a-zA-Z0-9_-]`. The mapping is stable and
+ * deterministic, and `providerToolName` holds the reverse table so a call the
+ * model makes maps back to the real tool.
+ * Provider 会接受的名字，由工具名派生。
+ *
+ * 工具是给人命名的（`Skill(release-notes)`、`docs.search`），但 Provider 只接受
+ * `[a-zA-Z0-9_-]`。映射稳定且确定，`providerToolName` 持有反向表，模型发起的调用能映射回真工具。
+ */
+export function toProviderToolName(name: string): string {
+  if (PROVIDER_NAME.test(name)) return name;
+  const cleaned = name.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+  const hash = [...name].reduce((value, character) => (value * 31 + character.charCodeAt(0)) % 0xffffffff, 7);
+  return `${cleaned.slice(0, 48) || "tool"}_${hash.toString(36).slice(0, 6)}`;
+}
+
 /** One model call request. 一次模型调用请求。 */
 export interface AgentModelRequest {
   messages: AgentMessage[];

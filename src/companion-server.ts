@@ -571,7 +571,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "The local runtime encountered an unexpected error.";
-      sendJson(response, 500, { error: message });
+      sendJson(response, error instanceof RequestBodyTooLargeError ? 413 : 500, { error: message });
     }
   });
 
@@ -610,9 +610,15 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       const serverClosed = new Promise<void>((resolve, reject) => {
         server.close((error) => (error === undefined ? resolve() : reject(error)));
       });
+      // An open SSE stream keeps `server.close` pending until the client goes
+      // away, so a desktop window left open would block shutdown forever.
+      // Destroy idle and active sockets once the queue has stopped.
+      // 打开的 SSE 流会让 `server.close` 一直挂起，直到客户端断开，因此一个开着的桌面窗口会
+      // 永远阻塞关停。队列停止后销毁空闲与活动连接。
       await scheduler.stop();
       await runQueue.stop();
       await Promise.allSettled([maintenanceInFlight, reportInFlight]);
+      server.closeAllConnections?.();
       await serverClosed;
       await clearCompanionEndpointIfOwned(dataDirectory, endpointStartedAt);
       await memoryGovernance.close();
@@ -2990,12 +2996,28 @@ function asRecord(value: unknown): Record<string, unknown> {
  * MemoryGovernance 提升它们。
  */
 
+/**
+ * The request body cap. It has to clear the attachment cap: four images at
+ * 7 MB of base64 each cannot fit in 32 KB, so the old limit rejected every real
+ * screenshot with a 500 while `parseAttachments` advertised 7 MB per image.
+ * 请求体上限。它必须高于附件上限：四张各 7 MB base64 的图片装不进 32 KB，
+ * 因此旧上限会让每张真实截图都得到 500，而 `parseAttachments` 却宣称每张可到 7 MB。
+ */
+const MAX_BODY_CHARACTERS = 40_000_000;
+
+class RequestBodyTooLargeError extends Error {
+  constructor() {
+    super("The local request body is too large.");
+    this.name = "RequestBodyTooLargeError";
+  }
+}
+
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   let body = "";
   for await (const chunk of request) {
     body += String(chunk);
-    if (body.length > 32_000) {
-      throw new Error("The local request body is too large.");
+    if (body.length > MAX_BODY_CHARACTERS) {
+      throw new RequestBodyTooLargeError();
     }
   }
   return body.length === 0 ? {} : asRecord(JSON.parse(body) as unknown);

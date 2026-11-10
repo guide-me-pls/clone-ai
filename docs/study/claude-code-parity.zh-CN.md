@@ -246,7 +246,7 @@ checkpoint 和反馈面。
 | 11 | 模型层（路由、回退、用量账本） | 5 | 55 | 无重试/回退、无按模型成本账本、无 prompt-cache 账 | **采纳**重试/回退与 cache 感知用量 |
 | 12 | 产品/UX 与分发 | 5 | 45 | 纯文本流、无工具时间线/停止按钮、无 resume/rewind、ad-hoc 签名 | **采纳**桌面控制面模式 |
 
-**基线加权分（估计）：58.5 / 100。** 最低维度是扩展点（10），其次是产品/UX（45）、Agent 循环（55）、
+**基线加权分（估计，不是测量）：58.5 / 100。** 没有 eval 产出这个数字——它是作者对审计的读数，仅用于让后续阶段有比较对象。不要把它当作已测量值引用。最低维度是扩展点（10），其次是产品/UX（45）、Agent 循环（55）、
 工具（55）、上下文（55）。分数刻意从严：只有可执行检查证明过的等级才算数。
 
 ### 4.1 采纳、适配、跳过、延后
@@ -344,13 +344,16 @@ abort、429 重试、预算耗尽、非法工具恢复、结果顺序确定。
 
 **预计：** 循环 55→90，模型层 55→75，可靠性 75→85。
 
-**状态（2026-11-09）：** 阶段 6 已开始：Main Agent 可以通过 Kernel 派发有界任务
-（`dispatch_task`）；阶段 7 已开始：对话从同一 SSE 流渲染实时工具时间线。阶段 1 与 2 已实现。`src/agent/loop.ts` 拥有带类型的终止原因、
-逐次 `authorize`、前置/后置 hook、预算与 abort；Main Agent 与原生 Worker 都运行在它上面。
-阶段 3 部分完成：Worker 的工具集是配置（编码只是其中一种），但额外的编码工具尚未编写。
-阶段 4 已实现为 `src/main-agent/context-window.ts` 加 `main_agent.context_compacted`。
-阶段 5 已实现为 `src/mcp/mcp-host.ts` 与 `src/skills/skill-loader.ts`；两者都按主 Agent
-回合显式开启。
+**状态（2026-11-10）。** 阶段 1 已实现：`src/agent/loop.ts` 拥有带类型的终止原因、预算、abort、
+重试与工具调度，Main Agent 与原生 Worker 都运行在它上面。阶段 2 **部分实现**：内核支持
+`authorize` / `ask` / 前置与后置 hook，但六模式阶梯、规则语法与审批卡都不存在，且 Main Agent
+不传 `authorize`，因此它的工具默认放行。阶段 3 部分实现：Worker 的工具集是配置，步骤声明的
+风险等级会限制它，但额外编码工具尚未编写。阶段 4 **在生产路径不可达**：
+`src/main-agent/context-window.ts` 实现了 token 感知压缩，但没有调用方传 `contextWindow`，
+因此回合仍按字符预算截断，也不记录任何压缩。阶段 5 以 `src/mcp/mcp-host.ts` 与
+`src/skills/skill-loader.ts` 存在，但没有产品入口；真正在用的是 Worker 的 MCP 路径
+（`src/workers/mcp-client.ts`）。阶段 6 已开始（`dispatch_task`，同步且不可取消）。
+阶段 7 已开始（工具时间线、停止按钮）。
 
 ### 阶段 2 — 逐次权限与 Hook（P0）
 

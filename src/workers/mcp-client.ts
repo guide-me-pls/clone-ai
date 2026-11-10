@@ -437,6 +437,12 @@ class StdioConnection {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     }) as ChildProcessWithoutNullStreams;
+    // A server that half-closes stdin makes the next write emit EPIPE on the
+    // stream; without a listener that is an unhandled 'error' and the daemon
+    // exits. Report it as a failed server instead.
+    // 半关 stdin 的服务器会让下一次写入触发流上的 EPIPE；没有监听器时它是未处理的
+    // 'error'，daemon 会退出。改为把它报成失败的服务器。
+    this.#child.stdin.on("error", (error: Error) => this.#onStdinError(error));
     this.#child.stdout.setEncoding("utf8");
     this.#child.stdout.on("data", (chunk: string) => this.#receive(chunk));
     this.#child.stderr.on("data", () => undefined);
@@ -516,6 +522,17 @@ class StdioConnection {
     this.#pending.delete(Number(message.id));
     if (message.error !== undefined) pending.reject(new Error(message.error.message ?? `JSON-RPC error ${message.error.code ?? ""}`.trim()));
     else pending.resolve(message.result);
+  }
+
+  /**
+   * A stdin write failed: the server closed its input but may still be running.
+   * Failing this server's pending calls is the honest outcome; the process must
+   * not die because one server misbehaves.
+   * stdin 写入失败：服务器关闭了输入，但可能仍在运行。让这个服务器的在途调用失败是诚实的
+   * 结果；进程不能因为一个服务器行为异常而退出。
+   */
+  #onStdinError(error: Error): void {
+    this.#failAll(error);
   }
 
   #failAll(error: Error): void {

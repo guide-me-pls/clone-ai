@@ -21,6 +21,7 @@ import type {
   AgentModelRequest,
   AgentModelResponse,
 } from "../agent/loop.ts";
+import { toProviderToolName } from "../agent/loop.ts";
 import type { ModelUsage } from "../core/contracts.ts";
 
 export interface OpenAiCompatibleClientOptions {
@@ -69,7 +70,10 @@ export class OpenAiCompatibleClient implements AgentModel {
             tools: input.tools.map((tool) => ({
               type: "function" as const,
               function: {
-                name: tool.name,
+                // Providers reject names outside [a-zA-Z0-9_-]; the call is
+                // mapped back below before the loop resolves the tool.
+                // Provider 拒绝 [a-zA-Z0-9_-] 之外的名字；循环解析工具前会映射回来。
+                name: toProviderToolName(tool.name),
                 description: tool.description,
                 parameters: tool.parameters ?? { type: "object", properties: {}, additionalProperties: true },
               },
@@ -100,9 +104,10 @@ export class OpenAiCompatibleClient implements AgentModel {
     if (message === undefined) throw new Error("The provider returned no message.");
     const content = message.content ?? null;
     if (typeof content === "string" && content.length > 0) input.onDelta?.(content);
+    const byProviderName = new Map(input.tools.map((tool) => [toProviderToolName(tool.name), tool.name]));
     const toolCalls = (message.tool_calls ?? []).map((call, index) => ({
       id: typeof call.id === "string" && call.id.length > 0 ? call.id : `call-${index + 1}`,
-      name: call.function?.name ?? "",
+      name: byProviderName.get(call.function?.name ?? "") ?? call.function?.name ?? "",
       arguments: call.function?.arguments ?? "{}",
     }));
     const usage = parseUsage(body.usage);

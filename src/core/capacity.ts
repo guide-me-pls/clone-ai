@@ -141,7 +141,7 @@ export class CapacityGate {
   async acquire(signal?: AbortSignal): Promise<() => void> {
     if (signal?.aborted === true) throw new Error("Capacity wait was cancelled.");
     const limit = Math.max(1, this.#sample().limit);
-    if (this.#active < limit) {
+    if (this.#active < limit && this.#waiters.length === 0) {
       this.#active += 1;
       return () => this.#release();
     }
@@ -158,13 +158,29 @@ export class CapacityGate {
       signal?.addEventListener("abort", onAbort, { once: true });
       this.#waiters.push(wake);
     });
-    this.#active += 1;
+    // #release already counted this waiter's slot when it woke it. 唤醒时 #release 已计入该等待者的槽位。
     return () => this.#release();
   }
 
+  /**
+   * Release a slot and wake the next waiter.
+   *
+   * The slot is transferred, not freed: the waiter's slot is counted here, in
+   * the same synchronous step, so an acquire() that runs before the woken
+   * waiter resumes cannot take a slot that was already promised. Previously
+   * the decrement happened here and the increment in the waiter's microtask,
+   * and a synchronous acquire in between put `limit + 1` executions in flight.
+   * 释放槽位并唤醒下一个等待者。
+   *
+   * 槽位是转移而不是让出：等待者的槽位在这一同步步骤内计入，因此被唤醒者恢复之前执行的
+   * acquire() 拿不到一个已经许诺出去的槽位。此前减一在这里、加一在等待者的微任务里，
+   * 其间一次同步 acquire 就能让 `limit + 1` 个执行同时在跑。
+   */
   #release(): void {
     this.#active = Math.max(0, this.#active - 1);
     const next = this.#waiters.shift();
-    if (next !== undefined) next();
+    if (next === undefined) return;
+    this.#active += 1;
+    next();
   }
 }
