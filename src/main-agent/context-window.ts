@@ -119,9 +119,19 @@ export function compactTranscript(
   let kept = 0;
   for (let index = body.length - 1; index >= 0; index -= 1) {
     const message = body[index]!;
-    const size = estimateMessages([message]);
+    // A tool result without its call (or a call without its result) is a
+    // transcript the provider rejects. The kept tail starts at a message that
+    // is not a dangling result, and never splits a pair.
+    // 没有对应调用的工具结果（或没有结果的调用）是 Provider 会拒绝的转录。保留的尾部从一条
+    // 不是悬空结果的消息开始，且绝不拆开一对调用与结果。
+    if (message.role === "tool") break;
+    let size = estimateMessages([message]);
+    const next = body[index + 1];
+    if (next?.role === "tool" && next.toolCallId !== undefined && message.toolCalls?.some((call) => call.id === next.toolCallId)) {
+      size += estimateMessages([next]);
+    }
     if (keep.length > 0 && kept + size > budget) break;
-    keep.unshift(message);
+    keep.unshift(...(next?.role === "tool" && next.toolCallId !== undefined && message.toolCalls?.some((call) => call.id === next.toolCallId) ? [message, next] : [message]));
     kept += size;
   }
   const dropped = body.slice(0, body.length - keep.length);

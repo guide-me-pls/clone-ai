@@ -15,7 +15,21 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-10 — The scope gate now refuses what it claimed to refuse
+
+- **Claim:** the per-call path gate rejects a symlink inside the workspace that
+  points outside it, a read grant cannot authorize a write, a grant on an
+  ancestor of a protected root is refused, and writes into `.git` are refused.
+- **Evidence:** `test/path-gate.test.ts` 4/4 covers all four; each was reproduced
+  against the repository's own modules before the fix — `decideTool` returned
+  `{allowed: true}` for `link/secret.txt` and `link/new.txt`, and a `~/Library`
+  grant was accepted with `dropped: []`. Full suite 626/626; typecheck and
+  `npm run gate` pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-10--scope-checks-compare-resolved-paths-and-the-repair-lanes-guards-are-real),
+  [execution chain](optimizations.md#2026-11-10--closing-the-audits-verified-defects).
+
 ## 2026-11-09 — A shared loop kernel with per-call authorization and recorded compaction
+
 
 - **Claim:** the Main Agent and the native worker run one loop contract, every
   tool call is decided before it executes, long transcripts compact on token

@@ -6,6 +6,25 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Audit fixes: the boundary now matches the claim
+
+A six-dimension audit against Claude Code 2.1.319 found 78 confirmed defects; the high-severity set is fixed. The per-call path gate now resolves both sides with `realpath`, so a symlink inside the workspace that points outside it is refused for reads and writes; read and write roots are checked separately (write implies read, never the reverse); a grant on a directory that contains a protected root is refused; case is folded on case-insensitive volumes; writes into a repository's `.git` are refused; and a path tool that yields no readable path is denied instead of skipping the check. A step's declared risk now caps which tools it is offered, so a `read_only` step no longer holds `write_file`. The repair lane's `refuse-existing` guard reaches `fileTools`, its worktree copies `node_modules` instead of symlinking the served checkout, and a round limit is a budget failure whether it came from the plan or the worker's default. Provider tool names are mapped to `[a-zA-Z0-9_-]` at both client boundaries, compaction keeps tool calls paired with their results, the request-body cap clears the attachment cap (a 300 KB image used to return 500), and `close()` destroys live connections so an open stream cannot block shutdown. The capacity gate transfers a released slot to its waiter synchronously, the native worker implements `cancel()`, and both MCP clients treat a half-closed stdin as a failed server rather than an uncaught EPIPE. The docs that claimed more than the code does were corrected: the Seatbelt profile is recorded as unused (the CLI workers it was written for are gone), the parity report marks Phase 2 partial, Phase 4 unreachable in production and Phase 5 without an entry point, the 58.5 baseline is labelled an estimate rather than a measurement, the README's "unrestricted host execution" claim (whose API returns 409) is replaced with what the native worker actually enforces, and `.env.example` names the real endpoint variables. `npm test` is 626 tests, 626 pass, 0 fail; typecheck and `gate` pass.
+
+对照 Claude Code 2.1.319 的六维审计发现 78 条已确认缺陷；高危组已修复。逐次路径闸门现在用
+`realpath` 解析两侧，工作区内指向外部的符号链接对读和写都被拒绝；读、写根分开检查（写蕴含读，
+绝不反过来）；覆盖受保护根的授权被拒绝；在不区分大小写的卷上折叠大小写；拒绝写入仓库的
+`.git`；路径工具解析不出路径时拒绝而不是跳过检查。步骤声明的风险等级限制可提供的工具，
+`read_only` 步骤不再持有 `write_file`。修复通道的 `refuse-existing` 闸门到达 `fileTools`，
+其 worktree 复制 `node_modules` 而不是链接服务检出，轮次上限无论来自计划还是 Worker 默认值
+都报为预算失败。工具名在两个客户端边界映射为 `[a-zA-Z0-9_-]`，压缩保持工具调用与结果成对，
+请求体上限高于附件上限（300 KB 的图片此前会得到 500），`close()` 销毁活动连接，打开的流不会
+阻塞关停。容量闸门同步把释放的槽位转移给等待者，原生 Worker 实现 `cancel()`，两个 MCP 客户端
+把半关的 stdin 当作失败的服务器而不是未捕获的 EPIPE。声称多于代码的文档已修正：Seatbelt profile 记为未使用（它为之编写的 CLI Worker 已不存在），
+对齐报告标明阶段 2 部分实现、阶段 4 在生产路径不可达、阶段 5 没有入口，58.5 基线标为估计而非
+测量，README 的"不受限主机执行"（其 API 返回 409）换成原生 Worker 实际执行的边界，
+`.env.example` 写出真实的端点变量。`npm test` 为 626 个测试、626 通过、0 失败；
+typecheck 与 `gate` 通过。
+
 ### The two lines merged: repair lane plus the shared loop
 
 Local `main` (repair lane, self-check loop, settings surface, WhatsApp approvals) and `origin/main` (shared agent loop, native-only workers, capacity gate, MCP host, skills) were developed from the same base and had diverged. The merge keeps both: the repair lane now reports an unknown worker before provider construction, the owner-configured round budget reaches the shared loop, the credential-name policy and the write-before-answer rule are restored, and the local MCP client (explicit `mcp.json` enablement, per-tool risk, undeclared tools refused) is the one that remains. The black-box CLI workers are gone as agreed. `npm test` is 616 tests, 616 pass, 0 fail.

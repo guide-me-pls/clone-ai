@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import type { ModelUsage, Run } from "../core/contracts.ts";
 import {
   runAgentLoop,
+  toProviderToolName,
   type AgentContentPart,
   type AgentLoopResult,
   type AgentMessage,
@@ -473,9 +474,12 @@ function nativeChatModel(endpoint: NativeMainAgentEndpoint, fetchImpl: typeof fe
         request.onDelta,
         request.signal,
       );
+      // The provider saw derived names; the loop resolves real tools by name.
+      // Provider 看到的是派生名；循环按真实名字解析工具。
+      const byProviderName = new Map(request.tools.map((tool) => [toProviderToolName(tool.name), tool.name]));
       return {
         content: reply.content,
-        toolCalls: reply.toolCalls,
+        toolCalls: reply.toolCalls.map((call) => ({ ...call, name: byProviderName.get(call.name) ?? call.name })),
         ...(reply.usage === undefined ? {} : { usage: reply.usage }),
       };
     },
@@ -536,7 +540,11 @@ async function chat(
           tools: tools.map((tool) => ({
             type: "function",
             function: {
-              name: tool.name,
+              // A provider rejects `Skill(name)` and `server.tool`; the name it
+              // sees is derived, and `nativeChatModel` maps a call back.
+              // Provider 会拒绝 `Skill(name)` 与 `server.tool`；它看到的是派生名，
+              // `nativeChatModel` 会把调用映射回来。
+              name: toProviderToolName(tool.name),
               description: tool.description,
               parameters: tool.parameters ?? { type: "object", properties: {} },
             },

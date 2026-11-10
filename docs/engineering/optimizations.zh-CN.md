@@ -51,6 +51,37 @@
 - **推翻条件：** 如果本地 MCP 客户端更严格的模型挡住了远端宿主支持的工作流，只重新审视那一个
   决定；合并的其余部分是结构性的。
 
+### 2026-11-10 — 关闭审计中已核实的缺陷
+
+- **目标 / 假设：** 对照 Claude Code 2.1.319 的六维审计确认了 78 条缺陷。安全问题不是假设：
+  其中多条在本仓库自己的模块上复现过。关闭高危组，让代码声称的边界与它实际执行的边界一致。
+- **取舍：** [Scope 检查比较解析后的路径，修复通道的闸门真正生效](../architecture/trade-offs.zh-CN.md#2026-11-10--scope-检查比较解析后的路径修复通道的闸门真正生效)。
+- **变更：** 新增 `src/authority/path-contains.ts`（`realTarget`、`containsPath`、`samePath`）；
+  `src/authority/scope.ts` 增加 `isCaseSensitive` 与折叠大小写的 `isForbiddenPath`；
+  `src/authority/path-gateway.ts` 拒绝覆盖受保护根的授权；`decideTool` 解析两侧、分开读写根、
+  拒绝写入 `.git`、路径工具解析不出路径时拒绝；步骤声明的风险等级限制可提供的工具；
+  `workerTools` 接受 `writeFileMode`，`provider-catalog` 把修复通道的值传进去；
+  `linkDependencies` 改为复制；`max_turns` 一律失败并使用统一的 `effectiveRoundLimit`；
+  `toProviderToolName` 在两个客户端边界映射名字；压缩保持工具调用与结果成对；
+  请求体上限高于附件上限并返回 413；容量闸门同步转移释放的槽位；Worker 实现
+  `cancel(sessionId)`；两个 MCP 客户端监听 stdin 错误；关停时销毁活动连接。
+- **Eval：** `npm test` → **626 个测试、626 通过、0 失败**（此前 616 通过）。新增确定性覆盖：
+  `test/path-gate.test.ts` 4/4（符号链接逃逸、读写根分离、祖先授权、大小写折叠）、
+  原生 Worker 的轮次上限回归、Worker 取消、容量转移、EPIPE、真实图片请求体、带打开流的关停。
+  `npm run typecheck` → 退出 0；`npm run gate` → PASS，基线未变。每个安全用例在修复前都用
+  脚本手工复现过（`/tmp/sym-test`、`/tmp/ancestor-check.ts`、`/tmp/repair-guard.ts`、
+  `/tmp/gate-race2.ts`、`/tmp/attach-body.ts`）。
+- **Benchmark run：** 无。这些是契约与正确性修复；实机模型运行无法区分闸门行为。
+- **执行链路：** 审计工作流（6 个维度阅读器，74 条发现经对抗性核实）→ 逐条手工复现高危 →
+  分四组修复（安全、正确性、可靠性、诚实性）→ 每个缺陷一条测试。过程中的失败：三个既有测试
+  假设 `read_only` 步骤可以写（改为 `reversible_write`）；大小写探针需要基于目录清单而不是
+  `realpath` 比较；一个附件测试用了签名检查会拒绝的 PNG（换成真正合法的图片）。
+- **优点：** 同一条代码路径现在执行文档声称的行为；每条修复都有确定性测试，回归会立刻失败。
+- **缺点 / 下次：** 诚实性条目（58.5 基线、"Phase 2 已实现"、Seatbelt 证据、MCP/技能可达性）
+  仍未处理；生产路径仍不传 `contextWindow`，因此 token 压缩不可达；`dispatch_task` 仍不可取消，
+  因为 `runQuery` 不接受 signal；修复通道仍不持 claim 执行。这些需要各自的变更。
+- **推翻条件：** 见取舍条目。
+
 ### 2026-11-09 — 停止正在生成的回答
 
 - **目标 / 假设：** 服务端已经能取消回合，但界面没有入口。回合运行时把发送槽位换成停止控件，

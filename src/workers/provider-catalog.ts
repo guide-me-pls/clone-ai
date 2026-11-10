@@ -30,7 +30,14 @@ export function nativeProviderDefinition(): ProviderDefinition {
         id: agentId,
         workCapabilities,
         dataDirectory,
-        tools: workerTools({ dataDirectory, log: (message) => console.warn(message) }),
+        tools: workerTools({
+          dataDirectory,
+          log: (message) => console.warn(message),
+          // The repair lane sets this for its own process; honouring it here is
+          // what makes `refuse-existing` an actual gate.
+          // 修复通道在自己的进程中设置它；在这里遵守它，`refuse-existing` 才真正生效。
+          ...(process.env.CLONE_AI_NATIVE_WRITE_FILE === "refuse-existing" ? { writeFileMode: "refuse-existing" as const } : {}),
+        }),
       });
       if (worker === undefined) {
         throw new Error("The native worker needs CLONE_AI_NATIVE_MODEL and CLONE_AI_NATIVE_BASE_URL.");

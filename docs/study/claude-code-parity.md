@@ -300,7 +300,10 @@ converted to 0–100.
 | 11 | Model layer (routing, fallback, usage ledger) | 5 | 55 | No retry/fallback, no per-model cost ledger, no prompt-cache accounting | **Adopt** retry/fallback and cache-aware usage |
 | 12 | Product/UX & distribution | 5 | 45 | Plain-text streaming, no tool timeline/stop button, no resume/rewind, ad-hoc signing | **Adopt** the Desktop control-surface patterns |
 
-**Baseline weighted score (estimate): 58.5 / 100.** The minimum dimension is
+**Baseline weighted score (estimate, not a measurement): 58.5 / 100.** No eval
+produced this number — it is the authors' reading of the audit, kept only so
+later phases have something to compare against. Do not cite it as measured. The
+minimum dimension is
 extensibility (10); the next lowest are product/UX (45), agent loop (55), tools
 (55), and context (55). The score is deliberately harsh: a dimension earns its
 level only when an executable check proves it.
@@ -435,17 +438,21 @@ exhaustion, malformed tool recovery, deterministic result order.
 
 **Projected:** loop 55→90, model layer 55→75, reliability 75→85.
 
-**Status (2026-11-09):** Phase 6 has begun: the Main Agent can dispatch a
-bounded task through the Kernel (`dispatch_task`), and Phase 7 has begun: the
-chat renders a live tool timeline from the same SSE stream. Phase 1 and 2 are
-implemented. `src/agent/loop.ts`
-carries the typed terminal reasons, per-call `authorize`, pre/post hooks, budgets,
-and abort; the Main Agent and the native worker both run on it. Phase 3 is
-partial: the worker's tool set is a profile (coding is one), but the additional
-coding tools are not written yet. Phase 4 is implemented as
-`src/main-agent/context-window.ts` plus `main_agent.context_compacted`. Phase 5
-is implemented as `src/mcp/mcp-host.ts` and `src/skills/skill-loader.ts`; both
-are opt-in per Main Agent turn.
+**Status (2026-11-10).** Phase 1 is implemented: `src/agent/loop.ts` carries
+typed terminal reasons, budgets, abort, retries and tool scheduling, and both the
+Main Agent and the native worker run on it. Phase 2 is **partial**: the kernel
+supports `authorize` / `ask` / pre- and post-hooks, but the six-mode ladder, the
+rule syntax and the approval card do not exist, and the Main Agent passes no
+`authorize` callback, so its tools are allowed by default. Phase 3 is partial:
+the worker's tool set is a profile and a step's declared risk caps it, but the
+additional coding tools are not written. Phase 4 is **unreachable in
+production**: `src/main-agent/context-window.ts` implements token-aware
+compaction, but no caller passes `contextWindow`, so turns still use the
+character budget and no compaction is recorded. Phase 5 exists as
+`src/mcp/mcp-host.ts` and `src/skills/skill-loader.ts` with no product entry
+point; the worker's MCP path (`src/workers/mcp-client.ts`) is the live one.
+Phase 6 has begun (`dispatch_task`, synchronous and uncancellable). Phase 7 has
+begun (tool timeline, stop control).
 
 ### Phase 2 — Per-call permission and hooks (P0)
 

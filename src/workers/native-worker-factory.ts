@@ -191,8 +191,16 @@ export function workerTools(options: {
   dataDirectory?: string;
   environment?: NodeJS.ProcessEnv;
   log?: (message: string) => void;
+  /**
+   * Whole-file write mode. The repair lane passes `refuse-existing` so a fix
+   * goes through `edit_file`; without threading it here the lane's protection
+   * was a comment, not a guard.
+   * 整文件写入模式。修复通道传 `refuse-existing`，使修复只能走 `edit_file`；
+   * 如果不把它传到这里，通道的保护就只是一句注释，而不是闸门。
+   */
+  writeFileMode?: WriteFileMode;
 } = {}): NativeToolSpec[] {
-  const builtIn = fileTools();
+  const builtIn = fileTools(options.writeFileMode === undefined ? {} : { writeFileMode: options.writeFileMode });
   if (options.dataDirectory === undefined) return builtIn;
   const loaded = loadMcpConfigSync(join(options.dataDirectory, MCP_CONFIG_FILE));
   for (const error of loaded.errors) options.log?.(`[mcp] ${error}`);

@@ -10,7 +10,7 @@
  */
 import { homedir } from "node:os";
 
-import { canonicalPath, isForbiddenPath, type Scope } from "./scope.ts";
+import { canonicalPath, forbiddenRoots, isForbiddenPath, pathWithin, type Scope } from "./scope.ts";
 
 export interface EffectiveGrants {
   /** Canonical directories/files the process may read in addition to its workspace. 除工作空间外可读的规范路径。 */
@@ -49,6 +49,16 @@ export function resolveGrants(
       const path = canonicalPath(scope.resource, home);
       if (path === "/" || path === home) {
         dropped.push({ scope, reason: "too broad: grant a specific folder, not the root or home directory" });
+        continue;
+      }
+      // A grant on a directory that CONTAINS a protected root opens that root,
+      // even though the granted path itself is not inside one. `~/Library` was
+      // accepted and handed over the Keychains with it.
+      // 覆盖受保护根的授权会把它一起打开，即使被授权的路径本身不在受保护根之内。
+      // `~/Library` 曾被接受，并连带交出了 Keychains。
+      const covering = forbiddenRoots(home).find((root) => pathWithin(path, root));
+      if (covering !== undefined) {
+        dropped.push({ scope, reason: `too broad: this grant contains the protected location ${covering}; grant the specific folder instead` });
         continue;
       }
       if (scope.access === "read") readRoots.add(path);

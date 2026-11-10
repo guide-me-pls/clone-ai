@@ -11,6 +11,16 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-10 — 作用域闸门现在拒绝它声称会拒绝的东西
+
+- **主张：** 逐次路径闸门拒绝工作区内指向外部的符号链接，读授权不能授权写，覆盖受保护根的
+  祖先授权被拒绝，写入 `.git` 被拒绝。
+- **证据：** `test/path-gate.test.ts` 4/4 覆盖以上四项；修复前每项都在仓库自己的模块上复现过——
+  `decideTool` 对 `link/secret.txt` 与 `link/new.txt` 返回 `{allowed: true}`，`~/Library` 的
+  授权被接受且 `dropped: []`。全量套件 626/626；typecheck 与 `npm run gate` 通过。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-10--scope-检查比较解析后的路径修复通道的闸门真正生效)、
+  [执行链路](optimizations.zh-CN.md#2026-11-10--关闭审计中已核实的缺陷)。
+
 ## 2026-11-09 — 共享循环内核、逐次授权与可记录的压缩
 
 - **主张：** Main Agent 与原生 Worker 运行同一套循环契约；每次工具调用在执行前被决定；

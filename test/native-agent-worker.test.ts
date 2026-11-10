@@ -85,8 +85,9 @@ test("a refused call returns a tool error to the model instead of killing the ru
     ],
   });
 
+  const base = assignment(directory);
   const events: ExecutionEvent[] = [];
-  for await (const event of worker.execute(assignment(directory))) events.push(event);
+  for await (const event of worker.execute({ ...base, step: { ...base.step, risk: "reversible_write" } })) events.push(event);
   const toolMessages = requests[1]!.messages.filter((message) => message.role === "tool");
   assert.equal(toolMessages.length, 3);
   assert.match(String(toolMessages[0]!.content), /blue template/);
@@ -162,8 +163,9 @@ test("successful writes become artifact evidence the verifier can check", async 
       { content: "wrote it", toolCalls: [] },
     ]),
   });
+  const base = assignment(directory);
   const events: ExecutionEvent[] = [];
-  for await (const event of worker.execute(assignment(directory))) events.push(event);
+  for await (const event of worker.execute({ ...base, step: { ...base.step, risk: "reversible_write" } })) events.push(event);
   const evidence = events.filter((event) => event.type === "evidence");
   assert.ok(evidence.some((event) => event.type === "evidence" && event.evidence.kind === "artifact" && event.evidence.locator === "out/note.md"));
   assert.equal(await readFile(join(directory, "out/note.md"), "utf8"), "hi");
@@ -282,4 +284,60 @@ test("a model-call budget is reported when the loop cannot finish in time", asyn
   assert.ok(failed?.type === "failed");
   assert.equal(failed.report?.category, "budget_exceeded");
   assert.equal(failed.report?.signature, "budget-model-calls");
+});
+
+test("a round limit from the worker default is still reported as a failure", async (t) => {
+  const directory = await workspace(t);
+  // No work order, hence no plan budget: the limit comes from the worker default.
+  // 没有 WorkOrder，因此没有计划预算：上限来自 Worker 的默认值。
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    maxRounds: 1,
+    tools: [],
+    createClient: () => fakeClient([
+      { content: null, toolCalls: [{ id: "a", name: "missing", arguments: "{}" }] },
+      { content: null, toolCalls: [{ id: "b", name: "missing", arguments: "{}" }] },
+    ]),
+  });
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute(assignment(directory))) events.push(event);
+  const failed = events.find((event) => event.type === "failed");
+  assert.ok(failed?.type === "failed", "a round limit must not be reported as completed");
+  assert.equal(failed.report?.category, "budget_exceeded");
+  assert.equal(events.some((event) => event.type === "completed"), false);
+});
+
+test("cancel stops a running worker instead of letting it finish its timeout", async (t) => {
+  const directory = await workspace(t);
+  let reachedModel = false;
+  let sawAbort = false;
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: [],
+    timeoutMs: 30_000,
+    createClient: () => ({
+      async complete(input) {
+        reachedModel = true;
+        await new Promise<void>((_resolve, reject) => {
+          input.signal.addEventListener("abort", () => { sawAbort = true; reject(new Error("aborted")); }, { once: true });
+        });
+        return { content: "never", toolCalls: [] };
+      },
+    }),
+  });
+  const base = assignment(directory);
+  const events: ExecutionEvent[] = [];
+  const run = (async () => {
+    for await (const event of worker.execute({ ...base, step: { ...base.step, risk: "reversible_write" } })) events.push(event);
+  })();
+  while (!reachedModel) await new Promise((resolve) => setTimeout(resolve, 5));
+  const sessionId = events.find((event) => event.type === "session_started");
+  assert.ok(sessionId?.type === "session_started");
+  await worker.cancel(sessionId.sessionId);
+  await run;
+  assert.equal(sawAbort, true, "the model call must be aborted");
+  const failed = events.find((event) => event.type === "failed");
+  assert.ok(failed?.type === "failed", "a cancelled execution ends as failed/aborted, not completed");
 });

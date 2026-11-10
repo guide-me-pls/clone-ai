@@ -103,14 +103,31 @@ export async function createRepairWorktree(input: CreateWorktreeInput): Promise<
  * `node_modules` 被 git 忽略，因此新 worktree 里没有它，`npm test` 跑不起来。链接服务检出
  * 的模块即可让修复套件可运行，既不安装任何东西，也不写服务中的树。
  */
+/**
+ * Give the worktree the repository's installed dependencies.
+ *
+ * A symlink is the cheap way and the dangerous one: it points into the served
+ * checkout, so a worker that writes `node_modules/pkg/index.js` edits the
+ * running installation, and `isRuntimeScratch` then hides that write from the
+ * staged diff. The link is now a one-time copy: writes land in the worktree's
+ * own tree and are visible to the gates.
+ * 给 worktree 提供仓库已安装的依赖。
+ *
+ * 符号链接是最省事也最危险的方式：它指向正在服务的检出，因此写 `node_modules/pkg/index.js`
+ * 的 Worker 编辑的是运行中的安装，而 `isRuntimeScratch` 又把这次写入从暂存差异里藏掉。
+ * 现在链接改成一次性复制：写入落在 worktree 自己的树里，闸门看得见。
+ */
 export async function linkDependencies(worktree: RepairWorktree): Promise<"linked" | "absent"> {
   const source = join(worktree.repo, "node_modules");
   if (!existsSync(source)) return "absent";
   const target = join(worktree.path, "node_modules");
   if (existsSync(target)) return "linked";
-  const { symlink } = await import("node:fs/promises");
+  const { cp } = await import("node:fs/promises");
   try {
-    await symlink(source, target, "junction");
+    // Dereference: nested symlinks inside node_modules would recreate the same
+    // escape one level down.
+    // 解引用：node_modules 内部还有符号链接时，会在下一层重建同样的逃逸。
+    await cp(source, target, { recursive: true, dereference: true, errorOnExist: false });
     return "linked";
   } catch {
     return "absent";

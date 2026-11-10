@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CapacityGate, computeCapacity } from "../src/core/capacity.ts";
+import { CapacityGate, computeCapacity, type CapacitySnapshot } from "../src/core/capacity.ts";
 
 test("capacity is bound by CPU first on a small, idle machine", () => {
   const snapshot = computeCapacity({
@@ -89,4 +89,25 @@ test("a cancelled wait releases the queue slot", async () => {
   assert.equal(gate.waiting, 0);
   held();
   assert.equal(gate.active, 0);
+});
+
+test("a released slot is transferred, not free for a synchronous re-acquire", async () => {
+  // The old implementation decremented in #release and incremented in the
+  // waiter's microtask; an acquire() in that window made `limit + 1` run.
+  // 旧实现把减一放在 #release、加一放在等待者的微任务里；其间一次 acquire() 会让
+  // `limit + 1` 个执行同时在跑。
+  const gate = new CapacityGate(() => ({ limit: 1 } as unknown as CapacitySnapshot));
+  const first = await gate.acquire();
+  let waiterAdmitted = false;
+  const waiter = gate.acquire().then((release) => { waiterAdmitted = true; return release; });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  first();
+  const third = await Promise.race([
+    gate.acquire().then(() => "admitted"),
+    new Promise((resolve) => setTimeout(() => resolve("queued"), 30)),
+  ]);
+  assert.equal(third, "queued", "a synchronous acquire must not take the slot promised to the waiter");
+  assert.equal(waiterAdmitted, true, "the woken waiter owns the slot");
+  assert.equal(gate.active, 1, "the limit counts the transferred slot");
+  (await waiter)();
 });

@@ -254,3 +254,27 @@ test("workerTools adds enabled servers when mcp.json names them", async (t) => {
   assert.ok(!names.includes("off.hidden"), "a disabled server's tool is not");
   assert.equal(await readFile(join(home, "mcp.json"), "utf8").then((text) => text.includes("hidden")), true);
 });
+
+test("a server that closes its stdin fails that server instead of the process", async (t) => {
+  // The client used to have no stdin error listener: a half-closed pipe made
+  // the next write emit an unhandled EPIPE and exit the daemon.
+  // 客户端此前没有 stdin 错误监听：半关的管道会让下一次写入触发未处理的 EPIPE 并退出 daemon。
+  const { McpClient } = await import("../src/workers/mcp-client.ts");
+  const client = new McpClient({
+    servers: [{
+      id: "closes-stdin",
+      enabled: true,
+      command: process.execPath,
+      args: ["-e", "require('fs').closeSync(0); setTimeout(()=>{}, 5000)"],
+      tools: [],
+    }] as never,
+    timeoutMs: 2_000,
+  });
+  t.after(async () => { await client.close().catch(() => undefined); });
+  // The client reports a dead server as a tool error the model can see; the
+  // point is that the process survives and the call returns.
+  // 客户端把死掉的服务器报成模型能看到的工具错误；重点是进程存活且调用返回。
+  const result = await client.callTool("closes-stdin", "anything", {});
+  assert.equal(result.isError, true);
+  assert.match(result.text, /EPIPE|exited|stdin|failed/i);
+});
