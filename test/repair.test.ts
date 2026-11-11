@@ -8,8 +8,7 @@ import { promisify } from "node:util";
 
 import { compareHashes, failingAssertions, hashFiles, listRegressionTests, stageAll, stageRepair, stagedDeletionCount, verifyRegressionGreen, verifyRegressionRed } from "../src/repair/gates.ts";
 import { createRepairWorktree, removeRepairWorktree, runCommand, type CommandRunner } from "../src/repair/worktree.ts";
-import { keepWorktree, runRepairLane } from "../src/repair/repair-lane.ts";
-import { repairPlan } from "../src/repair/repair-lane.ts";
+import { keepWorktree, repairPlan, runRepairLane, withCaseNames } from "../src/repair/repair-lane.ts";
 import type { ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabilities } from "../src/core/contracts.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 
@@ -541,3 +540,51 @@ test("a repair that cannot find a configured worker fails before any plan is acc
   assert.equal(written.status, "failed");
   if (report.worktree !== undefined) await removeRepairWorktree({ path: report.worktree, branch: report.branch ?? "", repo, base: "main" }, runCommand);
 });
+
+test("the repair prompts name the files in the trace and tell the model to stop", () => {
+  // A run on 2026-11-11 spent 24 and 32 rounds re-discovering the file the trace
+  // already named, and never reached the fix. Both halves are contract now.
+  // 2026-11-11 的运行花了 24 与 32 轮重复发现轨迹已经点名的文件，始终没到修复阶段。
+  // 这两半现在都是契约。
+  const traces = [{
+    schemaVersion: 1 as const,
+    id: "t1",
+    runId: "t1",
+    capturedAt: new Date().toISOString(),
+    kind: "explicit" as const,
+    signals: ["audit"],
+    title: "token compaction unreachable",
+    request: "contextWindow is never passed",
+    failure: { stage: "audit", reason: "runNativeMainAgentTurn is called from src/application/run-main-query.ts without contextWindow" },
+    plan: [],
+    executions: [],
+    evidence: [{ kind: "observation", summary: "src/main-agent/native-runtime.ts spreads contextWindow only when present" }],
+    tail: [],
+  }];
+  const steps = repairPlan({ traces, agentId: "worker", dependenciesLinked: true });
+  const testText = steps[0]!.instructions;
+  const fixText = steps[1]!.instructions;
+  assert.match(testText, /src\/application\/run-main-query\.ts/, "the test phase names the file from the trace");
+  assert.match(testText, /then STOP/, "the test phase tells the model to stop after one write");
+  assert.match(testText, /Do not read the docs\/ tree/, "docs are excluded explicitly");
+  assert.match(fixText, /src\/main-agent\/native-runtime\.ts/, "the fix phase names the file from the evidence");
+  assert.match(fixText, /do not explore the docs\/ tree/);
+});
+
+test("the fix phase is told only about the case this repair created", () => {
+  // test/regression also holds earlier repairs' cases. Handing all of them to
+  // the model aimed a context-window fix at apps/desktop/ui/app.js.
+  // test/regression 里还有更早修复的用例。把它们全部交给模型，曾让一次上下文修复去改 app.js。
+  const step = repairPlan({ traces: [traceFixture()], agentId: "w", dependenciesLinked: true })[1]!;
+  const scoped = withCaseNames(step, ["test/regression/this-repair.test.ts"]);
+  assert.match(scoped.instructions, /^This repair's regression case: test\/regression\/this-repair\.test\.ts\./);
+  assert.match(scoped.instructions, /do not read them and do not fix them/);
+  assert.equal(scoped.id, step.id);
+});
+
+function traceFixture() {
+  return {
+    schemaVersion: 1 as const, id: "t", runId: "t", capturedAt: new Date().toISOString(),
+    kind: "explicit" as const, signals: ["audit"], title: "x", plan: [], executions: [], evidence: [], tail: [],
+  };
+}

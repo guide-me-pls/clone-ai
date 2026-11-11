@@ -341,3 +341,34 @@ test("cancel stops a running worker instead of letting it finish its timeout", a
   const failed = events.find((event) => event.type === "failed");
   assert.ok(failed?.type === "failed", "a cancelled execution ends as failed/aborted, not completed");
 });
+
+test("the worker reports every model call and tool call to the Kernel", async (t) => {
+  // The Kernel's budgets count `model_call`, `tool_started` and `tool_completed`;
+  // the worker used to yield only the outcome, so both budgets were inert and an
+  // audit showed no tool activity at all.
+  // Kernel 的预算统计 `model_call`、`tool_started` 与 `tool_completed`；Worker 过去只 yield
+  // 结果，两个预算因此空转，审计里也看不到任何工具活动。
+  const directory = await workspace(t);
+  await writeFile(join(directory, "note.md"), "hi", "utf8");
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: fileTools(),
+    createClient: () => fakeClient([
+      { content: null, toolCalls: [{ id: "r1", name: "read_file", arguments: JSON.stringify({ path: "note.md" }) }] },
+      { content: "done", toolCalls: [] },
+    ]),
+  });
+  const base = assignment(directory);
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute({ ...base, step: { ...base.step, risk: "reversible_write" } })) events.push(event);
+  const types = events.map((event) => event.type);
+  assert.equal(types.filter((type) => type === "model_call").length, 2, "one event per model round trip");
+  const started = events.find((event) => event.type === "tool_started");
+  assert.ok(started?.type === "tool_started");
+  assert.equal(started.tool, "read_file");
+  const completed = events.find((event) => event.type === "tool_completed");
+  assert.ok(completed?.type === "tool_completed");
+  assert.equal(completed.isError, false);
+  assert.equal(typeof completed.durationMs, "number");
+});

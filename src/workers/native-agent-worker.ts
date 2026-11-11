@@ -30,6 +30,7 @@ import type { ExecutionAssignment, ExecutionEvent, ModelUsage, RuntimeAdapter, R
 import type { FailureReport } from "../core/failure-analysis.ts";
 import { resolveGrants } from "../authority/path-gateway.ts";
 import { containsPath, realTarget } from "../authority/path-contains.ts";
+import { redactMemoryPii } from "../memory/memory-hygiene.ts";
 import { isCaseSensitive } from "../authority/scope.ts";
 import {
   runAgentLoop,
@@ -193,20 +194,40 @@ export class NativeAgentWorker implements RuntimeAdapter {
     });
   }
 
+    /**
+   * The loop runs inside a generator so each event reaches the Kernel as it
+   * happens.
+   *
+   * It used to `await runAgentLoop(...)` and yield only the outcome. The Kernel
+   * then never saw a tool call or a model call, so `maxToolCalls` and
+   * `maxModelCalls` were inert for the only executor, and an audit of a repair
+   * showed one progress line and nothing else. The queue is the boundary: the
+   * loop pushes, the generator drains before each yield, the caller still gets
+   * an async iterable.
+   *
+   * 循环放在生成器里，使每个事件在发生的当下抵达 Kernel。
+   *
+   * 它过去先 `await runAgentLoop(...)`、只 yield 结果。Kernel 因此从未看到任何工具调用或模型
+   * 调用，`maxToolCalls` 与 `maxModelCalls` 对唯一的执行器形同虚设，一次修复的审计里也只有一行
+   * 进度。队列就是这个边界：循环推入，生成器在每次 yield 前取空，调用方拿到的仍是 async iterable。
+   */
   async *execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
     const workspace = resolve(input.workspacePath ?? process.cwd());
     const grants = resolveGrants(input.step.scopes, { workspace });
     // A step's declared risk caps what it may be offered: a read_only step has
     // no business holding a write tool, even though its workspace is writable.
-    // The Kernel's policy says read_only is "allowed", not "read-only" — this
-    // is where that distinction becomes real.
     // 步骤声明的风险等级决定它能拿到什么工具：read_only 步骤不该持有写工具，即使工作区可写。
-    // Kernel 的策略说 read_only 是"允许"，不是"只读"——这个区别在这里变成事实。
     const stepAllows = (risk: NativeToolRisk): boolean => {
       if (input.step.risk === "read_only") return risk === "read";
       if (input.step.risk === "reversible_write") return risk === "read" || risk === "write";
       return true;
     };
+    // The repair lane's evidence home (`.rsi/traces`) sits inside the workspace
+    // and is read-only material: the model must be able to read it, but no
+    // worker should write there.
+    // 修复通道的证据目录（`.rsi/traces`）位于工作区内，是只读材料：模型必须能读，但任何 Worker
+    // 都不该写。
+    const evidenceRoot = join(workspace, ".rsi");
     const offered = this.#config.tools.filter(
       (tool) => stepAllows(tool.risk) && decideTool({ risk: tool.risk, grants, workspace }).allowed,
     );
@@ -219,171 +240,153 @@ export class NativeAgentWorker implements RuntimeAdapter {
     const timeout = setTimeout(() => controller.abort(new Error("Native worker timed out.")), timeoutMs);
     const budget = input.workOrder?.budget;
     const startedAt = Date.now();
-    // Artifacts the worker actually touched, reported as evidence. Without this
-    // the verifier sees a run that "did nothing", even when files landed.
-    // Worker 实际触碰的产物，作为证据上报。没有它，即使文件已落盘，验证器也会认为
-    // 这次运行"什么都没做"。
     const produced = new Map<string, { kind: "artifact" | "observation"; summary: string; locator: string }>();
-    // Paths the task explicitly names. A failed read of one is a missing input,
-    // not a guess the model should work around.
-    // 任务明确点名的路径。读取它们失败意味着输入缺失，而不是模型应当绕过的猜测。
     const requiredText = [input.workOrder?.objective ?? "", input.step.instructions, ...input.step.acceptanceCriteria].join("\n");
     const missingInputs = new Set<string>();
+
+    // The hand-off between the loop and this generator: events queue here and
+    // the generator drains them in order.
+    // 循环与本生成器之间的交接：事件在这里排队，生成器按顺序取走。
+    const pending: ExecutionEvent[] = [];
+    let notify: (() => void) | undefined;
+    let finished = false;
+    const push = (event: ExecutionEvent): void => {
+      pending.push(event);
+      notify?.();
+      notify = undefined;
+    };
+    // The drain ends when the loop is done and the queue is empty; without the
+    // `finished` flag it waited forever after the last event, and every worker
+    // step hung after it had already produced its result.
+    // 排空在循环结束且队列为空时终止；没有 `finished` 标记时，它在最后一个事件之后永远等待，
+    // 于是每次 Worker 步骤在已经产出结果后仍然挂住。
+    const drain = async function* (): AsyncGenerator<ExecutionEvent> {
+      for (;;) {
+        if (pending.length > 0) { yield pending.shift()!; continue; }
+        if (finished) return;
+        await new Promise<void>((resolve) => { notify = resolve; });
+      }
+    };
+
+    const runloop = (async (): Promise<void> => {
+      try {
+        const instructions = buildInstructions(input, grants.dropped.map((item) => `${item.scope.domain}:${item.scope.resource} (${item.reason})`));
+        const messages: AgentMessage[] = [
+          { role: "system", content: systemPrompt(instructions, offered) },
+          { role: "user", content: instructions },
+        ];
+        const result = await runAgentLoop({
+          model: this.#config.createClient(),
+          tools: offered.map((tool) => agentTool(tool, workspace, produced, missingInputs, requiredText)),
+          messages,
+          maxRounds: effectiveRoundLimit(budget?.maxModelCalls, this.#config.maxRounds),
+          ...(budget?.maxToolCalls === undefined ? {} : { maxToolCalls: budget.maxToolCalls }),
+          maxDurationMs: timeoutMs,
+          signal: controller.signal,
+          authorize: (request) => {
+            const tool = offered.find((item) => item.name === request.call.name);
+            if (tool === undefined) {
+              return { behavior: "deny" as const, reason: `No tool named ${request.call.name} is available to this step.` };
+            }
+            // A tool that names a path but produced no readable value must be
+            // refused: `pathOf` returning undefined used to skip the containment
+            // check entirely, so an object-valued path argument bypassed the gate.
+            // 点名了路径却解析不出值的工具必须被拒绝：`pathOf` 返回 undefined 曾让包含检查
+            // 被完全跳过，因此对象形态的路径参数可以绕过闸门。
+            const path = tool.pathOf === undefined ? undefined : tool.pathOf(request.input);
+            if (tool.pathOf !== undefined && (typeof path !== "string" || path.length === 0)) {
+              return { behavior: "deny" as const, reason: `The ${tool.name} call did not name a readable path.` };
+            }
+            if (tool.risk === "write" && typeof path === "string" && realTarget(join(workspace, path)).startsWith(evidenceRoot + "/")) {
+              return { behavior: "deny" as const, reason: `${path} is repair evidence and is read-only.` };
+            }
+            const decision = decideTool({
+              risk: tool.risk,
+              grants,
+              workspace,
+              ...(path === undefined ? {} : { path }),
+            });
+            return decision.allowed
+              ? { behavior: "allow" as const }
+              : { behavior: "deny" as const, reason: decision.reason };
+          },
+          toolResultBudget: { perResultChars: 8_000, totalChars: 32_000 },
+          // Every round trip and every tool call reaches the Kernel, so its
+          // budgets count real activity and the audit shows what happened.
+          // 每次模型往返与每次工具调用都抵达 Kernel，使预算统计真实活动，审计也显示发生了什么。
+          onEvent: (event) => {
+            if (event.type === "model_call_started") push({ type: "model_call" });
+            else if (event.type === "tool_started") {
+              push({
+                type: "tool_started",
+                toolCallId: event.toolCallId,
+                tool: event.tool,
+                ...(summarizeArguments(event.arguments).length === 0 ? {} : { inputSummary: summarizeArguments(event.arguments) }),
+              });
+            } else if (event.type === "tool_completed") {
+              push({ type: "tool_completed", toolCallId: event.toolCallId, tool: event.tool, isError: event.isError, durationMs: event.durationMs });
+            }
+          },
+        });
+        const usage: ModelUsage = { ...result.usage, durationMs: Math.max(0, Date.now() - startedAt) };
+
+        if (missingInputs.size > 0) {
+          const detail = `Required input missing: ${[...missingInputs].join(", ")}`;
+          push({ type: "failed", message: detail, report: { providerId: this.providerId, agentId: this.id, category: "no_artifact", signature: "native-missing-input", detail }, usage });
+          return;
+        }
+        if (result.terminalReason === "budget_exhausted") {
+          const message = result.error ?? "The native worker reached a budget limit.";
+          push({ type: "failed", message, report: { providerId: this.providerId, agentId: this.id, category: "budget_exceeded", signature: budgetSignature(message), detail: message }, usage });
+          return;
+        }
+        if (result.terminalReason === "model_error") {
+          const message = result.error ?? "The native worker's model call failed.";
+          push({ type: "failed", message, report: { providerId: this.providerId, agentId: this.id, category: "unknown", signature: "native-worker-error", detail: message }, usage });
+          return;
+        }
+        if (result.terminalReason === "aborted") {
+          const message = result.error ?? "The native worker was cancelled.";
+          push({ type: "failed", message, report: { providerId: this.providerId, agentId: this.id, category: "timeout", signature: "native-worker-timeout", detail: message }, usage });
+          return;
+        }
+        // A round limit is a limit whether it came from the plan or from the
+        // worker's own default. Reporting it as `completed` published a fragment
+        // of an unfinished investigation as the step's answer.
+        // 轮次上限就是上限，无论它来自计划还是 Worker 自己的默认值。把它报成 `completed`
+        // 会把一次没做完的调查的片段当成步骤答案发布出去。
+        if (result.terminalReason === "max_turns") {
+          const limit = effectiveRoundLimit(budget?.maxModelCalls, this.#config.maxRounds);
+          const message = result.error ?? `The worker reached its ${limit}-model-call budget.`;
+          push({ type: "failed", message, report: { providerId: this.providerId, agentId: this.id, category: "budget_exceeded", signature: "budget-model-calls", detail: message }, usage });
+          return;
+        }
+        if (result.reply.length > 0) push({ type: "message_delta", text: result.reply });
+        for (const item of [...produced.values()].slice(0, 20)) push({ type: "evidence", evidence: item });
+        push({ type: "completed", summary: result.reply.trim().length > 0 ? result.reply : "The native worker finished without a final message.", usage });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        const timedOut = controller.signal.aborted;
+        push({
+          type: "failed",
+          message,
+          report: { providerId: this.providerId, agentId: this.id, category: timedOut ? "timeout" : "unknown", signature: timedOut ? "native-worker-timeout" : "native-worker-error", detail: message },
+        });
+      } finally {
+        finished = true;
+        notify?.();
+        notify = undefined;
+      }
+    })();
+
     try {
-      const instructions = buildInstructions(input, grants.dropped.map((item) => `${item.scope.domain}:${item.scope.resource} (${item.reason})`));
-      const messages: AgentMessage[] = [
-        { role: "system", content: systemPrompt(instructions, offered) },
-        { role: "user", content: instructions },
-      ];
-      const result = await runAgentLoop({
-        model: this.#config.createClient(),
-        tools: offered.map((tool) => agentTool(tool, workspace, produced, missingInputs, requiredText)),
-        messages,
-        maxRounds: effectiveRoundLimit(budget?.maxModelCalls, this.#config.maxRounds),
-        ...(budget?.maxToolCalls === undefined ? {} : { maxToolCalls: budget.maxToolCalls }),
-        maxDurationMs: timeoutMs,
-        signal: controller.signal,
-        authorize: (request) => {
-          const tool = offered.find((item) => item.name === request.call.name);
-          if (tool === undefined) {
-            return { behavior: "deny" as const, reason: `No tool named ${request.call.name} is available to this step.` };
-          }
-          // A tool that names a path but produced no readable value must be
-          // refused: `pathOf` returning undefined used to skip the containment
-          // check entirely, so an object-valued path argument bypassed the gate.
-          // 点名了路径却解析不出值的工具必须被拒绝：`pathOf` 返回 undefined 曾让包含检查
-          // 被完全跳过，因此对象形态的路径参数可以绕过闸门。
-          const path = tool.pathOf === undefined ? undefined : tool.pathOf(request.input);
-          if (tool.pathOf !== undefined && (typeof path !== "string" || path.length === 0)) {
-            return { behavior: "deny" as const, reason: `The ${tool.name} call did not name a readable path.` };
-          }
-          const decision = decideTool({
-            risk: tool.risk,
-            grants,
-            workspace,
-            ...(path === undefined ? {} : { path }),
-          });
-          return decision.allowed
-            ? { behavior: "allow" as const }
-            : { behavior: "deny" as const, reason: decision.reason };
-        },
-        toolResultBudget: { perResultChars: 8_000, totalChars: 32_000 },
-      });
-      const usage: ModelUsage = { ...result.usage, durationMs: Math.max(0, Date.now() - startedAt) };
-
-      if (missingInputs.size > 0) {
-        const detail = `Required input missing: ${[...missingInputs].join(", ")}`;
-        yield {
-          type: "failed",
-          message: detail,
-          report: {
-            providerId: this.providerId,
-            agentId: this.id,
-            category: "no_artifact",
-            signature: "native-missing-input",
-            detail,
-          },
-          usage,
-        };
-        return;
-      }
-      if (result.terminalReason === "budget_exhausted") {
-        const message = result.error ?? "The native worker reached a budget limit.";
-        yield {
-          type: "failed",
-          message,
-          report: {
-            providerId: this.providerId,
-            agentId: this.id,
-            category: "budget_exceeded",
-            signature: budgetSignature(message),
-            detail: message,
-          },
-          usage,
-        };
-        return;
-      }
-      if (result.terminalReason === "model_error") {
-        const message = result.error ?? "The native worker's model call failed.";
-        yield {
-          type: "failed",
-          message,
-          report: {
-            providerId: this.providerId,
-            agentId: this.id,
-            category: "unknown",
-            signature: "native-worker-error",
-            detail: message,
-          },
-          usage,
-        };
-        return;
-      }
-      if (result.terminalReason === "aborted") {
-        const message = result.error ?? "The native worker was cancelled.";
-        yield {
-          type: "failed",
-          message,
-          report: {
-            providerId: this.providerId,
-            agentId: this.id,
-            category: "timeout",
-            signature: "native-worker-timeout",
-            detail: message,
-          },
-          usage,
-        };
-        return;
-      }
-      // A round limit is a limit whether it came from the plan or from the
-      // worker's own default. Reporting it as `completed` published a fragment
-      // of an unfinished investigation as the step's answer.
-      // 轮次上限就是上限，无论它来自计划还是 Worker 自己的默认值。把它报成 `completed`
-      // 会把一次没做完的调查的片段当成步骤答案发布出去。
-      if (result.terminalReason === "max_turns") {
-        const limit = effectiveRoundLimit(budget?.maxModelCalls, this.#config.maxRounds);
-        const message = result.error ?? `The worker reached its ${limit}-model-call budget.`;
-        yield {
-          type: "failed",
-          message,
-          report: {
-            providerId: this.providerId,
-            agentId: this.id,
-            category: "budget_exceeded",
-            signature: "budget-model-calls",
-            detail: message,
-          },
-          usage,
-        };
-        return;
-      }
-
-      if (result.reply.length > 0) yield { type: "message_delta", text: result.reply };
-      for (const item of [...produced.values()].slice(0, 20)) {
-        yield { type: "evidence", evidence: item };
-      }
-      yield {
-        type: "completed",
-        summary: result.reply.trim().length > 0 ? result.reply : "The native worker finished without a final message.",
-        usage,
-      };
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      const timedOut = controller.signal.aborted;
-      const report: FailureReport = {
-        providerId: this.providerId,
-        agentId: this.id,
-        category: timedOut ? "timeout" : "unknown",
-        signature: timedOut ? "native-worker-timeout" : "native-worker-error",
-        detail: message,
-      };
-      yield { type: "failed", message, report };
+      for await (const event of drain()) yield event;
+      await runloop;
     } finally {
       this.#executions.delete(sessionId);
       clearTimeout(timeout);
-      // A tool that spawned a server must not outlive the step: an orphaned MCP
-      // child would keep running with the environment it was handed.
-      // 启动了服务器的工具不能活过步骤：孤立的 MCP 子进程会带着被交给它的环境继续运行。
+      // A tool that spawned a server must not outlive the step.
+      // 启动了服务器的工具不能活过步骤。
       await Promise.allSettled(offered.map((tool) => tool.close?.() ?? Promise.resolve()));
     }
   }
@@ -435,6 +438,15 @@ function budgetSignature(message: string): string {
   if (/duration|ms budget|timed? out/i.test(message)) return "budget-duration";
   if (/round|model[- ]call/i.test(message)) return "budget-model-calls";
   return "budget-exceeded";
+}
+
+/** A redacted, bounded argument summary for the audit. 供审计使用的脱敏、有界参数摘要。 */
+function summarizeArguments(source: string): string {
+  try {
+    return redactMemoryPii(JSON.stringify(JSON.parse(source))).text.slice(0, 2_000);
+  } catch {
+    return redactMemoryPii(source).text.slice(0, 2_000);
+  }
 }
 
 /** The rounds one step actually gets: plan budget, then owner setting, then the default. 一个步骤实际获得的轮次：计划预算、所有者设置、默认值。 */

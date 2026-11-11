@@ -6,6 +6,57 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-11 — Reads are windowed with an explicit total; writes refuse fragments
+
+**Decision.** `read_file` returns a named window (default 400 lines) with the
+file's total line count and the offset for the next page. `write_file` refuses
+content that would discard most of an existing file, in every mode, not only in
+the repair lane.
+
+**Evidence.** In the 2026-11-11 repair run at `reasoning_effort=max`, the model
+read `src/main-agent/native-runtime.ts` (771 lines), the shared loop capped the
+tool result at 8,000 characters, and the model then wrote the prefix back as the
+whole file: 391 lines deleted and replaced by placeholders such as
+`// __HEADER_IMPORTS__`. The same run deleted the file's header comment and
+imports. `read_file` had no offset, no limit and no total, so the truncation was
+invisible from the model's side.
+
+**What it costs.** A model that wants the whole file now needs one call per 400
+lines; a large file costs several rounds instead of one. A legitimate large
+rewrite has to go through `edit_file` or raise the size difference explicitly.
+
+**Reversal condition.** If windowed reads make legitimate multi-file tasks
+exceed their round budget, raise the default window rather than removing the
+total. If fragment refusal blocks a legitimate regeneration, give the worker a
+new-file mode instead of loosening the check.
+
+## 2026-11-11 — The worker streams its activity, and the repair lane says when to stop
+
+**Decision.** The native worker no longer awaits the shared loop and reports only
+its outcome: the loop runs inside the adapter's generator and every `model_call`,
+`tool_started` and `tool_completed` is pushed to the Kernel as it happens. The
+repair plan now names the files the trace already names, forbids reading
+`docs/`, and tells each phase to stop after its first write.
+
+**Evidence.** Three repair runs on 2026-11-11 against DeepSeek V4.1 Flash at
+`reasoning_effort=max`, captured through a logging proxy. A 24-round run and a
+32-round run both ended at `budget-model-calls` having only written a regression
+case; 12 of 31 rounds were spent re-reading the file the trace already named, and
+`docs/` was read after the case existed. The Kernel's audit for each run showed
+`execution.progress` once and nothing else, so `maxToolCalls` and `maxModelCalls`
+could never fire for the only executor, and no tool activity could be reviewed.
+
+**What it costs.** The worker keeps a small queue and a promise hand-off per
+step, and the Kernel writes two journal events per tool call it did not write
+before. A step that makes hundreds of tool calls now produces hundreds of audit
+records.
+
+**Reversal condition.** If the added journal volume dominates writes on a large
+step, record only failures and count the rest in the usage block. If a model
+overruns despite the stop instruction, replace the instruction with a hard rule
+in the loop (stop after the first successful write in a test-writing phase)
+rather than lengthening the prompt.
+
 ## 2026-11-10 — Scope checks compare resolved paths, and the repair lane's guards are real
 
 **Decision.** The per-call path gate resolves both sides with `realpath` (following

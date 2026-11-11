@@ -221,10 +221,11 @@ test("a realistic image attachment is accepted instead of failing on the body ca
     await rm(dataDirectory, { recursive: true, force: true });
   });
 
-  // A genuinely valid PNG that is large enough to clear the old body cap:
-  // 800x800 noise stored uncompressed, about 2.5 MB of base64.
-  // 一张真正合法、且大到超过旧请求体上限的 PNG：800x800 噪声，不压缩存储，约 2.5 MB base64。
-  const png = bigPng(800).toString("base64");
+  // A genuinely valid PNG that clears the old 32 KB body cap but is small
+  // enough for the context window: 160x160 noise, about 100 KB of base64.
+  // 一张真正合法、超过旧 32 KB 请求体上限、但仍在上下文窗口内的 PNG：160x160 噪声，约 100 KB base64。
+  const png = bigPng(160).toString("base64");
+  assert.ok(png.length > 32_000, `the fixture must exceed the old body cap (got ${png.length})`);
   const response = await companionFetch(server.url, server.token, "/api/main-agent/query", {
     method: "POST",
     headers: { "content-type": "application/json" },

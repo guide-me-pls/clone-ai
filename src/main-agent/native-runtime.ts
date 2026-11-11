@@ -74,7 +74,7 @@ export interface NativeMainAgentOptions {
   historyTurns?: number;
   /** Character budget for the verbatim transcript before deterministic compaction. 逐字对话记录在确定性压缩前的字符预算。 */
   historyChars?: number;
-  /** The model's context window; enables token-aware compaction. 模型的上下文窗口；用于按 token 压缩。 */
+  /** The model's context window; defaults to 128,000. Compaction is always token-aware. 模型的上下文窗口，默认 128,000；压缩始终按 token 进行。 */
   contextWindow?: number;
   /** Directories to scan for `<name>/SKILL.md`; omitted disables skills. 扫描 `<name>/SKILL.md` 的目录；缺省禁用技能。 */
   skillRoots?: readonly string[];
@@ -287,26 +287,27 @@ ${listing}`;
       tools: [...nativeAgentTools(tools), ...extraTools],
       messages,
       maxRounds,
-      ...(options.contextWindow === undefined
-        ? {}
-        : {
-          compactThresholdTokens: windowPolicy.compactAt,
-          compact: async (current, context) => {
-            const pressure = contextPressure(context.estimatedTokens, windowPolicy);
-            if (pressure === "blocked") {
-              throw new Error(`Context is at its ${windowPolicy.blockedAt}-token blocked level.`);
-            }
-            const outcome = compactTranscript(current, { estimatedTokens: context.estimatedTokens });
-            await recordContextCompaction(turn, {
-              estimatedTokens: context.estimatedTokens,
-              compactAt: windowPolicy.compactAt,
-              droppedMessages: outcome.droppedMessages,
-              keptMessages: outcome.keptMessages,
-              summary: outcome.summary,
-            });
-            return outcome.messages;
-          },
-        }),
+      // Token-aware compaction is always on: the default window applies when a
+      // caller does not name one, so no production surface can silently fall
+      // back to the character budget and truncate without an audit record.
+      // 按 token 的压缩始终启用：调用方不指定窗口时使用默认窗口，因此任何产品入口都不会
+      // 悄悄退回字符预算、在没有审计记录的情况下截断。
+      compactThresholdTokens: windowPolicy.compactAt,
+      compact: async (current, context) => {
+        const pressure = contextPressure(context.estimatedTokens, windowPolicy);
+        if (pressure === "blocked") {
+          throw new Error(`Context is at its ${windowPolicy.blockedAt}-token blocked level.`);
+        }
+        const outcome = compactTranscript(current, { estimatedTokens: context.estimatedTokens });
+        await recordContextCompaction(turn, {
+          estimatedTokens: context.estimatedTokens,
+          compactAt: windowPolicy.compactAt,
+          droppedMessages: outcome.droppedMessages,
+          keptMessages: outcome.keptMessages,
+          summary: outcome.summary,
+        });
+        return outcome.messages;
+      },
       ...(options.maxToolCalls === undefined ? {} : { maxToolCalls: options.maxToolCalls }),
       ...(options.maxDurationMs === undefined ? {} : { maxDurationMs: options.maxDurationMs }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),

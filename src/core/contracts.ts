@@ -503,7 +503,7 @@ export type ExecutionEvent =
   | { type: "tool_started"; toolCallId: string; tool: string; inputSummary?: string }
   /** One model round trip. Adapters that can count them emit this. 一次模型往返。能计数的 Adapter 发出此事件。 */
   | { type: "model_call" }
-  | { type: "tool_completed"; toolCallId: string; tool: string; isError: boolean }
+  | { type: "tool_completed"; toolCallId: string; tool: string; isError: boolean; durationMs?: number }
   | { type: "progress"; message: string }
   | { type: "evidence"; evidence: Omit<Evidence, "id" | "runId" | "stepId" | "createdAt"> }
   | { type: "completed"; summary: string; usage?: ModelUsage }

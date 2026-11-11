@@ -71,6 +71,70 @@ file keeps every attempt, including the ones that did not work.
   workflow the remote host supported, revisit that one decision; the rest of
   the merge is structural.
 
+### 2026-11-11 — Making the repair lane reviewable
+
+- **Goal / hypothesis:** the repair lane could not be reviewed. Its runs reached
+  the round limit without a fix, its audit showed no tool activity, and a model
+  that read a truncated file wrote the prefix back over the whole file. Making
+  the lane report what it does, tell the model where the defect is, and refuse
+  fragment writes turns "clone-ai repaired it" into a claim an owner can check.
+- **Trade-off:** [the worker streams its activity, and the repair lane says when
+  to stop](../architecture/trade-offs.md#2026-11-11--the-worker-streams-its-activity-and-the-repair-lane-says-when-to-stop)
+  and [reads are windowed with an explicit total; writes refuse
+  fragments](../architecture/trade-offs.md#2026-11-11--reads-are-windowed-with-an-explicit-total-writes-refuse-fragments).
+- **Change:** `NativeAgentWorker.execute` now runs the shared loop inside its
+  generator and forwards `model_call` / `tool_started` / `tool_completed`, so
+  the Kernel's `maxModelCalls` and `maxToolCalls` count real activity and the
+  audit shows every call. `repairPlan` extracts the files a trace names
+  (`traceLocations`), forbids reading `docs/`, and tells each phase to stop
+  after its first write; the fix phase receives only the case this repair
+  created (`newRegressionTests` + `withCaseNames`). `read_file` returns a
+  windowed view with the total line count and a continuation offset, and
+  `write_file` refuses content that would discard most of an existing file.
+  `CLONE_AI_NATIVE_REASONING_EFFORT` reaches the provider as
+  `reasoning_effort`.
+- **Eval:** `npm test` → **633 tests, 633 pass, 0 fail**. New deterministic
+  coverage: `test/native-agent-worker.test.ts` asserts one `model_call` per
+  round trip and paired `tool_started`/`tool_completed`; `test/repair.test.ts`
+  asserts the prompts name the trace's files and the scoped case;
+  `test/native-worker-tools.test.ts` covers windowed reads, the continuation
+  offset, fragment refusal, and the repair lane's `refuse-existing` mode.
+  `npm run typecheck` → exit 0; `npm run gate` → PASS.
+- **Benchmark run (live repair lane):**
+  - Command: `CLONE_HOME=~/.clone-audit-run5
+    CLONE_AI_NATIVE_MODEL=360/deepseek/deepseek-v4.1-flash
+    CLONE_AI_NATIVE_BASE_URL=http://127.0.0.1:4399
+    CLONE_AI_NATIVE_REASONING_EFFORT=max CLONE_AI_NATIVE_MAX_ROUNDS=28
+    node --experimental-strip-types src/cli/clone-ai.ts repair --max-traces 1 --keep`
+  - Provider/model/effort: Magpie gateway → DeepSeek V4.1 Flash, `max`
+    (verified against `/v1/models`: `reasoning_levels: ["low","high","max"]`).
+  - Inputs: five trace documents written from the 2.1.319 audit
+    (`~/.clone-audit-run5/failed-traces/*.json`), `--max-traces 1` so the run
+    works one defect (`audit-ctx-1`, token-aware compaction unreachable).
+  - Scoring: the lane's own gates (red before, green after, hashes unchanged,
+    protected paths untouched); no sampling or temperature parameter is
+    exposed.
+  - Results: earlier runs in the same series — `24501bb3` (24 rounds, wrong
+    defect), `960b941d` (16 rounds, red case written), `3bc0aef5` (32 rounds,
+    case written, no fix), `d03a4e2a` (24 rounds, case written, file
+    destroyed), `8f6f35c5` (24 rounds, case written). Each result file is
+    `~/.clone-audit-run*/rsi/last-run.json`; transcripts are in
+    `/tmp/llm-transcript.jsonl` per run.
+- **Execution chain:** audit → trace documents → five live repair runs, each
+  reviewed by reading the request/response transcript through a logging proxy.
+  Failures found and fixed in order: the worker reported no events (fixed),
+  the prompts did not say where the defect was (fixed), the prompts did not say
+  to stop (fixed), the fix phase read every case in the directory (fixed), and
+  a truncated read let the model overwrite a file (fixed). Total live cost
+  across the five runs: roughly 670k + 791k + 745k + 519k + 518k = **3.24M
+  tokens**; wall time about 30 minutes.
+- **Pros:** every subsequent repair run is reviewable call by call, and the
+  three ways the lane wasted rounds are now contract, not luck.
+- **Cons / next time:** the live run still ended at its round limit; the prompts
+  improved the first rounds but did not yet produce a green fix. The agent
+  should have run one defect end to end before writing five traces.
+- **Reversal condition:** see both trade-off entries.
+
 ### 2026-11-10 — Closing the audit's verified defects
 
 - **Goal / hypothesis:** a six-dimension audit against Claude Code 2.1.319 found
