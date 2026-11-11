@@ -21,6 +21,12 @@ import { Type } from "typebox";
 
 export interface DispatchTaskOptions {
   dataDirectory: string;
+  /**
+   * The turn's abort signal. A stopped turn must stop the work it dispatched;
+   * without this the run outlived the reply.
+   * 本回合的 abort 信号。停止的回合必须停掉它派发的工作；没有它，Run 会比回复活得更久。
+   */
+  signal?: AbortSignal;
   /** The same settings the companion uses; defaults are used when absent. 与 companion 相同的设置；缺省使用默认值。 */
   settings?: CloneSettings;
   /** Resolves the planner's settings lazily, so a settings edit applies to the next call. 惰性解析设置，使设置修改对下一次调用生效。 */
@@ -93,7 +99,10 @@ export function dispatchTaskTool(options: DispatchTaskOptions): PlainKernelTool 
             },
           },
           settings ?? { agents: defaultWorkerProfiles() },
-          options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath },
+          {
+            ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+            ...(options.signal === undefined ? {} : { signal: options.signal }),
+          },
         );
         return {
           content: [{

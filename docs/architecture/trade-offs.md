@@ -30,6 +30,43 @@ exceed their round budget, raise the default window rather than removing the
 total. If fragment refusal blocks a legitimate regeneration, give the worker a
 new-file mode instead of loosening the check.
 
+## 2026-11-11 — A decision is applied to the file it can see, and an approval names its step
+
+**Decision.** The standing-policy store reads the file inside its write queue and
+applies each change to that fresh value (read-modify-write, last writer wins on
+real content). Approving a run through HTTP or WhatsApp carries the step the
+approval was issued for, and a run waiting on a different step is refused with
+409. The loop retries `TimeoutError` but not `AbortError`, refuses malformed tool
+arguments instead of running the tool with `{}`, and treats `finish_reason:
+length` as a failed turn. MCP servers receive only the environment they
+declared, duplicate server and tool names are refused, framed output keeps its
+formatting, and a server's process group is killed. Memory context caps each
+item and the push carries the metadata the builder classifies by.
+
+**Evidence.** Each was reproduced against this repository's modules: two store
+instances resurrected a revoked policy because each computed `next` from its own
+copy before enqueuing; the approve route ignored the body, so a code issued for
+step A approved whatever was active; `AbortSignal.timeout()` rejects with
+`TimeoutError`, which the retry predicate did not recognise, so every timeout
+failed on the first attempt; `parseArguments` returned `{}` for truncated JSON,
+running the tool with no arguments; no caller read `finish_reason`, so a reply
+cut mid-sentence was reported as complete; `env: { ...process.env }` handed an
+MCP server the owner's API keys; `sanitizeObserved` collapsed every whitespace
+run, making source code and JSON unreadable; `close()` killed only the direct
+child; one long memory consumed the whole context budget and the push dropped
+`type`/`createdAt`, so every memory landed in one class.
+
+**What it costs.** Every policy edit now re-reads the file, so a large
+`policies.json` is parsed per edit. Approvals need the step id in the body, which
+is a wire-format change. A model that emits truncated tool arguments gets a tool
+error instead of a silent empty call. A chatty MCP server no longer logs at the
+owner's expense — its output is bounded and framed.
+
+**Reversal condition.** If re-reading the policy file on every edit becomes
+expensive, cache by mtime rather than trusting in-memory state. If a legitimate
+workflow needs an approval to apply to a later step, add an explicit
+"approve the next step" mode rather than removing the check.
+
 ## 2026-11-11 — The worker streams its activity, and the repair lane says when to stop
 
 **Decision.** The native worker no longer awaits the shared loop and reports only

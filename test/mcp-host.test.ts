@@ -59,3 +59,31 @@ test("tool parsing drops entries without a name and defaults a missing schema", 
   assert.deepEqual(tools.map((tool) => tool.name), ["a", "b"]);
   assert.deepEqual(tools[0]?.inputSchema, { type: "object", properties: {} });
 });
+
+test("an MCP server receives only the environment it declared", async () => {
+  // The host used to hand the server the owner's whole environment, API keys
+  // included; the worker client already narrows it.
+  // 宿主过去把所有者完整的环境交给服务器，包含 API 密钥；Worker 客户端已经收窄了它。
+  const { environmentFor } = await import("../src/workers/mcp-client.ts");
+  const source = { PATH: "/bin", HOME: "/home/owner", ANTHROPIC_API_KEY: "sk-secret", GITHUB_TOKEN: "ghp_x", LANG: "en_US.UTF-8" };
+  const named = environmentFor({ env: ["GITHUB_TOKEN"] }, source);
+  assert.equal(named.GITHUB_TOKEN, "ghp_x");
+  assert.equal(named.ANTHROPIC_API_KEY, undefined, "an undeclared credential must not leak");
+  assert.equal(named.PATH, "/bin", "the baseline variables survive");
+
+  const explicit = environmentFor({ env: { EXTRA: "value" } }, source);
+  assert.equal(explicit.EXTRA, "value");
+  assert.equal(explicit.ANTHROPIC_API_KEY, undefined, "the object form also stays narrow");
+});
+
+test("duplicate server names and duplicate tool names are refused, not silently shadowed", async () => {
+  // Two servers with one name both registered tools under one prefix, and the
+  // loop's first-wins lookup hid the second.
+  // 两个同名服务器把工具注册在同一前缀下，循环的先到先得查找遮住了第二个。
+  const { McpHost, mcpToolName } = await import("../src/mcp/mcp-host.ts");
+  assert.throws(() => new McpHost([
+    { name: "dup", command: "x" },
+    { name: "dup", command: "y" },
+  ]), /Duplicate MCP server name/);
+  assert.equal(mcpToolName("a", "b"), "mcp__a__b");
+});

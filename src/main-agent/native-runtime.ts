@@ -29,6 +29,7 @@ import { createKernelRuntimeSession, kernelToolDefinitions, type PlainKernelTool
 import { compileMainAgentPrompt } from "./prompt.ts";
 import { loadSkills, skillInvocation, skillListing, type SkillDefinition } from "../skills/skill-loader.ts";
 import { McpHost, type McpServerConfig } from "../mcp/mcp-host.ts";
+import { frameMcpOutput } from "../workers/mcp-client.ts";
 import { dispatchTaskTool } from "./tools/dispatch-task.ts";
 import { compactTranscript, contextLevels, contextPressure } from "./context-window.ts";
 import { recordPromptSnapshot } from "./prompt-snapshot.ts";
@@ -202,7 +203,7 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     query: options.text,
   });
-  const tools = nativeTools(options.dataDirectory);
+  const tools = nativeTools(options.dataDirectory, options.signal);
   // Skills and MCP are opt-in per turn: without roots or servers the tool table
   // and prompt are exactly what they were before.
   // 技能与 MCP 是按回合显式开启的：没有根目录或服务器时，工具表与 Prompt 与之前完全相同。
@@ -453,8 +454,13 @@ function agentExtraTools(
       parallelSafe: false,
       run: async (args) => {
         const result = await mcp!.call(tool.name, args);
+        // The same framing the worker's MCP path uses: a server can return
+        // "ignore your rules", and the wrapper makes clear it is a quoted
+        // observation rather than an instruction.
+        // 与 Worker 的 MCP 路径相同的包裹：服务器可能返回"忽略你的规则"，包裹会明确它是引用
+        // 观察而不是指令。
         return {
-          content: result.content.map((part) => part.text ?? "").filter(Boolean).join("\n") || "(no output)",
+          content: frameMcpOutput(tool.server, tool.tool, result.content.map((part) => part.text ?? "").filter(Boolean).join("\n")),
           isError: result.isError,
         };
       },
@@ -569,6 +575,7 @@ async function chat(
   const decoder = new TextDecoder();
   let buffer = "";
   let content = "";
+  let finishReason: string | undefined;
   let usage: ModelUsage | undefined;
   const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
 
@@ -580,6 +587,7 @@ async function chat(
     if (data.length === 0 || data === "[DONE]") return;
     let chunk: {
       choices?: Array<{
+        finish_reason?: string | null;
         delta?: {
           content?: string | null;
           tool_calls?: Array<{
@@ -600,6 +608,8 @@ async function chat(
       const parsed = parseUsage(chunk.usage);
       if (parsed !== undefined) usage = parsed;
     }
+    const finish = chunk.choices?.[0]?.finish_reason;
+    if (typeof finish === "string" && finish.length > 0) finishReason = finish;
     const delta = chunk.choices?.[0]?.delta;
     if (delta === undefined) return;
     if (typeof delta.content === "string" && delta.content.length > 0) {
@@ -637,6 +647,7 @@ async function chat(
 
   return {
     content: content.length > 0 ? content : null,
+    ...(finishReason === undefined ? {} : { finishReason }),
     toolCalls: [...toolCalls.entries()]
       .sort(([left], [right]) => left - right)
       .map(([, call]) => ({
@@ -654,8 +665,8 @@ async function chat(
  * 旧版 search_history 读 Pi 会话文件；原生对话记录是回合台账，因此本运行时只替换
  * 这一个工具为台账检索。
  */
-function nativeTools(dataDirectory: string): PlainKernelTool[] {
-  return [...kernelToolDefinitions({ dataDirectory }), dispatchTaskTool({ dataDirectory })].map((tool) => tool.name === "search_history"
+function nativeTools(dataDirectory: string, signal?: AbortSignal): PlainKernelTool[] {
+  return [...kernelToolDefinitions({ dataDirectory }), dispatchTaskTool({ dataDirectory, ...(signal === undefined ? {} : { signal }) })].map((tool) => tool.name === "search_history"
     ? {
       ...tool,
       execute: async (_toolCallId: string, params: Record<string, unknown>) => ({

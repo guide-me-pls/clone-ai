@@ -484,7 +484,9 @@ export class WhatsAppBridge {
     const response = await fetch(new URL(`/api/runs/${encodeURIComponent(consumed.request.runId)}/${path}`, companion.url), {
       method: "POST",
       headers: { authorization: `Bearer ${companion.token}`, "content-type": "application/json" },
-      body: "{}",
+      // The code names its step; the server refuses a different one.
+      // 审批码点名了它对应的步骤；服务器会拒绝不同的步骤。
+      body: JSON.stringify({ stepId: consumed.request.stepId }),
       signal: AbortSignal.timeout(60_000),
     }).catch(() => undefined);
     if (response === undefined || !response.ok) {
