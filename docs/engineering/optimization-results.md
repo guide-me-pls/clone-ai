@@ -15,6 +15,24 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-11 — The repair lane produced a verified fix
+
+- **Claim:** clone-ai's own repair lane produced the fix for token-aware
+  compaction being unreachable, and the working agent verified it functionally
+  rather than by rewriting it.
+- **Evidence:** patch changes `src/main-agent/native-runtime.ts` so compaction is
+  always enabled with a 128,000-token default. The regression case
+  `test/regression/audit-ctx-1.test.ts` is **red on `8e9bbd4`** (no
+  `main_agent.context_compacted` event) and **green with the patch**; full suite
+  634/634, typecheck and `npm run gate` pass. Produced by DeepSeek V4.1 Flash at
+  `reasoning_effort=max` through `clone-ai repair` (run `bd3451a6`), reviewed
+  from the captured request/response transcript.
+- **Where:** [worker streaming and stop
+  instructions](../architecture/trade-offs.md#2026-11-11--the-worker-streams-its-activity-and-the-repair-lane-says-when-to-stop),
+  [windowed reads and fragment
+  refusal](../architecture/trade-offs.md#2026-11-11--reads-are-windowed-with-an-explicit-total-writes-refuse-fragments),
+  [execution chain](optimizations.md#2026-11-11--making-the-repair-lane-reviewable).
+
 ## 2026-11-10 — The scope gate now refuses what it claimed to refuse
 
 - **Claim:** the per-call path gate rejects a symlink inside the workspace that

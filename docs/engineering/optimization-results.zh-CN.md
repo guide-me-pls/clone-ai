@@ -11,6 +11,19 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-11 — 修复通道产出了经过验证的修复
+
+- **主张：** clone-ai 自己的修复通道产出了"按 token 的压缩不可达"这一缺陷的修复，工作 Agent
+  只做功能验证，没有重写补丁。
+- **证据：** 补丁修改 `src/main-agent/native-runtime.ts`，让压缩始终启用、默认 128,000 token
+  窗口。回归用例 `test/regression/audit-ctx-1.test.ts` 在 `8e9bbd4` 上为**红**（没有
+  `main_agent.context_compacted` 事件），打补丁后为**绿**；全量套件 634/634、typecheck 与
+  `npm run gate` 通过。由 DeepSeek V4.1 Flash、`reasoning_effort=max` 经
+  `clone-ai repair`（运行 `bd3451a6`）产出，依据捕获的请求/响应轨迹审查。
+- **位置：** [Worker 流式上报与停止指令](../architecture/trade-offs.zh-CN.md#2026-11-11--worker-流式上报活动修复通道说清何时停止)、
+  [窗口读取与片段拒绝](../architecture/trade-offs.zh-CN.md#2026-11-11--读取按窗口进行并给出总数写入拒绝片段)、
+  [执行链路](optimizations.zh-CN.md#2026-11-11--让修复通道可审查)。
+
 ## 2026-11-10 — 作用域闸门现在拒绝它声称会拒绝的东西
 
 - **主张：** 逐次路径闸门拒绝工作区内指向外部的符号链接，读授权不能授权写，覆盖受保护根的

@@ -31,6 +31,12 @@ export interface OpenAiCompatibleClientOptions {
   apiKey?: string;
   /** One completion's output cap; the shared loop owns the rounds. 单次补全的输出上限；回合由共享内核拥有。 */
   maxTokens?: number;
+  /**
+   * Reasoning effort for providers that offer it. The gateway reports the
+   * levels each model accepts; `none` to `max`. Omitted means provider default.
+   * 支持它的 Provider 的推理强度。网关会报告每个模型接受的档位，从 `none` 到 `max`。省略即 Provider 默认。
+   */
+  reasoningEffort?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
@@ -80,6 +86,7 @@ export class OpenAiCompatibleClient implements AgentModel {
             })),
           }),
         ...(this.#options.maxTokens === undefined ? {} : { max_tokens: this.#options.maxTokens }),
+        ...(this.#options.reasoningEffort === undefined ? {} : { reasoning_effort: this.#options.reasoningEffort }),
         stream: false,
       }),
       signal,

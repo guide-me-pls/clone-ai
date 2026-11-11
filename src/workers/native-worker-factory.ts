@@ -31,12 +31,15 @@ export interface NativeWorkerEnvironment {
   maxRounds?: number;
   /** Cap one completion's tokens, when the owner sets it. 设置了该值时，限制单次补全的 token。 */
   maxTokens?: number;
+  /** Reasoning effort the worker asks the model for, when the owner sets it. 设置了该值时，Worker 请求的推理强度。 */
+  reasoningEffort?: string;
   workspace: string;
 }
 
 export function readNativeWorkerEnvironment(environment: NodeJS.ProcessEnv = process.env, workspace = process.cwd()): NativeWorkerEnvironment {
   const rounds = environment.CLONE_AI_NATIVE_MAX_ROUNDS?.trim();
   const maxRounds = rounds === undefined || rounds.length === 0 ? undefined : Number(rounds);
+  const reasoning = environment.CLONE_AI_NATIVE_REASONING_EFFORT?.trim().toLowerCase();
   const tokens = environment.CLONE_AI_NATIVE_MAX_TOKENS?.trim();
   const maxTokens = tokens === undefined || tokens.length === 0 ? undefined : Number(tokens);
   return {
@@ -49,6 +52,7 @@ export function readNativeWorkerEnvironment(environment: NodeJS.ProcessEnv = pro
     // 非法值直接忽略而不是变成 NaN：那会让循环跑零轮，看起来像模型什么都没说。
     ...(maxRounds !== undefined && Number.isInteger(maxRounds) && maxRounds > 0 ? { maxRounds } : {}),
     ...(maxTokens !== undefined && Number.isInteger(maxTokens) && maxTokens > 0 ? { maxTokens } : {}),
+    ...(reasoning !== undefined && reasoning.length > 0 ? { reasoningEffort: reasoning } : {}),
   };
 }
 
@@ -82,14 +86,37 @@ export function fileTools(options: { writeFileMode?: WriteFileMode } = {}): Nati
   return [
     {
       name: "read_file",
-      description: "Read a UTF-8 text file inside the step workspace.",
-      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      description:
+        "Read a UTF-8 text file inside the step workspace. A long file is returned in windows: "
+        + "the reply names the total line count and the range it returned, so read the rest with offset.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          offset: { type: "number", description: "First line to return, 1-based. Defaults to 1." },
+          limit: { type: "number", description: "Number of lines to return. Defaults to 400." },
+        },
+        required: ["path"],
+      },
       risk: "read",
       pathOf: (input) => String(input.path ?? ""),
       run: async (call, { workspace }) => {
         const text = await (await import("node:fs/promises")).readFile(resolveInWorkspace(workspace, String(call.input.path)), "utf8")
           .catch((error: Error) => `Error: ${error.message}`);
-        return { output: text, ...(text.startsWith("Error:") ? { isError: true } : {}) };
+        if (text.startsWith("Error:")) return { output: text, isError: true };
+        // A windowed read with an explicit total is what keeps a model from
+        // mistaking a truncated view for the whole file. The loop caps every
+        // tool result at 8,000 characters; before this, a 20 KB file arrived as
+        // a silent prefix and a later write_file replaced the rest with it.
+        // 带明确总数的窗口读取，是让模型不把截断视图当成完整文件的关键。循环把每个工具结果截到
+        // 8,000 字符；此前一个 20 KB 文件会无声地只给出前缀，随后的 write_file 用这段前缀替掉了其余部分。
+        const lines = text.split("\n");
+        const offset = Math.max(1, Math.trunc(Number(call.input.offset ?? 1)) || 1);
+        const limit = Math.max(1, Math.trunc(Number(call.input.limit ?? 400)) || 400);
+        const window = lines.slice(offset - 1, offset - 1 + limit);
+        const last = Math.min(lines.length, offset - 1 + window.length);
+        const header = `(${lines.length} lines total; showing ${offset}-${last}${last < lines.length ? `; continue with offset=${last + 1}` : ""})`;
+        return { output: `${header}\n${window.join("\n")}` };
       },
     },
     {
@@ -125,6 +152,21 @@ export function fileTools(options: { writeFileMode?: WriteFileMode } = {}): Nati
         const exists = writeFileMode === "refuse-existing" && await access(target).then(() => true, () => false);
         if (exists) {
           return { output: `Error: ${String(call.input.path)} already exists; use edit_file with an exact old_text excerpt to change it.`, isError: true };
+        }
+        // Even outside the repair lane, refuse to replace a file whose content
+        // the model cannot have seen whole: a windowed read is not the file.
+        // 即使在修复通道之外，也拒绝替换一个模型不可能完整看过的文件：窗口读取不等于文件本身。
+        if (await access(target).then(() => true, () => false)) {
+          const current = await (await import("node:fs/promises")).readFile(target, "utf8").catch(() => "");
+          const incoming = String(call.input.content ?? "");
+          const looksLikeFragment = current.length > incoming.length * 1.5 && current.length - incoming.length > 2_000;
+          if (looksLikeFragment) {
+            return {
+              output: `Error: ${String(call.input.path)} currently has ${current.length} characters and the new content has ${incoming.length}; `
+                + "that would discard most of the file. Use edit_file with an exact old_text excerpt instead.",
+              isError: true,
+            };
+          }
         }
         await mkdir(dirname(target), { recursive: true });
         await writeFile(target, String(call.input.content ?? ""), "utf8");
@@ -261,6 +303,7 @@ function createWorker(
       model: config.model!,
       ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
       ...(config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens }),
+      ...(config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort }),
       timeoutMs: Number(environment.CLONE_AI_NATIVE_TIMEOUT_MS ?? 120_000),
     }),
   });
