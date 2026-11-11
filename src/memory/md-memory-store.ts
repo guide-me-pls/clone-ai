@@ -854,7 +854,7 @@ export class GovernedMemorySource {
    * 避免 Kernel 在整个进程生命周期里握着数据库句柄——那样会妨碍所有者移动或删除
    * 自己的 clone home。
    */
-  async recall(query: string, _runId: string): Promise<Array<{ memory: { id: string; summary: string }; score: number; matchedTerms: string[] }>> {
+  async recall(query: string, _runId: string): Promise<Array<{ memory: MemoryEntry; score: number; matchedTerms: string[] }>> {
     const store = new MdMemoryStore({ dataDirectory: this.#dataDirectory });
     const { MemoryGovernance } = await import("./memory-governance.ts");
     const ownedJournal = this.#journal === undefined
@@ -863,8 +863,15 @@ export class GovernedMemorySource {
     const governance = new MemoryGovernance({ store, journal: this.#journal ?? ownedJournal! });
     try {
       const matches = await governance.recall(query, { maxResults: this.#maxResults });
+      // The whole entry crosses the boundary, not just its id and summary: the
+      // context builder classifies by `type`, orders supersedes by `createdAt`
+      // and drops `secret` by `sensitivity`. Narrowing it here is why every
+      // recalled memory used to land in one class.
+      // 整条记录越界，而不只是 id 与摘要：上下文构建器按 `type` 分类、按 `createdAt` 排序
+      // 取代关系、按 `sensitivity` 丢弃 `secret`。在这里收窄，正是所有召回记忆都落入同一类别的
+      // 原因。
       return matches.map((match) => ({
-        memory: { id: match.entry.id, summary: match.entry.summary },
+        memory: match.entry,
         score: match.score,
         matchedTerms: match.matchedTerms,
       }));

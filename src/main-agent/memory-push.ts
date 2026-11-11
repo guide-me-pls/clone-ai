@@ -45,7 +45,21 @@ export async function pushRelevantMemories(input: {
   const source = new GovernedMemorySource(input.dataDirectory, input.maxResults ?? 6);
   const recalled = await source.recall(query, MAIN_AGENT_RUN_ID);
   const context = buildMemoryContextFromCandidates(
-    recalled.map((item) => ({ id: item.memory.id, summary: item.memory.summary, score: item.score })),
+    // Carry the metadata the builder uses: without `type` every memory fell
+    // into the same class, so a preference and a task outcome competed for one
+    // share; without `createdAt` the supersedes ordering could not tell which
+    // statement came later.
+    // 带上构建器会用到的元数据：没有 `type` 时所有记忆落入同一类别，偏好与任务结果争抢同一份
+    // 额度；没有 `createdAt` 时"后者取代前者"的排序无法判断哪句更晚。
+    recalled.map((item) => ({
+      id: item.memory.id,
+      summary: item.memory.summary,
+      score: item.score,
+      type: item.memory.type,
+      status: item.memory.status,
+      createdAt: item.memory.createdAt,
+      sensitivity: item.memory.sensitivity,
+    })),
   );
   if (context === undefined) return undefined;
   await input.journal.append({
@@ -56,7 +70,18 @@ export async function pushRelevantMemories(input: {
       scope: { path: "main-agent-push" },
       memories: recalled
         .filter((item) => context.sourceMemoryIds.includes(item.memory.id))
-        .map((item) => ({ id: item.memory.id, summary: item.memory.summary, score: item.score, matchedTerms: item.matchedTerms })),
+        // The audit record carries the same classification the model saw, so a
+        // later review can tell why a memory was injected.
+        // 审计记录携带模型看到的同一分类，使事后审查能说明某条记忆为何被注入。
+        .map((item) => ({
+          id: item.memory.id,
+          summary: item.memory.summary,
+          score: item.score,
+          matchedTerms: item.matchedTerms,
+          type: item.memory.type,
+          createdAt: item.memory.createdAt,
+          sensitivity: item.memory.sensitivity,
+        })),
     },
   });
   return { text: context.summary, memoryIds: [...context.sourceMemoryIds] };

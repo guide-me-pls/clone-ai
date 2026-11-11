@@ -105,10 +105,11 @@ export class StandingPolicyStore {
   async setDomainLevel(domain: Domain, level: Autonomy): Promise<AuthorityConfig> {
     if (!isDomain(domain)) throw new Error(`Unknown domain: ${String(domain)}.`);
     if (!isAutonomy(level)) throw new Error(`Unknown autonomy level: ${String(level)}.`);
-    const previous = this.#config.domains[domain] ?? "observe";
-    const next = { ...this.#config, domains: { ...this.#config.domains, [domain]: level } };
-    await this.#persist(next, "domain_level_set", { domain, from: previous, to: level });
-    return next;
+    return this.#mutate((current) => ({
+      next: { ...current, domains: { ...current.domains, [domain]: level } },
+      change: "domain_level_set",
+      detail: { domain, from: current.domains[domain] ?? "observe", to: level },
+    }));
   }
 
   async addPolicy(input: {
@@ -134,27 +135,73 @@ export class StandingPolicyStore {
       ...(input.validFrom === undefined ? {} : { validFrom: input.validFrom }),
       ...(input.validUntil === undefined ? {} : { validUntil: input.validUntil }),
     };
-    await this.#persist({ ...this.#config, policies: [...this.#config.policies, policy] }, "policy_added", {
-      policyId: policy.id,
-      label: policy.label,
-      maxAutonomy: policy.maxAutonomy,
-      scopes: policy.scopes,
-    });
+    await this.#mutate((current) => ({
+      next: { ...current, policies: [...current.policies, policy] },
+      change: "policy_added",
+      detail: { policyId: policy.id, label: policy.label, maxAutonomy: policy.maxAutonomy, scopes: policy.scopes },
+    }));
     return policy;
   }
 
   /** Revocation keeps the record: an audit trail must outlive the permission. 撤销保留记录：审计轨迹必须比权限活得久。 */
   async revokePolicy(id: string, now = new Date()): Promise<StandingPolicy> {
-    const existing = this.#config.policies.find((policy) => policy.id === id);
-    if (existing === undefined) throw new Error(`Unknown policy: ${id}.`);
-    if (existing.revokedAt !== undefined) return existing;
-    const revoked = { ...existing, revokedAt: now.toISOString() };
-    await this.#persist(
-      { ...this.#config, policies: this.#config.policies.map((policy) => (policy.id === id ? revoked : policy)) },
-      "policy_revoked",
-      { policyId: id, label: existing.label },
-    );
-    return revoked;
+    let revoked: StandingPolicy | undefined;
+    await this.#mutate((current) => {
+      const existing = current.policies.find((policy) => policy.id === id);
+      if (existing === undefined) throw new Error(`Unknown policy: ${id}.`);
+      if (existing.revokedAt !== undefined) {
+        revoked = existing;
+        return undefined;
+      }
+      revoked = { ...existing, revokedAt: now.toISOString() };
+      return {
+        next: { ...current, policies: current.policies.map((policy) => (policy.id === id ? revoked! : policy)) },
+        change: "policy_revoked",
+        detail: { policyId: id, label: existing.label },
+      };
+    });
+    return revoked!;
+  }
+
+  /**
+   * Apply a change to the freshest on-disk config, inside the write queue.
+   *
+   * The mutators used to compute `next` from the in-memory copy before
+   * enqueuing, so an interleaved write from another instance (the CLI and the
+   * daemon share this file) was silently reverted: a revoke could reappear as
+   * active. Reading inside the queue makes the last write win on the real
+   * content, which is what "only the owner writes here" assumes.
+   * 在写队列内把变更应用到磁盘上最新的配置。
+   *
+   * 变更方法过去在入队前就基于内存副本算出 `next`，因此来自另一个实例（CLI 与守护进程共享
+   * 此文件）的交错写入会被静默回滚：被撤销的策略可能重新变为生效。在队列内读取，使最后一次
+   * 写入作用于真实内容，这正是"只有所有者写这里"所假设的前提。
+   */
+  async #mutate(
+    build: (current: AuthorityConfig) => { next: AuthorityConfig; change: string; detail: Record<string, unknown> } | undefined,
+  ): Promise<AuthorityConfig> {
+    let result: AuthorityConfig = this.#config;
+    const write = this.#writes.then(async () => {
+      // A missing file is "no authority granted yet", the same meaning
+      // `snapshot()` gives it.
+      // 文件不存在表示"尚未授权"，与 `snapshot()` 的含义一致。
+      let current: AuthorityConfig = EMPTY_AUTHORITY;
+      try {
+        current = normalize(JSON.parse(readFileSync(this.#file, "utf8")) as Partial<AuthorityConfig>);
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      const change = build(current);
+      if (change === undefined) { result = current; return; }
+      await writeJsonAtomic(this.#file, change.next);
+      this.#config = change.next;
+      this.#mtime = statSync(this.#file).mtimeMs;
+      await this.#journal?.append({ type: "authority.changed", payload: { change: change.change, ...change.detail } });
+      result = change.next;
+    });
+    this.#writes = write.then(() => undefined, () => undefined);
+    await write;
+    return result;
   }
 
   async #persist(next: AuthorityConfig, change: string, detail: Record<string, unknown>): Promise<void> {

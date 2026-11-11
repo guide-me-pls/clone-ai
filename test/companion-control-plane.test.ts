@@ -361,3 +361,30 @@ test("a paused run is offered for phone approval and the request is journaled", 
     assembly.close();
   }
 });
+
+test("an approval names the step it was issued for, and a mismatch is refused", async (t) => {
+  // A WhatsApp approval code describes one step. The route approved whatever was
+  // active, so a stale code could approve a step it never described.
+  // WhatsApp 审批码描述的是某一步。路由放行当时活动的那一步，因此过期审批码可能批准它从未描述的步骤。
+  const { url, token, dataDirectory } = await companion(t);
+  const assembly = await createRuntimeAssembly({ dataDirectory, workspacePath: dataDirectory });
+  let runId: string;
+  try {
+    const { run } = await assembly.runtime.acceptTrigger({ kind: "query", summary: "准备发布", payload: {} });
+    runId = run.id;
+    await assembly.runtime.attachPlan(runId, {
+      summary: "发布",
+      steps: [{ id: "publish", title: "发布", instructions: "发送公告", risk: "external_side_effect", acceptanceCriteria: ["已发送"], agentId: "evidence-reviewer", requiredCapabilities: ["review"] }],
+    });
+    const result = await assembly.runtime.execute(runId, createScriptedAgentRegistry());
+    assert.equal(result.status, "waiting_approval");
+  } finally {
+    assembly.close();
+  }
+  const path = `/api/runs/${runId}/approve`;
+  const wrong = await companionFetch(url, token, path, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stepId: "some-other-step" }),
+  });
+  assert.equal(wrong.status, 409);
+  assert.match((await wrong.json() as { error: string }).error, /issued for step/);
+});

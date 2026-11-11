@@ -289,7 +289,17 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
 
     if (response.toolCalls.length === 0) {
       messages.push({ role: "assistant", content: response.content });
-      stop(reply.trim().length === 0 ? "empty_response" : "completed");
+      // `finish_reason` is how a provider says the answer was cut off. Reading
+      // it is the difference between "the model finished" and "the model ran
+      // out of output tokens mid-sentence", and the callers report the second
+      // as a failure so a truncated answer is never presented as complete.
+      // `finish_reason` 是 Provider 说明回答被截断的方式。读取它，才能区分"模型说完了"与
+      // "模型在句子中间用完输出 token"；调用方把后者报为失败，使被截断的回答永远不会被当作完成。
+      const truncated = response.finishReason === "length" || response.finishReason === "max_tokens";
+      stop(
+        truncated ? "model_error" : reply.trim().length === 0 ? "empty_response" : "completed",
+        truncated ? `The model's answer was cut off (finish_reason: ${response.finishReason}).` : undefined,
+      );
       break;
     }
 
@@ -487,12 +497,16 @@ async function executeOne(input: {
     return toolMessage(call.id, `No tool named ${call.name} is available.`, true, options, round, call, Date.now() - startedAt, false);
   }
 
-  let request: AgentToolRequest = {
-    round,
-    tool,
-    call,
-    input: parseArguments(call.arguments),
-  };
+  let request: AgentToolRequest;
+  try {
+    request = { round, tool, call, input: parseArguments(call.arguments) };
+  } catch (error: unknown) {
+    // A malformed call is a tool result, not a dead turn: the model can correct
+    // it on the next round.
+    // 格式错误的调用是一条工具结果，而不是死掉的回合：模型可以在下一轮纠正。
+    const message = error instanceof Error ? error.message : String(error);
+    return toolMessage(call.id, `Tool ${call.name} failed: ${message}`, true, options, round, call, Date.now() - startedAt, false);
+  }
   let decision: AgentToolDecision;
   try {
     decision = await decideTool(options, request);
@@ -662,7 +676,15 @@ export function truncateResult(content: string, limit = 8_000): { content: strin
  * 默认重试判定：重试传输层失败、限流与服务端错误；绝不对 abort 或客户端错误重试。
  */
 export function isRetryableModelError(error: unknown): boolean {
+  // A user or shutdown abort is final; a timeout is not. `AbortSignal.timeout()`
+  // rejects with a DOMException whose name is `TimeoutError`, which is a
+  // different class from `AbortError` — treating them alike meant every
+  // timed-out request failed on the first attempt.
+  // 用户或关停的 abort 是终局；超时不是。`AbortSignal.timeout()` 以 `TimeoutError` 名称的
+  // DOMException 拒绝，与 `AbortError` 不是同一类——把它们等同起来，让每次超时都在第一次尝试
+  // 就失败。
   if (error instanceof Error && error.name === "AbortError") return false;
+  if (typeof error === "object" && error !== null && (error as { name?: unknown }).name === "TimeoutError") return true;
   const status = typeof error === "object" && error !== null && "status" in error
     ? Number((error as { status: unknown }).status)
     : undefined;
@@ -670,7 +692,7 @@ export function isRetryableModelError(error: unknown): boolean {
     return status === 408 || status === 409 || status === 429 || status >= 500;
   }
   const message = error instanceof Error ? error.message : String(error);
-  return /\b(408|409|429|5\d\d)\b|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|timed? out/i.test(message);
+  return /\b(408|409|429|5\d\d)\b|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|timed? ?out|timeout/i.test(message);
 }
 
 async function completeWithRetry(
@@ -739,14 +761,26 @@ export function estimateMessages(messages: readonly AgentMessage[]): number {
   return Math.ceil(chars / 4);
 }
 
+/**
+ * Parse the model's tool arguments, refusing a call whose JSON is unusable.
+ *
+ * Returning `{}` for malformed or non-object JSON ran the tool with no
+ * arguments: a truncated `{"path": "src/a` became a call with no path, and a
+ * path tool then either refused for the wrong reason or, worse, ran against
+ * its default. A malformed call is a tool error the model can correct.
+ * 解析模型的工具参数，拒绝 JSON 不可用的调用。
+ *
+ * 对格式错误或非对象 JSON 返回 `{}` 会在无参数下运行工具：被截断的 `{"path": "src/a` 变成
+ * 一次没有路径的调用，而路径工具随后要么以错误的原因拒绝，要么更糟——按默认值执行。格式错误的
+ * 调用是模型可以纠正的工具错误。
+ */
 function parseArguments(source: string): Record<string, unknown> {
   if (source.trim().length === 0) return {};
-  try {
-    const parsed = JSON.parse(source) as unknown;
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
+  const parsed: unknown = JSON.parse(source);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`The tool arguments must be a JSON object, not ${Array.isArray(parsed) ? "an array" : typeof parsed}.`);
   }
+  return parsed as Record<string, unknown>;
 }
 
 function isAborted(signal: AbortSignal | undefined): boolean {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, symlink, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -171,4 +171,29 @@ test("the Runtime fails a run whose step reaches a protected location, and recor
       summary: "s", steps: [{ ...step([{ domain: "files", resource: "relative", access: "read" } as Scope]), agentId: "operator", requiredCapabilities: ["general"] }],
     }), /absolute/);
   } finally { await f.cleanup(); }
+});
+
+test("two stores writing the same file cannot resurrect a revoked policy", async (t) => {
+  // The CLI and the daemon share policies.json. Each mutator used to compute the
+  // next config from its own in-memory copy before enqueuing, so an interleaved
+  // write put a revoked policy back as active.
+  // CLI 与守护进程共享 policies.json。变更方法过去在入队前基于各自的内存副本算出下一份配置，
+  // 因此交错写入会把已撤销的策略重新写成生效。
+  const root = await mkdtemp(join(tmpdir(), "clone-authority-cas-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, "policies.json");
+  const first = new StandingPolicyStore(root);
+  const second = new StandingPolicyStore(root);
+
+  const policy = await first.addPolicy({ label: "desktop reads", scopes: [{ domain: "files", resource: "/tmp/a", access: "read" }], maxAutonomy: "act_auto" });
+  await second.load();
+  await second.revokePolicy(policy.id);
+
+  // The first store still holds a copy where the policy is active. 第一个实例仍持有一份策略生效的副本。
+  const added = await first.addPolicy({ label: "second", scopes: [{ domain: "files", resource: "/tmp/b", access: "read" }], maxAutonomy: "act_auto" });
+  assert.ok(added.id);
+
+  const disk = JSON.parse(await readFile(file, "utf8")) as { policies: Array<{ id: string; revokedAt?: string }> };
+  const revoked = disk.policies.find((item) => item.id === policy.id);
+  assert.equal(revoked?.revokedAt !== undefined, true, "the revocation must survive a later write from another instance");
 });

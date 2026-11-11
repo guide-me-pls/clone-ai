@@ -91,8 +91,18 @@ export function renderObservationsAsFacts(result: ConnectorReadResult, limit = 2
 export function sanitizeObserved(text: string): string {
   return text
     .replace(/^\s*(system|assistant|user)\s*:\s*/i, "")
-    .replace(/\b(ignore|disregard|override)\s+(all\s+)?(previous|prior|above|your)\b[^.]*/gi, "[redacted directive]")
-    .replace(/忽略(以上|之前|全部|你的)?(的)?(系统)?(指令|规则)[^。]*/g, "[已移除的指令]")
-    .replace(/\s+/g, " ")
+    // Stop at the end of the sentence, not the file: the old pattern consumed
+    // everything up to the next period, which in a JSON or code payload is the
+    // rest of the line.
+    // 在句子结束处停止，而不是吃到文件末尾：旧模式会吞掉直到下一个句号的所有内容，而在 JSON 或
+    // 代码载荷里那就是整行的其余部分。
+    .replace(/\b(ignore|disregard|override)\s+(all\s+)?(previous|prior|above|your)\b[^.!?\n]*/gi, "[redacted directive]")
+    .replace(/忽略(以上|之前|全部|你的)?(的)?(系统)?(指令|规则)[^。！？\n]*/g, "[已移除的指令]")
+    // Preserve indentation, newlines and blank lines: this text is often source
+    // code or a diff, where collapsed whitespace is unreadable and changes
+    // meaning. Only a run of spaces/tabs inside a line is normalised.
+    // 保留缩进、换行与空行：这段文本常常是源码或 diff，折叠空白既不可读又会改变含义。
+    // 只规范化行内的连续空格与制表符。
+    .replace(/[ \t]{2,}/g, " ")
     .trim();
 }

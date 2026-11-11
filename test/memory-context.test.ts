@@ -235,3 +235,47 @@ test("nothing may exceed the hard caps", async () => {
   assert.ok(context.sourceMemoryIds.length <= 6);
   assert.ok(context.summary.length <= 1200 + 200);
 });
+
+test("one long memory cannot consume the whole context budget", async () => {
+  // A single 100k-character memory used to take the entire budget, starving
+  // every later class and making the per-class shares meaningless.
+  // 一条 10 万字符的记忆过去会吃掉整个预算，让后续类别全部饿死，使按类的份额形同虚设。
+  const { buildMemoryContextFromCandidates } = await import("../src/main-agent/memory-context-builder.ts");
+  const context = buildMemoryContextFromCandidates([
+    { id: "huge", summary: "x".repeat(100_000), score: 0.9 },
+    { id: "small", summary: "the owner prefers short answers", score: 0.8 },
+  ], { maxCharacters: 4_000 });
+  assert.ok(context);
+  const lines = context.summary.split("\n").filter((line) => line.startsWith("- "));
+  assert.ok(lines.every((line) => line.length <= 420), `a memory line must stay bounded, got ${Math.max(...lines.map((l) => l.length))}`);
+  assert.equal(context.sourceMemoryIds.includes("small"), true, "a later memory still fits");
+});
+
+test("a pushed memory keeps the type and time the builder classifies by", async () => {
+  // The push mapped recalled memories down to {id, summary, score}, so the
+  // builder could not classify by type or order supersedes by createdAt.
+  // 推送时把召回的记忆收窄成 {id, summary, score}，构建器因此无法按类型分类、按创建时间排序取代。
+  const { pushRelevantMemories } = await import("../src/main-agent/memory-push.ts");
+  const { createJournalStore } = await import("../src/core/sqlite-journal.ts");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp(join(tmpdir(), "clone-memory-push-"));
+  const journal = createJournalStore(directory);
+  try {
+    const { MdMemoryStore } = await import("../src/memory/md-memory-store.ts");
+    const store = new MdMemoryStore({ dataDirectory: directory });
+    await store.commit({ summary: "the owner prefers terse answers in Chinese", content: "...", type: "preference", confidence: "high" });
+    const pushed = await pushRelevantMemories({ dataDirectory: directory, query: "terse answers Chinese preference", journal });
+    assert.ok(pushed);
+    const events = await journal.list();
+    const recalled = events.find((event) => event.type === "memory.recalled");
+    assert.ok(recalled, "the push is journaled");
+    const memories = (recalled.payload as { memories: Array<{ type?: string; createdAt?: string }> }).memories;
+    assert.equal(memories[0]?.type, "preference", "the type crosses the boundary");
+    assert.equal(typeof memories[0]?.createdAt, "string", "the timestamp crosses too");
+  } finally {
+    (journal as { close?: () => void }).close?.();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

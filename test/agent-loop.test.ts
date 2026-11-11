@@ -396,3 +396,64 @@ test("a post-tool hook sees the result and cannot break the turn", async () => {
   assert.equal(result.terminalReason, "completed");
   assert.deepEqual(observed, ["content"]);
 });
+
+test("a malformed tool call becomes a tool error the model can correct", async () => {
+  // parseArguments returned {} for a truncated or non-object payload, so the tool
+  // ran with no arguments (or its defaults) instead of reporting the error.
+  // parseArguments 对截断或非对象载荷返回 {}，于是工具在无参数（或默认值）下运行，而不是报告错误。
+  let executed = 0;
+  const model = scriptedModel([
+    { content: null, toolCalls: [{ id: "t1", name: "read_file", arguments: "{\"path\": \"src/a" }] },
+    { content: "done", toolCalls: [] },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    tools: [tool("read_file", async () => { executed += 1; return { content: "should not run" }; })],
+    messages: [userMessage("read it")],
+  });
+  assert.equal(result.terminalReason, "completed");
+  assert.equal(executed, 0, "a malformed call must not execute the tool");
+  const message = result.messages.find((item) => item.role === "tool");
+  assert.match(String(message?.content), /Unterminated string|JSON object/);
+});
+
+test("a timed-out call is retried while a user abort is not", async () => {
+  let attempts = 0;
+  const model: AgentModel = {
+    async complete() {
+      attempts += 1;
+      if (attempts === 1) throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      return { content: "ok", toolCalls: [] };
+    },
+  };
+  const result = await runAgentLoop({
+    model,
+    tools: [],
+    messages: [userMessage("hi")],
+    retry: { maxAttempts: 2, baseDelayMs: 0 },
+  });
+  assert.equal(attempts, 2, "a timeout is retryable");
+  assert.equal(result.reply, "ok");
+
+  let abortedAttempts = 0;
+  const aborting: AgentModel = {
+    async complete() { abortedAttempts += 1; throw new DOMException("cancelled", "AbortError"); },
+  };
+  const aborted = await runAgentLoop({ model: aborting, tools: [], messages: [userMessage("hi")], retry: { maxAttempts: 3, baseDelayMs: 0 } });
+  assert.equal(abortedAttempts, 1, "an abort is not retried");
+  assert.equal(aborted.terminalReason, "model_error");
+});
+
+test("an answer cut off by the output limit is a failure, not a completed turn", async () => {
+  // finish_reason was parsed by no one, so a message truncated mid-sentence
+  // was reported as a finished answer.
+  // 没有任何一方读取 finish_reason，因此在句子中间被截断的消息被报成了完整回答。
+  const model: AgentModel = {
+    async complete() {
+      return { content: "The fix is to change the", toolCalls: [], finishReason: "length" };
+    },
+  };
+  const result = await runAgentLoop({ model, tools: [], messages: [userMessage("fix it")] });
+  assert.equal(result.terminalReason, "model_error");
+  assert.match(result.error ?? "", /cut off/);
+});

@@ -2093,11 +2093,16 @@ async function handleRequest(
   const approvalMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/approve$/);
   if (request.method === "POST" && approvalMatch?.[1] !== undefined) {
     try {
+      // An approval issued for one step must not approve another.
+      // 针对某一步签发的审批不得批准另一步。
+      const body = await readJsonBody(request);
+      const expectedStepId = typeof body.stepId === "string" && body.stepId.trim().length > 0 ? body.stepId.trim() : undefined;
       const result = await approveQueryRun(
         context.dataDirectory,
         decodeURIComponent(approvalMatch[1]),
         await context.agentSettings.get(),
         { workspacePath: context.workspacePath },
+        expectedStepId,
       );
       sendJson(response, 200, result);
     } catch (error: unknown) {
@@ -3031,6 +3036,10 @@ function headerValue(value: string | string[] | undefined): string | undefined {
 function runActionStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : "";
   if (message.startsWith("Unknown run:")) return 404;
+  // A step mismatch is a conflict with the run's current state, not a server
+  // error: the approval no longer describes what is waiting.
+  // 步骤不匹配是与 Run 当前状态的冲突，而不是服务器错误：该审批已不再描述正在等待的东西。
+  if (message.includes("was issued for step")) return 409;
   if (message.includes("is not waiting for an approval") || message.includes("is not waiting for review") || message.includes("cannot be cancelled")) return 409;
   return 500;
 }

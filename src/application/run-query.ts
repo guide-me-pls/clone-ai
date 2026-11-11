@@ -49,6 +49,15 @@ export interface QueryWorkflowOptions {
    * Adapter 以避免触达真实 Provider。这里刻意没有隐式的假 Registry 回退。
    */
   agents?: AgentRegistry;
+  /**
+   * Cancels the run. A caller that stops waiting — the Main Agent's
+   * `dispatch_task`, or a desktop turn the owner stopped — must be able to stop
+   * the work it started; before this, the run kept executing after the turn
+   * ended.
+   * 取消 Run。停止等待的调用方——Main Agent 的 `dispatch_task`，或所有者停止的桌面回合——必须
+   * 能停掉它启动的工作；此前回合结束后 Run 仍继续执行。
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -219,7 +228,7 @@ async function runQueryWithin(
     workspacePath,
     failureCatalog,
   });
-  const result = await executeClaimingRun(journal, runtime, run.id, registry);
+  const result = await executeClaimingRun(journal, runtime, run.id, registry, options.signal);
   const candidates = result.status === "completed" ? await processMemorySafely(memory, result.run.id) : [];
   return {
     ...toQueryResult(runtime, result, candidates.length),
@@ -251,10 +260,18 @@ async function executeClaimingRun(
   runtime: CloneRuntime,
   runId: string,
   registry: AgentRegistry,
+  callerSignal?: AbortSignal,
 ): Promise<DispatchResult> {
   const ownerId = `direct-${process.pid}-${randomUUID().slice(0, 8)}`;
   const leaseMs = 10 * 60_000;
   const controller = new AbortController();
+  // A caller that stops waiting aborts the run it started. The lease-renewal
+  // controller below is this function's own; forwarding keeps one abort path.
+  // 停止等待的调用方中止它启动的 Run。下面的租约续期 controller 属于本函数自身；转发让
+  // abort 只有一条路径。
+  const forwardAbort = (): void => controller.abort(callerSignal?.reason);
+  if (callerSignal?.aborted === true) forwardAbort();
+  else callerSignal?.addEventListener("abort", forwardAbort, { once: true });
   let ownsClaim = false;
   if (journal.claimRun !== undefined) {
     const claim = await journal.claimRun({ runId, ownerId, leaseMs });
@@ -284,6 +301,7 @@ async function executeClaimingRun(
     }
     return await runtime.execute(runId, registry, { signal: controller.signal, ...(ownsClaim ? { ownerId } : {}) });
   } finally {
+    callerSignal?.removeEventListener("abort", forwardAbort);
     clearInterval(renew);
     await journal.releaseClaim?.({ runId, ownerId })?.catch(() => undefined);
   }
@@ -304,6 +322,14 @@ export async function approveQueryRun(
   runId: string,
   settings?: CloneSettings,
   options: QueryWorkflowOptions = {},
+  /**
+   * The step the approval was issued for. An approval code is a decision about
+   * one step; approving whatever is active let a stale code approve a step it
+   * never described.
+   * 审批签发时所针对的步骤。审批码是对某一步的决定；放行当前活动步骤，会让一个过期的审批码
+   * 批准它从未描述过的步骤。
+   */
+  expectedStepId?: string,
 ): Promise<QueryRunResult> {
   const assembly = await createRuntimeAssembly({
     dataDirectory,
@@ -315,6 +341,9 @@ export async function approveQueryRun(
     const run = runtime.getRun(runId);
     if (run.status !== "waiting_approval" || run.activeStepId === undefined) {
       throw new Error(`Run ${runId} is not waiting for an approval.`);
+    }
+    if (expectedStepId !== undefined && run.activeStepId !== expectedStepId) {
+      throw new Error(`This approval was issued for step ${expectedStepId}, but run ${runId} is waiting on ${run.activeStepId}.`);
     }
 
     await runtime.grantApproval(run.id, run.activeStepId, "Approved from the local desktop companion.");

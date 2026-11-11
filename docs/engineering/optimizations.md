@@ -71,6 +71,51 @@ file keeps every attempt, including the ones that did not work.
   workflow the remote host supported, revisit that one decision; the rest of
   the merge is structural.
 
+### 2026-11-11 — Closing the audit's remaining high and medium defects
+
+- **Goal / hypothesis:** after the first repair batch, eleven confirmed findings
+  remained: a policy write that could resurrect a revoked rule, an approval that
+  applied to the wrong step, four loop defects, five MCP defects, and two memory
+  defects. Each has a reproduction that fails before the change.
+- **Trade-off:** [a decision is applied to the file it can see, and an approval
+  names its step](../architecture/trade-offs.md#2026-11-11--a-decision-is-applied-to-the-file-it-can-see-and-an-approval-names-its-step).
+- **Change:** `StandingPolicyStore` mutates inside its write queue
+  (`#mutate`); `approveQueryRun` and the companion route carry `stepId` and
+  refuse a mismatch with 409, and the WhatsApp bridge sends the step its code
+  names; `runQuery` accepts a `CancellationToken`; `dispatchTaskTool` threads it;
+  `isRetryableModelError` recognises `TimeoutError`; `parseArguments` refuses
+  malformed JSON and the loop turns that into a tool result; the loop reads
+  `finishReason` from both providers and fails a truncated answer; MCP servers
+  get `environmentFor(...)` instead of the owner's environment, duplicate
+  server/tool names are refused, `sanitizeObserved` preserves newlines and
+  indentation, and both clients signal the process group; memory context caps
+  each item at 400 characters and `recall` returns the full entry so `type`,
+  `status` and `createdAt` survive.
+- **Eval:** `npm test` → **646 tests, 646 pass, 0 fail** (before this batch:
+  634). New deterministic coverage: two-store resurrection
+  (`test/authority.test.ts`), step-mismatch approval
+  (`test/companion-control-plane.test.ts`), caller-cancels-run
+  (`test/run-query-routing.test.ts`), malformed arguments and truncated answers
+  (`test/agent-loop.test.ts`), stopped-turn dispatch (`test/dispatch-task.test.ts`),
+  environment narrowing, duplicate names, formatting preservation
+  (`test/mcp-host.test.ts`, `test/mcp.test.ts`), per-item memory cap and metadata
+  (`test/memory-context.test.ts`). `npm run typecheck` → exit 0;
+  `npm run gate` → PASS, baseline unchanged.
+- **Benchmark run:** none. These are contract and correctness fixes; a live
+  model run would not distinguish them.
+- **Execution chain:** worked through the audit's verified list in four groups
+  (authority, loop, MCP, memory), one reproduction per fix. Failures fixed in
+  place: `#mutate` had to tolerate a missing `policies.json`; the environment
+  helper had to accept both the name-array and value-object config shapes; three
+  test expectations needed the real event names (`run.status_changed`, not
+  `execution.completed`) and the real JSON error text.
+- **Pros:** every fix has a failing-first reproduction, so the suite now pins
+  the behaviour the audit described.
+- **Cons / next time:** the remaining medium findings (`ctx-*`, `T8`, `T13`,
+  `REL-07`, `REL-10`, `F9`, `F13`) are still open; `dispatch_task` remains
+  synchronous even though it is now cancellable; MCP has no HTTP handshake.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-11 — Making the repair lane reviewable
 
 - **Goal / hypothesis:** the repair lane could not be reviewed. Its runs reached

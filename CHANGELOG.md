@@ -6,6 +6,19 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The remaining high and medium defects from the audit
+
+Eleven confirmed findings closed, each with a reproduction that failed first. A standing-policy write could resurrect a revoked policy (two instances each computed the next config from their own copy); approvals now name the step they were issued for and a mismatch is a 409; `runQuery` and `dispatch_task` accept a cancellation signal, so a stopped turn stops the work it started; the loop retries `TimeoutError` but not `AbortError`, refuses malformed tool arguments instead of running the tool with `{}`, and treats `finish_reason: length` as a failed turn; MCP servers receive only the environment they declared, duplicate server and tool names are refused, framed output keeps its formatting, and a server's process group is killed; memory context caps each item at 400 characters and keeps the `type`/`status`/`createdAt` the builder classifies by. `npm test` is 646 tests, 646 pass, 0 fail; typecheck and `gate` pass.
+
+审计中已确认的 11 条高危与中危缺陷已关闭，每条都有先失败的复现。策略写入可能复活已撤销的策略
+（两个实例各自基于自己的副本算出下一份配置）；审批现在点名它签发时对应的步骤，不匹配返回 409；
+`runQuery` 与 `dispatch_task` 接受取消信号，停止的回合会停掉它启动的工作；循环重试
+`TimeoutError` 但不重试 `AbortError`，拒绝格式错误的工具参数而不是以 `{}` 运行工具，并把
+`finish_reason: length` 当作失败回合；MCP 服务器只收到它声明的环境变量，重复的服务器名与工具名
+被拒绝，包裹输出保留格式，服务器的进程组会被终止；记忆上下文每条上限 400 字符，并保留构建器用于
+分类的 `type`/`status`/`createdAt`。`npm test` 为 646 个测试、646 通过、0 失败；typecheck 与
+`gate` 通过。
+
 ### The repair lane repairs: token compaction now runs in production
 
 clone-ai's own repair lane, driven by DeepSeek V4.1 Flash at `reasoning_effort=max`, produced the fix for the audit's most-referenced defect: token-aware compaction was unreachable because no caller passed `contextWindow`. The patch makes compaction always on, with a 128,000-token default, so no product surface can fall back to the character budget or truncate without an audit record. The working agent verified it functionally only: the regression case is red on the previous revision and green with the patch, and the full suite (634 tests), typecheck and `gate` pass. Getting there required fixing the lane itself — the worker now streams `model_call` / `tool_started` / `tool_completed` to the Kernel, the prompts name the files a trace names and say when to stop, the fix phase reads only the case this repair created, `read_file` returns windowed views with the total line count, and `write_file` refuses fragments that would discard most of an existing file. Those five fixes came from reviewing five live runs; the first of them destroyed `native-runtime.ts` by writing an 8,000-character prefix back over the file.

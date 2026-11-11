@@ -104,10 +104,12 @@ export class OpenAiCompatibleClient implements AgentModel {
           content?: string | null;
           tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
         };
+        finish_reason?: string | null;
       }>;
       usage?: unknown;
     };
     const message = body.choices?.[0]?.message;
+    const finishReason = typeof body.choices?.[0]?.finish_reason === "string" ? body.choices[0].finish_reason : undefined;
     if (message === undefined) throw new Error("The provider returned no message.");
     const content = message.content ?? null;
     if (typeof content === "string" && content.length > 0) input.onDelta?.(content);
@@ -121,6 +123,7 @@ export class OpenAiCompatibleClient implements AgentModel {
     return {
       content,
       toolCalls,
+      ...(finishReason === undefined ? {} : { finishReason }),
       ...(usage === undefined ? {} : { usage }),
     };
   }
