@@ -401,7 +401,10 @@ export class McpClient implements McpClientLike {
 }
 
 /** Only the variable names a server declared, taken from the owner's environment. 只取服务器声明的变量名，值来自所有者环境。 */
-export function environmentFor(server: McpServerConfig, source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function environmentFor(
+  server: { env?: string[] | Record<string, string | undefined> },
+  source: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {
     PATH: source.PATH,
     HOME: source.HOME,
@@ -409,9 +412,19 @@ export function environmentFor(server: McpServerConfig, source: NodeJS.ProcessEn
     ...(source.TEMP === undefined ? {} : { TEMP: source.TEMP }),
     ...(source.LANG === undefined ? {} : { LANG: source.LANG }),
   };
-  for (const name of server.env ?? []) {
-    const value = source[name];
-    if (value !== undefined) environment[name] = value;
+  // A server may declare names (the MCP config format) or explicit values (the
+  // programmatic host format). Both end up as a narrow environment; neither
+  // hands over the rest of the owner's variables.
+  // 服务器可以声明变量名（MCP 配置格式）或显式值（程序化宿主格式）。两者都只得到窄环境；
+  // 都不会交出所有者的其余变量。
+  const declared = Array.isArray(server.env) ? server.env : Object.entries(server.env ?? {});
+  for (const entry of declared) {
+    if (typeof entry === "string") {
+      const value = source[entry];
+      if (value !== undefined) environment[entry] = value;
+    } else if (typeof entry[1] === "string") {
+      environment[entry[0]] = entry[1];
+    }
   }
   return environment;
 }
@@ -436,6 +449,12 @@ class StdioConnection {
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      // Own process group so the whole tree can be terminated. A server that
+      // spawns helpers (`npx`, a wrapper script) otherwise leaves them running
+      // after the step; killing only the direct child orphaned them.
+      // 独立进程组，以便终止整棵进程树。否则启动了辅助进程（`npx`、包装脚本）的服务器会在步骤
+      // 结束后留下它们；只杀掉直接子进程会让它们成为孤儿。
+      ...(process.platform === "win32" ? {} : { detached: true }),
     }) as ChildProcessWithoutNullStreams;
     // A server that half-closes stdin makes the next write emit EPIPE on the
     // stream; without a listener that is an unhandled 'error' and the daemon
@@ -482,11 +501,23 @@ class StdioConnection {
   async close(): Promise<void> {
     this.#closed = true;
     this.#failAll(new Error("the MCP client was closed"));
-    if (this.#child.exitCode !== null) return;
-    this.#child.kill("SIGTERM");
+    const child = this.#child;
+    if (child.exitCode !== null || child.pid === undefined) return;
+    // Signal the group, not the process: a server's own children must not
+    // outlive the step.
+    // 向进程组发信号，而不是单个进程：服务器自己的子进程不能活过步骤。
+    const signal = (name: NodeJS.Signals): void => {
+      try {
+        if (process.platform === "win32") child.kill(name);
+        else process.kill(-child.pid!, name);
+      } catch {
+        child.kill(name);
+      }
+    };
+    signal("SIGTERM");
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => { this.#child.kill("SIGKILL"); resolve(); }, 2_000);
-      this.#child.once("close", () => { clearTimeout(timer); resolve(); });
+      const timer = setTimeout(() => { signal("SIGKILL"); resolve(); }, 2_000);
+      child.once("close", () => { clearTimeout(timer); resolve(); });
     });
   }
 

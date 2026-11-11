@@ -17,6 +17,8 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
+import { environmentFor } from "../workers/mcp-client.ts";
+
 export interface McpServerConfig {
   /** A stable name; tools are exposed as `mcp__<server>__<tool>`. 稳定名称；工具暴露为 `mcp__<server>__<tool>`。 */
   name: string;
@@ -95,8 +97,17 @@ export class McpServerConnection {
     if (this.#failed !== undefined) throw new McpError(`MCP server ${this.#config.name} failed: ${this.#failed}`);
     const child = spawn(this.#config.command, this.#config.args ?? [], {
       cwd: this.#config.cwd ?? process.cwd(),
-      env: { ...process.env, ...this.#config.env },
+      // The owner's whole environment includes API keys. A server receives the
+      // same narrow set the worker's MCP client forwards (PATH, HOME and the
+      // names it declared), so a third-party server cannot read credentials it
+      // was never granted.
+      // 所有者的完整环境包含 API 密钥。服务器只收到 Worker 的 MCP 客户端转发的同一个窄集合
+      // （PATH、HOME 及它自己声明的变量名），因此第三方服务器读不到未被授予的凭据。
+      env: environmentFor({ env: this.#config.env ?? {} }, process.env),
       stdio: ["pipe", "pipe", "pipe"],
+      // Own process group so the whole tree can be terminated.
+      // 独立进程组，以便终止整棵进程树。
+      ...(process.platform === "win32" ? {} : { detached: true }),
     });
     this.#child = child;
     // An EPIPE on stdin must fail this server, not the process.
@@ -154,17 +165,25 @@ export class McpServerConnection {
       pending.reject(new McpError(`MCP server ${this.#config.name} closed.`));
       this.#pending.delete(id);
     }
-    if (child === undefined || child.exitCode !== null) return;
+    if (child === undefined || child.exitCode !== null || child.pid === undefined) return;
+    const signal = (name: NodeJS.Signals): void => {
+      try {
+        if (process.platform === "win32") child.kill(name);
+        else process.kill(-child.pid!, name);
+      } catch {
+        child.kill(name);
+      }
+    };
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        child.kill("SIGKILL");
+        signal("SIGKILL");
         resolve();
       }, 2_000);
       child.once("exit", () => {
         clearTimeout(timer);
         resolve();
       });
-      child.kill("SIGTERM");
+      signal("SIGTERM");
     });
   }
 
@@ -293,6 +312,19 @@ export class McpHost {
   readonly #failures: Array<{ server: string; reason: string }> = [];
 
   constructor(configs: readonly McpServerConfig[]) {
+    // Two servers with one name would both register tools under the same
+    // prefix, and the loop resolves a duplicate by name (first wins), so one
+    // server's tools silently shadowed the other's. Refusing at construction
+    // makes the configuration error visible where it is written.
+    // 两个同名服务器会把工具注册在同一前缀下，而循环按名解析（先到先得），于是一个服务器的工具
+    // 会静默遮住另一个。在构造时拒绝，让配置错误在书写处就暴露。
+    const names = new Set<string>();
+    for (const config of configs) {
+      const name = config.name.trim();
+      if (name.length === 0) throw new McpError("An MCP server needs a non-empty name.");
+      if (names.has(name)) throw new McpError(`Duplicate MCP server name: ${name}.`);
+      names.add(name);
+    }
     this.#servers = configs.map((config) => new McpServerConnection(config));
   }
 
@@ -314,13 +346,19 @@ export class McpHost {
 
   /** Every tool from every connected server, namespaced. 每个已连接服务器的全部工具，带命名空间。 */
   tools(): Array<{ name: string; description: string; parameters: Record<string, unknown>; server: string; tool: string }> {
-    return this.#servers.flatMap((server) => server.tools.map((tool) => ({
-      name: mcpToolName(server.name, tool.name),
-      description: tool.description,
-      parameters: tool.inputSchema,
-      server: server.name,
-      tool: tool.name,
-    })));
+    const seen = new Set<string>();
+    return this.#servers.flatMap((server) => server.tools.flatMap((tool) => {
+      const name = mcpToolName(server.name, tool.name);
+      if (seen.has(name)) {
+        // A provider rejects two functions with one name, and dropping the
+        // duplicate silently would hide which server lost its tool.
+        // Provider 会拒绝两个同名函数，而静默丢弃重复项会掩盖是哪个服务器失去了工具。
+        this.#failures.push({ server: server.name, reason: `duplicate tool name ${tool.name}` });
+        return [];
+      }
+      seen.add(name);
+      return [{ name, description: tool.description, parameters: tool.inputSchema, server: server.name, tool: tool.name }];
+    }));
   }
 
   /** Calls a namespaced tool. 调用一个命名空间工具。 */

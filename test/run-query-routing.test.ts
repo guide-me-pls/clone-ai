@@ -234,3 +234,31 @@ test("a disabled worker cannot be selected even when it is the best match", asyn
   assert.equal(result.status, "blocked");
   assert.equal(result.blocked?.code, "REQUESTED_AGENT_DISABLED");
 });
+
+test("a caller that stops waiting aborts the run it started", async (t) => {
+  // runQuery accepted no signal, so a stopped desktop turn or a cancelled
+  // dispatch_task left the run executing.
+  // runQuery 以前不接受 signal，因此停止的桌面回合或取消的 dispatch_task 会让 Run 继续执行。
+  const dataDirectory = await home(t);
+  const controller = new AbortController();
+  controller.abort(new Error("the owner stopped the turn"));
+  // An aborted caller ends the attempt, and the Kernel refuses to finish a run
+  // whose execution claim is gone; either way no completion is recorded.
+  // 中止的调用方结束该次尝试，Kernel 拒绝完成已失去执行领取的 Run；两种情况下都不会记录完成。
+  await assert.rejects(
+    () => runQuery(
+      dataDirectory,
+      "请只回复：收到。",
+      {},
+      undefined,
+      { agents: createScriptedAgentRegistry(), workspacePath: dataDirectory, signal: controller.signal },
+    ),
+    /lost its execution claim|cancelled|aborted/i,
+  );
+  const events = await journalEvents(dataDirectory);
+  assert.equal(
+    events.some((event) => event.type === "run.status_changed" && (event.payload as { status?: string }).status === "completed"),
+    false,
+    "an aborted run must not report completion",
+  );
+});

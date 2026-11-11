@@ -60,6 +60,14 @@ const BUDGET_WEIGHTS: Record<MemoryEvidence["kind"], number> = {
 const CLASS_ORDER: readonly MemoryEvidence["kind"][] = ["user_preference", "task_outcome", "project_fact", "agent_outcome"];
 
 const DEFAULT_MAX_CHARACTERS = 1_200;
+/**
+ * The most one memory may contribute. An owner-authored memory can be a page;
+ * the model needs the fact, not the page, and the full text stays in the store
+ * for `read_memory`.
+ * 单条记忆最多贡献多少。所有者撰写的记忆可能是一整页；模型需要的是事实而不是整页，全文留在
+ * 存储里供 `read_memory` 读取。
+ */
+const PER_ITEM_CHARACTERS = 400;
 const DEFAULT_MAX_ITEMS = 6;
 const DEFAULT_MIN_SCORE = 0.15;
 
@@ -122,7 +130,12 @@ export function buildMemoryContextFromCandidates(
     .filter((candidate) => candidate.score >= minScore)
     .filter((candidate) => candidate.status === undefined || candidate.status === "active")
     .filter((candidate) => candidate.sensitivity !== "secret")
-    .map((candidate) => ({ ...candidate, summary: sanitize(candidate.summary) }))));
+    // One memory is one line. Without a per-item cap a single long memory
+    // consumed the whole character budget, so the classes after it were starved
+    // and the advertised total was the only bound that ever applied.
+    // 一条记忆就是一行。没有单条上限时，一条超长记忆会吃掉整个字符预算，其后的类别全被饿死，
+    // 而宣传的总量成了唯一真正生效的界限。
+    .map((candidate) => ({ ...candidate, summary: sanitize(candidate.summary).slice(0, PER_ITEM_CHARACTERS) }))));
   if (relevant.length === 0) return undefined;
 
   // Fill class by class, each capped at its share of what is left, so the

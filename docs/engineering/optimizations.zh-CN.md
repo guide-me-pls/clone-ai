@@ -51,6 +51,36 @@
 - **推翻条件：** 如果本地 MCP 客户端更严格的模型挡住了远端宿主支持的工作流，只重新审视那一个
   决定；合并的其余部分是结构性的。
 
+### 2026-11-11 — 关闭审计中剩余的高危与中危缺陷
+
+- **目标 / 假设：** 第一批修复之后，仍有 11 条已确认发现：可复活已撤销策略的策略写入、作用于
+  错误步骤的审批、四个循环缺陷、五个 MCP 缺陷、两个记忆缺陷。每条都有在修复前失败的复现。
+- **取舍：** [决定作用于它能看到的文件，审批点名它的步骤](../architecture/trade-offs.zh-CN.md#2026-11-11--决定作用于它能看到的文件审批点名它的步骤)。
+- **变更：** `StandingPolicyStore` 在写队列内变更（`#mutate`）；`approveQueryRun` 与 companion
+  路由携带 `stepId` 并以 409 拒绝不匹配，WhatsApp 桥发送其审批码点名的步骤；`runQuery` 接受
+  取消信号；`dispatchTaskTool` 透传它；`isRetryableModelError` 识别 `TimeoutError`；
+  `parseArguments` 拒绝格式错误的 JSON，循环把它变成工具结果；循环从两个 Provider 读取
+  `finishReason` 并把截断的回答判为失败；MCP 服务器收到 `environmentFor(...)` 而不是所有者的
+  环境，重复的服务器/工具名被拒绝，`sanitizeObserved` 保留换行与缩进，两个客户端都向进程组发
+  信号；记忆上下文每条上限 400 字符，`recall` 返回完整记录，使 `type`、`status` 与 `createdAt`
+  得以保留。
+- **Eval：** `npm test` → **646 个测试、646 通过、0 失败**（本批之前 634）。新增确定性覆盖：
+  双实例复活（`test/authority.test.ts`）、步骤不匹配审批（`test/companion-control-plane.test.ts`）、
+  调用方取消 Run（`test/run-query-routing.test.ts`）、格式错误参数与截断回答
+  （`test/agent-loop.test.ts`）、停止回合的派发（`test/dispatch-task.test.ts`）、环境收窄、
+  重复名、格式保留（`test/mcp-host.test.ts`、`test/mcp.test.ts`）、单条记忆上限与元数据
+  （`test/memory-context.test.ts`）。`npm run typecheck` → 退出 0；`npm run gate` → PASS，
+  基线未变。
+- **Benchmark run：** 无。这些是契约与正确性修复；实机模型运行无法区分它们。
+- **执行链路：** 按审计的已核实清单分四组推进（授权、循环、MCP、记忆），每个修复一条复现。
+  就地修复的失败：`#mutate` 必须容忍 `policies.json` 不存在；环境辅助函数必须同时接受变量名数组
+  与值对象两种配置；三处测试断言需要真实事件名（`run.status_changed` 而非
+  `execution.completed`）与真实的 JSON 错误文本。
+- **优点：** 每个修复都有先失败的复现，套件因此钉住了审计描述的行为。
+- **缺点 / 下次：** 剩余中危（`ctx-*`、`T8`、`T13`、`REL-07`、`REL-10`、`F9`、`F13`）仍未处理；
+  `dispatch_task` 虽然现在可取消，仍是同步的；MCP 没有 HTTP 握手。
+- **推翻条件：** 见取舍条目。
+
 ### 2026-11-10 — 关闭审计中已核实的缺陷
 
 - **目标 / 假设：** 对照 Claude Code 2.1.319 的六维审计确认了 78 条缺陷。安全问题不是假设：
