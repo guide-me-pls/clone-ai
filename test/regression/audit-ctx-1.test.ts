@@ -21,6 +21,7 @@ import test from "node:test";
 
 import { createJournalStore } from "../../src/core/sqlite-journal.ts";
 import { runNativeMainAgentTurn } from "../../src/main-agent/native-runtime.ts";
+import { appendMainAgentTurnRecord } from "../../src/main-agent/turn-audit.ts";
 
 function sseResponse(chunks: unknown[]): Response {
   const body = `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`;
@@ -41,10 +42,26 @@ test("a production Main Agent turn records context compaction without an explici
     ]);
   }) as unknown as typeof fetch;
 
-  // ~360k characters is ~90k estimated tokens: past the default 128k window's
-  // compact level (86,400) and below its blocked level (105,000).
-  // 约 90k token：越过压缩线（86,400）而不到阻断线（105,000）。
-  const longText = `Summarize this log.\n${"a".repeat(360_000)}`;
+  // A long *history* with a normal current turn: 12 prior turns of 15k
+  // characters is ~90k estimated tokens, past the default 128k window's compact
+  // level (86,400) and below its blocked level (105,000). A current turn that
+  // is itself over the window cannot be compacted — the tail is the message —
+  // so the case must exercise history, which is what compaction can drop.
+  // 长「历史」加正常的当前问题：约 360k 字符的历史约 90k token，越过默认 128k 窗口的压缩线
+  // （86,400）而不到阻断线（105,000）。当前一轮本身超过窗口时无法压缩——尾部就是这条消息——
+  // 因此用例必须针对历史，那才是压缩能丢弃的部分。
+  const filler = "x".repeat(15_000);
+  for (let index = 0; index < 12; index += 1) {
+    await appendMainAgentTurnRecord(directory, {
+      id: `prior-${index}`,
+      text: `question ${index} ${filler}`,
+      status: "completed",
+      startedAt: new Date(Date.now() - (12 - index) * 60_000).toISOString(),
+      completedAt: new Date(Date.now() - (12 - index) * 60_000 + 1_000).toISOString(),
+      reply: `answer ${index} ${filler}`,
+    });
+  }
+  const longText = "Summarize this log.";
 
   const result = await runNativeMainAgentTurn({
     dataDirectory: directory,
