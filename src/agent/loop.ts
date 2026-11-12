@@ -14,6 +14,7 @@
  * 钩子。Provider 只是适配器，不拥有循环。
  */
 import type { ModelUsage } from "../core/contracts.ts";
+import { countCharacters, estimateTokens, type TokenCalibrator } from "./token-estimate.ts";
 
 /** A text or image part in a user message. 用户消息中的文本或图片片段。 */
 export type AgentContentPart =
@@ -200,6 +201,14 @@ export interface AgentLoopOptions {
   compact?: (messages: AgentMessage[], context: { round: number; estimatedTokens: number }) => Promise<AgentMessage[]>;
   compactThresholdTokens?: number;
   estimateTokens?: (messages: AgentMessage[]) => number;
+  /**
+   * Learns the provider's real characters-per-token from its usage reports, so
+   * the estimate is calibrated instead of guessed. Without one the loop uses
+   * the conservative bootstrap ratio.
+   * 从 Provider 的用量报告里学习真实的每 token 字符数，使估算经过标定而不是猜测。
+   * 不提供时循环使用保守的引导比例。
+   */
+  calibrator?: TokenCalibrator;
   retry?: AgentRetryPolicy;
 }
 
@@ -285,6 +294,13 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     }
     usage.modelCalls += 1;
     if (response.usage !== undefined) {
+      // The provider just told us what the request cost; learn from it so the
+      // next estimate is measured rather than guessed.
+      // Provider 刚告诉我们这次请求花了多少；据此学习，使下一次估算是测量而不是猜测。
+      options.calibrator?.observe(
+        countCharacters(messages, tools).characters,
+        response.usage.inputTokens ?? response.usage.totalTokens,
+      );
       usage.inputTokens += response.usage.inputTokens ?? 0;
       usage.outputTokens += response.usage.outputTokens ?? 0;
       usage.totalTokens += response.usage.totalTokens ?? 0;
@@ -765,70 +781,25 @@ async function compactIfNeeded(options: AgentLoopOptions, messages: AgentMessage
 
 /** A rough fallback estimate: four characters per token. 粗略回退估算：每 token 四个字符。 */
 /**
- * Tokens per image, the count providers charge regardless of pixel size.
+ * Estimate the tokens a transcript costs.
  *
- * An appended image arrives as a data URL of up to several megabytes. Dividing
- * that length by four over-counted one screenshot as half a million tokens, so
- * a single image could trip the compaction threshold and the blocked level.
- * 每张图片的 token 数，与像素尺寸无关，由 Provider 按固定值计费。
+ * Delegates to `token-estimate.ts`, which calibrates against the provider's own
+ * `usage.prompt_tokens`: a fixed character ratio is wrong for every model whose
+ * tokenizer differs, and measured on this machine the same Chinese sentence
+ * costs 30% more on one model than another, while code costs twice what Latin
+ * prose does per token.
+ * 估算转录消耗的 token。
  *
- * 附加图片以数 MB 的 data URL 到达。把该长度除以四，会把一张截图算成 50 万 token，
- * 一张图片就足以触发压缩阈值与阻断水位。
+ * 委托给 `token-estimate.ts`，它按 Provider 自己的 `usage.prompt_tokens` 标定：对任何
+ * tokenizer 不同的模型，固定的字符比例都是错的；在本机实测，同一句中文在某个模型上贵 30%，
+ * 而代码每 token 的字符数只有拉丁散文的一半。
  */
-const IMAGE_TOKENS = 1_568;
-
-/**
- * Estimate the tokens a transcript costs, counting what the model is charged for.
- *
- * A byte is not a token: a CJK character is one to two tokens, Latin text is
- * roughly four characters per token, and an image is a fixed count. Dividing
- * the raw length by four under-counted Chinese by about four times, which is
- * exactly the case where compaction has to fire before the request is refused.
- * 估算转录消耗的 token，按模型实际计费的东西来算。
- *
- * 字节不是 token：一个中日韩字符是一到两个 token，拉丁文本约每 token 四字符，图片是固定值。
- * 用原始长度除以四，会把中文低估约四倍，而这正是压缩必须在请求被拒之前触发的场景。
- */
-export function estimateMessages(messages: readonly AgentMessage[], tools: readonly AgentToolSpec[] = []): number {
-  let tokens = 0;
-  const addText = (text: string): void => {
-    // CJK, full-width punctuation and hangul each cost roughly one token; the
-    // rest of the text is Latin-shaped.
-    // 中日韩文字、全角标点与谚文各约一个 token；其余文本按拉丁文估算。
-    let cjk = 0;
-    for (const character of text) {
-      const code = character.codePointAt(0) ?? 0;
-      if ((code >= 0x3040 && code <= 0x30ff) || (code >= 0x3400 && code <= 0x9fff) || (code >= 0xac00 && code <= 0xd7af)
-        || (code >= 0xff00 && code <= 0xffef) || (code >= 0x3000 && code <= 0x303f)) cjk += 1;
-    }
-    tokens += cjk + Math.ceil((text.length - cjk) / 4);
-  };
-  for (const message of messages) {
-    if (typeof message.content === "string") addText(message.content);
-    else if (Array.isArray(message.content)) {
-      for (const part of message.content) {
-        if (part.type === "text") addText(part.text);
-        else tokens += IMAGE_TOKENS;
-      }
-    }
-    for (const call of message.toolCalls ?? []) {
-      addText(call.name);
-      addText(call.arguments);
-    }
-  }
-  // Tool schemas are part of every request and are re-sent each round; a table
-  // of twenty tools is thousands of tokens that the transcript alone never
-  // shows.
-  // 工具 Schema 属于每次请求的一部分，且每轮重发；二十个工具的表就是几千个 token，
-  // 只看转录永远看不到。
-  // 工具 Schema 属于每次请求的一部分，且每轮重发；二十个工具的表就是几千个 token，
-  // 只看转录永远看不到。
-  for (const tool of tools) {
-    addText(tool.name);
-    addText(tool.description);
-    if (tool.parameters !== undefined) addText(JSON.stringify(tool.parameters));
-  }
-  return tokens;
+export function estimateMessages(
+  messages: readonly AgentMessage[],
+  tools: readonly AgentToolSpec[] = [],
+  calibrator?: TokenCalibrator,
+): number {
+  return estimateTokens(messages, tools, calibrator).tokens;
 }
 
 /**

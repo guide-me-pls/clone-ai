@@ -30,6 +30,34 @@ exceed their round budget, raise the default window rather than removing the
 total. If fragment refusal blocks a legitimate regeneration, give the worker a
 new-file mode instead of loosening the check.
 
+## 2026-11-12 — Tokens are counted by the tokenizer, calibrated from usage
+
+**Decision.** Replace the hand-written character-class ratio with a calibrator
+that learns the provider's real characters-per-token from `usage.prompt_tokens`,
+starting from the lowest measured bootstrap ratio (3.15) and smoothing each new
+sample. Every estimate reports whether it is `bootstrap` or `calibrated` and how
+many samples it has seen.
+
+**Evidence.** Measured against this machine's gateway, the same Chinese sentence
+costs 265 tokens on `kimi-k3.1-pro` and 346 on `gpt-6.1-terra` — 30% apart — and
+a code sample costs 2.0–2.6 characters per token where Latin prose costs
+3.2–4.4. The character-class estimate I wrote before this used one fixed
+coefficient for CJK and four for Latin, so it was wrong for code by roughly 2×
+and wrong for one of the two models by 30%. The provider already reports the
+true number on every response, so guessing was never necessary.
+
+**What it costs.** The first request of a process is still an estimate; it
+converges after one response. Different providers on one clone home share the
+calibrator, so a turn that switches models carries a ratio learned elsewhere
+until the next report corrects it. A provider that reports a ratio outside 1–12
+characters per token is ignored, which also ignores a request whose prompt was
+mostly cached.
+
+**Reversal condition.** If a provider exposes a token-count endpoint, call it
+before sending instead of calibrating. If per-model calibration matters (a clone
+home that rotates models every turn), key the calibrator by model id — the
+current single instance is the simplification, not the requirement.
+
 ## 2026-11-12 — The token count is honest, and MCP is a real client
 
 **Decision.** The loop estimates tokens by character class (CJK and full-width

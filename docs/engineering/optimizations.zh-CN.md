@@ -51,6 +51,33 @@
 - **推翻条件：** 如果本地 MCP 客户端更严格的模型挡住了远端宿主支持的工作流，只重新审视那一个
   决定；合并的其余部分是结构性的。
 
+### 2026-11-12 — 用 Provider 的用量标定 token，而不是猜
+
+- **目标 / 假设：** 上一条把"长度除以四"换成了按字符类别的估算，所有者正确地否定了它：token 是
+  tokenizer 的属性，而我用的类别只在一个模型上测过。估算必须按 Provider 自己的
+  `usage.prompt_tokens` 标定。
+- **取舍：** [token 由 tokenizer 决定，并用 usage 标定](../architecture/trade-offs.zh-CN.md#2026-11-12--token-由-tokenizer-决定并用-usage-标定)。
+- **变更：** 新增 `src/agent/token-estimate.ts`（`TokenCalibrator`、`countCharacters`、
+  `estimateTokens`）；循环在每次压缩检查前把响应的 `inputTokens` 喂给标定器，
+  `estimateMessages` 委托给它。`TokenCalibrator` 以 3.15 字符/token 起步（实测最低值），
+  新样本按 0.3 平滑，并忽略每 token 1–12 字符之外的报告。
+- **Eval：** 对本机网关实测三个模型、四种文本形状：拉丁 3.15–4.35 字符/token；中文 0.87–1.29；
+  混排 1.35–2.30；代码 2.03–2.59。同一句中文在 `kimi-k3.1-pro` 与 `gpt-6.1-terra` 之间相差
+  30%，代码的每 token 字符数约为旧"四字符"规则的一半。`npm test` → **649 个测试、649 通过、
+  0 失败**；typecheck 与 `gate` 通过。回归用例现在报告真实的 `prompt_tokens`，并仍断言压缩记录
+  出现。
+- **Benchmark run：** 上面的测量就是 benchmark——三个模型
+  （`360/deepseek/deepseek-v4.1-flash`、`360/moonshotai/kimi-k3.1-pro`、
+  `360/openai/gpt-6.1-terra`）经 `http://127.0.0.1:3425/v1/chat/completions`，四个固定样本，
+  `max_tokens: 1`，读取 `usage.prompt_tokens`。没有采样或温度参数；数字是 Provider 自己的报告。
+- **执行链路：** 先写测量，再写标定器，然后接入循环；两个既有测试需要更新，因为估算的数值行为
+  变了，其中一个夹具对 288k 字符的提示词报告了不可能的 10 个 token。
+- **优点：** 估算会收敛到模型实际收取的量，并如实标注（`source: "calibrated"`），而不是把猜测
+  当作测量。
+- **缺点 / 下次：** 进程的第一次请求仍是猜测；共用同一个 clone home 的 Provider 共用一个标定器。
+  我应当在写字符类别版本之前测量，而不是之后。
+- **推翻条件：** 见取舍条目。
+
 ### 2026-11-12 — 诚实的 token 计数与真正的 MCP 客户端
 
 - **目标 / 假设：** 审计中剩余的循环与 MCP 发现是同一个主题：harness 低估了它发出的东西，也
