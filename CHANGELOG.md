@@ -6,6 +6,17 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Tokens are calibrated from the provider, not guessed
+
+The token estimate was a character ratio, and a ratio is a property of the tokenizer: measured against this machine's gateway, the same Chinese sentence costs 265 tokens on `kimi-k3.1-pro` and 346 on `gpt-6.1-terra` (30% apart), and a code sample costs 2.0–2.6 characters per token where Latin prose costs 3.2–4.4. `src/agent/token-estimate.ts` now learns the real ratio from `usage.prompt_tokens`, starting at the lowest measured value (3.15) and smoothing each sample; every estimate reports whether it is `bootstrap` or `calibrated`. The loop feeds each response into the calibrator before the next compaction check, so the threshold reflects what the model actually charges. `npm test` is 649 tests, 649 pass, 0 fail; typecheck and `gate` pass.
+
+token 估算此前是字符比例，而比例是 tokenizer 的属性：在本机网关上实测，同一句中文在
+`kimi-k3.1-pro` 上是 265 token，在 `gpt-6.1-terra` 上是 346（相差 30%）；一段代码每 token
+2.0–2.6 字符，而拉丁散文是 3.2–4.4。`src/agent/token-estimate.ts` 现在从
+`usage.prompt_tokens` 学习真实比例，以实测最低值（3.15）起步并对每个样本平滑；每次估算都会报告
+它是 `bootstrap` 还是 `calibrated`。循环在每次压缩检查前把响应喂给标定器，使阈值反映模型实际
+收取的量。`npm test` 为 649 个测试、649 通过、0 失败；typecheck 与 `gate` 通过。
+
 ### Honest token accounting and a real MCP client
 
 The loop now estimates tokens by character class — CJK and full-width punctuation one token each, Latin four characters per token — charges a fixed 1,568 tokens per image, and includes the tool schemas it re-sends every round. The native runtime no longer pre-truncates history: `buildHistory` had capped each record at 4,000 characters and the whole history at 12,000, so the transcript the loop measured never crossed the token threshold and compaction had never run in production. A compaction that removes nothing now ends the turn with `budget_exhausted` instead of being journalled again. The HTTP MCP transport performs the `initialize` / `notifications/initialized` handshake and reads a streamed SSE body event by event until the response id arrives; `mcpToolSpecs` can defer the whole declared table behind one `ToolSearch`-style loader. `npm test` is 648 tests, 648 pass, 0 fail; typecheck and `gate` pass.

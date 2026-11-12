@@ -71,6 +71,44 @@ file keeps every attempt, including the ones that did not work.
   workflow the remote host supported, revisit that one decision; the rest of
   the merge is structural.
 
+### 2026-11-12 — Calibrating tokens from the provider instead of guessing
+
+- **Goal / hypothesis:** the previous entry replaced "length / 4" with a
+  character-class estimate, which the owner correctly rejected: a token is a
+  property of the tokenizer, and the classes I used were measured on one model
+  only. The estimate must be calibrated from the provider's own
+  `usage.prompt_tokens`.
+- **Trade-off:** [tokens are counted by the tokenizer, calibrated from
+  usage](../architecture/trade-offs.md#2026-11-12--tokens-are-counted-by-the-tokenizer-calibrated-from-usage).
+- **Change:** added `src/agent/token-estimate.ts` (`TokenCalibrator`,
+  `countCharacters`, `estimateTokens`); the loop feeds every response's
+  `inputTokens` into the calibrator before the next compaction check, and
+  `estimateMessages` delegates to it. `TokenCalibrator` starts at 3.15
+  characters/token — the lowest measured value — and smooths each new sample at
+  0.3, ignoring reports outside 1–12 characters per token.
+- **Eval:** measured the real ratios against the local gateway for three models
+  and four text shapes. Latin: 3.15–4.35 chars/token; Chinese: 0.87–1.29; mixed:
+  1.35–2.30; code: 2.03–2.59. The same Chinese sentence differed by 30% between
+  `kimi-k3.1-pro` and `gpt-6.1-terra`, and code cost ~2× what the old
+  four-per-token rule gave. `npm test` → **649 tests, 649 pass, 0 fail**;
+  typecheck and `gate` pass. The regression case now reports a realistic
+  `prompt_tokens` and asserts the compaction record still appears.
+- **Benchmark run:** the measurement above is the benchmark — three models
+  (`360/deepseek/deepseek-v4.1-flash`, `360/moonshotai/kimi-k3.1-pro`,
+  `360/openai/gpt-6.1-terra`) through `http://127.0.0.1:3425/v1/chat/completions`,
+  four fixed samples, `max_tokens: 1`, reading `usage.prompt_tokens`. No sampling
+  or temperature parameter; the number is the provider's own report.
+- **Execution chain:** wrote the measurement first, then the calibrator, then
+  wired it into the loop; two existing tests needed updating because the
+  estimator's numeric behaviour changed and one fixture reported an implausible
+  10 tokens for a 288k-character prompt.
+- **Pros:** the estimate now converges to whatever the model actually charges,
+  and it says so (`source: "calibrated"`) instead of presenting a guess.
+- **Cons / next time:** the first request of a process is still a guess;
+  providers sharing one clone home share one calibrator. I should have measured
+  before writing the character-class version rather than after.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-12 — Honest token accounting and a real MCP client
 
 - **Goal / hypothesis:** the audit's remaining loop and MCP findings are one

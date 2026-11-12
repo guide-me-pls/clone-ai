@@ -38,7 +38,9 @@ test("a production Main Agent turn records context compaction without an explici
     return sseResponse([
       { choices: [{ delta: { content: "Noted." } }] },
       { choices: [{ delta: {}, finish_reason: "stop" }] },
-      { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } },
+      // The provider reports what it charged; the calibrator learns from it.
+      // Provider 报告它收取的用量；标定器据此学习。
+      { choices: [], usage: { prompt_tokens: 91_000, completion_tokens: 2, total_tokens: 91_002 } },
     ]);
   }) as unknown as typeof fetch;
 
@@ -50,7 +52,12 @@ test("a production Main Agent turn records context compaction without an explici
   // 长「历史」加正常的当前问题：约 360k 字符的历史约 90k token，越过默认 128k 窗口的压缩线
   // （86,400）而不到阻断线（105,000）。当前一轮本身超过窗口时无法压缩——尾部就是这条消息——
   // 因此用例必须针对历史，那才是压缩能丢弃的部分。
-  const filler = "x".repeat(15_000);
+  // 12 turns x 2 messages x 12k characters = 288k characters, which the
+  // conservative bootstrap ratio (3.15 chars/token) reads as ~91k tokens:
+  // past the 128k window's compact level (86,400) and below its blocked level.
+  // 12 轮 x 2 条 x 12k 字符 = 288k 字符，保守的引导比例（3.15 字符/token）读作约 91k token：
+  // 越过 128k 窗口的压缩线（86,400），低于阻断线。
+  const filler = "x".repeat(12_000);
   for (let index = 0; index < 12; index += 1) {
     await appendMainAgentTurnRecord(directory, {
       id: `prior-${index}`,

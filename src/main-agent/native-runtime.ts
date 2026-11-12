@@ -32,6 +32,7 @@ import { McpHost, type McpServerConfig } from "../mcp/mcp-host.ts";
 import { frameMcpOutput } from "../workers/mcp-client.ts";
 import { dispatchTaskTool } from "./tools/dispatch-task.ts";
 import { compactTranscript, contextLevels, contextPressure } from "./context-window.ts";
+import { TokenCalibrator } from "../agent/token-estimate.ts";
 import { recordPromptSnapshot } from "./prompt-snapshot.ts";
 import {
   beginMainAgentTurn,
@@ -286,6 +287,12 @@ ${listing}`;
   const startedAt = Date.now();
   const maxRounds = Math.max(1, options.maxRounds ?? 8);
   const windowPolicy = contextLevels({ contextWindow: options.contextWindow ?? 128_000 });
+  // One calibrator per turn: the provider's own usage reports teach it the real
+  // characters-per-token, so the compaction threshold is measured rather than
+  // guessed from a character ratio that differs by model and script.
+  // 每个回合一个标定器：Provider 自己的用量报告教会它真实的每 token 字符数，使压缩阈值来自
+  // 测量，而不是来自因模型与书写系统而异的字符比例。
+  const calibrator = new TokenCalibrator();
   let agentResult: AgentLoopResult;
   try {
     agentResult = await runAgentLoop({
@@ -299,6 +306,7 @@ ${listing}`;
       // 按 token 的压缩始终启用：调用方不指定窗口时使用默认窗口，因此任何产品入口都不会
       // 悄悄退回字符预算、在没有审计记录的情况下截断。
       compactThresholdTokens: windowPolicy.compactAt,
+      calibrator,
       compact: async (current, context) => {
         const pressure = contextPressure(context.estimatedTokens, windowPolicy);
         if (pressure === "blocked") {

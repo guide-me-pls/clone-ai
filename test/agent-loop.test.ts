@@ -458,22 +458,60 @@ test("an answer cut off by the output limit is a failure, not a completed turn",
   assert.match(result.error ?? "", /cut off/);
 });
 
-test("the token estimate counts CJK, images and tool schemas honestly", async () => {
-  // Dividing raw length by four under-counted Chinese about four times and
-  // over-counted one image by ~500x; the tool table was invisible.
-  // 用原始长度除以四会把中文低估约四倍、把一张图片高估约 500 倍；工具表完全不可见。
-  const { estimateMessages } = await import("../src/agent/loop.ts");
-  const latin = estimateMessages([{ role: "user", content: "abcd".repeat(100) }]);
-  assert.equal(latin, 100, "Latin is four characters per token");
+test("the token estimate is calibrated against the provider, not a fixed ratio", async () => {
+  // Measured on this machine: the same Chinese text costs 265 tokens on
+  // kimi-k3.1-pro and 346 on gpt-6.1-terra, and code costs 2.0-2.6 characters
+  // per token where Latin prose costs 3.2-4.4. A fixed ratio is wrong for at
+  // least two of those, so the estimate must learn from usage.prompt_tokens.
+  // 在本机实测：同一段中文在 kimi-k3.1-pro 上是 265 token、gpt-6.1-terra 上是 346；
+  // 代码每 token 2.0-2.6 字符，而拉丁散文 3.2-4.4。固定比例至少对其中两种是错的，
+  // 因此估算必须从 usage.prompt_tokens 学习。
+  const { TokenCalibrator, estimateTokens, BOOTSTRAP_CHARS_PER_TOKEN } = await import("../src/agent/token-estimate.ts");
+  const text = "abcd".repeat(100);
+  const messages = [{ role: "user" as const, content: text }];
 
-  const chinese = estimateMessages([{ role: "user", content: "测试".repeat(100) }]);
-  assert.ok(chinese >= 190 && chinese <= 210, `CJK is about one token per character, got ${chinese}`);
+  const bootstrap = estimateTokens(messages, []);
+  assert.equal(bootstrap.tokens, Math.ceil(400 / BOOTSTRAP_CHARS_PER_TOKEN));
+  assert.equal(bootstrap.source, "bootstrap", "before any response the estimate says it is a guess");
 
-  const image = estimateMessages([{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/png;base64,${"A".repeat(5_000_000)}` } }] }]);
-  assert.equal(image, 1_568, "an image is a fixed token cost, not its data-URL length");
+  // A provider that charges 2 characters per token teaches a different ratio.
+  // 一个按每 token 2 字符计费的 Provider 会教出不同的比例。
+  const cheap = new TokenCalibrator();
+  cheap.observe(400, 200);
+  assert.equal(cheap.charsPerToken, 2);
+  const calibrated = estimateTokens(messages, [], cheap);
+  assert.equal(calibrated.tokens, 200);
+  assert.equal(calibrated.source, "calibrated");
 
-  const tools = estimateMessages([{ role: "user", content: "hi" }], [
-    { name: "read_file", description: "Read a file.", parallelSafe: true, run: async () => ({ content: "" }) },
-  ]);
-  assert.ok(tools > 1, `the tool table adds tokens beyond the message, got ${tools}`);
+  // A second, different report moves the ratio by the smoothing weight, not to
+  // the new value: one odd request must not throw the estimate.
+  // 第二个不同报告只按平滑权重移动，而不是直接取新值：单个异常请求不能推翻估算。
+  // 第二个不同报告只按平滑权重移动，而不是直接取新值：单个异常请求不能推翻估算。
+  cheap.observe(400, 100);
+  assert.ok(cheap.charsPerToken > 2 && cheap.charsPerToken < 4);
+
+  // An image is a fixed cost, not its data-URL length.
+  // 图片是固定成本，与 data URL 长度无关。
+  const image = estimateTokens([{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/png;base64,${"A".repeat(5_000_000)}` } }] }], []);
+  assert.equal(image.tokens, 1_568);
+
+  // A report outside the plausible band is not for this request.
+  // 超出可信区间的报告不属于这次请求。
+  const guarded = new TokenCalibrator();
+  guarded.observe(400, 1);
+  assert.equal(guarded.samples, 0, "an implausible ratio is ignored");
+});
+
+test("an answer cut off by the output limit is a failure, not a completed turn", async () => {
+  // finish_reason was parsed by no one, so a message truncated mid-sentence
+  // was reported as a finished answer.
+  // 没有任何一方读取 finish_reason，因此在句子中间被截断的消息被报成了完整回答。
+  const model: AgentModel = {
+    async complete() {
+      return { content: "The fix is to change the", toolCalls: [], finishReason: "length" };
+    },
+  };
+  const result = await runAgentLoop({ model, tools: [], messages: [userMessage("fix it")] });
+  assert.equal(result.terminalReason, "model_error");
+  assert.match(result.error ?? "", /cut off/);
 });
