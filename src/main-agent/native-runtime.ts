@@ -252,7 +252,12 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
   const before = new Set((await currentRuns(options.dataDirectory)).map((run) => run.id));
   const history = await buildHistory(options.dataDirectory, turnId, {
     turns: options.historyTurns ?? 24,
-    chars: options.historyChars ?? 12_000,
+    // Token-aware compaction owns the budget. A character cap here would drop
+    // history before the loop could measure it, which is why production never
+    // crossed the token threshold; `historyChars` remains an explicit override.
+    // 预算归 token 感知压缩所有。在这里设字符上限会在循环测量之前丢掉历史，这正是生产路径
+    // 从未越过 token 阈值的原因；`historyChars` 仍是显式覆盖。
+    chars: options.historyChars ?? 0,
   });
   const images = options.images ?? [];
   const currentText = options.text.length > 0
@@ -711,13 +716,23 @@ async function buildHistory(
     .filter((record) => record.id !== excludeTurnId && record.status === "completed" && (record.reply ?? "").trim().length > 0)
     .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))
     .slice(-Math.max(1, options.turns));
+  // No per-record cap here either: a 15k-character turn truncated to 4k made
+  // the loop's token estimate four times too small, so a transcript that
+  // really exceeded the window never reached the compact threshold.
+  // 这里也不做逐条截断：把 15k 字符的回合截到 4k，会让循环的 token 估算小四倍，真正超过
+  // 窗口的转录因此永远到不了压缩阈值。
   const pairs = records.map((record) => ({
-    user: record.text.slice(0, 4_000),
-    assistant: (record.reply ?? "").slice(0, 4_000),
+    user: record.text,
+    assistant: record.reply ?? "",
   }));
   const budget = Math.max(1, options.chars);
   const total = pairs.reduce((sum, pair) => sum + pair.user.length + pair.assistant.length, 0);
-  if (total <= budget) return flattenPairs(pairs);
+  // A caller that compacts by tokens must see the whole history: this
+  // character budget used to truncate first, so the loop's token threshold
+  // could never be crossed and compaction never ran in production.
+  // 按 token 压缩的调用方必须看到完整历史：这个字符预算过去先截断，使循环的 token 阈值永远
+  // 无法触发，压缩在生产路径上从不执行。
+  if (options.chars === 0 || total <= budget) return flattenPairs(pairs);
 
   // Keep the newest pairs verbatim within two thirds of the budget; summarise
   // the rest into a bounded system note. The full text stays in the ledger.

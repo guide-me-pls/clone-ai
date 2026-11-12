@@ -457,3 +457,23 @@ test("an answer cut off by the output limit is a failure, not a completed turn",
   assert.equal(result.terminalReason, "model_error");
   assert.match(result.error ?? "", /cut off/);
 });
+
+test("the token estimate counts CJK, images and tool schemas honestly", async () => {
+  // Dividing raw length by four under-counted Chinese about four times and
+  // over-counted one image by ~500x; the tool table was invisible.
+  // 用原始长度除以四会把中文低估约四倍、把一张图片高估约 500 倍；工具表完全不可见。
+  const { estimateMessages } = await import("../src/agent/loop.ts");
+  const latin = estimateMessages([{ role: "user", content: "abcd".repeat(100) }]);
+  assert.equal(latin, 100, "Latin is four characters per token");
+
+  const chinese = estimateMessages([{ role: "user", content: "测试".repeat(100) }]);
+  assert.ok(chinese >= 190 && chinese <= 210, `CJK is about one token per character, got ${chinese}`);
+
+  const image = estimateMessages([{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/png;base64,${"A".repeat(5_000_000)}` } }] }]);
+  assert.equal(image, 1_568, "an image is a fixed token cost, not its data-URL length");
+
+  const tools = estimateMessages([{ role: "user", content: "hi" }], [
+    { name: "read_file", description: "Read a file.", parallelSafe: true, run: async () => ({ content: "" }) },
+  ]);
+  assert.ok(tools > 1, `the tool table adds tokens beyond the message, got ${tools}`);
+});

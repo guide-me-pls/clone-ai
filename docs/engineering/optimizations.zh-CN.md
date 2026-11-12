@@ -51,6 +51,33 @@
 - **推翻条件：** 如果本地 MCP 客户端更严格的模型挡住了远端宿主支持的工作流，只重新审视那一个
   决定；合并的其余部分是结构性的。
 
+### 2026-11-12 — 诚实的 token 计数与真正的 MCP 客户端
+
+- **目标 / 假设：** 审计中剩余的循环与 MCP 发现是同一个主题：harness 低估了它发出的东西，也
+  没有真正实现它声称的协议。中文为主的转录从不压缩，MCP 客户端无法与符合规范的 HTTP 服务器通信。
+- **取舍：** [token 计数要诚实，MCP 要是真正的客户端](../architecture/trade-offs.zh-CN.md#2026-11-12--token-计数要诚实mcp-要是真正的客户端)。
+- **变更：** `estimateMessages` 按码点统计中日韩文字、每张图片计 1,568 token 并计入工具
+  Schema；`buildHistory` 不再把每条记录截到 4,000 字符、也不再把历史截到 12,000；
+  `compactIfNeeded` 返回是否取得进展，连续两次无收益时循环以 `budget_exhausted` 停止；
+  `compact` 事件携带 `afterTokens`。HTTP MCP 传输执行 `initialize` /
+  `notifications/initialized` 握手，`readRpcResponse` 逐事件读取流式 SSE 体直到响应 id 到达；
+  `mcpToolSpecs` 接受 `deferUntil`/`loaderName`，暴露一个 `ToolSearch` 式加载器而不是整张表。
+- **Eval：** `npm test` → **648 个测试、648 通过、0 失败**（本批之前 646）。新增确定性覆盖：
+  中日韩/图片/工具 Schema 估算（`test/agent-loop.test.ts`）、长历史的生产回合记录
+  `main_agent.context_compacted`（`test/regression/audit-ctx-1.test.ts`）、MCP 延迟加载
+  （`test/mcp.test.ts`），以及手工运行的 HTTP MCP 服务器确认
+  `initialize → notifications/initialized → tools/list` 序列与"先进度后结果"的流式响应体。
+  `npm run typecheck` → 退出 0；`npm run gate` → PASS。
+- **Benchmark run：** 无。估算器是确定性的，HTTP 测试使用本地服务器；实机模型运行无法区分两者。
+- **执行链路：** 读循环与两个 MCP 客户端，写出按字符类别扫描的估算器，然后从 Journal 记录
+  反向追踪压缩链路到 `buildHistory`，发现两处独立的截断。MCP 这边，一台本地服务器同时暴露了
+  缺失的握手与 SSE 只读第一个事件的缺陷；第一次修复因标志在递归返回后才置位而无界递归，本地
+  服务器立刻发现了它。
+- **优点：** 中文对话现在会触发压缩；HTTP MCP 服务器可用；大工具表可以延迟。
+- **缺点 / 下次：** 估算保守且仍是近似；HTTP 传输在服务器重启后重新初始化而不是续接会话；
+  目前没有调用方传 `deferUntil`，延迟路径存在但生产未使用。
+- **推翻条件：** 见取舍条目。
+
 ### 2026-11-11 — 关闭审计中剩余的高危与中危缺陷
 
 - **目标 / 假设：** 第一批修复之后，仍有 11 条已确认发现：可复活已撤销策略的策略写入、作用于

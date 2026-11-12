@@ -142,7 +142,7 @@ export type AgentLoopEvent =
   | { type: "turn_started"; maxRounds: number }
   | { type: "model_call_started"; round: number }
   | { type: "model_call_completed"; round: number; usage?: ModelUsage; toolCalls: number }
-  | { type: "compaction"; round: number; estimatedTokens: number; before: number; after: number }
+  | { type: "compaction"; round: number; estimatedTokens: number; before: number; after: number; afterTokens?: number }
   | { type: "tool_started"; round: number; toolCallId: string; tool: string; arguments: string }
   | { type: "tool_decision"; round: number; toolCallId: string; tool: string; behavior: "allow" | "deny"; reason?: string }
   | {
@@ -258,7 +258,17 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       break;
     }
 
-    await compactIfNeeded(options, messages, round);
+    // Two consecutive compactions that remove nothing mean the newest turn alone
+    // exceeds the window; stop with a typed reason instead of journaling the
+    // same useless record every round.
+    // 连续两次压缩都没有减少，说明仅最新一轮就超过窗口；以带类型的原因停止，而不是每轮记下同一条
+    // 无用的记录。
+    const progressed = await compactIfNeeded(options, messages, round);
+    if (!progressed) {
+      await emit(options, { type: "budget_exhausted", kind: "tokens", limit: options.compactThresholdTokens ?? 0 });
+      stop("budget_exhausted", `Compaction cannot bring the transcript below ${options.compactThresholdTokens} tokens; the newest turn alone exceeds the window.`);
+      break;
+    }
 
     rounds += 1;
     await emit(options, { type: "model_call_started", round });
@@ -735,30 +745,90 @@ function safeDelta(sink: (delta: string) => void): (delta: string) => void {
   };
 }
 
-async function compactIfNeeded(options: AgentLoopOptions, messages: AgentMessage[], round: number): Promise<void> {
-  if (options.compact === undefined || options.compactThresholdTokens === undefined) return;
-  const estimate = options.estimateTokens ?? estimateMessages;
+async function compactIfNeeded(options: AgentLoopOptions, messages: AgentMessage[], round: number): Promise<boolean> {
+  if (options.compact === undefined || options.compactThresholdTokens === undefined) return true;
+  const estimate = options.estimateTokens ?? ((current: AgentMessage[]) => estimateMessages(current, options.tools));
   const tokens = estimate(messages);
-  if (tokens < options.compactThresholdTokens) return;
+  if (tokens < options.compactThresholdTokens) return true;
   const before = messages.length;
   const next = await options.compact(messages, { round, estimatedTokens: tokens });
   messages.splice(0, messages.length, ...next);
-  await emit(options, { type: "compaction", round, estimatedTokens: tokens, before, after: messages.length });
+  const after = estimate(messages);
+  await emit(options, { type: "compaction", round, estimatedTokens: tokens, before, after: messages.length, afterTokens: after });
+  // A compaction that removes no tokens is reported, not repeated forever: two
+  // consecutive no-ops mean the tail alone is over the threshold, and running
+  // again would journal the same useless record every round.
+  // 没有减少 token 的压缩会被报告，而不是无限重复：连续两次无效说明仅尾部就超过阈值，
+  // 再跑只会在每轮记下同一条无用的记录。
+  return after < tokens;
 }
 
 /** A rough fallback estimate: four characters per token. 粗略回退估算：每 token 四个字符。 */
-export function estimateMessages(messages: readonly AgentMessage[]): number {
-  let chars = 0;
+/**
+ * Tokens per image, the count providers charge regardless of pixel size.
+ *
+ * An appended image arrives as a data URL of up to several megabytes. Dividing
+ * that length by four over-counted one screenshot as half a million tokens, so
+ * a single image could trip the compaction threshold and the blocked level.
+ * 每张图片的 token 数，与像素尺寸无关，由 Provider 按固定值计费。
+ *
+ * 附加图片以数 MB 的 data URL 到达。把该长度除以四，会把一张截图算成 50 万 token，
+ * 一张图片就足以触发压缩阈值与阻断水位。
+ */
+const IMAGE_TOKENS = 1_568;
+
+/**
+ * Estimate the tokens a transcript costs, counting what the model is charged for.
+ *
+ * A byte is not a token: a CJK character is one to two tokens, Latin text is
+ * roughly four characters per token, and an image is a fixed count. Dividing
+ * the raw length by four under-counted Chinese by about four times, which is
+ * exactly the case where compaction has to fire before the request is refused.
+ * 估算转录消耗的 token，按模型实际计费的东西来算。
+ *
+ * 字节不是 token：一个中日韩字符是一到两个 token，拉丁文本约每 token 四字符，图片是固定值。
+ * 用原始长度除以四，会把中文低估约四倍，而这正是压缩必须在请求被拒之前触发的场景。
+ */
+export function estimateMessages(messages: readonly AgentMessage[], tools: readonly AgentToolSpec[] = []): number {
+  let tokens = 0;
+  const addText = (text: string): void => {
+    // CJK, full-width punctuation and hangul each cost roughly one token; the
+    // rest of the text is Latin-shaped.
+    // 中日韩文字、全角标点与谚文各约一个 token；其余文本按拉丁文估算。
+    let cjk = 0;
+    for (const character of text) {
+      const code = character.codePointAt(0) ?? 0;
+      if ((code >= 0x3040 && code <= 0x30ff) || (code >= 0x3400 && code <= 0x9fff) || (code >= 0xac00 && code <= 0xd7af)
+        || (code >= 0xff00 && code <= 0xffef) || (code >= 0x3000 && code <= 0x303f)) cjk += 1;
+    }
+    tokens += cjk + Math.ceil((text.length - cjk) / 4);
+  };
   for (const message of messages) {
-    if (typeof message.content === "string") chars += message.content.length;
+    if (typeof message.content === "string") addText(message.content);
     else if (Array.isArray(message.content)) {
       for (const part of message.content) {
-        chars += part.type === "text" ? part.text.length : part.image_url.url.length;
+        if (part.type === "text") addText(part.text);
+        else tokens += IMAGE_TOKENS;
       }
     }
-    for (const call of message.toolCalls ?? []) chars += call.name.length + call.arguments.length;
+    for (const call of message.toolCalls ?? []) {
+      addText(call.name);
+      addText(call.arguments);
+    }
   }
-  return Math.ceil(chars / 4);
+  // Tool schemas are part of every request and are re-sent each round; a table
+  // of twenty tools is thousands of tokens that the transcript alone never
+  // shows.
+  // 工具 Schema 属于每次请求的一部分，且每轮重发；二十个工具的表就是几千个 token，
+  // 只看转录永远看不到。
+  // 工具 Schema 属于每次请求的一部分，且每轮重发；二十个工具的表就是几千个 token，
+  // 只看转录永远看不到。
+  for (const tool of tools) {
+    addText(tool.name);
+    addText(tool.description);
+    if (tool.parameters !== undefined) addText(JSON.stringify(tool.parameters));
+  }
+  return tokens;
 }
 
 /**
