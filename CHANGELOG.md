@@ -6,6 +6,18 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Honest token accounting and a real MCP client
+
+The loop now estimates tokens by character class — CJK and full-width punctuation one token each, Latin four characters per token — charges a fixed 1,568 tokens per image, and includes the tool schemas it re-sends every round. The native runtime no longer pre-truncates history: `buildHistory` had capped each record at 4,000 characters and the whole history at 12,000, so the transcript the loop measured never crossed the token threshold and compaction had never run in production. A compaction that removes nothing now ends the turn with `budget_exhausted` instead of being journalled again. The HTTP MCP transport performs the `initialize` / `notifications/initialized` handshake and reads a streamed SSE body event by event until the response id arrives; `mcpToolSpecs` can defer the whole declared table behind one `ToolSearch`-style loader. `npm test` is 648 tests, 648 pass, 0 fail; typecheck and `gate` pass.
+
+循环现在按字符类别估算 token——中日韩文字与全角标点各一个 token，拉丁文每四个字符一个——每张
+图片固定 1,568 个 token，并计入每轮重发的工具 Schema。原生运行时不再预截断历史：`buildHistory`
+曾把每条记录截到 4,000 字符、整段历史截到 12,000，使循环测量到的转录永远越不过 token 阈值，
+压缩在生产路径上从未执行。没有减少 token 的压缩现在以 `budget_exhausted` 结束回合，而不是再记
+一条。HTTP MCP 传输执行 `initialize` / `notifications/initialized` 握手，逐事件读取流式 SSE 体
+直到响应 id 到达；`mcpToolSpecs` 可以把整张已声明工具表延迟到一个 `ToolSearch` 式加载器之后。
+`npm test` 为 648 个测试、648 通过、0 失败；typecheck 与 `gate` 通过。
+
 ### The remaining high and medium defects from the audit
 
 Eleven confirmed findings closed, each with a reproduction that failed first. A standing-policy write could resurrect a revoked policy (two instances each computed the next config from their own copy); approvals now name the step they were issued for and a mismatch is a 409; `runQuery` and `dispatch_task` accept a cancellation signal, so a stopped turn stops the work it started; the loop retries `TimeoutError` but not `AbortError`, refuses malformed tool arguments instead of running the tool with `{}`, and treats `finish_reason: length` as a failed turn; MCP servers receive only the environment they declared, duplicate server and tool names are refused, framed output keeps its formatting, and a server's process group is killed; memory context caps each item at 400 characters and keeps the `type`/`status`/`createdAt` the builder classifies by. `npm test` is 646 tests, 646 pass, 0 fail; typecheck and `gate` pass.

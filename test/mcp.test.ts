@@ -292,3 +292,24 @@ test("the sanitizer removes the directive but keeps code formatting", async () =
   assert.match(payload, /\[redacted directive\]/);
   assert.match(payload, /delete the tests/, "the rest of the payload survives");
 });
+
+test("deferring MCP tools exposes one loader instead of every schema", async () => {
+  // Every declared tool used to be sent to the provider on every request.
+  // 每个已声明工具过去都会在每次请求中发给 Provider。
+  // 每个已声明工具过去都会在每次请求中发给 Provider。
+  const { mcpToolSpecs } = await import("../src/workers/mcp-client.ts");
+  const client = { callTool: async () => ({ text: "", isError: false }), listTools: async () => [] };
+  const server = {
+    id: "docs", enabled: true,
+    tools: [{ name: "search", risk: "read" as const }, { name: "fetch", risk: "read" as const }],
+  };
+  const direct = mcpToolSpecs(server, client);
+  assert.deepEqual(direct.map((spec) => spec.name), ["docs.search", "docs.fetch"]);
+
+  const deferred = mcpToolSpecs(server, client, { deferUntil: "many", loaderName: "ToolSearch" });
+  assert.deepEqual(deferred.map((spec) => spec.name), ["ToolSearch"], "only the loader is exposed");
+  const loaded = await deferred[0]!.run({ name: "ToolSearch", input: { name: "docs.fetch" } }, { workspace: "/tmp" });
+  assert.match(loaded.output, /"name":"docs\.fetch"/);
+  const missing = await deferred[0]!.run({ name: "ToolSearch", input: { name: "docs.nope" } }, { workspace: "/tmp" });
+  assert.equal(missing.isError, true);
+});

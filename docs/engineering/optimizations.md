@@ -71,6 +71,48 @@ file keeps every attempt, including the ones that did not work.
   workflow the remote host supported, revisit that one decision; the rest of
   the merge is structural.
 
+### 2026-11-12 — Honest token accounting and a real MCP client
+
+- **Goal / hypothesis:** the audit's remaining loop and MCP findings are one
+  theme: the harness under-measured what it sent and under-implemented the
+  protocol it claimed. A CJK-heavy transcript never compacted, and the MCP
+  client could not talk to a conforming HTTP server.
+- **Trade-off:** [the token count is honest, and MCP is a real
+  client](../architecture/trade-offs.md#2026-11-12--the-token-count-is-honest-and-mcp-is-a-real-client).
+- **Change:** `estimateMessages` counts CJK by code point, charges 1,568 tokens
+  per image and includes the tool schemas; `buildHistory` no longer truncates
+  each record to 4,000 characters or the history to 12,000; `compactIfNeeded`
+  returns whether it made progress and the loop stops with `budget_exhausted`
+  when two compactions remove nothing; `compact` events carry `afterTokens`. The
+  HTTP MCP transport performs the `initialize` / `notifications/initialized`
+  handshake and `readRpcResponse` reads a streamed SSE body until the response id
+  arrives; `mcpToolSpecs` accepts `deferUntil`/`loaderName` and exposes a
+  `ToolSearch`-style loader instead of the whole table.
+- **Eval:** `npm test` → **648 tests, 648 pass, 0 fail** (before this batch:
+  646). New deterministic coverage: CJK/image/tool-schema estimation
+  (`test/agent-loop.test.ts`), a production turn over a long history journals
+  `main_agent.context_compacted`
+  (`test/regression/audit-ctx-1.test.ts`), deferred MCP loading
+  (`test/mcp.test.ts`), and a hand-run HTTP MCP server confirming the sequence
+  `initialize → notifications/initialized → tools/list` and a streamed
+  progress-then-result body. `npm run typecheck` → exit 0; `npm run gate` →
+  PASS.
+- **Benchmark run:** none. The estimator is deterministic and the HTTP test uses
+  a local server; a live model run would not distinguish either.
+- **Execution chain:** read the loop and both MCP clients, wrote the estimator
+  with a character-class scan, then followed the compaction chain backwards from
+  the journal record to `buildHistory` and found two separate truncations. For
+  MCP, a local server exposed both the missing handshake and the SSE
+  first-event bug; the first fix recursed without bound because the flag was set
+  after the recursive call returned, which the local server caught immediately.
+- **Pros:** compaction now fires for a Chinese conversation; an HTTP MCP server
+  works; a large tool table can be deferred.
+- **Cons / next time:** the estimate is conservative and still an
+  approximation; the HTTP transport re-initialises after a server restart rather
+  than resuming a session; no caller passes `deferUntil` yet, so the deferral
+  path exists but is not used in production.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-11 — Closing the audit's remaining high and medium defects
 
 - **Goal / hypothesis:** after the first repair batch, eleven confirmed findings

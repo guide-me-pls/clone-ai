@@ -30,6 +30,40 @@ exceed their round budget, raise the default window rather than removing the
 total. If fragment refusal blocks a legitimate regeneration, give the worker a
 new-file mode instead of loosening the check.
 
+## 2026-11-12 — The token count is honest, and MCP is a real client
+
+**Decision.** The loop estimates tokens by character class (CJK and full-width
+punctuation one token each, Latin four characters per token), a fixed 1,568
+tokens per image, and the tool schemas as part of every request. The native
+runtime stops pre-truncating history once compaction is on. A compaction that
+removes nothing ends the turn with `budget_exhausted` instead of being
+journalled again. The HTTP MCP transport performs the `initialize` /
+`notifications/initialized` handshake, reads a streamed SSE body event by event
+until the response id arrives, and `mcpToolSpecs` can defer the declared table
+behind one loader.
+
+**Evidence.** Dividing raw length by four under-counted Chinese about four times
+and charged one screenshot half a million tokens; the tool table was invisible
+to the estimate. `buildHistory` capped each record at 4,000 characters and the
+whole history at 12,000, so the transcript the loop measured never crossed the
+token threshold — compaction had never run in production, which the 2026-11-11
+repair confirmed by making the record reachable. The HTTP client skipped the
+handshake (every conforming server rejects `tools/list` first) and returned the
+first SSE event, which is usually progress rather than the result. Every
+declared MCP tool was sent on every request.
+
+**What it costs.** The estimate is still an approximation — a mixed-script
+message can be off by a quarter — and it is deliberately conservative, so
+compaction may fire slightly early. MCP over HTTP is now stateful per server, so
+a server that restarts needs its session re-established (the client re-initialises
+on the next call). Deferring tools needs a caller that activates the loaded
+schema; until a caller passes `deferUntil`, the table is exposed directly.
+
+**Reversal condition.** If a provider exposes a real tokenizer, replace the
+estimate with it and keep this as the fallback. If deferral makes a model call
+the loader on every turn instead of the tool, remove the option rather than
+lengthening the prompt.
+
 ## 2026-11-11 — A decision is applied to the file it can see, and an approval names its step
 
 **Decision.** The standing-policy store reads the file inside its write queue and
