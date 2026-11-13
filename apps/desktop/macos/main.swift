@@ -32,6 +32,35 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     private var developerReloadStamp: Date?
     private var developerReloadTimer: Timer?
 
+    /**
+     * Resident mode: launchd owns the runtime, so quitting this app must not
+     * kill it. The app is a window onto a daemon that outlives it.
+     *
+     * 常驻模式：由 launchd 托管运行时，因此退出本 App 不得杀死它。App 是通往一个比它
+     * 活得更久的 Daemon 的一扇窗。
+     */
+    private var residentRuntime: Bool {
+        ProcessInfo.processInfo.environment["CLONE_AI_RESIDENT_DAEMON"] == "1"
+    }
+
+    /**
+     * The clone home: the same resolution the daemon uses (CLONE_HOME, then
+     * CLONE_AI_HOME, then CLONE_AI_DATA_DIR, then ~/.clone). A second path
+     * resolver in the shell would let the window attach to a different home
+     * than the one launchd supervises.
+     * Clone home：与 Daemon 相同的解析顺序。外壳里再写一套解析，会让窗口附着到与
+     * launchd 托管的家目录不同的地方。
+     */
+    private var cloneHomeDirectory: URL {
+        let environment = ProcessInfo.processInfo.environment
+        for key in ["CLONE_HOME", "CLONE_AI_HOME", "CLONE_AI_DATA_DIR"] {
+            if let value = environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                return URL(fileURLWithPath: value, isDirectory: true)
+            }
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clone", isDirectory: true)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let configuredRoot = ProcessInfo.processInfo.environment["CLONE_AI_DEV_ROOT"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !configuredRoot.isEmpty {
@@ -137,6 +166,16 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // A resident daemon is launchd's child, not ours: killing it here would
+        // make quitting the window stop the twin, which is the bug this mode
+        // exists to remove. Detach and let launchd keep it.
+        // 常驻 Daemon 是 launchd 的子进程，不是我们的：在这里杀掉它，会让关闭窗口等于停掉
+        // 分身，而这正是本模式要移除的缺陷。断开即可，交给 launchd 继续托管。
+        if residentRuntime {
+            shuttingDown = true
+            daemon = nil
+            return .terminateNow
+        }
         guard let process = daemon, process.isRunning else { return .terminateNow }
         if shuttingDown { return .terminateNow }
         shuttingDown = true
@@ -471,7 +510,17 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
     }
 
-    private func startDaemon() {
+    /**
+     * Launch the runtime. In resident mode it is not spawned here — launchd
+     * already runs it — so the app attaches to the published endpoint instead.
+     * 启动运行时。常驻模式下它不由这里启动——launchd 已在跑——因此 App 改为附着到
+     * 已发布的端点上。
+     */
+    private func startDaemon(reconnecting: Bool = false) {
+        if residentRuntime {
+            attachToResidentDaemon(reconnecting: reconnecting)
+            return
+        }
         guard let resources = Bundle.main.resourceURL else {
             showMessage(title: "启动失败", detail: "找不到应用资源。")
             return
@@ -532,6 +581,17 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         process.terminationHandler = { [weak self] process in
             DispatchQueue.main.async {
                 guard let self, !self.shuttingDown else { return }
+                // Under launchd, an exit is a crash: launchd restarts it, and the
+                // window must follow the new port instead of showing an error.
+                // 在 launchd 之下，退出即崩溃：launchd 会重启它，窗口必须跟随新端口，
+                // 而不是显示错误。
+                if self.residentRuntime {
+                    self.daemon = nil
+                    self.localURL = nil
+                    self.pageReady = false
+                    self.startDaemon(reconnecting: true)
+                    return
+                }
                 if self.developerRestartPending {
                     self.developerRestartPending = false
                     self.daemon = nil
@@ -559,6 +619,51 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             self.showMessage(title: "启动超时", detail: "本地运行时没有及时就绪。请关闭应用后重新打开。")
         }
     }
+
+    /**
+     * Attach to the daemon launchd is supervising: read the endpoint file it
+     * publishes and load it. Retries while launchd starts or restarts the job,
+     * so a crash-loop still surfaces as a window that recovers.
+     * 附着到 launchd 托管的 Daemon：读取它发布的端点文件并加载。在 launchd 启动或
+     * 重启任务期间重试，使崩溃循环表现为一个能自行恢复的窗口。
+     */
+    private func attachToResidentDaemon(reconnecting: Bool) {
+        guard !shuttingDown else { return }
+        if !reconnecting {
+            showMessage(title: "正在连接", detail: "正在连接常驻运行时，请稍候。")
+        }
+        let endpointFile = cloneHomeDirectory.appendingPathComponent("companion-endpoint.json")
+        guard let data = try? Data(contentsOf: endpointFile),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let value = parsed["url"] as? String,
+              let url = URL(string: value), url.scheme == "http", url.host == "127.0.0.1", url.port != nil else {
+            // launchd may not have written the file yet, or is restarting the job.
+            // launchd 可能还没写文件，或正在重启任务。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, !self.shuttingDown else { return }
+                self.residentAttempts += 1
+                if self.residentAttempts > 120 {
+                    self.showMessage(title: "常驻运行时未响应", detail: "launchd 没有发布端点。请运行 scripts/install-daemon.mjs 重新安装。")
+                    return
+                }
+                self.attachToResidentDaemon(reconnecting: true)
+            }
+            return
+        }
+        residentAttempts = 0
+        localURL = url
+        readyTimer?.invalidate()
+        readyTimer = nil
+        startupDotTimer?.invalidate()
+        startupDotTimer = nil
+        webView.frame = window.contentLayoutRect
+        window.contentView = webView
+        webView.load(URLRequest(url: url))
+        print("CLONE_AI_DESKTOP_READY \(url.absoluteString)")
+        fflush(stdout)
+    }
+
+    private var residentAttempts = 0
 
     private func receiveStdout(_ data: Data) {
         stdoutBuffer += String(decoding: data, as: UTF8.self)

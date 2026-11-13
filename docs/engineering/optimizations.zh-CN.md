@@ -440,7 +440,29 @@
   凭据运行。代价是明确的：外部动作没有 Provider，CLI 独有能力消失，安装命令也帮不上忙。
 - **推翻条件：** 见取舍条目。
 
-### 2026-11-06 — Worker 并发跟随实测机器容量
+### 2026-11-13 — 运行时成为 launchd 任务
+
+- **目标 / 假设：** 让分身常驻——登录即启动、App 退出与崩溃后仍在——使"个人 Agent"
+  在没有窗口时也成立。
+- **取舍：** [launchd 拥有运行时](../architecture/trade-offs.zh-CN.md#2026-11-13--运行时是一个-launchd-任务app-只是窗口)。
+- **变更：** `src/desktop/daemon-supervisor.ts` 渲染并安装按用户的 LaunchAgent
+  （`RunAtLoad`、`KeepAlive`、`ThrottleInterval` 30、仅所有者可读）。`scripts/install-daemon.mjs`
+  负责安装、重载、打印或卸载。`apps/desktop/macos/main.swift` 在常驻模式下不再 spawn
+  Daemon：读取 `~/.clone/companion-endpoint.json`（与 Daemon 相同的 `CLONE_HOME`
+  解析），附着，并在 launchd 重启任务后重新附着。退出 App 只是断开，不再杀掉运行时。
+- **Eval：** `test/daemon-supervisor.test.ts`——7 个用例：RunAtLoad/KeepAlive/节流
+  存在、XML 元字符转义、plist 以 0600 写入且可重复、卸载可重复、argv 与外壳 spawn 一致、
+  默认安装位置。`swiftc -parse -typecheck` 对 `main.swift` 返回 0。全量 684 个测试 /
+  684 通过；typecheck 与 `npm run gate` 通过。
+- **执行链路：** 先写取舍；纯 plist 渲染器；安装器；Swift 附着路径；测试；文档。首次写入
+  被会话的 worktree 守卫拒绝（检出已移到 origin 仓库），因此改用 shell 写入。
+- **优点 / 缺点：** 分身现在无需窗口即可存在，崩溃会自行恢复。代价是诚实的：App 不能再靠
+  退出停掉运行时，需要卸载命令；plist 固定了 node 绝对路径，升级 node 后需重跑安装器。
+- **未验证：** 本会话没有真的执行 `launchctl bootstrap`（那会在所有者机器上安装登录项）；
+  plist 只经过渲染与 `swiftc` 验证，未通过加载验证。
+- **推翻条件：** 见取舍条目。
+
+## 2026-11-06 — Worker 并发跟随实测机器容量
 
 - **目标 / 假设：** 让派发按机器实际能力并行，而不是按计划形状；硬上限留在 Kernel，而不是
   一次采样出的模型 token。

@@ -5,6 +5,30 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-13 — 运行时是一个 launchd 任务，App 只是窗口
+
+**决定。** 一个按用户的 LaunchAgent（`ai.clone.companion`）拥有 companion 进程：
+`RunAtLoad` 登录即启动，`KeepAlive` 崩溃后重启，`ThrottleInterval` 30 防止崩溃循环。
+桌面 App 不再自己 spawn Daemon。常驻模式下它读取 Daemon 发布的端点
+（`~/.clone/companion-endpoint.json`，遵循 `CLONE_HOME` / `CLONE_AI_HOME` /
+`CLONE_AI_DATA_DIR`），加载它，并在端口变化时重新附着。退出 App 只是断开；它绝不终止
+运行时。`node scripts/install-daemon.mjs` 安装或移除该任务。
+
+**依据。** 改动之前，`applicationShouldTerminate` 会对它 spawn 的 Daemon 发 SIGTERM、
+SIGINT、SIGKILL（`apps/desktop/macos/main.swift:139-166`），而登录时没有任何东西启动它：
+没有 companion plist、没有登录项、全仓没有 `SMAppService`。于是分身只在窗口开着时存在，
+这与"个人 Agent"矛盾。产出本决定的审计跑了十个读者、八个能力维度，把"分身不能常驻"排在
+第一阻塞位。
+
+**代价。** 运行时现在依赖 `launchd` 作为监督者：崩溃会被重启（这是好事），但 App 不能
+再靠退出停掉它，所有者需要卸载命令才能关掉。开发模式仍在
+`CLONE_AI_RESIDENT_DAEMON` 之后保留进程内托管，热重载路径不变。第二份 App 也无法拥有
+运行时——它只会附着，这正是要点。
+
+**推翻条件。** 若 `launchd` 在目标平台不适用（Windows、Linux，或没有 `LaunchAgents` 的
+沙箱 Mac App Store 构建），把监督者换成该平台的服务管理器，但保留"发布端点、附着"的契约。
+不要重新引入"spawn 并由退出杀掉"。
+
 ## 2026-11-13 — 主 Agent 读取项目指令文件，并按信任类标注
 
 **决定。** 主 Agent 加载工作区里的 `AGENTS.md` / `CLAUDE.md`（以及 `.claude/CLAUDE.md`、

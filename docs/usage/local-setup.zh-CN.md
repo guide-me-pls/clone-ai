@@ -50,8 +50,18 @@ clone-ai app                # 打开 dist/Clone AI.app 或 /Applications/Clone A
 ```
 
 `clone-ai app` 只打开已构建的原生应用包，不会启动浏览器标签页，也不会启动 Chromium
-应用窗口。macOS 需要先运行 `npm run desktop:mac:build`；应用自己拥有本地 Runtime，
-并遵循桌面客户端 README 中的常驻、关闭与退出语义。
+应用窗口。macOS 需要先运行 `npm run desktop:mac:build`。
+
+运行时是一个常驻的 `launchd` 任务，而不是窗口的子进程。安装一次：
+
+```bash
+node scripts/install-daemon.mjs            # 安装并加载 ai.clone.companion
+node scripts/install-daemon.mjs --uninstall
+```
+
+之后分身会在登录时启动、崩溃后重启，并在你关闭窗口后继续运行——App 附着到 Daemon
+发布的端点（`~/.clone/companion-endpoint.json`）。升级 node 后需要重跑安装器，因为
+plist 固定了 node 的绝对路径。
 
 不需要单独下载。如果你想要单文件原生可执行程序，Tauri 外壳是可选项，需要 Rust 工具链：
 
