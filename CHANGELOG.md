@@ -26,6 +26,12 @@ Four gaps against Claude Code 2.1.319's memory architecture are closed, each thr
 
 `npm test` 为 677 个测试、677 通过、0 失败；`npm run typecheck` 与 `npm run gate` 通过。
 
+### The runtime is a launchd job; the app is only a window
+
+Quitting the desktop app no longer stops the twin. A per-user LaunchAgent (`ai.clone.companion`) now owns the companion process: `RunAtLoad` starts it at login, `KeepAlive` restarts it after a crash, and a 30-second throttle stops a crash loop. The app attaches to the endpoint the daemon publishes (`~/.clone/companion-endpoint.json`, honouring `CLONE_HOME` / `CLONE_AI_HOME` / `CLONE_AI_DATA_DIR`) and re-attaches when launchd restarts the job. `node scripts/install-daemon.mjs` installs, reloads or removes it (`--uninstall`); development mode keeps its in-process supervision behind `CLONE_AI_RESIDENT_DAEMON`. `npm test` is 684 tests, 684 pass, 0 fail; typecheck and `gate` pass.
+
+退出桌面 App 不再停掉分身。按用户的 LaunchAgent（`ai.clone.companion`）现在拥有 companion 进程：`RunAtLoad` 登录即启动，`KeepAlive` 崩溃后重启，30 秒节流防止崩溃循环。App 附着到 Daemon 发布的端点（`~/.clone/companion-endpoint.json`，遵循 `CLONE_HOME` / `CLONE_AI_HOME` / `CLONE_AI_DATA_DIR`），并在 launchd 重启任务后重新附着。`node scripts/install-daemon.mjs` 负责安装、重载或卸载（`--uninstall`）；开发模式在 `CLONE_AI_RESIDENT_DAEMON` 之后保留进程内托管。`npm test` 为 684 个测试、684 通过、0 失败；typecheck 与 `gate` 通过。
+
 ### MCP config accepts both `env` shapes, a per-server timeout, and refuses duplicate ids
 
 `mcp.json` now accepts `env` as either the MCP spec's variable-name list (`["GITHUB_TOKEN"]`) or the programmatic host's explicit values (`{"API_URL": "http://x"}`); the object form used to be silently dropped, so a server that needed a value started without it. A server may set `timeoutMs` instead of inheriting the client-wide timeout, because a slow tool and a quick one are different requests. Two servers with one id are refused with a clear error rather than shadowing each other. `npm test` is 650 tests, 650 pass, 0 fail; typecheck passes.
