@@ -111,6 +111,20 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   [MCP and skills trade-off](../architecture/trade-offs.md#2026-11-06--mcp-and-skills-first-plugins-cloud-vm-and-computer-use-deferred),
   [execution chain](optimizations.md#2026-11-09--per-call-permissions-context-compaction-mcp-and-skills).
 
+## 2026-11-13 — The twin survives an app quit
+
+- **Claim:** the runtime is a `launchd` job, so it starts at login, restarts
+  after a crash, and keeps running when the window is closed; the app attaches to
+  the endpoint the daemon publishes instead of owning the process.
+- **Evidence:** `test/daemon-supervisor.test.ts` (7 tests: RunAtLoad/KeepAlive/
+  throttle present, XML escaping, 0600 plist written idempotently, uninstall
+  idempotent, argv identical to the shell's spawn, default install location);
+  `swiftc -parse -typecheck apps/desktop/macos/main.swift` exits 0; full suite
+  684/684; typecheck and `gate` pass. Not verified live: no `launchctl bootstrap`
+  was run in this session, so the installed login item itself is unproven.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-13--the-runtime-is-a-launchd-job-and-the-app-is-only-a-window),
+  [execution chain](optimizations.md#2026-11-13--the-runtime-becomes-a-launchd-job).
+
 ## 2026-11-07 — Worker concurrency follows measured machine capacity
 
 - **Claim:** dispatch concurrency is bounded by measured CPU, load and free

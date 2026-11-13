@@ -6,6 +6,38 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-13 — The runtime is a launchd job, and the app is only a window
+
+**Decision.** A per-user LaunchAgent (`ai.clone.companion`) owns the companion
+process: `RunAtLoad` starts it at login, `KeepAlive` restarts it after a crash,
+`ThrottleInterval` 30 stops a crash loop. The desktop app no longer spawns the
+daemon. In resident mode it reads the endpoint the daemon publishes
+(`~/.clone/companion-endpoint.json`, honouring `CLONE_HOME` /
+`CLONE_AI_HOME` / `CLONE_AI_DATA_DIR`), loads it, and re-attaches when the port
+changes. Quitting the app detaches; it never terminates the runtime.
+`node scripts/install-daemon.mjs` installs or removes the job.
+
+**Evidence.** Before this change `applicationShouldTerminate` sent SIGTERM, then
+SIGINT, then SIGKILL to the daemon it had spawned (`apps/desktop/macos/main.swift:139-166`),
+and nothing started it at login: no companion plist, no login item, no
+`SMAppService` anywhere. The twin therefore existed only while a window was
+open, which contradicts "personal agent". The audit that produced this decision
+ran ten readers over eight capability dimensions and ranked "the twin cannot
+stay resident" as the first blocker.
+
+**What it costs.** The runtime now depends on `launchd` being the supervisor: a
+crash is restarted (good) but the app can no longer stop it by quitting, so the
+owner needs the uninstall command to take it down. Development mode keeps its
+in-process supervision behind `CLONE_AI_RESIDENT_DAEMON`, so the hot-reload
+path is unchanged. A second copy of the app cannot own the runtime either — it
+attaches, which is the point.
+
+**Reversal condition.** If `launchd` proves unsuitable on a target platform
+(Windows, Linux, or a sandboxed Mac App Store build without `LaunchAgents`),
+swap the supervisor for that platform's service manager behind the same
+"publish an endpoint, attach to it" contract. Do not reintroduce
+spawn-and-kill-by-quit.
+
 ## 2026-11-13 — The Main Agent reads project instruction files, labeled by trust class
 
 **Decision.** The Main Agent loads `AGENTS.md` / `CLAUDE.md` from the workspace

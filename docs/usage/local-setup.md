@@ -54,8 +54,20 @@ clone-ai app                # open dist/Clone AI.app or /Applications/Clone AI.a
 
 `clone-ai app` opens the built native application bundle. It never starts a
 browser tab or a Chromium app window. Build the macOS application first with
-`npm run desktop:mac:build`; the app owns its local runtime and uses the
-persistent close/Quit behavior described in the desktop client README.
+`npm run desktop:mac:build`.
+
+The runtime is a resident `launchd` job, not a child of the window. Install it
+once:
+
+```bash
+node scripts/install-daemon.mjs            # installs and loads ai.clone.companion
+node scripts/install-daemon.mjs --uninstall
+```
+
+After that the twin starts at login, restarts after a crash, and keeps running
+when you close the window — the app attaches to the endpoint the daemon
+publishes (`~/.clone/companion-endpoint.json`). Re-run the installer after a
+node upgrade, because the plist pins an absolute node path.
 
 There is no separate download. If you want a single-file native executable
 instead, the Tauri shell is optional and requires the Rust toolchain:

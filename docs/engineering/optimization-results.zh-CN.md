@@ -81,6 +81,18 @@
   [MCP 与技能取舍](../architecture/trade-offs.zh-CN.md#2026-11-06--先做-mcp-与-skills插件云vmcomputer-use-延后)、
   [执行链路](optimizations.zh-CN.md#2026-11-09--逐次权限上下文压缩mcp-与技能)。
 
+## 2026-11-13 — 分身能挺过 App 退出
+
+- **主张：** 运行时是一个 `launchd` 任务，因此登录即启动、崩溃后重启、关窗后仍在运行；
+  App 附着到 Daemon 发布的端点，而不是拥有该进程。
+- **证据：** `test/daemon-supervisor.test.ts`（7 个用例：RunAtLoad/KeepAlive/节流存在、
+  XML 转义、0600 plist 可重复写入、卸载可重复、argv 与外壳 spawn 一致、默认安装位置）；
+  `swiftc -parse -typecheck apps/desktop/macos/main.swift` 返回 0；全量 684/684；
+  typecheck 与 `gate` 通过。未实机验证：本会话没有执行 `launchctl bootstrap`，因此安装
+  出来的登录项本身未证明。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-13--运行时是一个-launchd-任务app-只是窗口)、
+  [执行链路](optimizations.zh-CN.md#2026-11-13--运行时成为-launchd-任务)。
+
 ## 2026-11-07 — Worker 并发跟随实测机器容量
 
 - **主张：** 派发并发由实测的 CPU、负载与空闲内存约束，而不是计划形状；队列与每个子 Agent
