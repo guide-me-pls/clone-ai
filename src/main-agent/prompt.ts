@@ -14,6 +14,7 @@
 import { createJournalStore } from "../core/sqlite-journal.ts";
 import { compileBriefing } from "./situation-briefing.ts";
 import { pushRelevantMemories } from "./memory-push.ts";
+import { loadProjectInstructions, type ProjectInstructions } from "./project-instructions.ts";
 
 export const MAIN_AGENT_CHARTER = [
   "You are clone-main, the Main Agent of Clone AI — a personal digital twin runtime.",
@@ -56,13 +57,28 @@ export const MAIN_AGENT_CHARTER = [
  * 上面那份 charter 的语义版本。含义变化时递增；哈希已经能捕捉措辞修改，而版本号
  * 才是人比较两个基线时真正会读的东西。
  */
-export const MAIN_AGENT_CHARTER_VERSION = 1;
+export const MAIN_AGENT_CHARTER_VERSION = 2;
+
+/**
+ * Whether synthesized recall is on. Off by default: it costs one model call on
+ * a turn that would otherwise be free of extra calls, so it is a switch the
+ * owner makes, not a default the runtime spends on their behalf.
+ * 合成召回是否开启。默认关闭：它会让原本没有额外调用的回合多一次模型调用，因此是所有者做出的
+ * 开关，而不是运行时替他们花费的默认值。
+ */
+export function memorySynthesisEnabled(environment: NodeJS.ProcessEnv = process.env): boolean {
+  const value = environment.CLONE_AI_MEMORY_SYNTHESIS?.trim().toLowerCase();
+  return value === "1" || value === "on" || value === "true";
+}
 
 export interface CompiledMainAgentPrompt {
   charter: string;
   charterVersion: number;
   briefing?: string;
   briefingError?: string;
+  /** The workspace's own instruction files, when any were readable. 工作区自己的指令文件，可读时存在。 */
+  instructions?: ProjectInstructions;
+  instructionsError?: string;
   systemPrompt: string;
 }
 
@@ -70,12 +86,29 @@ export async function compileMainAgentPrompt(options: {
   dataDirectory: string;
   cwd?: string;
   query?: string;
+  environment?: NodeJS.ProcessEnv;
 }): Promise<CompiledMainAgentPrompt> {
   const cwd = options.cwd ?? process.cwd();
   const journal = createJournalStore(options.dataDirectory);
   let systemPrompt = MAIN_AGENT_CHARTER;
   let briefing: string | undefined;
   let briefingError: string | undefined;
+  // Project instructions are independent of the journal and the briefing: a
+  // broken connector must not also cost the agent the repository's rules, and an
+  // unreadable rules file must not silence the briefing.
+  // 项目指令独立于 Journal 与简报：Connector 损坏不该同时让 Agent 失去仓库规则，规则文件不可读也
+  // 不该让简报失声。
+  let instructions: ProjectInstructions | undefined;
+  let instructionsError: string | undefined;
+  try {
+    instructions = await loadProjectInstructions({
+      workspacePath: cwd,
+      ...(options.environment === undefined ? {} : { environment: options.environment }),
+    });
+    if (instructions.text.length === 0) instructions = undefined;
+  } catch (error: unknown) {
+    instructionsError = error instanceof Error ? error.message : String(error);
+  }
   try {
     const compiled = await compileBriefing({
       journal,
@@ -88,15 +121,29 @@ export async function compileMainAgentPrompt(options: {
     const query = options.query?.trim();
     const pushed = query === undefined || query.length === 0
       ? undefined
-      : await pushRelevantMemories({ dataDirectory: options.dataDirectory, query, journal });
-    systemPrompt = [MAIN_AGENT_CHARTER, executors.text, compiled.text, ...(pushed === undefined ? [] : [pushed.text])].join("\n\n");
+      : await pushRelevantMemories({
+        dataDirectory: options.dataDirectory,
+        query,
+        journal,
+        synthesize: memorySynthesisEnabled(options.environment),
+      });
+    systemPrompt = [
+      MAIN_AGENT_CHARTER,
+      ...(instructions === undefined ? [] : [instructions.text]),
+      executors.text,
+      compiled.text,
+      ...(pushed === undefined ? [] : [pushed.text]),
+    ].join("\n\n");
   } catch (error: unknown) {
     // A broken connector or unreadable journal must not silence the agent;
-    // it degrades to the charter alone and says so.
-    // Connector 损坏或 Journal 不可读不能让 Agent 失声；它退化为仅有 charter 并如实说明。
+    // it degrades to the charter (and the project rules, when they were read)
+    // and says so.
+    // Connector 损坏或 Journal 不可读不能让 Agent 失声；它退化为仅有 charter（以及已读到的项目
+    // 规则），并如实说明。
     const reason = error instanceof Error ? error.message : String(error);
     briefingError = reason;
-    systemPrompt = `${MAIN_AGENT_CHARTER}\n\nSituation briefing unavailable: ${reason}`;
+    systemPrompt = [MAIN_AGENT_CHARTER, ...(instructions === undefined ? [] : [instructions.text])].join("\n\n");
+    systemPrompt += `\n\nSituation briefing unavailable: ${reason}`;
   } finally {
     // The briefing is a one-shot read; holding the journal open for the life of
     // the session would lock the owner's clone home.
@@ -108,6 +155,8 @@ export async function compileMainAgentPrompt(options: {
     charterVersion: MAIN_AGENT_CHARTER_VERSION,
     ...(briefing === undefined ? {} : { briefing }),
     ...(briefingError === undefined ? {} : { briefingError }),
+    ...(instructions === undefined ? {} : { instructions }),
+    ...(instructionsError === undefined ? {} : { instructionsError }),
     systemPrompt,
   };
 }
