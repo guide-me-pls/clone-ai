@@ -87,13 +87,13 @@ export function wilson(good: number, total: number, z = 1.96): { lower: number; 
   return { lower: Math.max(0, (centre - margin) / denominator), upper: Math.min(1, (centre + margin) / denominator) };
 }
 
-export type SuggestionKind = "reinforce" | "retire" | "lesson";
+export type SuggestionKind = "reinforce" | "retire" | "lesson" | "merge";
 
 export interface Suggestion {
   /** Deterministic, so recomputing the same basis never creates a duplicate. 确定性，因此对同一依据重算不会产生重复。 */
   id: string;
   kind: SuggestionKind;
-  /** Memory id for reinforce/retire; failure signature for lesson. reinforce/retire 为记忆 id；lesson 为失败签名。 */
+  /** Memory id for reinforce/retire/merge; failure signature for lesson. reinforce/retire/merge 为记忆 id；lesson 为失败签名。 */
   target: string;
   title: string;
   /** The numbers behind the suggestion, shown to the owner. 建议背后的数字，展示给所有者。 */
@@ -101,6 +101,8 @@ export interface Suggestion {
   /** Present for a lesson: the memory text the owner would be adding. lesson 专有：所有者将加入的记忆文本。 */
   proposedSummary?: string;
   evidenceRunIds?: string[];
+  /** Present for a merge: the ids this merge would replace. merge 专有：本次合并将取代的 id。 */
+  retireIds?: string[];
 }
 
 export interface LifecycleMemory {

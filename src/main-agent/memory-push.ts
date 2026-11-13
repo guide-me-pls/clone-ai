@@ -24,6 +24,7 @@
  */
 import type { JournalStore } from "../core/journal.ts";
 import { GovernedMemorySource } from "../memory/md-memory-store.ts";
+import { completeWithNativeEndpoint, synthesizeRecall, synthesisCandidates } from "../memory/synthesized-recall.ts";
 import { buildMemoryContextFromCandidates } from "./memory-context-builder.ts";
 
 /** Journal run id used for conversation turns that are not task runs. 非任务 Run 的对话回合使用的 Journal run id。 */
@@ -32,6 +33,14 @@ export const MAIN_AGENT_RUN_ID = "main-agent";
 export interface MemoryPush {
   text: string;
   memoryIds: string[];
+  /**
+   * The synthesized paragraph, when one was requested and passed validation.
+   * It is not a memory and is never counted as one; it is text shown for this
+   * turn, with the ids it cites so the journal records exactly what grounded it.
+   * 合成段落，在请求了合成且通过校验时存在。它不是记忆、也从不计为记忆；它是本回合展示的文本，
+   * 带上它引用的 id，使 Journal 准确记录它以什么为依据。
+   */
+  synthesis?: { text: string; citedIds: string[] };
 }
 
 export async function pushRelevantMemories(input: {
@@ -39,6 +48,10 @@ export async function pushRelevantMemories(input: {
   query: string;
   journal: JournalStore;
   maxResults?: number;
+  /** Opt-in: synthesize one grounded paragraph from the matches. 可选：从命中中合成一段有依据的话。 */
+  synthesize?: boolean;
+  /** Test seam: the completion used for synthesis. 测试切口：合成使用的补全。 */
+  complete?: (prompt: string) => Promise<string>;
 }): Promise<MemoryPush | undefined> {
   const query = input.query.trim();
   if (query.length === 0) return undefined;
@@ -61,15 +74,37 @@ export async function pushRelevantMemories(input: {
       sensitivity: item.memory.sensitivity,
     })),
   );
-  if (context === undefined) return undefined;
+  // Synthesis is attempted before the early return: the case it exists for is
+  // several weak matches, and that is exactly when the budgeted list compiles
+  // to nothing. It never replaces the list — a caller that asked for it gets
+  // both, and one that did not is unaffected.
+  // 合成在提前返回之前尝试：它存在的场景正是多条弱命中，也正是预算化列表编译为空的时候。它从不
+  // 取代列表——请求它的调用方两者都得到，没有请求的调用方不受影响。
+  const synthesis = input.synthesize === true && recalled.length > 0
+    ? await synthesizeRecall(
+      {
+        query,
+        memories: synthesisCandidates(recalled.map((item) => ({ entry: item.memory, score: item.score }))),
+      },
+      { complete: input.complete ?? completeWithNativeEndpoint },
+    )
+    : undefined;
+  const synthesized = synthesis !== undefined && synthesis.text.length > 0
+    ? `Background summary synthesized from reviewed memories (not a memory; it may paraphrase):\n${synthesis.text}`
+    : undefined;
+  const text = [context?.summary, synthesized].filter((part): part is string => part !== undefined).join("\n\n");
+  if (text.length === 0) return undefined;
+  const memoryIds = context !== undefined ? [...context.sourceMemoryIds] : [...new Set(synthesis?.citedIds ?? [])];
   await input.journal.append({
     type: "memory.recalled",
     runId: MAIN_AGENT_RUN_ID,
     payload: {
       query,
       scope: { path: "main-agent-push" },
+      mode: synthesized === undefined ? "select" : "synthesize",
+      ...(synthesized === undefined ? {} : { synthesisChars: synthesized.length }),
       memories: recalled
-        .filter((item) => context.sourceMemoryIds.includes(item.memory.id))
+        .filter((item) => memoryIds.includes(item.memory.id))
         // The audit record carries the same classification the model saw, so a
         // later review can tell why a memory was injected.
         // 审计记录携带模型看到的同一分类，使事后审查能说明某条记忆为何被注入。
@@ -84,5 +119,9 @@ export async function pushRelevantMemories(input: {
         })),
     },
   });
-  return { text: context.summary, memoryIds: [...context.sourceMemoryIds] };
+  return {
+    text,
+    memoryIds,
+    ...(synthesized === undefined || synthesis === undefined ? {} : { synthesis: { text: synthesis.text, citedIds: synthesis.citedIds } }),
+  };
 }

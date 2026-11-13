@@ -20,6 +20,7 @@ import type { JournalStore } from "../core/journal.ts";
 import { projectRunAudits } from "../audit/run-audit.ts";
 import { MEMORY_LIFETIME_DAYS, type MemoryGovernance } from "../memory/memory-governance.ts";
 import { redactMemoryPii } from "../memory/memory-hygiene.ts";
+import { findMergeCandidates } from "../memory/consolidation.ts";
 import type { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { clusterFailures, projectOutcomes, suggestLifecycle, type MemoryUsage, type Suggestion } from "./analysis.ts";
 
@@ -76,9 +77,16 @@ export class ImprovementService {
 
     const projection = projectOutcomes(events, audits);
     const memories = await this.#governance.list({ status: "active" });
-    const found = [
+    const found: Suggestion[] = [
       ...suggestLifecycle(projection, memories),
       ...clusterFailures(audits, this.#guidanceFor),
+      // Consolidation runs on the same sweep as expiry and idle archiving: it is
+      // an O(n²) similarity pass over the active library, which is why it never
+      // runs per turn. A secret memory never reaches it; the suggestion would
+      // have to quote the text.
+      // 巩固与过期、闲置归档跑在同一次扫描中：它对活跃库做 O(n²) 相似度比较，因此从不每回合运行。
+      // secret 记忆不会进入它：建议必须引用正文。
+      ...findMergeCandidates(memories),
     ];
 
     const decided = new Set<string>();
@@ -128,6 +136,23 @@ export class ImprovementService {
     if (suggestion.kind === "retire") {
       await this.#governance.archive(suggestion.target, "retired");
       applied = `Archived memory ${suggestion.target}.`;
+    } else if (suggestion.kind === "merge") {
+      // The merged memory is authored first, then the sources are retired: a
+      // failure between the two leaves a duplicate, which the next sweep
+      // proposes again — the reverse order would leave nothing at all.
+      // 先手写合并后的记忆，再退役来源：两步之间失败只会留下重复，下一次扫描会再次提出；顺序反过来
+      // 则什么都不会留下。
+      const sources = [suggestion.target, ...(suggestion.retireIds ?? [])];
+      const entries = await this.#governance.list({ status: "active" });
+      const originals = sources.map((id) => entries.find((entry) => entry.id === id)).filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+      if (originals.length < 2) throw new Error("The memories this merge would combine no longer exist as active memories.");
+      const merged = await this.#governance.author({
+        summary: redactMemoryPii(suggestion.proposedSummary ?? originals.map((entry) => entry.summary).join(" ")).text,
+        type: originals[0]!.type,
+        confidence: "high",
+      });
+      for (const original of originals) await this.#governance.archive(original.id, "retired");
+      applied = `Merged ${originals.map((entry) => entry.id).join(", ")} into ${merged.id}.`;
     } else if (suggestion.kind === "reinforce") {
       const memory = await this.#governance.read(suggestion.target);
       if (memory === undefined) throw new Error("The memory no longer exists.");

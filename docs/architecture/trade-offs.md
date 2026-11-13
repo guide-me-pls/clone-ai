@@ -6,7 +6,141 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
-## 2026-11-11 — Reads are windowed with an explicit total; writes refuse fragments
+## 2026-11-13 — The Main Agent reads project instruction files, labeled by trust class
+
+**Decision.** The Main Agent loads `AGENTS.md` / `CLAUDE.md` from the workspace
+(plus `.claude/CLAUDE.md`, `.claude/rules/*.md`, `CLAUDE.local.md`), up to 64 KiB
+in total, and appends them to its system prompt under a labeled heading that
+says they are project instructions, not memories the owner approved. An
+`@path` import expands to depth 3, only when the imported file stays inside the
+workspace. The governor is `CLONE_AI_PROJECT_INSTRUCTIONS=0`, which turns the
+whole layer off.
+
+**Evidence.** Before this change nothing in `src/` read either file: the only
+loader shipped is `src/skills/skill-loader.ts`, which accepts `SKILL.md` under
+explicit skill roots. The consequence is visible in the repository itself —
+`AGENTS.md` at the root of this checkout tells every agent to write a trade-off
+before an optimization and to run `npm run gate`; clone-main never saw it. The
+2026-11-13 memory comparison measured this as one of four gaps against Claude
+Code 2.1.319, whose loader reads managed / user / project / local `CLAUDE.md`
+with `@import` depth 5, a 4 MiB read cap, and injection labeled by trust class
+(extracted from the installed 2.1.319 binary: the `Project` / `Local` /
+`AutoMem` / `Managed` / `User` labels).
+
+**What it costs.** The instruction layer is owner-editable text the runtime
+cannot verify: a repository that ships a hostile `CLAUDE.md` now influences the
+Main Agent's prompt. That is why it is capped, labeled, and switchable, and why
+imports may not escape the workspace. Prompt-cache reuse also drops for the
+static prefix whenever an instruction file changes, because the content sits in
+the system prompt rather than after a cache boundary. The loader deliberately
+does not read `~/.claude` or managed policy files: clone-ai has no equivalent
+policy source, and reading another product's configuration would bind the twin
+to its layout.
+
+**Reversal condition.** If instruction files grow past the cap often enough that
+the Main Agent loses project rules, raise the cap rather than add partial-file
+inclusion — a half-read rules file is worse than a labeled truncation. If the
+prompt-snapshot hash shows the instruction layer churning every turn (a tool
+rewriting the file), move the layer to a cache-stable position or hash it out of
+the system prompt.
+
+## 2026-11-13 — Memory edits are versioned, and an undo restores the previous version
+
+**Decision.** Every owner-visible change to a memory (author, update, archive,
+restore) records a version snapshot — the fields before the change plus the
+journal sequence that made it — in a `memory_versions` table. `MemoryGovernance
+.undo(id)` restores the version before the latest change and journals a
+`memory.updated` event whose payload says `source: "undo"`, `restoredVersion`.
+The memory library's detail view shows the change list, and `PATCH
+/api/memory/governed/:id` with `{ "undo": true }` performs the restore.
+
+**Evidence.** The store's own recovery path (`stageMutation` / `memory_mutations`
+/ `applyMutation`) already proves the design works one mutation at a time, but a
+mutation row is deleted on commit: there is no record of what the memory said
+before, so an edit made in the GUI or by `syncFromFiles` cannot be reverted once
+it lands. The nearest analogue in Claude Code 2.1.319 is `rewind` removing a
+memory write — the binary carries `rewind_removed_memory_write` as a wait
+reason. Version snapshots are the narrower version of that idea: they cover memory
+content only, not conversation state.
+
+**What it costs.** One extra row per change, keeping at most 20 versions per
+memory (older ones are trimmed). An owner who edits a memory 500 times holds 20
+rows, not 500. The undo is per-change, not per-time-range: there is no "go back
+to last Tuesday". The row is written in the same transaction as the entry, so a
+failed change never leaves a version claiming a state that never existed.
+
+**Reversal condition.** If memory files are edited by a script more often than a
+person, per-change rows become noise; then snapshot on a time interval instead.
+If an owner asks to compare two versions side by side, the table is already the
+right shape — add a diff view rather than a second store.
+
+## 2026-11-13 — Recall can synthesize a paragraph, but the paragraph is never a memory
+
+**Decision.** `SynthesizedRecall` (`src/memory/synthesized-recall.ts`) takes the
+top lexical matches and asks the configured endpoint for one paragraph that
+answers the query from them, citing memory ids. The result is returned only
+when every cited id was actually among the recalled set and every sentence
+carries at least one citation (checked deterministically); otherwise the caller
+falls back to the plain list. The synthesis is never written to memory, never
+counted as a memory, and is journaled as `memory.recalled` with
+`mode: "synthesize"` so the attribution loop sees exactly what the model was
+fed.
+
+**Evidence.** clone-ai's recall returns summaries, and the Main Agent's push
+builder spends a 1,200-character budget across four memory classes. When many
+small memories each match weakly, no single one survives the budget, yet their
+union answers the question — the case Claude Code 2.1.319 handles with its
+`memory_recall` attachment in `synthesize` mode ("a Sonnet-authored paragraph
+distilled from many tiny memories", per the binary's protocol schema). clone-ai
+had only the `select` half.
+
+**What it costs.** One extra model call on the turn where synthesis is used, so
+it is opt-in (`synthesize: true`) and only runs when at least three memories
+match. A synthesis that cites a memory it was not given is discarded entirely
+rather than partially trusted. The paragraph is fluent text, not a stored fact:
+asking about the same thing twice may produce two different paragraphs. Because
+the model wrote it, the paragraph is framed as background, never instructions,
+and secret memories never enter the prompt that produces it.
+
+**Reversal condition.** If synthesis turns out to change the model's answers in
+ways the underlying memories do not support — measured by comparing answers with
+and without it on the LongMemEval slice — delete it and keep the list. If it
+proves useful, the next step is synthesizing on a timer and caching, not
+synthesizing more often.
+
+## 2026-11-13 — Background consolidation proposes merges; the owner still decides
+
+**Decision.** `MemoryConsolidator` (`src/memory/consolidation.ts`) runs on the
+same idle sweep as expiry and archives, and produces `merge` suggestions for
+same-type active memories whose overlap coefficient is at or above 0.55.
+Suggestions are journaled as `improvement.suggested` with `kind: "merge"` and
+carry the merged summary plus the ids it would replace; approving one goes
+through `ImprovementService.approve`, which authors the merged memory and
+archives the sources as `retired`. The consolidator never writes memory itself.
+
+**Evidence.** `src/memory/conflict.ts` already measures the right similarity
+(`summarySimilarity`, thresholds 0.55 / 0.35, measured on rewording pairs
+0.57–0.93 against unrelated pairs 0.0–0.4), but until now `findConflicts` had no
+production caller — its only consumers were tests. Claude Code 2.1.319 runs
+background memory consolidation (the `autoDreamEnabled` setting and a "Memory
+consolidation" pass that reports `consolidated N memory files`). clone-ai's
+governance forbids the model from writing memory, so the honest equivalent is a
+suggestion, not an automatic merge.
+
+**What it costs.** An idle sweep now does one O(n²) similarity pass over the
+active library; at 200 memories that is 20k comparisons of cheap bigram sets,
+which is why it runs on the idle sweep and not per turn. A merge is lossy by
+construction: the merged summary is written by a model and may drop a qualifier
+the two originals carried, which is why approval is required and the sources
+are archived (recoverable) rather than deleted. A false "these are the same"
+costs an owner click to dismiss; a false merge that was approved costs an undo.
+
+**Reversal condition.** If approved merges are later undone more than they are
+kept, the similarity signal is not good enough — require the model to quote both
+summaries and explain what differs before suggesting. If the library stays small
+the pass is free; if it grows past a few thousand active memories, bucket by
+type and a shared rare term before comparing.
+
 
 **Decision.** `read_file` returns a named window (default 400 lines) with the
 file's total line count and the offset for the next page. `write_file` refuses

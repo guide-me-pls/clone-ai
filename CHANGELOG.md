@@ -6,6 +6,26 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The Main Agent reads project instructions, memory edits are undoable, recall can synthesize, and consolidation proposes merges
+
+Four gaps against Claude Code 2.1.319's memory architecture are closed, each through clone-ai's own governance rather than by copying the other product's model.
+
+- **Project instructions.** The Main Agent now reads `AGENTS.md` / `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` and `.claude/rules/*.md` from the workspace (`src/main-agent/project-instructions.ts`) and appends them to its system prompt under a labeled heading. Nothing in `src/` read either file before this — this repository's own `AGENTS.md` was invisible to clone-main. `@path` imports expand to depth 3 but only inside the workspace (a symlinked escape is refused), the total is capped at 64 KiB with a stated truncation, and `CLONE_AI_PROJECT_INSTRUCTIONS=0` turns the layer off. The prompt snapshot now records which files contributed.
+- **Versioned memory and undo.** Every owner-visible change records the state before it in a `memory_versions` table (newest 20 per memory, written in the same transaction), and `MemoryGovernance.undo` restores the previous version as an ordinary `memory.updated` event with `source: "undo"`. A second undo walks one change further back. Exposed as `clone-ai memory versions <id>` / `clone-ai memory undo <id>`, `PATCH /api/memory/governed/:id` with `{ "undo": true }`, and a change list plus an undo button in the memory library.
+- **Synthesized recall (opt-in).** `CLONE_AI_MEMORY_SYNTHESIS=1` lets the memory push ask the configured endpoint for one paragraph grounded in the top matches (`src/memory/synthesized-recall.ts`). The paragraph is discarded whole unless every cited id was among the memories it was given and every sentence carries a citation; it is never stored, never counted as a memory, never includes a `secret` memory, and the journal records `mode: "synthesize"`. Failures fall back to the plain list.
+- **Consolidation proposals.** The improvement sweep now also proposes `merge` suggestions for same-type active memories at or above the measured 0.55 overlap threshold (`src/memory/consolidation.ts`), which finally gives `findConflicts` a production caller. A merge that would combine a statement with the one it explicitly replaced is never proposed; approving one authors the merged memory and archives the sources as `retired`, so it is undoable. The consolidator never writes memory itself.
+
+`npm test` is 677 tests, 677 pass, 0 fail; `npm run typecheck` and `npm run gate` pass.
+
+以上四项补齐了与 Claude Code 2.1.319 记忆架构之间的差距，每一项都走 clone-ai 自己的治理路径，而不是照搬对方的产品模型。
+
+- **项目指令。** 主 Agent 现在读取工作区的 `AGENTS.md` / `CLAUDE.md`、`.claude/CLAUDE.md`、`CLAUDE.local.md` 与 `.claude/rules/*.md`（`src/main-agent/project-instructions.ts`），按带标注的标题追加到系统提示词。此前 `src/` 里没有任何代码读取这两个文件——本仓库自己的 `AGENTS.md` 对 clone-main 不可见。`@path` 导入展开深度 3，且只能在工区内（符号链接逃逸会被拒绝），总量上限 64 KiB 且截断会写明，`CLONE_AI_PROJECT_INSTRUCTIONS=0` 关闭整层。提示词快照现在记录哪些文件参与了。
+- **记忆版本与撤销。** 每次所有者可见的变更都会把变更前的状态记入 `memory_versions` 表（每条最多 20 版，与变更同事务写入），`MemoryGovernance.undo` 以一条普通的 `memory.updated` 事件恢复上一版本并注明 `source: "undo"`。第二次撤销会再往前回退一次变更。入口是 `clone-ai memory versions <id>` / `clone-ai memory undo <id>`、`PATCH /api/memory/governed/:id`（`{ "undo": true }`），以及记忆库里的变更列表与撤销按钮。
+- **合成召回（显式开启）。** `CLONE_AI_MEMORY_SYNTHESIS=1` 让记忆推送请已配置的端点依据靠前命中写一段话（`src/memory/synthesized-recall.ts`）。只有当它引用的每个 id 都在给过它的记忆内、且每句都带引用时，整段才被接受；它从不入库、从不计为记忆、绝不包含 `secret` 记忆，Journal 记录 `mode: "synthesize"`。失败退回普通列表。
+- **巩固建议。** 改进扫描现在还会为同类型、重叠系数达到实测 0.55 阈值的活跃记忆提出 `merge` 建议（`src/memory/consolidation.ts`），终于让 `findConflicts` 有了生产调用方。会与它明确取代的那条陈述合并的组合绝不会被提出；批准后手写合并记忆并把来源以 `retired` 归档，因此可撤销。巩固器自己从不写记忆。
+
+`npm test` 为 677 个测试、677 通过、0 失败；`npm run typecheck` 与 `npm run gate` 通过。
+
 ### MCP config accepts both `env` shapes, a per-server timeout, and refuses duplicate ids
 
 `mcp.json` now accepts `env` as either the MCP spec's variable-name list (`["GITHUB_TOKEN"]`) or the programmatic host's explicit values (`{"API_URL": "http://x"}`); the object form used to be silently dropped, so a server that needed a value started without it. A server may set `timeoutMs` instead of inheriting the client-wide timeout, because a slow tool and a quick one are different requests. Two servers with one id are refused with a clear error rather than shadowing each other. `npm test` is 650 tests, 650 pass, 0 fail; typecheck passes.

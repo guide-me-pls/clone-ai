@@ -123,6 +123,23 @@
     </li>`).join("")}</ul>`;
   }
 
+  /** Recent changes to this memory, newest first, with the one undo takes back. 这条记忆的最近变更，最新在前，并标出撤销会撤回的那一次。 */
+  function history(item) {
+    const detail = state.details.get(item.id) ?? undefined;
+    if (detail === undefined) return `<h6 class="mem-subhead">变更记录</h6><p class="mem-pending">读取变更记录…</p>`;
+    const versions = detail.versions ?? [];
+    if (versions.length === 0) {
+      return `<h6 class="mem-subhead">变更记录</h6><p class="mem-note">还没有记录到变更。修改、归档或恢复这条记忆后，这里会出现可撤销的版本。</p>`;
+    }
+    return `<h6 class="mem-subhead">变更记录 <small>最近 ${versions.length} 次</small></h6>
+      <ul class="mem-usage">${versions.slice(0, 8).map((version, index) => `<li>
+        <span>${stamp(version.recordedAt)}</span>
+        <span>${escape(version.change)}</span>
+        ${version.sequence === undefined ? "" : `<small>#${version.sequence}</small>`}
+        ${index === 0 ? `<small>撤销将恢复这一版</small>` : `<small>${escape(String(version.entry?.summary ?? "").slice(0, 60))}</small>`}
+      </li>`).join("")}</ul>`;
+  }
+
   function row(item) {
     const index = state.details.get(item.id);
     const open = state.open.has(item.id);
@@ -139,8 +156,12 @@
         ${editing ? editor(item) : bodyOf(item)}
         ${provenance(item)}
         ${usage(item)}
+        ${history(item)}
         <div class="mem-actions">
           <button type="button" class="mem-btn" data-mem-edit="${escape(item.id)}">${editing ? "收起编辑" : "编辑"}</button>
+          ${(index?.versions?.length ?? 0) > 0
+            ? `<button type="button" class="mem-btn" data-mem-undo="${escape(item.id)}">撤销上一次修改</button>`
+            : ""}
           ${item.status === "archived"
             ? `<button type="button" class="mem-btn" data-mem-status="${escape(item.id)}" data-mem-next="active">恢复使用</button>`
             : `<button type="button" class="mem-btn" data-mem-status="${escape(item.id)}" data-mem-next="archived">归档</button>`}
@@ -283,6 +304,21 @@
       return;
     }
     if ((el = pick("[data-open-memory-source]"))) { closeSettings(); void selectSession(el.dataset.openMemorySource); return; }
+    if ((el = pick("[data-mem-undo]"))) {
+      const id = el.dataset.memUndo;
+      try {
+        await api(`/api/memory/governed/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ undo: true }),
+        });
+        state.signatures.library = null;
+        state.details.delete(id);
+        await refresh();
+        announce("已撤销上一次修改。");
+      } catch (error) { announce(error.message, true); }
+      return;
+    }
     if ((el = pick("[data-memory-conflict]"))) { await keepMemoryFile(el.dataset.memoryConflict); return; }
   });
 

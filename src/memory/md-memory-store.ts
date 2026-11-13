@@ -26,6 +26,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { MemorySensitivity, MemoryType } from "../core/contracts.ts";
 import type { JournalStore } from "../core/journal.ts";
+import { MEMORY_VERSIONS_SCHEMA, consumeVersion, consumeVersionOfSequence, migrateVersionColumns, recordVersion, undoVersionOf, versionsOf, type MemoryVersion } from "./memory-versions.ts";
 
 export type MemoryStatus = "active" | "archived";
 export type MemoryConfidence = "low" | "medium" | "high";
@@ -213,7 +214,9 @@ export class MdMemoryStore {
         id TEXT PRIMARY KEY,
         entry TEXT NOT NULL
       );
+      ${MEMORY_VERSIONS_SCHEMA}
     `);
+    migrateVersionColumns(this.#db);
   }
 
   async close(): Promise<void> {
@@ -282,7 +285,10 @@ export class MdMemoryStore {
     };
   }
 
-  stageMutation(entry: MemoryEntry, options: { acceptFileEdit?: boolean } = {}): string {
+  stageMutation(
+    entry: MemoryEntry,
+    options: { acceptFileEdit?: boolean; version?: { change: string; entryBefore: MemoryEntry } } = {},
+  ): string {
     const row = this.#db.prepare("SELECT * FROM memories WHERE id = ?").get(entry.id);
     const previous = row === undefined ? undefined : this.rowToEntry(row as Record<string, unknown>);
     const sourceStatus = previous?.status ?? entry.status;
@@ -303,6 +309,7 @@ export class MdMemoryStore {
     const id = randomUUID();
     this.#db.prepare("INSERT INTO memory_mutations (id, entry) VALUES (?, ?)").run(id, JSON.stringify({
       entry, sourceStatus, sourceHash: hashOptional(sourceText), targetHash: hashOptional(targetText),
+      ...(options.version === undefined ? {} : { version: options.version }),
     }));
     return id;
   }
@@ -324,7 +331,7 @@ export class MdMemoryStore {
     this.#db.prepare("DELETE FROM memory_mutations WHERE id = ?").run(id);
   }
 
-  async applyMutation(id: string): Promise<MemoryEntry | undefined> {
+  async applyMutation(id: string, sequence?: number): Promise<MemoryEntry | undefined> {
     const row = this.#db.prepare("SELECT entry FROM memory_mutations WHERE id = ?").get(id) as { entry: string } | undefined;
     if (row === undefined) return undefined;
     const staged = JSON.parse(row.entry) as {
@@ -332,6 +339,7 @@ export class MdMemoryStore {
       sourceStatus: MemoryStatus;
       sourceHash: string | null;
       targetHash: string | null;
+      version?: { change: string; entryBefore: MemoryEntry };
     };
     const entry = staged.entry;
     const source = this.memoryPath(entry.id, staged.sourceStatus);
@@ -344,7 +352,9 @@ export class MdMemoryStore {
     if (!unchanged && !alreadyWritten) {
       throw new Error(`Memory ${entry.id} changed on disk during recovery; inspect the file before continuing.`);
     }
-    await this.writeEntry(entry, staged.sourceStatus);
+    await this.writeEntry(entry, staged.sourceStatus, staged.version === undefined
+      ? undefined
+      : { change: staged.version.change, entryBefore: staged.version.entryBefore, ...(sequence === undefined ? {} : { sequence }) });
     this.#db.prepare("DELETE FROM memory_mutations WHERE id = ?").run(id);
     return entry;
   }
@@ -622,6 +632,26 @@ export class MdMemoryStore {
     return { active, archived, total: active + archived };
   }
 
+  /** Versions of one memory, newest first. 某条记忆的版本，最新在前。 */
+  versionsOf(id: string): MemoryVersion[] {
+    return versionsOf(this.#db, id);
+  }
+
+  /** The state an undo of the latest change would restore, if any. 撤销最近一次变更会恢复的状态，若存在。 */
+  undoVersionOf(id: string): MemoryVersion | undefined {
+    return undoVersionOf(this.#db, id);
+  }
+
+  /** Marks a version as restored, so the next undo steps one change further back. 标记某版本已被恢复，使下一次撤销再往前回退一次变更。 */
+  consumeVersion(id: string): void {
+    consumeVersion(this.#db, id);
+  }
+
+  /** Marks the version written by a journaled change as restored; used for the undo's own row. 把某次已入账变更写下的版本标记为已恢复；用于撤销自身那行。 */
+  consumeVersionOfSequence(sequence: number): void {
+    consumeVersionOfSequence(this.#db, sequence);
+  }
+
   private async requireEntry(id: string): Promise<MemoryEntry> {
     const entry = await this.get(id);
     if (entry === undefined) throw new Error(`Memory ${id} does not exist.`);
@@ -632,7 +662,11 @@ export class MdMemoryStore {
     return join(this.#contentDirectory, ...(status === "archived" ? ["archived"] : []), `${id}.md`);
   }
 
-  private async writeEntry(entry: MemoryEntry, sourceStatus?: MemoryStatus): Promise<void> {
+  private async writeEntry(
+    entry: MemoryEntry,
+    sourceStatus?: MemoryStatus,
+    version?: { change: string; entryBefore: MemoryEntry; sequence?: number },
+  ): Promise<void> {
     const archived = entry.status === "archived";
     const directory = archived ? join(this.#contentDirectory, "archived") : this.#contentDirectory;
     await mkdir(directory, { recursive: true });
@@ -682,6 +716,14 @@ export class MdMemoryStore {
         entry.summary, entry.content, `${entry.id}.md`, entry.createdAt, entry.updatedAt,
         entry.expiresAt ?? null, entry.accessCount, entry.lastAccessedAt ?? null,
       );
+      // The version row lands in the same transaction as the entry it
+      // precedes: a failed change cannot leave a version claiming a state that
+      // never existed, and a successful one cannot forget what it replaced.
+      // 版本行与它所记录的那次变更在同一事务中落地：失败的变更不会留下宣称从未存在过的状态的版本，
+      // 成功的变更也不会忘记它替换掉了什么。
+      if (version !== undefined) {
+        recordVersion(this.#db, { entryBefore: version.entryBefore, change: version.change, ...(version.sequence === undefined ? {} : { sequence: version.sequence }) });
+      }
       this.#db.exec("COMMIT");
     } catch (error) {
       this.#db.exec("ROLLBACK");

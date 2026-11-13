@@ -15,6 +15,49 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-13 — The Main Agent reads the repository's own rules
+
+- **Claim:** clone-main now loads the workspace's `AGENTS.md` / `CLAUDE.md`,
+  nested Claude files and `.claude/rules/*.md` into its system prompt, labeled as
+  project instructions; imports cannot leave the workspace, and the layer is
+  capped and switchable.
+- **Evidence:** `test/project-instructions.test.ts` 7/7 (order, nested paths,
+  in-workspace import expanded, outside import and symlink escape refused, cycle
+  terminates, budget truncation stated, switch off). End-to-end on this
+  repository: a live Main Agent turn's prompt material records
+  `[{ path: "AGENTS.md", bytes: 11576 }]` and the compiled system prompt
+  contains `npm run gate`; before the change, `grep -rn 'AGENTS.md' src/`
+  returned nothing. Full suite 677/677; typecheck and `npm run gate` pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-13--the-main-agent-reads-project-instruction-files-labeled-by-trust-class),
+  [execution chain](optimizations.md#2026-11-13--the-four-gaps-the-memory-comparison-found).
+
+## 2026-11-13 — A memory edit can be undone
+
+- **Claim:** every owner-visible change to a memory records the state before it,
+  and an undo restores that state as an auditable `memory.updated` reversal; a
+  second undo walks one change further back.
+- **Evidence:** `test/memory-versions.test.ts` 5/5 (edit undone back to the
+  original summary and content, undo event carries `source: "undo"` and the
+  restored version id, second undo returns the prior state, archive undone to
+  `active`, no-op refused, history capped at 20). Full suite 677/677; typecheck
+  and `npm run gate` pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-13--memory-edits-are-versioned-and-an-undo-restores-the-previous-version),
+  [execution chain](optimizations.md#2026-11-13--the-four-gaps-the-memory-comparison-found).
+
+## 2026-11-13 — Consolidation proposes merges from a signal that finally has a caller
+
+- **Claim:** the idle improvement sweep proposes merge suggestions for
+  same-type memories at or above the measured overlap threshold, and approving
+  one authors the merged memory and archives the sources as `retired`, so the
+  merge is reversible.
+- **Evidence:** `test/memory-consolidation.test.ts` 5/5 (reworded pair
+  proposed with the newer statement kept, unrelated and cross-type ignored, an
+  explicit revision excluded, secret excluded, approval leaves one active memory
+  and two archived with reason `retired`). `findConflicts` had no production
+  caller before this. Full suite 677/677; typecheck and `npm run gate` pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-13--background-consolidation-proposes-merges-the-owner-still-decides),
+  [execution chain](optimizations.md#2026-11-13--the-four-gaps-the-memory-comparison-found).
+
 ## 2026-11-11 — The repair lane produced a verified fix
 
 - **Claim:** clone-ai's own repair lane produced the fix for token-aware
