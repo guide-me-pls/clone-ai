@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### MCP config accepts both `env` shapes, a per-server timeout, and refuses duplicate ids
+
+`mcp.json` now accepts `env` as either the MCP spec's variable-name list (`["GITHUB_TOKEN"]`) or the programmatic host's explicit values (`{"API_URL": "http://x"}`); the object form used to be silently dropped, so a server that needed a value started without it. A server may set `timeoutMs` instead of inheriting the client-wide timeout, because a slow tool and a quick one are different requests. Two servers with one id are refused with a clear error rather than shadowing each other. `npm test` is 650 tests, 650 pass, 0 fail; typecheck passes.
+
+`mcp.json` 现在同时接受 `env` 的两种形态：MCP 规范里的变量名列表（`["GITHUB_TOKEN"]`）与程序化宿主的显式值（`{"API_URL": "http://x"}`）；对象形式此前被静默丢弃，需要值的服务器因此不带该值启动。服务器可以设置 `timeoutMs`，而不是继承客户端级超时，因为慢工具与快工具是不同的请求。同 id 的两个服务器会被明确拒绝，而不是互相遮蔽。`npm test` 为 650 个测试、650 通过、0 失败；typecheck 通过。
+
 ### Tokens are calibrated from the provider, not guessed
 
 The token estimate was a character ratio, and a ratio is a property of the tokenizer: measured against this machine's gateway, the same Chinese sentence costs 265 tokens on `kimi-k3.1-pro` and 346 on `gpt-6.1-terra` (30% apart), and a code sample costs 2.0–2.6 characters per token where Latin prose costs 3.2–4.4. `src/agent/token-estimate.ts` now learns the real ratio from `usage.prompt_tokens`, starting at the lowest measured value (3.15) and smoothing each sample; every estimate reports whether it is `bootstrap` or `calibrated`. The loop feeds each response into the calibrator before the next compaction check, so the threshold reflects what the model actually charges. `npm test` is 649 tests, 649 pass, 0 fail; typecheck and `gate` pass.

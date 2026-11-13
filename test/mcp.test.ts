@@ -313,3 +313,22 @@ test("deferring MCP tools exposes one loader instead of every schema", async () 
   const missing = await deferred[0]!.run({ name: "ToolSearch", input: { name: "docs.nope" } }, { workspace: "/tmp" });
   assert.equal(missing.isError, true);
 });
+
+test("mcp.json accepts both env shapes, a per-server timeout, and refuses duplicate ids", async () => {
+  // The object form of `env` was silently dropped, a slow server inherited the
+  // client-wide timeout, and two servers with one id shadowed each other.
+  // `env` 的对象形式被静默丢弃，慢服务器继承客户端级超时，同 id 的两个服务器互相遮蔽。
+  const { parseMcpConfig } = await import("../src/workers/mcp-client.ts");
+  const parsed = parseMcpConfig({
+    servers: [
+      { id: "names", enabled: true, command: "a", env: ["GITHUB_TOKEN"], timeoutMs: 120_000 },
+      { id: "values", enabled: true, command: "b", env: { API_URL: "http://x" } },
+      { id: "names", enabled: true, command: "c" },
+    ],
+  });
+  assert.deepEqual(parsed.errors, [`mcp.json: duplicate server id "names".`]);
+  const [names, values] = parsed.servers;
+  assert.deepEqual(names!.env, ["GITHUB_TOKEN"]);
+  assert.equal(names!.timeoutMs, 120_000);
+  assert.deepEqual(values!.env, { API_URL: "http://x" });
+});
