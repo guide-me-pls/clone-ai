@@ -58,12 +58,21 @@ export interface McpServerConfig {
   transport?: "stdio" | "http";
   command?: string;
   args?: string[];
-  /** Environment variable NAMES to forward from the owner's environment. 从所有者环境透传的环境变量*名*。 */
-  env?: string[];
+  /**
+   * Environment for the server. The MCP config format declares variable NAMES
+   * to forward from the owner's environment; the programmatic host format
+   * passes explicit values. Both are accepted; neither forwards anything the
+   * server did not ask for.
+   * 服务器的环境。MCP 配置格式声明从所有者环境透传的变量*名*，程序化宿主格式传显式值。
+   * 两者都接受；都不会转交服务器未要求的变量。
+   */
+  env?: string[] | Record<string, string>;
   /** Streamable HTTP endpoint, used when transport is "http". transport 为 "http" 时使用的端点。 */
   url?: string;
   /** Parent directory the server runs in. 服务器运行所在目录。 */
   cwd?: string;
+  /** Per-server request timeout; absent means the client-wide default. 每服务器请求超时；缺省使用客户端级默认值。 */
+  timeoutMs?: number;
   tools?: McpToolDeclaration[];
 }
 
@@ -140,6 +149,12 @@ export function parseMcpConfig(raw: unknown, where = MCP_CONFIG_FILE): McpConfig
       continue;
     }
     const transport = record.transport === "http" ? "http" : "stdio";
+    // One slow server must not inherit the client-wide timeout: a long-running
+    // tool and a quick one are different requests.
+    // 一个慢服务器不该继承客户端级的超时：长工具与快工具是不同的请求。
+    const timeoutMs = typeof record.timeoutMs === "number" && Number.isFinite(record.timeoutMs) && record.timeoutMs > 0
+      ? Math.trunc(record.timeoutMs)
+      : undefined;
     const server: McpServerConfig = {
       id,
       // Absent means disabled. Only a literal `true` turns a server on.
@@ -148,9 +163,20 @@ export function parseMcpConfig(raw: unknown, where = MCP_CONFIG_FILE): McpConfig
       transport,
       ...(typeof record.command === "string" && record.command.trim().length > 0 ? { command: record.command.trim() } : {}),
       ...(Array.isArray(record.args) ? { args: record.args.filter((item): item is string => typeof item === "string") } : {}),
-      ...(Array.isArray(record.env) ? { env: record.env.filter((item): item is string => typeof item === "string") } : {}),
+      // The MCP config format declares variable names (`"env": ["GITHUB_TOKEN"]`);
+      // the programmatic host format passes values. Accepting only the array
+      // silently dropped the standard object form, so a server that needed a
+      // value started without it.
+      // MCP 配置格式声明变量名（`"env": ["GITHUB_TOKEN"]`），程序化宿主格式传值。
+      // 只接受数组会静默丢弃标准的对象形式，需要值的服务器因此在不带该值的情况下启动。
+      ...(Array.isArray(record.env)
+        ? { env: record.env.filter((item): item is string => typeof item === "string") }
+        : typeof record.env === "object" && record.env !== null
+          ? { env: Object.fromEntries(Object.entries(record.env as Record<string, unknown>).filter(([, value]) => typeof value === "string")) as Record<string, string> }
+          : {}),
       ...(typeof record.url === "string" && record.url.trim().length > 0 ? { url: record.url.trim() } : {}),
       ...(typeof record.cwd === "string" && record.cwd.trim().length > 0 ? { cwd: record.cwd.trim() } : {}),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
       tools: parseToolDeclarations(record.tools, `${where}: server ${id}`, errors),
     };
     if (server.enabled && transport === "stdio" && server.command === undefined) {
@@ -159,6 +185,13 @@ export function parseMcpConfig(raw: unknown, where = MCP_CONFIG_FILE): McpConfig
     }
     if (server.enabled && transport === "http" && server.url === undefined) {
       errors.push(`${where}: server ${id} is enabled but has no "url".`);
+      continue;
+    }
+    if (servers.some((existing) => existing.id === id)) {
+      // Two servers with one id would both register tools under one prefix and
+      // the client resolves by id, so one silently shadowed the other.
+      // 两个同 id 服务器会把工具注册在同一前缀下，而客户端按 id 解析，于是一个静默遮住另一个。
+      errors.push(`${where}: duplicate server id "${id}".`);
       continue;
     }
     servers.push(server);
@@ -411,7 +444,7 @@ export class McpClient implements McpClientLike {
       // owner's whole environment, so tool credentials cannot leak through it.
       // 白名单只有变量名、没有值：服务器不继承所有者的完整环境，工具凭据无法经由它泄漏。
       env: environmentFor(server, this.#environment),
-      timeoutMs: this.#timeoutMs,
+      timeoutMs: server.timeoutMs ?? this.#timeoutMs,
     });
     this.#stdio.set(server.id, connection);
     await connection.initialize();
@@ -460,7 +493,7 @@ export class McpClient implements McpClientLike {
         ...(state.sessionId === undefined ? {} : { "mcp-session-id": state.sessionId }),
       },
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-      signal: AbortSignal.timeout(this.#timeoutMs),
+      signal: AbortSignal.timeout(server.timeoutMs ?? this.#timeoutMs),
     });
     const session = response.headers.get("mcp-session-id");
     if (session !== null) state.sessionId = session;
@@ -766,10 +799,18 @@ export function mcpServersForStep(input: {
       refused.push({ server: server.id, reason: `tool ${blocked.name}: ${decision.allowed ? "" : decision.reason}`.trim() });
       continue;
     }
+    // A value env is passed as written; a name env becomes a variable
+    // reference the CLI expands from its own environment.
+    // 值形式的 env 原样传递；名形式的 env 变成 CLI 从自身环境展开的变量引用。
+    const env = server.env === undefined
+      ? undefined
+      : Array.isArray(server.env)
+        ? (server.env.length === 0 ? undefined : variableReferences(server.env))
+        : server.env;
     document[server.id] = {
       command: server.command,
       args: server.args ?? [],
-      ...(server.env === undefined || server.env.length === 0 ? {} : { env: variableReferences(server.env) }),
+      ...(env === undefined ? {} : { env }),
     };
     allowedTools.push(...risk.map((tool) => `mcp__${server.id}__${tool.name}`));
   }
