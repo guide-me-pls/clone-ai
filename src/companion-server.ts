@@ -1510,6 +1510,7 @@ async function handleRequest(
         file: { path: context.memoryGovernance.filePathFor(memory) },
         evidence,
         usage,
+        versions: await context.memoryGovernance.versions(memory.id),
       });
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "The memory could not be read." });
@@ -1537,6 +1538,24 @@ async function handleRequest(
   if (request.method === "PATCH" && governedMatch?.[1] !== undefined) {
     const id = decodeURIComponent(governedMatch[1]);
     const body = await readJsonBody(request);
+    if (body.undo === true) {
+      // An undo is its own decision, not a field edit: it restores the whole
+      // previous version, so a body that also carries fields would be two
+      // contradictory instructions in one request.
+      // 撤销是独立的决定，不是字段编辑：它恢复整个上一版本，因此同时携带字段的请求体就是一条
+      // 请求里两条互相矛盾的指令。
+      if (Object.keys(body).some((key) => key !== "undo")) {
+        sendJson(response, 400, { error: "An undo restores the previous version whole; send only { undo: true }." });
+        return;
+      }
+      try {
+        const { memory, restored } = await context.memoryGovernance.undo(id);
+        sendJson(response, 200, { memory, undo: { restoredVersion: restored.id, recordedAt: restored.recordedAt } });
+      } catch (error: unknown) {
+        sendJson(response, 400, { error: error instanceof Error ? error.message : "The memory could not be restored." });
+      }
+      return;
+    }
     const update: Parameters<MemoryGovernance["update"]>[1] = {};
     if (typeof body.summary === "string") update.summary = body.summary;
     if (typeof body.content === "string") update.content = body.content;

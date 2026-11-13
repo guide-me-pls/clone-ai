@@ -45,6 +45,8 @@ Usage:
   clone-ai resume <n>            Continue conversation number <n> (see sessions)
   clone-ai new "<请求>"           Start a fresh conversation
   clone-ai memory [query]        List or search reviewed memories
+  clone-ai memory versions <id>  Show a memory's recorded changes
+  clone-ai memory undo <id>      Take back the last change to a memory
   clone-ai improve [list|stats|sweep|approve <id>|dismiss <id>]
                                  Review what the improvement loop suggests
   clone-ai export [dir]          Copy conversations, memories and the journal to dir
@@ -105,7 +107,7 @@ async function main(): Promise<number> {
     case "sessions": return listSessions(paths.dataDirectory);
     case "resume": return resumeSession(paths.dataDirectory, argv[1]);
     case "new": return converse(paths.dataDirectory, argv.slice(1).join(" ").trim(), true);
-    case "memory": return showMemory(paths.dataDirectory, argv.slice(1).join(" ").trim());
+    case "memory": return memoryCommand(paths.dataDirectory, argv.slice(1));
     case "improve": return improveCommand(paths.dataDirectory, argv.slice(1));
     case "export": return exportCommand(paths.dataDirectory, argv[1]);
     case "cases": return showCases(paths.dataDirectory);
@@ -335,6 +337,49 @@ async function resumeSession(dataDirectory: string, choice: string | undefined):
   console.log(`Continuing conversation #${index} (${row.messages} msgs): ${row.preview || "(no preview)"}`);
   console.log("The GUI and the CLI now share this conversation.");
   return 0;
+}
+
+/**
+ * `memory` is the owner's handle on the library: list or search by default,
+ * `versions <id>` to see what changed, `undo <id>` to take back the last change.
+ * The undo deliberately restores one whole version rather than merging fields:
+ * a partial undo has no obvious meaning for the owner reading the history.
+ * `memory` 是所有者操作记忆库的入口：默认列出或搜索，`versions <id>` 查看变更，`undo <id>` 撤回
+ * 最后一次变更。撤销刻意恢复整个版本而不是合并字段：对阅读历史的所有者来说，部分撤销没有明确含义。
+ */
+async function memoryCommand(dataDirectory: string, args: string[]): Promise<number> {
+  const [action, ...rest] = args;
+  if (action === "versions" || action === "undo") {
+    const id = rest[0];
+    if (id === undefined) {
+      console.error(`memory ${action} needs a memory id.`);
+      return 1;
+    }
+    const store = new MdMemoryStore({ dataDirectory });
+    const journal = createJournalStore(dataDirectory);
+    const governance = new MemoryGovernance({ store, journal });
+    try {
+      if (action === "versions") {
+        const versions = await governance.versions(id);
+        if (versions.length === 0) console.log("No recorded changes for this memory.");
+        for (const version of versions) {
+          console.log(`${version.recordedAt}  ${version.change}${version.sequence === undefined ? "" : `  #${version.sequence}`}  ${version.entry.summary}`);
+        }
+        return 0;
+      }
+      const { memory, restored } = await governance.undo(id);
+      console.log(`Restored ${memory.id} to its state before ${restored.change} (${restored.recordedAt}).`);
+      console.log(`  ${memory.summary}`);
+      return 0;
+    } catch (error: unknown) {
+      console.error(error instanceof Error ? error.message : String(error));
+      return 1;
+    } finally {
+      await governance.close();
+      (journal as { close?: () => void }).close?.();
+    }
+  }
+  return showMemory(dataDirectory, args.join(" ").trim());
 }
 
 async function showMemory(dataDirectory: string, query: string): Promise<number> {

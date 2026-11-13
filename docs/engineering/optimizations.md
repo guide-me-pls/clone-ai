@@ -31,6 +31,76 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-13 — The four gaps the memory comparison found
+
+- **Goal / hypothesis:** A comparison against Claude Code 2.1.319's memory
+  architecture found four things clone-ai lacked: the Main Agent never read the
+  workspace's instruction files, a landed memory edit could not be undone,
+  recall could only return a list (never a grounded synthesis), and the
+  conflict detector had no production caller. Closing each through clone-ai's
+  governance should raise fidelity without giving up the audit trail.
+- **Trade-off:** [project
+  instructions](../architecture/trade-offs.md#2026-11-13--the-main-agent-reads-project-instruction-files-labeled-by-trust-class),
+  [memory versions](../architecture/trade-offs.md#2026-11-13--memory-edits-are-versioned-and-an-undo-restores-the-previous-version),
+  [synthesized
+  recall](../architecture/trade-offs.md#2026-11-13--recall-can-synthesize-a-paragraph-but-the-paragraph-is-never-a-memory),
+  [consolidation](../architecture/trade-offs.md#2026-11-13--background-consolidation-proposes-merges-the-owner-still-decides).
+- **Change:** new `src/main-agent/project-instructions.ts` (discovery, `@import`
+  at depth 3 inside the workspace only, 64 KiB budget, `CLONE_AI_PROJECT_INSTRUCTIONS`
+  switch) wired into `prompt.ts` and recorded in `prompt-snapshot.ts`; new
+  `src/memory/memory-versions.ts` (`memory_versions` table, 20-per-memory cap,
+  `consumed_at` migration) wired into `md-memory-store.ts` (`commitVersioned`,
+  `applyMutation` sequence, `consumeVersion`) and `memory-governance.ts`
+  (`undo`, `versions`); new `src/memory/synthesized-recall.ts` (prompt,
+  deterministic citation validation, opt-in completion) wired into
+  `memory-push.ts` with a `synthesize` switch; new `src/memory/consolidation.ts`
+  (`findMergeCandidates`) wired into `ImprovementService.sweep`/`approve` with a
+  `merge` suggestion kind. Surfaces: `clone-ai memory versions|undo`, `PATCH
+  /api/memory/governed/:id { undo: true }`, `versions` in the memory detail
+  response, and a change list plus undo button in `apps/desktop/ui/memory.js`.
+- **Eval:** `npm test` → **677 tests, 677 pass, 0 fail** (baseline before this
+  change: 650/650). New deterministic tests: `test/project-instructions.test.ts`
+  7/7 (AGENTS-before-CLAUDE order, nested paths, in-workspace import expanded,
+  outside import and symlink escape refused, cycle terminates, byte budget
+  truncates with a stated warning, switch off); `test/memory-versions.test.ts`
+  5/5 (edit undoable, undo journaled with `source: "undo"`, second undo walks
+  back, archive undoable, no-op refused, 20-row cap);
+  `test/synthesized-recall.test.ts` 10/10 (given-only citations, every sentence
+  cited, `NO_ANSWER`, minimum of three non-secret memories, secret never in the
+  prompt, provider failure falls back, push journals the mode, opt-out leaves
+  the list unchanged); `test/memory-consolidation.test.ts` 5/5 (merge proposed,
+  unrelated/different-type ignored, revision excluded, secret excluded, approval
+  authors + archives). `npm run typecheck` → exit 0; `npm run gate` → PASS,
+  baseline unchanged.
+- **Benchmark run:** none. All four changes are deterministic judgment or
+  wiring; the synthetic-recall path makes a model call in production, but the
+  benchmark for it (`benchmark/long-memory-eval.ts`) measures retrieval only and
+  was not extended, so the synthesis gain is **assumed**, not measured — the
+  trade-off entry says so.
+- **Execution chain:** read the memory subsystem (`src/memory/*`,
+  `src/main-agent/memory-*`), then the installed Claude Code 2.1.319 binary for
+  the comparison (`memory_recall` select/synthesize schema, `autoDreamEnabled`,
+  `rewind_removed_memory_write`, `index_too_large` caps). Wrote the four
+  trade-off entries before code. Implemented in order 6 → 4 → 3 → 5, typechecking
+  after each. Two failures found and fixed during the work: the second undo
+  toggled instead of walking back (fixed with a `consumed_at` column and an
+  immediate consume of the undo's own row), and the synthesis prompt's example
+  citation `[mem-1234]` was itself parsed as an invented citation and made every
+  synthesis fail (fixed by using `[memory-id]` as the example). Verified the
+  instruction layer end to end against this repository: a live turn's prompt
+  material records `AGENTS.md` (11,576 bytes) and the compiled system prompt
+  contains `npm run gate`.
+- **Pros:** every change kept the governance invariant (the model still cannot
+  write memory; consolidation only suggests), the deterministic tests caught two
+  real design bugs before any model was involved, and the instruction loader was
+  proved against the repository's own `AGENTS.md` rather than a fixture.
+- **Cons / next time:** the memory-versions table needed a migration for a
+  column added within the same change — the schema should have included
+  `consumed_at` from the first commit. Synthesis has no measured benefit yet;
+  the honest next step is the LongMemEval answer-layer slice, not shipping it
+  on by default (it is off).
+- **Reversal condition:** copied from each trade-off entry.
+
 ### 2026-11-09 — Merging the repair line with the shared-loop line
 
 - **Goal / hypothesis:** local `main` and `origin/main` had diverged from the

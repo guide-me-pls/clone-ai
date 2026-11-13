@@ -26,6 +26,51 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-13 — 记忆对比找出的四项差距
+
+- **目标 / 假设：** 与 Claude Code 2.1.319 记忆架构的对比发现 clone-ai 缺四样东西：主 Agent 从不读取
+  工作区的指令文件、已落地的记忆编辑无法撤销、召回只能返回列表（无法给出有依据的合成）、冲突检测器没有
+  生产调用方。通过 clone-ai 自己的治理补齐每一件，应当在保住审计轨迹的同时提高保真度。
+- **取舍：** [项目指令](../architecture/trade-offs.zh-CN.md#2026-11-13--主-agent-读取项目指令文件并按信任类标注)、
+  [记忆版本](../architecture/trade-offs.zh-CN.md#2026-11-13--记忆编辑带版本撤销恢复上一个版本)、
+  [合成召回](../architecture/trade-offs.zh-CN.md#2026-11-13--召回可以合成一段话但那段话永远不是记忆)、
+  [巩固](../architecture/trade-offs.zh-CN.md#2026-11-13--后台巩固只提出合并建议仍由所有者决定)。
+- **变更：** 新增 `src/main-agent/project-instructions.ts`（发现文件、`@import` 深度 3 且仅限工区内、
+  64 KiB 预算、`CLONE_AI_PROJECT_INSTRUCTIONS` 开关），接入 `prompt.ts` 并记入 `prompt-snapshot.ts`；
+  新增 `src/memory/memory-versions.ts`（`memory_versions` 表、每条 20 版上限、`consumed_at` 迁移），
+  接入 `md-memory-store.ts`（`commitVersioned`、`applyMutation` 序号、`consumeVersion`）与
+  `memory-governance.ts`（`undo`、`versions`）；新增 `src/memory/synthesized-recall.ts`（提示词、
+  确定性引用校验、可选补全），以 `synthesize` 开关接入 `memory-push.ts`；新增
+  `src/memory/consolidation.ts`（`findMergeCandidates`），以 `merge` 建议类型接入
+  `ImprovementService.sweep`/`approve`。界面入口：`clone-ai memory versions|undo`、
+  `PATCH /api/memory/governed/:id { undo: true }`、记忆详情响应中的 `versions`，以及
+  `apps/desktop/ui/memory.js` 里的变更列表与撤销按钮。
+- **Eval：** `npm test` → **677 个测试、677 通过、0 失败**（变更前基线 650/650）。新增确定性测试：
+  `test/project-instructions.test.ts` 7/7（AGENTS 先于 CLAUDE、嵌套路径、工区内导入展开、区外导入与
+  符号链接逃逸被拒绝、循环终止、字节预算截断并给出警告、开关关闭）；`test/memory-versions.test.ts`
+  5/5（编辑可撤销、撤销以 `source: "undo"` 入账、二次撤销继续回退、归档可撤销、无变更时拒绝、
+  20 行上限）；`test/synthesized-recall.test.ts` 10/10（只引用给过的 id、每句带引用、`NO_ANSWER`、
+  至少三条非 secret 记忆、secret 不进提示词、Provider 失败退回、推送记录模式、关闭时列表不变）；
+  `test/memory-consolidation.test.ts` 5/5（提出合并、无关与不同类型忽略、修订排除、secret 排除、
+  批准后手写并归档）。`npm run typecheck` → 退出 0；`npm run gate` → PASS，基线未变。
+- **Benchmark run：** 无。四项都是确定性判断或接线；合成路径在生产中会发起模型调用，但对应的
+  benchmark（`benchmark/long-memory-eval.ts`）只测检索，未扩展，因此合成的收益是**假设**而非实测——
+  取舍条目已如实标注。
+- **执行链路：** 先读记忆子系统（`src/memory/*`、`src/main-agent/memory-*`），再从已安装的
+  Claude Code 2.1.319 二进制提取对比材料（`memory_recall` 的 select/synthesize Schema、
+  `autoDreamEnabled`、`rewind_removed_memory_write`、`index_too_large` 上限）。先写四条取舍条目再写代码。
+  按 6 → 4 → 3 → 5 的顺序实现，每步后跑 typecheck。过程中发现并修复两个真实失败：第二次撤销会在两个
+  状态间来回切换而不是继续回退（用 `consumed_at` 列并立即消费撤销自身那行修复）；合成提示词里的示例引用
+  `[mem-1234]` 本身被解析成编造引用，导致每次合成都失败（改用 `[memory-id]` 作示例修复）。对本仓库做
+  端到端验证：真实回合的提示词材料记录了 `AGENTS.md`（11,576 字节），编译后的系统提示词包含
+  `npm run gate`。
+- **优点：** 每项变更都保住了治理不变式（模型仍不能写记忆，巩固只建议），确定性测试在任何模型介入之前
+  就抓出两个真实设计缺陷，指令加载器用本仓库自己的 `AGENTS.md` 验证而不是夹具。
+- **缺点 / 下次：** 记忆版本表在同一次变更内为新增的列做了一次迁移——`consumed_at` 本应从第一次提交就
+  在 Schema 里。合成还没有实测收益；诚实的下一步是 LongMemEval 的答案层切片，而不是默认打开它（当前
+  默认关闭）。
+- **推翻条件：** 复制自各条取舍条目。
+
 ### 2026-11-09 — 合并修复线与共享循环线
 
 - **目标 / 假设：** 本地 `main` 与 `origin/main` 从同一基座分叉：一边是修复通道、自检回路与

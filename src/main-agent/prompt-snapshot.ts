@@ -59,6 +59,11 @@ export interface MainAgentPromptMaterials {
   briefing?: string;
   /** Why the briefing was unavailable; the agent ran on the charter alone. 简报不可用的原因；此时 Agent 仅凭 charter 运行。 */
   briefingError?: string;
+  /** Project instruction text appended to the system prompt, when any was readable. 追加到系统提示词的项目指令文本，可读时存在。 */
+  instructions?: string;
+  /** Instruction files that contributed, and the ones that were refused. 贡献了内容的指令文件，以及被拒绝的那些。 */
+  instructionSources?: Array<{ path: string; bytes: number; imports: string[] }>;
+  instructionWarnings?: string[];
   /** The exact system prompt handed to the SDK. 交给 SDK 的完整系统提示词。 */
   systemPrompt: string;
   tools: readonly RegisteredToolSnapshot[];
@@ -122,6 +127,9 @@ export async function capturePromptSnapshot(
     charter: materials.charter,
     ...(materials.briefing === undefined ? {} : { briefing: materials.briefing }),
     ...(materials.briefingError === undefined ? {} : { briefingError: materials.briefingError }),
+    ...(materials.instructions === undefined ? {} : { instructions: materials.instructions }),
+    ...(materials.instructionSources === undefined ? {} : { instructionSources: materials.instructionSources }),
+    ...(materials.instructionWarnings === undefined ? {} : { instructionWarnings: materials.instructionWarnings }),
     systemPrompt: materials.systemPrompt,
     tools: materials.tools,
   };

@@ -201,6 +201,11 @@ function classifyCandidate(candidate: MemoryCandidateInput): MemoryEvidence["kin
   return "project_fact";
 }
 
+/** Class of one memory, exposed so a synthesized paragraph ranks the same way the pushed list does. 暴露单条记忆的类别，使合成段落与推送列表使用同一套排序。 */
+export function memoryEvidenceKind(candidate: Pick<MemoryCandidateInput, "type" | "summary">): MemoryEvidence["kind"] {
+  return classifyCandidate({ ...candidate, id: "", score: 0 });
+}
+
 /**
  * Strips instruction-shaped framing so a mined memory cannot address the
  * worker as if it were the supervisor. The content is still owner-visible in

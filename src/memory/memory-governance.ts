@@ -16,6 +16,7 @@
 import type { Evidence, MemoryCandidate, NewJournalEvent } from "../core/contracts.ts";
 import type { JournalStore } from "../core/journal.ts";
 import { MdMemoryStore, type MemoryEntry } from "./md-memory-store.ts";
+import type { MemoryVersion } from "./memory-versions.ts";
 import type { MemoryType } from "../core/contracts.ts";
 import { workspaceExecutionLock } from "../core/workspace-lock.ts";
 import { readForRun, readTypes } from "../core/journal-types.ts";
@@ -209,8 +210,69 @@ export class MemoryGovernance {
           fields: Object.keys(update),
           updatedAt: entry.updatedAt,
         },
-      });
+      }, { recordVersionAs: "memory.updated" });
       return entry;
+    });
+  }
+
+  /**
+   * Restores the state before the most recent change and journals the undo.
+   *
+   * The undo is an ordinary `memory.updated` event, not a new event type: from
+   * the outside it is a change like any other, and every consumer of the
+   * journal already understands it. The payload says `source: "undo"` and names
+   * the version restored, so the audit trail shows a reversal rather than an
+   * unexplained edit. A second undo takes back the change before it, which is
+   * why the restored state is itself versioned.
+   *
+   * 恢复最近一次变更之前的状态，并记录这次撤销。
+   *
+   * 撤销是一条普通的 `memory.updated` 事件，而不是新的事件类型：从外部看它与其他变更无异，所有
+   * Journal 消费者本来就能理解。载荷写明 `source: "undo"` 并指出恢复的是哪个版本，因此审计轨迹显示
+   * 的是一次回退，而不是一次无从解释的编辑。第二次撤销会撤回再往前的那次变更——这正是被恢复的状态
+   * 本身也要写入版本的原因。
+   */
+  async undo(memoryId: string): Promise<{ memory: MemoryEntry; restored: MemoryVersion }> {
+    return this.withLock(async () => {
+      await this.recoverUnlocked();
+      const version = this.#store.undoVersionOf(memoryId);
+      if (version === undefined) throw new Error("This memory has no recorded change to undo.");
+      const before = version.entry;
+      const current = await this.#store.get(memoryId);
+      if (current === undefined) throw new Error("This memory does not exist.");
+      const entry = await this.#store.prepareUpdate(memoryId, {
+        summary: before.summary,
+        content: before.content,
+        type: before.type,
+        confidence: before.confidence,
+        sensitivity: before.sensitivity,
+        status: before.status,
+        ...(before.expiresAt === undefined ? {} : { expiresAt: before.expiresAt }),
+      });
+      await this.applyRecorded(entry, {
+        type: "memory.updated",
+        payload: {
+          memoryId,
+          source: "undo",
+          restoredVersion: version.id,
+          restoredRecordedAt: version.recordedAt,
+          fields: ["summary", "content", "type", "confidence", "sensitivity", "status", "expiresAt"],
+          updatedAt: entry.updatedAt,
+        },
+      }, { recordVersionAs: "memory.updated:undo" });
+      // Consume only after the write landed: a failed undo must leave the same
+      // version available to retry, not silently point at the one before it.
+      // 只在写入落地后消费：失败的撤销必须让同一版本仍可重试，而不是悄悄指向再前一个。
+      this.#store.consumeVersion(version.id);
+      return { memory: entry, restored: version };
+    });
+  }
+
+  /** The recorded versions of one memory, newest first. 某条记忆的记录版本，最新在前。 */
+  async versions(memoryId: string): Promise<MemoryVersion[]> {
+    return this.withLock(async () => {
+      await this.recoverUnlocked();
+      return this.#store.versionsOf(memoryId);
     });
   }
 
@@ -222,7 +284,7 @@ export class MemoryGovernance {
       await this.applyRecorded(entry, {
         type: "memory.archived",
         payload: { memoryId, reason, archivedAt: new Date().toISOString() },
-      });
+      }, { recordVersionAs: `memory.archived:${reason}` });
       return entry;
     });
   }
@@ -238,7 +300,7 @@ export class MemoryGovernance {
         await this.applyRecorded(entry, {
           type: "memory.archived",
           payload: { memoryId: memory.id, reason: "expired", archivedAt: new Date().toISOString() },
-        });
+        }, { recordVersionAs: "memory.archived:expired" });
       }
       return expired.map((entry) => entry.id);
     });
@@ -263,7 +325,7 @@ export class MemoryGovernance {
         await this.applyRecorded(entry, {
           type: "memory.archived",
           payload: { memoryId: memory.id, reason: "idle", idleDays, archivedAt: new Date().toISOString() },
-        });
+        }, { recordVersionAs: "memory.archived:idle" });
       }
       return idle.map((entry) => entry.id);
     });
@@ -277,7 +339,7 @@ export class MemoryGovernance {
       await this.applyRecorded(entry, {
         type: "memory.restored",
         payload: { memoryId, restoredAt: entry.updatedAt },
-      });
+      }, { recordVersionAs: "memory.restored" });
       return entry;
     });
   }
@@ -302,7 +364,7 @@ export class MemoryGovernance {
       return this.#store.syncFromFiles(async (entry, action) => {
         await this.applyRecorded(entry, action === "archived"
           ? { type: "memory.archived", payload: { memoryId: entry.id, reason: "deleted", source: "files", archivedAt: entry.updatedAt } }
-          : { type: "memory.updated", payload: { memoryId: entry.id, source: "files", action, updatedAt: entry.updatedAt } }, { acceptFileEdit: true });
+          : { type: "memory.updated", payload: { memoryId: entry.id, source: "files", action, updatedAt: entry.updatedAt } }, { acceptFileEdit: true, recordVersionAs: action === "archived" ? "memory.archived:deleted" : "memory.updated:files" });
       });
     });
   }
@@ -407,7 +469,10 @@ export class MemoryGovernance {
       const payload = event.payload as { mutationId?: unknown } | null;
       const id = payload?.mutationId;
       if (typeof id !== "string" || !pending.has(id)) continue;
-      await this.#store.applyMutation(id);
+      // The journal assigned the sequence before the crash, so the replayed
+      // version row points at the same event the live write would have named.
+      // Journal 在崩溃前已分配序号，因此重放的版本行指向与实时写入相同的那个事件。
+      await this.#store.applyMutation(id, event.sequence);
       pending.delete(id);
     }
     // Under the cross-process governance lock, an unjournaled stage cannot be
@@ -416,13 +481,31 @@ export class MemoryGovernance {
     for (const id of pending) this.#store.discardMutation(id);
   }
 
-  private async applyRecorded(entry: MemoryEntry, event: NewJournalEvent, options: { acceptFileEdit?: boolean } = {}): Promise<void> {
-    const mutationId = this.#store.stageMutation(entry, options);
-    await this.#journal.append({
+  private async applyRecorded(entry: MemoryEntry, event: NewJournalEvent, options: { acceptFileEdit?: boolean; recordVersionAs?: string } = {}): Promise<void> {
+    // The version rows travel with the staged mutation, so a recovery replay
+    // records the same history the live write did. `recordVersionAs` marks a
+    // change that rewrites an existing memory — an undo is one — and never a
+    // first write, which has no prior state worth keeping.
+    // 版本行随暂存变更一起保存，因此恢复重放记录的历史与实时写入相同。`recordVersionAs` 标记的是
+    // 重写已有记忆的变更——撤销就是一种——而非首次写入，后者没有值得保留的先前状态。
+    const previous = options.recordVersionAs === undefined ? undefined : await this.#store.get(entry.id);
+    const mutationId = this.#store.stageMutation(entry, {
+      ...options,
+      ...(previous === undefined || options.recordVersionAs === undefined
+        ? {}
+        : { version: { change: options.recordVersionAs, entryBefore: previous } }),
+    });
+    const recorded = await this.#journal.append({
       ...event,
       payload: { ...(event.payload as Record<string, unknown>), mutationId },
     });
-    await this.#store.applyMutation(mutationId);
+    await this.#store.applyMutation(mutationId, recorded.sequence);
+    // The undo's own row is history, not something a later undo should
+    // restore: consuming it immediately keeps "undo, undo" walking backwards.
+    // 撤销自身写下的那行是历史，不是后续撤销应恢复的目标：立即消费它，使"撤销、再撤销"持续回退。
+    if (options.recordVersionAs === "memory.updated:undo" && previous !== undefined) {
+      this.#store.consumeVersionOfSequence(recorded.sequence);
+    }
   }
 
   private async assertEvidenceExists(evidenceIds: readonly string[], runId: string): Promise<void> {

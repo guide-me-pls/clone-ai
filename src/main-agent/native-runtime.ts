@@ -203,6 +203,7 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
     dataDirectory: options.dataDirectory,
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     query: options.text,
+    ...(options.environment === undefined ? {} : { environment: options.environment }),
   });
   const tools = nativeTools(options.dataDirectory, options.signal);
   // Skills and MCP are opt-in per turn: without roots or servers the tool table
@@ -223,6 +224,11 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
     charterVersion: compiled.charterVersion,
     ...(compiled.briefing === undefined ? {} : { briefing: compiled.briefing }),
     ...(compiled.briefingError === undefined ? {} : { briefingError: compiled.briefingError }),
+    ...(compiled.instructions === undefined ? {} : { instructions: compiled.instructions.text }),
+    ...(compiled.instructions === undefined ? {} : { instructionSources: compiled.instructions.sources }),
+    ...(compiled.instructions === undefined || compiled.instructions.warnings.length === 0
+      ? {}
+      : { instructionWarnings: compiled.instructions.warnings }),
     systemPrompt: compiled.systemPrompt,
     tools: tools.map((tool) => ({
       name: tool.name,
