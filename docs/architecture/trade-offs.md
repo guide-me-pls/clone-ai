@@ -63,6 +63,50 @@ that is impossible should a dedicated script become a documented entry point. If
 external users report relying on the `clone-ai` binary, restore a compatibility
 shim or publish a migration path before removing the workaround.
 
+## 2026-11-17 — A tool result can carry an image, so a worker can see what it rendered
+
+**Decision.** Tool results may now return images, and MCP image blocks are
+forwarded instead of replaced by `[image block omitted]`. The worker can be
+given the owner's installed **Playwright MCP** server (`browser_navigate`,
+`browser_resize`, `browser_evaluate`, `browser_take_screenshot`) through the
+existing `mcp.json`, so it renders its own scene and *looks at it* inside one
+turn, instead of writing code it cannot see and being judged by an external
+checker afterwards. No new bespoke screenshot tool is written: the first choice
+is the existing, maintained server.
+
+**Evidence.** Worker tools were exactly `read_file`, `list_directory`,
+`write_file`, `edit_file`; `NativeToolSpec.run` returns `{ output: string }`
+(`src/workers/native-agent-worker.ts:58`), `AgentToolResult.content` is
+`string` (`src/agent/loop.ts:43`), and the OpenAI-compatible serializer turns any
+non-string tool content into `""`
+(`src/workers/openai-compatible-client.ts:135-140`). `textContent` in the MCP
+client replaced every non-text block with `[image block omitted]`
+(`src/workers/mcp-client.ts:744-756`). The consequence was measured over five
+attempts: the worker could satisfy a data contract 24/24 while the render was
+"建模的细节完全不够，跟一个平面图一样", and the only way to close the gap was
+external checks plus prompt edits — repeated query-adjust cycles the owner
+explicitly does not want ("一次 query -> answer 好"). Playwright MCP is already
+installed at
+`~/.config/magpie/mcp-npm/1b491aa4633d80d1/node_modules/@playwright/mcp/cli.js`
+and exposes those four tools, one of which returns PNG content blocks.
+
+**What it costs.** An image in a tool result is re-sent on every later round of
+the same turn, so one 1920×1080 screenshot costs roughly 1.5k tokens per round
+(a fixed per-image charge already exists in `token-estimate.ts`); a worker that
+screenshots every iteration will spend its budget on images. The MCP server is
+an execution surface: Playwright launches a real browser and can reach
+`file://` and the network, so it must be declared with an explicit risk in
+`mcp.json` and limited to the workspace, not offered by default. Images are
+untrusted input rendered by a third-party page, which is why they travel as
+`image_url` data with no tool-call semantics attached.
+
+**Reversal condition.** If workers burn their round or token budget re-reading
+screenshots, cap images per turn or downscale to 1280×720 before forwarding. If
+the MCP image path proves flaky across providers (some gateways reject image
+parts in tool messages), fall back to a first-party `render_scene` tool that
+returns one PNG and a numeric summary. Do not go back to string-only tool
+results: that is what forced the external-checker loop this replaces.
+
 ## 2026-11-17 — Detail is graded by counts and shadows, not by prose
 
 **Decision.** The Forbidden City benchmark gains four hard checks that make
@@ -2209,3 +2253,45 @@ flood of approvals trains the owner to approve blindly, which defeats the gate.
 ones are decided.
 
 **Status:** the bucket size and the cap of 10 are assumed, not tuned.
+
+## 2026-11-17 — Local browser verification through Playwright MCP
+
+**Decided:** a native worker may open the page it just wrote, through an
+owner-enabled Playwright MCP server and a loopback static server. Only the
+observation subset is declared (`browser_navigate`, `browser_console_messages`,
+`browser_snapshot`, `browser_evaluate`, `browser_take_screenshot`,
+`browser_press_key`, `browser_resize`, `browser_wait_for`,
+`browser_navigate_back`, `browser_close`); `browser_run_code_unsafe`, file
+upload and drag/drop stay undeclared. The browser is headless, isolated, rooted
+at the workspace, and limited to the local preview origin. A narrow standing
+policy grants `network read 127.0.0.1`; `browser_navigate` is declared `read`,
+`browser_evaluate`/screenshot/keyboard are `write`.
+
+**Alternatives rejected:** (a) add a shell/browser tool to the native worker's
+core — a wider tool surface and a new exec risk class, against the four-tool
+boundary; (b) enable unrestricted `file://` access so Playwright can open a page
+without a server — that lets the browser read any file on the machine;
+(c) keep four file tools and leave verification to the owner — that is the
+status quo that produced blind one-shot pages and owner review.
+
+**Evidence:** the 2026-11-17 browser-MCP eval. Before, the worker had no way to
+observe a page. After the change it called `browser_navigate`,
+`browser_wait_for`, `browser_console_messages`, `browser_evaluate` and
+`browser_take_screenshot` in one step, fixed its own color change and wrote
+`screenshot.png` (run `25521d80-d370-4a56-a45b-897639291b6b`). The first attempt
+exposed a provider 400 because the assistant message echoed the real tool name
+`playwright.browser_navigate`; sanitizing the assistant tool-call name fixed the
+loop. The declaration/wiring is covered by 8 cases in
+`test/browser-mcp.test.ts` and the name round trip by 3 cases in
+`test/provider-tool-names.test.ts`.
+
+**What was given up:** the browser child process is not an OS sandbox;
+`--allowed-origins` is a hint, not a boundary. `browser_evaluate` runs arbitrary
+JavaScript in the page and is declared `write`. The worker cannot see images, so
+screenshots are evidence for the owner, not for the model. The first launch needs
+network for `npx`.
+
+**Reversal condition:** if a browser enabled this way reaches a non-local host
+despite the local URL surface, or if the MCP child cannot be closed with the
+step, remove the server. If a first-party tool with per-call URL gating lands,
+prefer it over this MCP server.

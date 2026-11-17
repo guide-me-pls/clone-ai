@@ -55,7 +55,12 @@ export interface NativeToolSpec {
   risk: NativeToolRisk;
   /** Path of a file the call reads or writes; checked against the step's grants. 调用读写文件的路径，与步骤的授权核对。 */
   pathOf?: (input: Record<string, unknown>) => string | undefined;
-  run: (call: NativeToolCall, context: { workspace: string }) => Promise<{ output: string; isError?: boolean }>;
+  run: (call: NativeToolCall, context: { workspace: string }) => Promise<{
+    output: string;
+    /** Images the tool produced, forwarded to the model as content parts. 工具产出的图片，作为内容片段转给模型。 */
+    images?: Array<{ mimeType: string; data: string }>;
+    isError?: boolean;
+  }>;
   /** Releases whatever this tool started (an MCP child process, a socket). 释放该工具启动的东西（MCP 子进程、套接字）。 */
   close?: () => Promise<void>;
 }
@@ -242,6 +247,16 @@ export class NativeAgentWorker implements RuntimeAdapter {
     const startedAt = Date.now();
     const produced = new Map<string, { kind: "artifact" | "observation"; summary: string; locator: string }>();
     const requiredText = [input.workOrder?.objective ?? "", input.step.instructions, ...input.step.acceptanceCriteria].join("\n");
+    // The plan's required inputs, matched as whole paths. A plain substring
+    // test matches a path that merely occurs inside a longer word, and any such
+    // match aborts a step that may already have produced its artifact.
+    // 计划中的必需输入按整条路径匹配。纯子串匹配会命中只是出现在更长词里的路径，而任何这样的
+    // 命中都会中止一个可能已经产出工件的步骤。
+    const namedInputs = new Set(
+      [...requiredText.matchAll(/[A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8}/g)]
+        .map((match) => normalizePath(match[0]))
+        .filter((path) => path.length > 0),
+    );
     const missingInputs = new Set<string>();
 
     // The hand-off between the loop and this generator: events queue here and
@@ -277,7 +292,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
         ];
         const result = await runAgentLoop({
           model: this.#config.createClient(),
-          tools: offered.map((tool) => agentTool(tool, workspace, produced, missingInputs, requiredText)),
+          tools: offered.map((tool) => agentTool(tool, workspace, produced, missingInputs, requiredText, namedInputs)),
           messages,
           maxRounds: effectiveRoundLimit(budget?.maxModelCalls, this.#config.maxRounds),
           ...(budget?.maxToolCalls === undefined ? {} : { maxToolCalls: budget.maxToolCalls }),
@@ -404,6 +419,7 @@ function agentTool(
   produced: Map<string, { kind: "artifact" | "observation"; summary: string; locator: string }>,
   missingInputs: Set<string>,
   requiredText: string,
+  namedInputs: ReadonlySet<string>,
 ): AgentToolSpec {
   return {
     name: tool.name,
@@ -424,11 +440,20 @@ function agentTool(
       }
       if (outcome.isError === true && tool.risk === "read" && tool.pathOf !== undefined) {
         const failedPath = tool.pathOf(input);
-        if (failedPath !== undefined && requiredText.includes(failedPath)) missingInputs.add(failedPath);
+        if (failedPath !== undefined && namedInputs.has(normalizePath(failedPath))) missingInputs.add(failedPath);
       }
-      return { content: outcome.output, isError: outcome.isError === true };
+      return {
+        content: outcome.output,
+        isError: outcome.isError === true,
+        ...(outcome.images === undefined || outcome.images.length === 0 ? {} : { images: outcome.images }),
+      };
     },
   };
+}
+
+/** Compare paths the way the worker resolves them: no leading "./", one separator. 按 Worker 解析路径的方式比较：去掉 "./"，统一分隔符。 */
+function normalizePath(path: string): string {
+  return path.replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
 /** Classify a budget failure for the Kernel's comparable failure report. 为 Kernel 的可比较失败报告归类预算失败。 */

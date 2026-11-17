@@ -16,7 +16,7 @@
 import type { ModelUsage } from "../core/contracts.ts";
 import { countCharacters, estimateTokens, type TokenCalibrator } from "./token-estimate.ts";
 
-/** A text or image part in a user message. 用户消息中的文本或图片片段。 */
+/** A text or image part in a user or tool message. 用户或工具消息中的文本或图片片段。 */
 export type AgentContentPart =
   | { type: "text"; text: string }
   | { type: "image_url"; image_url: { url: string } };
@@ -42,6 +42,14 @@ export interface AgentToolCall {
 /** The normalized result of one tool call. 一次工具调用的规范化结果。 */
 export interface AgentToolResult {
   content: string;
+  /**
+   * Images the tool produced, forwarded to the model as content parts. A
+   * screenshot is the difference between "wrote code I cannot see" and
+   * "looked at the render and fixed it"; text-only results forced the first.
+   * 工具产出的图片，作为内容片段转给模型。截图决定了是"写完看不见"还是"看了渲染再修"；
+   * 纯文本结果只能做到前者。
+   */
+  images?: Array<{ mimeType: string; data: string }>;
   isError?: boolean;
 }
 
@@ -582,7 +590,7 @@ async function executeOne(input: {
       // A post-hook is telemetry; it cannot turn a successful tool into a failure.
       // 后置 Hook 是遥测；它不能把成功的工具变成失败。
     }
-    return toolMessage(call.id, content, isError, options, round, call, Date.now() - startedAt, truncated);
+    return toolMessage(call.id, content, isError, options, round, call, Date.now() - startedAt, truncated, false, result.images ?? []);
   } catch (error: unknown) {
     const message = isAborted(controller.signal)
       ? "Tool call cancelled."
@@ -654,6 +662,7 @@ async function toolMessage(
   durationMs: number,
   truncated: boolean,
   denied = false,
+  images: ReadonlyArray<{ mimeType: string; data: string }> = [],
 ): Promise<AgentMessage> {
   await emit(options, {
     type: "tool_completed",
@@ -665,7 +674,14 @@ async function toolMessage(
     truncated,
     ...(denied ? { denied: true } : {}),
   });
-  return { role: "tool", toolCallId, content };
+  // Images travel as content parts on the same tool message: the provider sees
+  // one tool result that is text plus pictures, not two messages.
+  // 图片作为同一条工具消息的内容片段传递：Provider 看到一条"文字 + 图片"的工具结果，而不是两条消息。
+  const parts: AgentContentPart[] = [{ type: "text", text: content }];
+  for (const image of images) {
+    parts.push({ type: "image_url", image_url: { url: `data:${image.mimeType};base64,${image.data}` } });
+  }
+  return { role: "tool", toolCallId, content: images.length === 0 ? content : parts };
 }
 
 function synthetic(call: AgentToolCall, content: string): AgentMessage {

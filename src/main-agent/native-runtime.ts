@@ -563,7 +563,8 @@ function toNativeMessages(messages: readonly AgentMessage[]): NativeMessage[] {
           tool_calls: message.toolCalls.map((call) => ({
             id: call.id,
             type: "function" as const,
-            function: { name: call.name, arguments: call.arguments },
+            // Provider-safe names, same as the tool table above. 与上面的工具表一样使用 Provider 安全名。
+            function: { name: toProviderToolName(call.name), arguments: call.arguments },
           })),
         }),
       };

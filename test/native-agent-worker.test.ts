@@ -372,3 +372,32 @@ test("the worker reports every model call and tool call to the Kernel", async (t
   assert.equal(completed.isError, false);
   assert.equal(typeof completed.durationMs, "number");
 });
+
+test("a failed read of a file the plan never named is not a missing required input", async (t) => {
+  // `requiredText.includes(failedPath)` matched a path that merely occurred
+  // inside a longer string, so a failed read of src/style.css aborted a step
+  // that had already produced its artifact. Only whole, named paths count.
+  // `requiredText.includes(failedPath)` 会命中只是嵌在更长字符串里的路径，于是一次
+  // src/style.css 的失败读取中止了已经产出工件的步骤。只有完整点名的路径才算。
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: fileTools(),
+    createClient: () => fakeClient([
+      { content: null, toolCalls: [{ id: "r", name: "read_file", arguments: JSON.stringify({ path: "src/style.css" }) }] },
+      { content: "recovered", toolCalls: [] },
+    ]),
+  });
+  const base = assignment(directory);
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute({
+    ...base,
+    step: {
+      ...base.step,
+      instructions: "Follow AGENTS.md and the project rules, then write the scene.",
+    },
+  })) events.push(event);
+  assert.equal(events.some((event) => event.type === "completed"), true);
+  assert.equal(events.some((event) => event.type === "failed"), false);
+});

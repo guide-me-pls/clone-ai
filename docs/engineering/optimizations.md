@@ -31,6 +31,52 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-17 — Local browser verification via Playwright MCP
+
+- **Goal / hypothesis:** a worker that can open the page it just wrote, read the
+  console, assert state and save a screenshot will produce better one-shot web
+  work than a file-only worker that can only hope.
+- **Trade-off:** [Local browser verification through Playwright MCP](../architecture/trade-offs.md#2026-11-17--local-browser-verification-through-playwright-mcp).
+- **Change:** added `src/integrations/browser-mcp.ts` (server config, the
+  observation-only tool declaration, the narrow localhost policy, merge
+  helpers), `scripts/install-browser-mcp.mjs`, `scripts/serve-workspace.mjs`,
+  `docs/usage/browser-mcp.md` and its zh-CN pair, and
+  `test/browser-mcp.test.ts`. Fixed a provider-boundary bug found by the eval:
+  assistant messages echoed real tool names (`playwright.browser_navigate`) and
+  the provider rejected the next request with a name-pattern 400; the assistant
+  tool-call name is now sanitized the same way the tool table is. Added
+  `test/provider-tool-names.test.ts`.
+- **Eval:** `node --experimental-strip-types eval-runs/2026-11-17-browser-mcp/run.mjs
+  eval-runs/2026-11-17-browser-mcp/ws eval-runs/2026-11-17-browser-mcp/home
+  eval-runs/2026-11-17-browser-mcp/prompt.md`. Before: the worker had four file
+  tools and no browser. After: it read `AGENTS.md` and `index.html`, navigated,
+  waited, read the console, edited, navigated again, asserted the canvas pixels
+  and `window.__probe` with `browser_evaluate`, and saved `screenshot.png`.
+  Result: run `25521d80-d370-4a56-a45b-897639291b6b`, worker 32,114 tokens /
+  12 model calls / 46.6 s, run `waiting_review` because the prose criteria were
+  not machine-coverable; the artifact and screenshot were correct.
+- **Benchmark run:** command above; provider `openai/gpt-6.1-terra`; Main
+  and worker effort `high`; worker `MAX_ROUNDS=60`, `MAX_TOKENS=24000`, 600 s
+  timeout; task: one HTML edit plus browser self-check; no dataset/seed;
+  result files `eval-runs/2026-11-17-browser-mcp/run.log`,
+  `.../home/journal.sqlite3`, `.../ws/screenshot.png`.
+- **Execution chain:** (1) probed `@playwright/mcp@0.0.85` through clone-ai's
+  MCP client directly — navigate, console, evaluate and screenshot worked;
+  (2) wrote the policy/declaration layer and the installer; (3) first run
+  failed because the driver's environment was not exported to the provider
+  registry; (4) second run failed with a provider 400 on the unsanitized tool
+  name; (5) fixed the boundary, reran, and the worker completed its own check.
+  The two failed attempts cost ~1.5 minutes and are kept in the log rather than
+  hidden.
+- **Pros:** the browser is visible to the worker as ten declared tools, not an
+  opaque agent; every call is in the journal; screenshots and console errors are
+  real evidence; the tool does not require an OS browser download.
+- **Cons / next time:** the worker cannot see images, so visual quality still
+  needs an owner or `browser_evaluate`; the browser is not OS-sandboxed; the
+  first `npx` launch downloads the server. A per-call URL gate would be
+  stronger than `--allowed-origins`.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-17 — Desktop-only product surface
 
 - **Goal / hypothesis:** Make the desktop app the only product entry, so the

@@ -286,7 +286,11 @@ export function mcpToolSpecs(
     ...(tool.pathField === undefined ? {} : { pathOf: (input: Record<string, unknown>) => stringValue(input[tool.pathField!]) }),
     run: async (call: { input: Record<string, unknown> }) => {
       const result = await client.callTool(server.id, tool.name, call.input);
-      return { output: frameMcpOutput(server.id, tool.name, result.text), ...(result.isError ? { isError: true } : {}) };
+      return {
+        output: frameMcpOutput(server.id, tool.name, result.text),
+        ...(result.images === undefined || result.images.length === 0 ? {} : { images: result.images }),
+        ...(result.isError ? { isError: true } : {}),
+      };
     },
   }));
   if (options.deferUntil === undefined) return specs;
@@ -318,7 +322,7 @@ export function deferredToolSpecs(server: McpServerConfig, client: McpClientLike
 }
 
 export interface McpClientLike {
-  callTool(serverId: string, toolName: string, input: Record<string, unknown>): Promise<{ text: string; isError: boolean }>;
+  callTool(serverId: string, toolName: string, input: Record<string, unknown>): Promise<{ text: string; images?: Array<{ mimeType: string; data: string }>; isError: boolean }>;
   listTools(serverId: string): Promise<Array<{ name: string; description?: string }>>;
 }
 
@@ -395,14 +399,15 @@ export class McpClient implements McpClientLike {
       .filter((tool) => tool.name.length > 0);
   }
 
-  async callTool(serverId: string, toolName: string, input: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
+  async callTool(serverId: string, toolName: string, input: Record<string, unknown>): Promise<{ text: string; images?: Array<{ mimeType: string; data: string }>; isError: boolean }> {
     const server = this.#server(serverId);
     try {
       const result = await this.#request(server, "tools/call", { name: toolName, arguments: input }) as {
         content?: unknown;
         isError?: unknown;
       };
-      return { text: textContent(result.content), isError: result.isError === true };
+      const images = imageContent(result.content);
+      return { text: textContent(result.content), ...(images.length === 0 ? {} : { images }), isError: result.isError === true };
     } catch (error) {
       // A server that is down is a tool error the model can see, not a dead run:
       // the step may still finish using other tools and report honestly.
@@ -738,6 +743,28 @@ function parseRpcBody(body: string): JsonRpcResponse {
     if (payload.startsWith("{")) return JSON.parse(payload) as JsonRpcResponse;
   }
   throw new Error("the MCP response was neither JSON nor an SSE event");
+}
+
+/**
+ * Image blocks the server returned, in the shape the loop forwards to the
+ * model. MCP sends `{ type: "image", data, mimeType }`; a screenshot tool's
+ * whole value is that the worker can look at it, so dropping these made
+ * browser MCP servers text-only in practice.
+ * 服务器返回的图片块，形状与循环转发给模型的一致。MCP 发送
+ * `{ type: "image", data, mimeType }`；截图工具的全部价值就是让 Worker 能看到它，
+ * 丢弃这些内容会让浏览器 MCP 服务器实际上变成纯文本。
+ */
+function imageContent(content: unknown): Array<{ mimeType: string; data: string }> {
+  if (!Array.isArray(content)) return [];
+  const images: Array<{ mimeType: string; data: string }> = [];
+  for (const block of content) {
+    if (typeof block !== "object" || block === null) continue;
+    const record = block as Record<string, unknown>;
+    if (record.type !== "image" || typeof record.data !== "string" || record.data.length === 0) continue;
+    const mimeType = typeof record.mimeType === "string" && record.mimeType.startsWith("image/") ? record.mimeType : "image/png";
+    images.push({ mimeType, data: record.data });
+  }
+  return images;
 }
 
 /** MCP content blocks joined as text; non-text blocks are named, not dropped silently. MCP 内容块拼成文本；非文本块点名保留，不静默丢弃。 */
