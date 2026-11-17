@@ -236,6 +236,59 @@ Together these turn a **21/21, fully verified-by-the-supervisor delivery** into
 Weighted with the capability rubric (25/25/20/15/10/5): **4.6 / 5**. The Run
 status shown to the owner was `failed`.
 
+## 4A. Re-run after the verifier fix (2026-11-17, attempt E)
+
+After the two verifier defects were fixed (§4.4) and the benchmark was made
+stricter — three new hard checks and prompt requirements for gate platforms,
+anchored ornaments and roof-form data — the same task and model
+(`gpt-6.1-terra`, plan-steered prompt) were run again on the new product surface
+(the companion HTTP API, since the `clone-ai` CLI was removed that day).
+
+| Measure | Baseline C | Re-run E |
+| --- | --- | --- |
+| Checker (same stricter rules applied to both) | **21/24**, 3 hard failures | **24/24**, 0 hard failures |
+| Roof-form data (`eaveY`/`ridgeY`/overhang/ridge length) | absent | present for every roof |
+| Gate platforms (`platformId` on 午门/太和门/乾清门/神武门) | missing | all four present |
+| Ornaments anchored to a hall or platform | 2 floating 华表 | 6 anchored |
+| Visible roof profile | bulbous, dolmen-like | 举折: flat eaves, steep near the ridge |
+| Tests | 6/6 | 9/9 |
+| Video (supervisor-rendered) | 30.00 s 1920×1080 H.264 | 30.00 s 1920×1080 H.264 |
+| Worker usage | 371 k tokens, 19 calls, 294 s | 493 k tokens, 20 calls, 432 s |
+| Run status shown to the owner | `failed` | **`failed`** |
+
+**What improved, verified in the screenshots:** every hall now sits on a modeled
+platform, the three-tier 三台 with railings and the imperial stairway is clearly
+visible at t = 22.5, the roofs read as Chinese roofs rather than tents, and the
+ornaments (石狮/华表/铜龟/铜鹤/日晷) sit beside the halls instead of floating in
+a plaza. The 24 checks all pass, including the three new ones.
+
+**What is still wrong, and is not measured by any check yet:**
+
+- The 30 s camera starts on the **north side of 午门** looking south — z runs
+  +480 (南) to −481 (北) in this model, and the camera opens at z = 563 → 465,
+  i.e. inside/behind the gate rather than on the moat outside it. The brief asked
+  for a start outside the moat; no check can see camera orientation.
+- **Lighting is flat.** No shadows, no ambient occlusion; every surface is lit
+  the same, which is most of why the renders still look like a model rather than
+  a place.
+- The roofs, while correctly profiled, are **untextured flat yellow** with no
+  tile rows, and 斗拱/彩画 are absent or a single band.
+
+So the modeling improved substantially where the contract reaches, and the
+remaining gap is mostly the part the contract does not describe: composition,
+light and surface detail. That is the next thing to measure (§7).
+
+**Why E still ended `failed`** — and this time it is a *different* cause, not a
+verifier defect: E's plan writes that `render.mjs` produces `out/video.mp4`, and
+the file verifier correctly reads that as a promised file. The prohibition fix
+from §4.4 covers "do not claim X"; it does not cover "the script you deliver
+will produce X", which is a true statement about a future step the owner runs.
+The run is not honestly complete by its own plan's words. The remaining fix is
+to let a plan mark a path as `producedLaterBy: "owner"` (or to put the MP4 only
+in the README), not to weaken the verifier again. This is recorded as a P1 in
+§7 rather than patched now, because it is a plan-schema change rather than a
+judgment bug.
+
 ## 5. Comparison with the 2026-11-17 capability eval (01 procedural 3D video)
 
 | Dimension | 01 city video (then) | Natural variant (A, B) | Steered variant (C) |
@@ -305,7 +358,13 @@ consistency, not external facts**.
    (`不要声称 out/video.mp4 已生成`) becomes a required file, and `tests/` named as
    a deliverable triggers `mentionsTests`. Regression cases belong in
    `benchmark/gate/verdict-cases.json`, where a false fail is already a gate
-   failure.
+   failure. **Fixed 2026-11-17** (hand fix, protected-path exception): negation
+   is now read, and `mentionsTests` requires a run request.
+4. **P1 — a plan must be able to say "produced later by the owner".**
+   Attempt E failed because its plan truthfully says `render.mjs` produces
+   `out/video.mp4`; that is a future owner step, not a worker deliverable. Add a
+   `producedLaterBy` marker to the plan artifact contract (or keep render outputs
+   in the README only) instead of weakening the verifier again.
 4. **P1 — “do not promise the MP4” must be enforced by the Kernel, not by the
    model's self-discipline.** The prompt said it; the plan still did it.
 5. **P1 — more repetitions.** One or two runs per variant cannot estimate

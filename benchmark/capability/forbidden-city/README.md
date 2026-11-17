@@ -73,6 +73,9 @@ evidence lands in `report.json` / `report.txt` next to the screenshots.
 | `model.symmetry` | yes | 体仁阁 / 弘义阁 not mirrored. |
 | `model.axis-length` | yes | The complex compressed or stretched beyond the 961 m ±10% band. |
 | `model.features` | yes | Platforms, camera keys or props missing from the model. |
+| `model.platforms-for-halls` | yes | A gate building drawn straight on the ground (午门/太和门/乾清门/神武门 must carry a `platformId`). |
+| `model.ornament-anchoring` | yes | Ornaments floating in a plaza instead of beside a hall or platform (≥3 required). |
+| `model.roof-form` | yes | Roofs with no reported eave/ridge relationship, an eave below the body top, no overhang, a 攒尖 with a long ridge, or a 庑殿 ridge wider than 75% of the hall. |
 | `browser.timeline-differs` | yes | A static image or a camera that does not move. |
 | `browser.frame-throughput` | no | An implementation that rebuilds geometry every seek (median > 100 ms/frame). |
 | optional `render.900-frames`, `render.video-spec` | yes when `--render` | The deliverable video and its 30 s / 1920×1080 spec. |
@@ -98,6 +101,15 @@ The benchmark separates three questions, and a single number would blur them:
    workspace README, compared with what the checker found.
 
 A run is only evidence about modeling (question 2) when question 1 passed.
+
+### 2026-11-17 baseline and re-run
+
+Baseline (attempt C, before the verifier fix): **21/24** under these stricter
+rules — gate buildings had no platform, two 华表 floated, and no roof-form data
+was reported. Re-run (attempt E, after the verifier fix and the stricter
+prompt): **24/24**, 9/9 tests, supervisor-rendered 30.00 s 1920×1080 video.
+See [`ANALYSIS.md`](ANALYSIS.md) §4A for what improved and what still does not
+(camera start, flat lighting, untextured roofs).
 
 ## Results
 
