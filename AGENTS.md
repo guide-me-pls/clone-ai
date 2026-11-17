@@ -66,9 +66,9 @@ took.
 A bug in this agent is fixed through this agent's own repair lane, not by a
 person or another agent hand-writing the fix:
 
-1. export the failed trace with `clone-ai traces export`;
-2. run the gated repair (`scripts/nightly-rsi.mjs`, or the equivalent isolated
-   worktree run) so the patch comes from the repair model;
+1. export the failed trace with `npm run traces -- export`;
+2. run the gated repair (`npm run repair`, or `scripts/nightly-rsi.mjs` for an
+   existing scheduler) so the patch comes from the repair model;
 3. the working agent — the one supervising the change — checks the result for
    **functional correctness only**: reproduce the original failure, run the new
    regression test, and exercise the affected feature. It does not rewrite the
@@ -189,9 +189,9 @@ reader treat an abandoned idea as a proven one.
 
 这个 Agent 的 bug 通过它自己的修复通道来修，而不是由人或另一个 Agent 手写补丁：
 
-1. 用 `clone-ai traces export` 导出失败轨迹；
-2. 运行带闸门的修复（`scripts/nightly-rsi.mjs`，或等价的隔离 worktree 运行），让补丁由
-   修复模型产出；
+1. 用 `npm run traces -- export` 导出失败轨迹；
+2. 运行带闸门的修复（`npm run repair`；已有调度主机也可继续用
+   `scripts/nightly-rsi.mjs`），让补丁由修复模型产出；
 3. 工作的 Agent——监督本次变更的那一个——只做**功能正确性检查**：复现原失败、运行新的
    回归测试、走一遍受影响的 feature。它不重写补丁；修复通道失败时，记录失败并停止。
 

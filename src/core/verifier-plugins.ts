@@ -181,9 +181,46 @@ export function extractTestCommand(step: PlanStep): string[] | undefined {
   return undefined;
 }
 
+/**
+ * True when a step expects a *test run*, not merely test files or a disclaimer.
+ *
+ * Plans legitimately name `tests/` as a deliverable and legitimately say "the
+ * tests were not run". Neither is a request for test evidence, and demanding one
+ * from a worker without a shell turns an honest, complete delivery into a
+ * failure. A step is a test step when an acceptance criterion asks for a run
+ * ("run the tests", "tests pass", "node --test …"), or when the instructions
+ * contain a run request, a shell command in a command context, or an acceptance
+ * criterion that says a named test file passes. Naming a test directory while
+ * writing files, or saying a test was not executed, is not a test step.
+ *
+ * 当步骤期望"运行测试"、而不只是测试文件或免责声明时为 true。
+ *
+ * 计划把 `tests/` 列为交付物、以及写明"测试未运行"都是合理的；两者都不是要求测试证据，向没有
+ * shell 的 Worker 索要证据会把一次诚实完整的交付判成失败。只有验收标准要求运行（"跑测试"、
+ * "测试通过"、"node --test …"），或指令含运行请求、命令语境下的 shell 命令，或验收标准声称
+ * 某个具名测试文件通过时，才算测试步骤。边写文件边点名测试目录，或声明测试未执行，都不算。
+ */
+const TEST_RUN_REQUEST = /(?:运行|跑|执行|执行并记录|跑通|通过)\s*(?:全部|所有|单元|回归|新的?)?\s*测试|\btests?\s+(?:must\s+)?pass(?:es)?\b|\brun\s+(?:the\s+|all\s+|unit\s+|regression\s+)?tests?\b|\bnode\s+--test\b|\bnpm\s+(?:run\s+)?test\b|\byarn\s+test\b|\bpnpm\s+test\b|\bbun\s+test\b|\bpytest\b|\bcargo\s+test\b|\bgo\s+test\b/i;
+const TEST_DISCLAIMER = /(?:未|没有|尚未|不|无法|不能|不得|请勿|不要|无需|never|not|no|without|didn't|did\s+not|haven't|have\s+not|cannot|can't|unable)\s*(?:由[^，。；\n]{0,12})?(?:运行|执行|跑)/;
+
 export function mentionsTests(step: PlanStep): boolean {
-  const text = [step.instructions, ...step.acceptanceCriteria].join("\n");
-  return /(?:\btests?\b|跑测试|运行测试|单元测试)/i.test(text);
+  const instructions = step.instructions ?? "";
+  const criteria = step.acceptanceCriteria.join("\n");
+  const hasTestWord = /(?:\btests?\b|测试|单元测试)/i.test(`${instructions}\n${criteria}`);
+  if (!hasTestWord) return false;
+  // A real run request anywhere settles it, including in an acceptance
+  // criterion such as "npm test passes".
+  // 任何地方出现真正的运行请求即可判定，包括"npm test 通过"这类验收标准。
+  if (TEST_RUN_REQUEST.test(criteria)) return true;
+  // A shell command only counts in a command context; a bare mention of
+  // `node --test` inside prose about writing files does not run anything.
+  // shell 命令只在命令语境中才算；写文件的散文里提到 `node --test` 并不会运行它。
+  const instructionSentences = instructions.split(/\n|(?<=[。！？；.!?;])/);
+  for (const sentence of instructionSentences) {
+    if (TEST_DISCLAIMER.test(sentence)) continue;
+    if (TEST_RUN_REQUEST.test(sentence) && !/(?:由所有者|由你|owner|yourself)\s*(?:执行|运行|验证|run|execute|verify)/i.test(sentence)) return true;
+  }
+  return false;
 }
 
 export function mentionsDiff(step: PlanStep): boolean {

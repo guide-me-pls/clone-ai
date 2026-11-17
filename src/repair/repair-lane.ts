@@ -1,5 +1,5 @@
 /**
- * `clone-ai repair`: the bug fix is produced by clone-ai, not by a script that
+ * `npm run repair`: the bug fix is produced by clone-ai, not by a script that
  * drives another CLI.
  *
  * The repair is a real Run. It accepts a Trigger from the failed traces, the
@@ -20,7 +20,7 @@
  * branch, and never merges. The report says what was repaired, the eval before
  * and after, and where the patch is.
  *
- * `clone-ai repair`：Bug 由 clone-ai 自己修，而不是由一个脚本驱动另一个 CLI。
+ * `npm run repair`：Bug 由 clone-ai 自己修，而不是由一个脚本驱动另一个 CLI。
  *
  * 修复就是一次真实的 Run：从失败轨迹接受 Trigger，Kernel 挂上两阶段计划（写回归测试；修代码），
  * 由所有者配置的 Worker 执行——Kernel 的预算、证据与 Journal 同样适用于这次修复。有三项检查留在
@@ -303,12 +303,12 @@ export async function runRepairLane(options: RepairLaneOptions): Promise<RepairR
 /**
  * Whether the worktree survives the run.
  *
- * `clone-ai repair` used to print "Worktree kept for inspection" for every
+ * `npm run repair` used to print "Worktree kept for inspection" for every
  * failure while the `finally` removed it unless `--keep` was passed — the owner
  * was told to look at a directory that no longer existed.
  * 运行结束后 worktree 是否保留。
  *
- * `clone-ai repair` 曾对每次失败都打印"已保留 worktree 供查看"，而 `finally` 实际上除非传入
+ * `npm run repair` 曾对每次失败都打印"已保留 worktree 供查看"，而 `finally` 实际上除非传入
  * `--keep` 就会删除它——所有者被指引去看一个已经不存在的目录。
  */
 export function keepWorktree(fixed: boolean, keep?: boolean): boolean {
@@ -577,7 +577,7 @@ async function repair(input: {
       ...origin,
       status: "failed",
       failedGate: "kernel",
-      error: `The Kernel Run ended ${executed.status}; a repair needs a completed run. Inspect it with \`clone-ai audit ${executed.runId}\`.`,
+      error: `The Kernel Run ended ${executed.status}; a repair needs a completed run. Inspect it in the desktop audit view (${executed.runId}).`,
     };
   }
 
@@ -616,7 +616,7 @@ async function repair(input: {
       status: "failed",
       failedGate: "kernel",
       evalBefore,
-      error: `The fix Run ended ${second.status}; inspect it with \`clone-ai audit ${second.runId}\`.`,
+      error: `The fix Run ended ${second.status}; inspect it in the desktop audit view (${second.runId}).`,
     };
   }
   const comparison = compareHashes(hashes, await hashFiles(worktree.path, produced));

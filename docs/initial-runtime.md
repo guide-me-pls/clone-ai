@@ -76,9 +76,8 @@ src/
   core/                       journal, policy, supervisor, verification
   adapters/                   replaceable agent adapters and demo registry
   memory/                     asynchronous memory-candidate pipeline
-  companion-server.ts         local development preview only
+  companion-server.ts         loopback desktop runtime API
   workflows/query-workflow.ts parent plan with subagent work orders
-  cli.ts                      developer demo and trace surface
 ```
 
 ## Runtime invariants

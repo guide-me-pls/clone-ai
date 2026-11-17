@@ -372,6 +372,9 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         if purpose == "connector" {
             panel.title = "选择观察目录"
             panel.message = "分身只会读取这个目录，不会获得执行权限。"
+        } else if purpose == "export" {
+            panel.title = "选择数据导出位置"
+            panel.message = "Clone AI 会在这个文件夹里新建一个带时间戳的导出目录。"
         } else {
             panel.title = "选择工作目录"
             panel.message = "Clone AI 会在这个目录中读取和写入任务产物。"

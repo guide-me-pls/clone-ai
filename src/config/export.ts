@@ -87,11 +87,11 @@ export async function exportOwnerData(input: {
   return manifest;
 }
 
-/** A one-line summary for the CLI. 供 CLI 使用的单行摘要。 */
+/** A one-line summary for the desktop. 供桌面使用的单行摘要。 */
 export function describeExport(manifest: ExportManifest, destination: string): string {
   const bytes = manifest.files.reduce((total, file) => total + file.bytes, 0);
   return `Exported ${manifest.files.length} files (${(bytes / 1024 / 1024).toFixed(1)} MB) to ${basename(destination)}. ${manifest.notice}`;
 }
 
-/** Paths an export deliberately leaves out, for the CLI to print. 导出刻意跳过的路径，供 CLI 打印。 */
+/** Paths an export deliberately leaves out, shown by the desktop after an export. 导出刻意跳过的路径，导出后由桌面展示。 */
 export const EXPORT_EXCLUDES = ["pi-sessions (conversation cache)", "*-journal/-wal/-shm (database bookkeeping)"] as const;

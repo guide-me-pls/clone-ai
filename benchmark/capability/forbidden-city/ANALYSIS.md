@@ -13,7 +13,7 @@ reported separately, and §5 explains why every run still ended `failed`.
 
 | Item | Value |
 | --- | --- |
-| Path under test | `clone-ai new` → Main Agent (native) → Kernel planning/policy/verification → native worker (`read_file` / `list_directory` / `write_file` / `edit_file` only) |
+| Path under test | Desktop request path (then `clone-ai new`) → Main Agent (native) → Kernel planning/policy/verification → native worker (`read_file` / `list_directory` / `write_file` / `edit_file` only) |
 | Command | `eval-runs/2026-11-17-forbidden-city/run-task.sh <attempt> [prompt-variant]` |
 | Provider / model | native / `360/openai/gpt-6.1-terra` (local OpenAI-compatible gateway `http://127.0.0.1:3425`) |
 | Effort | Main `high`; Worker `high` |
@@ -39,7 +39,7 @@ The task was run in two variants to separate the **harness** question from the
 - **Natural variant (A, B):** `prompt.md` is given exactly as written, without
   saying which tool the Main Agent should use. This measures the product's
   default behaviour: what happens when an ordinary user types this request into
-  `clone-ai new`.
+  the desktop app.
 - **Steered variant (C):** the same task plus one paragraph telling the Main
   Agent to submit one self-contained step through `propose_work_plan`. This
   measures **modeling** capability itself — what the worker does when the full

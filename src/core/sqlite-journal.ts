@@ -444,15 +444,16 @@ export async function migrateJsonlJournalToSqlite(input: {
 /**
  * Storage selection for the Kernel.
  *
- * SQLite is the default because the runtime is multi-process by design (GUI
- * daemon, CLI, scheduler, and Main Agent all write the same journal) and only
- * the transactional store gives unique sequences and unique Run claims.
- * CLONE_AI_JOURNAL=jsonl opts back into the inspectable single-process file.
+ * SQLite is the default because the runtime is multi-process by design (the
+ * GUI daemon, scheduler, maintenance scripts, and Main Agent all write the same
+ * journal) and only the transactional store gives unique sequences and unique
+ * Run claims. CLONE_AI_JOURNAL=jsonl opts back into the inspectable
+ * single-process file.
  *
  * Kernel 的存储选择。
  *
- * 默认 SQLite，因为本 Runtime 天生多进程（GUI Daemon、CLI、调度器、Main Agent 都写
- * 同一本 Journal），而只有事务型存储能给出唯一 sequence 与唯一 Run 领取。
+ * 默认 SQLite，因为本 Runtime 天生多进程（GUI Daemon、调度器、维护脚本、Main Agent
+ * 都写同一本 Journal），而只有事务型存储能给出唯一 sequence 与唯一 Run 领取。
  * CLONE_AI_JOURNAL=jsonl 可切回可直接检查的单进程文件。
  */
 export function createJournalStore(dataDirectory: string): JournalStore {

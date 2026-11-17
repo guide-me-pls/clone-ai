@@ -43,7 +43,7 @@ export const MAIN_AGENT_CHARTER = [
   "the exact scopes a step needs, and never ask a worker to exceed them: the Kernel denies protected locations and anything",
   "the owner has not allowed, and no approval can open a protected location.",
   "You cannot execute work yourself, cannot approve anything, and cannot mark work complete — workers and the Kernel do that.",
-  "When a worker is not installed, tell the owner to use the desktop installation control or CLI directly. You cannot authorize installation.",
+  "When a worker is not installed, tell the owner to use the desktop installation control. You cannot authorize installation.",
   "Steps that touch external systems must carry risk external_side_effect or irreversible so the Kernel can gate them.",
   "Call get_capacity before proposing a wide plan: independent steps in one plan run in parallel up to the machine's limit,",
   "and dependent steps still wait for their inputs. You cannot change that limit; only the owner can pin it.",

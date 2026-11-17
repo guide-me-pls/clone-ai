@@ -8,7 +8,7 @@
 
 `状态：初始 Runtime 骨架` · `许可证：MIT` · `核心：TypeScript + Node.js + Python`
 
-部署：[Mac App](apps/desktop/README.zh-CN.md) · [Linux 服务器](docs/usage/server-deployment.zh-CN.md) · [WhatsApp 手机通道](docs/usage/mobile-whatsapp.zh-CN.md)
+部署：[Mac App](apps/desktop/README.zh-CN.md) · [WhatsApp 手机通道](docs/usage/mobile-whatsapp.zh-CN.md)
 
 ---
 
@@ -16,7 +16,7 @@
 
 - 唯一的执行 Provider 是进程内的原生 Worker：每次工具调用都由 Kernel 按步骤 Scope 校验，且步骤声明的风险等级会限制它能拿到的工具——`read_only` 步骤不会获得写工具。路径检查会解析符号链接，工作区内指向外部的链接会被拒绝。Clone AI **不**为该 Worker 提供 OS 沙箱：它的工具就是边界。
 - 外部或不可逆动作完全无法执行。受治理的外部动作 Connector 尚未实现。
-- 无法自动核验的验收标准进入 `waiting_review`，由所有者查看证据并接受或拒绝；可用 `clone-ai review <runId>` 查看。
+- 无法自动核验的验收标准进入 `waiting_review`，由所有者在桌面对话或「审计与评估 → 运行记录」中查看证据并接受或拒绝。
 - 定时实例保存在 `schedules.sqlite3`；旧 `schedules.json` 只导入一次并保留为备份。启动后中断、结果不明的实例需要人工核对，不能自动重试。
 - 记忆与审计数据仍以本地 Markdown/SQLite 保存，未实现应用层加密或完整擦除。隐藏会话和归档记忆不等于删除数据；远程模型请求可能把相关上下文发送给服务商。
 - 记忆提炼在任务完成后通过同一个已配置端点运行，消耗一次模型调用；提炼失败会保留待重试任务，不会伪装成“没有候选”。
@@ -90,21 +90,21 @@ git clone https://github.com/guide-me-pls/clone-ai.git
 cd clone-ai
 ```
 
-接下来可阅读[架构](#架构)、[路线图](#路线图)、计划中的[命令行体验](#命令行体验计划)，以及
-[初始 Runtime 骨架](docs/initial-runtime.zh-CN.md)。运行开发者预览：
+接下来可阅读[架构](#架构)、[路线图](#路线图)、[桌面应用](apps/desktop/README.zh-CN.md)，以及
+[初始 Runtime 骨架](docs/initial-runtime.zh-CN.md)。从源码构建并运行桌面产品：
 
 ```bash
 npm install --ignore-scripts
 npm test
 npm run typecheck
-npm run main
+npm run desktop:dev
 ```
 
 当前从用户请求到完成验证的整条链路见 [Query 执行流程](docs/query-execution-flow.zh-CN.md)；显式开启的模型 Planner 及其安全边界见 [LLM Planner](docs/llm-planner.zh-CN.md)。
 原生 Worker 的边界见 [本地设置](docs/usage/local-setup.zh-CN.md)。
 架构、已经走过的路线与下一阶段见 [Runtime 架构与路线](docs/runtime-architecture-and-route.zh-CN.md)。
 
-CLI 演示仍使用确定性的 Adapter，便于学习、测试和重放；桌面 Runtime 根据本地设置，把有边界的
+确定性 Adapter 仍保持可重复，便于学习、测试和重放；桌面 Runtime 根据本地设置，把有边界的
 WorkOrder 交给统一的受治理边界。WorkOrder 包含输入、能力要求、产物合同、风险、预算和无环依赖图。
 每次指派都从全新的进程内会话开始；Clone AI 的 Kernel 状态、
 记忆、Workspace 证据、崩溃恢复和最终完成判定都在 Provider 之外。Provider 自己的 `--resume` 只能
@@ -351,8 +351,8 @@ Kernel 权威。
 
 | 技术 | 角色 | 边界 |
 | --- | --- | --- |
-| **TypeScript（strict）** | 统一领域协议、策略、Schema、CLI、Connector、Adapter、状态投影和测试。 | Runtime 拥有的状态与决策的事实语言。 |
-| **Node.js LTS** | 本地 Daemon、进程监管、流式 I/O、CLI、调度、Connector 执行和 Agent Runtime Adapter。 | 始终运行的本地控制平面。 |
+| **TypeScript（strict）** | 统一领域协议、策略、Schema、桌面 Runtime、Connector、Adapter、状态投影和测试。 | Runtime 拥有的状态与决策的事实语言。 |
+| **Node.js LTS** | 本地 Daemon、进程监管、流式 I/O、桌面 Runtime、调度、Connector 执行和 Agent Runtime Adapter。 | 始终运行的本地控制平面。 |
 | **Python** | 可选的智能 Worker：本地 ML、多模态提取、OCR、预测、排序、评估和实验性检索。 | 返回版本化建议与证据，不能直接拥有个人状态或权限。 |
 
 Daemon 使用当前 Node.js LTS。写本文档时 Node.js 24 是当前 LTS 线。Python 使用 3.13+，每一个
@@ -369,7 +369,6 @@ Python 应放在一个小而版本化的本地协议之后：第一版使用标�
 
 ```text
 apps/
-|-- cli/                         query、inspect、approve、trace、resume
 |-- daemon/                      本地生命周期与调度进程
 `-- desktop/                     已安装本地客户端、托盘、审批与活动追踪
 
@@ -465,23 +464,22 @@ WorkReceipt。
 
 暂缓语音克隆、头像、社交模拟、金融执行、健康决策、关系自动化、宽泛邮件访问和无边界的主动行为。
 
-## 命令行体验（计划）
+## 桌面体验
 
-```bash
-clone-ai init
-clone-ai connect calendar
-clone-ai ask "为下周准备最好的计划"
-clone-ai today
-clone-ai opportunity list
-clone-ai plan show <plan-id>
-clone-ai approve <approval-id>
-clone-ai trace <session-or-work-id>
-clone-ai memory inspect
-clone-ai memory forget <memory-id>
-```
+macOS App 是唯一的产品界面。对话、设置与审计视图覆盖所有所有者动作：
 
-最重要的命令不是 `run`，而是能够检查：分身为什么认为某事重要、它被允许做什么，以及什么证据证明了
-结果。
+- **对话** —— 提问、批准或拒绝外部动作、接受或拒绝需要复核的结果。
+- **设置 → Agent** —— 模型端点、网关、推理强度与 Provider。
+- **设置 → 权限与安全** —— 按域的自主档位（`observe` … `act_auto`）与所有者撰写的常设策略。
+- **设置 → 记忆与数据** —— 记忆库、受治理的变更与撤销，以及把所有者数据导出到 clone home
+  之外的时间戳归档。
+- **设置 → 上下文** —— 压缩记录与完整历史搜索。
+- **设置 → 手机通道** —— WhatsApp 绑定与公网 Webhook 隧道。
+- **设置 → 审计与评估** —— Run、主 Agent 回合、Agent 调用、坏案例日志、自检轮次、改进建议，
+  以及取消正在运行的 Run。
+
+最重要的能力不是 `run`，而是能够检查：分身为什么认为某事重要、它被允许做什么，以及什么证据
+证明了结果。
 
 ## 不可破坏的约束
 

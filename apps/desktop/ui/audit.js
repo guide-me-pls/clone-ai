@@ -20,6 +20,7 @@
     selected: null, loading: false, error: null, raw: false, traces: new Map(),
     review: null, reviewBusy: false, reviewError: null,
     invocations: [], invocationSelected: null, invocationDetail: null,
+    cases: null, improvement: null,
   };
 
   const root = () => document.getElementById("audit-root");
@@ -44,6 +45,8 @@
       state.invocations = (await api("/api/invocations").catch(() => ({ records: [] }))).records ?? [];
       state.review = (await api("/api/audit/review").catch(() => ({ review: null }))).review ?? null;
       state.selfcheck = (await api("/api/audit/selfcheck").catch(() => ({ rounds: [] }))).rounds ?? [];
+      state.improvement = await api("/api/improvement").catch(() => null);
+      state.cases = await api("/api/reporting/bad-cases").catch(() => ({ text: "" }));
       if (state.selected && !state.data.records.some((r) => r.runId === state.selected)) state.selected = null;
     } catch (error) { state.error = error.message; }
     state.loading = false; render();
@@ -252,6 +255,7 @@
       <h5>人工判定（评估真值）</h5>${labelBlock(r)}
       <h5>完整性</h5><p class="au-digest"><code title="对该 Run 全部事件的 sha256，可与 Journal 对账">${esc(r.digest)}</code> <button type="button" class="au-link" data-au-copy="${esc(r.digest)}">复制</button></p>
       <div class="au-actions"><button type="button" class="au-btn" data-au-open="${esc(r.runId)}"${r.deleted ? " disabled" : ""}>打开对话</button>
+        ${["queued", "running", "planning", "verifying", "waiting_approval"].includes(r.status) ? `<button type="button" class="au-btn au-btn-bad" data-au-cancel="${esc(r.runId)}">取消运行</button>` : ""}
         ${r.deleted ? `<button type="button" class="au-btn" data-au-restore="${esc(r.runId)}">恢复会话</button>` : `<button type="button" class="au-btn au-btn-bad" data-au-delete="${esc(r.runId)}">删除会话</button>`}
         <button type="button" class="au-btn" data-au-raw>${state.raw ? "收起" : "查看"}原始记录</button></div>
       ${state.raw ? `<pre class="au-raw">${esc(JSON.stringify(r, null, 2))}</pre>` : ""}`;
@@ -301,11 +305,26 @@
     </section>`;
   }
 
+  function casesView() {
+    const text = state.cases?.text ?? "";
+    return `<section class="au-card au-wide"><div class="au-review-head"><div><h4>坏案例日志</h4><p class="au-note">运行时记录的失败、取消与验证不通过，写在本地 <code>reporting/bad-cases.md</code>。优化回路从这里开始。</p></div><button type="button" class="au-btn" data-au-cases-refresh>刷新</button></div>${text.trim() ? `<pre class="au-raw">${esc(text)}</pre>` : `<p class="au-empty">还没有记录坏案例。</p>`}</section>`;
+  }
+
+  function improvementBlock() {
+    const data = state.improvement;
+    if (data === null) return "";
+    if (data.enabled !== true) return `<section class="au-card au-wide"><h4>改进建议</h4><p class="au-empty">改进环路已关闭（CLONE_AI_IMPROVEMENT=0）。</p></section>`;
+    const suggestions = data.suggestions || [];
+    const usage = data.usage || [];
+    const rows = suggestions.map((suggestion) => `<div class="au-queue"><div><b>${esc(suggestion.title)}</b><small>${esc(suggestion.rationale)}</small>${suggestion.proposedSummary ? `<pre class="au-pre">${esc(suggestion.proposedSummary)}</pre>` : ""}${suggestion.evidenceRunIds?.length ? `<small>证据 Run：${suggestion.evidenceRunIds.map((id) => esc(id.slice(0, 8))).join("、")}</small>` : ""}</div><div class="au-actions"><button type="button" class="au-btn au-btn-ok" data-au-improve="approve" data-au-id="${esc(suggestion.id)}">批准</button><button type="button" class="au-btn" data-au-improve="dismiss" data-au-id="${esc(suggestion.id)}">驳回</button></div></div>`).join("");
+    return `<section class="au-card au-wide"><div class="au-review-head"><div><h4>改进建议</h4><p class="au-note">来自记忆使用情况与失败聚类的建议；只有你批准后，它才会经记忆治理写入。分身不会自己改动代码、提示词或权限。</p></div></div>${suggestions.length ? rows : `<p class="au-empty">没有待处理的建议。</p>`}${usage.length ? `<h5>记忆使用情况</h5><ul class="au-history">${usage.map((item) => `<li><span>${esc(item.memoryId)}</span><span>${item.good}/${item.exposures} 次有效</span></li>`).join("")}</ul>` : ""}</section>`;
+  }
+
   function evaluation() {
     const e = state.data.summary.evaluation;
     const queue = records().filter((r) => !r.label && ["completed", "failed", "waiting_review"].includes(r.status)).slice(0, 12);
     const dis = records().filter((r) => r.label && ["completed", "failed"].includes(r.status) && (r.label.verdict === "pass") !== (r.status === "completed"));
-    return `${selfCheckBlock()}${reviewBlock()}<div class="au-stats">
+    return `${selfCheckBlock()}${reviewBlock()}${improvementBlock()}<div class="au-stats">
         ${stat("已人工判定", e.labeled, "评估的真值样本")}
         ${stat("与系统一致率", pct(e.agreement), "系统判定 vs 你的判定", e.agreement !== null && e.agreement < 0.8 ? "warn" : "")}
         ${stat("误判通过", e.falsePass, "系统说完成，你判不合格——最危险", e.falsePass ? "bad" : "")}
@@ -372,13 +391,13 @@
     if (!host) return;
     const keep = host.querySelector(".au-list")?.scrollTop ?? 0;
     const keepDetail = host.querySelector(".au-detail")?.scrollTop ?? 0;
-    const tabs = [["overview", "总览"], ["turns", "主 Agent 回合"], ["runs", "运行记录"], ["invocations", "Agent 调用"], ["eval", "评估"]]
+    const tabs = [["overview", "总览"], ["turns", "主 Agent 回合"], ["runs", "运行记录"], ["invocations", "Agent 调用"], ["cases", "坏案例"], ["eval", "评估"]]
       .map(([v, l]) => `<button type="button" class="au-tab${state.view === v ? " is-on" : ""}" data-au-view="${v}">${l}</button>`).join("");
     let body = "";
     if (state.error) body = `<div class="au-callout au-callout-bad"><b>读取审计失败</b><pre>${esc(state.error)}</pre></div>`;
     else if (!state.data) body = `<p class="au-empty">${state.loading ? "正在读取…" : "尚未加载。"}</p>`;
     else if (!state.data.records.length && !(state.turns ?? []).length && !(state.invocations ?? []).length) body = `<p class="au-empty">还没有任何记录。发起一个任务或对话后，这里会出现它的完整轨迹。</p>`;
-    else body = state.view === "overview" ? overview() : state.view === "turns" ? turnsView() : state.view === "runs" ? runs() : state.view === "invocations" ? invocationsView() : evaluation();
+    else body = state.view === "overview" ? overview() : state.view === "turns" ? turnsView() : state.view === "runs" ? runs() : state.view === "invocations" ? invocationsView() : state.view === "cases" ? casesView() : evaluation();
     host.innerHTML = `<div class="au-head"><div><h3>审计与评估</h3><p>每个 Run 的轨迹都从 Journal 投影而来：为什么成功或失败、哪个工具、花了多久和多少钱，一目了然。</p></div>
         <div class="au-actions"><button type="button" class="au-btn" data-au-refresh>${state.loading ? "刷新中…" : "刷新"}</button><button type="button" class="au-btn" data-au-export>导出 JSONL</button></div></div>
       <div class="au-tabs" role="tablist">${tabs}</div>${body}`;
@@ -428,6 +447,29 @@
     if ((el = pick("[data-au-status]"))) { state.status = el.dataset.auStatus; render(); return; }
     if (pick("[data-au-refresh]")) { await load(); return; }
     if (pick("[data-au-export]")) { await exportJsonl(); return; }
+    if (pick("[data-au-cases-refresh]")) {
+      try { state.cases = await api("/api/reporting/bad-cases"); } catch (error) { announce(error.message, true); }
+      render();
+      return;
+    }
+    if ((el = pick("[data-au-improve]"))) {
+      el.disabled = true;
+      try {
+        await api(`/api/improvement/suggestions/${encodeURIComponent(el.dataset.auId)}/${el.dataset.auImprove}`, { method: "POST" });
+        announce(el.dataset.auImprove === "approve" ? "建议已批准并写入记忆库。" : "建议已驳回。");
+        await load();
+      } catch (error) { el.disabled = false; announce(error.message, true); }
+      return;
+    }
+    if ((el = pick("[data-au-cancel]"))) {
+      if (!(await confirmDialog("取消这个 Run？正在执行的步骤会停止，已产生的证据会保留。", "取消运行"))) return;
+      try {
+        await api(`/api/runs/${encodeURIComponent(el.dataset.auCancel)}/cancel`, { method: "POST" });
+        announce("运行已取消。");
+        await load();
+      } catch (error) { announce(error.message, true); }
+      return;
+    }
     if ((el = pick("[data-au-copy]"))) { try { await navigator.clipboard.writeText(el.dataset.auCopy); announce("摘要已复制。"); } catch { announce("无法访问剪贴板。", true); } return; }
     if (pick("[data-au-raw]")) { state.raw = !state.raw; render(); return; }
     if ((el = pick("[data-au-quick]"))) { await label(el.dataset.auRun, el.dataset.auQuick, ""); return; }

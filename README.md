@@ -8,7 +8,7 @@
 
 `Status: initial runtime scaffold` · `License: MIT` · `Core: TypeScript + Node.js + Python`
 
-Deployment: [Mac app](apps/desktop/README.md) · [Linux server](docs/usage/server-deployment.md) · [WhatsApp phone channel](docs/usage/mobile-whatsapp.md)
+Deployment: [Mac app](apps/desktop/README.md) · [WhatsApp phone channel](docs/usage/mobile-whatsapp.md)
 
 ---
 
@@ -16,7 +16,7 @@ Deployment: [Mac app](apps/desktop/README.md) · [Linux server](docs/usage/serve
 
 - The only executor is the in-process native worker. Its tools are gated per call against the step's scopes, and a step's declared risk caps which tools it is offered: a `read_only` step is never given a write tool. Path checks resolve symlinks, so a link inside the workspace that points outside it is refused. Clone AI does **not** enforce an OS sandbox for this worker: its tools are the boundary.
 - External or irreversible actions cannot be executed at all. A governed external-action connector is not implemented yet.
-- Acceptance criteria that cannot be checked automatically enter `waiting_review` for the owner to inspect and accept or reject. Use `clone-ai review <runId>` to inspect them.
+- Acceptance criteria that cannot be checked automatically enter `waiting_review` for the owner to inspect and accept or reject in the desktop conversation or under 审计与评估 → 运行记录.
 - Scheduled occurrences live in `schedules.sqlite3`; an existing `schedules.json` is imported once and retained as a backup. Interrupted occurrences with unknown effects require review rather than automatic retry.
 - Memory and audit data remain in local Markdown/SQLite without application-layer encryption or complete erasure. Hiding a session or archiving memory is not deletion; remote model requests can send context to the model provider.
 - Memory mining runs after a completed task through the same configured endpoint and costs one model call; a failed extraction stays pending instead of being treated as an empty result.
@@ -98,15 +98,16 @@ git clone https://github.com/guide-me-pls/clone-ai.git
 cd clone-ai
 ```
 
-Then read [Architecture](#architecture), [Roadmap](#roadmap), the planned
-[command-line experience](#command-line-experience-planned), and the
-[initial runtime scaffold](docs/initial-runtime.md). To run the developer runtime:
+Then read [Architecture](#architecture), [Roadmap](#roadmap), the
+[desktop application](apps/desktop/README.md), and the
+[initial runtime scaffold](docs/initial-runtime.md). To build and run the
+desktop product from source:
 
 ```bash
 npm install --ignore-scripts
 npm test
 npm run typecheck
-npm run main
+npm run desktop:dev
 ```
 
 For the complete current path from a user request to verified completion, see
@@ -118,7 +119,7 @@ route already walked, and the next phase are in
 [Runtime architecture and route](docs/runtime-architecture-and-route.md).
 
 The first implementation is a local, inspectable trust loop—not a broad autonomous
-assistant. The CLI demo remains deterministic for repeatable learning and tests; the
+assistant. The deterministic adapters remain repeatable for learning and tests; the
 configured desktop runtime routes bounded WorkOrders through the native worker.
 Work orders carry inputs, capability requirements, artifact contracts, risk, budgets,
 and an acyclic dependency graph. Each assignment starts a fresh in-process session with no Clone AI-owned long-term
@@ -415,8 +416,8 @@ Yes. The first several product stages should use only these three:
 
 | Technology | Role | Boundary |
 | --- | --- | --- |
-| **TypeScript (strict)** | Canonical domain contracts, policies, schemas, CLI, connectors, adapters, state projections, and tests. | The language of truth for runtime-owned state and decisions. |
-| **Node.js LTS** | Local daemon, process supervision, streaming I/O, CLI, scheduling, connector execution, and agent-runtime adapters. | The always-on local control plane. |
+| **TypeScript (strict)** | Canonical domain contracts, policies, schemas, desktop runtime, connectors, adapters, state projections, and tests. | The language of truth for runtime-owned state and decisions. |
+| **Node.js LTS** | Local daemon, process supervision, streaming I/O, desktop runtime, scheduling, connector execution, and agent-runtime adapters. | The always-on local control plane. |
 | **Python** | Optional intelligent workers: local ML, multimodal extraction, OCR, forecasting, ranking, evaluation, and experimental retrieval. | It returns versioned proposals and evidence; it does not directly own personal state or permissions. |
 
 Use a current Node.js LTS release for the daemon. At the time of writing, Node.js 24 is
@@ -436,7 +437,6 @@ isolation, native device integration, or a performance-critical component.
 
 ```text
 apps/
-|-- cli/                         query, inspect, approve, trace, resume
 |-- daemon/                      local lifecycle and scheduling process
 `-- desktop/                     installed local client, tray, approvals, activity trace
 
@@ -542,23 +542,27 @@ with a narrow but meaningful loop:
 Defer voice cloning, avatars, social simulation, financial execution, health decisions,
 relationship automation, broad inbox access, and unconstrained proactive behavior.
 
-## Command-line experience (planned)
+## Desktop experience
 
-```bash
-clone-ai init
-clone-ai connect calendar
-clone-ai ask "prepare my best plan for next week"
-clone-ai today
-clone-ai opportunity list
-clone-ai plan show <plan-id>
-clone-ai approve <approval-id>
-clone-ai trace <session-or-work-id>
-clone-ai memory inspect
-clone-ai memory forget <memory-id>
-```
+The macOS app is the only product surface. Its conversation, settings and audit
+views cover every owner action:
 
-The most important command is not `run`. It is the ability to inspect why the twin thinks
-something matters, what it is allowed to do, and what evidence proves the outcome.
+- **对话** — ask, approve or reject an external action, and accept or reject a
+  result that needs review.
+- **设置 → Agent** — model endpoint, gateway, reasoning effort and provider.
+- **设置 → 权限与安全** — per-domain autonomy (`observe` … `act_auto`) and
+  owner-written standing policies.
+- **设置 → 记忆与数据** — the memory library, governed changes and undo, and an
+  owner-data export that writes a timestamped archive outside the clone home.
+- **设置 → 上下文** — compactions and full-history search.
+- **设置 → 手机通道** — WhatsApp binding and the public webhook tunnel.
+- **设置 → 审计与评估** — runs, Main Agent turns, Agent invocations, the bad-case
+  log, self-check rounds, improvement suggestions, and cancellation of an active
+  run.
+
+The most important capability is not "run". It is the ability to inspect why the
+twin thinks something matters, what it is allowed to do, and what evidence proves
+the outcome.
 
 ## Invariants
 

@@ -210,7 +210,7 @@ export interface TraceSummary {
   path: string;
 }
 
-/** What the nightly job and the CLI both need: the traces on disk, newest first. 夜间任务与 CLI 都需要的东西：磁盘上的轨迹，最新在前。 */
+/** What the nightly job and maintenance scripts need: the traces on disk, newest first. 夜间任务与维护脚本都需要的东西：磁盘上的轨迹，最新在前。 */
 export async function listFailedTraces(dataDirectory: string): Promise<TraceSummary[]> {
   const directory = tracesDirectory(dataDirectory);
   let names: string[];

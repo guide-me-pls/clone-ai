@@ -52,9 +52,12 @@ function loadRequire() {
 }
 
 const checks = [];
+/** Phase prefix so one report can hold the baseline and the re-run side by side. */
+const phasePrefix = (flag("phase", "") || "").trim();
 function record(id, ok, detail) {
-  checks.push({ id, ok: Boolean(ok), detail });
-  console.log(`${ok ? "PASS" : "FAIL"}  ${id}${detail ? ` — ${detail}` : ""}`);
+  const qualified = phasePrefix === "" ? id : `${phasePrefix}.${id}`;
+  checks.push({ id: qualified, ok: Boolean(ok), detail });
+  console.log(`${ok ? "PASS" : "FAIL"}  ${qualified}${detail ? ` — ${detail}` : ""}`);
 }
 
 async function exists(path) {
@@ -273,6 +276,61 @@ try {
       return true;
     });
     record("model.features", missingFeatures.length === 0, missingFeatures.length ? `missing: ${missingFeatures.join(", ")}` : "platforms, camera keys, props present");
+
+    // Every named hall must sit on a modeled platform. A gate building drawn
+    // straight on the ground reads as a wall, which is what the baseline showed.
+    // 每座具名宫殿都必须落在有记录的台基上。直接落地的门楼读起来像一堵墙，这正是基线暴露的问题。
+    const platformGround = expected.platformedBuildings;
+    const unplatformed = platformGround
+      .map((name) => byName.get(name))
+      .filter((b) => b !== undefined && (b.platformId === null || b.platformId === undefined));
+    const absentPlatformed = platformGround.filter((name) => !byName.has(name));
+    record("model.platforms-for-halls", unplatformed.length === 0 && absentPlatformed.length === 0,
+      absentPlatformed.length ? `absent: ${absentPlatformed.join(", ")}`
+        : unplatformed.length ? `no platformId: ${unplatformed.map((b) => b.name).join(", ")}`
+          : `${platformGround.length} named halls carry a platformId`);
+
+    // Ornaments must be near a hall or platform, not floating in a plaza.
+    // 陈设必须靠近某座建筑或台基，而不是浮在广场中间。
+    const ornaments = Array.isArray(model.props?.ornaments) ? model.props.ornaments : [];
+    const anchors = [
+      ...model.buildings.map((b) => ({ x: b.position?.x ?? 0, z: b.position?.z ?? 0, w: Math.max(b.footprint?.widthM ?? 0, b.footprint?.depthM ?? 0) / 2 })),
+      ...(model.platforms ?? []).map((p) => ({ x: p.position?.x ?? 0, z: p.position?.z ?? 0, w: Math.max(p.footprint?.widthM ?? 0, p.footprint?.depthM ?? 0) / 2 })),
+    ];
+    const floating = ornaments.filter((o) => {
+      const x = o.position?.x ?? 0;
+      const z = o.position?.z ?? 0;
+      return !anchors.some((a) => Math.hypot(x - a.x, z - a.z) <= a.w + expected.ornamentAnchorSlackM);
+    });
+    record("model.ornament-anchoring", ornaments.length >= expected.minimumOrnaments && floating.length === 0,
+      ornaments.length < expected.minimumOrnaments ? `only ${ornaments.length} ornament(s), need ${expected.minimumOrnaments}`
+        : floating.length ? `${floating.length} ornament(s) far from any hall or platform: ${floating.slice(0, 3).map((o) => o.id ?? o.type).join(", ")}`
+          : `${ornaments.length} ornament(s) anchored`);
+
+    // Roof form: eave must flare above the body, and the crown must sit above
+    // the eave with the ridge either narrow (hip/xieshan) or pointed (攒尖).
+    // 屋顶形制：檐口必须高于墙身并外挑，顶部必须高于檐口，正脊窄（庑殿/歇山）或收成宝顶（攒尖）。
+    const roofProblems = [];
+    for (const name of expected.roofFormBuildings) {
+      const b = byName.get(name);
+      if (b === undefined) { roofProblems.push(`${name}: absent`); continue; }
+      const eaveY = b.roof?.eaveY;
+      const ridgeY = b.roof?.ridgeY;
+      const eaveOverhang = b.roof?.eaveOverhangM;
+      const ridgeLength = b.roof?.ridgeLengthM;
+      if (typeof eaveY !== "number" || typeof ridgeY !== "number") { roofProblems.push(`${name}: roof.eaveY/ridgeY missing`); continue; }
+      const body = b.bodyTopY;
+      if (typeof body === "number" && eaveY < body - expected.roofFormToleranceM) roofProblems.push(`${name}: eave ${eaveY} below body top ${body}`);
+      if (ridgeY <= eaveY + expected.roofFormToleranceM) roofProblems.push(`${name}: ridge ${ridgeY} not above eave ${eaveY}`);
+      if (typeof eaveOverhang === "number" && eaveOverhang <= 0) roofProblems.push(`${name}: no eave overhang`);
+      if (typeof ridgeLength === "number") {
+        const width = b.footprint?.widthM ?? 0;
+        if (b.roofType === "四角攒尖" && ridgeLength > expected.pointedRidgeMaxM) roofProblems.push(`${name}: 攒尖 ridge ${ridgeLength} m is not pointed`);
+        if (b.roofType === "重檐庑殿" && ridgeLength > width * expected.hipRidgeMaxRatio) roofProblems.push(`${name}: 庑殿 ridge ${ridgeLength} m too wide for ${width} m`);
+      }
+    }
+    record("model.roof-form", roofProblems.length === 0,
+      roofProblems.length ? roofProblems.slice(0, 5).join("; ") : `${expected.roofFormBuildings.length} roofs report eave below ridge and a valid crown`);
   }
 
   // Screenshot differences along the timeline.
@@ -352,7 +410,7 @@ if (shouldRender) {
 /* --------------------------------------------------------------- report */
 
 const passed = checks.filter((c) => c.ok).length;
-const hardFailures = checks.filter((c) => !c.ok && !expected.softChecks.includes(c.id));
+const hardFailures = checks.filter((c) => !c.ok && !expected.softChecks.includes(c.id.replace(new RegExp(`^${phasePrefix === "" ? "__none__" : phasePrefix}\\.`), "")));
 const report = {
   task: "05-forbidden-city",
   workspace,

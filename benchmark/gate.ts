@@ -11,8 +11,9 @@
  * The default run is offline and costs nothing: it re-runs verification and
  * authority policy over `benchmark/gate/*.json` and calibrates the audit
  * projection over `audit-cases.jsonl`. Pass `--audit` to run the same
- * calibration over a real `clone-ai audit export` file. `--write-baseline`
- * records current behavior; review that diff like any other behavior change.
+ * calibration over a real file from `npm run audit:export -- --out <file>`.
+ * `--write-baseline` records current behavior; review that diff like any other
+ * behavior change.
  *
  * 确定性回归门禁。
  *
@@ -24,8 +25,8 @@
  *
  * 默认运行完全离线且零成本：对 `benchmark/gate/*.json` 重跑验证与权限策略，并对
  * `audit-cases.jsonl` 校准审计投影。传入 `--audit` 可对真实的
- * `clone-ai audit export` 文件做同一套校准。`--write-baseline` 记录当前行为；
- * 像审查其他行为变更一样审查那份 diff。
+ * `npm run audit:export -- --out <file>` 文件做同一套校准。`--write-baseline`
+ * 记录当前行为；像审查其他行为变更一样审查那份 diff。
  */
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";

@@ -6,6 +6,65 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The verifier reads negation, and naming `tests/` no longer demands a test run
+
+A complete delivery was being failed for saying what it did *not* do. The
+Forbidden City benchmark's plan wrote `不要声称 out/video.mp4 已生成` — do not claim
+the MP4 exists — and `extractFileExpectations` read the negated path as a
+promised file, failing a run whose 20 files, 6/6 tests and 21/21 external
+checks had all passed. `mentionsTests` matched the bare word `tests`, so listing
+`tests/` as a deliverable (or honestly recording that tests were not run)
+triggered the test-evidence gate a file-only worker cannot satisfy.
+`extractFileExpectations` now skips a path the clause before it says not to
+claim, and `mentionsTests` requires a test *run* signal — `npm test passes`, a
+run request in either language, or a shell command in a command context. Both
+defects were reproduced as one-line calls before the fix and are now gate cases
+(`negated-path-is-not-a-deliverable`,
+`tests-named-as-deliverable-needs-no-test-evidence`) plus unit cases. Both files
+are on the repair lane's protected list, so the owner authorized a hand fix,
+recorded as an explicit exception in the trade-off entry. `npm test` is 688
+tests, 688 pass; typecheck and `npm run gate` pass.
+
+一次完整的交付因为写出了自己*没有*做什么而被判失败。故宫基准的计划里写着
+`不要声称 out/video.mp4 已生成`，而 `extractFileExpectations` 把这个被否定的路径读成承诺文件，
+于是一次 20 个文件、6/6 测试、21/21 外部检查全部通过的运行被判失败。`mentionsTests` 匹配裸词
+`tests`，因此把 `tests/` 列为交付物（或诚实记录测试未运行）就触发了只有文件工具的 Worker 无法
+满足的测试证据闸门。现在 `extractFileExpectations` 会跳过其前方分句明确说"不要声称"的路径；
+`mentionsTests` 要求测试**运行**信号——`npm test 通过`、中英文运行请求、或命令语境中的 shell
+命令。两个缺陷在修复前都用单行调用复现，现已成为门禁用例
+（`negated-path-is-not-a-deliverable`、`tests-named-as-deliverable-needs-no-test-evidence`）
+与单元用例。两个文件都在修复通道的保护清单里，因此由所有者授权人工修复，并在取舍条目中记为显式
+例外。`npm test` 为 688 个测试、688 通过；typecheck 与 `npm run gate` 通过。
+
+### The desktop app is the only product surface
+
+The `clone-ai` command line, the headless server entry, the Docker/deployment
+files and the developer query entry are removed. The macOS app — a native shell
+over the loopback companion runtime — is now the only way to use the twin. Owner
+actions that used to exist only in the CLI moved into the app: an authority
+editor in **设置 → 权限与安全** (per-domain autonomy plus standing policies), an
+unencrypted owner-data export in **设置 → 记忆与数据**, a bad-case tab and
+improvement approvals in **设置 → 审计与评估**, and a cancel action on active
+runs. The self-improvement loop keeps non-product entry points as npm scripts:
+`npm run traces`, `npm run selfcheck`, `npm run repair` and
+`npm run audit:export`; the launchd example and `AGENTS.md` rule 4 now use them.
+The standalone WhatsApp bridge remains because the desktop 手机通道 panel
+depends on it. The desktop's Agent page also no longer reads undefined
+`providers`, `providerById`, `installed` or `missing` bindings, which blocked
+the first refresh after the merge that introduced them. Trade-off:
+[`docs/architecture/trade-offs.md`](docs/architecture/trade-offs.md).
+
+移除 `clone-ai` 命令行、无界面服务器入口、Docker/部署文件与开发查询入口。macOS App——
+原生外壳加环回 companion 运行时——是使用分身的唯一方式。原先只在 CLI 中存在的能力搬进
+App：**设置 → 权限与安全** 的权限编辑器（按域自主档位与常设策略）、**设置 → 记忆与数据**
+的未加密所有者数据导出、**设置 → 审计与评估** 的坏案例标签页与改进审批，以及取消正在运行
+的 Run。自我改进环路保留非产品入口，改为 npm scripts：`npm run traces`、
+`npm run selfcheck`、`npm run repair` 与 `npm run audit:export`；launchd 示例与
+`AGENTS.md` 第 4 条已改用它们。独立 WhatsApp 网桥保留，因为桌面「手机通道」面板依赖它。
+桌面的 Agent 页面也不再读取未定义的 `providers`、`providerById`、`installed` 与 `missing`
+绑定——它们在引入该绑定的合并后阻塞了首次刷新。
+取舍见 [`docs/architecture/trade-offs.zh-CN.md`](docs/architecture/trade-offs.zh-CN.md)。
+
 ### A Forbidden City 3D benchmark that grades the model against the world
 
 `benchmark/capability/forbidden-city/` asks clone-ai to model the Forbidden

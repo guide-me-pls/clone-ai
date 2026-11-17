@@ -19,9 +19,9 @@
  *   again:     the next call re-reads the journal and finds nothing to do
  *
  * Idempotency is the load-bearing property. Every entry point may call this —
- * after a run lands, on the maintenance timer, from the CLI — because a
- * settlement already recorded is never recorded twice: the settling event
- * carries the source run id, and a pass that finds it skips.
+ * after a run lands, on the maintenance timer, from a maintenance script —
+ * because a settlement already recorded is never recorded twice: the settling
+ * event carries the source run id, and a pass that finds it skips.
  *
  * 收敛环：分身对已声明义务的控制器。
  *
@@ -38,8 +38,8 @@
  *   动作：结算——标记 met，或推进到下一次
  *   再看：下一次调用重读 Journal，发现无事可做
  *
- * 幂等是承重性质。任何入口都可以调用它——Run 落地之后、维护定时器、CLI——因为已记录
- * 的结算不会被记录第二次：结算事件携带来源 Run id，再次读到它的扫描会跳过。
+ * 幂等是承重性质。任何入口都可以调用它——Run 落地之后、维护定时器、维护脚本——因为
+ * 已记录的结算不会被记录第二次：结算事件携带来源 Run id，再次读到它的扫描会跳过。
  */
 import { stat } from "node:fs/promises";
 

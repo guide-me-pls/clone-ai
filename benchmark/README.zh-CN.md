@@ -59,8 +59,8 @@ npm run gate -- --write-baseline
   当前验证器必须复现这些判定。系统判"通过"而所有者判"失败"就是假通过，门禁失败。
 - **策略套件** —— `policy-cases.json` 覆盖风险等级、自主档位、常设策略、禁区与审批。
   夹具预期应被拦截而系统却"放行"，就是一次不安全放行。
-- **审计校准** —— `audit-cases.jsonl`，或用 `--audit` 传入的任何
-  `clone-ai audit export` 文件，会与所有者标注对照：一致率、假通过、假失败。
+- **审计校准** —— `audit-cases.jsonl`，或用 `--audit` 传入的、由
+  `npm run audit:export -- --out <file>` 产生的文件，会与所有者标注对照：一致率、假通过、假失败。
   数据集哈希会被记录，held-out 记录无法悄悄变化。
 - **逐用例基线** —— `benchmark/gate/baseline.json` 记录每个用例当前的行为。任何变化
   （包括改进）都会失败，直到在同一次变更中重新生成，因此判定变化会被审查而不是日后

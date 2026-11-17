@@ -2,62 +2,34 @@
 
 **English** · [简体中文](local-setup.zh-CN.md)
 
-Clone AI runs on your machine as a normal command-line tool, next to the other
-coding agents you already have. Nothing leaves the device unless you configure
-an external integration.
+Clone AI is a macOS desktop application. The window is served by a resident
+local runtime (`src/desktop-sidecar.ts`) over loopback; the runtime owns the
+journal, memory, scheduling, approvals and the Main Agent. Nothing leaves the
+device unless you configure an external model or integration.
 
-## 1. Install
+## 1. Requirements
+
+- macOS (Apple Silicon or Intel), with Xcode Command Line Tools (`swiftc`,
+  `codesign`).
+- Node.js 24+ — the runtime runs TypeScript directly, with no build step.
+- Git.
+
+## 2. Build and launch
 
 ```bash
 git clone https://github.com/guide-me-pls/clone-ai.git
 cd clone-ai
 npm install --ignore-scripts
-npm link          # makes `clone-ai` available everywhere (npm i -g . also works)
+npm run desktop:mac:build
+open "dist/Clone AI.app"
 ```
 
-Requirements: **Node.js 24+** (it runs TypeScript directly, no build step).
+`npm run desktop:dev` builds the native shell on demand and launches the live
+source; use it while changing the UI or the runtime.
 
-Verify:
+## 3. The resident runtime
 
-```bash
-clone-ai --version
-clone-ai doctor
-```
-
-`doctor` prints your clone home, Node version, and which worker CLIs are
-installed.
-
-## 2. Use it
-
-```bash
-clone-ai "读一下 README 并总结三点"        # talk to the Main Agent
-clone-ai "用 pi 调研这个项目并写份笔记"      # explicitly choose a worker
-clone-ai app                              # open the native desktop app
-clone-ai status                           # runs, workers, memory, bad cases
-clone-ai workers                          # which worker CLIs are installed
-clone-ai install codex-cli                # install a missing worker
-clone-ai memory "发布流程"                  # search reviewed memories
-clone-ai cases                            # the local bad-case log
-clone-ai opportunities                    # open opportunity cards
-clone-ai bench                            # reliability benchmark
-```
-
-The default subcommand is a conversation: `clone-ai "<request>"` behaves like
-`pi "..."` or `claude -p "..."`, except the Main Agent routes the work to a
-worker and the Kernel verifies the result.
-
-## 3. The desktop app
-
-```bash
-clone-ai app                # open dist/Clone AI.app or /Applications/Clone AI.app
-```
-
-`clone-ai app` opens the built native application bundle. It never starts a
-browser tab or a Chromium app window. Build the macOS application first with
-`npm run desktop:mac:build`.
-
-The runtime is a resident `launchd` job, not a child of the window. Install it
-once:
+The window is not the runtime. Install the per-user LaunchAgent once:
 
 ```bash
 node scripts/install-daemon.mjs            # installs and loads ai.clone.companion
@@ -69,15 +41,39 @@ when you close the window — the app attaches to the endpoint the daemon
 publishes (`~/.clone/companion-endpoint.json`). Re-run the installer after a
 node upgrade, because the plist pins an absolute node path.
 
-There is no separate download. If you want a single-file native executable
-instead, the Tauri shell is optional and requires the Rust toolchain:
+## 4. Configure the model
 
-```bash
-npm run desktop:build
-# then run apps/desktop/src-tauri/target/.../clone-ai-desktop.exe
-```
+Open **设置 → Agent**. Apply a model exposed by the local Magpie gateway, or set
+the endpoint and key there. The key is write-only: after saving, the app shows
+only that it is stored. `CLONE_AI_NATIVE_MODEL`, `CLONE_AI_NATIVE_BASE_URL` and
+`CLONE_AI_NATIVE_API_KEY` remain available for development.
 
-## 4. Workers (the agent that does the work)
+### Main Agent runtime
+
+The native in-process runtime is the only Main Agent runtime. It writes the same
+`main_agent.turn_*`, `agent.tool_*` and `usage.recorded` events, uses the turn
+ledger as its transcript, and answers `search_history` from that ledger. It
+streams tokens as they arrive and compacts a long transcript deterministically:
+the newest turns stay verbatim within a 12,000-character budget, older turns
+become a bounded summary, and the full text stays in the turn ledger. Image
+attachments are sent as OpenAI-style data URLs in the current message; they are
+per-turn and not stored in the ledger.
+
+## 5. Owner controls in the app
+
+- **对话** — ask, approve or reject an external action, and accept or reject a
+  result that needs review.
+- **设置 → 权限与安全** — per-domain autonomy and owner-written standing
+  policies. Every change is journaled.
+- **设置 → 记忆与数据** — the memory library, governed changes and undo, and
+  **导出全部数据**: pick a folder and the runtime writes a timestamped archive
+  (manifest + copied data) outside the clone home.
+- **设置 → 上下文** — compactions and full-history search.
+- **设置 → 手机通道** — WhatsApp binding and the public webhook tunnel.
+- **设置 → 审计与评估** — runs, Main Agent turns, Agent invocations, bad cases,
+  self-check rounds, improvement suggestions, and cancellation of an active run.
+
+## 6. Workers
 
 Clone AI has one execution provider: the in-process native worker. It is not a
 CLI; every tool call is checked against the step's scopes at the moment it is
@@ -85,34 +81,12 @@ made, and its token usage is recorded exactly.
 
 | Worker | How it runs | Set up |
 | --- | --- | --- |
-| Native worker | In-process loop against an OpenAI-compatible endpoint | `CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL` |
+| Native worker | In-process loop against an OpenAI-compatible endpoint | Configure it in 设置 → Agent |
 
 Black-box CLI workers (Claude Code, Codex, the Pi CLI, opencode) were removed.
 A CLI hides its tool calls and credentials from the Kernel, so the harness can
 neither audit nor gate them. The `external` role has no provider until a
-governed action connector exists; it is not routed to a CLI.
-
-### Main Agent runtime
-
-The native in-process runtime is the only Main Agent runtime. It needs
-`CLONE_AI_NATIVE_MODEL` and `CLONE_AI_NATIVE_BASE_URL`; without them a turn fails
-with a message naming the missing variables. The Pi runtime and its SDK are no
-longer part of the product. To configure the runtime:
-
-```bash
-export CLONE_AI_NATIVE_MODEL=<model-id>
-export CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url>
-export CLONE_AI_NATIVE_API_KEY=<key>   # optional
-clone-ai "你好"
-```
-
-The native loop writes the same `main_agent.turn_*`, `agent.tool_*` and
-`usage.recorded` events, uses the turn ledger as its transcript, and answers
-`search_history` from that ledger. It streams tokens as they arrive and compacts
-a long transcript deterministically: the newest turns stay verbatim within a
-12,000-character budget, older turns become a bounded summary, and the full text
-stays in the turn ledger. Image attachments are sent as OpenAI-style data URLs
-in the current message; they are per-turn and not stored in the ledger.
+governed action connector exists.
 
 ### Worker concurrency
 
@@ -121,20 +95,11 @@ capacity: CPU cores, the 1-minute load average, and free memory. You do not
 configure that, and neither does the Main Agent — it can only read it
 (`get_capacity`) to size a plan.
 
-To pin a ceiling yourself, set `maxConcurrentWorkers` in `config.json` (or
-`PATCH /api/config`). `0` or unset means auto. The pin is capped at the core
-count, and it is re-read on every dispatch, so a change applies without a
-restart.
+To pin a ceiling yourself, set `maxConcurrentWorkers` in `config.json`. `0` or
+unset means auto. The pin is capped at the core count, and it is re-read on
+every dispatch, so a change applies without a restart.
 
-```bash
-# e.g. on a fanless laptop: never more than 2 workers at once
-curl -X PATCH http://127.0.0.1:4317/api/config \
-  -H "authorization: Bearer $CLONE_AI_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{"maxConcurrentWorkers": 2}'
-```
-
-## 5. Where your data lives
+## 7. Where your data lives
 
 | Item | Location |
 | --- | --- |
@@ -142,23 +107,40 @@ curl -X PATCH http://127.0.0.1:4317/api/config \
 | Journal | `<clone home>/journal.jsonl` (`CLONE_AI_JOURNAL=sqlite` for WAL) |
 | Memory | `<clone home>/memory-index.db` + `<clone home>/memory/*.md` |
 | Bad cases | `<clone home>/reporting/bad-cases.md` |
-| Provider overrides | `<clone home>/providers.json` |
+| Authority | `<clone home>/policies.json` |
 | Failure taxonomy | `<clone home>/outcomes/failures.json` |
 | Isolated workspaces | `<clone home>/isolated-workspaces/` |
+| Owner export | The folder you choose in 设置 → 记忆与数据 |
 | Env template | `.env.example` in the repo (names only, never secret values) |
 
-## 6. Platform notes
+## 8. Platform notes
 
-- **Windows**: `.cmd` shims are resolved to their real executables (no shell, so
-  prompts cannot be injected as arguments); worker process trees are terminated
-  with `taskkill /T` on timeout, so no orphaned agent processes remain.
-- **macOS**: workers run in their own POSIX process group and are terminated as
-  a group. Recipes use bare command names.
+- **macOS**: worker processes run in their own POSIX process group and are
+  terminated as a group. The app requires Xcode Command Line Tools to build.
+- **Windows**: the Tauri shell is still buildable with
+  `npm run desktop:build`; `.cmd` shims are resolved to their real executables,
+  and worker process trees are terminated with `taskkill /T` on timeout.
 
-## 7. First-run checklist
+## 9. First-run checklist
 
-1. `clone-ai doctor` → at least one worker installed.
-2. `clone-ai "你好"` → the Main Agent replies.
-3. `clone-ai app` → the native desktop application opens.
-4. Run a real task, then `clone-ai status` shows it.
-5. `clone-ai cases` accumulates failures — that file drives your optimization.
+1. `npm run desktop:mac:build` then `open "dist/Clone AI.app"` → the window opens.
+2. 设置 → Agent: configure a model, then send one message → the Main Agent replies.
+3. 审计与评估 → 运行记录 shows the run.
+4. 设置 → 权限与安全: confirm every domain is `observe`; raise only what you need.
+5. 设置 → 记忆与数据 → 导出全部数据: export once, inspect `manifest.json`, then
+   move the folder somewhere you can keep.
+6. 审计与评估 → 坏案例 starts accumulating failures — that file drives your
+   optimization loop.
+
+## 10. Maintenance entry points
+
+These are automation scripts, not a product CLI. The desktop app remains the
+owner interface.
+
+```bash
+npm run traces -- list | export | show <runId> | clear --yes
+npm run selfcheck -- [--full] [--repair]
+npm run repair -- [--dry-run] [--keep] [--max-traces N] [--agent <id>] [--base <ref>]
+npm run audit:export -- [--out <file>]
+npm run bench
+```

@@ -5,7 +5,7 @@ bad day into a failing test, a fix, and a **branch** the owner reviews. It never
 merges, never touches the serving checkout, and never edits the rules that
 govern it.
 
-Since 2026-11-06 the repair itself is a clone-ai Run: `clone-ai repair` accepts a
+Since 2026-11-06 the repair itself is a clone-ai Run: `npm run repair` accepts a
 trigger, attaches a two-phase plan, and dispatches it to a configured worker, so
 the Kernel's budgets, evidence and journal cover the repair. The lane still owns
 the checks a worker cannot make about itself — the regression test must be
@@ -17,28 +17,30 @@ consumed-trace modules.
 这是 RSI 回路里可以交给机器的那一部分：把一次糟糕的运行变成一条失败的测试、一个修复，和
 一个由所有者审查的**分支**。它从不合并、不碰正在服务的检出，也不修改约束它自己的规则。
 
-自 2026-11-06 起，修复本身就是一个 clone-ai Run：`clone-ai repair` 接受 Trigger、挂上两阶段
+自 2026-11-06 起，修复本身就是一个 clone-ai Run：`npm run repair` 接受 Trigger、挂上两阶段
 计划，并派发给已配置的 Worker，因此 Kernel 的预算、证据与 Journal 覆盖了这次修复。通道仍然
 负责 Worker 无法对自己做出的检查——回归测试必须被观察到是红的、修复后测试哈希必须不变、暂存
 差异不得触碰保护路径。`scripts/nightly-rsi.mjs` 保留给已经在运行它的调度主机；两者共用同一套
 策略与已消费轨迹模块。
 
 ```bash
-clone-ai selfcheck              # adversarial probes + gate; journals the round
-clone-ai selfcheck --full       # also npm test
-clone-ai selfcheck --repair     # a red round is handed to the repair lane
-clone-ai traces                 # list what is on disk for the repair lane
-clone-ai repair --dry-run       # what a repair would do, creating nothing
-clone-ai repair                 # repair as a Kernel Run in an isolated worktree
+npm run selfcheck --              # adversarial probes + gate; journals the round
+npm run selfcheck -- --full       # also npm test
+npm run selfcheck -- --repair     # a red round is handed to the repair lane
+npm run traces -- list            # list what is on disk for the repair lane
+npm run repair -- --dry-run       # what a repair would do, creating nothing
+npm run repair                    # repair as a Kernel Run in an isolated worktree
 node scripts/nightly-rsi.mjs --dry-run   # the script entry point, kept for existing schedulers
 ```
 
-The nightly schedule runs `selfcheck --full --repair`: the agent attacks its
-own boundaries, records the round, and only when something is red does the
-gated repair lane turn the failure into a draft PR.
+The nightly schedule runs `scripts/selfcheck.mjs --full --repair`: the agent
+attacks its own boundaries, records the round, and only when something is red
+does the gated repair lane turn the failure into a draft PR. A red round exports
+its traces itself, so the job never reads an empty directory.
 
-夜间计划运行 `selfcheck --full --repair`：Agent 先攻击自己的边界并记录这一轮，只有出现红色
-探针时，带闸门的修复通道才把失败变成草稿 PR。
+夜间计划运行 `scripts/selfcheck.mjs --full --repair`：Agent 先攻击自己的边界并记录这一轮，
+只有出现红色探针时，带闸门的修复通道才把失败变成草稿 PR。红色的一轮会自己导出轨迹，
+因此任务不会读到空目录。
 
 ## What a trace contains / 轨迹里有什么
 
@@ -115,13 +117,13 @@ web tools, capped by `--max-turns`. Errors from either phase are written to
 ## Scheduling on macOS / 在 macOS 上定时
 
 Use launchd, not cron: an OAuth-authenticated Claude Code keeps its credentials
-in the login Keychain, which a bare cron session cannot unlock. The example
-first runs `clone-ai traces export`, so the nightly job does not silently find
-an empty directory. Install `scripts/com.cloneai.rsi.plist.example` into
+in the login Keychain, which a bare cron session cannot unlock. A red self-check
+round exports its own traces, so the nightly job does not silently find an empty
+directory. Install `scripts/com.cloneai.rsi.plist.example` into
 `~/Library/LaunchAgents/`, adjust the paths, and load it in the GUI domain:
 
 用 launchd 而不是 cron：OAuth 登录的 Claude Code 把凭据放在登录钥匙串里，纯 cron 会话
-解不开它。示例会先执行 `clone-ai traces export`，避免夜间任务静默读到空目录。把示例 plist
+解不开它。红色的一轮自检会自己导出轨迹，夜间任务不会静默读到空目录。把示例 plist
 放进 `~/Library/LaunchAgents/`，改好路径后在 GUI 域加载：
 
 ```bash
@@ -131,10 +133,10 @@ launchctl kickstart -k gui/$(id -u)/com.cloneai.rsi   # run once now
 
 Set `RSI_NOTIFY_URL` to any endpoint that accepts `POST {"text": "..."}` to get
 the morning message; wiring it to WhatsApp is one line once the bridge's sender
-is reachable from a CLI.
+is reachable from a script.
 
 把 `RSI_NOTIFY_URL` 指向任何接受 `POST {"text": "..."}` 的端点即可收到晨间消息；等 WhatsApp
-桥的发送器能被 CLI 调用后，接上它只是改一行。
+桥的发送器能被脚本调用后，接上它只是改一行。
 
 ## What it does not do / 它不做什么
 

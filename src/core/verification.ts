@@ -24,6 +24,27 @@ export interface FileExpectation {
 }
 
 /**
+ * True when the words immediately before a path say the file is *not* expected.
+ *
+ * A plan that writes "do not claim out/video.mp4 exists" is being careful, and
+ * reading it as a promise turns honesty into a failure. Only the clause right
+ * before the path is inspected, so a prohibition on one file cannot hide a real
+ * deliverable named later in the same sentence.
+ *
+ * 当路径前的措辞表明"并不期望该文件"时为 true。
+ *
+ * 计划里写"不要声称 out/video.mp4 已生成"是在谨慎，把它读成承诺会让诚实变成失败。只检查路径
+ * 紧邻的分句，因此对一个文件的禁止不会掩盖同一句后面真正点名的交付物。
+ */
+const NEGATION = /(?:不要|不得|不应|不能|不可|禁止|无需|别|勿|未|没有|并不|do\s+not|don't|never|must\s+not|should\s+not|cannot|can't|no\s+need|without|not\s+required|isn't|is\s+not)\s*(?:声称|宣称|声明|断言|承诺|claim|state|assert|promise|say)?\s*[:：]?\s*$/i;
+
+function isNegatedPath(sentence: string, candidateStart: number): boolean {
+  const before = sentence.slice(0, candidateStart);
+  const clause = before.split(/[，,；;。！？!?]|(?<=\s)(?:and|but|then|or)\s/i).at(-1) ?? before;
+  return NEGATION.test(clause.replace(/[`"'\s]+$/, " ").trimEnd() + " ");
+}
+
+/**
  * Recognises the file contract hidden in a plan step.
  *
  * Plans are written in prose by a model, so the contract has to be read out of
@@ -31,14 +52,15 @@ export interface FileExpectation {
  * separators are extracted, except for URLs, code expressions and uppercase
  * constant directories. A root-level filename also needs an allowed extension
  * and an explicit file-intent word in the same sentence or assertion.
- * `包含` / `contains` phrases become required substrings.
+ * `包含` / `contains` phrases become required substrings. A path the sentence
+ * explicitly says not to claim is not extracted at all.
  *
  * 识别隐藏在计划步骤里的文件契约。
  *
  * 计划是模型用自然语言写的，因此契约必须从所有者与 Agent 实际使用的措辞中读出来。
  * 带目录分隔符的普通路径可被提取，但排除 URL、代码表达式和全大写常量目录。根级文件名
  * 还必须使用允许的扩展名，且同一句或同一条标准中有明确文件意图词；`包含` / `contains`
- * 之类的表述则变成必须出现的子串。
+ * 之类的表述则变成必须出现的子串。句子明确说"不要声称"的路径完全不提取。
  */
 export function extractFileExpectations(step: PlanStep): FileExpectation[] {
   const found = new Map<string, FileExpectation>();
@@ -64,6 +86,10 @@ export function extractFileExpectations(step: PlanStep): FileExpectation[] {
           const prefix = sentence.slice(0, candidateStart).replace(/[`"']$/, "");
           const suffix = sentence.slice(match.index + match[0].length);
           if (/[A-Za-z_$][\w.$]*\s*\($/.test(prefix) || /^\s*\(/.test(suffix)) continue;
+          // A file the sentence says not to claim is not a deliverable; reading
+          // it as one punishes the plan for being honest.
+          // 句子说不要声称的文件不是交付物；当成交付物等于因诚实而惩罚计划。
+          if (isNegatedPath(sentence, candidateStart)) continue;
           const segments = candidate.split(/[/\\]/);
           if (segments.length > 1) {
             // Only SCREAMING_SNAKE_CASE segments are code constants. A single

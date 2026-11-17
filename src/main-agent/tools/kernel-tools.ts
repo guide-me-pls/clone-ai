@@ -159,7 +159,7 @@ export async function requestApprovalInfo(runtime: CloneRuntime, runId: string):
   if (run.status === "waiting_approval") {
     return [
       `Run ${run.id} is waiting for approval on step ${run.activeStepId ?? "?"}.`,
-      "The owner must approve it through the companion or CLI; the Main Agent cannot approve its own work.",
+      "The owner must approve it through the desktop app; the Main Agent cannot approve its own work.",
     ].join("\n");
   }
   return `Run ${run.id} status: ${run.status}${run.activeStepId === undefined ? "" : `, active step: ${run.activeStepId}`}.`;
@@ -344,7 +344,7 @@ export async function recordOwnerState(
 
 /**
  * A model-selected quote cannot authorize a system-level installation. Only
- * an independent owner action through the desktop or CLI can do that.
+ * an independent owner action through the desktop app can do that.
  * 模型选出的引文不能授权系统级安装；必须由所有者通过桌面或 CLI 独立操作。
  */
 export async function requestAgentInstallation(
@@ -559,7 +559,7 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
     label: "Get Authority",
     description:
       "Read the owner's autonomy level per domain and active standing policies. Read-only. You can only read it: "
-      + "authority is changed by the owner in the desktop app or CLI, never by you or a worker.",
+      + "authority is changed by the owner in the desktop app, never by you or a worker.",
     parameters: Type.Object({}),
     execute: async () => {
       const store = new StandingPolicyStore(options.dataDirectory);

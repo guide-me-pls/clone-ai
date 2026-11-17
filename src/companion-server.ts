@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task } from "./core/contracts.ts";
@@ -40,6 +40,8 @@ import { PersonalStateStore } from "./state/personal-state-store.ts";
 import { sweepConnectors } from "./connectors/connector-registry.ts";
 import { scanMemoryPii } from "./memory/memory-hygiene.ts";
 import { describeAuthority, StandingPolicyStore } from "./authority/standing-policy-store.ts";
+import { expandHome } from "./authority/scope.ts";
+import { describeExport, EXPORT_EXCLUDES, exportOwnerData } from "./config/export.ts";
 import { OpportunityService } from "./opportunity/opportunity-service.ts";
 import { RunQueueConsumer } from "./application/run-queue.ts";
 import { createRuntimeAssembly } from "./core/runtime-factory.ts";
@@ -108,11 +110,11 @@ export function normalizeMainAgentRequestText(value: unknown): string {
  * The desktop Main Agent uses an append-only turn ledger so an interrupted
  * model call is still visible after a restart instead of becoming a spinner
  * that never resolves. The record type and its readers live in the shared
- * turn-audit module, so CLI turns and desktop turns use the same shape.
+ * turn-audit module, so turns from any entry point use the same shape.
  *
  * 桌面 Main Agent 使用只追加的回合账本：即使模型调用异常中断，重启后仍能看到
  * 这次失败，而不会留下一个永远转圈的占位卡片。记录类型与读取函数位于共享的
- * turn-audit 模块，因此 CLI 回合与桌面回合形状一致。
+ * turn-audit 模块，因此来自任意入口的回合形状一致。
  */
 export { readMainAgentTurnRecords };
 export { recordMainAgentTurnInterrupted as recordMainAgentClientInterruption };
@@ -308,9 +310,9 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const serverMode = options.serverMode === true;
   const host = normalizeCompanionHost(options.host ?? (serverMode ? "0.0.0.0" : "127.0.0.1"), serverMode);
   const port = options.port ?? parsePort(process.env.CLONE_AI_PORT, 4317);
-  // One resolver owns every persistent path, so the daemon, the CLI, and the
-  // Main Agent cannot disagree about where the owner's data lives.
-  // 由唯一的解析器决定所有持久化路径，使 Daemon、CLI 与 Main Agent 不会对
+  // One resolver owns every persistent path, so the daemon and the Main Agent
+  // cannot disagree about where the owner's data lives.
+  // 由唯一的解析器决定所有持久化路径，使 Daemon 与 Main Agent 不会对
   // "所有者数据在哪里" 产生分歧。
   const paths = resolveClonePaths({
     ...(options.dataDirectory === undefined ? {} : { dataDirectory: options.dataDirectory }),
@@ -1195,10 +1197,44 @@ async function handleRequest(
     }
   }
 
+  if (request.method === "POST" && url.pathname === "/api/export") {
+    // The owner takes their data out from the desktop. The chosen folder is a
+    // parent; a timestamped subfolder keeps a second export from overwriting
+    // the first, and the data directory may never be the destination.
+    // 所有者从桌面把数据带走。所选文件夹只是父目录；带时间戳的子目录使第二次导出不会覆盖
+    // 第一次，且数据目录本身绝不能作为导出目标。
+    try {
+      const body = await readJsonBody(request);
+      const raw = typeof body.destination === "string" ? body.destination.trim() : "";
+      if (raw.length === 0) {
+        sendJson(response, 400, { error: "Choose a folder for the export." });
+        return;
+      }
+      const expanded = expandHome(raw);
+      if (!isAbsolute(expanded)) {
+        sendJson(response, 400, { error: "The export destination must be an absolute path." });
+        return;
+      }
+      const parent = resolve(expanded);
+      const dataDirectory = resolve(context.dataDirectory);
+      if (parent === dataDirectory || parent.startsWith(`${dataDirectory}${sep}`) || dataDirectory.startsWith(`${parent}${sep}`)) {
+        sendJson(response, 400, { error: "The export destination must be outside the clone data directory." });
+        return;
+      }
+      const stamp = new Date().toISOString().slice(0, 23).replace(/[-:]/g, "").replace("T", "-").replace(".", "-");
+      const destination = join(parent, `clone-ai-export-${stamp}`);
+      const manifest = await exportOwnerData({ dataDirectory, destination });
+      sendJson(response, 200, { destination, manifest, summary: describeExport(manifest, destination), excludes: EXPORT_EXCLUDES });
+    } catch (error: unknown) {
+      sendJson(response, 500, { error: error instanceof Error ? error.message : "The export failed." });
+    }
+    return;
+  }
+
   if (url.pathname.startsWith("/api/authority")) {
-    // Only the owner's GUI/CLI reaches this (bearer token above). Workers and the
-    // Main Agent have no route or tool that edits authority.
-    // 只有所有者的 GUI/CLI 能到这里（上面的 bearer token）。Worker 与 Main Agent 没有任何
+    // Only the owner's desktop app reaches this (bearer token above). Workers
+    // and the Main Agent have no route or tool that edits authority.
+    // 只有所有者的桌面 App 能到这里（上面的 bearer token）。Worker 与 Main Agent 没有任何
     // 修改权限的路由或工具。
     try {
       if (method === "GET" && url.pathname === "/api/authority") {

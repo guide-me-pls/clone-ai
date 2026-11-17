@@ -26,6 +26,82 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-17 — 只有桌面的产品界面
+
+- **目标 / 假设：** 让桌面 App 成为唯一产品入口，使仓库不再附带第二个所有者界面和一条
+  绕过或重复 App 的无界面部署路径。只在 CLI 中存在的所有者动作，必须先在 App 中可达，
+  才能移除 CLI。
+- **取舍：** [桌面 App 是唯一产品界面；CLI 与无界面服务器被移除](../architecture/trade-offs.zh-CN.md#2026-11-17--桌面-app-是唯一产品界面cli-与无界面服务器被移除)。
+- **变更：** 移除 `src/cli/clone-ai.ts`、`bin`/`cli` 入口、`src/server-main.ts`、
+  `src/main-agent/clone-main.ts`、`Dockerfile`、`.dockerignore`、`compose.server.yml`、
+  `deploy/`、服务器部署文档与 `test/cli.test.ts`。新增 `POST /api/export`（在 clone home
+  之外写时间戳归档）、桌面权限编辑器（`apps/desktop/ui/app.js` + `index.html` +
+  `style.css`）、所有者数据导出卡片、坏案例标签页、改进审批与取消 Run 动作（`audit.js`）。
+  新增 `scripts/traces.mjs`、`scripts/selfcheck.mjs`、`scripts/repair.mjs`、
+  `scripts/audit-export.mjs` 及其 npm scripts；更新 launchd 示例与 `AGENTS.md` 第 4 条。
+  同步更新 README、本地设置、夜间 RSI、Agent 调用、递归自我改进、基准文档与 CHANGELOG。
+- **Eval：** 确定性契约测试（本次是接线变更，不是模型行为变更）：
+  `node --experimental-strip-types --test test/desktop-shell.test.ts
+  test/desktop-only-surface.test.ts`——**变更前：** shell 测试读取 CLI 源码，
+  `test/cli.test.ts` 启动它；没有测试断言产品 CLI 不存在，也没有测试覆盖新的所有者界面。
+  **变更后：** 5/5 通过，覆盖权限路由、导出路由（含拒绝导出到数据目录内部）、坏案例 +
+  改进路由、四个维护脚本，以及“CLI 与服务器入口不再存在”的包/界面断言。
+  `test/bilingual-documentation.test.ts` 与上述两个文件：在移除已删除的服务器部署文档对后
+  7/7 通过。companion UI 的浏览器预览确认：权限与安全 的权限编辑器、记忆与数据 的导出卡片
+  都能渲染，审计标签页包含 坏案例，评估视图包含 改进建议。`npm test`、
+  `npm run typecheck` 与 `npm run gate` 通过；gate 报告 `baseline unchanged`，
+  verdict/policy/audit 夹具一致率均为 100%。
+- **执行链路：** 一个五读者 `map-cli-removal` workflow 盘点了 CLI 表面（33 个命令）、
+  桌面/服务器路由、自动化脚本、测试与文档、打包（5 个 Agent、362 次工具调用、
+  65.7 万 subagent tokens、18.5 分钟）。主 Agent 随后在线核实高风险结论（桌面启动路径、
+  路由缺口、`runRepairLane`/`exportFailedTraces` 调用方），实现面板/路由/脚本，用
+  `git rm` 删除入口，并跑门禁。失败与重试：`rm -rf` 被权限层拒绝，改用 `git rm`；
+  第一版 `.mjs` 脚本带了 TypeScript 注解，`node --check` 失败（改为纯 JS）；一个静态断言
+  把模板字符串形式的改进路由当成带引号字符串（已改正则）；`npm test` 初次失败，因为双语
+  文档测试仍列出已删除的服务器部署文档对（已更新清单）；`npm install --package-lock-only`
+  会顺带剪掉 140 条与本次无关的陈年 Pi 条目，改为手工删除锁文件的根 `bin` 条目，避免让
+  本次变更的 diff 失真。浏览器预览还暴露了桌面 Agent 页面既有的多个未定义 Provider 绑定
+  （`providers`、`providerById`、`installed`、`missing`；由合并引入，不是本次变更）；
+  它们阻塞了首次刷新，因此把读取改为 `state.providers`、由它构建派生集合，并加了静态断言。
+  这是机械修复：修复通道的第一步（导出失败轨迹）无法为静态 UI ReferenceError 产出轨迹，
+  因此该通道不适用。
+- **优点：** 测绘在任何删除之前就找出了否则会不可达的能力（权限、导出、坏案例、改进、取消），
+  并证明桌面启动路径独立于 CLI。把 repair/traces/selfcheck 保留为脚本，既维持了
+  `AGENTS.md` 第 4 条，又没有保留产品 CLI。
+- **缺点 / 下次：** 这次变更对一个提交来说偏大；界面与现有手机面板一样只有中文，且没有
+  浏览器级测试真正点击新按钮（测试断言的是标记与路由，不是点击）。下一次新增所有者动作时，
+  应把桌面界面与旧入口移除拆成两个提交。
+- **推翻条件：** 若再次需要无界面或可脚本化的所有者界面，应新增独立的轻客户端/API 包，
+  而不是在桌面产品里重新长出 CLI；若某个所有者动作无法在桌面 UI 表达，先加进桌面，再把
+  脚本写成有文档的入口。
+
+### 2026-11-17 — 验证器不再惩罚诚实披露
+
+- **目标 / 假设：** 一次完整且经外部验证的交付，仅因计划写下了自己*没有*做什么而被判失败。
+  修掉两个判断缺陷，让诚实的运行按工件本身判定。
+- **取舍：** [验证器读取否定](../architecture/trade-offs.zh-CN.md#2026-11-17--验证器读取否定点名-tests-不再要求测试运行)。
+- **变更：** `src/core/verification.ts`——`isNegatedPath`（路径前的分句级否定）在
+  `extractFileExpectations` 内生效；`src/core/verifier-plugins.ts`——`mentionsTests` 现在要求
+  测试**运行**信号（`TEST_RUN_REQUEST`）并跳过 `TEST_DISCLAIMER` 句，而不是匹配裸词 `tests`。
+  测试：`test/verification.test.ts` 两个用例；`benchmark/gate/verdict-cases.json` 两个门禁用例，
+  并重生成基线。
+- **Eval：** 修复前，对真实尝试 C 步骤调用 `extractFileExpectations` 返回
+  `[{ path: "out/video.mp4" }]`、`mentionsTests` 返回 `true`；修复后分别为 `[]` 与 `false`，
+  而 `npm test passes`、`修复后运行测试`、`Run \`node --test tests/\`` 仍返回 `true`。
+  `npm test` 688/688（新增两用例前为 686）、`npm run typecheck` 退出 0、`npm run gate` PASS，
+  两个新用例在基线中记为 `review`。
+- **Benchmark run：** 无——这是确定性判断变更；门禁与单元用例就是 eval。它对基准的影响由另列的
+  重跑衡量。
+- **执行链路：** 由基准运行（尝试 C）发现。这两个函数在修复通道的 `PROTECTED` 清单里，通道无法
+  产出该修复；所有者授权人工修复，并作为显式例外记录在取舍条目中。先用单行调用复现每个缺陷，
+  写失败的单元预期，再修复，然后重跑套件与门禁。我自己的两条测试预期起初有误（一条中文句子同时
+  点名了真实交付物；一条英文句子的动词 "Deliver" 不是文件意图词），均已改为断言实际应有的行为。
+- **优点：** 每个前后对比都是可复现的单行调用；门禁现在记录了修正后的判定，未来若重新引入误判
+  会被抓住。
+- **缺点 / 下次：** 人工修复而非通道产出，这正是第 4 条要消除的证据缺口；否定启发式是分句级的，
+  在非常规措辞下可能掩盖交付物。
+- **推翻条件：** 从取舍条目复制。
+
 ### 2026-11-17 — 故宫 3D 基准
 
 - **目标 / 假设：** 新增一个能力基准，其 3D 任务对照**外部建筑契约**评分而不是内部一致性，

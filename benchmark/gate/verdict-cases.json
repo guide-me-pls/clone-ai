@@ -11,7 +11,9 @@
             "title": "Write the weekly report",
             "instructions": "Write report.md with this week's summary.",
             "risk": "reversible_write",
-            "acceptanceCriteria": ["report.md contains \"本周完成\""]
+            "acceptanceCriteria": [
+              "report.md contains \"本周完成\""
+            ]
           }
         ]
       },
@@ -19,7 +21,12 @@
         "report.md": "本周完成：3 项\n"
       },
       "evidence": [
-        { "stepId": "write-report", "kind": "artifact", "summary": "Wrote report.md.", "locator": "report.md" }
+        {
+          "stepId": "write-report",
+          "kind": "artifact",
+          "summary": "Wrote report.md.",
+          "locator": "report.md"
+        }
       ],
       "ownerVerdict": "pass",
       "note": "The positive control: existence, non-emptiness, and the required substring all hold."
@@ -34,13 +41,20 @@
             "title": "Write the weekly report",
             "instructions": "Write report.md with this week's summary.",
             "risk": "reversible_write",
-            "acceptanceCriteria": ["report.md contains \"本周完成\""]
+            "acceptanceCriteria": [
+              "report.md contains \"本周完成\""
+            ]
           }
         ]
       },
       "workspace": {},
       "evidence": [
-        { "stepId": "write-report", "kind": "artifact", "summary": "Says it wrote report.md.", "locator": "report.md" }
+        {
+          "stepId": "write-report",
+          "kind": "artifact",
+          "summary": "Says it wrote report.md.",
+          "locator": "report.md"
+        }
       ],
       "ownerVerdict": "fail",
       "note": "A worker's claim is not evidence; the file is opened."
@@ -55,7 +69,9 @@
             "title": "Write the weekly report",
             "instructions": "Write report.md with this week's summary.",
             "risk": "reversible_write",
-            "acceptanceCriteria": ["report.md contains \"本周完成\""]
+            "acceptanceCriteria": [
+              "report.md contains \"本周完成\""
+            ]
           }
         ]
       },
@@ -63,7 +79,12 @@
         "report.md": "   \n"
       },
       "evidence": [
-        { "stepId": "write-report", "kind": "artifact", "summary": "Wrote report.md.", "locator": "report.md" }
+        {
+          "stepId": "write-report",
+          "kind": "artifact",
+          "summary": "Wrote report.md.",
+          "locator": "report.md"
+        }
       ],
       "ownerVerdict": "fail"
     },
@@ -77,7 +98,9 @@
             "title": "Write the weekly report",
             "instructions": "Write report.md with this week's summary.",
             "risk": "reversible_write",
-            "acceptanceCriteria": ["report.md contains \"本周完成\""]
+            "acceptanceCriteria": [
+              "report.md contains \"本周完成\""
+            ]
           }
         ]
       },
@@ -85,7 +108,12 @@
         "report.md": "完成了 3 项\n"
       },
       "evidence": [
-        { "stepId": "write-report", "kind": "artifact", "summary": "Wrote report.md.", "locator": "report.md" }
+        {
+          "stepId": "write-report",
+          "kind": "artifact",
+          "summary": "Wrote report.md.",
+          "locator": "report.md"
+        }
       ],
       "ownerVerdict": "fail"
     },
@@ -99,7 +127,9 @@
             "title": "Write the weekly report",
             "instructions": "Write report.md with this week's summary.",
             "risk": "reversible_write",
-            "acceptanceCriteria": ["report.md contains \"本周完成\""]
+            "acceptanceCriteria": [
+              "report.md contains \"本周完成\""
+            ]
           }
         ]
       },
@@ -120,12 +150,18 @@
             "title": "Review the plan",
             "instructions": "Review the plan for consistency.",
             "risk": "read_only",
-            "acceptanceCriteria": ["The plan is consistent"]
+            "acceptanceCriteria": [
+              "The plan is consistent"
+            ]
           }
         ]
       },
       "evidence": [
-        { "stepId": "review-plan", "kind": "artifact", "summary": "Reviewed the plan." }
+        {
+          "stepId": "review-plan",
+          "kind": "artifact",
+          "summary": "Reviewed the plan."
+        }
       ],
       "ownerVerdict": "pass",
       "note": "The system must neither claim success nor fail; it asks the owner."
@@ -140,12 +176,18 @@
             "title": "Send the summary",
             "instructions": "Send the summary to the client.",
             "risk": "external_side_effect",
-            "acceptanceCriteria": ["The client received the summary"]
+            "acceptanceCriteria": [
+              "The client received the summary"
+            ]
           }
         ]
       },
       "evidence": [
-        { "stepId": "send-summary", "kind": "artifact", "summary": "The worker says it sent the email." }
+        {
+          "stepId": "send-summary",
+          "kind": "artifact",
+          "summary": "The worker says it sent the email."
+        }
       ],
       "ownerVerdict": "fail",
       "note": "A worker-controlled artifact cannot attest that an external action happened."
@@ -160,7 +202,9 @@
             "title": "Send the summary",
             "instructions": "Send the summary and save delivered.md.",
             "risk": "external_side_effect",
-            "acceptanceCriteria": ["delivered.md contains \"已送达\""]
+            "acceptanceCriteria": [
+              "delivered.md contains \"已送达\""
+            ]
           }
         ]
       },
@@ -168,8 +212,18 @@
         "delivered.md": "已送达：message-id-1\n"
       },
       "evidence": [
-        { "stepId": "send-summary", "kind": "receipt", "summary": "Gateway returned a message id.", "locator": "receipt:message-id-1" },
-        { "stepId": "send-summary", "kind": "artifact", "summary": "Saved delivered.md.", "locator": "delivered.md" }
+        {
+          "stepId": "send-summary",
+          "kind": "receipt",
+          "summary": "Gateway returned a message id.",
+          "locator": "receipt:message-id-1"
+        },
+        {
+          "stepId": "send-summary",
+          "kind": "artifact",
+          "summary": "Saved delivered.md.",
+          "locator": "delivered.md"
+        }
       ],
       "ownerVerdict": "pass"
     },
@@ -183,14 +237,18 @@
             "title": "Write alpha",
             "instructions": "Write alpha.md with the result.",
             "risk": "reversible_write",
-            "acceptanceCriteria": ["alpha.md contains \"alpha\""]
+            "acceptanceCriteria": [
+              "alpha.md contains \"alpha\""
+            ]
           },
           {
             "id": "step-beta",
             "title": "Write beta",
             "instructions": "Write beta.md with the result.",
             "risk": "reversible_write",
-            "acceptanceCriteria": ["beta.md contains \"beta\""]
+            "acceptanceCriteria": [
+              "beta.md contains \"beta\""
+            ]
           }
         ]
       },
@@ -198,8 +256,18 @@
         "alpha.md": "alpha done\n"
       },
       "evidence": [
-        { "stepId": "step-alpha", "kind": "artifact", "summary": "Wrote alpha.md.", "locator": "alpha.md" },
-        { "stepId": "step-beta", "kind": "artifact", "summary": "Wrote beta.md.", "locator": "beta.md" }
+        {
+          "stepId": "step-alpha",
+          "kind": "artifact",
+          "summary": "Wrote alpha.md.",
+          "locator": "alpha.md"
+        },
+        {
+          "stepId": "step-beta",
+          "kind": "artifact",
+          "summary": "Wrote beta.md.",
+          "locator": "beta.md"
+        }
       ],
       "ownerVerdict": "fail",
       "note": "A run is only as complete as its weakest promised artifact."
@@ -214,14 +282,18 @@
             "title": "Write alpha",
             "instructions": "Write alpha.md with the result.",
             "risk": "reversible_write",
-            "acceptanceCriteria": ["alpha.md contains \"alpha\""]
+            "acceptanceCriteria": [
+              "alpha.md contains \"alpha\""
+            ]
           },
           {
             "id": "step-beta",
             "title": "Write beta",
             "instructions": "Write beta.md with the result.",
             "risk": "reversible_write",
-            "acceptanceCriteria": ["beta.md contains \"beta\""]
+            "acceptanceCriteria": [
+              "beta.md contains \"beta\""
+            ]
           }
         ]
       },
@@ -230,7 +302,12 @@
         "beta.md": "beta done\n"
       },
       "evidence": [
-        { "stepId": "step-alpha", "kind": "artifact", "summary": "Wrote alpha.md.", "locator": "alpha.md" }
+        {
+          "stepId": "step-alpha",
+          "kind": "artifact",
+          "summary": "Wrote alpha.md.",
+          "locator": "alpha.md"
+        }
       ],
       "ownerVerdict": "fail"
     },
@@ -244,7 +321,10 @@
             "title": "Write meeting notes",
             "instructions": "Write notes.md for the meeting.",
             "risk": "reversible_write",
-            "acceptanceCriteria": ["notes.md exists", "The tone is friendly"]
+            "acceptanceCriteria": [
+              "notes.md exists",
+              "The tone is friendly"
+            ]
           }
         ]
       },
@@ -252,10 +332,89 @@
         "notes.md": "Meeting notes.\n"
       },
       "evidence": [
-        { "stepId": "write-notes", "kind": "artifact", "summary": "Wrote notes.md.", "locator": "notes.md" }
+        {
+          "stepId": "write-notes",
+          "kind": "artifact",
+          "summary": "Wrote notes.md.",
+          "locator": "notes.md"
+        }
       ],
       "ownerVerdict": "pass",
       "note": "The machine checks the file and reports the tone criterion as unverified, rather than guessing."
+    },
+    {
+      "id": "negated-path-is-not-a-deliverable",
+      "title": "A file the plan says not to claim is not missing",
+      "plan": {
+        "steps": [
+          {
+            "id": "publish",
+            "title": "Publish the project",
+            "instructions": "交付 index.html 与 render.mjs，但本执行器不能渲染，因此不要声称 out/video.mp4 已生成。",
+            "risk": "reversible_write",
+            "acceptanceCriteria": [
+              "交付物齐全"
+            ]
+          }
+        ]
+      },
+      "workspace": {
+        "index.html": "<!doctype html>\n",
+        "render.mjs": "export {};\n"
+      },
+      "evidence": [
+        {
+          "stepId": "publish",
+          "kind": "artifact",
+          "summary": "Wrote index.html.",
+          "locator": "index.html"
+        },
+        {
+          "stepId": "publish",
+          "kind": "artifact",
+          "summary": "Wrote render.mjs.",
+          "locator": "render.mjs"
+        }
+      ],
+      "ownerVerdict": "pass",
+      "note": "The old extractor read the prohibited MP4 as a promised file and failed a complete delivery."
+    },
+    {
+      "id": "tests-named-as-deliverable-needs-no-test-evidence",
+      "title": "Writing tests/ is not the same as promising to run them",
+      "plan": {
+        "steps": [
+          {
+            "id": "write-tests",
+            "title": "Write the module and its tests",
+            "instructions": "交付 main.js 与 RENDER.md；tests/ 目录说明由所有者执行的测试，不要声称已运行。",
+            "risk": "reversible_write",
+            "acceptanceCriteria": [
+              "main.js 与 RENDER.md 非空"
+            ]
+          }
+        ]
+      },
+      "workspace": {
+        "main.js": "export const x = 1;\n",
+        "RENDER.md": "tests are run by the owner\n"
+      },
+      "evidence": [
+        {
+          "stepId": "write-tests",
+          "kind": "artifact",
+          "summary": "Wrote main.js.",
+          "locator": "main.js"
+        },
+        {
+          "stepId": "write-tests",
+          "kind": "artifact",
+          "summary": "Wrote RENDER.md.",
+          "locator": "RENDER.md"
+        }
+      ],
+      "ownerVerdict": "pass",
+      "note": "The old mentionsTests matched the word 'tests' and demanded test evidence a file-only worker cannot produce."
     }
   ]
 }

@@ -2,105 +2,79 @@
 
 [English](local-setup.md) · **简体中文**
 
-Clone AI 在你的机器上就是一个普通命令行工具，和你已有的 Coding Agent 并列。除非
-你配置了外部集成，数据不会离开这台设备。
+Clone AI 是一个 macOS 桌面应用。窗口背后是常驻的本地运行时
+（`src/desktop-sidecar.ts`），经环回地址服务界面；Journal、记忆、调度、审批与
+Main Agent 都在这个运行时里。除非你配置了外部模型或集成，数据不会离开这台设备。
 
-## 1. 安装
+## 1. 环境要求
+
+- macOS（Apple Silicon 或 Intel），安装 Xcode Command Line Tools（`swiftc`、
+  `codesign`）。
+- Node.js 24+ —— 运行时直接运行 TypeScript，没有构建步骤。
+- Git。
+
+## 2. 构建与启动
 
 ```bash
 git clone https://github.com/guide-me-pls/clone-ai.git
 cd clone-ai
 npm install --ignore-scripts
-npm link          # 让 `clone-ai` 在任何目录可用（npm i -g . 同样可行）
+npm run desktop:mac:build
+open "dist/Clone AI.app"
 ```
 
-环境要求：**Node.js 24+**（直接运行 TypeScript，无需构建步骤）。
+`npm run desktop:dev` 会按需构建原生外壳并启动源码；修改界面或运行时时用它。
 
-验证：
+## 3. 常驻运行时
 
-```bash
-clone-ai --version
-clone-ai doctor
-```
-
-`doctor` 会打印你的 clone home、Node 版本，以及哪些 Worker CLI 已安装。
-
-## 2. 使用
-
-```bash
-clone-ai "读一下 README 并总结三点"        # 与 Main Agent 对话
-clone-ai "用 pi 调研这个项目并写份笔记"      # 显式指定 Worker
-clone-ai app                              # 打开原生桌面应用
-clone-ai status                           # Run、Worker、记忆、坏案例概览
-clone-ai workers                          # 查看已安装的 Worker CLI
-clone-ai install codex-cli                # 安装缺失的 Worker
-clone-ai memory "发布流程"                  # 检索已审核的记忆
-clone-ai cases                            # 查看本地坏案例日志
-clone-ai opportunities                    # 查看待处理的机会卡片
-clone-ai bench                            # 运行可靠性基准
-```
-
-默认子命令就是对话：`clone-ai "<请求>"` 的用法和 `pi "..."`、`claude -p "..."`
-一致，区别在于 Main Agent 会把工作路由给 Worker，并由 Kernel 验证结果。
-
-## 3. 桌面客户端
-
-```bash
-clone-ai app                # 打开 dist/Clone AI.app 或 /Applications/Clone AI.app
-```
-
-`clone-ai app` 只打开已构建的原生应用包，不会启动浏览器标签页，也不会启动 Chromium
-应用窗口。macOS 需要先运行 `npm run desktop:mac:build`。
-
-运行时是一个常驻的 `launchd` 任务，而不是窗口的子进程。安装一次：
+窗口不是运行时。安装一次当前用户的 LaunchAgent：
 
 ```bash
 node scripts/install-daemon.mjs            # 安装并加载 ai.clone.companion
 node scripts/install-daemon.mjs --uninstall
 ```
 
-之后分身会在登录时启动、崩溃后重启，并在你关闭窗口后继续运行——App 附着到 Daemon
-发布的端点（`~/.clone/companion-endpoint.json`）。升级 node 后需要重跑安装器，因为
+此后分身随登录启动、崩溃后重启，关闭窗口也不会停止——App 会附着到守护进程发布的
+端点（`~/.clone/companion-endpoint.json`）。升级 Node 后要重新运行安装脚本，因为
 plist 固定了 node 的绝对路径。
 
-不需要单独下载。如果你想要单文件原生可执行程序，Tauri 外壳是可选项，需要 Rust 工具链：
+## 4. 配置模型
 
-```bash
-npm run desktop:build
-# 然后运行 apps/desktop/src-tauri/target/.../clone-ai-desktop.exe
-```
-
-## 4. Worker（真正干活的 Agent）
-
-Clone AI 只有一个执行 Provider：进程内的原生 Worker。它不是 CLI；每次工具调用都在发起
-的瞬间按步骤 Scope 校验，token 用量被精确记录。
-
-| Worker | 运行方式 | 配置 |
-| --- | --- | --- |
-| 原生 Worker | 进程内循环，对接 OpenAI 兼容端点 | `CLONE_AI_NATIVE_MODEL` 与 `CLONE_AI_NATIVE_BASE_URL` |
-
-黑盒 CLI Worker（Claude Code、Codex、Pi CLI、opencode）已移除。CLI 会把工具调用与
-凭据藏在 Kernel 看不到的地方，harness 既无法审计也无法拦截。`external` 角色在有受治理的
-动作连接器之前没有 Provider，也不会被路由到 CLI。
+打开 **设置 → Agent**。可以应用本地 Magpie 网关暴露的模型，也可以在那里填写端点
+与密钥。密钥是只写的：保存后 App 只显示“已保存”，不会回显。开发时仍可使用
+`CLONE_AI_NATIVE_MODEL`、`CLONE_AI_NATIVE_BASE_URL` 与 `CLONE_AI_NATIVE_API_KEY`。
 
 ### 主 Agent 运行时
 
-进程内的原生运行时是唯一的主 Agent 运行时。它需要 `CLONE_AI_NATIVE_MODEL` 与
-`CLONE_AI_NATIVE_BASE_URL`；缺少时回合会以指明缺失变量的错误失败。Pi 运行时及其 SDK
-已不在产品中。要配置运行时：
+进程内的原生运行时是唯一的主 Agent 运行时。它写入相同的 `main_agent.turn_*`、
+`agent.tool_*` 与 `usage.recorded` 事件，以回合台账作为对话记录，并从台账检索
+`search_history`。它会随 token 到达流式输出，并对长对话做确定性压缩：最新轮次在
+12,000 字符预算内保留原文，较早轮次变成有界摘要，全文仍留在回合台账中。图片附件以
+OpenAI 风格 data URL 随当前消息发送；它们是逐回合的，不存入台账。
 
-```bash
-export CLONE_AI_NATIVE_MODEL=<model-id>
-export CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url>
-export CLONE_AI_NATIVE_API_KEY=<key>   # 可选
-clone-ai "你好"
-```
+## 5. 桌面里的所有者控制
 
-原生循环写入相同的 `main_agent.turn_*`、`agent.tool_*` 与 `usage.recorded` 事件，
-以回合台账作为对话记录，并从台账检索 `search_history`。它会随 token 到达流式输出，
-并对长对话做确定性压缩：最新轮次在 12,000 字符预算内保留原文，较早轮次变成有界摘要，
-全文仍留在回合台账中。图片附件以 OpenAI 风格 data URL 随当前消息发送；它们是逐回合的，
-不存入台账。
+- **对话** —— 提问、批准或拒绝外部动作、接受或拒绝需要复核的结果。
+- **设置 → 权限与安全** —— 按域的自主档位与所有者撰写的常设策略；每次变更写入 Journal。
+- **设置 → 记忆与数据** —— 记忆库、受治理的变更与撤销，以及**导出全部数据**：选择
+  一个文件夹，运行时会写入带时间戳的归档（清单 + 数据副本），不放在 clone home 里。
+- **设置 → 上下文** —— 压缩记录与完整历史搜索。
+- **设置 → 手机通道** —— WhatsApp 绑定与公网 Webhook 隧道。
+- **设置 → 审计与评估** —— Run、主 Agent 回合、Agent 调用、坏案例、自检轮次、
+  改进建议，以及取消正在运行的 Run。
+
+## 6. Worker
+
+Clone AI 只有一个执行 Provider：进程内的原生 Worker。它不是 CLI；每次工具调用都在
+发生的瞬间对照步骤的 Scope 检查，token 用量也精确记录。
+
+| Worker | 运行方式 | 配置 |
+| --- | --- | --- |
+| 原生 Worker | 进程内循环，对接 OpenAI 兼容端点 | 在「设置 → Agent」中配置 |
+
+黑盒 CLI Worker（Claude Code、Codex、Pi CLI、opencode）已移除。CLI 会把工具调用与
+凭据藏在 Kernel 看不到的地方，harness 既无法审计也无法拦截。`external` 角色在有受治理的
+动作连接器之前没有 Provider。
 
 ### Worker 并发
 
@@ -108,19 +82,10 @@ Kernel 根据实测的机器容量决定同时运行多少个 Worker：CPU 核�
 内存。这不是你配置的，也不是主 Agent 配置的——主 Agent 只能读取它（`get_capacity`）
 来决定计划规模。
 
-要自己固定上限，在 `config.json` 里设置 `maxConcurrentWorkers`（或调用
-`PATCH /api/config`）。`0` 或未设置表示自动。固定值会被核数上限约束，并在每次派发时
-重新读取，因此改动无需重启即可生效。
+要自己固定上限，在 `config.json` 里设置 `maxConcurrentWorkers`。`0` 或未设置表示自动。
+固定值会被核数上限约束，并在每次派发时重新读取，因此改动无需重启即可生效。
 
-```bash
-# 例如无风扇笔记本：最多同时 2 个 Worker
-curl -X PATCH http://127.0.0.1:4317/api/config \
-  -H "authorization: Bearer $CLONE_AI_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{"maxConcurrentWorkers": 2}'
-```
-
-## 5. 数据都在哪里
+## 7. 数据都在哪里
 
 | 项目 | 位置 |
 | --- | --- |
@@ -128,21 +93,36 @@ curl -X PATCH http://127.0.0.1:4317/api/config \
 | Journal | `<clone home>/journal.jsonl`（`CLONE_AI_JOURNAL=sqlite` 启用 WAL） |
 | 记忆 | `<clone home>/memory-index.db` + `<clone home>/memory/*.md` |
 | 坏案例 | `<clone home>/reporting/bad-cases.md` |
-| Provider 覆盖 | `<clone home>/providers.json` |
+| 权限 | `<clone home>/policies.json` |
 | 失败分类目录 | `<clone home>/outcomes/failures.json` |
 | 隔离工作区 | `<clone home>/isolated-workspaces/` |
+| 所有者导出 | 「设置 → 记忆与数据」里选择的文件夹 |
 | 环境变量模板 | 仓库中的 `.env.example`（只有变量名，绝不放密钥值） |
 
-## 6. 平台注意事项
+## 8. 平台注意事项
 
-- **Windows**：`.cmd` 垫片会被解析为真实可执行文件（不经 shell，Prompt 无法被当作
-  参数注入）；超时时用 `taskkill /T` 终止 Worker 整棵进程树，不留孤儿进程。
-- **macOS**：Worker 运行在自己的 POSIX 进程组中并按组终止；配方使用裸命令名。
+- **macOS**：Worker 运行在自己的 POSIX 进程组中并按组终止。构建 App 需要 Xcode
+  Command Line Tools。
+- **Windows**：Tauri 外壳仍可用 `npm run desktop:build` 构建；`.cmd` 垫片会被解析为
+  真实可执行文件，超时时用 `taskkill /T` 终止 Worker 整棵进程树。
 
-## 7. 首次运行检查清单
+## 9. 首次运行检查清单
 
-1. `clone-ai doctor` → 至少一个 Worker 已安装。
-2. `clone-ai "你好"` → Main Agent 有回复。
-3. `clone-ai app` → 原生桌面应用打开。
-4. 跑一个真实任务，然后 `clone-ai status` 能看到它。
-5. `clone-ai cases` 开始累积失败——这份文件驱动你的优化循环。
+1. `npm run desktop:mac:build` 后 `open "dist/Clone AI.app"` → 窗口打开。
+2. 设置 → Agent：配置模型，发送一条消息 → Main Agent 回复。
+3. 审计与评估 → 运行记录里能看到这次 Run。
+4. 设置 → 权限与安全：确认每个域都是 `observe`；只抬高你确实需要的域。
+5. 设置 → 记忆与数据 → 导出全部数据：导出一次，检查 `manifest.json`，然后把目录收好。
+6. 审计与评估 → 坏案例开始累积失败——这份文件驱动你的优化循环。
+
+## 10. 维护入口
+
+这些是自动化脚本，不是产品 CLI。桌面 App 仍是所有者界面。
+
+```bash
+npm run traces -- list | export | show <runId> | clear --yes
+npm run selfcheck -- [--full] [--repair]
+npm run repair -- [--dry-run] [--keep] [--max-traces N] [--agent <id>] [--base <ref>]
+npm run audit:export -- [--out <file>]
+npm run bench
+```
