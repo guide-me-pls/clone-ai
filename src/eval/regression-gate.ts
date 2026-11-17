@@ -366,8 +366,8 @@ export async function runPolicySuite(
 
 /**
  * Calibrates the audit projection against owner labels. The records are what a
- * `clone-ai audit export` produces; the owner's verdict is the ground truth.
- * 用所有者标注校准审计投影。记录正是 `clone-ai audit export` 的产物；所有者判定是真值。
+ * `npm run audit:export` produces; the owner's verdict is the ground truth.
+ * 用所有者标注校准审计投影。记录正是 `npm run audit:export` 的产物；所有者判定是真值。
  */
 export function runAuditSuite(records: readonly RunAuditRecord[]): AuditGateSummary {
   const summary = summarizeAudits(records, new Date("2026-01-01T00:00:00.000Z"));

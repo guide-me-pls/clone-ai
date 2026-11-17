@@ -1,14 +1,14 @@
 /**
  * Owner-authored authority: per-domain autonomy levels and standing policies.
  *
- * Only the owner (GUI / CLI) writes here. There is deliberately no tool that
+ * Only the owner (through the desktop app) writes here. There is deliberately no tool that
  * lets the Main Agent or a worker change it, so authority can never be widened
  * by the party that benefits from it. Every change is also journaled, so "who
  * allowed that, and when?" always has an answer.
  *
  * 所有者撰写的权限：按域的自主档位与常设策略。
  *
- * 只有所有者（GUI / CLI）会写这里。刻意没有任何工具允许 Main Agent 或 Worker 修改它，
+ * 只有所有者（通过桌面 App）会写这里。刻意没有任何工具允许 Main Agent 或 Worker 修改它，
  * 因此权限永远不会被受益方自己放宽。每次变更也写入 Journal，"谁在何时允许了这件事"
  * 永远有答案。
  */
@@ -167,15 +167,15 @@ export class StandingPolicyStore {
    * Apply a change to the freshest on-disk config, inside the write queue.
    *
    * The mutators used to compute `next` from the in-memory copy before
-   * enqueuing, so an interleaved write from another instance (the CLI and the
-   * daemon share this file) was silently reverted: a revoke could reappear as
-   * active. Reading inside the queue makes the last write win on the real
-   * content, which is what "only the owner writes here" assumes.
+   * enqueuing, so an interleaved write from another process (a hand edit, or a
+   * second daemon sharing this file) was silently reverted: a revoke could
+   * reappear as active. Reading inside the queue makes the last write win on
+   * the real content, which is what "only the owner writes here" assumes.
    * 在写队列内把变更应用到磁盘上最新的配置。
    *
-   * 变更方法过去在入队前就基于内存副本算出 `next`，因此来自另一个实例（CLI 与守护进程共享
-   * 此文件）的交错写入会被静默回滚：被撤销的策略可能重新变为生效。在队列内读取，使最后一次
-   * 写入作用于真实内容，这正是"只有所有者写这里"所假设的前提。
+   * 变更方法过去在入队前就基于内存副本算出 `next`，因此来自另一个进程（手工编辑，或共享
+   * 此文件的第二个守护进程）的交错写入会被静默回滚：被撤销的策略可能重新变为生效。在队列内
+   * 读取，使最后一次写入作用于真实内容，这正是"只有所有者写这里"所假设的前提。
    */
   async #mutate(
     build: (current: AuthorityConfig) => { next: AuthorityConfig; change: string; detail: Record<string, unknown> } | undefined,

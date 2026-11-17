@@ -11,7 +11,7 @@ still appear in the owner's audit view.
 ## What is recorded
 
 - a unique invocation id, caller kind (`codex`, `claude-code`, `whatsapp`,
-  `cli`, or an explicit value), surface, pid and optional caller session id;
+  `desktop`, or an explicit value), surface, pid and optional caller session id;
 - the user-visible request and final visible reply;
 - failure text when the turn fails;
 - workspace, data directory, session file, model, provider and effort;
@@ -25,13 +25,12 @@ as `running`, which is the honest representation of an interrupted process.
 ## Where to read it
 
 - Desktop: **设置 → 审计与轨迹 → Agent 调用**.
-- CLI: `clone-ai invocations` or `clone-ai invocations show <id>`.
 - API: `GET /api/invocations` and `GET /api/invocations/:id`.
 
 ## Caller identity and overrides
 
-The CLI detects `CODEX_THREAD_ID`, `CLAUDE_SESSION_ID` and `CLAUDE_CODE_SESSION_ID`
-automatically. An integrating agent should set:
+The ledger detects `CODEX_THREAD_ID`, `CLAUDE_SESSION_ID` and
+`CLAUDE_CODE_SESSION_ID` automatically. An integrating agent should set:
 
 ```bash
 CLONE_AI_CALLER=my-agent

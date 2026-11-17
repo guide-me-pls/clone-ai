@@ -15,7 +15,7 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>cd "$HOME/projects/clone-ai" &amp;&amp; exec node --experimental-strip-types src/cli/clone-ai.ts selfcheck --full --repair</string>
+    <string>cd "$HOME/projects/clone-ai" &amp;&amp; exec node --experimental-strip-types scripts/selfcheck.mjs --full --repair</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>

@@ -21,6 +21,10 @@ const state = {
   situation: null,
   config: null,
   connectors: [],
+  authority: null,
+  authorityDecisions: [],
+  authorityLoading: false,
+  exportDestination: null,
   whatsapp: null,
   whatsappLoading: false,
   whatsappDirty: false,
@@ -319,7 +323,10 @@ function renderAgentPage() {
     actions: gatewayBadge,
     body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}${endpointForm}</div>`,
   });
-  const providerRows = providers.map((provider) => {
+  const providerById = new Map(state.providers.map((provider) => [provider.id, provider]));
+  const installed = state.providers.filter((provider) => provider.installed);
+  const missing = state.providers.filter((provider) => !provider.installed);
+  const providerRows = state.providers.map((provider) => {
     const unrestricted = provider.hostAccess === "unrestricted";
     const access = provider.executionBlocked
       ? t("worker-blocked")
@@ -386,7 +393,7 @@ function renderAgentPage() {
   }).join("");
   const agentRows = settings.agents.map((agent) => {
     const provider = providerById.get(agent.providerId);
-    const options = providers.map((candidate) => ({
+    const options = state.providers.map((candidate) => ({
       value: candidate.id,
       label: `${providerLabel(candidate.id)}${candidate.installed ? "" : ` · ${t("missing")}`}`,
       disabled: !candidate.installed,
@@ -851,6 +858,148 @@ function revealWorkspace() {
   }
   if (window.CloneNative?.revealInFinder) {
     window.CloneNative.revealInFinder(path);
+    return;
+  }
+  announce(t("directory-native-only"), true);
+}
+
+/* ---------- Authority and owner-data export ---------- */
+const AUTHORITY_DOMAINS = [
+  ["files", "文件", "读取或写入文件与目录"],
+  ["shell", "Shell 命令", "在本机执行命令前缀，例如 git"],
+  ["network", "网络", "访问主机名或 *"],
+];
+const AUTHORITY_LEVELS = [
+  ["observe", "只观察"],
+  ["prepare", "可准备"],
+  ["act_with_approval", "需批准后执行"],
+  ["act_auto", "自动执行"],
+];
+const AUTHORITY_ACCESS = [["read", "读取"], ["write", "写入"], ["exec", "执行"]];
+
+function authorityLevelOptions(selected) {
+  return AUTHORITY_LEVELS.map(([value, label]) => `<option value="${value}"${value === selected ? " selected" : ""}>${label}</option>`).join("");
+}
+
+function renderAuthority() {
+  const host = $("authority-root");
+  if (!host || !state.authority) return;
+  const domains = state.authority.domains || {};
+  const policies = (state.authority.policies || []).filter((policy) => policy.revokedAt === undefined);
+  const domainRows = AUTHORITY_DOMAINS.map(([domain, title, detail]) =>
+    `<article class="agent-setting"><div><h3>${title}</h3><p>${detail}</p><small>当前：${escape(AUTHORITY_LEVELS.find(([value]) => value === (domains[domain] || "observe"))?.[1] || domains[domain] || "只观察")}</small></div><select data-authority-domain="${domain}" aria-label="${title}的自主档位">${authorityLevelOptions(domains[domain] || "observe")}</select></article>`,
+  ).join("");
+  const policyRows = policies.length
+    ? policies.map((policy) => `<article class="memory-card"><div class="memory-meta"><span>${escape(policy.label)}</span><span>最高 ${escape(AUTHORITY_LEVELS.find(([value]) => value === policy.maxAutonomy)?.[1] || policy.maxAutonomy)}</span></div><p class="context-summary">${policy.scopes.map((scope) => `${escape(scope.domain)}:${escape(scope.access)}:${escape(scope.resource)}`).join(" · ")}</p><small>${policy.validUntil ? `有效至 ${escape(policy.validUntil)}` : "长期有效"} · ${escape(policy.id)}</small><div class="memory-tool-row"><button class="secondary" type="button" data-authority-revoke="${escape(policy.id)}">撤销</button></div></article>`).join("")
+    : `<div class="memory-empty">没有常设策略。当前只有按次的审批路径。</div>`;
+  const decisions = (state.authorityDecisions || []).slice(0, 20)
+    .map((event) => `<li><time>${escape(String(event.occurredAt || "").slice(0, 16).replace("T", " "))}</time><span>${escape(event.type)}</span></li>`).join("");
+  host.innerHTML = `<div class="authority-grid">${domainRows}</div>
+    <div class="agent-section-label">常设策略</div>
+    <div class="memory-list">${policyRows}</div>
+    <form id="authority-policy-form" class="authority-form">
+      <h4>新增常设策略</h4>
+      <p class="agent-runtime-note">策略只在它覆盖的 Scope 内授予自主权，且上限不会超过对应域的档位。</p>
+      <div class="memory-tool-row"><input id="authority-policy-label" type="text" placeholder="用途说明，例如：整理下载目录" aria-label="策略用途"/></div>
+      <div class="memory-tool-row">
+        <select id="authority-policy-domain" aria-label="域">${AUTHORITY_DOMAINS.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>
+        <select id="authority-policy-access" aria-label="访问方式">${AUTHORITY_ACCESS.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>
+        <input id="authority-policy-resource" type="text" placeholder="资源：绝对路径 / 命令前缀 / 主机名" aria-label="资源"/>
+      </div>
+      <div class="memory-tool-row">
+        <select id="authority-policy-max" aria-label="最高档位">${authorityLevelOptions("prepare")}</select>
+        <input id="authority-policy-until" type="date" aria-label="有效期至（可选）"/>
+        <button class="primary" type="submit">添加策略</button>
+      </div>
+    </form>
+    ${decisions ? `<details class="authority-decisions"><summary>最近的权限判定（${Math.min(state.authorityDecisions.length, 20)} 条）</summary><ul class="au-history">${decisions}</ul></details>` : ""}`;
+}
+
+async function refreshAuthority() {
+  if (state.authorityLoading) return;
+  state.authorityLoading = true;
+  try {
+    const [config, decisions] = await Promise.all([
+      api("/api/authority"),
+      api("/api/authority/decisions").catch(() => ({ events: [] })),
+    ]);
+    state.authority = config.config;
+    state.authorityDecisions = decisions.events || [];
+    renderAuthority();
+  } catch (error) {
+    const host = $("authority-root");
+    if (host) host.innerHTML = `<p class="memory-empty">读取权限失败：${escape(error.message)}</p>`;
+  } finally {
+    state.authorityLoading = false;
+  }
+}
+
+async function setAuthorityDomain(domain, level) {
+  try {
+    const result = await api("/api/authority/domains", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ domain, level }) });
+    state.authority = result.config;
+    renderAuthority();
+    announce(`${domain} 的自主档位已更新。`);
+    void refreshAuthority();
+  } catch (error) { announce(error.message, true); }
+}
+
+async function revokeAuthorityPolicy(id) {
+  if (!(await confirmDialog("撤销这条常设策略？撤销后，它覆盖的动作会重新需要审批。", "撤销"))) return;
+  try {
+    await api(`/api/authority/policies/${encodeURIComponent(id)}`, { method: "DELETE" });
+    announce("策略已撤销。");
+    await refreshAuthority();
+  } catch (error) { announce(error.message, true); }
+}
+
+async function addAuthorityPolicy(form) {
+  const label = $("authority-policy-label").value.trim();
+  const domain = $("authority-policy-domain").value;
+  const access = $("authority-policy-access").value;
+  const resource = $("authority-policy-resource").value.trim();
+  const maxAutonomy = $("authority-policy-max").value;
+  const until = $("authority-policy-until").value;
+  if (resource.length === 0) { announce("请填写策略覆盖的资源。", true); return; }
+  const body = {
+    label: label || `${domain} ${access} ${resource}`,
+    scopes: [{ domain, access, resource }],
+    maxAutonomy,
+    ...(until ? { validUntil: new Date(`${until}T23:59:59`).toISOString() } : {}),
+  };
+  try {
+    await api("/api/authority/policies", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    form.reset();
+    announce("策略已添加。");
+    await refreshAuthority();
+  } catch (error) { announce(error.message, true); }
+}
+
+async function exportOwnerDataFromDesktop() {
+  chooseNativeDirectory("export", async (destination) => {
+    const button = $("data-export-choose");
+    if (button) button.disabled = true;
+    $("data-export-status").textContent = "正在导出…";
+    try {
+      const result = await api("/api/export", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ destination }) });
+      state.exportDestination = result.destination;
+      $("data-export-path").textContent = result.destination;
+      $("data-export-reveal").hidden = false;
+      $("data-export-status").textContent = `${result.summary}${result.excludes?.length ? ` 跳过：${result.excludes.join("；")}` : ""}`;
+      announce("数据已导出。");
+    } catch (error) {
+      $("data-export-status").textContent = "";
+      announce(error.message, true);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  });
+}
+
+function revealExport() {
+  if (!state.exportDestination) return;
+  if (window.CloneNative?.revealInFinder) {
+    window.CloneNative.revealInFinder(state.exportDestination);
     return;
   }
   announce(t("directory-native-only"), true);
@@ -1444,6 +1593,7 @@ function selectSettingsSection(section, forceReset = false, options = {}) {
   }
   notifyDesktopNavigation(section === "agents" ? "agents" : section === "memory" ? "memory" : "settings");
   if (section === "agents" && !state.gatewayLoading) void refreshGateways();
+  if (section === "safety" && state.authority === null && !state.authorityLoading) void refreshAuthority();
 }
 function settingsTabs() { return [...document.querySelectorAll("[data-settings-section]")]; }
 
@@ -1518,6 +1668,21 @@ document.querySelector(".settings-content")?.addEventListener("scroll", (event) 
   state.settingsScroll.set(state.settingsSection, content.scrollTop);
 }, { passive: true });
 $("config-workspace-choose").addEventListener("click", () => void chooseWorkspace());
+$("authority-root").addEventListener("change", (event) => {
+  const select = event.target.closest("[data-authority-domain]");
+  if (select) void setAuthorityDomain(select.dataset.authorityDomain, select.value);
+});
+$("authority-root").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-authority-revoke]");
+  if (button) void revokeAuthorityPolicy(button.dataset.authorityRevoke);
+});
+$("authority-root").addEventListener("submit", (event) => {
+  if (event.target.id !== "authority-policy-form") return;
+  event.preventDefault();
+  void addAuthorityPolicy(event.target);
+});
+$("data-export-choose").addEventListener("click", () => void exportOwnerDataFromDesktop());
+$("data-export-reveal").addEventListener("click", revealExport);
 $("config-workspace-reveal").addEventListener("click", revealWorkspace);
 $("config-main-agent-model-save").addEventListener("click", () => void saveMainAgentModel());
 $("config-main-agent-effort-save").addEventListener("click", () => void saveMainAgentEffort());

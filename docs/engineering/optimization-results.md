@@ -15,6 +15,21 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-17 — An honest delivery is no longer failed for being honest
+
+- **Claim:** the file verifier no longer reads `不要声称 out/video.mp4 已生成` as a
+  promise, and a plan that names `tests/` as a deliverable (or says the tests
+  were not run) no longer triggers the test-evidence gate — while a step that
+  really asks for a test run still requires test evidence.
+- **Evidence:** before, `extractFileExpectations(attemptCStep)` returned
+  `[{ path: "out/video.mp4" }]` and `mentionsTests(...)` returned `true`; after,
+  `[]` and `false`, with `npm test passes`, `修复后运行测试` and
+  ``Run `node --test tests/` `` still `true`.
+  `test/verification.test.ts` 16/16; full suite 688/688; typecheck and
+  `npm run gate` pass, with the two new gate cases recorded in the baseline.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-17--the-verifier-reads-negation-and-naming-tests-no-longer-demands-a-test-run),
+  [execution chain](optimizations.md#2026-11-17--the-verifier-stops-punishing-honest-disclosure).
+
 ## 2026-11-17 — A 3D task that can fail on the world, not just on itself
 
 - **Claim:** Forbidden City modeling is now graded against an external

@@ -31,6 +31,114 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-17 — Desktop-only product surface
+
+- **Goal / hypothesis:** Make the desktop app the only product entry, so the
+  repository stops shipping a second owner interface and a headless deployment
+  that duplicate or bypass the app. Owner actions that exist only in the CLI
+  must be reachable in the app before the CLI is removed.
+- **Trade-off:** [the desktop app is the only product surface](../architecture/trade-offs.md#2026-11-17--the-desktop-app-is-the-only-product-surface-the-cli-and-headless-server-are-removed).
+- **Change:** removed `src/cli/clone-ai.ts`, the `bin`/`cli` entries,
+  `src/server-main.ts`, `src/main-agent/clone-main.ts`, `Dockerfile`,
+  `.dockerignore`, `compose.server.yml`, `deploy/`, the server-deployment docs,
+  and `test/cli.test.ts`. Added `POST /api/export` (timestamped archive outside
+  the clone home), a desktop authority editor (`apps/desktop/ui/app.js` +
+  `index.html` + `style.css`), an owner-data export card, a bad-case tab,
+  improvement approvals, and a run-cancel action in `audit.js`. Added
+  `scripts/traces.mjs`, `scripts/selfcheck.mjs`, `scripts/repair.mjs`,
+  `scripts/audit-export.mjs` and their npm scripts; updated the launchd example
+  and `AGENTS.md` rule 4. Updated READMEs, local-setup, nightly-RSI,
+  agent-invocations, recursive-self-improvement, benchmark docs and CHANGELOG.
+- **Eval:** deterministic contract tests (the change is wiring, not model
+  behavior): `node --experimental-strip-types --test test/desktop-shell.test.ts
+  test/desktop-only-surface.test.ts` — **before:** the shell test read the CLI
+  source and `test/cli.test.ts` spawned it; no test asserted the absence of a
+  product CLI or exercised the new owner surfaces. **After:** 5/5 pass, covering
+  the authority routes, the export route (including refusal inside the data
+  directory), bad cases + improvement routes, the four maintenance scripts, and
+  package/UI assertions that the CLI and server entries stay gone.
+  `test/bilingual-documentation.test.ts` + the two files above: 7/7 pass after
+  dropping the deleted server-deployment pair. A browser preview of the
+  companion UI confirmed that the 权限与安全 authority editor and the 记忆与数据
+  export card render, that the audit tabs include 坏案例, and that the 评估 view
+  includes 改进建议. `npm test`, `npm run typecheck` and `npm run gate` pass;
+  gate reports `baseline unchanged` with 100% agreement on verdict/policy/audit
+  fixtures.
+- **Execution chain:** a five-reader `map-cli-removal` workflow inventoried the
+  CLI surface (33 commands), desktop/server routes, automation scripts, tests and
+  docs, and packaging (5 agents, 362 tool calls, 657 k subagent tokens, 18.5
+  min). The main agent then verified the risky claims inline (desktop launch
+  path, route gaps, `runRepairLane`/`exportFailedTraces` callers), implemented
+  the panels/routes/scripts, deleted the entries with `git rm`, and ran the
+  gates. Failures and retries: `rm -rf` was denied by the permission layer and
+  was replaced with `git rm`; the first `.mjs` scripts carried TypeScript
+  annotations and failed `node --check` (fixed to plain JS); one static
+  assertion looked for a quoted improvement route that is a template literal
+  (regex corrected); `npm test` initially failed because the deleted
+  server-deployment pair was still listed in the bilingual-docs test (list
+  updated); the lock's root `bin` entry was removed by hand after
+  `npm install --package-lock-only` proved to prune 140 unrelated stale Pi
+  entries, which would have made this change's diff misleading. The browser
+  preview also exposed pre-existing undefined provider bindings on the desktop
+  Agent page (`providers`, `providerById`, `installed`, `missing`; introduced by
+  a merge, not by this change); they blocked the first refresh, so the reads
+  were pointed at `state.providers` and the derived collections were built from
+  it, with static assertions added. This is a mechanical fix: the repair lane's
+  first step (export a failed trace) cannot produce a trace for a static UI
+  ReferenceError, and the lane was therefore not applicable.
+- **Pros:** the map caught the capabilities that would otherwise have become
+  unreachable (authority, export, bad cases, improvement, cancel) before any
+  deletion, and the desktop launch path was proven independent of the CLI.
+  Keeping repair/traces/selfcheck as scripts preserves `AGENTS.md` rule 4
+  without preserving a product CLI.
+- **Cons / next time:** the change is large for one commit; the UI panels are
+  Chinese-only like the existing mobile panel, and no browser-level test drives
+  the new buttons (the tests assert markup and routes, not clicks). A future
+  change that adds an owner action should land the desktop surface and the
+  removal in separate commits.
+- **Reversal condition:** if a headless or scriptable owner interface is needed
+  again, add a separate thin client/API package rather than re-growing a CLI
+  inside the desktop product; if an owner action cannot be expressed in the
+  desktop UI, add it there before documenting a script as the entry point.
+
+### 2026-11-17 — The verifier stops punishing honest disclosure
+
+- **Goal / hypothesis:** A complete, externally verified delivery was being
+  failed because the plan wrote down what it did *not* do. Fix the two judgment
+  defects so an honest run is judged on its artifacts.
+- **Trade-off:** [the verifier reads negation](../architecture/trade-offs.md#2026-11-17--the-verifier-reads-negation-and-naming-tests-no-longer-demands-a-test-run).
+- **Change:** `src/core/verification.ts` — `isNegatedPath` (clause-scoped
+  negation before a candidate path) consulted inside `extractFileExpectations`;
+  `src/core/verifier-plugins.ts` — `mentionsTests` now requires a test *run*
+  signal (`TEST_RUN_REQUEST`) and ignores `TEST_DISCLAIMER` sentences, instead of
+  matching the bare word `tests`. Tests: two cases in
+  `test/verification.test.ts`; two gate cases in `benchmark/gate/verdict-cases.json`
+  with the baseline regenerated.
+- **Eval:** before the fix, `extractFileExpectations` on the real attempt-C step
+  returned `[{ path: "out/video.mp4" }]` and `mentionsTests` returned `true`;
+  after, `[]` and `false`, while `npm test passes`, `修复后运行测试`, and
+  `Run \`node --test tests/\`` still return `true`. `npm test` 688/688 (was 686
+  before the two new cases), `npm run typecheck` exit 0, `npm run gate` PASS with
+  the two new cases recorded as `review` in the baseline.
+- **Benchmark run:** none — this is a deterministic judgment change; the gate and
+  unit cases are the eval. Its effect on the benchmark is measured by the
+  re-run entered separately.
+- **Execution chain:** found by the benchmark run (attempt C). The two functions
+  are on the repair lane's `PROTECTED` list, so the lane cannot produce the fix;
+  the owner authorized a hand fix and it is recorded as an explicit exception in
+  the trade-off entry. Reproduced each defect in a one-line call first, wrote the
+  failing unit expectations, fixed, then re-ran the suite and the gate. Two of my
+  own test expectations were wrong at first (a Chinese sentence that also names
+  real deliverables, and an English sentence whose verb "Deliver" is not a
+  file-intent word); both corrected to assert what should actually happen.
+- **Pros:** every before/after is a reproducible one-liner; the gate now records
+  the corrected verdicts so a future change that reintroduces the false failure
+  is caught.
+- **Cons / next time:** hand-fixed rather than lane-produced, which is exactly
+  the evidence gap rule 4 exists to close; the negation heuristic is
+  clause-scoped and could hide a deliverable in unusual phrasing.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-17 — The Forbidden City 3D benchmark
 
 - **Goal / hypothesis:** Add a capability benchmark whose 3D task is graded

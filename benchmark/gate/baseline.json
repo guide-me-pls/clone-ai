@@ -30,6 +30,8 @@
     "verdict/two-steps-one-file-missing": "fail",
     "verdict/second-step-without-evidence": "fail",
     "verdict/partially-checkable-criteria-needs-review": "review",
+    "verdict/negated-path-is-not-a-deliverable": "review",
+    "verdict/tests-named-as-deliverable-needs-no-test-evidence": "review",
     "policy/local-read-allowed": "allowed",
     "policy/local-write-allowed": "allowed",
     "policy/external-needs-approval": "approval_required",

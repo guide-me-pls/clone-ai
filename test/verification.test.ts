@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 
 import type { Evidence, PlanStep, Run, WorkPlan } from "../src/core/contracts.ts";
 import { CompositeVerifier, createDefaultVerifier, EvidenceVerifier, extractFileExpectations } from "../src/core/verification.ts";
-import { DiffFileVerifier, TestCommandVerifier } from "../src/core/verifier-plugins.ts";
+import { DiffFileVerifier, TestCommandVerifier, mentionsTests } from "../src/core/verifier-plugins.ts";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { DefaultPolicyEngine } from "../src/core/policy.ts";
 import { CloneRuntime } from "../src/core/runtime.ts";
@@ -67,6 +67,50 @@ test("file expectations distinguish paths and explicit root-level deliverables f
     "docs/nightly-rsi.md", "test/foo.test.ts", "src/core/runtime.ts",
     "weekly-report.md", "README.md", "lib\\runtime.ts",
   ]);
+});
+
+test("a path a plan says not to claim is not a promised file", () => {
+  // The Forbidden City benchmark caught this: a step that honestly says "do not
+  // claim out/video.mp4 exists" was failed for the missing MP4.
+  // 故宫基准发现了这一点：诚实写明"不要声称 out/video.mp4 已生成"的步骤因缺少 MP4 被判失败。
+  const zh: PlanStep = {
+    id: "zh", title: "Publish", risk: "reversible_write",
+    instructions: "交付 index.html 与 render.mjs，但本执行器不能渲染，因此不要声称 out/video.mp4 已生成。",
+    acceptanceCriteria: ["交付物齐全"],
+  };
+  assert.deepEqual(extractFileExpectations(zh).map((item) => item.path), ["index.html", "render.mjs"]);
+  const en: PlanStep = {
+    id: "en", title: "Publish", risk: "reversible_write",
+    instructions: "Deliver index.html. Do not claim out/video.mp4 exists; the worker cannot render.",
+    acceptanceCriteria: ["Deliverables present"],
+  };
+  // "Deliver" is not a file-intent word, so this sentence yields no deliverable;
+  // what matters is that the negated MP4 does not become one either.
+  // "Deliver" 不是文件意图词，本句本就不产出交付物；关键是其中的否定 MP4 也不会变成交付物。
+  assert.deepEqual(extractFileExpectations(en).map((item) => item.path), []);
+  // A prohibition on one path must not hide a real deliverable named after it.
+  // 对一个路径的禁止不能掩盖其后真正点名的交付物。
+  const mixed: PlanStep = {
+    id: "mixed", title: "Publish", risk: "reversible_write",
+    instructions: "Do not claim out/video.mp4 exists. Write out/summary.md instead.",
+    acceptanceCriteria: ["out/summary.md is non-empty"],
+  };
+  assert.deepEqual(extractFileExpectations(mixed).map((item) => item.path), ["out/summary.md"]);
+});
+
+test("a step that expects a test run still needs test evidence", () => {
+  const step = (instructions: string, acceptanceCriteria: string[] = []): PlanStep =>
+    ({ id: "t", title: "Test", risk: "reversible_write", instructions, acceptanceCriteria });
+  // A real run request, in either language, is still a test step.
+  // 真正的运行请求，中英文都仍算测试步骤。
+  assert.equal(mentionsTests(step("Fix the parser.", ["npm test passes"])), true);
+  assert.equal(mentionsTests(step("修复后运行测试并记录结果。")), true);
+  assert.equal(mentionsTests(step("Run `node --test tests/` and record the result.")), true);
+  // Naming tests/ as a deliverable, or saying the tests were not run, is not.
+  // 把 tests/ 列为交付物、或声明测试未运行，则不算。
+  assert.equal(mentionsTests(step("交付 index.html、src/ 模块、render.mjs、tests/ 与 README。")), false);
+  assert.equal(mentionsTests(step("README 列出未执行的测试与渲染。")), false);
+  assert.equal(mentionsTests(step("测试由所有者执行，不要声称已运行。")), false);
 });
 
 test("an external_side_effect step without a receipt locator cannot pass", async () => {

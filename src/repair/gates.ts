@@ -359,7 +359,7 @@ export async function commitRepair(workspace: string, run: CommandRunner, input:
     `Traces: ${input.traceIds.join(", ")}`,
     `Regression tests: ${input.tests.join(", ")}`,
     "",
-    "Produced by `clone-ai repair` as a Kernel Run. The regression tests were verified",
+    "Produced by `npm run repair` as a Kernel Run. The regression tests were verified",
     "red before the fix and hashed, and the hashes were verified unchanged after it.",
     "Merging is the owner's decision.",
   ].join("\n");

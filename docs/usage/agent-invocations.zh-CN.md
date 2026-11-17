@@ -9,7 +9,7 @@
 
 ## 记录内容
 
-- 唯一调用 id、调用者类型（`codex`、`claude-code`、`whatsapp`、`cli` 或显式值）、
+- 唯一调用 id、调用者类型（`codex`、`claude-code`、`whatsapp`、`desktop` 或显式值）、
   调用界面、pid 与可选的调用者会话 id；
 - 用户可见的请求与最终可见回复；
 - 失败时的错误文本；
@@ -23,12 +23,11 @@
 ## 查看方式
 
 - 桌面端：**设置 → 审计与轨迹 → Agent 调用**。
-- CLI：`clone-ai invocations` 或 `clone-ai invocations show <id>`。
 - API：`GET /api/invocations` 与 `GET /api/invocations/:id`。
 
 ## 调用者身份与覆盖
 
-CLI 会自动识别 `CODEX_THREAD_ID`、`CLAUDE_SESSION_ID` 与
+账本会自动识别 `CODEX_THREAD_ID`、`CLAUDE_SESSION_ID` 与
 `CLAUDE_CODE_SESSION_ID`。接入方应设置：
 
 ```bash

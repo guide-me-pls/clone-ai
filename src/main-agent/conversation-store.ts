@@ -2,23 +2,23 @@
  * Plain conversation pointers and legacy-session listing, without any agent SDK.
  *
  * The native Main Agent's transcript is the turn ledger; this module keeps the
- * small file-based pieces the CLI and desktop still use (the "current
- * conversation" pointer and a read-only listing of older session files). It
- * imports no SDK, so removing the Pi runtime does not remove the ability to
- * inspect what was already on disk.
+ * small file-based pieces the desktop still uses (the "current conversation"
+ * pointer written by the former CLI, and a read-only listing of older session
+ * files). It imports no SDK, so removing the Pi runtime does not remove the
+ * ability to inspect what was already on disk.
  *
  * 不依赖任何 Agent SDK 的对话指针与旧会话列举。
  *
- * 原生主 Agent 的对话记录是回合台账；本模块保留 CLI 与桌面仍在用的小块文件能力
- * （“当前对话”指针，以及只读列举旧会话文件）。它不导入任何 SDK，因此移除 Pi 运行时
- * 并不会移除查看磁盘上已有记录的能力。
+ * 原生主 Agent 的对话记录是回合台账；本模块保留桌面仍在用的小块文件能力
+ * （前 CLI 写入的“当前对话”指针，以及只读列举旧会话文件）。它不导入任何 SDK，
+ * 因此移除 Pi 运行时并不会移除查看磁盘上已有记录的能力。
  */
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 const POINTER_FILE = "current-session.json";
 
-/** The conversation both the CLI and the GUI continue. CLI 与 GUI 共同续跑的那段对话。 */
+/** The conversation the desktop continues, or the newest one when no pointer exists. 桌面续跑的对话；没有指针时用最新的一条。 */
 export async function readCurrentSessionPointer(directory: string): Promise<string | undefined> {
   try {
     const parsed = JSON.parse(await readFile(join(directory, POINTER_FILE), "utf8")) as { sessionFile?: unknown };
@@ -31,11 +31,6 @@ export async function readCurrentSessionPointer(directory: string): Promise<stri
   } catch {
     return undefined;
   }
-}
-
-export async function writeCurrentSessionPointer(directory: string, sessionFile: string): Promise<void> {
-  await mkdir(directory, { recursive: true });
-  await writeFile(join(directory, POINTER_FILE), `${JSON.stringify({ sessionFile })}\n`, "utf8");
 }
 
 /** Conversations on disk, newest first. 磁盘上的对话，新的在前。 */

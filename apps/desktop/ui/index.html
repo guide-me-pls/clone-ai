@@ -153,6 +153,16 @@
               </div>
               <div class="memory-candidates" id="memory-candidates"></div>
               <div class="memory-list" id="library-list"></div>
+              <div class="settings-card" id="data-export-card">
+                <h4>导出全部数据</h4>
+                <p>把对话、记忆、审计 Journal 复制到你选择的文件夹。导出不加密，只写到本机磁盘；每次导出会新建一个带时间戳的子目录。</p>
+                <div class="memory-tool-row path-picker-row">
+                  <div class="path-display" id="data-export-path">尚未选择导出位置</div>
+                  <button class="primary" id="data-export-choose" type="button">选择位置并导出</button>
+                  <button class="secondary" id="data-export-reveal" type="button" hidden>在 Finder 中显示</button>
+                </div>
+                <p class="agent-runtime-note" id="data-export-status"></p>
+              </div>
             </section>
             <section class="settings-panel" id="settings-panel-context" role="tabpanel" aria-labelledby="settings-tab-context" data-settings-panel="context" hidden>
               <h3 data-i18n="context-title">上下文</h3><p data-i18n="context-lead">对话变长时上下文会被自动压缩，但没有任何东西被删除：压缩只是写入一段摘要并记下切点，原文仍在磁盘上。分身可以用 <code>search_history</code> 把它们找回来。</p>
@@ -166,6 +176,9 @@
             </section>
             <section class="settings-panel" id="settings-panel-safety" role="tabpanel" aria-labelledby="settings-tab-safety" data-settings-panel="safety" hidden>
               <h3 data-i18n="safety-title">权限与安全</h3><p data-i18n="safety-lead">Kernel 对计划中的外部动作要求确认；未隔离的黑盒 Worker 默认禁止运行。</p>
+              <div class="agent-section-label">自主档位与常设策略</div>
+              <p class="agent-runtime-note">默认都是「只观察」：所有者开口之前，任何域都不可写。修改会写入 Journal，Main Agent 与 Worker 没有任何工具能放宽权限。</p>
+              <div id="authority-root"><p class="memory-empty">正在读取权限配置…</p></div>
               <div class="settings-card"><h4 data-i18n="safety-external-title">外部动作确认</h4><p data-i18n="safety-external-body">已标记的外部动作等待确认，但受控执行 Connector 尚未实现；不受限 Worker 可能绕过审批。</p><span class="settings-value" data-i18n="safety-external-value">计划级确认</span></div>
               <div class="settings-card"><h4 data-i18n="safety-child-title">子 Agent 边界</h4><p data-i18n="safety-child-body">黑盒 Worker 没有由 Clone AI 强制的系统沙箱；不受限运行可能读取或修改本机文件并访问网络。</p><span class="settings-value" data-i18n="safety-child-value">默认禁止</span></div>
             </section>

@@ -128,7 +128,8 @@ pattern; revisit it with real data.
 
 ## 8. Phasing
 
-1. **Attribution (read-only).** Projection of §4 and `clone-ai memory stats`.
+1. **Attribution (read-only).** Projection of §4, surfaced in the desktop
+   **审计与评估 → 改进建议** view.
    Value: shows whether the idea is worth continuing before anything else is
    built. Needs no new events.
 2. **Lifecycle suggestions.** §5 rules surfaced in the memory UI as owner
@@ -163,7 +164,7 @@ src/improvement/improvement-service.ts
    dismiss()  -> improvement.dismissed
    ^
    |  background maintenance loop (companion-server), before the idle sweep
-   |  CLI: clone-ai improve [list|stats|sweep|approve|dismiss]
+   |  Desktop: 设置 → 审计与评估 → 改进建议 (approve / dismiss)
    |  API: GET /api/improvement, POST /api/improvement/suggestions/:id/(approve|dismiss)
 ```
 
@@ -275,8 +276,8 @@ OpenAI-compatible gateway: the worker listed the empty workspace, wrote
 - **Attention list** — `GET /api/attention` composes commitments, review items,
   suggestions, opportunities and observations into one urgency-ordered list;
   each item points at the service that owns it.
-- **Export** — `clone-ai export [dir]` writes a readable tree with a manifest
-  that states the archive is not encrypted.
+- **Export** — **设置 → 记忆与数据 → 导出全部数据** writes a readable tree
+  with a manifest that states the archive is not encrypted.
 - **Step-level progress** — `getRunProgress`, `get_run_status` and
   `GET /api/runs/:id/progress` report per-step completion and last message.
 - **Benchmark** — `npm run bench:journal` records append/list/replay/refresh

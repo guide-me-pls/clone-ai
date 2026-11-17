@@ -71,10 +71,10 @@ npm run gate -- --write-baseline
 - **Policy suite** — `policy-cases.json` covers risk classes, autonomy levels,
   standing policies, protected paths, and approvals. An "allowed" where the
   fixture expects a gate is an unsafe allow.
-- **Audit calibration** — `audit-cases.jsonl`, or any `clone-ai audit export`
-  file passed with `--audit`, is compared with owner labels: agreement, false
-  pass, false fail. The dataset hash is recorded, so held-out records cannot
-  change silently.
+- **Audit calibration** — `audit-cases.jsonl`, or any file produced by
+  `npm run audit:export -- --out <file>` and passed with `--audit`, is compared
+  with owner labels: agreement, false pass, false fail. The dataset hash is
+  recorded, so held-out records cannot change silently.
 - **Per-case baseline** — `benchmark/gate/baseline.json` records what each case
   currently does. Any change, including an improvement, fails until it is
   regenerated in the same change, so a verdict shift is reviewed rather than

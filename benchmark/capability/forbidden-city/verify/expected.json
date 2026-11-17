@@ -41,6 +41,24 @@
   "symmetryToleranceM": 1,
   "requiredModelFeatures": ["platforms", "cameraKeys", "props"],
   "minimumPlatforms": 1,
+  "platformedBuildings": [
+    "午门",
+    "太和门",
+    "乾清门",
+    "神武门"
+  ],
+  "minimumOrnaments": 3,
+  "ornamentAnchorSlackM": 15,
+  "roofFormBuildings": [
+    "午门",
+    "太和殿",
+    "中和殿",
+    "保和殿",
+    "乾清宫"
+  ],
+  "roofFormToleranceM": 0.5,
+  "pointedRidgeMaxM": 2,
+  "hipRidgeMaxRatio": 0.75,
   "softChecks": [
     "browser.frame-throughput",
     "render.script-static"

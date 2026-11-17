@@ -11,6 +11,18 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-17 — 诚实的交付不再因为诚实而被判失败
+
+- **主张：** 文件验证器不再把 `不要声称 out/video.mp4 已生成` 读成承诺；把 `tests/` 列为交付物
+  （或声明测试未运行）的计划不再触发测试证据闸门——而真正要求运行测试的步骤仍然要求测试证据。
+- **证据：** 修复前 `extractFileExpectations(尝试C的步骤)` 返回 `[{ path: "out/video.mp4" }]`、
+  `mentionsTests(...)` 返回 `true`；修复后分别为 `[]` 与 `false`，而 `npm test passes`、
+  `修复后运行测试`、``Run `node --test tests/` `` 仍为 `true`。
+  `test/verification.test.ts` 16/16；完整套件 688/688；typecheck 与 `npm run gate` 通过，
+  两个新门禁用例已记入基线。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-17--验证器读取否定点名-tests-不再要求测试运行)、
+  [执行链路](optimizations.zh-CN.md#2026-11-17--验证器不再惩罚诚实披露)。
+
 ## 2026-11-17 — 3D 任务现在会对真实世界失败，而不只是对自身失败
 
 - **主张：** 故宫建模现在对照外部建筑契约评分——十座具名宫殿及其正确的屋顶形制、共用三台、

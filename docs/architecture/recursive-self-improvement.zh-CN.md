@@ -101,8 +101,8 @@
 
 ## 8. 分阶段
 
-1. **归因（只读）。** 实现 §4 的投影与 `clone-ai memory stats`。价值：在投入其他之前，先看这条路
-   值不值得继续。不需要新事件。
+1. **归因（只读）。** 实现 §4 的投影，并在桌面 **审计与评估 → 改进建议** 中呈现。
+   价值：在投入其他之前，先看这条路值不值得继续。不需要新事件。
 2. **生命周期建议。** 把 §5 规则作为所有者决策呈现在记忆 UI。延后：要等阶段 1 积累到足够曝光。
 3. **聚类与 L1 提案。** §6。延后：需要足够的失败历史，单个所有者的量可能始终达不到。
 4. **基准门禁。** 自动化前后对比。延后：每次变更都要花真实模型调用。
@@ -130,7 +130,7 @@ src/improvement/improvement-service.ts
    dismiss()  -> improvement.dismissed
    ^
    |  后台维护循环（companion-server），先于闲置扫描
-   |  CLI：clone-ai improve [list|stats|sweep|approve|dismiss]
+   |  桌面：设置 → 审计与评估 → 改进建议（批准 / 驳回）
    |  API：GET /api/improvement，POST /api/improvement/suggestions/:id/(approve|dismiss)
 ```
 
@@ -209,6 +209,6 @@ Worker 列出空工作区、写入 `out/hello.txt`、读回确认后停止——
 - **Connector** —— 日历（ICS 文件或 https URL）与邮件（IMAP，只读），两者在无法运行时都会说明原因而不是显示为空。
 - **对话附件** —— 按签名校验图片，交给会话 Prompt，绝不写入工作区。
 - **注意力列表** —— `GET /api/attention` 把承诺、待审项、建议、机会与观察合成一个按紧迫度排序的列表；每项都指向拥有它的服务。
-- **导出** —— `clone-ai export [dir]` 写出可读目录树与清单，清单明确声明归档未加密。
+- **导出** —— **设置 → 记忆与数据 → 导出全部数据** 写出可读目录树与清单，清单明确声明归档未加密。
 - **步骤级进度** —— `getRunProgress`、`get_run_status` 与 `GET /api/runs/:id/progress` 报告每步完成情况与最后的报告。
 - **基准** —— `npm run bench:journal` 记录 append/list/replay/refresh 耗时；3 万条事件：list 32 ms、replay 77 ms、热刷新 0 ms。

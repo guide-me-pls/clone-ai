@@ -13,9 +13,9 @@ measured axis, and published dimensions — all exposed through a JSON model the
 supervisor reads from the running page.
 
 It is also a **harness** benchmark. The task is dispatched through the same
-`clone-ai new` path the product uses, so the run records whether the Main
-Agent's specification reaches the worker, whether evidence is verified, and
-what a failed run tells the owner.
+request path the desktop app uses, so the run records whether the Main Agent's
+specification reaches the worker, whether evidence is verified, and what a
+failed run tells the owner.
 
 ## Files
 

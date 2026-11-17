@@ -40,6 +40,8 @@
 ## 几何质量
 
 - 屋顶必须是举折曲面（至少 3 段折线/曲线），不能是平面三角形；正脊、垂脊、戗脊、檐口起翘要有几何表达；
+- 屋顶剖面必须是中国式屋面，不是穹顶或石棚：靠近正脊处坡度陡，越近檐口越平缓（举折），檐口外挑于墙身之外；庑殿的正脊必须有长度（约为面阔的 1/2–3/4），攒尖不收长长脊而是收成宝顶；
+- 每座具名宫殿（含门楼）必须有台基，不能直接落地；
 - 斗拱层、额枋彩画、窗棂、门钉、台阶、栏杆望柱可用简化几何，但必须实例化或合批；
 - 建筑不是「盒子 + 三角顶」：台基、柱廊、墙体、屋顶要有层次；
 - 确定性的种子 PRNG，禁止无种子 `Math.random()`；给定 `t` 场景状态唯一；
@@ -61,7 +63,9 @@
     position: { x, y, z }, rotationY,
     bays: { width, depth } | null, // 面阔/进深间数
     platformId: string | null,
-    symmetryPair: string | null
+    symmetryPair: string | null,
+    bodyTopY?: number,               // 墙顶高度（m）
+    roof?: { eaveY: number, ridgeY: number, eaveOverhangM: number, ridgeLengthM: number }  // 檐口/正脊高度、外挑、正脊长度
   }],
   platforms: [{ id, name, tiers, heightM, footprint: {widthM, depthM}, position }],
   props: { walls: {...}, moat: {...}, cornerTowers: [...], ornaments: [...] },
@@ -71,6 +75,16 @@
 
 3. `window.getForbiddenCityChecks()`：从上述模型计算并返回：
    `{ axisLengthM, namedHallCount, maxSymmetryErrorM, roofTypesByName, triangleCount, drawCalls }`。
+
+## 本轮额外验收（比上一轮更严格）
+
+上一轮交付的模型屋顶剖面外鼓、门楼无台基、陈设漂在广场上。本轮这些项由所有者机器检查，不通过即算不合格：
+
+- `model.platforms-for-halls`：午门、太和门、乾清门、神武门 必须有非空 `platformId`；
+- `model.ornament-anchoring`：每件陈设必须位于某座建筑或台基附近（距离 ≤ 其半宽 + 15 m），且至少 3 件；
+- `model.roof-form`：午门、太和殿、中和殿、保和殿、乾清宫 必须报告 `roof.eaveY < roof.ridgeY`、`eaveY ≥ bodyTopY`、`eaveOverhangM > 0`；攒尖 `ridgeLengthM ≤ 2`，重檐庑殿 `ridgeLengthM ≤ 0.75 × widthM`。
+
+README 必须说明这些数值由构建数据导出，而不是事后手填。
 
 ## 交付物
 

@@ -6,6 +6,107 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-17 — The desktop app is the only product surface; the CLI and headless server are removed
+
+**Decision.** `src/cli/clone-ai.ts` (33 command surfaces), its `bin` and `cli`
+npm entries, `src/server-main.ts`, `Dockerfile`, `compose.server.yml`, `deploy/`,
+and the developer `npm run main` entry are removed. The macOS desktop app — a
+native shell over `src/desktop-sidecar.ts` and the loopback companion server —
+is the only way to talk to the twin. Owner capabilities that existed only in
+the CLI are added to the desktop: an authority editor in 权限与安全, owner-data
+export in 记忆与数据, bad cases and improvement approvals in 审计与评估, and a
+cancel action for active runs. The maintenance loop keeps non-product entry
+points as npm scripts — `traces`, `selfcheck`, `repair`, `audit:export`, and the
+existing `bench` — because they are automation, not a second user interface.
+The standalone WhatsApp bridge stays: the desktop's 手机通道 panel depends on
+it.
+
+**Evidence.** A dependency map of the whole repository found that every desktop
+launch mode runs `node --experimental-strip-types src/desktop-sidecar.ts`
+directly — the dev driver (`scripts/desktop-dev.mjs`), the packaged shell
+(`apps/desktop/macos/main.swift:533-563`), and the launchd job
+(`scripts/install-daemon.mjs:38-52`) — and no `src/` module imports the CLI; only
+two tests and documentation reference it. 23 of the CLI's 33 surfaces were
+duplicates of an existing HTTP route or desktop panel. The remaining eight were
+`export`, `traces`, `repair`, `bench`, `selfcheck --repair`, `resume`, `doctor`,
+and `--help`/`--version`; among them, `exportOwnerData`, `exportFailedTraces` and
+`runRepairLane` had no caller outside the CLI. Four owner capabilities existed in
+the HTTP API but had no desktop caller: authority, improvement, bad cases, and
+run cancellation. The macOS bundle already copied the whole `src/` tree, so the
+CLI shipped inside `Clone AI.app` unreachable.
+
+**What it costs.** Terminal users lose a scriptable interface, and external
+automation that calls `clone-ai` breaks; we cannot inspect callers outside this
+repository, so that breakage is marked unverified. Owner operations now
+depend on the app window (or the maintenance npm scripts); if the app cannot
+start, there is no fallback owner console. The desktop UI grows by four panels
+and one action, and the repair lane's documented first step changes, so
+`AGENTS.md` rule 4 must change in the same commit. Removing the server entry and
+Docker deployment gives up Linux/headless hosting; that path would have to be
+rebuilt deliberately if it is wanted again.
+
+**Not ported, and why.** `doctor` printed the clone home, Node version, model
+endpoint and worker list; the desktop already shows the first three across
+Agent/情境, and the worker list is a constant now that black-box worker CLIs are
+gone. `resume <n>` wrote a pointer that only the CLI wrote and only the context
+view read; desktop conversation selection lives in `localStorage`, and the
+Main Agent turn ledger does not use the pointer, so porting it would create a
+second source of truth. `install` and `workers` were stubs that always failed or
+printed a constant; `model` and `effort` are already editable in desktop
+settings. `app` and `gui` only launched or announced the app itself.
+
+**Reversal condition.** If a headless or scriptable owner interface is needed
+again (CI, a remote host, or a phone-only workflow), add a separate thin client
+or API package rather than re-growing a CLI inside the desktop product. If an
+owner action cannot be expressed in the desktop UI, add it there first; only if
+that is impossible should a dedicated script become a documented entry point. If
+external users report relying on the `clone-ai` binary, restore a compatibility
+shim or publish a migration path before removing the workaround.
+
+## 2026-11-17 — The verifier reads negation, and naming `tests/` no longer demands a test run
+
+**Decision.** Two judgment bugs found by the Forbidden City benchmark are fixed
+by hand, as an explicit, recorded exception to AGENTS.md rule 4 (see the last
+paragraph). `extractFileExpectations` no longer treats a path the plan says
+*not* to claim as a promised file, and `mentionsTests` only classifies a step as
+a test step when it asks for a test *run* — an acceptance criterion like
+`npm test passes`, a run request in either language, or a shell command in a
+command context — not when `tests/` is merely a deliverable or the plan honestly
+says the tests were not executed.
+
+**Evidence.** The 2026-11-17 benchmark: attempt C delivered 20 files, 6/6 tests
+and 21/21 external-contract checks, and the Kernel still failed the Run with
+`"out/video.mp4" was promised but does not exist on disk` — from the sentence
+`不要声称 out/video.mp4 已生成` — and `a test step needs test evidence with a
+locator` — from `tests/` listed as a deliverable. Both reproduced in one-line
+calls before the fix, and both are now gate cases
+(`benchmark/gate/verdict-cases.json`: `negated-path-is-not-a-deliverable`,
+`tests-named-as-deliverable-needs-no-test-evidence`) plus unit cases in
+`test/verification.test.ts`. The failure mode was the worst kind for this
+project: **honest disclosure punished**, which trains the agent to stop saying
+what it did not do.
+
+**What it costs.** Negation detection reads only the clause before the path, so
+an unusual construction ("not only X but out/video.mp4") could hide a real
+deliverable; the mixed-case unit test pins the common form. `mentionsTests` is
+now a heuristic over run-request phrasings rather than a single word, so a
+plan that expects a test run using wording none of the patterns cover would
+not be gated — a miss is safer here than the false failure it replaces, because
+the file and evidence verifiers still apply. Both functions are on the repair
+lane's `PROTECTED` list, so the lane cannot produce this fix: AGENTS.md rule 4
+("fixes come from the repair lane") and the lane's own invariant ("a repair must
+not edit its own verifier") directly conflict for this class of bug. The owner
+authorized a hand fix for this case and it is recorded here rather than hidden;
+the other defects from the benchmark (§ the specification dropped by
+`dispatch_task`) are not verifier code and remain for the repair lane.
+
+**Reversal condition.** If the negation heuristic starts hiding real promised
+files in production, restrict it to the exact "do not claim" phrasings and log
+the dropped paths as an observation instead. If `mentionsTests` misses a real
+test step and a run completes without tests, add the phrasing to
+`TEST_RUN_REQUEST` and add the case to the gate. Do not restore the bare
+`\btests?\b` match: it is what punished honesty.
+
 ## 2026-11-17 — The Forbidden City benchmark grades an external contract, and keeps harness and modeling apart
 
 **Decision.** A new capability benchmark,

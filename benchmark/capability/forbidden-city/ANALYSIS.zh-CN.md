@@ -14,7 +14,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 被测链路 | `clone-ai new` → Main Agent（native）→ Kernel 规划/策略/验证 → native worker（仅 `read_file` / `list_directory` / `write_file` / `edit_file`） |
+| 被测链路 | 桌面请求路径（当时为 `clone-ai new`）→ Main Agent（native）→ Kernel 规划/策略/验证 → native worker（仅 `read_file` / `list_directory` / `write_file` / `edit_file`） |
 | 命令 | `eval-runs/2026-11-17-forbidden-city/run-task.sh <attempt> [prompt-variant]` |
 | Provider / 模型 | native / `openai/gpt-6.1-terra`（本地 OpenAI 兼容网关 `http://127.0.0.1:3425`） |
 | Effort | Main `high`；Worker `high` |
@@ -35,7 +35,7 @@
 同一任务跑两种变体，目的是把 **harness** 与 **建模** 两个问题分开：
 
 - **自然变体（A、B）**：`prompt.md` 原样交给 Main Agent，不规定它用哪个工具。这测的是产品
-  默认行为：一个普通用户把这段需求打进 `clone-ai new` 会发生什么。
+  默认行为：一个普通用户把这段需求打进桌面 App 会发生什么。
 - **steered 变体（C）**：同一任务，额外一段工作方式说明，要求用 `propose_work_plan`
   提交一个自包含 step。这测的是**建模能力**本身——当完整规格确实到达 Worker 时，它能不能
   按考据建模。2026-11-17 能力评测的 02-v2/03/04 也是靠同样的提示层修正才取得可用结果，

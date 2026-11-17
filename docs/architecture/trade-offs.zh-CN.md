@@ -5,6 +5,75 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-17 —— 桌面 App 是唯一产品界面；CLI 与无界面服务器被移除
+
+**决定。** 移除 `src/cli/clone-ai.ts`（33 个命令面）、它的 `bin` 与 `cli` npm 入口、
+`src/server-main.ts`、`Dockerfile`、`compose.server.yml`、`deploy/`，以及开发用的
+`npm run main`。macOS 桌面 App——原生外壳加 `src/desktop-sidecar.ts` 与环回 companion
+服务器——是所有者与分身交互的唯一方式。原先只在 CLI 中存在的能力补进桌面：
+「权限与安全」里的权限编辑器、「记忆与数据」里的所有者数据导出、「审计与评估」里的坏案例
+与改进审批，以及针对进行中 Run 的取消动作。维护环路保留非产品入口，改为 npm scripts——
+`traces`、`selfcheck`、`repair`、`audit:export`，以及既有的 `bench`——因为它们是自动化，
+不是第二个用户界面。独立 WhatsApp 网桥保留：桌面的「手机通道」面板依赖它。
+
+**依据。** 对全仓库的依赖测绘发现：三种桌面启动方式都直接运行
+`node --experimental-strip-types src/desktop-sidecar.ts`——开发驱动
+（`scripts/desktop-dev.mjs`）、打包外壳（`apps/desktop/macos/main.swift:533-563`）
+与 launchd 任务（`scripts/install-daemon.mjs:38-52`）——并且没有任何 `src/` 模块
+导入 CLI；只有两个测试与文档引用它。CLI 的 33 个命令面中有 23 个与既有 HTTP 路由或
+桌面面板重复。其余八个是 `export`、`traces`、`repair`、`bench`、`selfcheck --repair`、
+`resume`、`doctor` 与 `--help`/`--version`；其中 `exportOwnerData`、
+`exportFailedTraces` 与 `runRepairLane` 在 CLI 之外没有调用方。另有四项所有者能力
+存在于 HTTP API 却没有任何桌面调用方：权限、改进、坏案例与取消 Run。macOS 打包本来就
+复制整个 `src/`，因此 CLI 虽被打进 `Clone AI.app`，却不可达。
+
+**代价。** 终端用户失去可脚本化的界面，调用 `clone-ai` 的外部自动化会失效；我们无法
+检查本仓库之外的调用方，因此这部分破坏标为**未核实**。所有者操作现在依赖 App 窗口
+（或维护用 npm scripts）；若 App 无法启动，就没有后备的所有者控制台。桌面 UI 增加四个
+面板与一个动作；修复通道文档里的第一步改变，因此 `AGENTS.md` 第 4 条必须同一次变更
+修改。移除服务器入口与 Docker 部署等于放弃 Linux/无界面托管；若以后需要，必须重新
+有意地建设这条路径。
+
+**不迁移的部分及理由。** `doctor` 打印 clone home、Node 版本、模型端点与 Worker 列表；
+桌面已在 Agent/情境面板展示前三项，而黑盒 Worker CLI 移除后 Worker 列表已是常量。
+`resume <n>` 写入的指针只有 CLI 写、只有上下文视图读；桌面的会话选择在
+`localStorage`，Main Agent 回合台账也不使用该指针，迁移它只会制造第二个真相来源。
+`install` 与 `workers` 是永远失败或打印常量的桩；`model` 与 `effort` 已在桌面设置中
+可编辑。`app` 与 `gui` 只是在启动或宣告桌面 App 本身。
+
+**推翻条件。** 若再次需要无界面或可脚本化的所有者界面（CI、远端主机、只有手机的工作流），
+应新增独立的轻客户端或 API 包，而不是在桌面产品里重新长出一个 CLI。若某个所有者动作
+无法在桌面 UI 中表达，先把它加进桌面；只有在确实做不到时，才让专用脚本成为有文档的
+入口。若有外部用户报告依赖 `clone-ai` 二进制，应先恢复兼容层或给出迁移路径，再移除
+替代方案。
+
+## 2026-11-17 —— 验证器读取否定，点名 `tests/` 不再要求测试运行
+
+**决定。** 故宫基准发现的两个判断缺陷由人工修复，作为 AGENTS.md 第 4 条的一次明确、有记录的
+例外（见最后一段）。`extractFileExpectations` 不再把计划明确说"不要声称"的路径当成承诺文件；
+`mentionsTests` 只在步骤要求**运行**测试时（验收标准如 `npm test 通过`、中英文运行请求、或命令
+语境中的 shell 命令）才判为测试步骤，而不是在 `tests/` 只是交付物、或计划诚实写明测试未执行时。
+
+**依据。** 2026-11-17 基准：尝试 C 交付 20 个文件、6/6 测试、21/21 外部契约检查，而 Kernel 仍以
+`"out/video.mp4" was promised but does not exist on disk`（来自 `不要声称 out/video.mp4 已生成`）
+和 `a test step needs test evidence with a locator`（来自把 `tests/` 列为交付物）判该 Run 失败。
+两者在修复前都用单行调用复现；现在都是门禁用例
+（`benchmark/gate/verdict-cases.json`：`negated-path-is-not-a-deliverable`、
+`tests-named-as-deliverable-needs-no-test-evidence`）与 `test/verification.test.ts` 的单元用例。
+这种失败模式对本项目最糟：**诚实披露被惩罚**，等于训练 Agent 不再说明自己没做什么。
+
+**代价。** 否定检测只看路径前的分句，因此非常规句式（"not only X but out/video.mp4"）可能掩盖真正
+的交付物；混合句式的单元测试钉住了常见形态。`mentionsTests` 现在是对运行请求措辞的启发式，而不是
+单个词，因此若计划用未覆盖的措辞表达要运行测试，就不会被闸门拦下——这里漏判比它替代的误判更安全，
+因为文件与证据验证器仍然生效。这两个函数在修复通道的 `PROTECTED` 清单里，通道无法产出这次修复：
+AGENTS.md 第 4 条（"修复来自修复通道"）与通道自身的不变式（"修复不得修改自己的验证器"）在这一类
+缺陷上直接冲突。所有者授权本例人工修复，并记录在此而非隐瞒；基准中的其他缺陷（
+`dispatch_task` 丢弃规格）不是验证器代码，仍留给修复通道。
+
+**推翻条件。** 若否定启发式在生产中开始掩盖真正承诺的文件，就把它收紧到明确的"不要声称"句式，
+并把被丢弃的路径记为 observation。若 `mentionsTests` 漏判真实测试步骤、导致没有测试就完成 Run，
+就把该措辞加入 `TEST_RUN_REQUEST` 并补门禁用例。不要恢复裸 `\btests?\b` 匹配：正是它惩罚了诚实。
+
 ## 2026-11-17 —— 故宫基准考核外部契约，并把 harness 与建模分开
 
 **决定。** 新能力基准
