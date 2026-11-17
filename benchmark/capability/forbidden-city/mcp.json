@@ -1,0 +1,55 @@
+{
+  "servers": [
+    {
+      "id": "playwright",
+      "enabled": true,
+      "transport": "stdio",
+      "command": "node",
+      "args": [
+        "/Users/<owner>/.config/magpie/mcp-npm/1b491aa4633d80d1/node_modules/@playwright/mcp/cli.js",
+        "--headless",
+        "--isolated",
+        "--executable-path",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      ],
+      "timeoutMs": 180000,
+      "tools": [
+        {
+          "name": "browser_navigate",
+          "risk": "external",
+          "description": "Open a URL in a headless browser. The worker uses this to load its own scene from the local static server."
+        },
+        {
+          "name": "browser_resize",
+          "risk": "external",
+          "description": "Set the browser viewport, e.g. 1920x1080 before a screenshot."
+        },
+        {
+          "name": "browser_evaluate",
+          "risk": "external",
+          "description": "Evaluate JavaScript on the page. Use it to call window.setVideoTime(t) so a screenshot lands on an exact frame."
+        },
+        {
+          "name": "browser_take_screenshot",
+          "risk": "external",
+          "description": "Capture the page as a PNG and return it as an image, so the worker can look at what it rendered."
+        },
+        {
+          "name": "browser_snapshot",
+          "risk": "external",
+          "description": "Return the accessibility tree, to check that controls and text are present."
+        },
+        {
+          "name": "browser_console_messages",
+          "risk": "external",
+          "description": "Read console output, to catch page errors after a render."
+        },
+        {
+          "name": "browser_close",
+          "risk": "external",
+          "description": "Close the browser when the visual check is done."
+        }
+      ]
+    }
+  ]
+}

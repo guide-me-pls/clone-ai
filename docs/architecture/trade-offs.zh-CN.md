@@ -47,6 +47,36 @@
 入口。若有外部用户报告依赖 `clone-ai` 二进制，应先恢复兼容层或给出迁移路径，再移除
 替代方案。
 
+## 2026-11-17 —— 工具结果可以携带图片，Worker 因此能看见自己渲染的结果
+
+**决定。** 工具结果现在可以返回图片，MCP 的图片内容块也被转发，而不是被替换成
+`[image block omitted]`。通过现有 `mcp.json`，可以给 Worker 配置所有者已安装的 **Playwright MCP**
+（`browser_navigate`、`browser_resize`、`browser_evaluate`、`browser_take_screenshot`），
+让它在同一回合内渲染自己的场景并**看见它**，而不是写完看不见的代码、再由外部检查器事后评判。
+不新写专用的截图工具：第一选择是已有的、有人维护的服务器。
+
+**依据。** Worker 的工具此前恰好只有 `read_file`、`list_directory`、`write_file`、`edit_file`；
+`NativeToolSpec.run` 返回 `{ output: string }`（`src/workers/native-agent-worker.ts:58`），
+`AgentToolResult.content` 是 `string`（`src/agent/loop.ts:43`），OpenAI 兼容序列化器把任何
+非字符串的工具内容变成 `""`（`src/workers/openai-compatible-client.ts:135-140`）。MCP 客户端
+的 `textContent` 把每个非文本块替换为 `[image block omitted]`
+（`src/workers/mcp-client.ts:744-756`）。后果在五次尝试上实测：Worker 可以在数据契约上拿到
+24/24，而渲染"建模的细节完全不够，跟一个平面图一样"，唯一能缩小差距的办法是外部检查加改提示词
+——正是所有者明确不要的反复 query-adjust（"一次 query -> answer 好"）。Playwright MCP 已安装在
+`~/.config/magpie/mcp-npm/1b491aa4633d80d1/node_modules/@playwright/mcp/cli.js`，暴露那四个
+工具，其中一个返回 PNG 内容块。
+
+**代价。** 工具结果里的图片在同一回合后续每一轮都会被重发，因此一张 1920×1080 截图每轮约
+1.5k tokens（`token-estimate.ts` 里已有固定的单图计费）；每轮都截图的 Worker 会把预算花在图片上。
+MCP 服务器是一个执行面：Playwright 会启动真实浏览器，可访问 `file://` 与网络，因此必须在
+`mcp.json` 中显式声明风险并限制在工作区，不能默认开启。图片是第三方页面渲染的不可信输入，这也是
+它只作为 `image_url` 数据传递、不附带任何工具调用语义的原因。
+
+**推翻条件。** 若 Worker 因反复读截图耗尽轮次或 token 预算，就限制每回合图片数，或转发前缩到
+1280×720。若 MCP 图片通道在多个 Provider 上不稳定（部分网关拒绝工具消息里的 image part），退回
+一个第一方 `render_scene` 工具，返回一张 PNG 加一段数值摘要。不要退回纯字符串工具结果：那正是
+造成本决定要取代的外部检查回路的原因。
+
 ## 2026-11-17 —— 细节由计数与阴影评分，而不是由文字描述
 
 **决定。** 故宫基准新增四项硬性检查，让"细节"可以被证伪而不是只能审美判断：
@@ -1482,3 +1512,33 @@ diff，只产出草稿 PR（或补丁文件）。它从不合并、部署、重�
 **放弃了什么。** 一条真正新的建议可能被推迟到旧建议被决定之后。
 
 **状态：** bucket 大小与上限 10 都是推测值，尚未调参。
+
+## 2026-11-17 —— 通过 Playwright MCP 做本地浏览器验收
+
+**决定：** 原生 Worker 可以打开自己刚写好的页面，走的是所有者开启的 Playwright MCP 服务器
+加一个环回静态服务器。只声明观察子集（`browser_navigate`、`browser_console_messages`、
+`browser_snapshot`、`browser_evaluate`、`browser_take_screenshot`、`browser_press_key`、
+`browser_resize`、`browser_wait_for`、`browser_navigate_back`、`browser_close`）；
+`browser_run_code_unsafe`、文件上传与拖放不声明。浏览器无头、隔离、以工作区为根，并限制在
+本地预览来源。一条很窄的常设策略授予 `network read 127.0.0.1`；`browser_navigate` 声明为
+`read`，`browser_evaluate`/截图/键盘声明为 `write`。
+
+**否决的备选：**（a）把 shell/浏览器工具加进原生 Worker 内核——工具面更宽，还要新增 exec
+风险类，违背四工具边界；（b）开启不受限的 `file://` 访问，让 Playwright 不用服务器就能打开
+页面——那会让浏览器读到机器上的任意文件；（c）保留四个文件工具、把验收留给所有者——这正是
+产生"盲写一次性页面 + 所有者复核"的现状。
+
+**依据：** 2026-11-17 的浏览器 MCP eval。变更前 Worker 无法观察页面；变更后它在同一个 step 里
+调用了 `browser_navigate`、`browser_wait_for`、`browser_console_messages`、
+`browser_evaluate` 与 `browser_take_screenshot`，自己修正了颜色，并写出 `screenshot.png`
+（Run `25521d80-d370-4a56-a45b-897639291b6b`）。第一次尝试暴露了 Provider 400：assistant
+消息回显了真实工具名 `playwright.browser_navigate`；把 assistant 工具调用名也做 Provider
+安全化后，循环恢复。声明与接线由 `test/browser-mcp.test.ts` 的 8 个用例覆盖，名称往返由
+`test/provider-tool-names.test.ts` 的 3 个用例覆盖。
+
+**放弃了什么：** 浏览器子进程不是 OS 沙箱；`--allowed-origins` 是提示，不是边界。
+`browser_evaluate` 在页面里执行任意 JavaScript，声明为 `write`。Worker 看不见图片，截图是给
+所有者的证据，不是给模型的。首次启动需要联网下载 `npx` 包。
+
+**可推翻条件：** 如果这样启用的浏览器仍能到达非本地主机，或 MCP 子进程无法随步骤关闭，就
+移除该服务器。如果出现带逐次 URL 闸门的第一方工具，优先用它替代这个 MCP 服务器。

@@ -133,10 +133,18 @@ export class OpenAiCompatibleClient implements AgentModel {
 function toChatMessages(messages: readonly AgentMessage[]): ChatMessage[] {
   return messages.map((message) => {
     if (message.role === "tool") {
+      // A tool result may be text plus images. Flattening non-string content to
+      // "" is what silently dropped every screenshot before this.
+      // 工具结果可以是文字加图片；把非字符串内容压成 "" 正是此前静默丢弃每张截图的原因。
+      const content = typeof message.content === "string"
+        ? message.content
+        : (message.content ?? []).map((part) => part.type === "text"
+          ? { type: "text" as const, text: part.text }
+          : { type: "image_url" as const, image_url: part.image_url });
       return {
         role: "tool",
         tool_call_id: message.toolCallId ?? "",
-        content: typeof message.content === "string" ? message.content : "",
+        content,
       };
     }
     if (message.role === "assistant") {
@@ -149,7 +157,15 @@ function toChatMessages(messages: readonly AgentMessage[]): ChatMessage[] {
             tool_calls: message.toolCalls.map((call) => ({
               id: call.id,
               type: "function" as const,
-              function: { name: call.name, arguments: call.arguments },
+              // A tool named for humans (`playwright.browser_navigate`,
+              // `Skill(release-notes)`) is sent to the provider sanitized; only
+              // the loop's internal name keeps the dot. Sending the real name
+              // back in an assistant tool call made the provider reject the
+              // whole next request with a name-pattern 400.
+              // 给人看的工具名（`playwright.browser_navigate`、`Skill(...)`）发给 Provider 时要
+              // 清洗；只有循环内部名保留点号。把真实名放回 assistant 工具调用会让 Provider 以
+              // 名称模式 400 拒绝整个下一次请求。
+              function: { name: toProviderToolName(call.name), arguments: call.arguments },
             })),
           }),
       };
