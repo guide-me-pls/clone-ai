@@ -6,6 +6,53 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-17 — The Forbidden City benchmark grades an external contract, and keeps harness and modeling apart
+
+**Decision.** A new capability benchmark,
+[`benchmark/capability/forbidden-city/`](../../benchmark/capability/forbidden-city/README.md),
+asks clone-ai to model the Forbidden City's central axis and grades it against
+an external contract rather than internal consistency: named halls, the
+historically correct roof form for each, the shared three-tier platform, a
+measured axis, and the published 太和殿 dimensions, all exposed through
+`window.getForbiddenCityModel()` and read by a supervisor checker from the
+running page. It runs in two variants — a **natural** prompt that lets the Main
+Agent choose its tool, and a **plan-steered** prompt that requires
+`propose_work_plan` with one self-contained step — and reports modeling only
+when the specification is proven to have reached the worker.
+
+**Evidence.** The 2026-11-17 capability eval graded its 3D task 3.6/5 on a scene
+that rendered correctly; the supervisor's own notes record that the cloud sea
+was below the camera path and never visible, and that no post-processing pass
+existed. Every automated check that task had (tests, seeded timeline, a render
+script) is internal: a city with arbitrary composition would have passed. The
+first Forbidden City runs then measured the harness half directly: both natural
+attempts produced **zero artifacts** because `dispatch_task` → `runQuery` →
+`buildFallbackPlan` replaced the Main Agent's task with a generic
+`local-draft` work order, and `buildInstructions` passes the work-order
+objective (`src/workers/native-agent-worker.ts:460`), so the worker received
+“只在本地准备可修改、可回退的结果” instead of the task. The plan-steered variant
+did reach the worker, which is why it is the run that can score modeling.
+
+**What it costs.** A second 3D-shaped task and checker to maintain, and the
+expected values (roof forms, 961 m axis, 64×37×35 m hall) are the checking
+model's training knowledge, not a citable source — `expected.json` says so and a
+reader with a better source can replace it without touching the checker. The
+natural variant spends two runs to say “the specification did not arrive”, which
+is cheap and is the point. The checker's render step is opt-in because 900
+frames take minutes; the default run measures the model, the tests and the
+browser.
+
+**Reversal condition.** If `dispatch_task` starts routing the task's
+objective/criteria into the work order (the P0 in
+[`ANALYSIS.md`](../../benchmark/capability/forbidden-city/ANALYSIS.md)), re-run
+the natural variant and, if it produces artifacts, drop the plan-steered variant
+and keep one prompt — two variants exist only to separate the two questions. If
+a sourced architectural dataset (for example a surveyed BIM or gazetteer) becomes
+available, replace `expected.json` with it and treat the current ±10% dimensions
+as a fallback for readers without one. If the benchmark's modeling checks stop
+discriminating (a model that satisfies all of them still looks obviously wrong in
+the screenshots), add a human screenshot review rather than more regex checks.
+
 ## 2026-11-17 — The endpoint is saved in config.json, and the key is write-only
 
 **Decision.** `config.json` gains `mainAgentBaseUrl` and `mainAgentApiKey`

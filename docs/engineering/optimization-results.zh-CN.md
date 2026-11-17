@@ -11,6 +11,21 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-17 — 3D 任务现在会对真实世界失败，而不只是对自身失败
+
+- **主张：** 故宫建模现在对照外部建筑契约评分——十座具名宫殿及其正确的屋顶形制、共用三台、
+  可测量中轴线、公开的太和殿尺寸——由主管检查器从 `window.getForbiddenCityModel()` 读取，
+  并把 harness 与建模分开报告。
+- **证据：** 尝试 C（steered 提示）产出 20 个文件；`node --test` 6/6；检查器 **21/21 硬性
+  检查**通过，含 10/10 屋顶形制、10/10 中轴建筑 \|x\| ≤ 1 m、`platformId: three-halls`、
+  太和殿 64×37×35 m、对称误差 0 m；主管渲染 900 帧 → 30.00 s 1920×1080 H.264；中位
+  33.3 ms/帧。在较早的 01 城市工件上的校准：11/14，仅有的硬性失败是缺少模型契约与 import map
+  指向错误。证据：`eval-runs/2026-11-17-forbidden-city/verify/c/report.json`、
+  `…/render/video.mp4`；分析见
+  [`ANALYSIS.zh-CN.md`](../../benchmark/capability/forbidden-city/ANALYSIS.zh-CN.md)。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-17--故宫基准考核外部契约并把-harness-与建模分开)、
+  [执行链路](optimizations.zh-CN.md#2026-11-17--故宫-3d-基准)。
+
 ## 2026-11-13 — 主 Agent 会读仓库自己的规则
 
 - **主张：** clone-main 现在把工作区的 `AGENTS.md` / `CLAUDE.md`、嵌套 Claude 文件与

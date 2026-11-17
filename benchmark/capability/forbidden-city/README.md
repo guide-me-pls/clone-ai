@@ -25,6 +25,7 @@ what a failed run tells the owner.
 | [`prompt.plan-steered.md`](prompt.plan-steered.md) | Same task, plus one paragraph telling the Main Agent to use `propose_work_plan` with a self-contained step. This is the **modeling** variant; `prompt.md` is the **natural** variant. |
 | [`verify/expected.json`](verify/expected.json) | The sourced expectations (roof forms, axis tolerance, 太和殿 dimensions, symmetry pairs, soft checks). |
 | [`verify/check-forbidden-city.mjs`](verify/check-forbidden-city.mjs) | The supervisor checker: static inspection, `node --test`, headless Chrome, model contract, timeline screenshots, frame throughput, optional 900-frame render. |
+| [`verify/render-frames.mjs`](verify/render-frames.mjs) | Supervisor frame renderer on the installed Chrome; used when a workspace's own `render.mjs` needs a browser download the machine cannot perform. |
 | [`verify/serve.mjs`](verify/serve.mjs) | Static file server used by the checker. |
 
 ## Run

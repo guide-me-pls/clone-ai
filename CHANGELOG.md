@@ -6,6 +6,40 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A Forbidden City 3D benchmark that grades the model against the world
+
+`benchmark/capability/forbidden-city/` asks clone-ai to model the Forbidden
+City's central axis with file tools only and grades it against an external
+architectural contract: ten named halls with their historically correct roof
+forms, the shared 三台, an axis within ±1 m, 961 m overall (±10 %), 64×37×35 m
+太和殿 (±10 %), mirrored 体仁阁/弘义阁. The task exposes
+`window.getForbiddenCityModel()` built from the same data as the geometry, and
+`verify/check-forbidden-city.mjs` reads it from headless Chrome alongside
+`node --test`, timeline screenshots, frame throughput and an optional 900-frame
+render. It runs in two variants — a natural prompt and one that requires a
+self-contained `propose_work_plan` step — so the report separates "the
+specification reached the worker" from "the worker could model it". First
+baseline: the natural variant produced **0 artifacts** (`dispatch_task` replaces
+the task with a generic work order, and `buildInstructions` passes that
+objective to the worker); the steered variant produced 20 files and passed
+**21/21** checker checks plus a supervisor-rendered 900-frame video, yet its Run
+was still marked `failed` because the file verifier read `不要声称
+out/video.mp4 已生成` as a required file and `tests/` in prose triggered the
+test-evidence gate. Analysis:
+[`benchmark/capability/forbidden-city/ANALYSIS.md`](benchmark/capability/forbidden-city/ANALYSIS.md).
+
+以上新增一个故宫 3D 基准：只给文件工具的 Worker 需按外部建筑契约建模紫禁城中轴线——十座
+具名宫殿及历史上正确的屋顶形制、共用三台、轴线 ±1 m、总长 961 m（±10%）、太和殿
+64×37×35 m（±10%）、体仁阁/弘义阁镜像对称。任务用与几何同源的
+`window.getForbiddenCityModel()` 暴露模型，`verify/check-forbidden-city.mjs` 在无头 Chrome
+里读取它，并运行 `node --test`、时间轴截图、帧吞吐与可选的 900 帧渲染。它跑两个变体——自然
+提示，以及要求单个自包含 `propose_work_plan` step 的提示——以便报告把「规格是否到达 Worker」
+与「Worker 能否建模」分开。首次基线：自然变体产出 **0 个工件**（`dispatch_task` 用通用工作
+单元替换了任务，而 `buildInstructions` 把那个目标传给 Worker）；steered 变体产出 20 个文件、
+通过 **21/21** 项检查并附主管渲染的 900 帧视频，但 Run 仍被判 `failed`，因为文件验证器把
+`不要声称 out/video.mp4 已生成` 读成必需文件，且散文里的 `tests/` 触发了测试证据闸门。分析见
+[`benchmark/capability/forbidden-city/ANALYSIS.zh-CN.md`](benchmark/capability/forbidden-city/ANALYSIS.zh-CN.md)。
+
 ### The Main Agent reads project instructions, memory edits are undoable, recall can synthesize, and consolidation proposes merges
 
 Four gaps against Claude Code 2.1.319's memory architecture are closed, each through clone-ai's own governance rather than by copying the other product's model.

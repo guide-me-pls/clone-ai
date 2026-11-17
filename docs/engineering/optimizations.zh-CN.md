@@ -26,6 +26,56 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-17 — 故宫 3D 基准
+
+- **目标 / 假设：** 新增一个能力基准，其 3D 任务对照**外部建筑契约**评分而不是内部一致性，
+  并把「规格是否到达 Worker」与「Worker 能否建模」分开——2026-11-17 的能力评测无法区分两者。
+- **取舍：** [故宫基准考核外部契约，并把 harness 与建模分开](../architecture/trade-offs.zh-CN.md#2026-11-17--故宫基准考核外部契约并把-harness-与建模分开)。
+- **变更：** 新增 `benchmark/capability/forbidden-city/`——`README.md` / `README.zh-CN.md`、
+  `prompt.md`（自然变体）与 `prompt.plan-steered.md`（单个 `propose_work_plan` step）、
+  `verify/expected.json`（屋顶形制、±1 m 轴线、961 m ±10%、64×37×35 m ±10%、体仁阁/弘义阁
+  对称、软检查）、`verify/check-forbidden-city.mjs`（静态检查、`node --test`、无头 Chrome、
+  `window.getForbiddenCityModel()` 契约、时间轴截图、帧吞吐、可选 900 帧渲染与 ffmpeg 探测）、
+  `verify/render-frames.mjs`（主管用系统 Chrome 渲染）与 `verify/serve.mjs`。运行脚本：
+  `eval-runs/2026-11-17-forbidden-city/run-task.sh <attempt> [variant]`，因 Worker 无网络，
+  它预置 r170 的 `vendor/three.module.js`。
+- **Eval：** 基准本身就是 eval。书面分析：
+  [`ANALYSIS.md`](../../benchmark/capability/forbidden-city/ANALYSIS.md) /
+  [`ANALYSIS.zh-CN.md`](../../benchmark/capability/forbidden-city/ANALYSIS.zh-CN.md)。
+  检查器在 2026-11-17 能力评测 01 城市工件上的校准：11/14 项通过，3 个硬性失败（无模型契约；
+  import map 未指向 `vendor/`）；测试 4/4、截图互异、33.3 ms/帧。
+- **Benchmark run：**
+  - 命令：`eval-runs/2026-11-17-forbidden-city/run-task.sh a`（自然，sha256
+    `5a27f8c4…8b95`）、`… b`（自然，同一提示）、`… c prompt.plan-steered.md`（sha256
+    `3cdfc278…7d3c`）。
+  - Provider / 模型：native / `openai/gpt-6.1-terra`；Main effort `high`，Worker `high`；
+    `CLONE_AI_NATIVE_MAX_ROUNDS=40`、`CLONE_AI_NATIVE_MAX_TOKENS=24000`、超时 600 s；无 MCP；
+    仅文件工具。
+  - 任务 / 数据集：基准自带的故宫任务；无外部数据集；种子 202405 由提示词固定；无采样
+    （`maxResults` 不适用）。
+  - 机器：macOS 27.0.0 arm64、Node v26.8.1、Chrome 157；本地网关 `http://127.0.0.1:3425`。
+  - 结果：A/B（自然）——**0 个工件**，两次在同一失败点 `failed`。C（steered）——20 个文件、
+    6/6 测试、**21/21 检查器检查**、主管渲染的 900 帧 30.00 s 1920×1080 H.264 视频；Kernel
+    仍把 Run 判为 `failed`。证据：`eval-runs/2026-11-17-forbidden-city/`（`meta/<attempt>/`、
+    `homes/<attempt>/journal.sqlite3`、`verify/c/report.json`、`verify/c/render/video.mp4`）。
+  - 前后对比：不适用——这是新基线，不是变更门禁。
+- **执行链路：** 阅读 2026-11-17 能力评测（REPORT、RESULTS、manifest、01 工作区），确认无头
+  Chrome 的 WebGL2 与本地网关，编写提示词与检查器，在 01 工件上校准检查器，并发运行 A 与 B，
+  再用 steered 提示跑 C。主管耗时约 3.5 小时；三次尝试合计约 0.15 M Main Agent tokens 与
+  约 0.42 M Worker tokens（A、B 各在 5–10k worker tokens 后停止；C 用了 371k）。失败与重试：
+  第一次 `nohup` 因日志目录不存在而失败；`rm -rf` 清理被权限层拒绝，改为新建尝试目录；检查器
+  初版误解析 `node --test` 输出（`ℹ pass` vs `# pass`）并把 favicon 404 计为控制台错误（均已
+  修复并在 01 上重新校准）；帧渲染器在服务未就绪时启动，需要自动起服务兜底（两处修复：
+  `flag` → `get`、先探测再服务）。
+- **优点：** 自然变体用 Journal 证据复现了确定性的 P0（任务规格在 `dispatch_task` 与工作单元
+  之间被丢弃）；steered 变体证明 Worker 能守住有出处的建筑契约；导致 C 失败的两个验证器缺陷
+  已用单行用例复现（`不要声称 out/video.mp4 已生成` 被提取为必需文件；`tests/` 作为交付物
+  触发 `mentionsTests`）。
+- **缺点 / 下次：** 每个变体只跑一次（自然变体两次），没有方差估计——应固定三次重复并报告中位
+  数。最早几次运行在基准目录存在之前就启动了，因此只有 `eval-runs/` 里的记录。截图显示屋顶
+  剖面在视觉上不对，尽管契约检查通过；在基准可以声称建筑质量之前必须加入截图复核。
+- **推翻条件：** 从取舍条目复制。
+
 ### 2026-11-13 — 记忆对比找出的四项差距
 
 - **目标 / 假设：** 与 Claude Code 2.1.319 记忆架构的对比发现 clone-ai 缺四样东西：主 Agent 从不读取
