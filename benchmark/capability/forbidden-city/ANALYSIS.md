@@ -289,6 +289,50 @@ in the README), not to weaken the verifier again. This is recorded as a P1 in
 §7 rather than patched now, because it is a plan-schema change rather than a
 judgment bug.
 
+## 4B. Detail contract (attempt F)
+
+The owner's verdict on E was "建模的细节完全不够，跟一个平面图一样". Cropped at 1:1,
+E's 太和殿 was one smooth yellow roof sheet, a single green bracket band, flat
+door panels and pavement with no shadow. Measured: **83.2%** of center-crop
+pixels near-flat, 646 distinct colors, 221,850 triangles, and no
+`castShadow`/`shadowMap` anywhere in its source. The new detail contract (§4A
+and the trade-off entry) made those requirements countable, and F ran the same
+prompt and model with them.
+
+| Measure | E (before) | F (after) |
+| --- | --- | --- |
+| Checker under the detail contract | 24/28 | **27/28** |
+| `model.roof-detail` | not reported | 6 halls, ≥3 segments and ≥24 tile ridges |
+| `model.dougong` | absent | 6 halls, ≥40 bracket pieces |
+| `model.facade-detail` | not reported | 6 halls, ≥32 mullions, ≥36 studs |
+| `browser.shadows` | no `shadowMap` in source | source has `shadowMap.enabled` + a casting sun; **`shadowLights` not reported** |
+| Center-crop flat pixels (diagnostic) | 83.2% | **72.7%** |
+| Tests | 9/9 | 4/4 (fewer cases, all pass) |
+| Video | 30.00 s 1920×1080 | pending render at the time of writing |
+
+**What F visibly fixed** (t=0 and t=22.5 crops): the roof has real tile ridges,
+the 额枋 is a distinct band, doors carry lattice grids and stud-counted panels,
+the 御路 stairway is modelled step by step, and **a shadow from the roof falls
+across the stairway and pavement** — the first run in this series with any cast
+shadow. It reads as architecture rather than a floor plan.
+
+**What is still wrong:** F does not report `shadowLights` in
+`getForbiddenCityChecks()` (the prompt that asked for it was written after F
+started; attempt G, which received it, failed on a harness precondition —
+"Required input missing: AGENTS.md" — before writing any file). The camera still
+opens close to 午门 rather than outside the moat, and lighting is a single
+directional sun with no ambient occlusion. So 27/28 has one remaining failure, and it is a reporting gap rather than a
+rendering gap.
+
+**Honest note on the shadow probe.** The first pixel-based shadow check was
+wrong twice: reading the WebGL framebuffer after a screenshot returned an empty
+frame (0.0% for both runs), and reading the PNG split by luminance called E's
+shadowless frame 39.4% "darker" because of the dark HUD bar and sky gradient.
+It is now a **diagnostic number plus a hard check on the renderer's declared
+state** (`shadowMap.enabled` + `castShadow` in source, plus `shadowLights` from
+the checks API). This is recorded because a benchmark that reports a confident
+wrong number is worse than one that reports none.
+
 ## 5. Comparison with the 2026-11-17 capability eval (01 procedural 3D video)
 
 | Dimension | 01 city video (then) | Natural variant (A, B) | Steered variant (C) |

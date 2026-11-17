@@ -63,6 +63,50 @@ that is impossible should a dedicated script become a documented entry point. If
 external users report relying on the `clone-ai` binary, restore a compatibility
 shim or publish a migration path before removing the workaround.
 
+## 2026-11-17 — Detail is graded by counts and shadows, not by prose
+
+**Decision.** The Forbidden City benchmark gains four hard checks that make
+"detail" falsifiable instead of aesthetic: `model.roof-detail` (≥3 roof
+segments and ≥24 tile ridges per listed hall), `model.dougong` (≥40 bracket
+pieces), `model.facade-detail` (≥32 mullions and ≥36 door studs), and
+`browser.shadows`, a pixel probe that reads the WebGL framebuffer and asks
+whether the ground under the eaves is measurably darker than the median
+pavement tone (≥2% of sampled pavement pixels more than 8 levels below the
+median). The model must report these counts under `detail: { roofSegments,
+tileRidges, dougong, windowMullions, doorStuds }`, built from the construction
+data rather than written as constants.
+
+**Evidence.** The owner's judgement of the 24/24 re-run was "建模的细节完全不够，
+跟一个平面图一样", and the pixels agree: in the center crop, 83–87% of pixels are
+near-flat (luminance gradient < 1.5) and the fragment has ~650 distinct 5-bit
+colors. Cropped at 1:1 the roof is one smooth yellow sheet, the bracket layer is
+a single green band, and the pavement has no shadow anywhere. The render holds
+only 221,850 triangles and 71 batched `add` sites, and
+`grep castShadow\|receiveShadow\|shadowMap` over its `src/` returns nothing. The
+earlier checks could not see any of this because every one of them grades data
+or geometry, never the rendered surface. The shadow probe is the one signal that
+distinguishes the two runs: attempt E scores **0.0%** darker pavement, below the
+2% floor, while the probe's own calibration on a shadowed reference frame clears
+it.
+
+**What it costs.** The counts reward *quantity*, not taste: 24 tile ridges and 40
+brackets can be ugly, and a model that pads counts will pass. That is accepted
+because the alternative — a prose criterion — is what already passed a floor
+plan. The pixel probe assumes the frame's lower-middle band contains pavement,
+which is true for the three-shot camera the task requires but would misread an
+aerial-only camera; the threshold is deliberately low (2%) so it detects "no
+shadows at all" rather than grading shadow quality. The center-crop flatness
+metric is **not** used as a check: measured across C, E and the game/video
+references it did not separate good from bad (E 83.2% vs C 84.9%), so it stays
+in `pixel-detail.mjs` as a diagnostic and a reader must not treat it as a gate.
+
+**Reversal condition.** If a run passes all four counts and its screenshots
+still read as a floor plan, replace the counts with a human screenshot review —
+do not add more counts. If the shadow probe produces a false pass (darker
+pavement from a painted texture rather than a shadow map), read the renderer's
+`shadowMap.enabled` instead and keep the pixel probe as a second signal. If most
+tasks move to aerial-only cameras, crop the probe to the platform band.
+
 ## 2026-11-17 — The verifier reads negation, and naming `tests/` no longer demands a test run
 
 **Decision.** Two judgment bugs found by the Forbidden City benchmark are fixed

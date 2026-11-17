@@ -15,6 +15,26 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-17 — Detail is now a measured requirement, and the render finally shows it
+
+- **Claim:** the Forbidden City benchmark grades architectural detail by counted
+  pieces and a declared shadow state, instead of passing any render that
+  satisfies a data contract; a model that had passed 24/24 on data now fails
+  three detail checks and one shadow check.
+- **Evidence:** attempt E under the detail contract: **24/28** —
+  `model.roof-detail`, `model.dougong`, `model.facade-detail` fail (no counts
+  reported) and `browser.shadows` fails (no `castShadow`/`shadowMap` in source;
+  center-crop diagnostic 83.2% near-flat pixels, 221,850 triangles). Attempt F
+  under the same contract: **27/28** — 6 halls report ≥3 roof segments and ≥24
+  tile ridges, ≥40 brackets, ≥32 mullions and ≥36 studs; source enables
+  `shadowMap.enabled` and a casting sun; center-crop flat pixels fall to
+  **72.7%**; t=0 and t=22.5 screenshots show tile ridges and a cast shadow.
+  Supervisor render 30.00 s 1920×1080 H.264 (7.8 MB). Evidence:
+  `eval-runs/2026-11-17-forbidden-city/verify/{e-detail,f}/report.json`,
+  `…/verify/f/video.mp4`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-17--detail-is-graded-by-counts-and-shadows-not-by-prose),
+  [execution chain](optimizations.md#2026-11-17--detail-becomes-a-graded-contract-in-the-forbidden-city-benchmark).
+
 ## 2026-11-17 — An honest delivery is no longer failed for being honest
 
 - **Claim:** the file verifier no longer reads `不要声称 out/video.mp4 已生成` as a

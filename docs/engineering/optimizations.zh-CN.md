@@ -75,6 +75,33 @@
   而不是在桌面产品里重新长出 CLI；若某个所有者动作无法在桌面 UI 表达，先加进桌面，再把
   脚本写成有文档的入口。
 
+### 2026-11-17 — 细节在故宫基准中成为可评分的契约
+
+- **目标 / 假设：** 所有者评价 24/24 的重跑"建模的细节完全不够，跟一个平面图一样"。把细节变成
+  可计数、可证伪的要求，使基准不再放过平涂渲染。
+- **取舍：** [细节由计数与阴影评分](../architecture/trade-offs.zh-CN.md#2026-11-17--细节由计数与阴影评分而不是由文字描述)。
+- **变更：** `benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs` 新增
+  `model.roof-detail`、`model.dougong`、`model.facade-detail`（从每座列名殿宇的
+  `detail:{roofSegments,tileRidges,dougong,windowMullions,doorStuds}` 计数）以及
+  `browser.shadows`（WebGL 帧缓冲探针，比较屋檐下铺装与铺装中位色）。新增
+  `verify/pixel-detail.mjs` 作为诊断而非门禁。`expected.json` 记录下限（3 段、24 条瓦垄、
+  40 个斗拱、32 条棂格、36 枚门钉、2% 暗部铺装），两份提示词都写明这些要求。
+- **Eval：** 把新检查套用到尝试 E（那次 24/24）后为 **24/28**：roof-detail、dougong、
+  facade-detail 因未报告计数而失败，`browser.shadows` 测得 **0.0%** 暗部铺装，低于 2% 下限。
+  同一帧的像素诊断：中心裁剪 83.2% 近平坦像素、646 种颜色、221,850 个三角形，其 `src/` 中
+  找不到 `castShadow`/`shadowMap`。第三次运行（尝试 F）才是对修正后任务的测量。
+- **Benchmark run：** 尝试 F，`run-task.sh f prompt.plan-steered.md`，native /
+  `360/openai/gpt-6.1-terra`，worker `high`、40 轮、24k tokens、600 s；无 MCP；仅文件工具。
+  证据在 `eval-runs/2026-11-17-forbidden-city/`；结果记入 `ANALYSIS.md` §4B。
+- **执行链路：** 把 E 的渲染按 1:1 裁剪以直接看到缺陷（平屋顶、单条斗拱带、无阴影），用新的
+  像素脚本测量，并拿游戏与视频参照图校准；随后发现中心裁剪平坦度指标**不能**区分好坏
+  （E 83.2% vs 基线 C 84.9%）——因此把它记录为诊断，门禁改用计数加阴影探针，后者能区分。
+  加入阴影探针、确认它对 E 打 0.0%、先写取舍条目，再启动 F。
+- **优点：** 所有者看到的问题现在是一个数字（0.0% 暗部铺装、0 项计数），而不是一种感觉；
+  在所有先前检查都失效的地方，探针区分了两次运行。
+- **缺点 / 下次：** 计数奖励数量而非品味；探针假定画面中下带是铺装。两个限制都写在取舍条目里。
+- **推翻条件：** 从取舍条目复制。
+
 ### 2026-11-17 — 验证器不再惩罚诚实披露
 
 - **目标 / 假设：** 一次完整且经外部验证的交付，仅因计划写下了自己*没有*做什么而被判失败。
