@@ -31,6 +31,76 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-17 — The Forbidden City 3D benchmark
+
+- **Goal / hypothesis:** Add a capability benchmark whose 3D task is graded
+  against an external architectural contract, not internal consistency, and
+  that separates "the specification reached the worker" from "the worker could
+  model it" — which the 2026-11-17 capability eval could not tell apart.
+- **Trade-off:** [the Forbidden City benchmark grades an external
+  contract](../architecture/trade-offs.md#2026-11-17--the-forbidden-city-benchmark-grades-an-external-contract-and-keeps-harness-and-modeling-apart).
+- **Change:** new `benchmark/capability/forbidden-city/` — `README.md` /
+  `README.zh-CN.md`, `prompt.md` (natural) and `prompt.plan-steered.md` (one
+  `propose_work_plan` step), `verify/expected.json` (roof forms, ±1 m axis,
+  961 m ±10 %, 64×37×35 m ±10 %, 体仁阁/弘义阁 symmetry, soft checks),
+  `verify/check-forbidden-city.mjs` (static inspection, `node --test`, headless
+  Chrome, `window.getForbiddenCityModel()` contract, timeline screenshots,
+  frame throughput, opt-in 900-frame render + ffmpeg probe),
+  `verify/render-frames.mjs` (supervisor renderer on system Chrome) and
+  `verify/serve.mjs`. Runner: `eval-runs/2026-11-17-forbidden-city/run-task.sh
+  <attempt> [variant]`, which seeds `vendor/three.module.js` r170 because the
+  worker has no network.
+- **Eval:** the benchmark is the eval. Written analysis:
+  [`ANALYSIS.md`](../../benchmark/capability/forbidden-city/ANALYSIS.md) /
+  [`ANALYSIS.zh-CN.md`](../../benchmark/capability/forbidden-city/ANALYSIS.zh-CN.md).
+  Checker calibration on the 2026-11-17 eval's 01 city artifact: 11/14 checks,
+  3 hard failures (no model contract; import map not `vendor/`); tests 4/4,
+  distinct screenshots, 33.3 ms/frame.
+- **Benchmark run:**
+  - command: `eval-runs/2026-11-17-forbidden-city/run-task.sh a` (natural,
+    sha256 `5a27f8c4…8b95`), `… b` (natural, same prompt), `… c
+    prompt.plan-steered.md` (sha256 `3cdfc278…7d3c`).
+  - provider/model: native / `360/openai/gpt-6.1-terra`; main effort `high`,
+    worker `high`; `CLONE_AI_NATIVE_MAX_ROUNDS=40`,
+    `CLONE_AI_NATIVE_MAX_TOKENS=24000`, 600 s timeout; no MCP; file tools only.
+  - task/dataset: the benchmark's own Forbidden City task; no external dataset;
+    seed 202405 fixed by the prompt; no sampling (`maxResults` n/a).
+  - machine: macOS 27.0.0 arm64, Node v26.8.1, Chrome 157; local gateway
+    `http://127.0.0.1:3425`.
+  - result: A/B (natural) — **0 artifacts**, `failed` twice at the same point.
+    C (steered) — 20 files, 6/6 tests, **21/21 checker checks**,
+    supervisor-rendered 900-frame 30.00 s 1920×1080 H.264 video; Kernel still
+    `failed` the Run. Evidence: `eval-runs/2026-11-17-forbidden-city/`
+    (`meta/<attempt>/`, `homes/<attempt>/journal.sqlite3`,
+    `verify/c/report.json`, `verify/c/render/video.mp4`).
+  - before/after: n/a — a new baseline, not a change gate.
+- **Execution chain:** read the 2026-11-17 capability eval (REPORT, RESULTS,
+  manifest, the 01 workspace), confirmed headless Chrome WebGL2 and the local
+  gateway, wrote prompt + checker, calibrated the checker on the 01 artifact,
+  ran A and B concurrently, then C with the steered prompt. About 3.5 hours of
+  supervisor time; 0.15 M main-agent tokens and ~0.42 M worker tokens across the
+  three attempts (A and B stopped after ~5–10 k worker tokens each; C used
+  371 k). Failures and retries: the first `nohup` launch failed because the log
+  directory did not exist; an `rm -rf` cleanup was refused by the permission
+  layer, so fresh attempt directories were created instead; the checker's first
+  version mis-parsed `node --test` output (`ℹ pass` vs `# pass`) and counted the
+  favicon 404 as a console error (both fixed and re-calibrated); the frame
+  renderer was launched before its server was checked and needed an
+  auto-serve fallback (two fixes: `flag` → `get`, probe-then-serve).
+- **Pros:** the natural variant reproduced a deterministic P0 (the task
+  specification is dropped between `dispatch_task` and the work order) with
+  journal evidence; the steered variant proved the worker can hold a sourced
+  architectural contract; and the two verifier defects that failed C were
+  reproduced in one-line cases (`不要声称 out/video.mp4 已生成` extracted as a
+  required file; `tests/` as a deliverable triggering `mentionsTests`).
+- **Cons / next time:** each variant ran once (natural twice), so there is no
+  variance estimate — pin three repeats and report medians. The first runs were
+  launched before the benchmark directory existed, so their only record is
+  `eval-runs/`. The screenshots show the roof profile is visually wrong despite
+  passing the contract checks; a screenshot review must be added before the
+  bench can claim architectural quality.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-13 — The four gaps the memory comparison found
 
 - **Goal / hypothesis:** A comparison against Claude Code 2.1.319's memory

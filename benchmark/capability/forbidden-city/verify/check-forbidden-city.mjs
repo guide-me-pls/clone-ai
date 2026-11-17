@@ -194,6 +194,7 @@ const relevantResponses = () => failedResponses.filter((line) => !/favicon\.ico/
 let model = null;
 let videoChecks = null;
 let cameraTelemetry = null;
+let roofTable = [];
 const screenshots = [];
 try {
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle", timeout: 120_000 });
@@ -215,6 +216,12 @@ try {
       else if (building.roofType !== roof) roofMismatches.push(`${name}: ${building.roofType} != ${roof}`);
     }
     record("model.roof-types", roofMismatches.length === 0, roofMismatches.length ? roofMismatches.join("; ") : `${Object.keys(expected.roofTypes).length} named roofs match`);
+    // A single line per named hall, so a reader can see what was modeled even
+    // when the roof check fails; the pass/fail above stays the hard verdict.
+    roofTable = Object.entries(expected.roofTypes).map(([name, roof]) => {
+      const b = byName.get(name);
+      return `${name}\t${b?.roofType ?? "absent"}\t${b?.roofType === roof ? "ok" : `expected ${roof}`}`;
+    });
 
     const axisTolerance = expected.axisToleranceM;
     const offAxis = model.buildings
@@ -314,10 +321,12 @@ record("browser.console", relevantConsole().length === 0 && relevantResponses().
 
 let renderEvidence = null;
 if (shouldRender) {
-  const renderScript = join(here, "render-3d.mjs");
+  const renderScript = join(here, "render-frames.mjs");
   if (await exists(renderScript)) {
     const started = Date.now();
-    const result = await run(process.execPath, [renderScript, "--url", `http://127.0.0.1:${port}/`, "--out", join(outDir, "render"), "--frames", String(renderFrames)], { timeoutMs: 3_600_000, cwd: here });
+    // The browser above closed its server, so the renderer starts one itself
+    // from --root; --url is kept for a caller who supplies a live server.
+    const result = await run(process.execPath, [renderScript, "--url", `http://127.0.0.1:${port}/`, "--root", workspace, "--out", join(outDir, "render"), "--frames", String(renderFrames)], { timeoutMs: 3_600_000, cwd: here });
     renderEvidence = {
       code: result.code,
       frames: renderFrames,
@@ -352,6 +361,7 @@ const report = {
   model,
   videoChecks,
   cameraTelemetry,
+  roofTable,
   screenshots,
   fileState,
   srcFiles,
@@ -372,6 +382,9 @@ const lines = [
   `checks: ${passed}/${checks.length}, hard failures: ${hardFailures.length}`,
   "",
   ...checks.map((c) => `${c.ok ? "PASS" : "FAIL"}  ${c.id} — ${c.detail}`),
+  "",
+  "roof model (name / modeled / verdict):",
+  ...roofTable.map((line) => `  ${line}`),
   "",
   `model buildings: ${model?.buildings?.length ?? "n/a"}`,
   `checks object: ${JSON.stringify(videoChecks)}`,

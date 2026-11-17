@@ -15,6 +15,25 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-17 — A 3D task that can fail on the world, not just on itself
+
+- **Claim:** Forbidden City modeling is now graded against an external
+  architectural contract — ten named halls with their correct roof forms, the
+  shared 三台, a measured axis, and the published 太和殿 dimensions — read from
+  `window.getForbiddenCityModel()` by a supervisor checker, with harness and
+  modeling reported separately.
+- **Evidence:** attempt C (steered prompt) produced 20 files; `node --test`
+  6/6; checker **21/21 hard checks** including 10/10 roof forms, 10/10 axis
+  buildings within ±1 m, `platformId: three-halls`, 64×37×35 m 太和殿, 0 m
+  symmetry error; supervisor-rendered 900 frames → 30.00 s 1920×1080 H.264;
+  33.3 ms/frame median. Calibration on the older 01 city artifact: 11/14, with
+  the missing model contract and wrong import map the only hard failures.
+  Evidence: `eval-runs/2026-11-17-forbidden-city/verify/c/report.json`,
+  `…/render/video.mp4`; analysis
+  [`ANALYSIS.md`](../../benchmark/capability/forbidden-city/ANALYSIS.md).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-17--the-forbidden-city-benchmark-grades-an-external-contract-and-keeps-harness-and-modeling-apart),
+  [execution chain](optimizations.md#2026-11-17--the-forbidden-city-3d-benchmark).
+
 ## 2026-11-13 — The Main Agent reads the repository's own rules
 
 - **Claim:** clone-main now loads the workspace's `AGENTS.md` / `CLAUDE.md`,

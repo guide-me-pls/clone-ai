@@ -5,6 +5,39 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-17 —— 故宫基准考核外部契约，并把 harness 与建模分开
+
+**决定。** 新能力基准
+[`benchmark/capability/forbidden-city/`](../../benchmark/capability/forbidden-city/README.zh-CN.md)
+要求 clone-ai 为紫禁城中轴线建模，并对照**外部契约**而不是内部一致性评分：具名宫殿、
+每座历史上正确的屋顶形制、共用三台、可测量的轴线、公开的太和殿尺寸，全部经
+`window.getForbiddenCityModel()` 暴露，由主管检查器从运行中的页面读取。它跑两个变体——
+让 Main Agent 自选工具的**自然**提示，以及要求用 `propose_work_plan` 提交单个自包含
+step 的 **plan-steered** 提示——并且只有在规格被证明到达 Worker 时才报告建模分数。
+
+**依据。** 2026-11-17 能力评测给 3D 任务的 3.6/5 分建立在一个能正确渲染的场景上；主管
+自己的记录写着云海在镜头路径之下、从未进入画面，也没有后处理通道。该任务当时的所有自动
+检查（测试、种子时间轴、渲染脚本）都是内部的：构图任意的城市同样会通过。随后第一批故宫
+运行直接测到了 harness 那一半：两次自然尝试都产出 **0 个工件**，因为 `dispatch_task` →
+`runQuery` → `buildFallbackPlan` 用通用的 `local-draft` 工作单元替换了 Main Agent 的
+任务，而 `buildInstructions` 传递的是工作单元的目标
+（`src/workers/native-agent-worker.ts:460`），于是 Worker 拿到的是「只在本地准备可修改、
+可回退的结果」而不是任务本身。plan-steered 变体确实到达了 Worker，因此它才是能评建模的
+那次运行。
+
+**代价。** 多一个 3D 形状的任务与检查器要维护；期望值（屋顶形制、961 m 轴线、64×37×35 m
+大殿）是运行检查的模型的训练知识，不是可引用来源——`expected.json` 已如实标注，有更好
+来源的读者可替换它而无需改代码。自然变体花两次运行只为得出「规格没有到达」，这很便宜，
+也正是目的。检查器的渲染步骤是显式开启的，因为 900 帧要几分钟；默认运行测量模型、测试
+与浏览器。
+
+**推翻条件。** 如果 `dispatch_task` 开始把任务的 objective/criteria 路由进工作单元
+（[`ANALYSIS.md`](../../benchmark/capability/forbidden-city/ANALYSIS.zh-CN.md) 中的
+P0），重跑自然变体；若它产出工件，就删掉 plan-steered 变体、只保留一份提示——两个变体
+的存在只为了分开这两个问题。若出现有出处的建筑数据集（例如测绘 BIM 或地方志）就替换
+`expected.json`，把当前 ±10% 尺寸作为无来源读者的后备。若建模检查不再有区分度（满足全部
+检查的模型在截图里仍明显错误），应增加人工截图复核，而不是加更多正则检查。
+
 ## 2026-11-17 —— 端点保存在 config.json 中，密钥是只写的
 
 **决定。** `config.json` 在模型之外新增 `mainAgentBaseUrl` 与 `mainAgentApiKey`。
