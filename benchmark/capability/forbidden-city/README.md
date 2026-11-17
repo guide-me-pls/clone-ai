@@ -76,6 +76,10 @@ evidence lands in `report.json` / `report.txt` next to the screenshots.
 | `model.platforms-for-halls` | yes | A gate building drawn straight on the ground (午门/太和门/乾清门/神武门 must carry a `platformId`). |
 | `model.ornament-anchoring` | yes | Ornaments floating in a plaza instead of beside a hall or platform (≥3 required). |
 | `model.roof-form` | yes | Roofs with no reported eave/ridge relationship, an eave below the body top, no overhang, a 攒尖 with a long ridge, or a 庑殿 ridge wider than 75% of the hall. |
+| `model.roof-detail` | yes | A smooth roof with no tile ridges: each listed hall must report >= 3 segments and >= 24 ridge pieces. |
+| `model.dougong` | yes | A single colour band where brackets should be: each listed hall must report >= 40 bracket pieces. |
+| `model.facade-detail` | yes | Flat door panels: each listed hall must report >= 32 mullions and >= 36 door studs. |
+| `browser.shadows` | yes | No shadow mapping in the source, or `getForbiddenCityChecks().shadowLights < 1`. A per-frame pixel share is recorded as a diagnostic only (it did not separate the runs; see the analysis). |
 | `browser.timeline-differs` | yes | A static image or a camera that does not move. |
 | `browser.frame-throughput` | no | An implementation that rebuilds geometry every seek (median > 100 ms/frame). |
 | optional `render.900-frames`, `render.video-spec` | yes when `--render` | The deliverable video and its 30 s / 1920×1080 spec. |

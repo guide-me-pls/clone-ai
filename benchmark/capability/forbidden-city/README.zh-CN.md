@@ -67,6 +67,10 @@ CLONE_AI_VERIFY_DEPS=eval-runs/2026-11-17-capability/verify \
 | `model.platforms-for-halls` | 是 | 门楼直接落地（午门/太和门/乾清门/神武门 必须带 `platformId`）。 |
 | `model.ornament-anchoring` | 是 | 陈设漂在广场上而不是贴在大殿或台基旁（至少 3 件）。 |
 | `model.roof-form` | 是 | 屋顶没有报告的檐口/正脊关系、檐口低于墙顶、无外挑、攒尖带长正脊、或庑殿正脊超过面阔 75%。 |
+| `model.roof-detail` | 是 | 光滑屋面、没有瓦垄：每座列名殿宇须报告 ≥3 段、≥24 条瓦垄。 |
+| `model.dougong` | 是 | 斗拱位置只有一条色带：每座列名殿宇须报告 ≥40 个斗拱件。 |
+| `model.facade-detail` | 是 | 平板门窗：每座列名殿宇须报告 ≥32 条棂格、≥36 枚门钉。 |
+| `browser.shadows` | 是 | 源码没有阴影贴图，或 `getForbiddenCityChecks().shadowLights < 1`。逐帧像素比例仅作诊断记录（它未能区分两次运行，见分析）。 |
 | `browser.timeline-differs` | 是 | 静态画面或镜头不动。 |
 | `browser.frame-throughput` | 否 | 每次寻帧重建几何（中位 > 100 ms/帧）。 |
 | 可选 `render.900-frames`、`render.video-spec` | `--render` 时为是 | 交付视频及其 30 s / 1920×1080 规格。 |

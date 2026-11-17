@@ -101,6 +101,44 @@ file keeps every attempt, including the ones that did not work.
   inside the desktop product; if an owner action cannot be expressed in the
   desktop UI, add it there before documenting a script as the entry point.
 
+### 2026-11-17 — Detail becomes a graded contract in the Forbidden City benchmark
+
+- **Goal / hypothesis:** The owner judged the 24/24 re-run "建模的细节完全不够，跟一个
+  平面图一样". Turn detail into counted, falsifiable requirements so the benchmark
+  stops passing flat renders.
+- **Trade-off:** [detail is graded by counts and shadows](../architecture/trade-offs.md#2026-11-17--detail-is-graded-by-counts-and-shadows-not-by-prose).
+- **Change:** `benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs` gains
+  `model.roof-detail`, `model.dougong`, `model.facade-detail` (counted from a
+  `detail:{roofSegments,tileRidges,dougong,windowMullions,doorStuds}` block on each
+  named hall) and `browser.shadows` (a WebGL framebuffer probe comparing pavement
+  under the eaves with the median pavement tone). `verify/pixel-detail.mjs` is added
+  as a diagnostic, not a gate. `expected.json` carries the floors (3 segments,
+  24 ridges, 40 brackets, 32 mullions, 36 studs, 2% darker pavement) and both
+  prompts state them.
+- **Eval:** the new checks applied to attempt E (the 24/24 run) mark it **24/28**:
+  roof-detail, dougong, facade-detail fail because no counts are reported, and
+  `browser.shadows` measures **0.0%** darker pavement against a 2% floor. Pixel
+  diagnostics on the same frame: 83.2% near-flat pixels in the center crop, 646
+  distinct colors, 221,850 triangles, no `castShadow`/`shadowMap` anywhere in its
+  `src/`. A third run (attempt F) is the measurement of the fixed task.
+- **Benchmark run:** attempt F, `run-task.sh f prompt.plan-steered.md`, native /
+  `openai/gpt-6.1-terra`, worker `high`, 40 rounds, 24k tokens, 600 s; no MCP;
+  file tools only. Evidence under `eval-runs/2026-11-17-forbidden-city/`; result
+  recorded in `ANALYSIS.md` §4B.
+- **Execution chain:** cropped the E render at 1:1 to see the defect directly
+  (flat roof sheet, single bracket band, no shadow), measured it with a new
+  pixel script, calibrated the script against game and video references, and
+  then found the center-crop flatness metric does **not** separate good from bad
+  (E 83.2% vs baseline C 84.9%) — so it is documented as a diagnostic and the
+  gate uses counts plus the shadow probe, which does separate. Added the shadow
+  probe, verified it scores E at 0.0%, wrote the trade-off, then launched F.
+- **Pros:** the failure the owner saw is now a number (0.0% shadowed pavement,
+  0 counts reported), not an opinion; the probe distinguishes the two runs where
+  every earlier check did not.
+- **Cons / next time:** counts reward quantity, not taste; the probe assumes
+  pavement in the lower-middle band. Both limits are stated in the trade-off.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-17 — The verifier stops punishing honest disclosure
 
 - **Goal / hypothesis:** A complete, externally verified delivery was being

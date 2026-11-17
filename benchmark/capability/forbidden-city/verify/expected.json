@@ -31,15 +31,33 @@
     "神武门"
   ],
   "axisToleranceM": 1,
-  "axisLengthRangeM": [865, 1057],
-  "threeHalls": ["太和殿", "中和殿", "保和殿"],
-  "taiheHall": { "widthM": 64, "depthM": 37, "heightM": 35 },
+  "axisLengthRangeM": [
+    865,
+    1057
+  ],
+  "threeHalls": [
+    "太和殿",
+    "中和殿",
+    "保和殿"
+  ],
+  "taiheHall": {
+    "widthM": 64,
+    "depthM": 37,
+    "heightM": 35
+  },
   "sizeTolerance": 0.1,
   "symmetryPairs": [
-    ["体仁阁", "弘义阁"]
+    [
+      "体仁阁",
+      "弘义阁"
+    ]
   ],
   "symmetryToleranceM": 1,
-  "requiredModelFeatures": ["platforms", "cameraKeys", "props"],
+  "requiredModelFeatures": [
+    "platforms",
+    "cameraKeys",
+    "props"
+  ],
   "minimumPlatforms": 1,
   "platformedBuildings": [
     "午门",
@@ -61,6 +79,21 @@
   "hipRidgeMaxRatio": 0.75,
   "softChecks": [
     "browser.frame-throughput",
+    "browser.shadows-pixel",
     "render.script-static"
-  ]
+  ],
+  "detailBuildings": [
+    "午门",
+    "太和门",
+    "太和殿",
+    "保和殿",
+    "乾清宫",
+    "坤宁宫"
+  ],
+  "minRoofSegments": 3,
+  "minTileRidges": 24,
+  "minDougong": 40,
+  "minWindowMullions": 32,
+  "minDoorStuds": 36,
+  "minShadowDarkerShare": 0.02
 }

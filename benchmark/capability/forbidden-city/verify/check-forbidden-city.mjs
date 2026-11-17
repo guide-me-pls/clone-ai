@@ -198,6 +198,7 @@ let model = null;
 let videoChecks = null;
 let cameraTelemetry = null;
 let roofTable = [];
+let shadowState = null;
 const screenshots = [];
 try {
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle", timeout: 120_000 });
@@ -205,6 +206,11 @@ try {
   record("browser.ready", true, "videoReady && setVideoTime");
   record("browser.no-uncaught-error", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | ") || "none");
 
+  const shadows = await page.evaluate(() => {
+    const canvases = Array.from(document.querySelectorAll("canvas"));
+    return { canvases: canvases.length, shadowMap: typeof window.__threeShadowMaps === "number" ? window.__threeShadowMaps : null };
+  });
+  shadowState = shadows;
   model = await page.evaluate(() => (typeof window.getForbiddenCityModel === "function" ? window.getForbiddenCityModel() : null));
   videoChecks = await page.evaluate(() => (typeof window.getForbiddenCityChecks === "function" ? window.getForbiddenCityChecks() : null));
   record("api.model", model && Array.isArray(model.buildings), model ? `${model.buildings?.length ?? 0} buildings` : "getForbiddenCityModel() missing");
@@ -307,6 +313,38 @@ try {
         : floating.length ? `${floating.length} ornament(s) far from any hall or platform: ${floating.slice(0, 3).map((o) => o.id ?? o.type).join(", ")}`
           : `${ornaments.length} ornament(s) anchored`);
 
+    // Detail must be counted, not asserted. A single smooth roof surface with
+    // a green band for brackets is what "looks like a floor plan" means, and it
+    // passed every earlier check; these four counts make detail falsifiable.
+    // 细节必须被计数而不是被声称。光滑屋面加一条绿色带就是"像平面图"的意思，它此前通过了
+    // 每一项检查；这四个计数让细节可以被证伪。
+    const detailFlags = [];
+    for (const name of expected.detailBuildings) {
+      const b = byName.get(name);
+      if (b === undefined) { detailFlags.push(`${name}: absent`); continue; }
+      const d = b.detail ?? {};
+      const missing = ["roofSegments", "tileRidges", "dougong", "windowMullions", "doorStuds"].filter((k) => typeof d[k] !== "number");
+      if (missing.length > 0) { detailFlags.push(`${name}: detail.${missing.join("/")} not reported`); continue; }
+      if (d.roofSegments < expected.minRoofSegments) detailFlags.push(`${name}: ${d.roofSegments} roof segments`);
+      if (d.tileRidges < expected.minTileRidges) detailFlags.push(`${name}: ${d.tileRidges} tile ridges`);
+    }
+    record("model.roof-detail", detailFlags.length === 0, detailFlags.slice(0, 4).join("; ") || `${expected.detailBuildings.length} halls report >= ${expected.minRoofSegments} segments and >= ${expected.minTileRidges} tile ridges`);
+
+    const dougongFlags = expected.detailBuildings
+      .map((name) => [name, byName.get(name)?.detail?.dougong])
+      .filter(([, n]) => typeof n !== "number" || n < expected.minDougong)
+      .map(([name, n]) => `${name}: ${n ?? "absent"}`);
+    record("model.dougong", dougongFlags.length === 0, dougongFlags.slice(0, 4).join("; ") || `${expected.detailBuildings.length} halls report >= ${expected.minDougong} bracket pieces`);
+
+    const facadeFlags = [];
+    for (const name of expected.detailBuildings) {
+      const d = byName.get(name)?.detail;
+      if (d === undefined) { facadeFlags.push(`${name}: no detail`); continue; }
+      if (typeof d.windowMullions !== "number" || d.windowMullions < expected.minWindowMullions) facadeFlags.push(`${name}: ${d.windowMullions ?? "absent"} mullions`);
+      if (typeof d.doorStuds !== "number" || d.doorStuds < expected.minDoorStuds) facadeFlags.push(`${name}: ${d.doorStuds ?? "absent"} door studs`);
+    }
+    record("model.facade-detail", facadeFlags.length === 0, facadeFlags.slice(0, 4).join("; ") || `${expected.detailBuildings.length} halls report >= ${expected.minWindowMullions} mullions and >= ${expected.minDoorStuds} studs`);
+
     // Roof form: eave must flare above the body, and the crown must sit above
     // the eave with the ridge either narrow (hip/xieshan) or pointed (攒尖).
     // 屋顶形制：檐口必须高于墙身并外挑，顶部必须高于檐口，正脊窄（庑殿/歇山）或收成宝顶（攒尖）。
@@ -346,6 +384,78 @@ try {
     screenshots.push({ t, actual, bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex").slice(0, 16) });
   }
   const unique = new Set(screenshots.map((s) => s.sha256)).size;
+  // Shadows, measured from the captured PNG rather than the WebGL framebuffer:
+  // the drawing buffer is not preserved after a screenshot, so readPixels there
+  // returns an empty frame. The probe measures the t=22.5 capture — the camera
+  // key that looks along a hall's base, where a sunlit render shows cast
+  // shadows. Pixels are split by luminance; a render with real shadows has a
+  // measurable dark cluster below the pavement median, a flat-shaded one does
+  // not.
+  // 从已捕获的 PNG 而不是 WebGL 帧缓冲测量阴影：截图后绘制缓冲不会保留，readPixels 会返回空帧。
+  // 探针使用 t=22.5 的截图——沿殿宇基座取景的那个关键帧，有阳光的渲染会在这里出现投影。像素按
+  // 亮度分组；真有阴影的渲染会在铺装中位色下方形成一个可测量的暗簇，平涂渲染没有。
+  const declaredShadowLights = Number(videoChecks?.shadowLights ?? -1);
+  const shadowSource = await (async () => {
+    const parts = [];
+    for (const rel of srcFiles) parts.push(await readFile(join(srcDir, rel), "utf8"));
+    return parts.join("\n");
+  })();
+  const sourceShadowMap = /shadowMap\s*\.\s*enabled\s*=\s*true/.test(shadowSource) && /castShadow\s*=\s*true/.test(shadowSource);
+  const shadowShot = screenshots.find((shot) => shot.t === 22.5) ?? screenshots.at(-1);
+  const probeBrowser = await deps.playwright.chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", headless: true });
+  let shadowProbe = { error: "no screenshot to probe" };
+  if (shadowShot !== undefined && /^[a-z0-9-]+$/i.test(shadowShot.sha256)) {
+    const shotFile = join(outDir, "screens", `t-${String(shadowShot.t).replace(".", "_")}.png`);
+    const shotBytes = await readFile(shotFile);
+    const probePage = await probeBrowser.newPage({ viewport: { width: 400, height: 300 } });
+    shadowProbe = await probePage.evaluate(async ([url, floor]) => {
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      context.drawImage(image, 0, 0);
+      const { data, width, height } = context.getImageData(0, 0, image.width, image.height);
+      const luma = new Float32Array(width * height);
+      for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
+        luma[p] = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+      }
+      // The pavement is the mid-bright, low-saturation band in the lower half;
+      // collect it, then ask how much of it sits well below its own median.
+      const tones = [];
+      for (let y = Math.floor(height * 0.55); y < height * 0.95; y += 2) {
+        for (let x = Math.floor(width * 0.08); x < width * 0.92; x += 2) {
+          const i = (y * width + x) * 4;
+          const r = data[i], g = data[i + 1], b = data[i + 2];
+          const max = Math.max(r, g, b), min = Math.min(r, g, b);
+          if (max - min > 28) continue; // coloured geometry, not pavement
+          tones.push(luma[y * width + x]);
+        }
+      }
+      tones.sort((a, b) => a - b);
+      const median = tones[Math.floor(tones.length / 2)] ?? 0;
+      let darker = 0;
+      for (const tone of tones) if (tone < median - 8) darker += 1;
+      return { samples: tones.length, median: Number(median.toFixed(1)), darkerShare: Number((darker / Math.max(1, tones.length)).toFixed(3)), floor };
+    }, [`data:image/png;base64,${shotBytes.toString("base64")}`, expected.minShadowDarkerShare]);
+    await probePage.close();
+  }
+  await probeBrowser.close();
+  // The pixel share is recorded as a diagnostic, not the verdict. Measured on
+  // both runs it did not separate them (a shadowless frame still shows a large
+  // "darker" cluster made of the dark HUD bar and the sky gradient), so the
+  // hard check reads the renderer's declared state instead: shadow mapping must
+  // be enabled and at least one light must cast, reported through
+  // getForbiddenCityChecks().shadowLights and confirmed in the source.
+  // 像素比例只作为诊断记录，不作为判定。两次运行上测量表明它无法区分（没有阴影的帧仍会因深色
+  // HUD 条与天空渐变出现一大簇"更暗"像素），因此硬性检查改读渲染器声明的状态：必须启用阴影贴图、
+  // 至少一盏光投影，并经 getForbiddenCityChecks().shadowLights 报告、在源码中确认。
+  shadowState = { pixel: shadowProbe, sourceShadowMap, declaredShadowLights };
+  record("browser.shadows", sourceShadowMap && declaredShadowLights >= 1,
+    sourceShadowMap ? `${declaredShadowLights} shadow-casting light(s) reported` : "no shadowMap/castShadow in source");
+
   record("browser.timeline-differs", unique >= 3, `${unique}/5 distinct screenshots at t=0/7.5/15/22.5/30`);
 
   // Frame throughput: 60 forwards seeks, same path a renderer would use.
@@ -419,6 +529,7 @@ const report = {
   model,
   videoChecks,
   cameraTelemetry,
+  shadowState,
   roofTable,
   screenshots,
   fileState,

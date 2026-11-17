@@ -41,6 +41,10 @@
 
 - 屋顶必须是举折曲面（至少 3 段折线/曲线），不能是平面三角形；正脊、垂脊、戗脊、檐口起翘要有几何表达；
 - 屋顶剖面必须是中国式屋面，不是穹顶或石棚：靠近正脊处坡度陡，越近檐口越平缓（举折），檐口外挑于墙身之外；庑殿的正脊必须有长度（约为面阔的 1/2–3/4），攒尖不收长长脊而是收成宝顶；
+- **屋顶必须是瓦垄，不是一块光滑曲面**：每一坡至少 24 条凸起的瓦垄（沿坡向的细长几何），正脊/垂脊/戗脊是独立的脊件，檐口有瓦当/滴水或至少一圈独立檐件；整片屋顶用单一光滑曲面视为不合格；
+- **斗拱必须是独立构件层**：每座主要殿宇的檐下至少 2 层、共 ≥ 40 个独立斗拱件；一条色带不算斗拱；
+- **门窗必须有棂格**：每座主要殿宇正面的门/窗至少 8 扇，每扇有 ≥ 4×3 的棂格条；门钉按扇计，每扇 ≥ 36 枚；
+- **必须有光照深度**：开启阴影（`castShadow` / `receiveShadow` / `shadowMap`），至少一盏光会投影；平涂无阴影视为不合格；
 - 每座具名宫殿（含门楼）必须有台基，不能直接落地；
 - 斗拱层、额枋彩画、窗棂、门钉、台阶、栏杆望柱可用简化几何，但必须实例化或合批；
 - 建筑不是「盒子 + 三角顶」：台基、柱廊、墙体、屋顶要有层次；
@@ -73,8 +77,12 @@
 }
 ```
 
+屋顶与细部的段数/件数必须由构建数据导出，并在 `getForbiddenCityModel()` 的每个建筑上报告：
+`detail: { roofSegments, tileRidges, dougong, windowMullions, doorStuds }`（整数，屋顶坡向分段数、瓦垄条数、斗拱件数、棂格条数、门钉数）。
+
 3. `window.getForbiddenCityChecks()`：从上述模型计算并返回：
-   `{ axisLengthM, namedHallCount, maxSymmetryErrorM, roofTypesByName, triangleCount, drawCalls }`。
+   `{ axisLengthM, namedHallCount, maxSymmetryErrorM, roofTypesByName, triangleCount, drawCalls, shadowLights }`，
+   其中 `shadowLights` 是**真正设置 `castShadow = true` 的光源数量**。
 
 ## 本轮额外验收（比上一轮更严格）
 
@@ -83,6 +91,14 @@
 - `model.platforms-for-halls`：午门、太和门、乾清门、神武门 必须有非空 `platformId`；
 - `model.ornament-anchoring`：每件陈设必须位于某座建筑或台基附近（距离 ≤ 其半宽 + 15 m），且至少 3 件；
 - `model.roof-form`：午门、太和殿、中和殿、保和殿、乾清宫 必须报告 `roof.eaveY < roof.ridgeY`、`eaveY ≥ bodyTopY`、`eaveOverhangM > 0`；攒尖 `ridgeLengthM ≤ 2`，重檐庑殿 `ridgeLengthM ≤ 0.75 × widthM`。
+
+本轮还要求**细节量化**（由所有者机器检查）：
+
+- `model.roof-detail`：每座主要殿宇 `detail.roofSegments ≥ 3`、`detail.tileRidges ≥ 24`；
+- `model.dougong`：每座主要殿宇 `detail.dougong ≥ 40`；
+- `model.facade-detail`：每座主要殿宇 `detail.windowMullions ≥ 8×4`、`detail.doorStuds ≥ 36`；
+- `browser.shadows`：源码启用 `shadowMap.enabled = true`、至少一盏 `castShadow = true` 的光，且
+  `getForbiddenCityChecks().shadowLights ≥ 1`。
 
 README 必须说明这些数值由构建数据导出，而不是事后手填。
 
