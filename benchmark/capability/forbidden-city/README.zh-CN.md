@@ -64,6 +64,9 @@ CLONE_AI_VERIFY_DEPS=eval-runs/2026-11-17-capability/verify \
 | `model.symmetry` | 是 | 体仁阁 / 弘义阁不镜像。 |
 | `model.axis-length` | 是 | 宫城被压缩或拉伸超出 961 m ±10%。 |
 | `model.features` | 是 | 模型缺少台基、相机关键帧或陈设。 |
+| `model.platforms-for-halls` | 是 | 门楼直接落地（午门/太和门/乾清门/神武门 必须带 `platformId`）。 |
+| `model.ornament-anchoring` | 是 | 陈设漂在广场上而不是贴在大殿或台基旁（至少 3 件）。 |
+| `model.roof-form` | 是 | 屋顶没有报告的檐口/正脊关系、檐口低于墙顶、无外挑、攒尖带长正脊、或庑殿正脊超过面阔 75%。 |
 | `browser.timeline-differs` | 是 | 静态画面或镜头不动。 |
 | `browser.frame-throughput` | 否 | 每次寻帧重建几何（中位 > 100 ms/帧）。 |
 | 可选 `render.900-frames`、`render.video-spec` | `--render` 时为是 | 交付视频及其 30 s / 1920×1080 规格。 |
@@ -83,6 +86,13 @@ CLONE_AI_VERIFY_DEPS=eval-runs/2026-11-17-capability/verify \
 3. **所有者拿到诚实的报告了吗？** 将主 Agent 回复与工作区 README 同检查器发现对照。
 
 只有问题 1 通过时，一次运行才是关于建模（问题 2）的证据。
+
+### 2026-11-17 基线与重跑
+
+基线（尝试 C，验证器修复前）：按这套更严格规则为 **21/24**——门楼没有台基、两件华表漂空、
+没有报告屋顶形制数据。重跑（尝试 E，验证器修复并加严提示后）：**24/24**、9/9 测试、主管渲染的
+30.00 s 1920×1080 视频。改善了什么、还有什么没解决（镜头起点、平涂光照、无纹理屋顶），见
+[`ANALYSIS.zh-CN.md`](ANALYSIS.zh-CN.md) §4A。
 
 ## 结果
 
