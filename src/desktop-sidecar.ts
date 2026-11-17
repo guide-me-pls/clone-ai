@@ -5,6 +5,12 @@ import { resolveDesktopLaunchConfig } from "./desktop/launch-config.ts";
 
 const pkgProcess = process as NodeJS.Process & { pkg?: unknown };
 async function main(): Promise<void> {
+  // Every file this process creates — the journal, the endpoint file, the
+  // bridge secrets — is the owner's. Server mode already does this; the desktop
+  // sidecar must not be the one path that leaves them world-readable.
+  // 本进程创建的每个文件——Journal、端点文件、桥密钥——都属于所有者。服务器模式已经这
+  // 样做；桌面 sidecar 不该成为那个把文件留成全局可读的路径。
+  process.umask(0o077);
   const launch = await resolveDesktopLaunchConfig();
   const fallbackClientPath = pkgProcess.pkg === undefined
     ? join(process.cwd(), "apps", "desktop", "ui", "index.html")

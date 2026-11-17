@@ -47,7 +47,9 @@ import { recordUsage, type UsageRecord } from "../observability/usage.ts";
 import { parseUsage } from "../workers/openai-compatible-client.ts";
 import { redactMemoryPii } from "../memory/memory-hygiene.ts";
 import { tokenize } from "../memory/md-memory-store.ts";
-import { readMainAgentEffortPreference, readMainAgentModelPreference } from "./model-preferences.ts";
+import { readMainAgentEffortPreference } from "./model-preferences.ts";
+import { CloneConfigStore } from "../config/clone-config.ts";
+import { resolveClonePaths } from "../config/clone-home.ts";
 
 export interface NativeMainAgentEndpoint {
   baseUrl: string;
@@ -154,17 +156,22 @@ export function isNativeMainAgentSelected(environment: NodeJS.ProcessEnv = proce
  */
 export function readNativeMainAgentEndpoint(
   environment: NodeJS.ProcessEnv = process.env,
-  modelFallback?: string,
+  fallback: { model?: string; baseUrl?: string; apiKey?: string } = {},
 ): {
   endpoint?: NativeMainAgentEndpoint;
   missing: string[];
 } {
-  const baseUrl = environment.CLONE_AI_NATIVE_BASE_URL?.trim();
-  const model = environment.CLONE_AI_NATIVE_MODEL?.trim()
-    ?? (modelFallback === undefined || modelFallback.trim().length === 0 ? undefined : modelFallback.trim());
+  // The environment wins for a one-off run; the persisted config is the
+  // fallback so an app launched from Finder — with an empty environment — still
+  // has an endpoint. The key never appears in a missing-paths message.
+  // 一次性运行以环境变量为准；持久配置作为兜底，使从 Finder 启动、环境为空的 App 仍有
+  // 端点。密钥绝不出现在"缺什么"的提示里。
+  const baseUrl = nonEmpty(environment.CLONE_AI_NATIVE_BASE_URL) ?? nonEmpty(fallback.baseUrl);
+  const model = nonEmpty(environment.CLONE_AI_NATIVE_MODEL) ?? nonEmpty(fallback.model);
+  const apiKey = nonEmpty(environment.CLONE_AI_NATIVE_API_KEY) ?? nonEmpty(fallback.apiKey);
   const missing: string[] = [];
-  if (baseUrl === undefined || baseUrl.length === 0) missing.push("CLONE_AI_NATIVE_BASE_URL");
-  if (model === undefined || model.length === 0) missing.push("CLONE_AI_NATIVE_MODEL");
+  if (baseUrl === undefined) missing.push("CLONE_AI_NATIVE_BASE_URL");
+  if (model === undefined) missing.push("CLONE_AI_NATIVE_MODEL");
   if (missing.length > 0) return { missing };
   const timeout = Number(environment.CLONE_AI_NATIVE_TIMEOUT_MS ?? 120_000);
   return {
@@ -172,10 +179,36 @@ export function readNativeMainAgentEndpoint(
     endpoint: {
       baseUrl: baseUrl!.replace(/\/$/, ""),
       model: model!,
-      ...(environment.CLONE_AI_NATIVE_API_KEY?.trim() ? { apiKey: environment.CLONE_AI_NATIVE_API_KEY.trim() } : {}),
+      ...(apiKey === undefined ? {} : { apiKey }),
       timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : 120_000,
     },
   };
+}
+
+/** A trimmed non-empty string, or undefined. 去空白后的非空字符串，否则 undefined。 */
+function nonEmpty(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed !== undefined && trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * The endpoint the owner saved in `config.json`. A missing or unreadable config
+ * degrades to "nothing persisted" rather than failing before the environment
+ * is even consulted.
+ * 所有者在 `config.json` 中保存的端点。配置缺失或不可读时退化为"没有持久值"，而不是在
+ * 读环境变量之前就失败。
+ */
+export async function readPersistedMainAgentEndpoint(dataDirectory: string): Promise<{ model?: string; baseUrl?: string; apiKey?: string }> {
+  try {
+    const config = await new CloneConfigStore(resolveClonePaths({ dataDirectory })).get();
+    return {
+      ...(config.mainAgentModel === undefined ? {} : { model: config.mainAgentModel }),
+      ...(config.mainAgentBaseUrl === undefined ? {} : { baseUrl: config.mainAgentBaseUrl }),
+      ...(config.mainAgentApiKey === undefined ? {} : { apiKey: config.mainAgentApiKey }),
+    };
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -185,19 +218,19 @@ export function readNativeMainAgentEndpoint(
  */
 export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): Promise<NativeMainAgentResult> {
   const environment = options.environment ?? process.env;
+  // Read the persisted endpoint once: it is the fallback for every field the
+  // environment does not set, so a Finder-launched app and a terminal run reach
+  // the same endpoint.
+  // 读取一次持久化端点：环境变量未设置的每个字段都用它兜底，使 Finder 启动的 App 与
+  // 终端运行到达同一个端点。
+  const persisted = await readPersistedMainAgentEndpoint(options.dataDirectory);
   const resolved = options.endpoint === undefined
-    ? readNativeMainAgentEndpoint(environment)
+    ? readNativeMainAgentEndpoint(environment, persisted)
     : { endpoint: options.endpoint, missing: [] as string[] };
-  // The settings page writes a model id to config.json; when the endpoint is
-  // configured only through the environment's base URL, use that choice.
-  // 设置页把模型 id 写入 config.json；当端点只通过环境变量给出基础地址时，沿用该选择。
-  const effective = options.endpoint === undefined && resolved.endpoint === undefined
-    ? readNativeMainAgentEndpoint(environment, await readMainAgentModelPreference(options.dataDirectory, environment))
-    : resolved;
-  if (effective.endpoint === undefined) {
-    throw new Error(`The native Main Agent needs ${effective.missing.join(" and ")}.`);
+  if (resolved.endpoint === undefined) {
+    throw new Error(`The native Main Agent needs ${resolved.missing.join(" and ")}. Set them in Settings or in the environment.`);
   }
-  const endpoint = effective.endpoint;
+  const endpoint = resolved.endpoint;
   const effort = await readMainAgentEffortPreference(options.dataDirectory, environment);
   const compiled = await compileMainAgentPrompt({
     dataDirectory: options.dataDirectory,

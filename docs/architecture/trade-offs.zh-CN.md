@@ -5,6 +5,28 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-17 —— 端点保存在 config.json 中，密钥是只写的
+
+**决定。** `config.json` 在模型之外新增 `mainAgentBaseUrl` 与 `mainAgentApiKey`。
+解析顺序是环境变量优先、其次是配置、最后是点名缺失变量的清晰错误。设置接口返回
+`hasMainAgentApiKey` 而不是值，`PATCH /api/config` 接受这两个字段，应用 Magpie 模型时
+同时固定网关端点，并且所有原子 JSON 写入现在是 0600。
+
+**依据。** 审计的第二阻塞项：此前只有 `mainAgentModel` 被持久化，而
+`readNativeMainAgentEndpoint` 只从 `process.env` 读基础地址与密钥
+（`src/main-agent/native-runtime.ts:162-175`），Swift 外壳又只转发自身环境
+（`main.swift:494`），而 macOS 从 Finder 启动 App 时该环境为空。结果是一个每个回合都
+失败的发布版 App。同一次审计还发现 sidecar 从不设置 `umask`，而服务器模式设置了
+（`src/server-main.ts:18`），因此配置、Journal 与端点文件被创建为全局可读。
+
+**代价。** 凭据现在落在磁盘上（0600、仅所有者），而不只是在进程环境里，这扩大了忽略权限
+的备份或导出所造成的影响面。密钥经接口只写，所有者无法读回验证；唯一的检查是"已保存"与
+"回合成功"。
+
+**推翻条件。** 若 OS 钥匙串能在每次启动时无需交互地向 Daemon 提供凭据，把
+`mainAgentApiKey` 移过去，配置字段只留作迁移指针。若所有者需要审计已存的密钥，增加一个
+带二次确认的显式"显示"操作，而不是让 GET 返回它。
+
 ## 2026-11-13 — 运行时是一个 launchd 任务，App 只是窗口
 
 **决定。** 一个按用户的 LaunchAgent（`ai.clone.companion`）拥有 companion 进程：

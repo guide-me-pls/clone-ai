@@ -1,0 +1,48 @@
+{
+  "note": "Sourced expectations for the Forbidden City benchmark. Dimensions follow the conventional published figures for the complex (see prompt.md); the task asks for ±10% tolerance so the checker is not a memory quiz. Roof types are the historical forms, not a matter of taste.",
+  "requiredFiles": [
+    "index.html",
+    "render.mjs",
+    "README.md"
+  ],
+  "minimumSrcModules": 5,
+  "roofTypes": {
+    "午门": "重檐庑殿",
+    "太和门": "重檐歇山",
+    "太和殿": "重檐庑殿",
+    "中和殿": "四角攒尖",
+    "保和殿": "重檐歇山",
+    "乾清门": "单檐歇山",
+    "乾清宫": "重檐庑殿",
+    "交泰殿": "四角攒尖",
+    "坤宁宫": "重檐庑殿",
+    "神武门": "重檐庑殿"
+  },
+  "axisBuildings": [
+    "午门",
+    "太和门",
+    "太和殿",
+    "中和殿",
+    "保和殿",
+    "乾清门",
+    "乾清宫",
+    "交泰殿",
+    "坤宁宫",
+    "神武门"
+  ],
+  "axisToleranceM": 1,
+  "axisLengthRangeM": [865, 1057],
+  "threeHalls": ["太和殿", "中和殿", "保和殿"],
+  "taiheHall": { "widthM": 64, "depthM": 37, "heightM": 35 },
+  "sizeTolerance": 0.1,
+  "symmetryPairs": [
+    ["体仁阁", "弘义阁"]
+  ],
+  "symmetryToleranceM": 1,
+  "requiredModelFeatures": ["platforms", "cameraKeys", "props"],
+  "minimumPlatforms": 1,
+  "softChecks": [
+    "browser.frame-throughput",
+    "render.script-static"
+  ]
+}

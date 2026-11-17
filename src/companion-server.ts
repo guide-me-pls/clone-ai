@@ -632,6 +632,18 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   };
 }
 
+/**
+ * The config as the settings API may show it: the endpoint and the model are
+ * public, the credential is not. Every response that carries a config goes
+ * through here, so no route can leak the key by forgetting.
+ * 设置接口可展示的配置：端点与模型是公开的，凭据不是。每个携带配置的响应都经过这里，
+ * 因此没有哪条路由会因为忘记而泄漏密钥。
+ */
+function publicConfig(config: Awaited<ReturnType<CloneConfigStore["get"]>>): Record<string, unknown> {
+  const { mainAgentApiKey, ...rest } = config;
+  return { ...rest, ...(mainAgentApiKey === undefined ? {} : { hasMainAgentApiKey: true }) };
+}
+
 async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
@@ -779,8 +791,11 @@ async function handleRequest(
     // 展示路径是为了让所有者能找到并检查自己的数据；该响应从不包含任何凭据值。
     // ui.strings 跟随 config.locale，桌面框架文案就不会锁死在一种语言上。
     const config = await context.config.get();
+    // The API key is write-only: the settings page learns that one exists, never
+    // its value, so a screenshot or a log of this endpoint cannot leak it.
+    // 密钥是只写的：设置页只知道存在与否，永远拿不到值，因此这个接口的截图或日志都不会泄漏它。
     sendJson(response, 200, {
-      config,
+      config: publicConfig(config),
       ui: { locale: config.locale, strings: uiStrings(config.locale) },
       paths: {
         dataDirectory: context.paths.dataDirectory,
@@ -874,7 +889,7 @@ async function handleRequest(
 
   if (request.method === "PATCH" && url.pathname === "/api/config") {
     const body = await readJsonBody(request);
-    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined; maxConcurrentWorkers?: number } = {};
+    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined; mainAgentBaseUrl?: string; mainAgentApiKey?: string; maxConcurrentWorkers?: number } = {};
     if (typeof body.workspacePath === "string" && body.workspacePath.trim().length > 0) {
       update.workspacePath = body.workspacePath.trim();
     }
@@ -885,6 +900,28 @@ async function handleRequest(
         return;
       }
       update.mainAgentModel = body.mainAgentModel.trim();
+    }
+    if ("mainAgentBaseUrl" in body) {
+      if (typeof body.mainAgentBaseUrl !== "string") {
+        sendJson(response, 400, { error: "mainAgentBaseUrl must be a string (empty clears it)." });
+        return;
+      }
+      const value = body.mainAgentBaseUrl.trim();
+      // A typo in the scheme would fail every turn silently; refuse it here,
+      // where the owner can still see the field they typed.
+      // 协议拼错会让每个回合静默失败；在这里拒绝，所有者还能看到自己输入的字段。
+      if (value.length > 0 && !/^https?:\/\/[^\s]+$/.test(value)) {
+        sendJson(response, 400, { error: "mainAgentBaseUrl must start with http:// or https://." });
+        return;
+      }
+      update.mainAgentBaseUrl = value;
+    }
+    if ("mainAgentApiKey" in body) {
+      if (typeof body.mainAgentApiKey !== "string") {
+        sendJson(response, 400, { error: "mainAgentApiKey must be a string (empty clears it)." });
+        return;
+      }
+      update.mainAgentApiKey = body.mainAgentApiKey.trim();
     }
     if ("mainAgentEffort" in body) {
       if (body.mainAgentEffort === "" || body.mainAgentEffort === null) update.mainAgentEffort = undefined;
@@ -905,7 +942,7 @@ async function handleRequest(
       }
     }
     if (Object.keys(update).length === 0) {
-      sendJson(response, 400, { error: "Provide a workspacePath, locale, mainAgentModel, mainAgentEffort, or maxConcurrentWorkers to change." });
+      sendJson(response, 400, { error: "Provide a workspacePath, locale, mainAgentModel, mainAgentEffort, mainAgentBaseUrl, mainAgentApiKey, or maxConcurrentWorkers to change." });
       return;
     }
     const config = await context.config.update(update);
@@ -914,7 +951,7 @@ async function handleRequest(
     // 每次派发都会重新读取固定值，因此这里刷新只是双保险；它也自动模式的变化立即体现在
     // 容量读取中。
     await context.refreshCapacityPin().catch(() => undefined);
-    sendJson(response, 200, { config });
+    sendJson(response, 200, { config: publicConfig(config) });
     return;
   }
 
@@ -956,7 +993,7 @@ async function handleRequest(
     }
     const modelId = body.model.trim().replace(/^magpie\//, "");
     if (modelId.length === 0) {
-      sendJson(response, 200, { config: await context.config.update({ mainAgentModel: "" }) });
+      sendJson(response, 200, { config: publicConfig(await context.config.update({ mainAgentModel: "" })) });
       return;
     }
     const gateway = await inspectMagpieGateway();
@@ -979,8 +1016,14 @@ async function handleRequest(
         });
         return;
       }
+      // Applying a gateway model also pins the endpoint: the model id alone was
+      // not enough for an app whose environment is empty.
+      // 应用网关模型时同时固定端点：对一台环境为空的 App，只有模型 id 是不够的。
       sendJson(response, 200, {
-        config: await context.config.update({ mainAgentModel: reference }),
+        config: publicConfig(await context.config.update({
+          mainAgentModel: reference,
+          mainAgentBaseUrl: gateway.endpoint,
+        })),
         gateway: await inspectMagpieGateway(),
       });
     } catch (error: unknown) {

@@ -81,6 +81,17 @@
   [MCP 与技能取舍](../architecture/trade-offs.zh-CN.md#2026-11-06--先做-mcp-与-skills插件云vmcomputer-use-延后)、
   [执行链路](optimizations.zh-CN.md#2026-11-09--逐次权限上下文压缩mcp-与技能)。
 
+## 2026-11-17 — Finder 启动的 App 也有端点
+
+- **主张：** 端点与凭据持久化在 `config.json`，因此进程环境为空的 App 仍能运行；凭据经
+  接口只写，文件权限 0600。
+- **证据：** `test/companion-config-api.test.ts`（已存密钥绝不回显、完整重读不泄漏、
+  显式清除会移除、缺协议地址被拒）；`test/daemon-supervisor.test.ts`（sidecar 在启动
+  companion 之前设置 `umask 0o077`）；全量 687/687；typecheck 与 `gate` 通过。
+  未验证：没有用仅配置端点跑真实回合。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-17--端点保存在-configjson-中密钥是只写的)、
+  [执行链路](optimizations.zh-CN.md#2026-11-17--端点被持久化密钥是只写的)。
+
 ## 2026-11-13 — 分身能挺过 App 退出
 
 - **主张：** 运行时是一个 `launchd` 任务，因此登录即启动、崩溃后重启、关窗后仍在运行；

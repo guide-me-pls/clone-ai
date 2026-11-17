@@ -21,7 +21,11 @@ export async function readJsonFile<T>(path: string): Promise<T | undefined> {
 export async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  // 0600: these documents hold owner settings and, for config.json, the model
+  // endpoint credential. A world-readable temp file would be the leak.
+  // 0600：这些文档保存所有者设置，config.json 还保存模型端点凭据。全局可读的临时文件
+  // 本身就是泄漏。
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await rename(temporary, path);
 }
 

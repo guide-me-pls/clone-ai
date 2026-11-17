@@ -111,6 +111,19 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   [MCP and skills trade-off](../architecture/trade-offs.md#2026-11-06--mcp-and-skills-first-plugins-cloud-vm-and-computer-use-deferred),
   [execution chain](optimizations.md#2026-11-09--per-call-permissions-context-compaction-mcp-and-skills).
 
+## 2026-11-17 — A Finder-launched app has an endpoint
+
+- **Claim:** the endpoint and its credential persist in `config.json`, so an
+  app whose process environment is empty still runs; the credential is
+  write-only over the API and the files are 0600.
+- **Evidence:** `test/companion-config-api.test.ts` (stored key never echoed, a
+  full re-read does not leak it, explicit clear removes it, scheme-less URL
+  refused); `test/daemon-supervisor.test.ts` (sidecar sets `umask 0o077` before
+  starting the companion); full suite 687/687; typecheck and `gate` pass.
+  Not verified: no live turn on a config-only endpoint.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-17--the-endpoint-is-saved-in-config-json-and-the-key-is-write-only),
+  [execution chain](optimizations.md#2026-11-17--the-endpoint-is-persisted-and-the-key-is-write-only).
+
 ## 2026-11-13 — The twin survives an app quit
 
 - **Claim:** the runtime is a `launchd` job, so it starts at login, restarts

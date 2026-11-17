@@ -23,12 +23,14 @@
 import { randomUUID } from "node:crypto";
 
 import type { Evidence, MemoryCandidate, MemorySensitivity, MemoryType } from "../core/contracts.ts";
-import { readNativeMainAgentEndpoint } from "../main-agent/native-runtime.ts";
+import { readNativeMainAgentEndpoint, readPersistedMainAgentEndpoint } from "../main-agent/native-runtime.ts";
 import type { MemoryWorker, PendingMemoryJob } from "./memory-pipeline.ts";
 
 export interface AgentMemoryWorkerOptions {
   /** Injected completion; defaults to the configured native endpoint. 注入的补全；默认使用已配置的原生端点。 */
   complete?: (prompt: string) => Promise<string>;
+  /** Clone home, so the persisted endpoint is found when the environment is empty. Clone home，环境为空时据此找到持久端点。 */
+  dataDirectory?: string;
   /** Hard cap on candidates per task. 每个任务候选条数上限。 */
   maxCandidates?: number;
 }
@@ -41,7 +43,8 @@ export class AgentMemoryWorker implements MemoryWorker {
   readonly #maxCandidates: number;
 
   constructor(options: AgentMemoryWorkerOptions = {}) {
-    this.#complete = options.complete ?? completeWithNativeEndpoint;
+    const dataDirectory = options.dataDirectory;
+    this.#complete = options.complete ?? ((prompt: string) => completeWithNativeEndpoint(prompt, dataDirectory));
     this.#maxCandidates = options.maxCandidates ?? 3;
   }
 
@@ -68,8 +71,9 @@ export class AgentMemoryWorker implements MemoryWorker {
  * 默认补全：向主 Agent 使用的同一端点发起一次无工具的 chat 调用。端点缺失即为提炼失败，
  * 并如实报告。
  */
-async function completeWithNativeEndpoint(prompt: string): Promise<string> {
-  const { endpoint, missing } = readNativeMainAgentEndpoint();
+async function completeWithNativeEndpoint(prompt: string, dataDirectory?: string): Promise<string> {
+  const persisted = dataDirectory === undefined ? {} : await readPersistedMainAgentEndpoint(dataDirectory);
+  const { endpoint, missing } = readNativeMainAgentEndpoint(process.env, persisted);
   if (endpoint === undefined) {
     throw new Error(`the endpoint is not configured (${missing.join(", ")})`);
   }

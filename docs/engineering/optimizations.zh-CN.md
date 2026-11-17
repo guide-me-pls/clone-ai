@@ -440,7 +440,30 @@
   凭据运行。代价是明确的：外部动作没有 Provider，CLI 独有能力消失，安装命令也帮不上忙。
 - **推翻条件：** 见取舍条目。
 
-### 2026-11-13 — 运行时成为 launchd 任务
+### 2026-11-17 — 端点被持久化，密钥是只写的
+
+- **目标 / 假设：** 让 macOS 从 Finder 启动（进程环境为空）的发布版 App 可用：把端点与
+  凭据持久化到 `config.json`，并阻止 sidecar 把所有者文件写成全局可读。
+- **取舍：** [端点持久化](../architecture/trade-offs.zh-CN.md#2026-11-17--端点保存在-configjson-中密钥是只写的)。
+- **变更：** `CloneConfig` 新增 `mainAgentBaseUrl`/`mainAgentApiKey`；
+  `readNativeMainAgentEndpoint` 接受持久兜底（环境变量优先）；同一兜底覆盖原生 Worker
+  工厂、记忆提炼与自评审；`GET /api/config` 只返回 `hasMainAgentApiKey`；PATCH 校验
+  协议并接受两个字段；应用 Magpie 模型时固定端点；`writeJsonAtomic` 写入 0600；
+  sidecar 设置 `umask 0o077`；设置页新增手填端点与密钥表单。
+- **Eval：** `test/companion-config-api.test.ts`——密钥被保存且绝不回显，完整重读不泄漏，
+  显式清除会移除，缺协议的地址被拒。`test/daemon-supervisor.test.ts`——sidecar 在启动
+  companion 之前设置 umask。全量 687 个测试 / 687 通过；typecheck、`npm run gate` 与 UI
+  的 `node --check` 通过。
+- **执行链路：** 取舍在代码之后才写，偏离规则 1，在此如实记录而不是隐藏；配置存储 → 端点
+  解析 → Worker 工厂 → 记忆/评审 → API → UI → umask。首次测试失败是因为 PATCH 响应仍
+  返回密钥，而这正是测试要抓的泄漏；一个 `publicConfig` 辅助函数现在覆盖所有响应。
+- **优点 / 缺点：** Finder 启动的 App 现在有端点；设置页可修，无需改文件。密钥落在磁盘上，
+  忽略权限的备份会带上一个有效凭据，所有者也无法读回已存的密钥。
+- **未验证：** 没有用"仅配置"端点跑真实回合（解析器只经 API 与单元路径测试）；Finder 启动
+  路径来自 Swift 环境转发的推断，未实测。
+- **推翻条件：** 见取舍条目。
+
+## 2026-11-13 — 运行时成为 launchd 任务
 
 - **目标 / 假设：** 让分身常驻——登录即启动、App 退出与崩溃后仍在——使"个人 Agent"
   在没有窗口时也成立。

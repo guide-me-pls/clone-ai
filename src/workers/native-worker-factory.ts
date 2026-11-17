@@ -287,10 +287,15 @@ function createWorker(
     label?: string;
     workCapabilities?: readonly string[];
     dataDirectory?: string;
+    /** Persisted endpoint from config.json, used when the environment is empty. 来自 config.json 的持久端点，环境为空时使用。 */
+    fallback?: { model?: string; baseUrl?: string; apiKey?: string };
     tools?: readonly NativeToolSpec[];
   },
 ): NativeAgentWorker | undefined {
-  if (config.model === undefined || config.baseUrl === undefined) return undefined;
+  const model = config.model ?? options.fallback?.model;
+  const baseUrl = config.baseUrl ?? options.fallback?.baseUrl;
+  const apiKey = config.apiKey ?? options.fallback?.apiKey;
+  if (model === undefined || baseUrl === undefined) return undefined;
   return new NativeAgentWorker({
     id: options.id ?? "native",
     label: options.label ?? "Native worker (OpenAI-compatible)",
@@ -299,9 +304,9 @@ function createWorker(
     tools: options.tools ?? fileTools({ writeFileMode: environment.CLONE_AI_NATIVE_WRITE_FILE === "refuse-existing" ? "refuse-existing" : "overwrite" }),
     ...(config.maxRounds === undefined ? {} : { maxRounds: config.maxRounds }),
     createClient: () => new OpenAiCompatibleClient({
-      baseUrl: config.baseUrl!,
-      model: config.model!,
-      ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
+      baseUrl,
+      model,
+      ...(apiKey === undefined ? {} : { apiKey }),
       ...(config.maxTokens === undefined ? {} : { maxTokens: config.maxTokens }),
       ...(config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort }),
       timeoutMs: Number(environment.CLONE_AI_NATIVE_TIMEOUT_MS ?? 120_000),
