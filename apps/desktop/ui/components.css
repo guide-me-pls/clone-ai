@@ -682,6 +682,11 @@ textarea:focus-visible {
 .gateway-summary__copy code { display: block; overflow: hidden; margin-top: 4px; color: var(--muted); font: 10.5px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .gateway-details { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .gateway-controls { display: grid; gap: 8px; }
+.gateway-endpoint { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line, #e3e7ee); }
+.gateway-endpoint__field { display: grid; gap: 4px; font-size: 12px; color: var(--muted, #8791a1); }
+.gateway-endpoint__field input { padding: 7px 9px; border: 1px solid var(--line, #e3e7ee); border-radius: 8px; font: inherit; color: inherit; background: var(--surface, #fff); }
+.gateway-endpoint__field input:focus { outline: 2px solid var(--accent, #3468f6); outline-offset: 1px; }
+
 .gateway-controls__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
 .gateway-hint { color: var(--muted); font-size: 10.5px; line-height: 1.55; }
 .agent-section-head { display: flex; align-items: end; justify-content: space-between; gap: 14px; margin: 22px 0 9px; }

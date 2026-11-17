@@ -11,6 +11,14 @@ export interface ProviderAdapterInput {
   workspacePath?: string;
   /** Owner-editable diagnostic catalog. 所有者可编辑的诊断目录。 */
   failureCatalog?: OutcomeCatalog;
+  /**
+   * The persisted OpenAI-compatible endpoint, when the environment does not
+   * define one. Adapters that need a model endpoint read it here so a
+   * Finder-launched app still runs.
+   * 环境未定义时使用的持久 OpenAI 兼容端点。需要模型端点的 Adapter 从这里读取，使
+   * 从 Finder 启动的 App 仍可运行。
+   */
+  endpoint?: { model?: string; baseUrl?: string; apiKey?: string };
 }
 
 export interface ProviderDefinition {

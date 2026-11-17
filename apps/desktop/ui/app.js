@@ -298,13 +298,26 @@ function renderAgentPage() {
         <div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}${mainAgentModel ? ui.button({ label: t("gateway-clear"), variant: "ghost", attributes: { "data-gateway-clear": "" } }) : ""}</div>
       </div>`
     : `<div class="gateway-controls"><div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}</div><span class="gateway-hint">${escape(gateway?.running && gateway.modelCount > 0 ? t("gateway-pi-hint") : gateway?.error || t("gateway-start-hint"))}</span></div>`;
+  // A manual endpoint is the fallback when no gateway is running: an app
+  // launched from Finder has an empty environment, so the value must be
+  // persisted in config.json or every turn fails.
+  // 手填端点是网关未运行时的兜底：从 Finder 启动的 App 环境为空，因此该值必须持久化到
+  // config.json，否则每个回合都会失败。
+  const currentBaseUrl = state.config?.config?.mainAgentBaseUrl || "";
+  const hasKey = state.config?.config?.hasMainAgentApiKey === true;
+  const endpointForm = `<div class="gateway-controls gateway-endpoint">
+      <label class="gateway-endpoint__field">端点地址<input type="url" id="config-base-url" placeholder="http://127.0.0.1:3425" value="${escape(currentBaseUrl)}" autocomplete="off" spellcheck="false"></label>
+      <label class="gateway-endpoint__field">API Key<input type="password" id="config-api-key" placeholder="${hasKey ? "已保存，留空则不修改" : "可选"}" autocomplete="off"></label>
+      <div class="c-cluster">${ui.button({ label: "保存端点", iconName: "check", variant: "secondary", attributes: { "data-endpoint-save": "" } })}${hasKey ? ui.button({ label: "清除密钥", variant: "ghost", attributes: { "data-endpoint-clear-key": "" } }) : ""}</div>
+      <span class="gateway-hint">${currentBaseUrl ? `当前保存：${escape(currentBaseUrl)}` : "未保存端点；环境变量仍可覆盖本次运行。"}</span>
+    </div>`;
   const gatewayCard = ui.card({
     title: "Magpie Gateway",
     subtitle: "Clone AI 内置 Agent 的模型端点；不再通过 Pi 或其他 Agent SDK 转发。",
     tone: gateway?.running ? "accent" : "warning",
     className: "agent-gateway",
     actions: gatewayBadge,
-    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
+    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}${endpointForm}</div>`,
   });
   const providerRows = providers.map((provider) => {
     const unrestricted = provider.hostAccess === "unrestricted";
@@ -423,6 +436,35 @@ async function refreshGateways({ announceFailure = false } = {}) {
     renderAgentPage();
   }
 }
+async function saveEndpoint() {
+  const baseUrl = $("config-base-url")?.value?.trim() || "";
+  const apiKeyInput = $("config-api-key");
+  const apiKey = apiKeyInput?.value ?? "";
+  const body = { mainAgentBaseUrl: baseUrl };
+  // An empty key field means "keep the stored one"; only an explicit clear
+  // removes it, so re-saving a URL cannot silently drop the credential.
+  // 空的密钥字段表示"保留已存的"；只有显式清除才会移除它，因此重存地址不会悄悄丢掉凭据。
+  if (apiKey.trim().length > 0) body.mainAgentApiKey = apiKey.trim();
+  try {
+    const result = await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (state.config) state.config.config = result.config;
+    if (apiKeyInput) apiKeyInput.value = "";
+    state.signatures.agentPage = "";
+    await refresh({ preserveScroll: true });
+    announce(baseUrl ? "端点已保存。" : "端点已清除。");
+  } catch (error) { announce(error.message, true); }
+}
+
+async function clearEndpointKey() {
+  try {
+    const result = await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ mainAgentApiKey: "" }) });
+    if (state.config) state.config.config = result.config;
+    state.signatures.agentPage = "";
+    await refresh({ preserveScroll: true });
+    announce("API Key 已清除。");
+  } catch (error) { announce(error.message, true); }
+}
+
 async function useGatewayModel() {
   const model = $("gateway-model")?.value;
   if (!model) {
@@ -1519,7 +1561,9 @@ $("agent-page").addEventListener("click", (event) => {
   const install = event.target.closest("[data-install-provider]");
   if (install) { void installProvider(install.dataset.installProvider); return; }
   const installMissing = event.target.closest("[data-install-missing]");
-  if (installMissing) { void installMissingProviders(); }
+  if (installMissing) { void installMissingProviders(); return; }
+  if (event.target.closest("[data-endpoint-save]")) { void saveEndpoint(); return; }
+  if (event.target.closest("[data-endpoint-clear-key]")) { void clearEndpointKey(); }
 });
 $("audit-session-list").addEventListener("click", (event) => { const button = event.target.closest("[data-open-audit-run]"); if (button) { closeSettings(); void selectSession(button.dataset.openAuditRun); } });
 $("memory-candidates").addEventListener("click", (event) => { const promote = event.target.closest("[data-promote-candidate]"); if (promote) { void decideCandidate(promote.dataset.promoteCandidate, "promote"); return; } const reject = event.target.closest("[data-reject-candidate]"); if (reject) void decideCandidate(reject.dataset.rejectCandidate, "reject"); });

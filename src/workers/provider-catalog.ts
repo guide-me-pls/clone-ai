@@ -22,7 +22,7 @@ export function nativeProviderDefinition(): ProviderDefinition {
     label: "Native worker (OpenAI-compatible)",
     supportedRoles: ["direct", "research", "draft", "review"],
     roleRestrictionReason: "The native worker cannot perform external side effects; use a governed action connector.",
-    createAdapter: ({ agentId, workCapabilities, workspacePath, dataDirectory }) => {
+    createAdapter: ({ agentId, workCapabilities, workspacePath, dataDirectory, endpoint }) => {
       // MCP tools come from the clone home's mcp.json; a malformed entry is
       // reported once here and skipped, so built-in tools still work.
       // MCP 工具来自 clone home 的 mcp.json；损坏的条目在此报告一次并跳过，内建工具仍可用。
@@ -30,6 +30,7 @@ export function nativeProviderDefinition(): ProviderDefinition {
         id: agentId,
         workCapabilities,
         dataDirectory,
+        ...(endpoint === undefined ? {} : { fallback: endpoint }),
         tools: workerTools({
           dataDirectory,
           log: (message) => console.warn(message),

@@ -118,6 +118,8 @@ export interface ConversationMemoryWorkerOptions {
   miner?: AgentMemoryWorkerOptions;
   /** Caps how many candidates one conversation batch may propose. 一批对话最多可提出多少条候选。 */
   maxCandidates?: number;
+  /** Clone home, so the miner finds the persisted endpoint. Clone home，使提炼器找到持久端点。 */
+  dataDirectory?: string;
 }
 
 /**
@@ -132,7 +134,7 @@ export class ConversationMemoryWorker implements MemoryWorker {
   readonly #maxCandidates: number;
 
   constructor(options: ConversationMemoryWorkerOptions = {}) {
-    this.#miner = new AgentMemoryWorker(options.miner ?? {});
+    this.#miner = new AgentMemoryWorker({ dataDirectory: options.dataDirectory, ...(options.miner ?? {}) });
     this.#maxCandidates = options.maxCandidates ?? 3;
   }
 

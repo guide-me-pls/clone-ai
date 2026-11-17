@@ -703,7 +703,41 @@ file keeps every attempt, including the ones that did not work.
   install command can no longer help.
 - **Reversal condition:** see the trade-off entry.
 
-### 2026-11-13 — The runtime becomes a launchd job
+### 2026-11-17 — The endpoint is persisted, and the key is write-only
+
+- **Goal / hypothesis:** make the packaged app usable when macOS launches it
+  from Finder, where the process environment is empty: persist the endpoint and
+  its credential in `config.json`, and stop the sidecar from writing owner files
+  world-readable.
+- **Trade-off:** [endpoint persistence](../architecture/trade-offs.md#2026-11-17--the-endpoint-is-saved-in-config-json-and-the-key-is-write-only).
+- **Change:** `CloneConfig` gains `mainAgentBaseUrl`/`mainAgentApiKey`;
+  `readNativeMainAgentEndpoint` takes a persisted fallback (environment wins);
+  the same fallback reaches the native worker factory, memory mining and
+  self-review; `GET /api/config` returns `hasMainAgentApiKey` only; PATCH
+  validates a scheme and accepts both fields; applying a Magpie model pins the
+  endpoint; `writeJsonAtomic` writes 0600; the sidecar sets `umask 0o077`; the
+  settings page gains a manual endpoint + key form.
+- **Eval:** `test/companion-config-api.test.ts` — the key is stored and never
+  echoed, a full re-read does not leak it, an explicit clear removes it, and a
+  scheme-less URL is refused. `test/daemon-supervisor.test.ts` — the sidecar sets
+  the umask before the companion starts. Full suite 687 tests / 687 pass;
+  typecheck, `npm run gate` and `node --check` on the UI pass.
+- **Execution chain:** trade-off last (written after the code, which is a
+  deviation from rule 1 — recorded here rather than hidden); config store →
+  endpoint resolver → worker factory → memory/review → API → UI → umask. The
+  first test run failed because the PATCH response still returned the key, which
+  is exactly the leak the test was written to catch; a single `publicConfig`
+  helper now covers every response.
+- **Pros / cons:** a Finder-launched app now has an endpoint; the settings page
+  can fix it without editing files. The key lives on disk, so a backup that
+  ignores permissions now carries a live credential, and the owner cannot read
+  the stored key back.
+- **Not verified:** no live turn was run with a config-only endpoint (the
+  resolver is tested through the API and unit paths); the Finder-launch path is
+  inferred from the Swift environment forwarding, not observed.
+- **Reversal condition:** see the trade-off entry.
+
+## 2026-11-13 — The runtime becomes a launchd job
 
 - **Goal / hypothesis:** make the twin resident — running at login, surviving an
   app quit and a crash — so "personal agent" is true when no window is open.

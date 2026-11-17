@@ -309,6 +309,50 @@ test("the owner can change the workspace and locale through the API", async (t) 
   assert.equal(empty.status, 400);
 });
 
+test("the owner can persist an endpoint, and the key is never read back", async (t) => {
+  const { url, token } = await companion(t);
+
+  const saved = await companionFetch(url, token, "/api/config", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mainAgentBaseUrl: "http://127.0.0.1:3425/", mainAgentApiKey: "sk-test-should-never-return" }),
+  });
+  assert.equal(saved.status, 200);
+  const body = await saved.json() as { config: { mainAgentBaseUrl?: string; hasMainAgentApiKey?: boolean; mainAgentApiKey?: string } };
+  // The trailing slash is normalised; the key is acknowledged, not echoed.
+  // 末尾斜杠被规范化；密钥只被确认存在，不回显。
+  assert.equal(body.config.mainAgentBaseUrl, "http://127.0.0.1:3425");
+  assert.equal(body.config.hasMainAgentApiKey, true);
+  assert.equal(body.config.mainAgentApiKey, undefined);
+  assert.doesNotMatch(JSON.stringify(body), /sk-test-should-never-return/);
+
+  // A later full read must not leak it either.
+  // 之后的一次完整读取也不得泄漏它。
+  const reread = await (await companionFetch(url, token, "/api/config")).json();
+  assert.doesNotMatch(JSON.stringify(reread), /sk-test-should-never-return/);
+  assert.equal((reread as { config: { hasMainAgentApiKey?: boolean } }).config.hasMainAgentApiKey, true);
+
+  // Only an explicit clear removes it, so re-saving a URL cannot drop the key.
+  // 只有显式清除才会移除它，因此重存地址不会丢掉密钥。
+  const cleared = await companionFetch(url, token, "/api/config", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mainAgentApiKey: "" }),
+  });
+  assert.equal((await cleared.json() as { config: { hasMainAgentApiKey?: boolean } }).config.hasMainAgentApiKey, undefined);
+});
+
+test("an endpoint without a scheme is refused before it can fail every turn", async (t) => {
+  const { url, token } = await companion(t);
+  const response = await companionFetch(url, token, "/api/config", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mainAgentBaseUrl: "127.0.0.1:3425" }),
+  });
+  assert.equal(response.status, 400);
+  assert.match((await response.json() as { error: string }).error, /http:\/\/ or https:\/\//);
+});
+
 test("the owner can set and clear the Main Agent model in config.json", async (t) => {
   const { url, token } = await companion(t);
 

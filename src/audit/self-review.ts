@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { loadAudits, summarizeAudits } from "./audit-service.ts";
 import type { RunAuditRecord } from "./run-audit.ts";
 import { recordUsage } from "../observability/usage.ts";
-import { readNativeMainAgentEndpoint } from "../main-agent/native-runtime.ts";
+import { readNativeMainAgentEndpoint, readPersistedMainAgentEndpoint } from "../main-agent/native-runtime.ts";
 import { parseUsage } from "../workers/openai-compatible-client.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
@@ -152,7 +152,8 @@ const REVIEW_SYSTEM = [
  * 端点缺失时退化为调用方已经处理的“只给事实”评审。
  */
 async function askModel(system: string, prompt: string, dataDirectory: string): Promise<string> {
-  const { endpoint, missing } = readNativeMainAgentEndpoint();
+  const persisted = await readPersistedMainAgentEndpoint(dataDirectory);
+  const { endpoint, missing } = readNativeMainAgentEndpoint(process.env, persisted);
   if (endpoint === undefined) {
     throw new Error(`AI review is unavailable: ${missing.join(" and ")} is not configured.`);
   }

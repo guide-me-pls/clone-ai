@@ -26,6 +26,12 @@ Four gaps against Claude Code 2.1.319's memory architecture are closed, each thr
 
 `npm test` 为 677 个测试、677 通过、0 失败；`npm run typecheck` 与 `npm run gate` 通过。
 
+### The model endpoint is saved, so a Finder-launched app works
+
+`config.json` now persists the OpenAI-compatible base URL and its key alongside the model, because a macOS app started from Finder has an empty environment and every turn used to fail. The environment still wins for one-off runs, and a missing endpoint fails with a message naming the variables. The settings API never returns the key — it reports `hasMainAgentApiKey` — `PATCH /api/config` validates the URL scheme, and applying a Magpie model pins the endpoint too. Owner JSON files are written 0600 and the desktop sidecar sets `umask 0o077`. Settings gains a manual endpoint + key form. `npm test` is 687 tests, 687 pass, 0 fail; typecheck and `gate` pass.
+
+`config.json` 现在在模型之外持久化 OpenAI 兼容的基础地址与密钥，因为从 Finder 启动的 macOS App 环境为空，此前每个回合都会失败。一次性运行仍以环境变量为准，缺失端点会以点名变量的错误失败。设置接口绝不返回密钥——只报告 `hasMainAgentApiKey`——`PATCH /api/config` 校验 URL 协议，应用 Magpie 模型时也会固定端点。所有者 JSON 文件以 0600 写入，桌面 sidecar 设置 `umask 0o077`。设置页新增手填端点与密钥表单。`npm test` 为 687 个测试、687 通过、0 失败；typecheck 与 `gate` 通过。
+
 ### The runtime is a launchd job; the app is only a window
 
 Quitting the desktop app no longer stops the twin. A per-user LaunchAgent (`ai.clone.companion`) now owns the companion process: `RunAtLoad` starts it at login, `KeepAlive` restarts it after a crash, and a 30-second throttle stops a crash loop. The app attaches to the endpoint the daemon publishes (`~/.clone/companion-endpoint.json`, honouring `CLONE_HOME` / `CLONE_AI_HOME` / `CLONE_AI_DATA_DIR`) and re-attaches when launchd restarts the job. `node scripts/install-daemon.mjs` installs, reloads or removes it (`--uninstall`); development mode keeps its in-process supervision behind `CLONE_AI_RESIDENT_DAEMON`. `npm test` is 684 tests, 684 pass, 0 fail; typecheck and `gate` pass.

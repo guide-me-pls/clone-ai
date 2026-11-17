@@ -108,3 +108,20 @@ test("the default install location is the owner's LaunchAgents folder", () => {
   assert.equal(paths.directory, "/Users/owner/Library/LaunchAgents");
   assert.equal(paths.plist, "/Users/owner/Library/LaunchAgents/ai.clone.companion.plist");
 });
+
+test("the sidecar sets a private umask before it creates anything", async () => {
+  // Source-level assertion: the sidecar entry must not be the one path that
+  // writes owner files world-readable. Server mode already sets it.
+  // 源码级断言：sidecar 入口不能成为那条把所有者文件写成全局可读的路径。服务器模式已设置。
+  const source = await readFile(new URL("../src/desktop-sidecar.ts", import.meta.url), "utf8");
+  const umaskIndex = source.indexOf("process.umask(0o077)");
+  // The entry resolves the clone home inside startCompanionServer, so assert the
+  // umask is set before that call rather than before a literal path resolution.
+  // 入口在 startCompanionServer 内部解析 clone home，因此断言 umask 先于该调用设置，
+  // 而不是先于某处字面的路径解析。
+  // The import line also names startCompanionServer, so anchor on the call.
+  // import 行也包含 startCompanionServer，因此锚定到调用处。
+  const serverIndex = source.indexOf("await startCompanionServer");
+  assert.ok(umaskIndex >= 0, "the sidecar must set umask 0o077");
+  assert.ok(serverIndex > umaskIndex, "the umask must be set before the companion server starts");
+});

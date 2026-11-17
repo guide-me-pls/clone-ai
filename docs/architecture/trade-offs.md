@@ -6,6 +6,36 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-17 — The endpoint is saved in config.json, and the key is write-only
+
+**Decision.** `config.json` gains `mainAgentBaseUrl` and `mainAgentApiKey`
+alongside the model. Resolution is environment first, then config, then a clear
+error naming the missing variables. The settings API returns
+`hasMainAgentApiKey` instead of the value, `PATCH /api/config` accepts both
+fields, applying a Magpie model also pins the gateway endpoint, and every atomic
+JSON write is now mode 0600.
+
+**Evidence.** The audit's second blocker: `mainAgentModel` was the only endpoint
+field persisted, while `readNativeMainAgentEndpoint` read the base URL and key
+from `process.env` alone (`src/main-agent/native-runtime.ts:162-175`), and the
+Swift shell forwards only its own environment (`main.swift:494`), which is empty
+when macOS launches an app from Finder. The result was a packaged app in which
+every turn failed. The same audit found the sidecar never set `umask` while
+server mode did (`src/server-main.ts:18`), so config, journal and endpoint files
+were created world-readable.
+
+**What it costs.** The credential now lives on disk (0600, owner-only) rather
+than only in the process environment, which widens the blast radius of a backup
+or an export that ignores permissions. The key is write-only over the API, so the
+owner cannot verify it by reading it back; the only checks are that it was stored
+and that a turn succeeds.
+
+**Reversal condition.** If the OS keychain becomes available to the daemon
+without a prompt on every start, move `mainAgentApiKey` there and keep the config
+field only as a migration pointer. If an owner needs to audit a stored key, add
+an explicit "reveal" action with a second confirmation rather than making GET
+return it.
+
 ## 2026-11-13 — The runtime is a launchd job, and the app is only a window
 
 **Decision.** A per-user LaunchAgent (`ai.clone.companion`) owns the companion
