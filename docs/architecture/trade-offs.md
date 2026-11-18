@@ -6,6 +6,45 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — The default view is graded on composition, not only on data
+
+**Decision.** The interactive checker measures how much of the frame height the
+hero hall (太和殿) covers from `getForbiddenCityView()` at load, and requires at
+least 25%; the eval prompt states the same rule. The measurement projects the
+hall's eight corners with the page's own camera numbers (forward/right/up derived
+from position and target, `fovDeg` for the frustum), so it cannot pass by
+reporting a camera the page does not use.
+
+**Alternatives rejected.**
+
+- *Grade only the model data and the interaction APIs.* Run `4ce0db3d` passed
+  26/27 by those measures and still looked like a floor plan: the default camera
+  sat 820 m away and 28° up, so 太和殿 covered 9% of the frame height. The
+  owner's complaint ("跟一个平面图一样") was about exactly this, and no check
+  could see it.
+- *Judge the screenshot with a vision model.* Non-deterministic, costs a model
+  call per grading, and would need its own calibration; the projection is exact
+  and free.
+- *Require a fixed camera position.* That grades one author's taste instead of
+  the observable property (the hall fills the frame), and forbids equally good
+  compositions from other angles.
+- *Set the threshold at 50%.* At `fovDeg` 42 a 35 m hall at 50% would have to be
+  within ~90 m, which hides the courtyards and walls that make the scene read as
+  the Forbidden City; 25% keeps the city as context while making the hall the
+  subject.
+
+**Evidence.** `4ce0db3d` graded 26/27 before this check; the same workspace then
+measured `hero covers 9.0% of frame height, inside=true` with the new check. The
+screenshot at that view shows the axis as a thin strip in a large empty plaza.
+
+**What it costs.** A model that composes a wide establishing shot now fails
+until it moves the default camera closer; the prompt has to say so, or the
+requirement reads as a hidden rule.
+
+**Reversal condition.** If owners prefer a wide establishing view by default,
+lower the threshold or grade the closest of the three required screenshots
+instead of the load-time view.
+
 ## 2026-11-18 — Maintenance automation runs in its own clone home
 
 **Decision.** The repair lane, nightly RSI, the eval companion and any script
