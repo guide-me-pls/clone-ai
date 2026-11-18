@@ -440,7 +440,14 @@ function agentTool(
       }
       if (outcome.isError === true && tool.risk === "read" && tool.pathOf !== undefined) {
         const failedPath = tool.pathOf(input);
-        if (failedPath !== undefined && namedInputs.has(normalizePath(failedPath))) missingInputs.add(failedPath);
+        // Only absence means "required input missing". A failed read for any
+        // other reason (too large for one window, a transient error) is an
+        // observation the model can act on; treating it as absence aborted a
+        // run whose input existed on disk.
+        // 只有"不存在"才算"必需输入缺失"。其他原因的读取失败（单次窗口过大、瞬时错误）是模型可以
+        // 处理的观察；当成缺失会中止一次输入明明存在于磁盘上的运行。
+        const absent = /(ENOENT|no such file|does not exist|not found|cannot find)/i.test(outcome.output);
+        if (absent && failedPath !== undefined && namedInputs.has(normalizePath(failedPath))) missingInputs.add(failedPath);
       }
       return {
         content: outcome.output,

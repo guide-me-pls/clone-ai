@@ -10,6 +10,7 @@
  * 配置是显式的：没有 CLONE_AI_NATIVE_MODEL 时工厂返回 undefined，不猜任何 Provider。
  * 因此在所有者显式开启之前，默认运行时仍使用沙箱化的 CLI Worker。
  */
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { NativeAgentWorker, type NativeToolSpec } from "./native-agent-worker.ts";
@@ -279,6 +280,26 @@ export function createConfiguredNativeWorker(
   return createWorker(config, environment, options);
 }
 
+/**
+ * Endpoint persisted in `config.json`, for a process that launchd started with
+ * an empty environment. Without this the worker cannot start at all after the
+ * runtime became a login job.
+ * 持久化在 `config.json` 里的端点，供 launchd 以空环境启动的进程使用。缺少它时，运行时改为
+ * 登录任务后 Worker 根本无法启动。
+ */
+function persistedEndpoint(dataDirectory: string | undefined): { model?: string; baseUrl?: string } {
+  if (dataDirectory === undefined) return {};
+  try {
+    const raw = JSON.parse(readFileSync(join(dataDirectory, "config.json"), "utf8")) as Record<string, unknown>;
+    return {
+      ...(typeof raw.mainAgentModel === "string" && raw.mainAgentModel.length > 0 ? { model: raw.mainAgentModel } : {}),
+      ...(typeof raw.mainAgentBaseUrl === "string" && raw.mainAgentBaseUrl.length > 0 ? { baseUrl: raw.mainAgentBaseUrl } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
 function createWorker(
   config: NativeWorkerEnvironment,
   environment: NodeJS.ProcessEnv,
@@ -292,8 +313,9 @@ function createWorker(
     tools?: readonly NativeToolSpec[];
   },
 ): NativeAgentWorker | undefined {
-  const model = config.model ?? options.fallback?.model;
-  const baseUrl = config.baseUrl ?? options.fallback?.baseUrl;
+  const persisted = persistedEndpoint(options.dataDirectory);
+  const model = config.model ?? options.fallback?.model ?? persisted.model;
+  const baseUrl = config.baseUrl ?? options.fallback?.baseUrl ?? persisted.baseUrl;
   const apiKey = config.apiKey ?? options.fallback?.apiKey;
   if (model === undefined || baseUrl === undefined) return undefined;
   return new NativeAgentWorker({
