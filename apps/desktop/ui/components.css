@@ -557,24 +557,29 @@ textarea:focus-visible {
 }
 .message-actions button:hover { border-color: #aeb9b0; background: #f7f8f6; }
 .clone-text { max-width: 720px; overflow-wrap: anywhere; }
-.clone-text .md-heading {
+.clone-text .md-heading,
+.message-copy .md-heading {
   margin: 13px 0 5px;
   color: var(--text);
   font-size: 14px;
   font-weight: 720;
   line-height: 1.4;
 }
-.clone-text .md-heading:first-child { margin-top: 0; }
+.clone-text .md-heading:first-child,
+.message-copy .md-heading:first-child { margin-top: 0; }
 .clone-text br + br { display: none; }
-.clone-text .md-list-line {
+.clone-text .md-list-line,
+.message-copy .md-list-line {
   display: grid;
   grid-template-columns: 17px minmax(0, 1fr);
   gap: 4px;
   margin: 2px 0;
   padding-left: 2px;
 }
-.clone-text .md-list-line > span:first-child { color: var(--accent); font-weight: 700; }
-.clone-text .md-list-line--ordered > span:first-child { font-variant-numeric: tabular-nums; }
+.clone-text .md-list-line > span:first-child,
+.message-copy .md-list-line > span:first-child { color: var(--accent); font-weight: 700; }
+.clone-text .md-list-line--ordered > span:first-child,
+.message-copy .md-list-line--ordered > span:first-child { font-variant-numeric: tabular-nums; }
 @keyframes pending-dot {
   0%, 80%, 100% { opacity: .28; transform: translateY(0); }
   40% { opacity: 1; transform: translateY(-2px); }
@@ -969,6 +974,9 @@ body { color: #202020; }
 .approval-kicker { color: #94652c; }
 .approval-card h2 { color: #574329; }
 .approval-card p { color: #806a4a; }
+.approval-item { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(141,106,43,.18); }
+.approval-item b { display: block; font-size: 13px; }
+.approval-item p { margin: 3px 0 0; }
 .approve { color: #fff; background: #202020; }
 .secondary { border-color: #dfdfdf; color: #666; background: #fff; }
 .trace { border-left-color: #dfdfdf; }

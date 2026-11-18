@@ -15,23 +15,19 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
-## 2026-11-18 — The Forbidden City benchmark passes end to end in the App
+## 2026-11-18 — The owner's message bubble renders Markdown
 
-- **Claim:** run `18569eb4`, submitted through the App's own daemon with a
-  one-paragraph task, now grades **28/28** with zero hard failures: ten named
-  halls with their roof types and a 961 m axis, the shared 三台, 太和殿 at
-  64×37×35 m, detailed roofs/brackets/lattices/studs, shadows, orbit 63°,
-  zoom ×0.58, a hero framing at 34.5% of the frame height, and mirrored
-  体仁阁/弘义阁.
-- **Evidence:** `node benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs
-  --workspace "/Users/user/Documents/Clone AI" --out …/verify/app-final2
-  --interactive` → **28/28**, screenshots in `screens/`, report in
-  `report.json`. Runs along the way: `91a50a87` cut off at 12 rounds (fixed),
-  `9d706a27` wrong workspace (fixed), `4ce0db3d` correct data but a 9% hero
-  framing (now graded), `18569eb4` 27/28 with the pavilions under
-  `props.sideHalls` (lookup fixed).
-- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--the-default-view-is-graded-on-composition-not-only-on-data),
-  [execution chain](optimizations.md#2026-11-18--the-load-time-view-is-graded-on-composition).
+- **Claim:** owner messages now render headings, lists, inline/fenced code and
+  bold through the same escaping renderer as the agent's replies, so a pasted
+  task brief is no longer literal markdown.
+- **Evidence:** `node --experimental-strip-types --test test/ui-structure.test.ts`
+  — **8/8**. Browser check on the isolated companion dev server: the injected
+  owner message produced 1 heading (computed weight 720), 2 bullets, 1 bold,
+  2 inline code spans and 1 code block; a `<script>` in the text produced no
+  script node and `window.__pwned` stayed false. Full suite **751/751**,
+  typecheck and gate pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--the-owners-message-renders-through-the-markdown-path),
+  [execution chain](optimizations.md#2026-11-18--the-owners-message-renders-markdown).
 
 ## 2026-11-18 — Automation stopped competing with the owner's runtime
 
@@ -43,8 +39,9 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   `npm run repair -- --dry-run --max-traces 2` prints the isolated home and
   plans **2 traces** read from `~/.clone/failed-traces`;
   `node scripts/nightly-rsi.mjs --dry-run --max-traces 2` plans from the same
-  traces with `.automation/nightly` state; `companion-dev` refuses an unset home
-  and `~/.clone`. Full suite **750/750**, typecheck and gate pass.
+  traces with `.automation/nightly` state; `companion-dev` falls back to
+  `.automation/preview` and refuses `~/.clone`. Full suite **750/750**, typecheck
+  and gate pass.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--maintenance-automation-runs-in-its-own-clone-home),
   [execution chain](optimizations.md#2026-11-18--automation-runs-in-its-own-clone-home).
 
@@ -67,6 +64,24 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   suite **744/744**, typecheck and gate pass.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-packaged-launch-attaches-when-the-launchagent-is-loaded),
   [execution chain](optimizations.md#2026-11-18--a-finder-launched-app-attaches-to-the-loaded-daemon).
+
+## 2026-11-18 — The Forbidden City benchmark passes end to end in the App
+
+- **Claim:** run `18569eb4`, submitted through the App's own daemon with a
+  one-paragraph task, now grades **28/28** with zero hard failures: ten named
+  halls with their roof types and a 961 m axis, the shared 三台, 太和殿 at
+  64×37×35 m, detailed roofs/brackets/lattices/studs, shadows, orbit 63°,
+  zoom ×0.58, a hero framing at 34.5% of the frame height, and mirrored
+  体仁阁/弘义阁.
+- **Evidence:** `node benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs
+  --workspace "/Users/user/Documents/Clone AI" --out …/verify/app-final2
+  --interactive` → **28/28**, screenshots in `screens/`, report in
+  `report.json`. Runs along the way: `91a50a87` cut off at 12 rounds (fixed),
+  `9d706a27` wrong workspace (fixed), `4ce0db3d` correct data but a 9% hero
+  framing (now graded), `18569eb4` 27/28 with the pavilions under
+  `props.sideHalls` (lookup fixed).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--the-default-view-is-graded-on-composition-not-only-on-data),
+  [execution chain](optimizations.md#2026-11-18--the-load-time-view-is-graded-on-composition).
 
 ## 2026-11-18 — A complete model is no longer allowed to look like a floor plan
 

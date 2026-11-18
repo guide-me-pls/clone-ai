@@ -1373,7 +1373,12 @@ function messageMarkup(message) {
   if (!text) return "";
   const tone = message.tone ? ` ${message.tone}` : "";
   const collapsible = clone && text.length > 480;
-  const body = clone ? richText(text) : escape(text).replace(/\n/g, "<br>");
+  // The owner pastes task briefs, not prose: headings, lists, inline code and
+  // bold must render instead of arriving as literal markdown. richText escapes
+  // its input first, so a message cannot inject markup.
+  // 所有者粘贴的是任务说明而不是散文：标题、列表、行内代码与粗体应当渲染，而不是以字面
+  // Markdown 出现。richText 先转义输入，因此消息不能注入标记。
+  const body = richText(text);
   // The conversation reads like Codex: the owner is a compact right-aligned
   // instruction, while the agent's work stays in the main reading column.
   // 对话按 Codex 的方式排版：所有者指令靠右且紧凑，Agent 工作留在主阅读栏。
@@ -1478,7 +1483,7 @@ async function createSession(query) { const button = $("submit"); button.disable
   const attachmentMarkup = outgoingAttachments.map((item) => item.kind === "document" || item.kind === "binary-document"
     ? `<div class="message-attachment-doc">${documentIcon}<span><b>${escape(shortName(item.name, 28))}</b><small>${escape(formatBytes(item.size))}</small></span></div>`
     : `<img src="${item.previewUrl}" alt="${escape(item.name)}" />`).join("");
-  inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${escape(query || "（已发送附件）")}</div>${attachmentMarkup ? `<div class="message-attachments">${attachmentMarkup}</div>` : ""}</div></div>`);
+  inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${richText(query || "（已发送附件）")}</div>${attachmentMarkup ? `<div class="message-attachments">${attachmentMarkup}</div>` : ""}</div></div>`);
   const card = document.createElement("div"); card.className = "message clone";
   card.innerHTML = `<div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="tool-timeline" data-tool-timeline hidden></div><div class="clone-text" data-streaming="1" hidden></div></div>`;
   inner.appendChild(card);

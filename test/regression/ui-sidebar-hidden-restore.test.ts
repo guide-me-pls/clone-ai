@@ -138,6 +138,10 @@ function createSidebar(source: string) {
     scrollPositions: new Map(),
     openDisclosures: new Map(),
     disclosureScrollPositions: new Map(),
+    // The sidebar renders a child-group disclosure from this set; a stub
+    // without it fails before the restore control is reached.
+    // 侧栏从这个集合渲染子任务分组折叠状态；缺少它会在到达恢复控件之前失败。
+    openChildGroups: new Set(),
     composingNew: false,
     streaming: false,
   };

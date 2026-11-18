@@ -25,6 +25,18 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--默认视角按构图评分而不只看数据)、
   [执行链路](optimizations.zh-CN.md#2026-11-18--加载时的视角按构图评分)。
 
+## 2026-11-18 —— 所有者的消息气泡渲染 Markdown
+
+- **主张：** 所有者消息现在通过 Agent 回复所用的同一个先转义渲染器呈现标题、列表、行内/
+  围栏代码与粗体，粘贴的任务说明不再是字面 Markdown。
+- **证据：** `node --experimental-strip-types --test test/ui-structure.test.ts` ——
+  **8/8**。在隔离的 companion 预览服务器上做浏览器检查：注入的所有者消息产生 1 个标题
+  （计算权重 720）、2 个圆点、1 个粗体、2 个行内代码与 1 个代码块；文本里的 `<script>`
+  没有产生 script 节点，`window.__pwned` 保持 false。全量 **751/751**，typecheck 与 gate
+  通过。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--所有者的消息与-agent-回复走同一条-markdown-路径)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--所有者的消息渲染-markdown)。
+
 ## 2026-11-18 —— 自动化不再与所有者的运行时竞争
 
 - **主张：** 修复通道、夜间 RSI 与评测 companion 解析隔离的 clone home
@@ -34,8 +46,8 @@
   `npm run repair -- --dry-run --max-traces 2` 打印隔离 home，并从
   `~/.clone/failed-traces` 读到 **2 条轨迹**；
   `node scripts/nightly-rsi.mjs --dry-run --max-traces 2` 用 `.automation/nightly` 的
-  状态从同一批轨迹规划；`companion-dev` 在 home 未设置或为 `~/.clone` 时拒绝。全量
-  **750/750**，typecheck 与 gate 通过。
+  状态从同一批轨迹规划；`companion-dev` 在没有提供 home 时回落到
+  `.automation/preview`，并拒绝 `~/.clone`。全量 **750/750**，typecheck 与 gate 通过。
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--维护自动化在自己的-clone-home-里运行)、
   [执行链路](optimizations.zh-CN.md#2026-11-18--自动化在自己的-clone-home-里运行)。
 
