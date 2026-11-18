@@ -544,6 +544,15 @@ file keeps every attempt, including the ones that did not work.
   check could never fire. The `regression-still-red` gate kept branch
   `rsi/auto-fix-20261118T0732` and worktree
   `/tmp/clone-repair-worktrees/rsi-20261118T0732`. No hand rewrite.
+  A fifth attempt used Qwen3.8 Max with the same isolated home and worktree
+  root. Phase 1 hit the worker's 24-round limit after 594 s and 405,850 tokens
+  without a final answer: it had written
+  `test/regression/missing-required-input-prose-path.test.ts` and was editing
+  it when the budget stopped the run. The Kernel ended `failed`
+  (`budget-model-calls`), so the lane stopped at its `kernel` gate before the
+  red/green checks. The test currently crashes (`mkdtempSync is not defined`),
+  so it is not a valid reproduction either. Branch
+  `rsi/auto-fix-20261118T0746` and its worktree are kept; no production change.
 - **Benchmark run:** none — no model benchmark; the lane's Kernel run is recorded
   in the journal (phase 1 `19252252-6952-4c85-8559-b7168558ceb3`).
 - **Execution chain:** exported 9 traces (the six unrelated traces were moved to
