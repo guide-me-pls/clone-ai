@@ -31,6 +31,56 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — The window retries its runtime and shows why it stopped
+
+- **Goal / hypothesis:** the window should own the liveness of the runtime it
+  spawned: relaunch a dead sidecar with backoff, probe `/api/health`, follow a
+  republished endpoint in resident mode, and put the captured stderr on screen.
+  The alternative in place on 2026-11-18 — a static "close and reopen" — sent
+  the owner into a loop the journal had already explained.
+- **Trade-off:** [The window supervises its runtime: retry, probe, and say why](../architecture/trade-offs.md#2026-11-18--the-window-supervises-its-runtime-retry-probe-and-say-why).
+- **Change:** `apps/desktop/macos/main.swift` gains `scheduleRuntimeRestart`
+  (exponential backoff, 1 s doubling to a 30 s cap, attempt count and the last
+  four stderr lines on the startup view), `handleStartupTimeout` (30 s without
+  `CLONE_AI_READY` terminates and restarts), `startHealthMonitor` /
+  `probeRuntimeHealth` (5-second `/api/health`, two misses), 
+  `recoverFromUnhealthyRuntime`, `retryResidentAttach` (30-second endpoint
+  re-reads instead of a terminal message) and `didFailProvisionalNavigation`
+  (a stale endpoint recovers at once instead of showing a blank page).
+  `test/desktop-shell.test.ts` asserts the wiring and the absence of the old
+  terminal copy.
+- **Eval:** `node --experimental-strip-types --test test/desktop-shell.test.ts`
+  — before: `git show HEAD:apps/desktop/macos/main.swift` contains no
+  `scheduleRuntimeRestart` and no `/api/health` caller, and still prints
+  "请关闭应用后重新打开" twice; after: the test is **1/1** and the string is
+  gone (`rg -c scheduleRuntimeRestart` = 7). Manual launch of
+  `dist/Clone AI-2026-11-18T06-53-44-937Z.app` (bundle id changed to
+  `ai.clone.desktop.eval`; `CLONE_HOME` pointed at a regular file so every start
+  fails): five `Clone AI sidecar exited with status 1` events at 14:55:22.777,
+  14:55:24.004, 14:55:26.241, 14:55:30.443 and 14:55:38.632 — relaunch gaps of
+  1.2 s, 2.2 s, 4.2 s, 8.2 s and 16.2 s, exactly the backoff this change adds.
+  The healthy-exit branch calls the same scheduler; the attempt to kill a
+  healthy child was refused by the permission classifier, so it was not
+  exercised end to end. `GET /api/health` on a running runtime returns HTTP 200.
+- **Benchmark run:** none — deterministic shell wiring plus a local launch; no
+  provider, model, dataset or scoring parameters.
+- **Execution chain:** trade-off first; shell change; compile with the build
+  script's `swiftc` flags; contract test; `npm test` **742/742**, `npm run
+  typecheck` and `npm run gate` pass; a timestamped app build
+  (`npm run desktop:mac:build`) for the eval; the failure-mode launch above;
+  docs and changelog. Two detours: the checked-in test still expected
+  `["docx"]` while the working tree had added `.doc` (a concurrent edit),
+  restored to match the pane; and the first attempt to kill the healthy child
+  was refused, replaced by the failure-mode launch.
+- **Pros:** the window now shows a recovering state instead of a dead end; the
+  stderr tail makes a crash loop diagnosable; resident mode keeps following the
+  endpoint every 30 s instead of stopping after 60 s.
+- **Cons / next time:** the relaunch loop is indefinite by design, so a
+  permanently broken install pulses every 30 s until the owner quits; the health
+  probe relies on the intentionally unauthenticated `/api/health`; a hang (two
+  missed probes) is covered only by the source contract, not by the manual eval.
+- **Reversal condition:** see the trade-off entry.
+
 ### 2026-11-18 — A projection rebuild survives a raced status transition
 
 - **Goal / hypothesis:** the journal is shared and append-only; a reader must be
@@ -94,9 +144,10 @@ file keeps every attempt, including the ones that did not work.
 - **Pros:** the decision reaches both phases without opening `docs/` to a
   round-limited worker; the brief is bounded and recorded; the red/green gates
   remain the authority on whether the reproduction is real.
-- **Cons / next time:** the capability has no end-to-end proof yet; the next
-  repair must run with an isolated `CLONE_AI_HOME` so the live desktop app cannot
-  race it on the same journal (that race, not the brief, stopped this run).
+- **Cons / next time:** the capability has no end-to-end proof yet. The third run
+  proved the brief reaches the plan, but the configured model
+  (`openai/gpt-6.1-terra`) still answered without calling `write_file`; the
+  next variable is the repair model, not the brief.
 - **Reversal condition:** copied from the trade-off entry.
 
 ### 2026-11-18 — An isolated worktree carries the owner's untracked inputs
@@ -174,6 +225,14 @@ file keeps every attempt, including the ones that did not work.
   same error every 2 s until the replay fix above. No journal events were written
   after 06:15; the second worktree is empty. This is a shared-data-directory race
   between the lane and the live app, not a decision-gate failure.
+  A third attempt ran in an isolated `CLONE_AI_HOME=/tmp/clone-repair-home`
+  (the three Forbidden City traces copied in, the same `--decision` brief, the
+  native `draft-maker` on `openai/gpt-6.1-terra`): phase 1 (run `ca32dcb0`)
+  made 3 model calls, 3 tool calls and 3,611 output tokens in 58 s, listed and
+  read all three traces — the plan instructions did contain the decision — and
+  again answered without calling `write_file`. The `not-red` gate stopped it;
+  the worktree differs from `main` only by `.rsi/`. Isolation removed the
+  shared-journal race but not the model's failure to act.
 - **Benchmark run:** none — no model benchmark; the lane's Kernel run is recorded
   in the journal (phase 1 `19252252-6952-4c85-8559-b7168558ceb3`).
 - **Execution chain:** exported 9 traces (the six unrelated traces were moved to
