@@ -11,6 +11,18 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 隔离步骤能看到所有者未被跟踪的输入
+
+- **主张：** 在 git worktree 中运行的外部步骤现在会带上所有者未被跟踪、未被忽略的文件，
+  因此在 `~/.clone/isolated-workspaces/...` 里能读到种下的 `vendor/three.module.js`，而不是以
+  “Required input missing”中止。已跟踪文件仍来自 HEAD；被忽略的产物与符号链接不进入。
+- **证据：** `node --experimental-strip-types --test test/isolated-workspace.test.ts`——
+  8/8；worktree 用例从沙箱读取 `note.md` 与 `vendor/three.module.js`，读取 HEAD 的
+  `tracked.md`，并拒绝 `debug.log`。`npm test` 740/740，`npm run typecheck` 通过，
+  `npm run gate` **PASS**。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--隔离-worktree-复制进未被跟踪的工作区文件)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--隔离-worktree-带上所有者未被跟踪的输入)。
+
 ## 2026-11-18 —— 归档记忆集是一个控件，而且可以清理
 
 - **主张：** 记忆面板的「已归档」计数现在点一下就把列表筛到归档集；一条归档记忆可以永久删除——两个可能位置的 `.md`、索引行、检索词、权重、版本与暂存变更——并在删除文件之前把决定连同摘要记为 `memory.deleted`。使用中的记忆必须先归档，使唯一不可逆的记忆动作离默认视图保持一步。

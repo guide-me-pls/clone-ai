@@ -6,6 +6,49 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — Untracked workspace files are copied into the isolated worktree
+
+**Decision.** When an external step runs in an isolated git worktree, the owner's
+untracked, non-ignored regular files are copied into that worktree after
+`git worktree add`. Tracked content still comes from HEAD; ignored files and
+symlinks stay out. The owner authorized this as a hand fix ("改隔离复制") outside
+the repair lane, for the same reason as the earlier verifier exception: the fix
+has to land before the next App run can produce a model at all.
+
+**Alternatives rejected.**
+
+- *Commit the vendor directory into the workspace repository.* Done as an
+  interim workaround (`a2ae04e`), but any input the owner has not committed — a
+  downloaded model, a generated asset — would fail the same way, and importing
+  files into the owner's repository is a change they did not ask for.
+- *Copy every uncommitted change, including modified tracked files.* That turns
+  the snapshot from "HEAD of the owner's repository" into "a moving copy of the
+  working tree"; a black-box CLI's run would no longer start from a reproducible
+  base.
+- *Copy ignored files too.* `node_modules` and build output make sandbox
+  creation large and slow for no observed benefit; ignored files are derivable
+  from the tracked tree.
+- *Refuse to start and ask the owner to commit first.* The owner's request was a
+  one-query run; requiring a git commit is another manual step in the loop this
+  work exists to remove.
+
+**Evidence.** Runs `560e7a43`, `5909c705` and `87c526d5` failed with
+`Required input missing: vendor/three.module.js` inside
+`~/.clone/isolated-workspaces/...` although the file existed in the workspace:
+`git worktree add` materialises HEAD only. `git ls-files --others
+--exclude-standard` run from the workspace root lists exactly the untracked
+inputs (`vendor/three.module.js`) and excludes an ignored `.log` fixture in a
+scratch repository — the command the patch uses.
+
+**What it costs.** The sandbox can now carry files the owner never committed,
+including an untracked secret; the worker can read them. Sandbox creation pays
+for copying those bytes.
+
+**Reversal condition.** If an untracked secret reaches model context where it
+should not, restrict the copy to files the plan names as inputs, or to a
+configured allowlist. If sandbox creation becomes slow, cap the copied bytes and
+report what was skipped.
+
 ## 2026-11-18 — A path mentioned in instructions is not a required input
 
 **Decision.** The native worker fails a step for a missing required input only

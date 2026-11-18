@@ -127,6 +127,7 @@ async function tryGitWorktree(git: GitRunner, ownerPath: string, sandboxPath: st
   const repo = resolve(toplevel.stdout.trim());
   const added = await git(["worktree", "add", "--detach", sandboxPath], repo);
   if (added.code !== 0) return undefined;
+  await copyUntrackedFiles(git, ownerPath, sandboxPath);
   return {
     path: sandboxPath,
     kind: "git_worktree",
@@ -139,6 +140,50 @@ async function tryGitWorktree(git: GitRunner, ownerPath: string, sandboxPath: st
       }
     },
   };
+}
+
+/**
+ * Files the owner has not committed are still inputs: a downloaded vendor
+ * library, a generated asset. A worktree materialises HEAD only, so without
+ * this copy a worker is told a file is missing although the owner can see it.
+ * Only untracked, non-ignored regular files are copied; tracked content stays
+ * at HEAD and symlinks are skipped, so the sandbox cannot write back through
+ * the owner tree.
+ * 所有者尚未提交的文件同样是输入：下载的 vendor 库、生成的资源。worktree 只物化 HEAD，
+ * 没有这一步，Worker 会被告知文件缺失，而所有者明明看得到。只复制未被跟踪、未被忽略的普通
+ * 文件；已跟踪内容仍是 HEAD，符号链接跳过，沙箱不能写穿回所有者树。
+ */
+async function copyUntrackedFiles(git: GitRunner, ownerPath: string, sandboxPath: string): Promise<void> {
+  const listed = await git(["ls-files", "--others", "--exclude-standard"], ownerPath);
+  if (listed.code !== 0) return;
+  // The prefix comes from git rather than `relative(repo, ownerPath)`: on macOS
+  // `rev-parse --show-toplevel` resolves /var to /private/var, so a path
+  // comparison would produce a ../ escape and copy outside the sandbox.
+  // 前缀取自 git 而不是 `relative(repo, ownerPath)`：macOS 上 `rev-parse --show-toplevel`
+  // 会把 /var 解析成 /private/var，路径比较会得到 ../ 逃逸并把文件复制到沙箱之外。
+  const shownPrefix = await git(["rev-parse", "--show-prefix"], ownerPath);
+  const prefix = shownPrefix.code === 0 ? shownPrefix.stdout.trim().replace(/\/+$/, "") : "";
+  for (const line of listed.stdout.split("\n")) {
+    const relativePath = line.trim();
+    if (relativePath.length === 0) continue;
+    const from = join(ownerPath, ...relativePath.split("/"));
+    let source;
+    try {
+      source = lstatSync(from);
+    } catch {
+      continue;
+    }
+    if (source.isSymbolicLink() || !source.isFile()) continue;
+    const to = join(sandboxPath, prefix, ...relativePath.split("/"));
+    try {
+      await mkdir(dirname(to), { recursive: true });
+      await copyFile(from, to);
+    } catch {
+      // A file that vanished between listing and copying is not an input the
+      // sandbox can provide; the worker observes it as absent.
+      // 在列出与复制之间消失的文件，沙箱无法提供；Worker 会观察到它不存在。
+    }
+  }
 }
 
 async function copyOwnerTree(from: string, to: string): Promise<void> {
