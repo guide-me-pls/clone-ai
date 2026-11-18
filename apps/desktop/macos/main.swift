@@ -424,7 +424,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.resolvesAliases = true
         panel.allowedContentTypes = [.image, .movie, .text, .json, .commaSeparatedText, .pdf]
-            + ["docx"].compactMap { UTType(filenameExtension: $0) }
+            + ["docx", "doc"].compactMap { UTType(filenameExtension: $0) }
         panel.beginSheetModal(for: window) { response in
             guard response == .OK, !panel.urls.isEmpty else {
                 completionHandler(nil)
@@ -561,6 +561,10 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         environment["PATH"] = ([environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"] + extraPaths).joined(separator: ":")
         environment["CLONE_AI_DESKTOP_CLIENT_PATH"] = client.path
         environment["CLONE_AI_DESKTOP_DEFAULT_WORKSPACE"] = defaultWorkspace.path
+        let documentTool = resources.appendingPathComponent("CloneAIDocumentTool")
+        if FileManager.default.isExecutableFile(atPath: documentTool.path) {
+            environment["CLONE_AI_DOCUMENT_TOOL"] = documentTool.path
+        }
         if developerRoot != nil { environment["CLONE_AI_DEV_MODE"] = "1" }
         environment.removeValue(forKey: "NODE_OPTIONS")
         process.executableURL = node
