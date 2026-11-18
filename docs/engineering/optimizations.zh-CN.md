@@ -407,6 +407,12 @@
   `required`），因此"已声明的必需输入"检查永远不会触发。`regression-still-red` 闸门保留了分支
   `rsi/auto-fix-20261118T0732` 与 worktree
   `/tmp/clone-repair-worktrees/rsi-20261118T0732`。没有手写重写。
+  第五次尝试用 Qwen3.8 Max，隔离 home 与 worktree 根相同。第一阶段在 594 秒、405,850
+  tokens 后撞上 Worker 的 24 轮上限而没有最终回答：它已经写出
+  `test/regression/missing-required-input-prose-path.test.ts`，正在编辑它时被预算停下。
+  Kernel 以 `failed`（`budget-model-calls`）结束，通道因此停在 `kernel` 闸门，尚未进入
+  红/绿检查。该测试目前会崩溃（`mkdtempSync is not defined`），因此也不是有效复现。分支
+  `rsi/auto-fix-20261118T0746` 与其 worktree 保留；没有生产改动。
 - **Benchmark run：** 无——没有模型基准；通道的 Kernel Run 记录在 Journal 中（第一阶段
   `19252252-6952-4c85-8559-b7168558ceb3`）。
 - **执行链路：** 导出 9 条轨迹（为本次运行把六条无关轨迹移到
