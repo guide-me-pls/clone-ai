@@ -5,33 +5,43 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
-## 2026-11-18 —— 安装的 Daemon 解析出 App 使用的工作区
+## 2026-11-18 —— 维护自动化在自己的 clone home 里运行
 
-**决定。** `scripts/install-daemon.mjs` 在生成的 LaunchAgent 中写入
-`CLONE_AI_DESKTOP_DEFAULT_WORKSPACE=$HOME/Documents/Clone AI`，使从仓库启动的常驻
-Daemon 与打包 App 解析出同一个工作区，而不是把 `process.cwd()`（源码树）当成工作区。
+**决定。** 修复通道、夜间 RSI、评测 companion，以及任何启动自动化 companion 的脚本，都通过
+`scripts/automation-home.mjs` 解析数据目录：设置了 `CLONE_AI_AUTOMATION_HOME` 就用它，否则用
+`<repo>/.automation/<用途>`。解析器拒绝与所有者正在使用的 clone home 相同的路径，除非
+`CLONE_AI_ALLOW_OWNER_HOME=1`。隔离 home 只播种一次小配置文件（`config.json`、
+`settings.json`、`providers.json`、`mcp.json`、`policies.json`），绝不含 Journal、记忆、
+会话、回合账本、令牌、端点或锁；`CLONE_AI_AUTOMATION_REFRESH=1` 会重新播种。修复通道仍从
+所有者 home 只读地读取失败轨迹。
 
 **被否决的备选方案。**
 
-- *只在 `config.json` 里设置工作区。* 只有默认工作区变量存在时
-  `resolveDesktopLaunchConfig` 才会读取它，而 `resolveClonePaths` 会回落到
-  `process.cwd()`；没有该变量的 Daemon 会忽略保存值。与此同时 UI 显示的是保存的路径，
-  让不一致变得不可见。
-- *在 `resolveClonePaths` 里把工作区默认成 App 目录。* 这会改变该变量对每个调用方的
-  含义，包括测试与服务器部署——它们的工作区本来就应当是 cwd。
-- *交给所有者自己改 plist。* 重跑安装脚本会悄悄丢掉这处修改。
+- *继续共享 `~/.clone`。* 2026-11-18，App 与修复通道共用一个数据目录，产生了竞态的
+  `failed -> verifying` Journal 事件；同一天，一条发给在线守护的自动化提示持有 Main Agent
+  提示锁 149.9 秒，并以 "The Main Agent is already answering another request" 拒绝了所有者
+  的两条消息。
+- *复制整个所有者 home。* 复制 Journal、记忆与令牌，并在新路径下重建双写者风险；自动化只
+  需要配置文件。
+- *要求必须设置环境变量、不给默认值。* dry run 或 cron 条目会再次静默回落到 `~/.clone`；
+  安全的默认值必须是隔离目录。
 
-**证据。** 运行 `9d706a27` 由 launchd 的 Daemon 执行，在 3 次模型调用、8.9 秒后以
-`Required input missing: vendor/three.module.js` 失败，尽管 `~/.clone/config.json`
-写的是 `/Users/qihoo/Documents/Clone AI`，而该目录里正有 1.3 MB 的 vendor 文件。
-`launchctl print` 显示 `working directory = /Users/qihoo/study/clone-ai` 且没有默认
-工作区变量；`lsof` 确认 Daemon 的 cwd 是仓库，仓库里没有 `vendor/`。
+**证据。** Journal 回合 `6d04f0ac`（source `companion`，模型
+`360/openai/gpt-6.1-terra`）于 2026-11-18T07:18:22.108Z 开始、07:20:51.974Z 完成，期间持有
+`~/.clone/pi-sessions/main-agent/prompt.lock`（pid 78156，带打开的写句柄）共 149.9 秒；
+所有者 07:19:39Z 与 07:19:43Z 的发送被记录为 `interrupted`，错误即该忙锁。
+`scripts/repair.mjs` 直接调用 `resolveClonePaths()`（默认 `~/.clone`），
+`scripts/companion-dev.mjs` 启动服务器时没有显式数据目录，因此任何未设置
+`CLONE_AI_DATA_DIR` 的调用都会落在所有者 home 上。
 
-**代价。** 安装脚本现在假定 App 的默认工作区路径；把交付物放在别处的所有者必须改
-`config.json`（App 会写它）或安装脚本中的这一行。
+**代价。** 每个自动化用途多一个很小的 home，保存配置文件快照；轮换凭据需要
+`CLONE_AI_AUTOMATION_REFRESH=1` 或删除已播种的文件。报告、已消费轨迹状态与夜间锁现在位于
+`.automation/` 下，因此不在所有者的导出里。有意让自动化使用 `~/.clone` 的所有者必须设置
+`CLONE_AI_ALLOW_OWNER_HOME=1`。
 
-**推翻条件。** 若 App 不再以 `~/Documents/Clone AI` 为默认工作区，安装脚本必须从同一个
-共享常量读取该路径，而不是重复写一份。
+**推翻条件。** 如果 companion 获得按客户端排队的能力，使自动化提示不再持有所有者的 Main Agent
+锁；或每个客户端都有自己的会话级运行时，则移除独立 home。如果配置快照无法保持同步，改为
+不复制文件的"读穿式"配置读取。
 
 ## 2026-11-18 —— 调用列表暴露行级删除控件
 
@@ -84,6 +94,34 @@ sidecar。端点文件里的 pid（11243）早已死亡，因此"文件存在"�
 **推翻条件。** 如果 App 能在不依赖 launchd 的情况下确认 Daemon 活性（决定前先探测一个健康的
 已发布端点），改用该方式并删掉 `launchctl` 调用。如果安装器能在启动窗口时设置环境变量，
 在那里设置，并把本探测只留作兜底。
+
+## 2026-11-18 —— 安装的 Daemon 解析出 App 使用的工作区
+
+**决定。** `scripts/install-daemon.mjs` 在生成的 LaunchAgent 中写入
+`CLONE_AI_DESKTOP_DEFAULT_WORKSPACE=$HOME/Documents/Clone AI`，使从仓库启动的常驻
+Daemon 与打包 App 解析出同一个工作区，而不是把 `process.cwd()`（源码树）当成工作区。
+
+**被否决的备选方案。**
+
+- *只在 `config.json` 里设置工作区。* 只有默认工作区变量存在时
+  `resolveDesktopLaunchConfig` 才会读取它，而 `resolveClonePaths` 会回落到
+  `process.cwd()`；没有该变量的 Daemon 会忽略保存值。与此同时 UI 显示的是保存的路径，
+  让不一致变得不可见。
+- *在 `resolveClonePaths` 里把工作区默认成 App 目录。* 这会改变该变量对每个调用方的
+  含义，包括测试与服务器部署——它们的工作区本来就应当是 cwd。
+- *交给所有者自己改 plist。* 重跑安装脚本会悄悄丢掉这处修改。
+
+**证据。** 运行 `9d706a27` 由 launchd 的 Daemon 执行，在 3 次模型调用、8.9 秒后以
+`Required input missing: vendor/three.module.js` 失败，尽管 `~/.clone/config.json`
+写的是 `/Users/qihoo/Documents/Clone AI`，而该目录里正有 1.3 MB 的 vendor 文件。
+`launchctl print` 显示 `working directory = /Users/qihoo/study/clone-ai` 且没有默认
+工作区变量；`lsof` 确认 Daemon 的 cwd 是仓库，仓库里没有 `vendor/`。
+
+**代价。** 安装脚本现在假定 App 的默认工作区路径；把交付物放在别处的所有者必须改
+`config.json`（App 会写它）或安装脚本中的这一行。
+
+**推翻条件。** 若 App 不再以 `~/Documents/Clone AI` 为默认工作区，安装脚本必须从同一个
+共享常量读取该路径，而不是重复写一份。
 
 ## 2026-11-18 —— 交互评分不再考核视频专属字段
 

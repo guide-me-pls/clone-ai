@@ -113,6 +113,15 @@ export interface RepairReport {
 export interface RepairLaneOptions {
   /** Clone home; traces and reports live under it. Clone home；轨迹与报告在其下。 */
   dataDirectory: string;
+  /**
+   * Clone home whose `failed-traces` folder is read; defaults to
+   * `dataDirectory`. Automation points this at the owner's home and keeps its
+   * reports, state and locks in an isolated one, so a repair never writes the
+   * home the window is attached to.
+   * 读取其 `failed-traces` 的 clone home；默认 `dataDirectory`。自动化把这一项指向所有者
+   * 的 home，而把报告、状态与锁放在隔离 home，因此修复绝不会写入窗口附着的那一个 home。
+   */
+  tracesDirectory?: string;
   /** The checkout being served. Never written to. 正在服务的检出；绝不写入。 */
   repo: string;
   /** Branch the worktree is based on. worktree 所基于的分支。 */
@@ -170,7 +179,7 @@ export async function runRepairLane(options: RepairLaneOptions): Promise<RepairR
   await mkdir(reportDirectory, { recursive: true });
 
   const state = await loadState(reportDirectory);
-  const traces = await loadPendingTraces(dataDirectory, state, options.maxTraces ?? 5);
+  const traces = await loadPendingTraces(options.tracesDirectory ?? dataDirectory, state, options.maxTraces ?? 5);
   const reportPath = join(reportDirectory, "last-run.json");
   const shelf: RepairReport = {
     status: traces.length === 0 ? "no-traces" : "dry-run",
@@ -351,8 +360,8 @@ async function stageTraces(workspace: string, traces: readonly FailedTrace[]): P
   }
 }
 
-async function loadPendingTraces(dataDirectory: string, state: ConsumedState, limit: number): Promise<TraceEntry[]> {
-  const directory = tracesDirectory(dataDirectory);
+async function loadPendingTraces(traceHome: string, state: ConsumedState, limit: number): Promise<TraceEntry[]> {
+  const directory = tracesDirectory(traceHome);
   let names: string[];
   try {
     names = (await readdir(directory)).filter((name) => name.endsWith(".json")).sort();

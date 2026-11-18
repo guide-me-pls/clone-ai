@@ -6,42 +6,54 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
-## 2026-11-18 — The installed daemon resolves the workspace the app uses
+## 2026-11-18 — Maintenance automation runs in its own clone home
 
-**Decision.** `scripts/install-daemon.mjs` writes
-`CLONE_AI_DESKTOP_DEFAULT_WORKSPACE=$HOME/Documents/Clone AI` into the generated
-LaunchAgent, so a resident daemon started from the repository resolves the same
-workspace as the packaged app instead of treating `process.cwd()` (the source
-tree) as the workspace.
+**Decision.** The repair lane, nightly RSI, the eval companion and any script
+that starts an automation companion resolve their data directory through
+`scripts/automation-home.mjs`: `CLONE_AI_AUTOMATION_HOME` when set, otherwise
+`<repo>/.automation/<purpose>`. The resolver refuses a path equal to the
+owner's live clone home unless `CLONE_AI_ALLOW_OWNER_HOME=1`. The isolated home
+is seeded once with the small config files (`config.json`, `settings.json`,
+`providers.json`, `mcp.json`, `policies.json`), never the journal, memory,
+sessions, turn ledger, token, endpoint or locks; `CLONE_AI_AUTOMATION_REFRESH=1`
+re-seeds them. The repair lane still reads failed traces from the owner's home,
+read-only.
 
 **Alternatives rejected.**
 
-- *Set the workspace only in `config.json`.* `resolveDesktopLaunchConfig` reads
-  it only when the default-workspace variable is present, and
-  `resolveClonePaths` falls back to `process.cwd()`; a daemon with no variable
-  ignores the saved value. The UI meanwhile displayed the saved path, which made
-  the mismatch invisible.
-- *Default the workspace to the app folder inside `resolveClonePaths`.* That
-  changes the meaning of the variable for every caller, including tests and
-  server deployments whose workspace is legitimately their cwd.
-- *Leave it to the owner to edit the plist.* Re-running the installer would
-  silently drop the edit.
+- *Keep sharing `~/.clone`.* On 2026-11-18 the app and the repair lane shared
+  one data directory and produced the raced `failed -> verifying` journal event;
+  the same day an automation prompt sent to the live daemon held the Main Agent
+  prompt lock for 149.9 s and rejected the owner's two messages with "The Main
+  Agent is already answering another request".
+- *Copy the whole owner home.* Duplicates the journal, memory and tokens, and
+  recreates the two-writer hazard under a new path; automation only needs the
+  config files.
+- *Require an environment variable with no default.* A dry run or a cron entry
+  would silently fall back to `~/.clone` again; the safe default has to be the
+  isolated one.
 
-**Evidence.** Run `9d706a27` was executed by the launchd daemon and failed with
-`Required input missing: vendor/three.module.js` after 3 model calls and 8.9 s,
-although `~/.clone/config.json` names `/Users/qihoo/Documents/Clone AI` and that
-folder holds the 1.3 MB vendor file. `launchctl print` showed
-`working directory = /Users/qihoo/study/clone-ai` and no default-workspace
-variable; `lsof` confirmed the daemon's cwd was the repository, where `vendor/`
-does not exist.
+**Evidence.** Journal turn `6d04f0ac` (source `companion`, model
+`360/openai/gpt-6.1-terra`) started 2026-11-18T07:18:22.108Z and completed
+07:20:51.974Z, holding `~/.clone/pi-sessions/main-agent/prompt.lock` (pid 78156,
+open write handle) for 149.9 s; the owner's sends at 07:19:39Z and 07:19:43Z
+were recorded `interrupted` with the busy error. `scripts/repair.mjs` resolved
+`resolveClonePaths()` with no override (default `~/.clone`), and
+`scripts/companion-dev.mjs` started a server with no explicit data directory,
+so any invocation without `CLONE_AI_DATA_DIR` landed on the owner's home.
 
-**What it costs.** The installer now assumes the app's default workspace path;
-an owner who keeps deliverables elsewhere must change `config.json` (which the
-app writes) or the installer line.
+**What it costs.** A second small home per automation purpose, holding a snapshot
+of the config files; rotating a credential needs `CLONE_AI_AUTOMATION_REFRESH=1`
+or deleting the seeded file. Reports, consumed-trace state and nightly locks now
+live under `.automation/`, so they are not in the owner's export. An
+owner who deliberately wants automation in `~/.clone` must set
+`CLONE_AI_ALLOW_OWNER_HOME=1`.
 
-**Reversal condition.** If the app stops using `~/Documents/Clone AI` as its
-default workspace, the installer must read the path from one shared constant
-rather than duplicating it.
+**Reversal condition.** If the companion gains per-client queues so an
+automation prompt cannot hold the owner's Main Agent lock, or if every client
+gets its own session-scoped runtime, remove the separate home. If the config
+snapshot cannot be kept in sync, replace seeding with a read-through config
+reader that never copies the file.
 
 ## 2026-11-18 — The invocation list exposes a per-row delete control
 
@@ -112,6 +124,43 @@ launchd (a healthy published endpoint probed before deciding), use that and drop
 the `launchctl` call. If the installer can launch the window with the
 environment variable set, set it there and keep this detection only as a
 fallback.
+
+## 2026-11-18 — The installed daemon resolves the workspace the app uses
+
+**Decision.** `scripts/install-daemon.mjs` writes
+`CLONE_AI_DESKTOP_DEFAULT_WORKSPACE=$HOME/Documents/Clone AI` into the generated
+LaunchAgent, so a resident daemon started from the repository resolves the same
+workspace as the packaged app instead of treating `process.cwd()` (the source
+tree) as the workspace.
+
+**Alternatives rejected.**
+
+- *Set the workspace only in `config.json`.* `resolveDesktopLaunchConfig` reads
+  it only when the default-workspace variable is present, and
+  `resolveClonePaths` falls back to `process.cwd()`; a daemon with no variable
+  ignores the saved value. The UI meanwhile displayed the saved path, which made
+  the mismatch invisible.
+- *Default the workspace to the app folder inside `resolveClonePaths`.* That
+  changes the meaning of the variable for every caller, including tests and
+  server deployments whose workspace is legitimately their cwd.
+- *Leave it to the owner to edit the plist.* Re-running the installer would
+  silently drop the edit.
+
+**Evidence.** Run `9d706a27` was executed by the launchd daemon and failed with
+`Required input missing: vendor/three.module.js` after 3 model calls and 8.9 s,
+although `~/.clone/config.json` names `/Users/qihoo/Documents/Clone AI` and that
+folder holds the 1.3 MB vendor file. `launchctl print` showed
+`working directory = /Users/qihoo/study/clone-ai` and no default-workspace
+variable; `lsof` confirmed the daemon's cwd was the repository, where `vendor/`
+does not exist.
+
+**What it costs.** The installer now assumes the app's default workspace path;
+an owner who keeps deliverables elsewhere must change `config.json` (which the
+app writes) or the installer line.
+
+**Reversal condition.** If the app stops using `~/Documents/Clone AI` as its
+default workspace, the installer must read the path from one shared constant
+rather than duplicating it.
 
 ## 2026-11-18 — Interactive grading stops asking for video-only fields
 

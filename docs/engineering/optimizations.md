@@ -31,6 +31,49 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — Automation runs in its own clone home
+
+- **Goal / hypothesis:** maintenance automation must not share the owner's
+  runtime data directory: it can hold the Main Agent prompt lock, append to the
+  journal, or rewrite the endpoint. Give it its own home, seeded with config
+  only, and keep the owner's home read-only input.
+- **Trade-off:** [Maintenance automation runs in its own clone home](../architecture/trade-offs.md#2026-11-18--maintenance-automation-runs-in-its-own-clone-home).
+- **Change:** new `scripts/automation-home.mjs` (`resolveAutomationHome`,
+  `prepareAutomationHome`, CLI) plus `automation-home.d.mts`;
+  `scripts/repair.mjs` prepares `.automation/repair`, points `tracesDirectory`
+  at the owner's clone home (the lane reads its `failed-traces`), and writes
+  reports/state under the isolated home; `src/repair/repair-lane.ts` gains
+  `tracesDirectory`; `scripts/nightly-rsi.mjs` keeps state and its lock under
+  `.automation/nightly` and reads traces from the owner;
+  `scripts/companion-dev.mjs` requires an explicit isolated home and refuses
+  `~/.clone` unless `CLONE_AI_ALLOW_OWNER_HOME=1`; `.automation/` is ignored;
+  `test/automation-home.test.ts` covers the default, refusal, override, seeding
+  and purpose validation.
+- **Eval:** `node --experimental-strip-types --test test/automation-home.test.ts`
+  — **5/5**. `npm run repair -- --dry-run --max-traces 2` prints
+  `Automation home: <repo>/.automation/repair` and plans **2 traces** read from
+  `~/.clone/failed-traces`; `node scripts/nightly-rsi.mjs --dry-run --max-traces 2`
+  likewise; `companion-dev` exits with the refusal message when
+  `CLONE_AI_DATA_DIR` is unset or names `~/.clone`. Full suite **750/750**,
+  typecheck and gate pass.
+- **Benchmark run:** none — deterministic paths and a dry run; no provider,
+  model, dataset or scoring parameters.
+- **Execution chain:** diagnosis (journal turn `6d04f0ac` held the prompt lock
+  149.9 s), trade-off, helper, repair/nightly wiring, companion guard, tests,
+  typecheck (added a `.d.mts` after TS7016), full suite, docs. One module bug
+  found by the dry run: the lane appended `failed-traces` to the directory it
+  was given, so the first version looked in
+  `.../failed-traces/failed-traces`; the option now names the trace directory.
+- **Pros:** automation can no longer hold the owner's prompt lock or write the
+  owner's journal; failed traces remain readable; the config snapshot keeps the
+  model and worker settings available.
+- **Cons / next time:** a second home per purpose and a credential snapshot that
+  must be refreshed explicitly; ad-hoc clients that read
+  `~/.clone/companion-endpoint.json` directly are not covered by these scripts
+  and must adopt the helper; the owner's `failed-traces` are read by both the
+  live runtime and automation (read-only).
+- **Reversal condition:** see the trade-off entry.
+
 ### 2026-11-18 — A per-row delete entry in the Agent-invocation list
 
 - **Goal / hypothesis:** the owner should be able to delete one invocation from

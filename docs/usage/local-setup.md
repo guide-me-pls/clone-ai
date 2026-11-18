@@ -41,6 +41,18 @@ when you close the window — the app attaches to the endpoint the daemon
 publishes (`~/.clone/companion-endpoint.json`). Re-run the installer after a
 node upgrade, because the plist pins an absolute node path.
 
+### Maintenance automation
+
+`npm run repair`, `scripts/nightly-rsi.mjs` and the eval companions run in
+their own clone home (`<repo>/.automation/<purpose>`, or
+`CLONE_AI_AUTOMATION_HOME`). It is seeded once with
+`config.json`/`settings.json`/`providers.json`/`mcp.json`/`policies.json` from
+`~/.clone`; the journal, memory, sessions, token, endpoint and locks are never
+copied. The repair lane reads failed traces from the owner's home read-only.
+`CLONE_AI_AUTOMATION_REFRESH=1` re-seeds the config copy;
+`CLONE_AI_ALLOW_OWNER_HOME=1` is the explicit escape hatch for sharing the live
+home. `scripts/companion-dev.mjs` refuses to start without an isolated home.
+
 ## 4. Configure the model
 
 Open **设置 → Agent**. Apply a model exposed by the local Magpie gateway, or set

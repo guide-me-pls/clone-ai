@@ -13,18 +13,19 @@
  *
  * Usage:
  *   node scripts/nightly-rsi.mjs [--dry-run] [--keep] [--max-traces 5] [--repo DIR]
- * Env: CLONE_AI_DATA_DIR (defaults to ~/.clone), CLAUDE_BIN, RSI_NOTIFY_URL.
+ * Env: CLONE_AI_AUTOMATION_HOME (defaults to <repo>/.automation/nightly;
+ * the owner's home supplies failed traces read-only), CLAUDE_BIN, RSI_NOTIFY_URL.
  */
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { protectedPathViolations, stagedPaths } from "./nightly-rsi-policy.mjs";
 import { fingerprint, isConsumed, loadState, recordOutcome, saveState } from "./nightly-rsi-state.mjs";
+import { prepareAutomationHome } from "./automation-home.mjs";
 
 const run = promisify(execFile);
 const args = process.argv.slice(2);
@@ -38,9 +39,14 @@ const DRY_RUN = flag("--dry-run");
 const KEEP = flag("--keep");
 const MAX_TRACES = Number(value("--max-traces", "5"));
 const REPO = resolve(value("--repo", process.cwd()));
-const DATA = resolve(process.env.CLONE_AI_DATA_DIR ?? join(homedir(), ".clone"));
+// The nightly run owns an isolated home; the owner's home is read-only input
+// for failed traces. Sharing it produced the raced journal event on
+// 2026-11-18. 夜间运行拥有隔离 home；所有者 home 只是失败轨迹的只读输入。共享它曾在
+// 2026-11-18 产生竞态的 Journal 事件。
+const automation = await prepareAutomationHome({ repoRoot: REPO, purpose: "nightly" });
+const DATA = automation.dataDirectory;
 const CLAUDE = process.env.CLAUDE_BIN ?? "claude";
-const TRACE_DIR = join(DATA, "failed-traces");
+const TRACE_DIR = join(automation.ownerDirectory, "failed-traces");
 const STAMP = new Date().toISOString().replace(/[-:]/g, "").slice(0, 13);
 const BRANCH = `rsi/auto-fix-${STAMP}`;
 const WORKTREE = join(REPO, ".claude", "worktrees", `rsi-${STAMP}`);

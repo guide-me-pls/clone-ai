@@ -11,6 +11,20 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 自动化不再与所有者的运行时竞争
+
+- **主张：** 修复通道、夜间 RSI 与评测 companion 解析隔离的 clone home
+  （`.automation/<用途>` 或 `CLONE_AI_AUTOMATION_HOME`），只播种配置文件，并拒绝所有者的
+  在线 home；失败轨迹仍可读，而报告、状态与锁不再落在 `~/.clone`。
+- **证据：** `test/automation-home.test.ts` **5/5**；
+  `npm run repair -- --dry-run --max-traces 2` 打印隔离 home，并从
+  `~/.clone/failed-traces` 读到 **2 条轨迹**；
+  `node scripts/nightly-rsi.mjs --dry-run --max-traces 2` 用 `.automation/nightly` 的
+  状态从同一批轨迹规划；`companion-dev` 在 home 未设置或为 `~/.clone` 时拒绝。全量
+  **750/750**，typecheck 与 gate 通过。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--维护自动化在自己的-clone-home-里运行)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--自动化在自己的-clone-home-里运行)。
+
 ## 2026-11-18 —— 一条 Agent 调用可以从行上删除
 
 - **主张：** 每条 Agent 调用记录所在的行在可选记录旁自带删除/恢复动作，删除单条不再需要打开详情并滚过 Prompt；批量动作仍作用于筛选后的列表，两者都是软删除。

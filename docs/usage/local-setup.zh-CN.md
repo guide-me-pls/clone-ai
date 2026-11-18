@@ -38,6 +38,16 @@ node scripts/install-daemon.mjs --uninstall
 端点（`~/.clone/companion-endpoint.json`）。升级 Node 后要重新运行安装脚本，因为
 plist 固定了 node 的绝对路径。
 
+### 维护自动化
+
+`npm run repair`、`scripts/nightly-rsi.mjs` 与评测 companion 在各自的 clone home
+（`<repo>/.automation/<用途>`，或 `CLONE_AI_AUTOMATION_HOME`）里运行。该 home 会从
+`~/.clone` 播种一次 `config.json`/`settings.json`/`providers.json`/`mcp.json`/
+`policies.json`；Journal、记忆、会话、令牌、端点与锁绝不复制。修复通道只读地读取所有者
+home 里的失败轨迹。`CLONE_AI_AUTOMATION_REFRESH=1` 重新播种配置副本；
+`CLONE_AI_ALLOW_OWNER_HOME=1` 是共享在线 home 的显式退路。
+`scripts/companion-dev.mjs` 在没有隔离 home 时拒绝启动。
+
 ## 4. 配置模型
 
 打开 **设置 → Agent**。可以应用本地 Magpie 网关暴露的模型，也可以在那里填写端点
