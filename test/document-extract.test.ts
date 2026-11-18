@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
-import { DOCX_MIME_TYPE } from "../src/main-agent/attachments.ts";
+import { DOCX_MIME_TYPE, DOC_MIME_TYPE } from "../src/main-agent/attachments.ts";
 import { extractBinaryDocuments } from "../src/main-agent/document-extract.ts";
 
 async function fixture(name: string): Promise<string> {
@@ -40,12 +40,48 @@ test("a .docx's paragraphs and XML entities are extracted", async () => {
   }
 });
 
-test("an image-only PDF is refused instead of producing an empty document", async () => {
+test("an image-only PDF falls back to the native OCR tool", async () => {
   const result = await extractBinaryDocuments([binary("scanned.pdf", "application/pdf", await fixture("scanned.pdf.b64"))], {
     remainingCharacters: 1_000,
+    runDocumentTool: async (mode) => {
+      assert.equal(mode, "ocr-pdf");
+      return "Recognized scan text";
+    },
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.match(result.documents[0]!.text, /Recognized scan text/);
+});
+
+test("OCR that recognizes nothing is refused with the reason", async () => {
+  const result = await extractBinaryDocuments([binary("scanned.pdf", "application/pdf", await fixture("scanned.pdf.b64"))], {
+    remainingCharacters: 1_000,
+    runDocumentTool: async () => "",
   });
   assert.equal(result.ok, false);
-  if (!result.ok) assert.match(result.error, /no extractable text.*OCR/);
+  if (!result.ok) assert.match(result.error, /no extractable text.*OCR recognized nothing/);
+});
+
+test("a legacy .doc is read through the native tool", async () => {
+  const result = await extractBinaryDocuments([binary("sample.doc", DOC_MIME_TYPE, await fixture("sample.doc.b64"))], {
+    remainingCharacters: 1_000,
+    runDocumentTool: async (mode) => {
+      assert.equal(mode, "doc");
+      return "Legacy Word text";
+    },
+  });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.match(result.documents[0]!.text, /Legacy Word text/);
+});
+
+test("a missing native tool is reported with the file name", async () => {
+  const result = await extractBinaryDocuments([binary("sample.doc", DOC_MIME_TYPE, await fixture("sample.doc.b64"))], {
+    remainingCharacters: 1_000,
+    runDocumentTool: async () => {
+      throw new Error("Legacy .doc needs the desktop app's document tool.");
+    },
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /sample\.doc: Legacy \.doc needs/);
 });
 
 test("a document longer than the budget is truncated with a marker and a report", async () => {

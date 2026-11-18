@@ -44,6 +44,7 @@ const MAX_BINARY_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const MAX_DOCUMENT_CHARS = 50_000;
 const MAX_TOTAL_DOCUMENT_CHARS = 100_000;
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const DOC_MIME = "application/msword";
 const TEXT_EXTENSIONS = new Set([
   "txt", "text", "md", "markdown", "mdx", "rst", "adoc", "tex",
   "csv", "tsv", "json", "jsonl", "ndjson", "yaml", "yml", "toml", "xml", "html", "htm",
@@ -135,6 +136,7 @@ function binaryDocumentKind(file) {
   const genericType = file.type.length === 0 || file.type === "application/octet-stream" || file.type === "application/zip";
   if (file.type === "application/pdf" || (genericType && extension === "pdf")) return "pdf";
   if (file.type === DOCX_MIME || (genericType && extension === "docx")) return "docx";
+  if (file.type === DOC_MIME || (genericType && extension === "doc")) return "doc";
   return undefined;
 }
 
@@ -194,7 +196,7 @@ async function addAttachmentFiles(files) {
         state.attachments.push({
           kind: "binary-document",
           name: file.name,
-          mimeType: binaryKind === "pdf" ? "application/pdf" : DOCX_MIME,
+          mimeType: binaryKind === "pdf" ? "application/pdf" : binaryKind === "docx" ? DOCX_MIME : DOC_MIME,
           data: dataUrl.split(",")[1],
           size: file.size,
         });

@@ -16,9 +16,14 @@
  * PDF 文本来自 `unpdf`（PDF.js 的 serverless 构建）；`.docx` 是 OOXML 的 ZIP，因此用
  * `node:zlib` 的小型读取器即可。只有 PDF 真正到达时才加载依赖，且不向磁盘写入任何内容。
  */
+import { spawn } from "node:child_process";
+import { accessSync, constants } from "node:fs";
+import { dirname, join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
 import {
+  DOCX_MIME_TYPE,
+  DOC_MIME_TYPE,
   MAX_DOCUMENT_CHARACTERS,
   MAX_TOTAL_DOCUMENT_CHARACTERS,
   type BinaryDocumentAttachment,
@@ -38,6 +43,9 @@ export interface AttachmentReport {
   truncated: boolean;
 }
 
+export type DocumentToolMode = "ocr-pdf" | "doc";
+export type DocumentToolRunner = (mode: DocumentToolMode, bytes: Buffer) => Promise<string>;
+
 export type BinaryExtractionResult =
   | { ok: true; documents: DocumentAttachment[]; reports: AttachmentReport[] }
   | { ok: false; error: string };
@@ -51,6 +59,79 @@ function loadPdfModule(): Promise<PdfModule> {
 }
 
 /**
+ * The Swift helper ships next to the bundled Node, or is named by the shell
+ * that started this process. A daemon started outside the app has neither; the
+ * caller then gets a clear "needs the desktop app" error instead of a crash.
+ * Swift 助手与打包的 Node 相邻，或由启动本进程的外壳指定。App 之外启动的守护进程
+ * 两者都没有；调用方会得到明确的“需要桌面 App”错误，而不是崩溃。
+ */
+function resolveDocumentTool(): string | undefined {
+  const configured = process.env.CLONE_AI_DOCUMENT_TOOL?.trim();
+  if (configured !== undefined && configured.length > 0) return configured;
+  const sibling = join(dirname(process.execPath), "CloneAIDocumentTool");
+  try {
+    accessSync(sibling, constants.X_OK);
+    return sibling;
+  } catch {
+    return undefined;
+  }
+}
+
+async function defaultRunDocumentTool(mode: DocumentToolMode, bytes: Buffer): Promise<string> {
+  const tool = resolveDocumentTool();
+  if (tool === undefined) {
+    throw new Error(
+      mode === "ocr-pdf"
+        ? "OCR needs the desktop app's document tool; open Clone AI and retry."
+        : "Legacy .doc needs the desktop app's document tool; open Clone AI and retry.",
+    );
+  }
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn(tool, [mode], { stdio: ["pipe", "pipe", "pipe"] });
+    const output: Buffer[] = [];
+    const errors: Buffer[] = [];
+    let outputBytes = 0;
+    let settled = false;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error !== undefined) reject(error);
+      else resolve(Buffer.concat(output).toString("utf8"));
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(new Error("the document tool timed out"));
+    }, 120_000);
+    child.stdout.on("data", (chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes > 4_000_000) {
+        child.kill("SIGKILL");
+        finish(new Error("the document tool produced too much text"));
+        return;
+      }
+      output.push(chunk);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (errors.length < 64) errors.push(chunk);
+    });
+    child.on("error", (error) => finish(error));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        const detail = Buffer.concat(errors).toString("utf8").trim();
+        finish(new Error(detail.length > 0 ? detail : `the document tool exited with ${code}`));
+        return;
+      }
+      finish();
+    });
+    // A tool that exits early closes its stdin; EPIPE is its error, not ours.
+    // 提前退出的助手会关闭 stdin；EPIPE 是它的错误，不是我们的。
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(bytes);
+  });
+}
+
+/**
  * Extracts every binary attachment, then applies the remaining document budget.
  * A longer document keeps its first `cap` characters and gains an explicit
  * marker; the caller learns the truncation through the report, so the interface
@@ -60,8 +141,9 @@ function loadPdfModule(): Promise<PdfModule> {
  */
 export async function extractBinaryDocuments(
   binaries: ReadonlyArray<BinaryDocumentAttachment>,
-  options: { remainingCharacters?: number } = {},
+  options: { remainingCharacters?: number; runDocumentTool?: DocumentToolRunner } = {},
 ): Promise<BinaryExtractionResult> {
+  const runDocumentTool = options.runDocumentTool ?? defaultRunDocumentTool;
   let remaining = Math.max(0, options.remainingCharacters ?? MAX_TOTAL_DOCUMENT_CHARACTERS);
   const documents: DocumentAttachment[] = [];
   const reports: AttachmentReport[] = [];
@@ -73,19 +155,24 @@ export async function extractBinaryDocuments(
     let extracted: { text: string; truncated: boolean };
     try {
       const bytes = Buffer.from(binary.data, "base64");
-      extracted = binary.mimeType === "application/pdf"
-        ? await extractPdfText(bytes, cap + 1)
-        : extractDocxText(bytes);
+      if (binary.mimeType === DOC_MIME_TYPE) {
+        extracted = { text: await runDocumentTool("doc", bytes), truncated: false };
+      } else if (binary.mimeType === DOCX_MIME_TYPE) {
+        extracted = extractDocxText(bytes);
+      } else {
+        const pdf = await extractPdfText(bytes, cap + 1);
+        extracted = normalizeExtractedText(pdf.text).length === 0
+          ? { text: await runDocumentTool("ocr-pdf", bytes), truncated: false }
+          : pdf;
+      }
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : String(error);
       return { ok: false, error: `${binary.name}: ${reason}` };
     }
     const normalized = normalizeExtractedText(extracted.text);
     if (normalized.length === 0) {
-      return {
-        ok: false,
-        error: `${binary.name}: no extractable text was found${binary.mimeType === "application/pdf" ? " (a scanned PDF needs OCR)" : ""}.`,
-      };
+      const hint = binary.mimeType === "application/pdf" ? " (OCR recognized nothing)" : "";
+      return { ok: false, error: `${binary.name}: no extractable text was found${hint}.` };
     }
     const truncated = extracted.truncated || normalized.length > cap;
     const marker = `\n\n[… document truncated after ${cap} characters …]`;

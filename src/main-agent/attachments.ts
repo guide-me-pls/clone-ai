@@ -69,6 +69,7 @@ export const MAX_DOCUMENT_CHARACTERS = 50_000;
 export const MAX_TOTAL_DOCUMENT_CHARACTERS = 100_000;
 const MAX_DOCUMENT_NAME_CHARACTERS = 120;
 export const DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+export const DOC_MIME_TYPE = "application/msword";
 
 const SIGNATURES: ReadonlyArray<{ mimeType: string; matches: (bytes: Buffer) => boolean }> = [
   { mimeType: "image/png", matches: (bytes) => bytes.length > 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
@@ -131,20 +132,26 @@ function mimeTypeForName(name: string): string {
  * 文件名与声明类型所描述的二进制文档种类；没有则为 undefined。声明类型优先，扩展名只补
  * WebKit 对某些文件留下的空缺。签名另行检查。
  */
-function binaryDocumentKind(name: string, mimeType: string): "pdf" | "docx" | undefined {
+function binaryDocumentKind(name: string, mimeType: string): "pdf" | "docx" | "doc" | undefined {
   const extension = extensionOf(name);
   if (mimeType.length > 0) {
     if (mimeType === "application/pdf") return "pdf";
     if (mimeType === DOCX_MIME_TYPE) return "docx";
+    if (mimeType === DOC_MIME_TYPE) return "doc";
     return undefined;
   }
   if (extension === "pdf") return "pdf";
   if (extension === "docx") return "docx";
+  if (extension === "doc") return "doc";
   return undefined;
 }
 
-function hasBinaryDocumentSignature(bytes: Buffer, kind: "pdf" | "docx"): boolean {
+function hasBinaryDocumentSignature(bytes: Buffer, kind: "pdf" | "docx" | "doc"): boolean {
   if (kind === "pdf") return bytes.length >= 5 && bytes.subarray(0, 5).toString("ascii") === "%PDF-";
+  if (kind === "doc") {
+    const magic = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    return bytes.length >= magic.length && bytes.subarray(0, magic.length).equals(magic);
+  }
   return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
 }
 
@@ -181,12 +188,13 @@ export function parseAttachments(input: unknown): AttachmentResult {
       if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return { ok: false, error: `Attachment ${index + 1} is not base64.` };
       const bytes = Buffer.from(data, "base64");
       if (!hasBinaryDocumentSignature(bytes, binaryKind)) {
-        return { ok: false, error: `Attachment ${index + 1} does not look like a ${binaryKind === "pdf" ? "PDF" : ".docx"} file.` };
+        const label = binaryKind === "pdf" ? "PDF" : binaryKind === "docx" ? ".docx" : ".doc";
+        return { ok: false, error: `Attachment ${index + 1} does not look like a ${label} file.` };
       }
       binaryDocuments.push({
         type: "binary-document",
         name,
-        mimeType: binaryKind === "pdf" ? "application/pdf" : DOCX_MIME_TYPE,
+        mimeType: binaryKind === "pdf" ? "application/pdf" : binaryKind === "docx" ? DOCX_MIME_TYPE : DOC_MIME_TYPE,
         data,
       });
       continue;

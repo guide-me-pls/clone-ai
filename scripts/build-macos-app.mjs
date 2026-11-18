@@ -54,6 +54,21 @@ try {
     env: { ...process.env, CLANG_MODULE_CACHE_PATH: moduleCache, SWIFT_MODULE_CACHE_PATH: moduleCache },
   });
   await chmod(executable, 0o755);
+  // Vision OCR and legacy .doc need macOS frameworks the Node runtime cannot
+  // link directly; a tiny helper reads bytes on stdin and writes text on stdout.
+  // Vision OCR 与旧式 .doc 需要 Node 运行时无法直接链接的 macOS 框架；一个小助手从
+  // stdin 读字节、向 stdout 写文本。
+  const documentTool = join(resources, "CloneAIDocumentTool");
+  execFileSync("/usr/bin/xcrun", [
+    "swiftc", "-O", "-target", "arm64-apple-macos13.5",
+    join(root, "apps", "desktop", "macos", "document-tool.swift"),
+    "-framework", "AppKit", "-framework", "PDFKit", "-framework", "Vision", "-o", documentTool,
+  ], {
+    cwd: root,
+    stdio: "inherit",
+    env: { ...process.env, CLANG_MODULE_CACHE_PATH: moduleCache, SWIFT_MODULE_CACHE_PATH: moduleCache },
+  });
+  await chmod(documentTool, 0o755);
   await writeFile(join(contents, "Info.plist"), plist(manifest.version));
   await writeFile(join(resources, "THIRD-PARTY-NOTICES.txt"), [
     "This app includes Node.js and its production npm dependencies.",
