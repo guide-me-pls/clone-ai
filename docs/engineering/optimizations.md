@@ -450,6 +450,45 @@ file keeps every attempt, including the ones that did not work.
   not only the stored one.
 - **Reversal condition:** copied from the trade-off entry.
 
+### 2026-11-18 — A worker stops when the model stops; the default round cap is gone
+
+- **Goal / hypothesis:** remove the arbitrary per-step model-round ceiling so a
+  model still doing valid work — writing or editing a regression test, verifying
+  a render — can finish. Duration, tool-call and token budgets remain the cost
+  guards.
+- **Trade-off:** [A worker stops when the model stops; no default round cap](../architecture/trade-offs.md#2026-11-18--a-worker-stops-when-the-model-stops-no-default-round-cap).
+- **Change:** `src/agent/loop.ts` (`maxRounds` optional, no default 8; the
+  round-tail notice fires only when a limit is set);
+  `src/workers/native-agent-worker.ts` (`effectiveRoundLimit` returns only the
+  plan budget or owner setting, and `max_turns` handles a missing limit);
+  `src/main-agent/native-runtime.ts` (no default 8);
+  `src/planning/llm-planner.ts` and `src/planning/fallback-planner.ts` (no
+  `maxModelCalls` in their budgets); tests in `test/agent-loop.test.ts`,
+  `test/native-agent-worker.test.ts` and `test/companion-main-agent.test.ts`.
+- **Eval:** `node --experimental-strip-types --test test/agent-loop.test.ts
+  test/native-agent-worker.test.ts test/companion-main-agent.test.ts` — the new
+  case runs 13 rounds while the model keeps requesting tools and stops when it
+  answers; an explicit 2-round cap still ends in `max_turns`;
+  `effectiveRoundLimit(undefined, undefined)` is `undefined`. `npm test`
+  **756/756**, `npm run typecheck` passes, `npm run gate` PASS (baseline
+  unchanged).
+- **Benchmark run:** none — deterministic tests; no provider, model, dataset or
+  scoring parameters.
+- **Execution chain:** inventoried `maxRounds`/`effectiveRoundLimit` and the
+  planners' `maxModelCalls`; wrote the trade-off; changed the loop, worker, Main
+  Agent runtime and both planners; ran the focused tests; the full suite exposed
+  one streaming case whose fake model repeated a tool call forever — the old
+  8-round default was the only thing stopping it; the fake now answers after the
+  first tool call, as a real model does; full suite and gate pass.
+- **Pros:** no arbitrary cliff; the model decides when it is done, while
+  duration/tool/token guards still bound a runaway cost. The repair lane's
+  round cuts (Qwen at 24, Kimi at 40) are no longer product behaviour.
+- **Cons / next time:** without an explicit limit the round-tail notice never
+  fires, so a model that never stops runs until another budget or the owner's
+  abort. If a step consistently makes no progress, add a per-step budget in the
+  plan rather than restoring a global default.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-18 — A build-and-verify step gets 40 rounds, and interactive grading drops video-only checks
 
 - **Goal / hypothesis:** two defects made a good interactive model look like a
