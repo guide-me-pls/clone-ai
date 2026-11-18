@@ -55,6 +55,14 @@ const options = {
   log,
   environment: {
     CLONE_AI_RESIDENT_DAEMON: "1",
+    // The daemon serves a checkout, so its client files are development
+    // assets: re-read them per request instead of pinning the copy from the
+    // moment the job started. Without this an edit under a running daemon
+    // reaches the window as "Can't find variable" on the first click.
+    // 守护服务的是源码检出，因此它的客户端文件属于开发资源：每次请求重读，而不是固定在任务
+    // 启动那一刻的副本。没有这一项，守护运行期间的编辑会以第一次点击就 "Can't find
+    // variable" 的形式到达窗口。
+    CLONE_AI_DEV_MODE: "1",
     CLONE_AI_DESKTOP_CLIENT_PATH: client,
     // The app resolves its workspace from this variable; without it a daemon
     // launched from the repo ran every step against the source tree, so a task

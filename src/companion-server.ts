@@ -367,6 +367,15 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
   const clientPath = options.clientPath ?? join(packageRoot, "apps", "desktop", "ui", "index.html");
   const clientDirectory = dirname(clientPath);
+  // In development the client files are read once, so editing the UI under a
+  // running daemon does not reach the window: the served script can be missing a
+  // function the source already calls, and the first click dies with "Can't find
+  // variable". Re-reading them on each request costs a few file reads and makes
+  // the window show the source that is actually on disk.
+  // 开发模式下客户端文件只读取一次，因此在守护运行期间改界面不会到达窗口：被提供的脚本可能
+  // 缺少源码已经在调用的函数，第一次点击就以 "Can't find variable" 失败。每次请求重读只花
+  // 几次文件读取，却能让窗口显示磁盘上真正的源码。
+  const reloadClientAssets = process.env.CLONE_AI_DEV_MODE === "1";
   const [client, clientCss, componentCss, clientJs, componentJs, auditCss, auditJs, memoryCss, memoryJs] = await Promise.all([
     readFile(clientPath, "utf8"),
     readFile(join(clientDirectory, "style.css"), "utf8"),
@@ -378,6 +387,21 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     readFile(join(clientDirectory, "memory.css"), "utf8"),
     readFile(join(clientDirectory, "memory.js"), "utf8"),
   ]);
+  const clientAssets = { client, clientCss, componentCss, clientJs, componentJs, auditCss, auditJs, memoryCss, memoryJs };
+  const clientPathFor = {
+    client: clientPath,
+    clientCss: join(clientDirectory, "style.css"),
+    componentCss: join(clientDirectory, "components.css"),
+    clientJs: join(clientDirectory, "app.js"),
+    componentJs: join(clientDirectory, "components.js"),
+    auditCss: join(clientDirectory, "audit.css"),
+    auditJs: join(clientDirectory, "audit.js"),
+    memoryCss: join(clientDirectory, "memory.css"),
+    memoryJs: join(clientDirectory, "memory.js"),
+  } as const;
+  const serveAsset = async (key: keyof typeof clientAssets): Promise<string> => (
+    reloadClientAssets ? await readFile(clientPathFor[key], "utf8").catch(() => clientAssets[key]) : clientAssets[key]
+  );
   const token = options.token?.trim() || issueCompanionToken();
   if (serverMode && token.length < 32) {
     throw new Error("Server deployment requires CLONE_AI_COMPANION_TOKEN with at least 32 characters.");
@@ -560,6 +584,24 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const bound = { port };
   const server = createServer(async (request, response) => {
     try {
+      // In development each request re-reads the asset it serves, so an edit
+      // under a running daemon cannot leave the window on a stale script that
+      // calls functions the served copy no longer defines.
+      // 开发模式下每个请求重读它要提供的资源，因此在守护运行期间的编辑不会让窗口停留在
+      // 调用了旧函数定义的陈旧脚本上。
+      const fresh = reloadClientAssets && request.url !== undefined
+        ? {
+            ...(request.url === "/app.js" ? { clientJs: await serveAsset("clientJs") } : {}),
+            ...(request.url === "/components.js" ? { componentJs: await serveAsset("componentJs") } : {}),
+            ...(request.url === "/audit.js" ? { auditJs: await serveAsset("auditJs") } : {}),
+            ...(request.url === "/memory.js" ? { memoryJs: await serveAsset("memoryJs") } : {}),
+            ...(request.url === "/" ? { client: injectCompanionToken(await serveAsset("client"), token) } : {}),
+            ...(request.url === "/style.css" ? { clientCss: await serveAsset("clientCss") } : {}),
+            ...(request.url === "/components.css" ? { componentCss: await serveAsset("componentCss") } : {}),
+            ...(request.url === "/audit.css" ? { auditCss: await serveAsset("auditCss") } : {}),
+            ...(request.url === "/memory.css" ? { memoryCss: await serveAsset("memoryCss") } : {}),
+          }
+        : {};
       await handleRequest(request, response, {
         host,
         listenPort: bound.port,
@@ -580,6 +622,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         auditJs,
         memoryCss,
         memoryJs,
+        ...fresh,
         schedules,
         sessions,
         agentSettings,

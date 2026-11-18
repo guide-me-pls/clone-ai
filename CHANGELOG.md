@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### UI edits reach the running window
+
+The resident daemon serves a checkout but read `app.js`, the stylesheets and the view scripts once at startup, so an edit made while it ran could arrive in the window as a script that calls a function the served copy no longer defines — `Can't find variable` on the first click. The daemon now re-reads the asset it is about to serve when `CLONE_AI_DEV_MODE=1` (set by the LaunchAgent installer), and a new UI test fails when `app.js` calls a function it never defines.
+
+常驻守护服务的是源码检出，但此前只在启动时读取一次 `app.js`、样式表与视图脚本，因此运行期间的编辑可能以"脚本调用了被提供副本里已不存在的函数"的形式到达窗口——第一次点击就 `Can't find variable`。现在守护在 `CLONE_AI_DEV_MODE=1`（由 LaunchAgent 安装器设置）时按请求重读即将提供的资源；新增的界面测试会在 `app.js` 调用自己从未定义的函数时失败。
+
 ### Workers stop when the model stops, not at a round number
 
 The per-step model-round cap is gone unless the plan or owner sets one explicitly. The shared loop now continues until the model answers, the turn is aborted, or a duration/tool/token budget stops it; the planners no longer write `maxModelCalls`. The final-answer reserve only applies when a limit is set, so an unbounded run is expected to end with the model's own answer.
