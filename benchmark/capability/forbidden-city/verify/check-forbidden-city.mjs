@@ -283,10 +283,22 @@ try {
     }
 
     const pairs = expected.symmetryPairs;
+    // Paired halls are buildings, but a page may keep them off the axis list and
+    // expose them under props.sideHalls. Both are legitimate homes; the grader
+    // looks in both rather than forcing one array layout.
+    // 对称配楼是建筑，但页面可以把它们放在中轴列表之外、以 props.sideHalls 暴露。两者都是
+    // 合法的存放方式；评分器两边都查，而不是强制一种数组布局。
+    const lookup = new Map(byName);
+    for (const extra of [model.props?.sideHalls, model.props?.buildings]) {
+      if (!Array.isArray(extra)) continue;
+      for (const building of extra) {
+        if (typeof building?.name === "string" && !lookup.has(building.name)) lookup.set(building.name, building);
+      }
+    }
     const symmetryErrors = [];
     for (const [left, right] of pairs) {
-      const a = byName.get(left);
-      const b = byName.get(right);
+      const a = lookup.get(left);
+      const b = lookup.get(right);
       if (!a || !b) { symmetryErrors.push(`${left}/${right} absent`); continue; }
       const dx = Math.abs((a.position?.x ?? 0) + (b.position?.x ?? 0));
       const dz = Math.abs((a.position?.z ?? 0) - (b.position?.z ?? 0));

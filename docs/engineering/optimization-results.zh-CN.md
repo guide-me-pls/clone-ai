@@ -11,6 +11,20 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 故宫基准在 App 内端到端通过
+
+- **主张：** 经 App 自己的守护进程、用一段话任务提交的运行 `18569eb4` 现在评为 **28/28**、
+  零硬失败：十座具名殿与屋顶类型、961 米中轴、共用三台、太和殿 64×37×35 米、屋面/斗拱/
+  棂格/门钉细节、阴影、orbit 63°、zoom ×0.58、主殿占画面高度 34.5%、体仁阁/弘义阁左右
+  对称。
+- **证据：** `node benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs
+  --workspace "/Users/qihoo/Documents/Clone AI" --out …/verify/app-final2 --interactive`
+  → **28/28**，截图在 `screens/`，报告在 `report.json`。过程中：`91a50a87` 在第 12 轮
+  被切断（已修）、`9d706a27` 工作区错误（已修）、`4ce0db3d` 数据正确但主殿只占 9%
+  （已加入评分）、`18569eb4` 27/28 因配楼放在 `props.sideHalls`（查找已修）。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--默认视角按构图评分而不只看数据)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--加载时的视角按构图评分)。
+
 ## 2026-11-18 —— 自动化不再与所有者的运行时竞争
 
 - **主张：** 修复通道、夜间 RSI 与评测 companion 解析隔离的 clone home

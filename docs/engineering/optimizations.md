@@ -31,6 +31,26 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — The symmetry check sees paired halls wherever the contract puts them
+
+- **Goal / hypothesis:** the contract calls `buildings` the axial roster; a page
+  may expose flanking halls under `props`. The symmetry check only searched
+  `buildings`, so a correct pair read as absent.
+- **Trade-off:** [Paired halls may live under props, and the grader looks there](../architecture/trade-offs.md#2026-11-18--paired-halls-may-live-under-props-and-the-grader-looks-there).
+- **Change:** `benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs`
+  builds the symmetry lookup from `buildings` plus `props.sideHalls` and
+  `props.buildings`.
+- **Eval:** run `18569eb4` placed 体仁阁/弘义阁 at x = ∓150, z = 235 under
+  `props.sideHalls` and graded 27/28 with "体仁阁/弘义阁 absent"; after the
+  lookup change the same workspace grades **28/28**.
+- **Execution chain:** read the model in the running page, found the two records
+  under `props.sideHalls`, then widened the lookup. No model cost.
+- **Pros:** grades the property (mirrored positions), not one author's array
+  layout.
+- **Cons / next time:** two accepted shapes make the contract looser; the cleaner
+  fix would be one roster field with an explicit category.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-18 — Automation runs in its own clone home
 
 - **Goal / hypothesis:** maintenance automation must not share the owner's
