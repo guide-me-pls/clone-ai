@@ -483,7 +483,12 @@ function summarizeArguments(source: string): string {
 
 /** The rounds one step actually gets: plan budget, then owner setting, then the default. 一个步骤实际获得的轮次：计划预算、所有者设置、默认值。 */
 export function effectiveRoundLimit(planBudget: number | undefined, ownerRounds: number | undefined): number {
-  return planBudget ?? ownerRounds ?? 12;
+  // 40, not 12: a build pass that also verifies itself (render, screenshot,
+  // read the picture, fix, re-check) needs more rounds than read-plan-write.
+  // App run 91a50a87 stopped at 12 with a working scene already on disk.
+  // 40 而非 12：一次既要构建又要自证的步骤（渲染、截图、看图、修复、复查）比"读—规划—写"
+  // 需要更多轮次。App 运行 91a50a87 在第 12 轮停止时，可用的场景已经在磁盘上了。
+  return planBudget ?? ownerRounds ?? 40;
 }
 
 /** Instructions plus the boundary the model must work within. 指令，以及模型必须遵守的边界。 */

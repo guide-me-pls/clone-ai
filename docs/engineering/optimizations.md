@@ -195,6 +195,45 @@ file keeps every attempt, including the ones that did not work.
   next variable is the repair model, not the brief.
 - **Reversal condition:** copied from the trade-off entry.
 
+### 2026-11-18 — A build-and-verify step gets 40 rounds, and interactive grading drops video-only checks
+
+- **Goal / hypothesis:** two defects made a good interactive model look like a
+  failure. The native worker's default of 12 model calls cut a working scene off
+  mid-improvement, and the interactive checker still graded video-only fields
+  (timeline, `setVideoTime`, `camera.keys`, five source modules).
+- **Trade-off:** [The native worker's default round budget is 40, not 12](../architecture/trade-offs.md#2026-11-18--the-native-workers-default-round-budget-is-40-not-12),
+  [Interactive grading stops asking for video-only fields](../architecture/trade-offs.md#2026-11-18--interactive-grading-stops-asking-for-video-only-fields).
+- **Change:** `src/workers/native-agent-worker.ts` — `effectiveRoundLimit`
+  defaults to 40 (plan budget and owner setting still win);
+  `test/native-agent-worker.test.ts` pins the precedence.
+  `benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs` — in
+  `--interactive` mode, skip `browser.timeline-differs`, measure
+  frame-throughput with a render loop instead of `setVideoTime`, skip
+  `cameraKeys`, and use `interactiveMinimumSrcModules`;
+  `verify/expected.json` gains `interactiveMinimumSrcModules: 1`.
+- **Eval:** App run `91a50a87` produced `index.html`, `src/main.js`,
+  `README.md`, `front.png`, `side-45.png` and three more screenshots, then failed
+  with `The agent reached its 12-round limit without a final answer` (12 model
+  calls, 14 tool calls, 102,872 tokens, 112.2 s). The same workspace graded
+  `--interactive`: before the checker change **23/28** (timeline, cameraKeys and
+  a `setVideoTime` TypeError); after **26/27**, with `interaction.orbit 63°`,
+  `interaction.zoom ×0.55`, `browser.frame-throughput median 33.3 ms`, and only
+  `model.symmetry` failing because the eval prompt omits 体仁阁/弘义阁 that
+  `expected.json` requires. `npm test` and `npm run typecheck` after the change.
+- **Execution chain:** the task ran inside the App's own daemon (bundled
+  runtime, workspace `~/Documents/Clone AI`), submitted through
+  `POST /api/main-agent/query`; the audit showed `playwright.browser_navigate`,
+  `browser_resize`, `browser_console_messages` and `write_file` as it went.
+  Grading the workspace by hand exposed the checker's video assumptions; fixing
+  them was a small deterministic edit, no further model run needed for the eval.
+- **Pros:** the score now reflects the model rather than the wrong contract, and
+  the round default matches the fallback planner's own 40-round reasoning.
+- **Cons / next time:** the prompt and `expected.json` still disagree about the
+  side pavilions; the eval prompt should be generated from the expected file, or
+  the pair moved to a soft check. The 40-round default is a stopgap for the
+  planner not emitting `maxModelCalls`.
+- **Reversal condition:** copied from both trade-off entries.
+
 ### 2026-11-18 — An isolated worktree carries the owner's untracked inputs
 
 - **Goal / hypothesis:** external steps run in a git worktree created from the

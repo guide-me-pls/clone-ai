@@ -11,6 +11,20 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 一次性的构建并自证步骤不再在第 12 轮被切断
+
+- **主张：** Native Worker 的默认模型调用预算现在是 40，因此一个"写页面—渲染—经浏览器
+  工具看截图—按所见修复"的步骤可以在一次 query 内完成。计划预算与
+  `CLONE_AI_NATIVE_MAX_ROUNDS` 仍然优先。
+- **证据：** App 运行 `91a50a87` 写出了 `index.html`、`src/main.js`、`README.md` 与五张
+  截图，随后以 `The agent reached its 12-round limit without a final answer` 失败
+  （12 次模型调用、14 次工具调用、102,872 tokens、112.2 秒）。在修正交互检查器、不再评
+  视频专属字段后，同一工作区评为 **26/27**（orbit 63°、zoom ×0.55、每帧中位数 33.3 ms），
+  唯一未过的是评测提示词从未要求的左右配楼。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--native-worker-的默认轮次预算从-12-改为-40)、
+  [检查器取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--交互评分不再考核视频专属字段)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--构建并自证的步骤现在有-40-轮交互评分去掉视频专属检查)。
+
 ## 2026-11-18 —— OCR 与旧式 .doc 不离开本机就能交给模型
 
 - **主张：** 扫描 PDF 会回退到 Vision OCR，旧式 `.doc` 由编译进 App 的 Swift 助手用

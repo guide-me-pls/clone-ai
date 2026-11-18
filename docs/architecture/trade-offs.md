@@ -6,6 +6,80 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — Interactive grading stops asking for video-only fields
+
+**Decision.** The Forbidden City checker's `--interactive` mode no longer grades
+`browser.timeline-differs`, `browser.frame-throughput` via `setVideoTime`, or
+`model.features.cameraKeys`; `src.modules` uses a separate minimum of 1 for the
+interactive contract.
+
+**Alternatives rejected.**
+
+- *Keep one contract for both deliverables.* The 2026-11-18 decision to grade an
+  interactive model replaced the video, but the checker kept three video-only
+  assertions; they failed every interactive model regardless of quality, which
+  makes the score useless as a signal.
+- *Drop the timeline checks for both modes.* The video contract still needs them;
+  its frames must differ and its seek path must stay fast.
+- *Treat the failures as soft checks.* A soft check still prints FAIL and hides
+  the fact that the model was never graded on that dimension.
+
+**Evidence.** Grading App run `91a50a87` with `--interactive` before the change:
+23/28 with `browser.timeline-differs 1/5 distinct screenshots` (an interactive
+page has one view, not a timeline), `model.features missing: cameraKeys` (the
+model has a live camera, not keyframes), and `browser.run TypeError:
+window.setVideoTime is not a function` — the last one aborted the rest of the
+browser section, including the frame-throughput measurement. After the change:
+26/27, with only `model.symmetry` failing because the eval prompt omits
+体仁阁/弘义阁 that `expected.json` requires.
+
+**What it costs.** Interactive models are no longer checked for having a
+timeline — by design; their interaction is graded by `interaction.orbit` and
+`interaction.zoom`, which a static render cannot pass.
+
+**Reversal condition.** If an interactive deliverable is later expected to
+animate over time, add a mode flag rather than reusing the video timeline checks;
+if the two contracts converge again, collapse the interactive branch.
+
+## 2026-11-18 — The native worker's default round budget is 40, not 12
+
+**Decision.** `effectiveRoundLimit` keeps its precedence — the plan's
+`maxModelCalls`, then the owner's `CLONE_AI_NATIVE_MAX_ROUNDS`, then a default —
+but the default becomes 40 model calls instead of 12.
+
+**Alternatives rejected.**
+
+- *Leave 12 and require every plan to carry a budget.* The LLM planner emits
+  steps without a budget (`budget: null` in `plan.created`), so the default is
+  what runs in practice; requiring the planner to budget model calls makes a
+  working default depend on a field no one fills.
+- *No default (unbounded).* The duration budget then becomes the only stop, and
+  a loop that keeps making cheap calls can burn the whole step before any
+  round-level signal appears.
+- *Raise it to 100.* The observed cost per round is a few seconds and ~8k
+  tokens; 40 already covers a build-read-verify-fix pass, and a larger default
+  hides a plan that should have budgeted explicitly.
+
+**Evidence.** App run `91a50a87` (2026-11-18) wrote `index.html`,
+`src/main.js`, `README.md` and five screenshots through the Playwright MCP, then
+stopped at its 12th model call with
+`The agent reached its 12-round limit without a final answer` — 14 tool calls,
+102,872 tokens, 112.2 s, and a scene that already loaded and orbited. The
+fallback planner carried 40 for the same reason: "20 cut a working FPS off
+mid-verification; 40 lets the same one-shot request finish"
+(`src/planning/fallback-planner.ts`). Interactive 3D adds a screenshot-review
+loop on top of the write pass, which 12 cannot cover.
+
+**What it costs.** A step that would have failed at 12 now may spend up to 40
+rounds of tokens; the 10-minute work-order duration and the tool-call budget
+still bound it. A model that loops without progress now wastes more before the
+round limit stops it.
+
+**Reversal condition.** If per-step cost becomes the binding constraint, lower
+the default and make the planner emit `maxModelCalls` on each step; if runs
+still stop at 40 while producing, raise it only together with a duration budget
+that covers the extra rounds.
+
 ## 2026-11-18 — OCR and legacy .doc go through a native macOS helper
 
 **Decision.** A second Swift executable, `CloneAIDocumentTool`, is compiled into
