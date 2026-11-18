@@ -372,7 +372,9 @@ export class NativeAgentWorker implements RuntimeAdapter {
         // 会把一次没做完的调查的片段当成步骤答案发布出去。
         if (result.terminalReason === "max_turns") {
           const limit = effectiveRoundLimit(budget?.maxModelCalls, this.#config.maxRounds);
-          const message = result.error ?? `The worker reached its ${limit}-model-call budget.`;
+          const message = result.error ?? (limit === undefined
+            ? "The worker stopped without a final answer."
+            : `The worker reached its ${limit}-model-call budget.`);
           push({ type: "failed", message, report: { providerId: this.providerId, agentId: this.id, category: "budget_exceeded", signature: "budget-model-calls", detail: message }, usage });
           return;
         }
@@ -481,14 +483,12 @@ function summarizeArguments(source: string): string {
   }
 }
 
-/** The rounds one step actually gets: plan budget, then owner setting, then the default. 一个步骤实际获得的轮次：计划预算、所有者设置、默认值。 */
-export function effectiveRoundLimit(planBudget: number | undefined, ownerRounds: number | undefined): number {
-  // 40, not 12: a build pass that also verifies itself (render, screenshot,
-  // read the picture, fix, re-check) needs more rounds than read-plan-write.
-  // App run 91a50a87 stopped at 12 with a working scene already on disk.
-  // 40 而非 12：一次既要构建又要自证的步骤（渲染、截图、看图、修复、复查）比"读—规划—写"
-  // 需要更多轮次。App 运行 91a50a87 在第 12 轮停止时，可用的场景已经在磁盘上了。
-  return planBudget ?? ownerRounds ?? 40;
+/** The rounds one step actually gets: plan budget, then owner setting, then none. 一个步骤实际获得的轮次：计划预算、所有者设置，否则无上限。 */
+export function effectiveRoundLimit(planBudget: number | undefined, ownerRounds: number | undefined): number | undefined {
+  // No default cap: the model decides when to stop. An explicit plan budget or
+  // owner setting remains an upper bound for callers that need one.
+  // 没有默认上限：由模型决定何时停下。显式的计划预算或所有者设置仍可为需要的调用方提供上界。
+  return planBudget ?? ownerRounds;
 }
 
 /** Instructions plus the boundary the model must work within. 指令，以及模型必须遵守的边界。 */

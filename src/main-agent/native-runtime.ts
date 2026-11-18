@@ -332,7 +332,10 @@ ${listing}`;
     userMessage,
   ];
   const startedAt = Date.now();
-  const maxRounds = Math.max(1, options.maxRounds ?? 8);
+  // No default round cap: the model decides when to stop. Callers that need a
+  // bound pass `maxRounds` explicitly.
+  // 没有默认轮次上限：由模型决定何时停下。需要上界的调用方显式传入 `maxRounds`。
+  const maxRounds = options.maxRounds === undefined ? undefined : Math.max(1, options.maxRounds);
   const windowPolicy = contextLevels({ contextWindow: options.contextWindow ?? 128_000 });
   // One calibrator per turn: the provider's own usage reports teach it the real
   // characters-per-token, so the compaction threshold is measured rather than

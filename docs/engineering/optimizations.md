@@ -300,6 +300,44 @@ file keeps every attempt, including the ones that did not work.
   an isolated `CLONE_AI_HOME`. That isolation is the next runbook change.
 - **Reversal condition:** copied from the trade-off entry.
 
+### 2026-11-18 — Workers decide when to stop; the default round cap is gone
+
+- **Goal / hypothesis:** remove the arbitrary per-step model-round cap so a model
+  that is still doing useful work — writing or editing a regression test,
+  verifying a render — can finish. Duration, tool-call and token budgets remain
+  as the cost guards.
+- **Trade-off:** [A worker stops when the model stops; no default round cap](../architecture/trade-offs.md#2026-11-18--a-worker-stops-when-the-model-stops-no-default-round-cap).
+- **Change:** `src/agent/loop.ts` (`maxRounds` is optional, no default of 8; the
+  round-tail notice only fires with an explicit limit); `src/workers/native-agent-worker.ts`
+  (`effectiveRoundLimit` returns only a plan budget or an owner setting, and the
+  `max_turns` message handles an absent limit); `src/main-agent/native-runtime.ts`
+  (no default 8); `src/planning/llm-planner.ts` and
+  `src/planning/fallback-planner.ts` (no `maxModelCalls` in their budgets);
+  tests in `test/agent-loop.test.ts`, `test/native-agent-worker.test.ts` and
+  `test/companion-main-agent.test.ts`.
+- **Eval:** `node --experimental-strip-types --test test/agent-loop.test.ts
+  test/native-agent-worker.test.ts test/companion-main-agent.test.ts` — the new
+  case runs 13 rounds when the model keeps asking for tools and stops when it
+  answers; an explicit 2-round cap still ends with `max_turns`;
+  `effectiveRoundLimit(undefined, undefined)` is `undefined`. `npm test`
+  **756/756**, `npm run typecheck` pass, `npm run gate` PASS (baseline unchanged).
+- **Benchmark run:** none — deterministic tests; no provider, model, dataset or
+  scoring parameters.
+- **Execution chain:** inventoried `maxRounds`/`effectiveRoundLimit` and the
+  planners' `maxModelCalls`; wrote the trade-off; changed the loop, worker,
+  main-agent runtime and both planners; ran the targeted tests; the full suite
+  exposed one stream test whose fake model repeated a tool call forever and had
+  only been stopped by the old 8-round default — the fake now answers after the
+  first tool call, as a real model would; full suite and gate passed.
+- **Pros:** no arbitrary cliff; the model decides when it is done, and the
+  duration/tool/token guards still bound runaway cost. The repair lane's round
+  cuts (Qwen at 24, Kimi at 40) are no longer product behavior.
+- **Cons / next time:** without an explicit cap the final-answer reserve never
+  fires, so a model that never stops is stopped only by the other budgets or the
+  owner. If a step loops without progress, add a per-step plan budget rather
+  than a global default.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-18 — The repair lane can carry the working agent's decision
 
 - **Goal / hypothesis:** a decision-level repair (reversing an older rule) cannot

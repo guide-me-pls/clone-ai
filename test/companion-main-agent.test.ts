@@ -145,11 +145,22 @@ test("a client disconnect cancels the native turn", async (t) => {
 });
 
 test("the stream forwards tool progress before it forwards the answer", async (t) => {
+  let calls = 0;
   const modelServer = createServer((request, response) => {
     if (request.url !== "/v1/chat/completions") { response.writeHead(404); response.end(); return; }
+    // The loop has no default round cap: the model must answer to end the turn.
+    // First call asks for a tool, the next answers, as a real model would.
+    // 循环没有默认轮次上限：模型必须回答才能结束回合。第一次调用请求工具，下一次回答，
+    // 与真实模型一致。
+    calls += 1;
     response.writeHead(200, { "content-type": "text/event-stream" });
-    response.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "a", type: "function", function: { name: "get_authority", arguments: "{}" } }] } }] })}\n\n`);
-    response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
+    if (calls === 1) {
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "a", type: "function", function: { name: "get_authority", arguments: "{}" } }] } }] })}\n\n`);
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
+    } else {
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "You may read files." } }] })}\n\n`);
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`);
+    }
     response.end("data: [DONE]\n\n");
   });
   await new Promise<void>((resolve) => modelServer.listen(0, "127.0.0.1", resolve));

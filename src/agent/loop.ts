@@ -148,7 +148,7 @@ export type AgentTerminalReason =
 
 /** A loop event; callers map these onto their journal or UI. 循环事件；调用方映射到 Journal 或 UI。 */
 export type AgentLoopEvent =
-  | { type: "turn_started"; maxRounds: number }
+  | { type: "turn_started"; maxRounds?: number }
   | { type: "model_call_started"; round: number }
   | { type: "model_call_completed"; round: number; usage?: ModelUsage; toolCalls: number }
   | { type: "compaction"; round: number; estimatedTokens: number; before: number; after: number; afterTokens?: number }
@@ -188,7 +188,7 @@ export interface AgentLoopOptions {
   tools: AgentToolSpec[];
   /** Initial messages, including the system prompt. 初始消息，包含 System Prompt。 */
   messages: AgentMessage[];
-  /** Maximum model rounds; defaults to 8. 最大模型回合数；默认 8。 */
+  /** Maximum model rounds; absent means the model decides when to stop. 最大模型回合数；缺省表示由模型决定何时停下。 */
   maxRounds?: number;
   /** Maximum tool calls across the turn. 整个回合的最大工具调用次数。 */
   maxToolCalls?: number;
@@ -242,7 +242,12 @@ export interface AgentLoopResult {
  */
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
   const startedAt = Date.now();
-  const maxRounds = Math.max(1, options.maxRounds ?? 8);
+  // A round cap is optional. Without one the loop runs until the model stops
+  // asking for tools, the turn is aborted, or a duration/tool/token budget
+  // stops it — the model, not an arbitrary number, decides when to pause.
+  // 轮次上限是可选的。没有上限时，循环一直运行到模型不再请求工具、回合被中止，或时长/工具/
+  // token 预算把它停下——决定何时暂停的是模型，而不是一个任意数字。
+  const maxRounds = options.maxRounds === undefined ? undefined : Math.max(1, options.maxRounds);
   const messages = [...options.messages];
   const tools = options.tools;
   const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, modelCalls: 0 };
@@ -253,14 +258,14 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   let terminalError: string | undefined;
   let budgetNoticeSent = false;
 
-  await emit(options, { type: "turn_started", maxRounds });
+  await emit(options, { type: "turn_started", ...(maxRounds === undefined ? {} : { maxRounds }) });
 
   const stop = (reason: AgentTerminalReason, error?: string): void => {
     terminalReason = reason;
     if (error !== undefined) terminalError = error;
   };
 
-  for (let round = 0; round < maxRounds; round += 1) {
+  for (let round = 0; maxRounds === undefined || round < maxRounds; round += 1) {
     if (isAborted(options.signal)) {
       stop("aborted", "The turn was cancelled.");
       break;
@@ -279,11 +284,12 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     // Reserve the tail of the round budget for a final answer. Without this a
     // builder keeps polishing until the hard limit and is reported as a failure
     // even when the artifact is complete. Two rounds remain: one to run the last
-    // essential check, one to answer.
+    // essential check, one to answer. With no cap the model decides when to
+    // stop, so there is no tail to reserve.
     // 为最终回答预留轮次尾部。没有这条，构建型任务会一直打磨到硬上限，即使工件已完成也会被判失败。
-    // 剩余两轮：一轮做最后的必要检查，一轮回答。
-    const remainingRounds = maxRounds - round;
-    if (!budgetNoticeSent && remainingRounds <= 2 && remainingRounds > 0) {
+    // 剩余两轮：一轮做最后的必要检查，一轮回答。没有上限时，由模型决定何时停下，因此没有可预留的尾部。
+    const remainingRounds = maxRounds === undefined ? undefined : maxRounds - round;
+    if (!budgetNoticeSent && remainingRounds !== undefined && remainingRounds <= 2 && remainingRounds > 0) {
       budgetNoticeSent = true;
       messages.push({
         role: "system",
@@ -393,14 +399,16 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       stop("budget_exhausted", `The turn exceeded its ${options.maxDurationMs}ms budget.`);
       break;
     }
-    if (round === maxRounds - 1) {
+    if (maxRounds !== undefined && round === maxRounds - 1) {
       await emit(options, { type: "budget_exhausted", kind: "rounds", limit: maxRounds });
       stop("max_turns", `The agent reached its ${maxRounds}-round limit without a final answer.`);
     }
   }
 
   const reason: AgentTerminalReason = terminalReason ?? "max_turns";
-  const reasonError = terminalError ?? `The agent reached its ${maxRounds}-round limit without a final answer.`;
+  const reasonError = terminalError ?? (maxRounds === undefined
+    ? "The agent stopped without a final answer."
+    : `The agent reached its ${maxRounds}-round limit without a final answer.`);
   const result: AgentLoopResult = {
     reply: reply.trim(),
     terminalReason: reason,

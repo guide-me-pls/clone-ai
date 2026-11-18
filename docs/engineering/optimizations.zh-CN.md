@@ -316,6 +316,33 @@
   修复通道跑在隔离的 `CLONE_AI_HOME` 上。这个隔离是下一次的 runbook 变更。
 - **推翻条件：** 从取舍条目复制。
 
+### 2026-11-18 —— Worker 在模型停下时停下；默认轮次上限已移除
+
+- **目标 / 假设：** 移除任意的单步模型轮次上限，让仍在做有效工作的模型——写或改回归测试、
+  验证渲染——能够完成。时长、工具调用与 token 预算继续作为成本护栏。
+- **取舍：** [Worker 在模型停下时停下；没有默认轮次上限](../architecture/trade-offs.zh-CN.md#2026-11-18--worker-在模型停下时停下没有默认轮次上限)。
+- **变更：** `src/agent/loop.ts`（`maxRounds` 可选、无默认 8；轮次尾部提示只在有显式上限时
+  触发）；`src/workers/native-agent-worker.ts`（`effectiveRoundLimit` 只返回计划预算或所有者
+  设置，`max_turns` 消息处理缺失上限）；`src/main-agent/native-runtime.ts`（无默认 8）；
+  `src/planning/llm-planner.ts` 与 `src/planning/fallback-planner.ts`（预算里不再写
+  `maxModelCalls`）；测试在 `test/agent-loop.test.ts`、`test/native-agent-worker.test.ts`
+  与 `test/companion-main-agent.test.ts`。
+- **Eval：** `node --experimental-strip-types --test test/agent-loop.test.ts
+  test/native-agent-worker.test.ts test/companion-main-agent.test.ts` —— 新用例在模型持续
+  请求工具时跑满 13 轮、在模型回答时停止；显式的 2 轮上限仍以 `max_turns` 结束；
+  `effectiveRoundLimit(undefined, undefined)` 为 `undefined`。`npm test` **756/756**，
+  `npm run typecheck` 通过，`npm run gate` PASS（基线未变）。
+- **Benchmark run：** 无——确定性测试；没有 Provider、模型、数据集或评分参数。
+- **执行链路：** 盘点 `maxRounds`/`effectiveRoundLimit` 与规划器的 `maxModelCalls`；写取舍；
+  改循环、Worker、主 Agent 运行时与两个规划器；跑定向测试；全套测试暴露了一个流式用例——
+  它的假模型无限重复工具调用，旧 8 轮默认值是唯一让它停下的东西；假模型改为在第一次工具调用后
+  回答，与真实模型一致；全套与门禁通过。
+- **优点：** 不再有任意悬崖；由模型决定何时做完，时长/工具/token 护栏仍约束失控成本。修复
+  通道的轮次切断（Qwen 24 轮、Kimi 40 轮）不再是产品行为。
+- **缺点 / 下次：** 没有显式上限时，轮次尾部提示永远不会触发，因此一个永不停止的模型只能靠
+  其他预算或所有者中止。若某步骤长期无进展，应在计划里加单步预算，而不是恢复全局默认值。
+- **推翻条件：** 从取舍条目复制。
+
 ### 2026-11-18 —— 修复通道可以携带工作 Agent 的决定
 
 - **目标 / 假设：** 决定层面的修复（推翻旧规则）无法从只展示旧行为的轨迹中推断。给通道一份显式的

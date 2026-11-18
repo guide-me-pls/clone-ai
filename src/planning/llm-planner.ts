@@ -404,7 +404,6 @@ function riskRank(risk: RiskClass): number {
 function budgetForRisk(risk: RiskClass): SubagentWorkOrder["budget"] {
   return {
     maxDurationMs: 10 * 60_000,
-    maxModelCalls: 20,
     maxToolCalls: 100,
     // Retrying external actions can duplicate real-world effects. The Runtime
     // may retry planning, but never repeats a risky WorkOrder automatically.

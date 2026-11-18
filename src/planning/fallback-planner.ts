@@ -201,15 +201,10 @@ function artifactContract(id: string, description: string, locatorRequired = fal
 
 function defaultWorkOrderBudget() {
   return {
-    // A build-and-verify task (a game page, a small app) needs more than a
-    // read-plan-write pass: the browser check and the fixes it produces cost
-    // rounds of their own. 20 cut a working FPS off mid-verification; 40 lets
-    // the same one-shot request finish. The duration cap still bounds cost.
-    // 构建并验收一个页面（游戏、小应用）不止"读—规划—写"一遍：浏览器检查和由此产生的修复
-    // 本身就要花轮次。20 曾把一个能跑的 FPS 在验收中途切断；40 让同一个一次性请求跑到收尾。
-    // 时长上限仍然约束成本。
+    // Rounds are not capped: the model decides when to stop. Duration and tool
+    // calls still bound the cost of one work order.
+    // 轮次不设上限：由模型决定何时停下。时长与工具调用次数仍然约束单个工作单的成本。
     maxDurationMs: 10 * 60_000,
-    maxModelCalls: 40,
     maxToolCalls: 200,
     maxAttempts: 2,
   };

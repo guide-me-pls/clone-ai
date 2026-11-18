@@ -286,20 +286,18 @@ test("a model-call budget is reported when the loop cannot finish in time", asyn
   assert.equal(failed.report?.signature, "budget-model-calls");
 });
 
-test("the worker default gives a build-and-verify step 40 rounds, not 12", () => {
-  // A page is built, rendered, looked at and repaired inside one step; 12
-  // stopped App run 91a50a87 with a working scene already written.
-  // 一个页面在同一个步骤里被构建、渲染、查看并修复；12 轮让 App 运行 91a50a87 在场景
-  // 已经写好的情况下被切断。
-  assert.equal(effectiveRoundLimit(undefined, undefined), 40);
+test("the worker has no round cap unless the plan or owner sets one", () => {
+  // Without a plan budget or owner setting there is no cap: the model decides.
+  // 没有计划预算或所有者设置时没有上限：由模型决定。
+  assert.equal(effectiveRoundLimit(undefined, undefined), undefined);
   assert.equal(effectiveRoundLimit(7, undefined), 7);
   assert.equal(effectiveRoundLimit(undefined, 9), 9);
 });
 
-test("a round limit from the worker default is still reported as a failure", async (t) => {
+test("a round limit set by the owner is still reported as a failure", async (t) => {
   const directory = await workspace(t);
-  // No work order, hence no plan budget: the limit comes from the worker default.
-  // 没有 WorkOrder，因此没有计划预算：上限来自 Worker 的默认值。
+  // No work order, hence no plan budget: the limit is the owner's setting.
+  // 没有 WorkOrder，因此没有计划预算：上限来自所有者的设置。
   const worker = new NativeAgentWorker({
     id: "n",
     label: "N",
