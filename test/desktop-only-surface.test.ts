@@ -23,9 +23,14 @@ async function companion(t: TestContext): Promise<{ url: string; token: string; 
 
 function runScript(script: string, args: string[], dataDirectory: string): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
+    // Override every home variable: the repair lane and other callers may leave
+    // CLONE_AI_HOME or CLONE_HOME in the environment, and the script prefers
+    // them over CLONE_AI_DATA_DIR. The test's data directory must win.
+    // 覆盖所有 home 变量：修复通道等调用方可能在环境里留下 CLONE_AI_HOME 或 CLONE_HOME，
+    // 而脚本优先使用它们而不是 CLONE_AI_DATA_DIR。测试的数据目录必须胜出。
     const child = spawn(process.execPath, ["--experimental-strip-types", join(process.cwd(), script), ...args], {
       cwd: process.cwd(),
-      env: { ...process.env, CLONE_AI_DATA_DIR: dataDirectory },
+      env: { ...process.env, CLONE_HOME: dataDirectory, CLONE_AI_HOME: dataDirectory, CLONE_AI_DATA_DIR: dataDirectory },
     });
     let stdout = "";
     let stderr = "";
