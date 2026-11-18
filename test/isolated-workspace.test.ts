@@ -65,16 +65,26 @@ test("an isolated workspace cannot be created inside the owner's live project", 
   );
 });
 
-test("a git project uses a detached worktree when git is available", async (t) => {
+test("a git project uses a detached worktree and carries untracked inputs", async (t) => {
   const owner = await tempDir(t, "clone-iso-git-");
   const sandboxRoot = await tempDir(t, "clone-iso-git-box-");
   await writeFile(join(owner, "tracked.md"), "committed\n", "utf8");
+  await writeFile(join(owner, ".gitignore"), "*.log\n", "utf8");
   const gitOk = await initGitRepo(owner);
   if (!gitOk) {
     t.skip("git is not available");
     return;
   }
-  await writeFile(join(owner, "dirty.md"), "uncommitted\n", "utf8");
+  // A tracked edit and three untracked inputs: the worktree must stay at HEAD
+  // for tracked files, and carry the untracked files a worker needs while
+  // leaving ignored output behind.
+  // 一处已跟踪的修改与三份未跟踪输入：worktree 的已跟踪文件必须停在 HEAD，同时带上
+  // Worker 需要的未跟踪文件，并丢下被忽略的产物。
+  await writeFile(join(owner, "tracked.md"), "uncommitted edit\n", "utf8");
+  await writeFile(join(owner, "note.md"), "uncommitted\n", "utf8");
+  await mkdir(join(owner, "vendor"), { recursive: true });
+  await writeFile(join(owner, "vendor", "three.module.js"), "export const version = 1;\n", "utf8");
+  await writeFile(join(owner, "debug.log"), "ignored output\n", "utf8");
 
   const isolated = await prepareIsolatedWorkspace({
     ownerPath: owner,
@@ -85,7 +95,12 @@ test("a git project uses a detached worktree when git is available", async (t) =
 
   assert.equal(isolated.kind, "git_worktree");
   assert.equal(await readFile(join(isolated.path, "tracked.md"), "utf8"), "committed\n");
-  await assert.rejects(access(join(isolated.path, "dirty.md")), /ENOENT/);
+  assert.equal(await readFile(join(isolated.path, "note.md"), "utf8"), "uncommitted\n");
+  assert.equal(
+    await readFile(join(isolated.path, "vendor", "three.module.js"), "utf8"),
+    "export const version = 1;\n",
+  );
+  await assert.rejects(access(join(isolated.path, "debug.log")), /ENOENT/);
   await writeFile(join(isolated.path, "poison.md"), "from worktree\n", "utf8");
   await assert.rejects(access(join(owner, "poison.md")), /ENOENT/);
 });

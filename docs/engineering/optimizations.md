@@ -31,6 +31,92 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — An isolated worktree carries the owner's untracked inputs
+
+- **Goal / hypothesis:** external steps run in a git worktree created from the
+  owner's project; `git worktree add` materialises HEAD only, so an input the
+  owner seeded but never committed (`vendor/three.module.js`) was absent and the
+  worker aborted with "Required input missing". Copying untracked, non-ignored
+  regular files into the sandbox should let the step start while tracked content
+  stays at HEAD.
+- **Trade-off:** [Untracked workspace files are copied into the isolated worktree](../architecture/trade-offs.md#2026-11-18--untracked-workspace-files-are-copied-into-the-isolated-worktree).
+- **Change:** `src/core/isolated-workspace.ts` — after a successful
+  `git worktree add`, `git ls-files --others --exclude-standard` lists the
+  owner's untracked inputs and each regular file is copied to the same relative
+  path; the prefix comes from `git rev-parse --show-prefix`, symlinks are
+  skipped and ignored files stay out. `test/isolated-workspace.test.ts` — the
+  worktree case now asserts a tracked edit stays at its committed content,
+  untracked `note.md` and `vendor/three.module.js` are readable inside the
+  sandbox, and an ignored `debug.log` is absent. The owner authorized this hand
+  fix outside the repair lane ("改隔离复制").
+- **Eval:** `node --experimental-strip-types --test test/isolated-workspace.test.ts`
+  — before: the case asserted the untracked file was **absent** (the defect);
+  after: 8/8 pass with the three new assertions. `npm test` 740/740,
+  `npm run typecheck` passes, `npm run gate` **PASS** (13 cases, agreement 100%,
+  baseline unchanged).
+- **Execution chain:** traced the failure to `prepareIsolatedWorkspace`; the
+  first patch computed the destination prefix with `relative(repo, ownerPath)`,
+  and the new test failed with ENOENT for `note.md` because macOS
+  `rev-parse --show-toplevel` resolves `/var` to `/private/var`, making the
+  prefix a `../` escape whose `copyFile` error was swallowed. Switched the
+  prefix to `git rev-parse --show-prefix`; a scratch script then showed
+  `note.md` and `vendor/three.module.js` inside the sandbox and `debug.log`
+  excluded. About 20 minutes, no model cost.
+- **Pros:** one boundary — git itself decides what is tracked, ignored, or an
+  input — and no new configuration. The sandbox now matches the tree the owner
+  can see for the files a worker needs.
+- **Cons / next time:** the copy is silent best-effort; a per-file permission
+  error is swallowed, so a future iteration should count skipped files and
+  surface them in the step's evidence. Untracked secrets can now enter the
+  sandbox, which the trade-off records as the reversal condition.
+- **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-18 — A path in prose is not a required input (repair lane: not repaired)
+
+- **Goal / hypothesis:** narrow the native worker's missing-input guard so a path
+  that merely appears in prose cannot fail a step, while a declared required
+  input that is missing still does — the reversal condition recorded in the
+  2026-11-05 entry.
+- **Trade-off:** [A path mentioned in instructions is not a required input](../architecture/trade-offs.md#2026-11-18--a-path-mentioned-in-instructions-is-not-a-required-input).
+- **Change:** none. The patch was to be produced by the repair lane
+  (`npm run repair`), as AGENTS.md rule 4 requires. The lane stopped at its
+  `not-red` gate before any production or test file was written; no source file
+  in the worktree differs from `main`.
+- **Eval:** `npm run traces -- export` wrote 9 traces; the three Forbidden City
+  failures (`560e7a43`, `5909c705`, `87c526d5`, all "Required input missing:
+  vendor/three.module.js") were the only pending ones;
+  `CLONE_AI_NATIVE_MAX_ROUNDS=24 CLONE_AI_NATIVE_TIMEOUT_MS=600000
+  CLONE_AI_NATIVE_MAX_TOKENS=8192 npm run repair -- --agent draft-maker
+  --max-traces 3 --keep` → **failed** (`failedGate: "not-red"`). Phase 1 (run
+  `19252252-…`) made 4 model calls, 4 tool calls, 10,160 tokens and 13.4 s: it
+  listed `.rsi/traces`, read all three traces, read `vendor/three.module.js`
+  (ENOENT), and answered without writing a file. The gate ran the three files
+  already in `test/regression/` and, finding them green, refused to continue.
+  Eval before: not red. No eval after. `git status` in the worktree: only `.rsi/`
+  staged evidence; the branch equals `main`.
+- **Benchmark run:** none — no model benchmark; the lane's Kernel run is recorded
+  in the journal (phase 1 `19252252-6952-4c85-8559-b7168558ceb3`).
+- **Execution chain:** exported 9 traces (the six unrelated traces were moved to
+  `failed-traces/archive-2026-11-05/` for the run and restored afterwards); the
+  lane created worktree `.claude/worktrees/rsi-20261118T0614` from `main`
+  (branch `rsi/auto-fix-20261118T0614`), linked `node_modules`, staged the three
+  traces, ran phase 1 with the native `draft-maker` on the persisted
+  `config.json` endpoint (`openai/gpt-6.1-terra`), and stopped at the gate.
+  Nothing was retried: rule 4 says record the failure and stop.
+- **Pros:** the red gate did its job — it refused to let a worker declare a fix
+  without a failing reproduction, and it left the worktree for inspection. No
+  production file was touched.
+- **Cons / next time:** the phase-1 worker interpreted the trace as an
+  environment problem ("the file is missing"), which it is; the intended
+  behavior change lives in the trade-off entry, and the plan explicitly tells
+  the worker not to read `docs/`. A decision-level change cannot be repaired by
+  a worker that is denied the decision text. Before retrying, put the decision
+  into the step instructions or trace context, or use a trace that names the
+  production file and the wrong behavior. The phase-1 run also reported `failed`
+  ("executor died…") 0.4 s after start and then continued; that status churn
+  should be understood before trusting a phase's status.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-18 — Archived memories are one click away and can be deleted for good
 
 - **Goal / hypothesis:** the memory panel should let the owner reach the archived

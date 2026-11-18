@@ -26,6 +26,67 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-18 —— 隔离 worktree 带上所有者未被跟踪的输入
+
+- **目标 / 假设：** 外部步骤运行在从所有者项目创建的 git worktree 里；`git worktree add`
+  只物化 HEAD，因此所有者种下却从未提交的输入（`vendor/three.module.js`）不在其中，Worker 以
+  “Required input missing”中止。把未被跟踪、未被忽略的普通文件复制进沙箱，应能让步骤开始，
+  同时已跟踪内容仍停在 HEAD。
+- **取舍：** [隔离 worktree 复制进未被跟踪的工作区文件](../architecture/trade-offs.zh-CN.md#2026-11-18--隔离-worktree-复制进未被跟踪的工作区文件)。
+- **变更：** `src/core/isolated-workspace.ts`——`git worktree add` 成功后，用
+  `git ls-files --others --exclude-standard` 列出所有者的未跟踪输入，逐个把普通文件复制到
+  相同的相对路径；前缀取自 `git rev-parse --show-prefix`，符号链接跳过，被忽略的文件不进入。
+  `test/isolated-workspace.test.ts`——worktree 用例现在断言已跟踪的修改停在提交内容、
+  未跟踪的 `note.md` 与 `vendor/three.module.js` 在沙箱内可读、被忽略的 `debug.log` 不在。
+  所有者以“改隔离复制”授权了修复通道之外的手工修改。
+- **Eval：** `node --experimental-strip-types --test test/isolated-workspace.test.ts`——变更前：
+  用例断言未跟踪文件**不存在**（即缺陷）；变更后：8/8 通过，含三条新断言。`npm test` 740/740，
+  `npm run typecheck` 通过，`npm run gate` **PASS**（13 个用例、一致率 100%、基线未变）。
+- **执行链路：** 把失败定位到 `prepareIsolatedWorkspace`；第一版补丁用
+  `relative(repo, ownerPath)` 计算目标前缀，新测试以 `note.md` 的 ENOENT 失败：macOS 的
+  `rev-parse --show-toplevel` 把 `/var` 解析成 `/private/var`，前缀成了 `../` 逃逸，而
+  `copyFile` 的报错被吞掉。改用 `git rev-parse --show-prefix`；临时脚本随后显示沙箱内有
+  `note.md` 与 `vendor/three.module.js`，`debug.log` 被排除。约 20 分钟，无模型成本。
+- **优点：** 只有一个边界——由 git 自己决定什么被跟踪、被忽略或是输入——且没有新增配置。
+  对 Worker 需要的文件，沙箱现在与所有者看得见的树一致。
+- **缺点 / 下次：** 复制是静默的尽力而为；单个文件的权限错误会被吞掉，下一轮应统计跳过的文件
+  并把它们写进步骤证据。未被跟踪的密钥现在可能进入沙箱，取舍条目把它记为推翻条件。
+- **推翻条件：** 从取舍条目复制。
+
+### 2026-11-18 —— 指令里提到的路径不是必需输入（修复通道：未修成）
+
+- **目标 / 假设：** 收窄 Native Worker 的缺失输入闸门：仅仅出现在散文里的路径不能让步骤失败，
+  而已声明的必需输入缺失时仍然失败——这是 2026-11-05 条目写下的推翻条件。
+- **取舍：** [指令里提到的路径不是必需输入](../architecture/trade-offs.zh-CN.md#2026-11-18--指令里提到的路径不是必需输入)。
+- **变更：** 无。补丁本应由修复通道（`npm run repair`）产出，这是 AGENTS.md 规则 4 的要求。
+  通道在写出任何生产代码或测试之前停在 `not-red` 闸门前；worktree 中没有任何源文件与 `main`
+  不同。
+- **Eval：** `npm run traces -- export` 写出 9 条轨迹；只有三条故宫失败（`560e7a43`、
+  `5909c705`、`87c526d5`，原因都是 "Required input missing: vendor/three.module.js"）处于
+  待修复状态；`CLONE_AI_NATIVE_MAX_ROUNDS=24 CLONE_AI_NATIVE_TIMEOUT_MS=600000
+  CLONE_AI_NATIVE_MAX_TOKENS=8192 npm run repair -- --agent draft-maker --max-traces 3
+  --keep` → **失败**（`failedGate: "not-red"`）。第一阶段（Run `19252252-…`）用了 4 次模型
+  调用、4 次工具调用、10,160 tokens、13.4 秒：它列了 `.rsi/traces`、读完了三条轨迹、读了
+  `vendor/three.module.js`（ENOENT），然后没有写任何文件就回答。闸门跑了 `test/regression/`
+  里已有的三个文件，发现全绿，拒绝继续。变更前 eval：不红。没有变更后 eval。worktree 的
+  `git status` 只有 `.rsi/` 暂存证据；分支与 `main` 相同。
+- **Benchmark run：** 无——没有模型基准；通道的 Kernel Run 记录在 Journal 中（第一阶段
+  `19252252-6952-4c85-8559-b7168558ceb3`）。
+- **执行链路：** 导出 9 条轨迹（为本次运行把六条无关轨迹移到
+  `failed-traces/archive-2026-11-05/`，运行结束后已还原）；通道从 `main` 创建 worktree
+  `.claude/worktrees/rsi-20261118T0614`（分支 `rsi/auto-fix-20261118T0614`），链接
+  `node_modules`，暂存三条轨迹，用原生 `draft-maker` 在 `config.json` 持久端点上
+  （`openai/gpt-6.1-terra`）跑第一阶段，然后在闸门停下。没有重试：规则 4 要求记录失败
+  并停止。
+- **优点：** 红色闸门起了作用——它拒绝让 Worker 在没有失败复现的情况下宣称修复，并把
+  worktree 留给检查。没有生产文件被改动。
+- **缺点 / 下次：** 第一阶段的 Worker 把轨迹理解成环境问题（"文件缺失"），而它确实是；
+  但预期的行为变更写在取舍条目里，而计划明确告诉 Worker 不要读 `docs/`。一个被剥夺了决定文本的
+  Worker 修不了决定层面的变更。重试前，应把决定写进步骤指令或轨迹上下文，或使用一条点名生产
+  文件与错误行为的轨迹。第一阶段的 Run 还在开始 0.4 秒后报了一次 `failed`
+  （"executor died…"）然后继续；在信任阶段状态之前，应先弄清这次状态抖动。
+- **推翻条件：** 从取舍条目复制。
+
 ### 2026-11-18 —— 归档记忆点一下就能看到，也可以永久删除
 
 - **目标 / 假设：** 记忆面板应让所有者不必翻状态下拉框就能看到归档集，并能永久移除一条

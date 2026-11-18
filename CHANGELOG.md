@@ -6,6 +6,25 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### An isolated worktree carries untracked inputs
+
+External steps run in a git worktree of the owner's project; `git worktree add`
+materialised HEAD only, so a file the owner seeded but never committed
+(`vendor/three.module.js`) was missing inside `~/.clone/isolated-workspaces/...`
+and the worker aborted with "Required input missing". Untracked, non-ignored
+regular files are now copied into the sandbox; tracked files stay at HEAD, and
+ignored output and symlinks stay out. Tests:
+`test/isolated-workspace.test.ts` 8/8, full suite 740/740, typecheck and gate
+pass.
+
+隔离 worktree 现在带上未被跟踪的输入
+
+外部步骤运行在所有者项目的 git worktree 里；`git worktree add` 只物化 HEAD，所有者种下却
+从未提交的文件（`vendor/three.module.js`）在 `~/.clone/isolated-workspaces/...` 中缺失，
+Worker 以“Required input missing”中止。现在会把未被跟踪、未被忽略的普通文件复制进沙箱；
+已跟踪文件停在 HEAD，被忽略的产物与符号链接不进入。测试：
+`test/isolated-workspace.test.ts` 8/8，全套 740/740，typecheck 与 gate 通过。
+
 ### A one-query FPS capability benchmark, imported audit, and a rebuilt app
 
 Added `benchmark/capability/shadowport-fps/`: a one-paragraph prompt, a

@@ -15,6 +15,20 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — An isolated step sees the owner's untracked inputs
+
+- **Claim:** an external step that runs in a git worktree now carries the
+  owner's untracked, non-ignored files, so a seeded `vendor/three.module.js` is
+  readable inside `~/.clone/isolated-workspaces/...` instead of aborting with
+  "Required input missing". Tracked files still come from HEAD; ignored output
+  and symlinks stay out.
+- **Evidence:** `node --experimental-strip-types --test test/isolated-workspace.test.ts`
+  — 8/8; the worktree case reads `note.md` and `vendor/three.module.js` from the
+  sandbox, reads HEAD's `tracked.md`, and refuses `debug.log`. `npm test`
+  740/740, `npm run typecheck` passes, `npm run gate` **PASS**.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--untracked-workspace-files-are-copied-into-the-isolated-worktree),
+  [execution chain](optimizations.md#2026-11-18--an-isolated-worktree-carries-the-owners-untracked-inputs).
+
 ## 2026-11-18 — The archived memory set is a control, and it can be pruned
 
 - **Claim:** the memory panel's 已归档 count now filters the list to the archived set with one click, and an archived memory can be permanently deleted — both possible `.md` paths, its index row, terms, weights, versions and staged mutations — with the decision journaled as `memory.deleted` (summary included) before the files go. An active memory must be archived first, so the only irreversible memory action stays one deliberate step from the default view.
