@@ -95,5 +95,7 @@
   "minDougong": 40,
   "minWindowMullions": 32,
   "minDoorStuds": 36,
-  "minShadowDarkerShare": 0.02
+  "minShadowDarkerShare": 0.02,
+  "minOrbitDeg": 10,
+  "maxZoomRatio": 0.9
 }

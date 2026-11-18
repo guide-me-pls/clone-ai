@@ -23,6 +23,16 @@ import { usageForWindow, type GatewayRequestRow, type GatewayUsage } from "../in
 
 export type FailureStage = "none" | "planning" | "policy" | "execution" | "verification" | "cancelled" | "unknown";
 
+/** One tool call a worker made, in order, so the audit answers "what did it actually do". 一个 Worker 按顺序发起的工具调用，使审计能回答"它实际做了什么"。 */
+export interface AuditToolCall {
+  tool: string;
+  startedAt: string;
+  durationMs?: number;
+  isError?: boolean;
+  /** Redacted, bounded arguments. 已脱敏、有界的入参。 */
+  inputSummary?: string;
+}
+
 export interface AuditExecution {
   stepId: string;
   /** Subagent work order id when the step delegated; absent for a single-agent step. 步骤委派子 Agent 时的 WorkOrder id；单 Agent 步骤没有。 */
@@ -37,6 +47,15 @@ export interface AuditExecution {
   failure?: { message: string; category?: string; signature?: string; exitCode?: number | null };
   /** Model-gateway view of this execution (tokens, cost, HTTP errors). Inferred by time window, never exact. 模型网关视角下的此次执行（token、费用、HTTP 错误）；按时间窗口推断，不是精确归因。 */
   gatewayUsage?: GatewayUsage;
+  /**
+   * The tools this execution called, in order. Browser tools are the ones an
+   * owner most needs to see: a screenshot that returned an image leaves no
+   * path-based evidence, so without this list the visual iteration is invisible
+   * in the audit.
+   * 本次执行按顺序调用的工具。浏览器工具是所有者最需要看到的：返回图片的截图不会留下基于路径的
+   * 证据，没有这个列表，视觉迭代在审计里就是不可见的。
+   */
+  tools?: AuditToolCall[];
   /** Exact usage reported by the adapter for this execution. Adapter 为本次执行报告的精确用量。 */
   usage?: {
     inputTokens?: number;
@@ -95,6 +114,8 @@ export interface RunAuditRecord {
 
 type Payload = Record<string, any>;
 
+const TOOL_CALL_LIMIT = 200;
+
 export function projectRunAudits(events: readonly JournalEvent[]): RunAuditRecord[] {
   const byRun = new Map<string, JournalEvent[]>();
   const tasks = new Map<string, Payload>();
@@ -141,6 +162,7 @@ function projectOne(
     }
   }
   const open = new Map<string, AuditExecution>();
+  const pendingTools = new Map<string, AuditToolCall>();
   let lastFailure: { stage: FailureStage; category?: string; reason?: string } | undefined;
   let sawExecution = false;
 
@@ -194,6 +216,44 @@ function projectOne(
       case "execution.progress":
         if (open.has(p.stepId)) open.get(p.stepId)!.progressEvents += 1;
         break;
+      case "agent.tool_started": {
+        // Keyed by the step (and work order) that was open when it ran, so a
+        // delegated worker's calls land on its own execution row.
+        // 以调用发生时打开的步骤（与工作单元）为键，使被派发的 Worker 的调用落在它自己的执行行上。
+        const execution = p.workOrderId === undefined
+          ? open.get(p.stepId)
+          : open.get(`${p.stepId}/${p.workOrderId}`) ?? open.get(p.stepId);
+        if (execution === undefined) break;
+        const tools = execution.tools ?? (execution.tools = []);
+        // A long step can call hundreds of tools; keep the record bounded but
+        // say how many were dropped rather than silently truncating.
+        // 长步骤可能调用数百次工具；记录有界，但明确说明丢弃了多少，而不是静默截断。
+        if (tools.length >= TOOL_CALL_LIMIT) {
+          // Say that calls were dropped instead of silently truncating.
+          // 明确说明有调用被丢弃，而不是静默截断。
+          // 明确说明有调用被丢弃，而不是静默截断。
+          if (!tools.some((entry) => entry.tool === "…")) {
+            tools.push({ tool: "…", startedAt: event.occurredAt });
+          }
+          break;
+        }
+        tools.push({
+          tool: String(p.tool ?? "?"),
+          startedAt: event.occurredAt,
+          ...(typeof p.inputSummary === "string" && p.inputSummary.length > 0
+            ? { inputSummary: p.inputSummary.slice(0, 240) }
+            : {}),
+        });
+        pendingTools.set(String(p.toolCallId ?? ""), tools[tools.length - 1]!);
+        break;
+      }
+      case "agent.tool_completed": {
+        const entry = pendingTools.get(String(p.toolCallId ?? ""));
+        if (entry === undefined) break;
+        if (typeof p.durationMs === "number") entry.durationMs = p.durationMs;
+        if (p.isError === true) entry.isError = true;
+        break;
+      }
       case "execution.failed": {
         const execution = open.get(p.stepId) ?? ensureExecution(record, p.stepId, p.agentId);
         closeExecution(execution, event.occurredAt, "failed");

@@ -182,3 +182,28 @@ test("exact adapter usage is journaled with run and step, and the audit shows it
     modelCalls: 2,
   });
 });
+
+test("the audit carries the worker's tool calls, including browser tools", () => {
+  // A screenshot returns an image and touches no path, so it leaves no
+  // evidence row. Without the tool list the visual iteration is invisible in
+  // the audit — which is exactly what the owner reported.
+  // 截图返回图片、不触碰任何路径，因此不留下证据行。没有工具列表，视觉迭代在审计里不可见——
+  // 这正是所有者的反馈。
+  const at = "2026-11-18T00:00:00.000Z";
+  const events = [
+    { sequence: 1, id: "e1", type: "run.created", occurredAt: at, runId: "r1", taskId: "t1", payload: {} },
+    { sequence: 2, id: "e2", type: "execution.started", occurredAt: at, runId: "r1", payload: { stepId: "s1", adapterId: "w" } },
+    { sequence: 3, id: "e3", type: "agent.tool_started", occurredAt: at, runId: "r1", payload: { stepId: "s1", tool: "playwright.browser_navigate", toolCallId: "c1", inputSummary: '{"url":"http://127.0.0.1:8135/"}' } },
+    { sequence: 4, id: "e4", type: "agent.tool_completed", occurredAt: at, runId: "r1", payload: { stepId: "s1", tool: "playwright.browser_navigate", toolCallId: "c1", durationMs: 120, isError: false } },
+    { sequence: 5, id: "e5", type: "agent.tool_started", occurredAt: at, runId: "r1", payload: { stepId: "s1", tool: "playwright.browser_take_screenshot", toolCallId: "c2", inputSummary: '{"filename":"final.png"}' } },
+    { sequence: 6, id: "e6", type: "agent.tool_completed", occurredAt: at, runId: "r1", payload: { stepId: "s1", tool: "playwright.browser_take_screenshot", toolCallId: "c2", durationMs: 640, isError: false } },
+    { sequence: 7, id: "e7", type: "execution.failed", occurredAt: at, runId: "r1", payload: { stepId: "s1", message: "boom" } },
+  ];
+  const [record] = projectRunAudits(events as never);
+  const tools = record!.executions[0]!.tools ?? [];
+  assert.equal(tools.length, 2);
+  assert.equal(tools[0]!.tool, "playwright.browser_navigate");
+  assert.equal(tools[0]!.durationMs, 120);
+  assert.equal(tools[1]!.tool, "playwright.browser_take_screenshot");
+  assert.equal(tools[1]!.inputSummary, '{"filename":"final.png"}');
+});

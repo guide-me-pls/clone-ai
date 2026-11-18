@@ -166,9 +166,24 @@
       return `<div class="au-exec"><div class="au-exec-head"><b>${esc(e.providerId ?? "?")}</b><span>${esc(e.agentId ?? "")}${e.workOrderId ? ` · ${esc(e.workOrderId)}` : ""} · 步骤 ${esc(e.stepId)}</span>${badge(e.outcome === "failed" ? "失败" : e.outcome === "completed" ? "完成" : "未结束", tone)}<em>${ms(e.durationMs)}</em></div>
         <div class="au-bar"><i class="au-fill-${tone}" style="width:${Math.max(3, ((e.durationMs ?? 0) / total) * 100)}%"></i></div>
         <div class="au-chips"><span>${e.progressEvents} 条进度</span>${e.usage ? `<span>精确用量 ${num(e.usage.inputTokens ?? 0)}↑ ${num(e.usage.outputTokens ?? 0)}↓ tokens</span>${e.usage.modelCalls !== undefined ? `<span>${e.usage.modelCalls} 次模型调用</span>` : ""}` : ""}${u ? `<span>${u.calls} 次模型调用</span><span>${num(u.inputTokens)}↑ ${num(u.outputTokens)}↓ tokens</span><span>${usd(u.costUsd)}</span><span>${esc(u.models.join(", "))}</span><span title="网关无法确认请求属于哪个 Run">按时间窗口推断</span>` : `<span>无网关数据</span>`}</div>
+        ${toolCalls(e.tools)}
         ${e.failure ? `<div class="au-callout au-callout-bad"><b>${esc(e.failure.category ?? "失败")}</b>${e.failure.exitCode != null ? ` · 退出码 ${esc(e.failure.exitCode)}` : ""}<pre>${esc(e.failure.message)}</pre></div>` : ""}
         ${u?.errorSamples?.length ? `<div class="au-callout au-callout-warn"><b>网关返回的错误（${u.errors}）</b>${u.errorSamples.map((x) => `<pre>${esc(x.status)} ${esc(x.model ?? "")}\n${esc(x.message)}</pre>`).join("")}</div>` : ""}</div>`;
     }).join("");
+  }
+
+  /**
+   * The tools a worker actually called, in order. This is where the visual
+   * iteration is visible: a screenshot that returned an image leaves no
+   * path-based evidence row, and before this list the owner could not see that
+   * the worker looked at its own render at all.
+   * Worker 实际按顺序调用的工具。视觉迭代在这里可见：返回图片的截图不留下基于路径的证据行，
+   * 在这个列表之前，所有者根本看不到 Worker 是否看过自己的渲染。
+   */
+  function toolCalls(tools) {
+    if (!tools || !tools.length) return "";
+    const rows = tools.map((call) => `<li><code>${esc(call.tool)}</code>${call.isError ? badge("错误", "bad") : ""}${call.durationMs !== undefined ? `<em>${ms(call.durationMs)}</em>` : ""}${call.inputSummary ? `<span>${esc(call.inputSummary.slice(0, 180))}</span>` : ""}</li>`).join("");
+    return `<details class="au-tools"><summary>工具调用 ${tools.length} 次</summary><ul class="au-turn-tools">${rows}</ul></details>`;
   }
 
   /** The run's whole journal trace, loaded on demand. 该 Run 的完整 Journal 轨迹，按需加载。 */
