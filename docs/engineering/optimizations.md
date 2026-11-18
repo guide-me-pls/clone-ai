@@ -782,6 +782,18 @@ file keeps every attempt, including the ones that did not work.
   also failed: `tsc` could not resolve `../lib/tsc.js` in the linked worktree (a
   concurrent `node_modules` change) and a desktop-shell test expected an `app.js`
   regex. Branch `rsi/auto-fix-20261118T0817` and its worktree are kept; no merge.
+  A seventh attempt used the both-direction brief after the round cap was
+  removed (Kimi, no cap, isolated automation home and worktree root). Phase 1
+  was red and phase 2's regression cases turned green. The patch is now
+  contract-correct: it reads `WorkOrderInput.name`, clears a missing input after
+  a successful read/write, and lists declared inputs in the prompt. The `suite`
+  gate still failed for three reasons outside the patch:
+  `test/native-agent-worker.test.ts` still asserts the old "path named in the
+  instructions fails" rule (the repair worker may not edit `test/`), the
+  desktop-only-surface test injects `CLONE_AI_DATA_DIR` while inheriting
+  `CLONE_AI_HOME` (so it reads the repair's traces), and `linkDependencies`
+  dereferences `.bin` symlinks, leaving a `tsc` shim that cannot find
+  `../lib/tsc.js`. Branch `rsi/auto-fix-20261118T0845` and its worktree are kept.
 - **Benchmark run:** none — no model benchmark; the lane's Kernel run is recorded
   in the journal (phase 1 `19252252-6952-4c85-8559-b7168558ceb3`).
 - **Execution chain:** exported 9 traces (the six unrelated traces were moved to

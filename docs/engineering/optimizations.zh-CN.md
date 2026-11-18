@@ -550,6 +550,14 @@
   worktree 里链接的 `node_modules` 无法解析 `../lib/tsc.js`（并发的安装改动），外加一个
   desktop-shell 用例期望 `app.js` 的正则。分支 `rsi/auto-fix-20261118T0817` 与其 worktree
   保留；没有合并。
+  第七次尝试在移除轮次上限之后使用双向说明（Kimi、无上限、隔离 automation home 与 worktree
+  根）。第一阶段变红，第二阶段的回归用例转绿。补丁现在符合契约：读取
+  `WorkOrderInput.name`，在成功读取/写入后清除缺失标记，并在 Prompt 中列出已声明的输入。
+  `suite` 闸门仍因补丁之外的三个原因失败：`test/native-agent-worker.test.ts` 仍在断言旧的
+  "指令里点名的路径会失败"规则（修复 Worker 不能修改 `test/`）；desktop-only-surface 用例
+  注入 `CLONE_AI_DATA_DIR` 却继承了 `CLONE_AI_HOME`（于是读到修复的轨迹）；
+  `linkDependencies` 解引用 `.bin` 符号链接，留下一个找不到 `../lib/tsc.js` 的 tsc 壳。
+  分支 `rsi/auto-fix-20261118T0845` 与其 worktree 保留。
 - **Benchmark run：** 无——没有模型基准；通道的 Kernel Run 记录在 Journal 中（第一阶段
   `19252252-6952-4c85-8559-b7168558ceb3`）。
 - **执行链路：** 导出 9 条轨迹（为本次运行把六条无关轨迹移到
