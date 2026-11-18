@@ -11,6 +11,17 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 从 Finder 打开的 App 附着到常驻守护
+
+- **主张：** LaunchAgent `ai.clone.companion` 已加载时，从 Finder 打开的打包 App 附着到它
+  发布的端点，而不是在同一本 Journal 上再拉起一个运行时；没有该任务时仍独立运行。
+- **证据：** `node --experimental-strip-types --test test/desktop-shell.test.ts` ——
+  **1/1**。手工验证：任务已加载时，变更前的构建拉起了子进程 76242 并重写端点；变更后的构建
+  （App 81494）没有子进程，端点仍是守护 pid 78156，`GET /api/health` 返回 HTTP 200。
+  全量 **744/744**，typecheck 与 gate 通过。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--打包启动在-launchagent-已加载时选择附着)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--从-finder-打开的-app-附着到已加载的守护)。
+
 ## 2026-11-18 —— 一次性的构建并自证步骤不再在第 12 轮被切断
 
 - **主张：** Native Worker 的默认模型调用预算现在是 40，因此一个"写页面—渲染—经浏览器

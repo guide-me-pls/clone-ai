@@ -40,14 +40,44 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     private var lastExitSummary = ""
 
     /**
-     * Resident mode: launchd owns the runtime, so quitting this app must not
-     * kill it. The app is a window onto a daemon that outlives it.
+     * Resident mode, decided once at launch: launchd owns the runtime, so
+     * quitting this app must not kill it. The app is a window onto a daemon
+     * that outlives it.
      *
-     * 常驻模式：由 launchd 托管运行时，因此退出本 App 不得杀死它。App 是通往一个比它
-     * 活得更久的 Daemon 的一扇窗。
+     * A packaged launch from Finder carries no environment, so the explicit
+     * variable cannot be the only signal: when the LaunchAgent is loaded the
+     * window attaches instead of spawning a second writer on the same journal.
+     *
+     * 常驻模式，在启动时决定一次：由 launchd 托管运行时，因此退出本 App 不得杀死它。
+     * App 是通往一个比它活得更久的 Daemon 的一扇窗。
+     *
+     * 从 Finder 打开的打包 App 没有环境变量，因此不能只靠显式变量：LaunchAgent 已加载时
+     * 窗口选择附着，而不是在同一个 Journal 上再拉起一个写者。
      */
-    private var residentRuntime: Bool {
-        ProcessInfo.processInfo.environment["CLONE_AI_RESIDENT_DAEMON"] == "1"
+    private var residentRuntime = false
+
+    private static let launchAgentLabel = "ai.clone.companion"
+
+    /**
+     * Ask launchd whether the job exists in this user's GUI domain. A loaded
+     * job that is temporarily dead still counts: launchd owns the restart, and
+     * the window retries the endpoint instead of starting a rival runtime.
+     * 向 launchd 询问该任务是否存在于当前用户的 GUI 域。已加载但暂时死掉的任务仍算数：
+     * 重启由 launchd 负责，窗口重试端点，而不是启动一个竞争运行时。
+     */
+    private func launchAgentIsLoaded() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["print", "gui/\(getuid())/\(Self.launchAgentLabel)"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
     }
 
     /**
@@ -73,6 +103,14 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
            !configuredRoot.isEmpty {
             developerRoot = URL(fileURLWithPath: configuredRoot, isDirectory: true).standardizedFileURL
         }
+        // A packaged launch decides once: an explicit variable wins; otherwise
+        // a loaded LaunchAgent means the window attaches; a checkout without
+        // the job keeps a private runtime. Developer builds keep theirs unless
+        // the variable is explicit.
+        // 打包启动只决定一次：显式变量优先；否则已加载的 LaunchAgent 意味着附着；没有该
+        // 任务的检出保留私有运行时。开发构建除非显式设置变量，否则始终保留私有运行时。
+        let explicitResident = ProcessInfo.processInfo.environment["CLONE_AI_RESIDENT_DAEMON"] == "1"
+        residentRuntime = explicitResident || (developerRoot == nil && launchAgentIsLoaded())
         if activateExistingInstance() {
             DistributedNotificationCenter.default().post(name: Self.showWindowNotification, object: nil)
             NSApp.terminate(nil)

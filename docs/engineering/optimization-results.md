@@ -15,6 +15,19 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — A Finder-launched app attaches to the resident daemon
+
+- **Claim:** when the LaunchAgent `ai.clone.companion` is loaded, a packaged app
+  launched from Finder attaches to its endpoint instead of spawning a second
+  runtime on the same journal; without the job it still runs standalone.
+- **Evidence:** `node --experimental-strip-types --test test/desktop-shell.test.ts`
+  — **1/1**. Manual: with the job loaded, the pre-change build spawned child
+  76242 and rewrote the endpoint; the changed build (app 81494) has no child,
+  the endpoint still names daemon pid 78156, `GET /api/health` → HTTP 200. Full
+  suite **744/744**, typecheck and gate pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-packaged-launch-attaches-when-the-launchagent-is-loaded),
+  [execution chain](optimizations.md#2026-11-18--a-finder-launched-app-attaches-to-the-loaded-daemon).
+
 ## 2026-11-18 — A one-shot build-and-verify step is no longer cut off at 12 rounds
 
 - **Claim:** the native worker's default model-call budget is now 40, so a step

@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The packaged app attaches to the resident daemon
+
+A build launched from Finder carries no environment, so the window used to spawn its own runtime even while the `ai.clone.companion` LaunchAgent was running — two writers on one journal. The window now asks launchd whether the job is loaded and attaches when it is; a checkout without the job still runs its own runtime. Developer builds keep theirs unless `CLONE_AI_RESIDENT_DAEMON=1` is explicit.
+
+从 Finder 打开的构建没有环境变量，因此即使 `ai.clone.companion` 守护已在运行，窗口也会再拉起一个运行时——两个写者共享一本 Journal。现在窗口会向 launchd 询问任务是否已加载，已加载就附着；没有该任务的检出仍运行自己的运行时。开发构建除非显式设置 `CLONE_AI_RESIDENT_DAEMON=1`，否则保留私有运行时。
+
 ### A build-and-verify step gets 40 rounds, and interactive grading is honest
 
 The native worker's default model-call budget rises from 12 to 40: App run
