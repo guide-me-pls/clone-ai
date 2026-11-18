@@ -6,6 +6,67 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — Text documents attach inline; PDFs and cross-turn document text wait
+
+**Decision.** The composer accepts text-like documents alongside images and
+videos, from the file panel or a drag-and-drop: any `text/*` file plus the
+common source/config extensions, up to 4 attachments per message, 50,000
+characters per document and 100,000 characters across documents. The UI reads
+the file as text and sends it in the request; the Main Agent renders each
+document as a bounded, clearly delimited data block in the current turn. The
+turn ledger and conversation history record the owner's typed message plus a
+manifest (names and sizes), not the document bodies. PDF, binary and compressed
+files are refused with a reason. The native `NSOpenPanel` now allows `.text` in
+addition to `.image` and `.movie`, and the WebView accepts a drop anywhere in
+the window.
+
+**Alternatives rejected.**
+
+- *Write the document into the workspace and let the model read it with a tool.*
+  The Main Agent runs with built-in file tools disabled; adding a read path for
+  attachments would hand the model a broader filesystem surface, persist the
+  owner's documents on disk, and need a new authority decision. Inline text
+  keeps the attachment inside the governed turn.
+- *Add a PDF parser (pdfjs-dist or a native helper).* The bundle ships only
+  `typebox`; a parser would add a dependency and a second decode path for one
+  format. PDF support waits until it is actually requested.
+- *Use provider-native document/file content parts.* The Gateway is
+  OpenAI-compatible and today carries images as `image_url`; document parts are
+  not guaranteed across models and a text-only model would 400. Inline text
+  works with every model that can read text.
+- *Persist the full document text in the ledger and history.* Up to 100,000
+  characters would be repeated to the provider on every later turn and stored a
+  second time. The manifest keeps the audit honest about what was attached
+  without that cost.
+
+**Evidence.** The composer before this change accepted only
+PNG/JPEG/GIF/WebP/video (`apps/desktop/ui/index.html` accept list) and
+`parseAttachments` accepted only four image signatures
+(`src/main-agent/attachments.ts`); the owner reported adding files was clumsy.
+`package.json` has no PDF or document parser dependency. The 100,000-character
+total is about 25,000 tokens under the existing 128,000-token window, leaving
+room for the system prompt and history; the loop's token-aware compaction still
+runs if the rest exceeds the threshold. This is an assumption based on the
+common four-characters-per-token estimate, not a measured provider count for
+the attached files. The eval is deterministic: `test/attachments.test.ts` gains
+accept, reject and compose cases, and `test/desktop-shell.test.ts` asserts the
+drop handlers and the native `.text` panel type.
+
+**What it costs.** Documents live in the turn that carried them: a later
+follow-up that asks about their contents must reattach the file, because history
+holds only the manifest. A 100,000-character attachment can cost roughly 25k
+input tokens per turn. PDF, Word, and other binary formats stay unsupported.
+Adding `text/*` to the native panel also widens what the picker shows, so the UI
+must reject a text file that is too large or binary after reading it.
+
+**Reversal condition.** If the Gateway gains native document parts or a
+document-aware model, carry documents as native parts instead. If owners
+routinely ask follow-ups about an earlier document, add a governed attachment
+store and a read tool rather than growing the manifest. If PDF requests become
+common, add one vetted extractor and cover it with the same size and signature
+tests. If a 100k-character attachment regularly triggers compaction, lower the
+cap or extract only the relevant sections.
+
 ## 2026-11-17 — The desktop app is the only product surface; the CLI and headless server are removed
 
 **Decision.** `src/cli/clone-ai.ts` (33 command surfaces), its `bin` and `cli`
@@ -83,6 +144,15 @@ rejected the earlier deliverable as "我不想只要一个 png ... 能放大进�
 the task demanded a 30-second timeline and a rendered MP4, which is exactly a
 fixed camera, and every check graded data or a still image — none of them could
 tell an inspectable model from a picture of one.
+
+**Owner turns are labelled `desktop`.** A query that arrives without an
+`x-clone-caller` header is the owner through the app; recording it as `unknown`
+made every owner turn in the audit unreadable. An explicit caller (a benchmark,
+a bridge) still wins. This is the same record, not a second one: a reader should
+never have to guess who started a run.
+所有者的回合标记为 `desktop`。没有 `x-clone-caller` 头的查询就是所有者通过 App 在说话；记成
+`unknown` 会让审计里每一回合都读不出是谁。显式调用方（评测、桥接）仍然优先。这属于同一条记录，
+不是第二条：读者不应该需要猜是谁启动了 Run。
 
 **What it costs.** The record grows by up to 200 small entries per execution;
 `inputSummary` is already redacted and bounded to 240 characters, and the cap
@@ -2381,3 +2451,24 @@ know about the preview server can still make the worker's browser check fail
 **Reversal condition:** if `dispatch_task` gains asynchronous progress and a way
 to join a run without blocking the turn, remove the steer and let the model
 choose either path.
+
+## 2026-11-17 — Reserve the last two rounds for a final answer
+
+**Decided:** when an agent turn has two model rounds left, the shared loop adds a
+system budget notice: stop exploring and editing, run only the essential final
+check, and answer with what was built, what was verified, and what remains
+unverified.
+
+**Why it won.** The 60-round FPS build produced a complete, browser-checked v4
+with menu, relay interaction and debrief screenshots, then failed because it
+spent the last round polishing instead of answering. The artifact was good; the
+run's terminal status was not. The notice makes the last two rounds do the job
+the owner actually needs — a check and a report.
+
+**What was given up.** Two rounds of potential polishing. On a task that needs
+the tail for real work, the notice can stop it early; the budget must then be
+raised rather than the notice removed.
+
+**Reversal condition:** if runs with the notice routinely end with a materially
+worse artifact than runs without it, reserve three rounds or make the reserve
+configurable. If models ignore the notice, make the final round answer-only.
