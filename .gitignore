@@ -2,6 +2,7 @@ node_modules/
 .idea/
 .clone-ai/
 .clone/
+.automation/
 .omx/
 coverage/
 /dist/

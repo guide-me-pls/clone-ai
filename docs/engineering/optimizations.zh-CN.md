@@ -26,6 +26,39 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-18 —— 自动化在自己的 clone home 里运行
+
+- **目标 / 假设：** 维护自动化不得共享所有者的运行时数据目录：它可能持有 Main Agent
+  提示锁、向 Journal 追加、或重写端点。给它自己的 home，只播种配置，所有者 home 只作只读
+  输入。
+- **取舍：** [维护自动化在自己的 clone home 里运行](../architecture/trade-offs.zh-CN.md#2026-11-18--维护自动化在自己的-clone-home-里运行)。
+- **变更：** 新增 `scripts/automation-home.mjs`（`resolveAutomationHome`、
+  `prepareAutomationHome`、CLI）与 `automation-home.d.mts`；`scripts/repair.mjs` 准备
+  `.automation/repair`，把 `tracesDirectory` 指向所有者的 clone home（通道读取其
+  `failed-traces`），并把报告/状态写入隔离 home；`src/repair/repair-lane.ts` 增加
+  `tracesDirectory`；`scripts/nightly-rsi.mjs` 把状态与锁放在 `.automation/nightly`，
+  从所有者处读取轨迹；
+  `scripts/companion-dev.mjs` 要求显式隔离 home，并拒绝 `~/.clone`，除非
+  `CLONE_AI_ALLOW_OWNER_HOME=1`；`.automation/` 已加入忽略；`test/automation-home.test.ts`
+  覆盖默认值、拒绝、覆盖、播种与用途校验。
+- **Eval：** `node --experimental-strip-types --test test/automation-home.test.ts` ——
+  **5/5**。`npm run repair -- --dry-run --max-traces 2` 打印
+  `Automation home: <repo>/.automation/repair`，并从 `~/.clone/failed-traces` 读到
+  **2 条轨迹**；`node scripts/nightly-rsi.mjs --dry-run --max-traces 2` 同理；
+  `COMPANION-DEV` 在 `CLONE_AI_DATA_DIR` 未设置或指向 `~/.clone` 时以拒绝信息退出。全量
+  **750/750**，typecheck 与 gate 通过。
+- **Benchmark run：** 无——确定性路径加一次 dry run；没有 Provider、模型、数据集或评分参数。
+- **执行链路：** 诊断（Journal 回合 `6d04f0ac` 持有提示锁 149.9 秒）、取舍、helper、
+  修复/夜间接线、companion 闸门、测试、typecheck（TS7016 后补 `.d.mts`）、全量、文档。
+  dry run 发现一个模块缺陷：通道在传入目录后再次追加 `failed-traces`，第一版因此查找
+  `.../failed-traces/failed-traces`；现在该选项直接指向轨迹目录。
+- **优点：** 自动化不再能持有所有者的提示锁或写所有者的 Journal；失败轨迹仍可读；配置快照
+  保留模型与 Worker 设置。
+- **缺点 / 下次：** 每个用途多一个 home 与一份需要显式刷新的凭据快照；直接读取
+  `~/.clone/companion-endpoint.json` 的临时客户端不受这些脚本覆盖，必须改用该 helper；
+  所有者的 `failed-traces` 同时被在线运行时与自动化读取（只读）。
+- **推翻条件：** 见取舍条目。
+
 ### 2026-11-18 —— Agent 调用列表的行级删除入口
 
 - **目标 / 假设：** 所有者应该能在行上直接删除一次调用，而不必打开详情、滚过很长的 Prompt；

@@ -232,6 +232,20 @@ test("a dry run reports the decision brief it would inject", async (t) => {
   assert.equal(dry.decision, "expected behavior");
 });
 
+test("a tracesDirectory names the clone home, and the lane finds its failed-traces folder", async (t) => {
+  const repo = await initRepo(t);
+  const data = await tempDir(t, "clone-repair-data-");
+  const owner = await tempDir(t, "clone-repair-owner-");
+  await mkdir(join(owner, "failed-traces"), { recursive: true });
+  await writeFile(join(owner, "failed-traces", "r1.json"), JSON.stringify({ runId: "r1", title: "bug" }));
+  // Passing the failed-traces folder itself would make the lane append a second
+  // one and find nothing; the contract is a clone home.
+  // 传入 failed-traces 文件夹本身会让通道再追加一层而找不到任何东西；契约是 clone home。
+  const dry = await runRepairLane({ dataDirectory: data, repo, tracesDirectory: owner, dryRun: true, run: runCommand, log: () => undefined });
+  assert.equal(dry.status, "dry-run");
+  assert.deepEqual(dry.traces, ["r1"]);
+});
+
 test("the lane reports no work when no trace is pending, and a dry run creates nothing", async (t) => {
   const repo = await initRepo(t);
   const data = await tempDir(t, "clone-repair-data-");

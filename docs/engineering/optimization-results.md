@@ -15,6 +15,21 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — Automation stopped competing with the owner's runtime
+
+- **Claim:** the repair lane, nightly RSI and the eval companion resolve an
+  isolated clone home (`.automation/<purpose>` or `CLONE_AI_AUTOMATION_HOME`),
+  seed only config files, and refuse the owner's live home; failed traces stay
+  readable while reports, state and locks no longer land in `~/.clone`.
+- **Evidence:** `test/automation-home.test.ts` **5/5**;
+  `npm run repair -- --dry-run --max-traces 2` prints the isolated home and
+  plans **2 traces** read from `~/.clone/failed-traces`;
+  `node scripts/nightly-rsi.mjs --dry-run --max-traces 2` plans from the same
+  traces with `.automation/nightly` state; `companion-dev` refuses an unset home
+  and `~/.clone`. Full suite **750/750**, typecheck and gate pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--maintenance-automation-runs-in-its-own-clone-home),
+  [execution chain](optimizations.md#2026-11-18--automation-runs-in-its-own-clone-home).
+
 ## 2026-11-18 — One Agent invocation can be deleted from its row
 
 - **Claim:** each Agent-invocation row carries its own delete/restore action beside the selectable record, so deleting one record no longer requires opening the detail and scrolling past the prompt; the bulk action remains for the filtered list, and both are soft deletes.

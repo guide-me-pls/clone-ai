@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Automation runs in its own clone home
+
+Repair, nightly RSI and eval companions no longer share the owner's `~/.clone`. They resolve `<repo>/.automation/<purpose>` (or `CLONE_AI_AUTOMATION_HOME`), seed only `config.json`/`settings.json`/`providers.json`/`mcp.json`/`policies.json`, and refuse the live home unless `CLONE_AI_ALLOW_OWNER_HOME=1`. The repair lane still reads failed traces from the owner's home, read-only; reports, consumed-trace state and locks live in the isolated home. `scripts/companion-dev.mjs` now requires an explicit isolated home.
+
+修复通道、夜间 RSI 与评测 companion 不再共享所有者的 `~/.clone`。它们改用 `<repo>/.automation/<用途>`（或 `CLONE_AI_AUTOMATION_HOME`），只播种 `config.json`/`settings.json`/`providers.json`/`mcp.json`/`policies.json`，并拒绝使用在线 home，除非 `CLONE_AI_ALLOW_OWNER_HOME=1`。修复通道仍从所有者 home 只读地读取失败轨迹；报告、已消费轨迹状态与锁放在隔离 home。`scripts/companion-dev.mjs` 现在要求显式指定隔离 home。
+
 ### One Agent invocation can be deleted from its row
 
 The Agent-invocation list now shows a compact 删除 control on each row, beside the selectable record, and 恢复 on a deleted row; the bulk "删除这 N 条" still acts on the filtered list. Delete remains soft — a tombstone, restorable from 含已删除.

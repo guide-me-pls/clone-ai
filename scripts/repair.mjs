@@ -3,7 +3,7 @@
  * The gated repair lane — a maintenance script, not a product CLI.
  *
  * Usage:
- *   npm run repair -- [--dry-run] [--keep] [--max-traces N] [--agent <id>] [--base <ref>] [--repo <path>] [--decision <file>]
+ *   npm run repair -- [--dry-run] [--keep] [--max-traces N] [--agent <id>] [--base <ref>] [--repo <path>] [--worktrees-root <path>] [--decision <file>]
  *
  * Every phase of a repair is a Kernel Run in an isolated worktree. The lane
  * commits a branch and never merges or pushes it. The desktop app remains the
@@ -15,10 +15,11 @@
  * 桌面 App 仍是唯一面向所有者的产品界面。
  */
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { prepareCloneHome, resolveClonePaths } from "../src/config/clone-home.ts";
 import { runRepairLane } from "../src/repair/repair-lane.ts";
+import { prepareAutomationHome } from "./automation-home.mjs";
 
 const args = process.argv.slice(2);
 const flagValue = (name) => {
@@ -27,12 +28,11 @@ const flagValue = (name) => {
 };
 const maxTraces = Number(flagValue("--max-traces") ?? "5");
 
-const paths = resolveClonePaths();
-await prepareCloneHome(paths);
+const ownerPaths = resolveClonePaths();
 
 async function run() {
   if (args.includes("--help") || args.includes("-h")) {
-    console.log("Usage: npm run repair -- [--dry-run] [--keep] [--max-traces N] [--agent <id>] [--base <ref>] [--repo <path>] [--decision <file>]");
+    console.log("Usage: npm run repair -- [--dry-run] [--keep] [--max-traces N] [--agent <id>] [--base <ref>] [--repo <path>] [--worktrees-root <path>] [--decision <file>]");
     return 0;
   }
   if (!Number.isInteger(maxTraces) || maxTraces < 1) {
@@ -62,11 +62,29 @@ async function run() {
       return 1;
     }
   }
+  // The lane writes reports and consumes traces; the owner's home is input
+  // only. Without this split a repair run shares the daemon's journal, which
+  // already produced one raced `failed -> verifying` event on 2026-11-18.
+  // 通道写报告、消费轨迹；所有者的 home 只是输入。没有这层拆分，修复运行会共享守护的
+  // Journal——2026-11-18 已经因此产生过一次竞态的 `failed -> verifying` 事件。
+  const automation = await prepareAutomationHome({
+    repoRoot: resolve(import.meta.dirname, ".."),
+    purpose: "repair",
+    ownerDirectory: ownerPaths.dataDirectory,
+  });
+  console.log(`Automation home: ${automation.dataDirectory}${automation.seeded.length === 0 ? "" : ` (seeded ${automation.seeded.join(", ")})`}`);
+  const paths = resolveClonePaths({ dataDirectory: automation.dataDirectory });
+  await prepareCloneHome(paths);
   const report = await runRepairLane({
     dataDirectory: paths.dataDirectory,
+    // The lane appends "failed-traces" to the directory it is given, so this
+    // must be the owner's clone home, not the traces folder itself.
+    // 通道会在给定目录后追加 "failed-traces"，因此这里必须给所有者 home，而不是轨迹文件夹本身。
+    tracesDirectory: automation.ownerDirectory,
     repo: resolve(flagValue("--repo") ?? process.cwd()),
     ...(flagValue("--base") === undefined ? {} : { base: flagValue("--base") }),
     ...(flagValue("--agent") === undefined ? {} : { agentId: flagValue("--agent") }),
+    ...(flagValue("--worktrees-root") === undefined ? {} : { worktreesRoot: flagValue("--worktrees-root") }),
     ...(decision === undefined ? {} : { decision }),
     maxTraces,
     dryRun: args.includes("--dry-run"),
