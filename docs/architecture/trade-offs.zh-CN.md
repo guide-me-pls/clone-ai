@@ -5,6 +5,34 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-18 —— 安装的 Daemon 解析出 App 使用的工作区
+
+**决定。** `scripts/install-daemon.mjs` 在生成的 LaunchAgent 中写入
+`CLONE_AI_DESKTOP_DEFAULT_WORKSPACE=$HOME/Documents/Clone AI`，使从仓库启动的常驻
+Daemon 与打包 App 解析出同一个工作区，而不是把 `process.cwd()`（源码树）当成工作区。
+
+**被否决的备选方案。**
+
+- *只在 `config.json` 里设置工作区。* 只有默认工作区变量存在时
+  `resolveDesktopLaunchConfig` 才会读取它，而 `resolveClonePaths` 会回落到
+  `process.cwd()`；没有该变量的 Daemon 会忽略保存值。与此同时 UI 显示的是保存的路径，
+  让不一致变得不可见。
+- *在 `resolveClonePaths` 里把工作区默认成 App 目录。* 这会改变该变量对每个调用方的
+  含义，包括测试与服务器部署——它们的工作区本来就应当是 cwd。
+- *交给所有者自己改 plist。* 重跑安装脚本会悄悄丢掉这处修改。
+
+**证据。** 运行 `9d706a27` 由 launchd 的 Daemon 执行，在 3 次模型调用、8.9 秒后以
+`Required input missing: vendor/three.module.js` 失败，尽管 `~/.clone/config.json`
+写的是 `/Users/qihoo/Documents/Clone AI`，而该目录里正有 1.3 MB 的 vendor 文件。
+`launchctl print` 显示 `working directory = /Users/qihoo/study/clone-ai` 且没有默认
+工作区变量；`lsof` 确认 Daemon 的 cwd 是仓库，仓库里没有 `vendor/`。
+
+**代价。** 安装脚本现在假定 App 的默认工作区路径；把交付物放在别处的所有者必须改
+`config.json`（App 会写它）或安装脚本中的这一行。
+
+**推翻条件。** 若 App 不再以 `~/Documents/Clone AI` 为默认工作区，安装脚本必须从同一个
+共享常量读取该路径，而不是重复写一份。
+
 ## 2026-11-18 —— 调用列表暴露行级删除控件
 
 **决定。** 每条 Agent 调用记录所在的行变成一个容器，含两个兄弟控件：选择按钮

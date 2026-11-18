@@ -75,6 +75,27 @@
   调用在启动时同步执行（毫秒级，但仍是一次进程启动）。
 - **推翻条件：** 见取舍条目。
 
+### 2026-11-18 —— 安装的 Daemon 解析出 App 使用的工作区
+
+- **目标 / 假设：** 从仓库启动的常驻 Daemon 把 `process.cwd()` 当成工作区，于是点名
+  App 工作区里存在的文件时会以"缺少必需输入"失败，而 App 的配置里显示的却是正确路径。
+  让生成的 LaunchAgent 带上打包 App 设置的同一个 `CLONE_AI_DESKTOP_DEFAULT_WORKSPACE`，
+  两者应解析出同一个工作区。
+- **取舍：** [安装的 Daemon 解析出 App 使用的工作区](../architecture/trade-offs.zh-CN.md#2026-11-18--安装的-daemon-解析出-app-使用的工作区)。
+- **变更：** `scripts/install-daemon.mjs` 在 LaunchAgent 环境里加入
+  `CLONE_AI_DESKTOP_DEFAULT_WORKSPACE`；安装前用 `--print` 检查了渲染出的 plist。
+- **Eval：** 运行 `9d706a27`（launchd Daemon）在 8.9 秒后以
+  `Required input missing: vendor/three.module.js` 失败；`launchctl print` 显示
+  `working directory = /Users/qihoo/study/clone-ai` 且没有工作区变量，而
+  `~/.clone/config.json` 写的是 `/Users/qihoo/Documents/Clone AI`。重装后
+  `launchctl print` 显示该变量，Daemon 经 `/api/config` 报告该工作区；下一次运行即 eval。
+- **执行链路：** 经 journal（`run.created` → `execution.failed`）、`launchctl print`、
+  `lsof -p <pid> -d cwd` 定位，然后改安装脚本。约 15 分钟，无模型成本。
+- **优点：** 一个变量让 Daemon 与窗口达成一致，安装脚本仍是唯一声明它的地方。
+- **缺点 / 下次：** 路径与 Swift 外壳重复；更好的做法是共享常量。UI 显示保存的工作区而
+  运行时用另一个——配置 API 应报告运行时的**生效**工作区，而不只是存储值。
+- **推翻条件：** 从取舍条目复制。
+
 ### 2026-11-18 —— 构建并自证的步骤现在有 40 轮，交互评分去掉视频专属检查
 
 - **目标 / 假设：** 两个缺陷让一个好的交互模型看起来像失败。Native Worker 默认的 12 次

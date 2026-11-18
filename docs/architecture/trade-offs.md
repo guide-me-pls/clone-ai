@@ -6,6 +6,43 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — The installed daemon resolves the workspace the app uses
+
+**Decision.** `scripts/install-daemon.mjs` writes
+`CLONE_AI_DESKTOP_DEFAULT_WORKSPACE=$HOME/Documents/Clone AI` into the generated
+LaunchAgent, so a resident daemon started from the repository resolves the same
+workspace as the packaged app instead of treating `process.cwd()` (the source
+tree) as the workspace.
+
+**Alternatives rejected.**
+
+- *Set the workspace only in `config.json`.* `resolveDesktopLaunchConfig` reads
+  it only when the default-workspace variable is present, and
+  `resolveClonePaths` falls back to `process.cwd()`; a daemon with no variable
+  ignores the saved value. The UI meanwhile displayed the saved path, which made
+  the mismatch invisible.
+- *Default the workspace to the app folder inside `resolveClonePaths`.* That
+  changes the meaning of the variable for every caller, including tests and
+  server deployments whose workspace is legitimately their cwd.
+- *Leave it to the owner to edit the plist.* Re-running the installer would
+  silently drop the edit.
+
+**Evidence.** Run `9d706a27` was executed by the launchd daemon and failed with
+`Required input missing: vendor/three.module.js` after 3 model calls and 8.9 s,
+although `~/.clone/config.json` names `/Users/qihoo/Documents/Clone AI` and that
+folder holds the 1.3 MB vendor file. `launchctl print` showed
+`working directory = /Users/qihoo/study/clone-ai` and no default-workspace
+variable; `lsof` confirmed the daemon's cwd was the repository, where `vendor/`
+does not exist.
+
+**What it costs.** The installer now assumes the app's default workspace path;
+an owner who keeps deliverables elsewhere must change `config.json` (which the
+app writes) or the installer line.
+
+**Reversal condition.** If the app stops using `~/Documents/Clone AI` as its
+default workspace, the installer must read the path from one shared constant
+rather than duplicating it.
+
 ## 2026-11-18 — The invocation list exposes a per-row delete control
 
 **Decision.** Each Agent-invocation row becomes a container with two sibling

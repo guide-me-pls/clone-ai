@@ -264,6 +264,35 @@ file keeps every attempt, including the ones that did not work.
   next variable is the repair model, not the brief.
 - **Reversal condition:** copied from the trade-off entry.
 
+### 2026-11-18 — The installed daemon resolves the workspace the app uses
+
+- **Goal / hypothesis:** a resident daemon started from the repository treated
+  `process.cwd()` as the workspace, so a task naming a file that exists in the
+  app's workspace failed with "Required input missing" while the App showed the
+  correct path in its config. Giving the generated LaunchAgent the same
+  `CLONE_AI_DESKTOP_DEFAULT_WORKSPACE` the packaged app sets should make both
+  resolve one workspace.
+- **Trade-off:** [The installed daemon resolves the workspace the app uses](../architecture/trade-offs.md#2026-11-18--the-installed-daemon-resolves-the-workspace-the-app-uses).
+- **Change:** `scripts/install-daemon.mjs` adds
+  `CLONE_AI_DESKTOP_DEFAULT_WORKSPACE` to the LaunchAgent environment; the
+  rendered plist was checked with `--print` before installing.
+- **Eval:** run `9d706a27` (launchd daemon) failed in 8.9 s with
+  `Required input missing: vendor/three.module.js`; `launchctl print` showed
+  `working directory = /Users/qihoo/study/clone-ai` and no workspace variable,
+  while `~/.clone/config.json` named `/Users/qihoo/Documents/Clone AI`. After
+  reinstalling, `launchctl print` shows the variable and the daemon reports that
+  workspace over `/api/config`; the next run is the eval.
+- **Execution chain:** traced through the journal (`run.created` →
+  `execution.failed`), `launchctl print`, `lsof -p <pid> -d cwd`, then the
+  installer. About 15 minutes, no model cost.
+- **Pros:** one variable makes the daemon and the window agree, and the
+  installer stays the single place that declares it.
+- **Cons / next time:** the path is duplicated from the Swift shell; a shared
+  constant would be better. The UI showed the saved workspace while the runtime
+  used another — the config API should report the runtime's effective workspace,
+  not only the stored one.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-18 — A build-and-verify step gets 40 rounds, and interactive grading drops video-only checks
 
 - **Goal / hypothesis:** two defects made a good interactive model look like a
