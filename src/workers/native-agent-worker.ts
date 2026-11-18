@@ -246,15 +246,15 @@ export class NativeAgentWorker implements RuntimeAdapter {
     const budget = input.workOrder?.budget;
     const startedAt = Date.now();
     const produced = new Map<string, { kind: "artifact" | "observation"; summary: string; locator: string }>();
-    const requiredText = [input.workOrder?.objective ?? "", input.step.instructions, ...input.step.acceptanceCriteria].join("\n");
-    // The plan's required inputs, matched as whole paths. A plain substring
-    // test matches a path that merely occurs inside a longer word, and any such
-    // match aborts a step that may already have produced its artifact.
-    // 计划中的必需输入按整条路径匹配。纯子串匹配会命中只是出现在更长词里的路径，而任何这样的
-    // 命中都会中止一个可能已经产出工件的步骤。
+    // Only the work order can declare a required input. A path that merely
+    // occurs in the objective, instructions, or acceptance criteria is prose,
+    // not an input declaration; a single-agent step therefore has none.
+    // 只有工作订单可以声明必需输入。仅仅出现在目标、指令或验收标准中的路径只是正文，
+    // 不是输入声明；因此单 Agent 步骤没有必需输入。
     const namedInputs = new Set(
-      [...requiredText.matchAll(/[A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8}/g)]
-        .map((match) => normalizePath(match[0]))
+      (input.workOrder?.inputs ?? [])
+        .filter((item) => item.required)
+        .map((item) => normalizePath(item.name))
         .filter((path) => path.length > 0),
     );
     const missingInputs = new Set<string>();
@@ -292,7 +292,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
         ];
         const result = await runAgentLoop({
           model: this.#config.createClient(),
-          tools: offered.map((tool) => agentTool(tool, workspace, produced, missingInputs, requiredText, namedInputs)),
+          tools: offered.map((tool) => agentTool(tool, workspace, produced, missingInputs, namedInputs)),
           messages,
           maxRounds: effectiveRoundLimit(budget?.maxModelCalls, this.#config.maxRounds),
           ...(budget?.maxToolCalls === undefined ? {} : { maxToolCalls: budget.maxToolCalls }),
@@ -420,7 +420,6 @@ function agentTool(
   workspace: string,
   produced: Map<string, { kind: "artifact" | "observation"; summary: string; locator: string }>,
   missingInputs: Set<string>,
-  requiredText: string,
   namedInputs: ReadonlySet<string>,
 ): AgentToolSpec {
   return {
@@ -432,6 +431,10 @@ function agentTool(
       const outcome = await tool.run({ name: tool.name, input }, { workspace });
       if (outcome.isError !== true && tool.pathOf !== undefined) {
         const path = tool.pathOf(input);
+        // A later successful read or write proves that an earlier absence no
+        // longer applies. Only an input still missing when the step ends fails.
+        // 后续成功读取或写入证明先前的缺失已不再适用。只有步骤结束时仍缺失的输入才会导致失败。
+        if (path !== undefined) missingInputs.delete(path);
         if (path !== undefined && !produced.has(path)) {
           produced.set(path, {
             kind: tool.risk === "write" ? "artifact" : "observation",
@@ -497,7 +500,7 @@ export function buildInstructions(input: ExecutionAssignment, dropped: readonly 
     input.workOrder?.objective ?? input.step.instructions,
     "",
     "You may call only the tools provided. Any path outside the workspace or the granted scopes is refused.",
-    "If a file named in these instructions is missing or unreadable, stop and report it. Do not invent its contents.",
+    "If an input declared with required: true is missing or unreadable at the end of the step, stop and report it. A path mentioned only in prose is not a required input. Do not invent file contents.",
   ];
   const memory = input.memoryContext;
   if (memory !== undefined && memory.items.length > 0) {
