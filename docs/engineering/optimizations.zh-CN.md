@@ -361,6 +361,14 @@
   列出并读完了三条轨迹——计划指令里确实带着决定——然后又一次没有调用 `write_file` 就回答。
   `not-red` 闸门停下；worktree 与 `main` 只差 `.rsi/`。隔离消除了共享 Journal 竞态，但没有消除
   模型的"不行动"。
+  第四次尝试用 Kimi K3.1 Pro，跑在隔离的 automation home 与仓库外的 worktree 根
+  （`/tmp/clone-repair-worktrees`）。第一阶段通过：新测试
+  `test/regression/prose-path-is-not-required-input.test.js` 以断言失败变红（连同三条已有用例）。
+  第二阶段产出的补丁无法解析——`native-agent-worker.ts` 末尾多出 `("\n");` 与一个 `}`——
+  并且读取了契约里根本不存在的 `WorkOrderInput.path`（实际字段是 `name`、`description`、
+  `required`），因此"已声明的必需输入"检查永远不会触发。`regression-still-red` 闸门保留了分支
+  `rsi/auto-fix-20261118T0732` 与 worktree
+  `/tmp/clone-repair-worktrees/rsi-20261118T0732`。没有手写重写。
 - **Benchmark run：** 无——没有模型基准；通道的 Kernel Run 记录在 Journal 中（第一阶段
   `19252252-6952-4c85-8559-b7168558ceb3`）。
 - **执行链路：** 导出 9 条轨迹（为本次运行把六条无关轨迹移到

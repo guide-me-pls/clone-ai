@@ -486,6 +486,16 @@ file keeps every attempt, including the ones that did not work.
   again answered without calling `write_file`. The `not-red` gate stopped it;
   the worktree differs from `main` only by `.rsi/`. Isolation removed the
   shared-journal race but not the model's failure to act.
+  A fourth attempt used Kimi K3.1 Pro in an isolated automation home and an
+  out-of-repo worktree root (`/tmp/clone-repair-worktrees`). Phase 1 passed: the
+  new test `test/regression/prose-path-is-not-required-input.test.js` was red
+  with a failing assertion (plus the three existing cases). Phase 2 produced a
+  patch that no longer parsed — a stray `("\n");` and an extra `}` at the end of
+  `native-agent-worker.ts` — and read `WorkOrderInput.path`, a field the contract
+  does not have (it has `name`, `description`, `required`), so the declared-input
+  check could never fire. The `regression-still-red` gate kept branch
+  `rsi/auto-fix-20261118T0732` and worktree
+  `/tmp/clone-repair-worktrees/rsi-20261118T0732`. No hand rewrite.
 - **Benchmark run:** none — no model benchmark; the lane's Kernel run is recorded
   in the journal (phase 1 `19252252-6952-4c85-8559-b7168558ceb3`).
 - **Execution chain:** exported 9 traces (the six unrelated traces were moved to
