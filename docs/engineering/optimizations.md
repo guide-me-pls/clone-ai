@@ -31,6 +31,74 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — A projection rebuild survives a raced status transition
+
+- **Goal / hypothesis:** the journal is shared and append-only; a reader must be
+  able to rebuild its projection even when one raced writer recorded a status
+  transition a later reader would refuse. Move transition validation to the live
+  writer so the write is refused before it becomes history.
+- **Trade-off:** [A journal replay reflects what was recorded; writers validate](../architecture/trade-offs.md#2026-11-18--a-journal-replay-reflects-what-was-recorded-writers-validate).
+- **Change:** `src/core/run-state.ts` no longer asserts during `reduceEvent`;
+  `src/core/runtime.ts` `changeStatus` asserts before appending; new
+  `test/run-state.test.ts` proves replay keeps the last recorded status and live
+  writers still refuse the raced transition.
+- **Eval:** `node --experimental-strip-types --test test/run-state.test.ts
+  test/runtime.test.ts test/run-queue.test.ts test/recovery-concurrency.test.ts`
+  — **19/19**; `npm run typecheck` pass. The desktop sidecar, which previously
+  crashed in `CloneRuntime.hydrate()` on every launch, started and answered
+  `GET /api/dashboard` with HTTP 200 and 8 sessions; the 2-second queue error
+  loop stopped.
+- **Benchmark run:** none — deterministic tests plus a live restart; no provider,
+  model, dataset or scoring parameters.
+- **Execution chain:** diagnosed the crash from `~/.clone/companion.log`
+  (`failed -> verifying` at `run-state.ts:83`), traced the event to the shared
+  home race between the repair lane and the app's queue consumer (events 525 and
+  545 of run `19252252`), wrote the trade-off entry, moved the check to
+  `changeStatus`, added the test, ran the four test files and typecheck, then
+  started the sidecar manually and verified the HTTP 200 with the bearer token.
+  The poisoned event remains in the journal as evidence.
+- **Pros:** one raced event no longer bricks the journal; live writes keep the
+  state machine; the fix is a few lines and verified by a restart of the real
+  service.
+- **Cons / next time:** the check protects a writer's local projection, not a
+  second process's claim; the real prevention is running the repair lane against
+  an isolated `CLONE_AI_HOME`. That isolation is the next runbook change.
+- **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-18 — The repair lane can carry the working agent's decision
+
+- **Goal / hypothesis:** a decision-level repair (reversing an older rule) cannot
+  be inferred from a trace that only shows the old behavior. Give the lane an
+  explicit `--decision <file>` brief, included in both phase instructions as
+  expected behavior, and let the same red/green gates decide whether the worker
+  actually reproduced it.
+- **Trade-off:** [A repair plan carries the working agent's decision](../architecture/trade-offs.md#2026-11-18--a-repair-plan-carries-the-working-agents-decision).
+- **Change:** `src/repair/repair-lane.ts` gained `decision` on
+  `RepairLaneOptions`, `repairPlan`, and `RepairReport`; both phase prompts carry
+  the brief marked "NOT trace data". `scripts/repair.mjs` gained
+  `--decision <file>` (trimmed, non-empty, ≤8,000 characters, read before any
+  worktree is created). The report records the brief so a reader can see what
+  steered the run.
+- **Eval:** `node --experimental-strip-types --test test/repair.test.ts` — **25/25**
+  (two new cases: the brief reaches both phases and is marked as expected
+  behavior; a dry run reports the brief it would inject). `npm run typecheck`
+  pass. The end-to-end repair was **not** verified: the run that used the brief
+  failed on a journal transition race (see the entry below), so only the
+  plan-level capability is proven.
+- **Benchmark run:** none — deterministic tests; no provider, model, dataset or
+  scoring parameters.
+- **Execution chain:** wrote the trade-off entry first; changed the lane and the
+  maintenance CLI; added tests; ran the suite and typecheck; then attempted the
+  Forbidden City repair with the brief (see below). No model calls were spent on
+  the change itself.
+- **Pros:** the decision reaches both phases without opening `docs/` to a
+  round-limited worker; the brief is bounded and recorded; the red/green gates
+  remain the authority on whether the reproduction is real.
+- **Cons / next time:** the capability has no end-to-end proof yet; the next
+  repair must run with an isolated `CLONE_AI_HOME` so the live desktop app cannot
+  race it on the same journal (that race, not the brief, stopped this run).
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-18 — An isolated worktree carries the owner's untracked inputs
 
 - **Goal / hypothesis:** external steps run in a git worktree created from the
@@ -94,6 +162,18 @@ file keeps every attempt, including the ones that did not work.
   already in `test/regression/` and, finding them green, refused to continue.
   Eval before: not red. No eval after. `git status` in the worktree: only `.rsi/`
   staged evidence; the branch equals `main`.
+  A second attempt injected the decision brief (see the entry above) and ran the
+  same command plus `--decision /tmp/worker-required-input-decision.md`; it failed
+  before any phase could execute with `Invalid run status transition: failed ->
+  verifying`. The restored unrelated traces sorted first, so that batch also
+  included `0973bca9`; no work was spent on it because the run never started.
+  The first attempt's run had been marked failed by the running desktop app's
+  queue consumer at 06:14:08, then continued on the lane and wrote `verifying` at
+  06:14:21; the illegal transition is now in the journal, and a fresh runtime
+  rebuilding its projection throws on it. The app's queue consumer logged the
+  same error every 2 s until the replay fix above. No journal events were written
+  after 06:15; the second worktree is empty. This is a shared-data-directory race
+  between the lane and the live app, not a decision-gate failure.
 - **Benchmark run:** none — no model benchmark; the lane's Kernel run is recorded
   in the journal (phase 1 `19252252-6952-4c85-8559-b7168558ceb3`).
 - **Execution chain:** exported 9 traces (the six unrelated traces were moved to

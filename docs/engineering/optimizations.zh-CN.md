@@ -26,6 +26,54 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-18 —— 投影重建能越过竞态写入的状态转换
+
+- **目标 / 假设：** Journal 是共享且只追加的；即使某个竞态写入者记录了一次后来者会拒绝的状态
+  转换，读者也必须能重建投影。把转换校验移到实时写入方，让写入在变成历史之前被拒绝。
+- **取舍：** [Journal 重放如实反映记录；写入方负责校验](../architecture/trade-offs.zh-CN.md#2026-11-18--journal-重放如实反映记录写入方负责校验)。
+- **变更：** `src/core/run-state.ts` 在 `reduceEvent` 中不再校验；`src/core/runtime.ts` 的
+  `changeStatus` 在追加前校验；新增 `test/run-state.test.ts`，证明重放保留最后记录的状态，
+  而实时写入仍拒绝那次竞态转换。
+- **Eval：** `node --experimental-strip-types --test test/run-state.test.ts
+  test/runtime.test.ts test/run-queue.test.ts test/recovery-concurrency.test.ts`
+  —— **19/19**；`npm run typecheck` 通过。此前每次启动都在 `CloneRuntime.hydrate()` 崩溃的
+  桌面 sidecar 成功启动，并用 bearer token 回答 `GET /api/dashboard`：HTTP 200、8 个会话；
+  每 2 秒一次的队列错误停止。
+- **Benchmark run：** 无——确定性测试加一次真实重启；没有 Provider、模型、数据集或评分参数。
+- **执行链路：** 从 `~/.clone/companion.log` 诊断崩溃（`run-state.ts:83` 的
+  `failed -> verifying`），把事件追到修复通道与 App 队列消费者共享 home 的竞态
+  （Run `19252252` 的事件 525 与 545），先写取舍条目，把校验移到 `changeStatus`，加测试，
+  跑四个测试文件与类型检查，然后手工启动 sidecar 并用 bearer token 验证 HTTP 200。被污染的
+  事件仍留在 Journal 里作为证据。
+- **优点：** 一个竞态事件不再毁掉 Journal；实时写入仍受状态机约束；修复只有几行，并用真实服务
+  的重启验证过。
+- **缺点 / 下次：** 该校验保护的是写入方的本地投影，而不是第二个进程的领取；真正的预防是让
+  修复通道跑在隔离的 `CLONE_AI_HOME` 上。这个隔离是下一次的 runbook 变更。
+- **推翻条件：** 从取舍条目复制。
+
+### 2026-11-18 —— 修复通道可以携带工作 Agent 的决定
+
+- **目标 / 假设：** 决定层面的修复（推翻旧规则）无法从只展示旧行为的轨迹中推断。给通道一份显式的
+  `--decision <file>` 说明，作为期望行为注入两个阶段的指令，再由同一组红/绿闸门判断 Worker 是否
+  真的复现了它。
+- **取舍：** [修复计划携带工作 Agent 的决定](../architecture/trade-offs.zh-CN.md#2026-11-18--修复计划携带工作-agent-的决定)。
+- **变更：** `src/repair/repair-lane.ts` 在 `RepairLaneOptions`、`repairPlan` 与 `RepairReport`
+  上增加 `decision`；两个阶段的 Prompt 都带着标记为 "NOT trace data" 的说明。
+  `scripts/repair.mjs` 增加 `--decision <file>`（去空白、非空、≤8,000 字符，在创建任何
+  worktree 之前读取）。报告记录该说明，使后来者能看到是什么在引导这次运行。
+- **Eval：** `node --experimental-strip-types --test test/repair.test.ts` —— **25/25**
+  （两个新用例：说明到达两个阶段并被标为期望行为；dry run 报告它将注入的说明）。
+  `npm run typecheck` 通过。端到端修复**未**验证：使用该说明的那次运行因 Journal 状态转换竞态
+  失败（见下一条），因此只证明了计划层面的能力。
+- **Benchmark run：** 无——确定性测试；没有 Provider、模型、数据集或评分参数。
+- **执行链路：** 先写取舍条目；改通道与维护 CLI；加测试；跑套件与类型检查；随后带说明尝试修复
+  故宫轨迹（见下）。变更本身没有花费模型调用。
+- **优点：** 决定在没有向轮次有限的 Worker 开放 `docs/` 的情况下到达两个阶段；说明有界且被记录；
+  红/绿闸门仍对复现是否真实拥有最终裁决。
+- **缺点 / 下次：** 该能力尚无端到端证明；下一次修复必须在隔离的 `CLONE_AI_HOME` 下运行，避免
+  在运行的桌面 App 与它在同一 Journal 上竞争（拦住这次运行的是那个竞态，不是说明）。
+- **推翻条件：** 从取舍条目复制。
+
 ### 2026-11-18 —— 隔离 worktree 带上所有者未被跟踪的输入
 
 - **目标 / 假设：** 外部步骤运行在从所有者项目创建的 git worktree 里；`git worktree add`
@@ -70,6 +118,15 @@
   `vendor/three.module.js`（ENOENT），然后没有写任何文件就回答。闸门跑了 `test/regression/`
   里已有的三个文件，发现全绿，拒绝继续。变更前 eval：不红。没有变更后 eval。worktree 的
   `git status` 只有 `.rsi/` 暂存证据；分支与 `main` 相同。
+  第二次尝试注入了决定说明（见上一条），并在同一命令上加
+  `--decision /tmp/worker-required-input-decision.md`；它在任何阶段执行之前就因
+  `Invalid run status transition: failed -> verifying` 失败。被还原的无关轨迹排在前面，
+  因此这一批还包含了 `0973bca9`；由于运行从未开始，没有在它身上花任何工作。
+  第一次尝试的 Run 在 06:14:08 被运行中的桌面 App 队列消费者标为失败，随后又在通道里继续、
+  于 06:14:21 写入 `verifying`；这个非法转换现在留在 Journal 里，任何重建投影的新运行时都会
+  在它上面抛错。App 的队列消费者每 2 秒记录同一条错误，直到上面的重放修复落地。06:15 之后
+  没有新的 Journal 事件；第二个 worktree 是空的。这是通道与运行中的 App 共享数据目录产生的
+  竞态，不是决定闸门的失败。
 - **Benchmark run：** 无——没有模型基准；通道的 Kernel Run 记录在 Journal 中（第一阶段
   `19252252-6952-4c85-8559-b7168558ceb3`）。
 - **执行链路：** 导出 9 条轨迹（为本次运行把六条无关轨迹移到

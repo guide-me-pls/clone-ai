@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The app starts again after a raced journal event
+
+A shared journal can contain a status transition one writer recorded and every later reader would refuse. The projection now reflects the recorded status instead of crashing, while live writers are still checked before they append. The desktop sidecar that had crashed in `hydrate()` on every launch starts and serves normally again; the illegal event stays in the journal as evidence.
+
+共享 Journal 里可能有一条被某个写入者记录、而后来每个读者都会拒绝的状态转换。投影现在如实反映记录的状态，而不是崩溃；实时写入方在追加之前仍会被校验。此前每次启动都在 `hydrate()` 崩溃的桌面 sidecar 恢复正常启动与服务；非法事件留在 Journal 里作为证据。
+
 ### An isolated worktree carries untracked inputs
 
 External steps run in a git worktree of the owner's project; `git worktree add`
