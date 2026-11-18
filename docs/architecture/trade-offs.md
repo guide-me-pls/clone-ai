@@ -6,6 +6,52 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — A finished run keeps its verification, evidence and trace on screen
+
+**Decision.** A task record always shows what the run produced: an evidence list
+(kind, locator, summary) separate from the artifact files, a verification block
+that survives the owner's decision (system verdict, the owner's verdict, the
+criteria and the summary), and an execution trace that is open for a run that
+still needs the owner and collapsible but visible for a finished one. The
+server returns `evidence` and the trace already exists; the UI stops hiding it.
+
+**Alternatives rejected.**
+
+- *Keep the verification card only while `waiting_review`.* That is why the
+  owner saw "核验结果呢，为什么没有显示记录" after accepting: the decision wrote
+  a second `verification.completed` with `reviewedBy: "owner"`, but the card's
+  first condition (`status === "waiting_review"`) made it disappear, so the
+  accepted verdict was invisible in the record that it belongs to.
+- *Leave evidence as a count.* `evidenceCount` told the owner "9 条可验证证据"
+  and nothing else; the nine rows existed in the journal (kind, locator,
+  summary) and in the audit view, but the task record — the place the owner
+  actually opens — never listed them.
+- *Put artifacts inside the trace.* A `write_file` call is evidence with
+  `kind: "artifact"`; folding it into 100+ trace rows makes the deliverable
+  impossible to find. The artifact block is a separate, short list of files.
+- *Expand all 100+ trace rows by default for every run.* That buries the plan
+  and the verification. The trace opens by default only while the run is still
+  waiting for the owner; a finished run keeps it collapsed but one click away.
+
+**Evidence.** Run `91b685cf` (the knowledge-base RAG review) has 9
+`evidence.recorded` events, 9 `agent.tool_*` calls and a
+`verification.completed` with `needsReview: true`, yet its task record showed
+only the plan, the evidence count and a collapsed trace. Runs `709e9ab5`,
+`4ce0db3d` and `18569eb4` each have two `verification.completed` events — the
+system's and the owner's; only the first was ever rendered, and only until the
+owner decided. `test/ui-structure.test.ts` and
+`test/main-conversation-approvals.test.ts` pin the new blocks.
+
+**What it costs.** The session payload grows by the evidence list (bounded by
+the run's evidence, typically under 50 rows). The verification block repeats the
+criteria the review card already showed: the duplication is deliberate, because
+one is an action prompt and the other is the record of what was decided.
+
+**Reversal condition.** If a run's evidence list routinely exceeds a screenful,
+summarize by kind with an expander instead of removing it. If the owner says the
+duplicated criteria are noise, keep the verdict line and move the criteria into
+the trace.
+
 ## 2026-11-18 — The owner's message renders through the markdown path
 
 **Decision.** `messageMarkup` renders both the owner's and the agent's messages
@@ -90,6 +136,43 @@ automation prompt cannot hold the owner's Main Agent lock, or if every client
 gets its own session-scoped runtime, remove the separate home. If the config
 snapshot cannot be kept in sync, replace seeding with a read-through config
 reader that never copies the file.
+
+## 2026-11-18 — A worker stops when the model stops; no default round cap
+
+**Decision.** `maxRounds` is optional everywhere. Without an explicit plan budget
+or owner setting, the shared loop has no round cap: it continues until the model
+returns no tool calls, the turn is aborted, or a duration/tool/token budget
+stops it. The planners no longer write `maxModelCalls` into their budgets. The
+round-tail notice ("only N rounds remain") applies only when a limit is set.
+
+**Alternatives rejected.**
+
+- *Keep the 40-round default.* It is still an arbitrary number that cuts a
+  legitimate step mid-edit: Qwen3.8 Max had written a regression test and was
+  still editing it when the 24-round owner setting stopped phase 1 at 594 s
+  (405,850 tokens). The number moved from 12 to 24 to 40 across incidents; each
+  raise only moved the cliff.
+- *A very high cap (100, 500).* The same cliff, harder to notice; the model still
+  cannot decide.
+- *Remove all guards.* Duration, tool-call and token budgets remain; those
+  measure cost and can stop a runaway loop even when the model keeps calling
+  tools.
+
+**Evidence.** `test/native-agent-worker.test.ts` asserted `effectiveRoundLimit(
+undefined, undefined) === 40`; the repair runs on 2026-11-18 stopped at 24
+(Qwen, 594 s, 405,850 tokens) and at 40 (Kimi's phase 1 finished but phase 2
+spent its rounds editing). The loop has `maxDurationMs`, `maxToolCalls` and
+`maxTotalTokens` guards independent of rounds.
+
+**What was given up.** A deterministic upper bound on model calls per turn. A
+model that loops without progress now runs until the duration/tool/token budget
+or the owner's abort. The round-tail notice no longer fires unless a limit is
+explicitly set.
+
+**Reversal condition:** if a step runs far past its useful work without a
+duration/tool/token budget stopping it, add an explicit per-step budget in the
+plan (not a global default), or restore a high default cap with a documented
+number and the incident that justifies it.
 
 ## 2026-11-18 — The invocation list exposes a per-row delete control
 

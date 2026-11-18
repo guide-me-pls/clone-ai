@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Workers stop when the model stops, not at a round number
+
+The per-step model-round cap is gone unless the plan or owner sets one explicitly. The shared loop now continues until the model answers, the turn is aborted, or a duration/tool/token budget stops it; the planners no longer write `maxModelCalls`. The final-answer reserve only applies when a limit is set, so an unbounded run is expected to end with the model's own answer.
+
+单步模型轮次上限已移除，除非计划或所有者显式设置。共享循环现在持续到模型给出回答、回合被中止，或时长/工具/token 预算把它停下；规划器不再写入 `maxModelCalls`。轮次尾部提示只在设置了上限时适用，因此无上限的运行应以模型自己的回答结束。
+
 ### The Forbidden City benchmark passes end to end in the App
 
 A one-paragraph request submitted through the App's own daemon now produces a

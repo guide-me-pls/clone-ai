@@ -151,8 +151,7 @@ test("safe tools run together and an unsafe tool is a barrier", async () => {
   assert.equal(order.indexOf("after:start") > order.indexOf("mutate:end"), true);
 });
 
-test("max rounds ends with a typed max_turns reason", async () => {
-  let calls = 0;
+test("max rounds ends with a typed max_turns reason", async () => {  let calls = 0;
   const model = scriptedModel([
     () => ({ content: null, toolCalls: [call("t", "noop")] }),
   ]);
@@ -166,6 +165,26 @@ test("max rounds ends with a typed max_turns reason", async () => {
   assert.equal(result.rounds, 2);
   assert.equal(calls, 2);
   assert.match(result.error ?? "", /2-round/);
+});
+
+test("without a round cap the model decides when to stop", async () => {
+  let calls = 0;
+  const responses: Scripted[] = Array.from({ length: 12 }, () => ({
+    content: null,
+    toolCalls: [call("t", "noop")],
+  }));
+  responses.push({ content: "done", toolCalls: [] });
+  const result = await runAgentLoop({
+    model: scriptedModel(responses),
+    tools: [tool("noop", async () => { calls += 1; return { content: "ok" }; })],
+    messages: [userMessage("loop")],
+  });
+  // More than the old default of 8 rounds: the loop kept going because the
+  // model kept asking for tools, and stopped when it answered.
+  // 超过旧的 8 轮默认值：模型继续请求工具，循环就继续；模型回答后循环停止。
+  assert.equal(result.terminalReason, "completed");
+  assert.equal(result.rounds, 13);
+  assert.equal(calls, 12);
 });
 
 test("a tool-call budget skips later calls but keeps every result paired", async () => {
