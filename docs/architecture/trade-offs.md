@@ -6,6 +6,36 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — The invocation list exposes a per-row delete control
+
+**Decision.** Each Agent-invocation row becomes a container with two sibling
+controls: a pick button (`data-au-invocation`, selection + `aria-pressed`) and a
+compact delete/restore action (`data-au-inv-delete` / `data-au-inv-restore`). The
+bulk "删除这 N 条" remains and still counts pick buttons.
+
+**Alternatives rejected.**
+
+- *Keep delete only in the detail panel.* That shipped first; the owner could not
+  find it — the detail's action sits below a potentially long prompt, while the
+  toolbar's bulk button is the only visible control.
+- *Nest a delete button inside the row button.* Invalid HTML; browsers drop or
+  mis-handle nested interactive elements.
+- *A context menu or swipe action.* Hidden behind a gesture, and this list has no
+  established context-menu pattern.
+
+**Evidence.** The owner's Agent-invocation view showed a selected record whose
+request body filled the panel; `删除记录` was below the fold, while `删除这 27 条`
+was visible in the toolbar. The row was a single `<button>`, so no per-row control
+could exist without restructuring it.
+
+**What was given up.** One more small control per row, and the row itself is no
+longer the button — keyboard focus lands on the pick button. Delete stays
+confirmation-gated and soft (tombstone, restorable).
+
+**Reversal condition:** if accidental deletes increase, move the action back to
+the detail or require selecting the row first. If the row grows more actions,
+switch to a compact overflow menu instead of adding buttons.
+
 ## 2026-11-18 — A packaged launch attaches when the LaunchAgent is loaded
 
 **Decision.** The window decides resident mode once, at launch. An explicit
