@@ -15,6 +15,24 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — The Forbidden City benchmark passes end to end in the App
+
+- **Claim:** run `18569eb4`, submitted through the App's own daemon with a
+  one-paragraph task, now grades **28/28** with zero hard failures: ten named
+  halls with their roof types and a 961 m axis, the shared 三台, 太和殿 at
+  64×37×35 m, detailed roofs/brackets/lattices/studs, shadows, orbit 63°,
+  zoom ×0.58, a hero framing at 34.5% of the frame height, and mirrored
+  体仁阁/弘义阁.
+- **Evidence:** `node benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs
+  --workspace "/Users/user/Documents/Clone AI" --out …/verify/app-final2
+  --interactive` → **28/28**, screenshots in `screens/`, report in
+  `report.json`. Runs along the way: `91a50a87` cut off at 12 rounds (fixed),
+  `9d706a27` wrong workspace (fixed), `4ce0db3d` correct data but a 9% hero
+  framing (now graded), `18569eb4` 27/28 with the pavilions under
+  `props.sideHalls` (lookup fixed).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--the-default-view-is-graded-on-composition-not-only-on-data),
+  [execution chain](optimizations.md#2026-11-18--the-load-time-view-is-graded-on-composition).
+
 ## 2026-11-18 — Automation stopped competing with the owner's runtime
 
 - **Claim:** the repair lane, nightly RSI and the eval companion resolve an

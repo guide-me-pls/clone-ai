@@ -6,6 +6,25 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The Forbidden City benchmark passes end to end in the App
+
+A one-paragraph request submitted through the App's own daemon now produces a
+model that grades 28/28: ten named halls, the shared three-tier terrace, 太和殿
+at 64×37×35 m, detailed roofs, brackets, lattices and door studs, shadows, orbit
+and zoom, a hero framing at 34.5% of the frame height, and mirrored
+体仁阁/弘义阁. Reaching it fixed the worker's round default (12 → 40), the
+LaunchAgent's workspace, and three grader blind spots: video-only checks in
+interactive mode, a 9% hero framing that read as a floor plan, and paired halls
+kept under `props.sideHalls`.
+
+故宫基准现在能在 App 内端到端通过
+
+经 App 自己的守护进程提交的一段话请求，现在产出的模型评为 28/28：十座具名殿、共用三层
+三台、太和殿 64×37×35 米、精确的屋面/斗拱/棂格/门钉、阴影、orbit 与 zoom、主殿占画面
+高度 34.5%、体仁阁/弘义阁左右对称。达成它的过程中修好了 Worker 默认轮次（12 → 40）、
+LaunchAgent 的工作区，以及评分器的三处盲点：交互模式仍在评视频字段、主殿只占 9% 却读作
+平面图、配楼放在 `props.sideHalls` 时被判缺失。
+
 ### The load-time view is graded on composition
 
 A Forbidden City model can pass every data and interaction check and still look

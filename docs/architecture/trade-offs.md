@@ -6,6 +6,33 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — Paired halls may live under props, and the grader looks there
+
+**Decision.** The symmetry check accepts a paired hall found either in
+`model.buildings` or in `model.props.sideHalls` / `model.props.buildings`, as
+long as both members of the pair carry mirrored positions.
+
+**Alternatives rejected.**
+
+- *Require every building in `buildings`.* The contract says `buildings` is the
+  axial roster; a page that keeps the ten axis halls there and exposes the
+  flanking halls under `props` is following the contract, and run `18569eb4`
+  did exactly that. Failing it graded an array layout, not symmetry.
+- *Add the pair to `buildings` regardless.* That would forbid a legitimate
+  representation and make `namedHallCount` ambiguous.
+
+**Evidence.** Run `18569eb4` added 体仁阁/弘义阁 at x = ∓150, z = 235 with
+`symmetryPair` pointing at each other, under `props.sideHalls`; the check still
+reported "体仁阁/弘义阁 absent" because it only searched `buildings`. After the
+lookup change the same workspace passes 28/28.
+
+**What it costs.** The grader now accepts two shapes, so a page that splits
+buildings across both arrays is harder to reason about; the check tolerates it
+rather than enforcing one layout.
+
+**Reversal condition.** If the contract is tightened to a single `buildings`
+roster, remove the props lookup and state the requirement in the prompt.
+
 ## 2026-11-18 — The default view is graded on composition, not only on data
 
 **Decision.** The interactive checker measures how much of the frame height the
