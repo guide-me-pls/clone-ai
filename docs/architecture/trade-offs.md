@@ -6,6 +6,183 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — The Main Agent knows its workspace, and a review carries the answer
+
+**Decision.** The companion passes the running workspace into every Main Agent
+turn, so project instructions, the situation briefing and the invocation ledger
+all come from it. The compiled prompt names that workspace, says workers see
+only inside it, and says that a project named outside it must be reported, not
+replaced by whatever the workspace contains. A worker's instructions repeat the
+same rule for the step's workspace. A single-agent step journals its final
+answer as `execution.completed`; the task record and the review card render that
+answer. A workspace saved in Settings returns `restartRequired`, and the
+settings pane marks the saved path as pending until the app restarts.
+
+**Alternatives rejected.**
+
+- *Keep `process.cwd()` as the Main Agent's workspace.* That is the defect:
+  the prompt snapshot for turn `4c0ae6ca` has `instructionSources: ["AGENTS.md"]`
+  loaded from `/Users/qihoo/study/clone-ai`, while the owner's configured
+  workspace was `/Users/qihoo/Documents/Clone AI` and the project being asked
+  about was `/Users/qihoo/work/knowledge_base`. The agent sounded like it was
+  working on clone-ai because it was reading clone-ai's rules.
+- *Let the Main Agent search the home folder for a named project.* Discovery
+  outside the workspace widens the trust boundary. It needs an owner-authorized
+  `files` scope and its own decision; until then the honest answer is "not in
+  this workspace", with the path or a workspace switch.
+- *Let the worker "find the project in the workspace" and accept what it reads.*
+  Run `062716a9` did exactly that: `list_directory("..")` was refused, all nine
+  evidence rows came from `/Users/qihoo/Documents/Clone AI`, and the run still
+  reached `waiting_review` with a review card that asked the owner to accept it.
+- *Keep only evidence and criteria on the review card.* A single-agent
+  completion had no durable event: the worker's 565 output tokens were dropped,
+  so the owner was asked to decide about a result that was stored nowhere.
+- *Rebuild the runtime assembly in place when the workspace changes.* The
+  assembly, queue consumer and scheduler capture the path at boot; a partial
+  swap would leave two workspaces in one process. A restart is the boundary
+  that actually holds.
+
+**Evidence.** Run `062716a9` (and the earlier `91b685cf`) has four model calls,
+565 output tokens, nine `observation` evidence rows — `README.md`,
+`CHANGELOG.md`, `src`, `vendor`, `.git/config`, all from the Clone AI workspace —
+and no `execution.completed` or `subagent.completed` event. The Main Agent's
+prompt snapshot `a063d154…` names `AGENTS.md` from the clone-ai checkout as its
+only instruction source. `~/.clone/config.json` says
+`workspacePath: /Users/qihoo/Documents/Clone AI`; the RAG project is at
+`/Users/qihoo/work/knowledge_base`.
+
+**What it costs.** The prompt grows by a short workspace paragraph. Every
+single-agent step adds one journal event carrying the redacted answer, bounded
+by the model's output. The review card repeats an answer that also appears in
+the task record: one is the decision surface, the other is what remains after
+the decision. The settings change remains a restart, now stated instead of
+silently ignored.
+
+**Reversal condition.** If the runtime learns to switch workspaces live, drop
+the restart notice and apply the path to the running assembly. If the owner
+decides cross-project lookup is required, add an owner-authorized `files` scope
+and a discovery tool (the rejected alternative above) rather than widening the
+workspace silently; then the "outside the workspace" rule becomes an
+instruction to use that tool.
+
+## 2026-11-18 — The main pane is a dispatch log, not a chat transcript
+
+**Decision.** A conversation's main pane renders one log entry per Main Agent
+turn instead of chat bubbles. Each entry shows the owner's query, how the turn
+assembled its context (provider, model and effort; the prompt snapshot's
+charter version, tool table and material hashes; deterministic compactions; how
+many completed turns the history carried), how it dispatched work (every tool
+call with its input summary and duration, and the runs the turn spawned with
+their titles and statuses), and the result (the reply or the error). Approval
+and review cards, the task-record view and the composer are unchanged. The
+searchable, global turn log stays in 设置 → 审计与轨迹 → 回合.
+
+**Why it won.** Every new task dispatches its work as Kernel runs, which the
+sidebar already lists under the conversation. The chat bubble between them
+repeats a one-line summary those runs already carry, while the two facts the
+owner needs when a turn goes wrong — what context the model was given and what
+it dispatched — exist only in the audit tab. The screenshot that motivated the
+change shows the main pane spending its reading column on "已派发任务，运行 ID …"
+while the failed run's evidence sat in a card below. The owner's stated
+preference plus the observed duplication justifies the change; the user-facing
+gain is an assumption until a usability check confirms it.
+
+**Alternatives rejected.**
+
+- *Keep the chat bubbles and add a collapsed log under each turn.* Two
+  renderings of the same turn; the bubble still owns the column, and the log
+  stays a second-class detail.
+- *Move the log to the audit tab only.* The audit tab is global and searchable,
+  but it cannot show this conversation's turns beside the composer, and
+  answering "what did it dispatch?" would mean leaving the task.
+- *Hide everything but the composer.* Loses the reply and the failure reason,
+  which are the turn's result.
+
+**What was given up.** The conversational rhythm of the Main Agent's prose: a
+long reply still takes the same space, but inside a log entry with context and
+dispatch around it. Turns written before the turn ledger existed (legacy Pi
+session files) render as compact history rows inside the same log, so they stay
+visible without being styled as a conversation.
+
+**Evidence.** `test/main-agent-turn-audit.test.ts` projects the new fields
+(conversation id, compactions, prompt snapshot) and
+`test/ui-structure.test.ts` asserts a conversation renders the log while a task
+record still renders its messages; both fail before the change. `npm test`,
+`npm run typecheck` and `npm run gate` pass.
+
+**Reversal condition.** If a usability check shows owners scroll past the
+context and dispatch rows to read the reply, or ask for the back-and-forth
+rhythm a log entry cannot carry, restore the chat transcript for the reply and
+keep the log as a collapsed section under it.
+
+## 2026-11-18 — Each task runs its own Main Agent, sized by the machine
+
+**Decision.** A Main Agent turn belongs to a conversation (task) id. The turn
+ledger records that id, the model's history is rebuilt only from turns of the
+same conversation, and the prompt lock is per conversation: a second prompt in
+the same conversation is still refused, while prompts in different
+conversations run concurrently. A cross-process slot pool caps how many Main
+Agent turns run at once. In auto mode the cap is sampled on every acquisition:
+half the CPU cores (two when the machine has room); halved when the 1-minute
+load is at or above half the cores; bounded by free memory at 512 MB per turn
+after a 1 GB reserve; and never above eight. Load or memory pressure can reduce
+it to one. The owner may pin `maxConcurrentMainAgents`; a pin is capped at the
+core count. A turn above the cap waits for a slot (abortable) instead of being
+refused. The cap is per clone home, not machine-wide: a benchmark or a second
+`CLONE_AI_DATA_DIR` gets its own pool. In the desktop, "新建任务" starts a new
+conversation, and the sidebar lists conversations alongside the task runs they
+spawned.
+
+**Alternatives rejected.**
+
+- *Keep one lock and queue every turn.* History is still one transcript: two
+  tasks would read and write each other's context, which is the reason the
+  owner asked for separate Main Agents.
+- *Per-conversation locks without a global cap.* Every conversation could issue
+  model calls and worker dispatches at once; the only bound would be the
+  provider and the OS.
+- *An in-process semaphore.* The daemon, the CLI and the WhatsApp bridge are
+  separate processes; a per-process counter cannot see the others, so the cap
+  would be false as soon as two surfaces are used.
+- *Let the model choose the number of concurrent Main Agents.* Concurrency
+  would depend on a sampled token rather than the machine — the same reason
+  worker concurrency is measured deterministically.
+
+**Evidence.** `withMainAgentLock` (`src/main-agent/prompt-lock.ts`) holds one
+`prompt.lock` per clone home, and `runMainAgentQuery` wraps the whole turn in
+it; `test/prompt-lock.test.ts` asserts the second caller is refused and
+`test/companion-control-plane.test.ts` expects the 409 this produces.
+`buildHistory` (`src/main-agent/native-runtime.ts`) reads every completed
+ledger row with no conversation filter, so separate tasks share one transcript.
+The parity study already lists "concurrent Main Agent prompt → 409/queue" as
+gap D11 (`docs/study/claude-code-parity.md`). The worker gate
+(`src/core/capacity.ts`) is the existing precedent for a measured limit with an
+owner pin.
+
+**What it costs.** Concurrent turns spend provider tokens in parallel and share
+the provider's rate limit; a turn made to wait shows no progress until it
+starts, and the desktop's 3-minute stall still applies to a very long wait. A
+turn that none of its callers aborts can hold a slot until it ends: there is
+deliberately no default round or duration cap, so the pool cannot reclaim a
+hung turn while its process lives. The cap is per clone home, so two homes on
+one machine each get their own pool. The ledger stays one append-only file, so
+scope is a field rather than a file, and a row written before this change
+belongs to the main conversation. Runs and work updates created before this
+change also stay under the main conversation. Each dispatched run still builds
+its own worker capacity gate, so N concurrent Main Agents can each dispatch up
+to the machine's worker budget; sharing one worker gate across concurrent
+queries is a separate change.
+
+**Reversal condition.** If concurrent Main Agent turns corrupt Kernel or
+journal state, or two agents' simultaneous dispatches oversubscribe the
+provider or the machine despite the cap, reduce the pool to one and keep the
+per-conversation scoping until the failure is understood. If per-conversation
+history is shown to fragment the owner's memory — a fact stated in one task is
+expected in another and is not found — merge the histories again and keep only
+the per-conversation lock. If waiting for a slot makes the desktop feel hung in
+ordinary use, return a readable 429/409 instead of waiting and let the owner
+retry.
+
 ## 2026-11-18 — A verification record states a count, not a repeated list
 
 **Decision.** `VerificationResult.summary` no longer embeds the unverified
@@ -87,6 +264,58 @@ window immediately instead of being frozen out. The packaged app is unchanged.
 watcher-based cache (fs events) proves simpler, replace the re-read with the
 watcher. If a shipped build is ever served from a checkout, remove the flag
 from the installer and gate it on an explicit developer command instead.
+
+## 2026-11-18 — A plan step's label names its risk, not a pending approval
+
+**Decision.** The plan row labels the step's risk class — `直接处理` for reads,
+`本地写入` for reversible writes, `外部动作` for external side effects,
+`不可逆` for irreversible steps — instead of the single `需确认` it showed for
+every non-read step.
+
+**Why it won.** Run `abf7e3e4` planned a `reversible_write` step; the policy
+decided `allowed` ("The step is local and reversible"), so no approval was
+raised. The plan still said `需确认`, and the owner asked where that confirmation
+was. The label described an action that never existed.
+
+**What was given up.** The label no longer hints that a confirmation might
+appear. Where a confirmation really is pending, the run is `waiting_approval`
+and the approval card in the main conversation remains the authoritative place;
+the plan row is only a risk description.
+
+**Evidence.** `journal_events` for run `abf7e3e4`: `plan.created` risk
+`reversible_write`, `policy.decided` outcome `allowed`; the task record showed no
+approval card. `test/ui-structure.test.ts` pins the four labels and rejects
+`需确认`.
+
+**Reversal condition.** If planners gain a flag that a step needs the owner's
+confirmation regardless of policy, label that flag explicitly. If the owner
+wants every reversible write confirmed, change the policy, not the label.
+
+## 2026-11-18 — A finished run opens its trace by default
+
+**Decision.** `traceMarkup` opens the execution trace for every task record,
+finished or not; a collapse the owner makes is still remembered per session.
+This reverses the "finished runs keep it collapsed" half of the entry below.
+
+**Why it won.** The owner opened a finished review and asked why the work record
+was folded and unlike every other agent they use. The trace is the record of
+what the run did: collapsed, the task looks empty even though 43–214 rows exist.
+The trace container is already bounded (`max-height: min(360px, 45vh)` with its
+own scroll), so opening it does not push the verification off screen.
+
+**What was given up.** A long trace (214 rows in `4ce0db3d`) occupies the
+viewport by default. The verification card sits above it and stays visible; the
+owner can collapse the trace in one click and that choice is remembered.
+
+**Evidence.** In an isolated copy of the owner's journal, run `4ce0db3d`
+(completed, 26 evidence rows, 214 trace rows) renders the trace open without
+displacing the verification card; `test/ui-structure.test.ts` asserts the trace
+is open for both `waiting_review` and `completed`.
+
+**Reversal condition.** If a typical completed run's trace buries the
+verification or makes the record feel like a log dump, return to
+collapsed-on-finish, or keep a compact summary (counts by event type) and put the
+full list behind the disclosure.
 
 ## 2026-11-18 — A finished run keeps its verification, evidence and trace on screen
 
@@ -767,10 +996,11 @@ longer counts as missing at the end. The patch itself is produced by the repair
 lane (`npm run repair`) from the exported trace, as AGENTS.md rule 4 requires;
 this entry records the decision the patch must satisfy.
 
-**Attempt status (2026-11-18).** The first repair-lane run stopped at its
-`not-red` gate before writing a regression test, so this decision is not yet
-implemented and no production file changed. See the optimization log entry for
-what the worker did instead.
+**Status (2026-11-18).** Implemented by the repair lane in commit `fb496e5b`
+(branch `rsi/auto-fix-20261118T0913`, fast-forwarded into `main`): the worker
+reads `workOrder.inputs` where `required: true`, clears an input that is later
+read or written, and its prompt stops only for declared inputs. The
+two-direction regression test is `test/regression/native-missing-input.test.js`.
 
 **Why it won.** Run `87c526d5` planned "first re-check vendor/three.module.js:
 the previous two runs reported it missing", and its acceptance criterion asked

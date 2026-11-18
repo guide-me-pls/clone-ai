@@ -6,6 +6,24 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A path mentioned only in prose no longer fails a worker step
+
+The native worker now fails a step for a missing required input only when the work order declares that input with `required: true`. A path in the objective, instructions or acceptance criteria is context, not a requirement, and a path that is later read or written during the run no longer counts as missing. Declared required inputs that stay missing still fail. The fix came from the repair lane (commit `fb496e5b`) and ships with a two-direction regression test.
+
+Native Worker 现在只有在工作单以 `required: true` 声明某输入时，才因该输入缺失而判步骤失败。目标、指令或验收标准里的路径只是上下文，不是要求；运行期间后来被读取或写入的路径也不再算缺失。已声明且仍然缺失的必需输入仍会失败。该修复由修复通道产出（提交 `fb496e5b`），并带有覆盖两个方向的回归测试。
+
+### A plan step says what kind of risk it carries
+
+The execution plan no longer labels every non-read step `需确认`, which read as a pending approval even when the policy had already allowed the step. Steps now say `直接处理` (read), `本地写入` (reversible write), `外部动作` (external side effect) or `不可逆` (irreversible). When a confirmation really is pending, the run is `waiting_approval` and the approval card in the main conversation is the place to decide.
+
+执行计划不再把所有非只读步骤标成「需确认」——即使策略已经放行，它也会被读成待审批。现在按风险显示「直接处理」（只读）、「本地写入」（可回滚写入）、「外部动作」（外部副作用）或「不可逆」。真正需要确认时，Run 会进入 `waiting_approval`，在主对话的审批卡里决定。
+
+### Each task runs its own Main Agent
+
+A new task in the desktop is now its own Main Agent conversation: it carries its own history, and a task whose subtasks are still executing no longer blocks another task from starting. Concurrent Main Agent turns are capped by a cross-process pool measured from the machine — half the CPU cores (two when the machine has room), reduced under load and memory pressure, ceiling eight; `maxConcurrentMainAgents` pins the limit. Two prompts for the same task still return 409. Older ledger rows and runs, which carry no conversation id, stay under the main conversation. WhatsApp now keeps one conversation per chat.
+
+桌面端新建任务现在是一个独立的 Main Agent 对话：拥有自己的历史；一个任务的子任务仍在执行，也不会阻止另一个任务开始。并发 Main Agent 回合由跨进程槽位池按机器实测限制——CPU 核数的一半（机器有余量时给两个），负载与内存紧张时下调，上限八个；`maxConcurrentMainAgents` 可固定上限。同一任务的两个提示仍返回 409。没有对话 id 的旧台账行与 Run 仍归在主对话下。WhatsApp 现在按聊天各保留一个对话。
+
 ### The verification record stops repeating itself
 
 A finished task's review card printed the step title on every criterion, pasted all criteria again into the summary paragraph, and said the owner's decision twice. The pill now is the decision (`已接受结果` / `已驳回结果`), the criteria are numbered rows with the repeated title on its own muted line, and the summary counts them; new records keep the criteria only in their structured field. Records already stored get the same reading — the UI shortens their legacy summary sentence.
@@ -20,9 +38,9 @@ Waiting approvals and reviews are now decided from the Main Agent conversation, 
 
 ### A finished run keeps its verification and evidence
 
-A task record no longer loses the verification card when the owner accepts or rejects a result: it keeps the system verdict, the owner's decision, the unverified criteria and a count of checked evidence. The evidence list now names the artifacts and observations the run produced instead of only counting them, and the execution trace opens by default while a run is still waiting for a decision.
+A task record no longer loses the verification card when the owner accepts or rejects a result: it keeps the system verdict, the owner's decision, the unverified criteria and a count of checked evidence. The evidence list now names the artifacts and observations the run produced instead of only counting them, and the execution trace opens by default for every run, finished or not (the scroll container bounds a long one; a collapse the owner makes is remembered).
 
-所有者接受或拒绝结果后，任务记录不再丢失核验卡：它保留系统结论、所有者的决定、未自动验证的标准与被检查证据的数量。证据清单现在列出 Run 产出的产物与观察记录，而不只是计数；仍在等待决定的 Run 默认展开执行轨迹。
+所有者接受或拒绝结果后，任务记录不再丢失核验卡：它保留系统结论、所有者的决定、未自动验证的标准与被检查证据的数量。证据清单现在列出 Run 产出的产物与观察记录，而不只是计数；每个 Run（无论是否已结束）的执行轨迹都默认展开（长轨迹由滚动容器约束；所有者自己做过的折叠仍会记住）。
 
 ### UI edits reach the running window
 

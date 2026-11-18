@@ -31,6 +31,64 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — Each task gets its own Main Agent, sized by the machine
+
+- **Goal / hypothesis:** one global prompt lock and one shared transcript made
+  every task wait behind every other task and read every other task's history.
+  Scope a turn to a conversation id, replace the global lock with
+  per-conversation locks plus a cross-process slot pool measured from the
+  machine, and let "新建任务" create a real conversation.
+- **Trade-off:** [Each task runs its own Main Agent, sized by the machine](../architecture/trade-offs.md#2026-11-18--each-task-runs-its-own-main-agent-sized-by-the-machine).
+- **Change:** `src/main-agent/conversation.ts` (default id and request
+  validation), `main-agent-capacity.ts` (deterministic CPU/load/memory formula
+  and the `maxConcurrentMainAgents` pin), `main-agent-slots.ts` (numbered
+  cross-process slot files, stale-owner reclaim, abortable wait),
+  `prompt-lock.ts` (per-conversation hashed lock files; the default path is
+  preserved), `run-main-query.ts` (lock → slot → turn), `turn-audit.ts`
+  (conversationId on started, completed and interrupted rows and journal
+  events), `native-runtime.ts` (history and `search_history` scoped to the
+  conversation; tools receive the id), `dispatch-task.ts` and `kernel-tools.ts`
+  (run triggers carry the conversation id), `work-updates.ts` (updates carry
+  it), `companion-server.ts` (stream/query/interruption accept `conversationId`;
+  the dashboard groups conversations; session GET/DELETE/restore resolve
+  conversation ids from the ledger; a task view includes the owner's ledger
+  messages), `clone-config.ts` (the pin), `apps/desktop/ui/app.js` (new-task
+  mints an id, sends it and selects the conversation; sidebar and topbar
+  labels).
+- **Eval:** `node --experimental-strip-types --test test/main-agent-capacity.test.ts
+  test/main-agent-slots.test.ts test/prompt-lock.test.ts
+  test/native-main-agent.test.ts test/companion-control-plane.test.ts` — the
+  conversation-isolation cases cannot exist before the change: `buildHistory`
+  reads every completed row and `withMainAgentLock` refuses the second prompt
+  (`test/prompt-lock.test.ts`). After: **3/3**, **4/4**, **4/4**, **8/8**,
+  **18/18**. Full suite **772/772**, `npm run typecheck` pass, `npm run gate`
+  PASS (`verdict 13 cases · agreement 100%`, `policy 14 · 100%`, `audit 5 ·
+  100%`, baseline unchanged). Browser check on the isolated companion at
+  `localhost:4321`: the sidebar listed `conversation-verify-a` and
+  `conversation-verify-b` separately; each opened only its own two messages;
+  "新建任务" sent `{conversationId: "conversation-4a0c…", text, turnId}` and the
+  failed turn became its own sidebar entry titled from the owner's text.
+- **Benchmark run:** none — deterministic tests and a browser check; no
+  provider, model, dataset or scoring parameters were involved (the browser
+  failure path deliberately did not call a provider).
+- **Execution chain:** read the lock, ledger, history, dashboard, tool and UI
+  paths; wrote the trade-off entries; implemented three modules and wired them
+  through the turn path, dispatch triggers, work updates, server and UI; added
+  five test files/cases; ran the targeted tests, the full suite, typecheck and
+  gate; inspected the desktop in the preview with an isolated clone home. An
+  independent three-lens design review (concurrency, context, product) ran in
+  parallel and its findings were reconciled before the final run. No model
+  tokens were spent by the implementation; the review agents read code only.
+- **Pros:** one task no longer blocks another, and each transcript is the
+  task's own; the capacity bound is cross-process and testable; old homes keep
+  working because unscoped rows belong to the main conversation.
+- **Cons / next time:** a session GET scans the ledger on every request to
+  decide conversation-versus-run, and each dispatched run still samples its own
+  worker capacity — a process-wide worker gate is a separate change. The
+  new-task flow was verified with a deliberately aborted stream, not a live
+  model reply.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-18 — The verification record stops repeating itself
 
 - **Goal / hypothesis:** the review list showed the step title on every row and
@@ -118,8 +176,8 @@ file keeps every attempt, including the ones that did not work.
   `apps/desktop/ui/app.js` adds `verificationMarkup` (system verdict, owner
   verdict, unverified criteria, checked-evidence count) and rewrites
   `evidenceMarkup` to list artifact rows before observations with a 60-row cap
-  per group and an "N more" line; `traceMarkup` opens by default while the run is
-  `waiting_approval` or `waiting_review`. `style.css` adds the verification and
+  per group and an "N more" line; `traceMarkup` opens by default for every run,
+  finished or not (the owner's own collapse is remembered). `style.css` adds the verification and
   evidence styles; `test/ui-structure.test.ts` pins the blocks.
 - **Eval:** at HEAD the new UI contract test fails (`verificationMarkup`, the
   evidence list and the trace fallback do not exist); after the change the
@@ -130,7 +188,7 @@ file keeps every attempt, including the ones that did not work.
   `test/main-conversation-approvals.test.ts`. In an isolated copy of the owner's
   journal, run `91b685cf` renders 核验结果/需要你的复核, nine evidence rows and
   an open 43-row trace; run `4ce0db3d` renders 通过/你的决定：接受结果, three
-  artifact rows before 23 observations, and a collapsed 214-row trace.
+  artifact rows before 23 observations, and an open 214-row trace.
 - **Benchmark run:** none — deterministic UI/API tests; no provider, model,
   dataset or scoring parameters.
 - **Execution chain:** compared HEAD's `reviewMarkup` (hidden unless
@@ -710,7 +768,7 @@ file keeps every attempt, including the ones that did not work.
   sandbox, which the trade-off records as the reversal condition.
 - **Reversal condition:** copied from the trade-off entry.
 
-### 2026-11-18 — A path in prose is not a required input (repair lane: not repaired)
+### 2026-11-18 — A path in prose is not a required input (repair lane: repaired)
 
 - **Goal / hypothesis:** narrow the native worker's missing-input guard so a path
   that merely appears in prose cannot fail a step, while a declared required
@@ -794,6 +852,12 @@ file keeps every attempt, including the ones that did not work.
   `CLONE_AI_HOME` (so it reads the repair's traces), and `linkDependencies`
   dereferences `.bin` symlinks, leaving a `tsc` shim that cannot find
   `../lib/tsc.js`. Branch `rsi/auto-fix-20261118T0845` and its worktree are kept.
+  A final attempt after the eval and worktree fixes (`8702310`, `07f8bb5`)
+  passed every gate: phase 1 red, phase 2 green regression, the full suite
+  **759/759** and typecheck 0 in the worktree. The lane committed `fb496e5b`
+  (branch `rsi/auto-fix-20261118T0913`) and the branch was fast-forwarded into
+  `main`. Independent check: the new test fails with an assertion on an
+  unpatched worktree at `07f8bb5` and passes on the branch.
 - **Benchmark run:** none — no model benchmark; the lane's Kernel run is recorded
   in the journal (phase 1 `19252252-6952-4c85-8559-b7168558ceb3`).
 - **Execution chain:** exported 9 traces (the six unrelated traces were moved to

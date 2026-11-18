@@ -26,6 +26,48 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-18 —— 每个任务有自己的 Main Agent，并发由机器实测决定
+
+- **目标 / 假设：** 一把全局提示锁与一份共享转录，使每个任务都排在别的任务后面，并读到别的
+  任务的历史。把回合划分到对话 id，用按对话的锁加跨进程槽位池替代全局锁，槽位上限按机器实测，
+  并让"新建任务"真正开启一个对话。
+- **取舍：** [每个任务有自己的 Main Agent，并发由机器实测决定](../architecture/trade-offs.zh-CN.md#2026-11-18--每个任务有自己的-main-agent并发由机器实测决定)。
+- **变更：** `src/main-agent/conversation.ts`（默认 id 与请求校验）、
+  `main-agent-capacity.ts`（确定性的 CPU/负载/内存公式与 `maxConcurrentMainAgents` 固定值）、
+  `main-agent-slots.ts`（带编号的跨进程槽位文件、陈旧属主回收、可中止的等待）、
+  `prompt-lock.ts`（按对话哈希的锁文件；默认路径保持不变）、`run-main-query.ts`（锁 → 槽位 →
+  回合）、`turn-audit.ts`（started/completed/interrupted 行与 Journal 事件携带 conversationId）、
+  `native-runtime.ts`（历史与 `search_history` 按对话过滤；工具收到该 id）、
+  `dispatch-task.ts` 与 `kernel-tools.ts`（Run 的 Trigger 携带对话 id）、`work-updates.ts`
+  （工作更新携带它）、`companion-server.ts`（stream/query/interruption 接受
+  `conversationId`；仪表盘按对话分组；会话 GET/DELETE/restore 从台账判定对话 id；任务视图包含
+  所有者在台账中的消息）、`clone-config.ts`（固定值）、`apps/desktop/ui/app.js`（新建任务生成
+  id、发送并选中该对话；侧栏与顶栏标签）。
+- **Eval：** `node --experimental-strip-types --test test/main-agent-capacity.test.ts
+  test/main-agent-slots.test.ts test/prompt-lock.test.ts
+  test/native-main-agent.test.ts test/companion-control-plane.test.ts` —— 对话隔离用例在
+  变更前无法存在：`buildHistory` 读取每一行已完成回合，`withMainAgentLock` 拒绝第二次提示
+  （`test/prompt-lock.test.ts`）。变更后：**3/3**、**4/4**、**4/4**、**8/8**、**18/18**。
+  全量 **772/772**，`npm run typecheck` 通过，`npm run gate` PASS（`verdict 13 用例 ·
+  一致率 100%`、`policy 14 · 100%`、`audit 5 · 100%`，基线未变）。在隔离 companion
+  （`localhost:4321`）做浏览器检查：侧栏分别列出 `conversation-verify-a` 与
+  `conversation-verify-b`，各自只显示自己的两条消息；"新建任务"发送
+  `{conversationId: "conversation-4a0c…", text, turnId}`，失败的回合成为侧栏中一个以所有者
+  文本命名的独立条目。
+- **Benchmark run：** 无——确定性测试加浏览器检查；不涉及 Provider、模型、数据集或评分参数
+  （浏览器失败路径刻意不调用 Provider）。
+- **执行链路：** 阅读锁、台账、历史、仪表盘、工具与界面路径；写取舍条目；实现三个模块并把它们
+  接到回合路径、派发 Trigger、工作更新、服务端与界面；新增五个测试文件/用例；跑目标测试、全量
+  测试、typecheck 与 gate；在预览里用隔离 clone home 检查桌面。一个独立的三角色设计评审
+  （并发、上下文、产品）并行运行，其发现已在最终运行前核对。实现本身没有消耗模型 token；
+  评审 Agent 只读代码。
+- **优点：** 一个任务不再阻塞另一个，每份转录属于任务自己；容量上限跨进程且可测试；旧 home
+  继续可用，因为未划分的行属于主对话。
+- **缺点 / 下次：** 每次会话 GET 都扫描台账来判定"对话还是 Run"；每个派发的 Run 仍各自采样
+  Worker 容量——进程级 Worker 闸门是另一项变更。新建任务流程用刻意中止的流验证，而不是真实
+  模型回复。
+- **推翻条件：** 从取舍条目复制。
+
 ### 2026-11-18 —— 核验记录不再自我重复
 
 - **目标 / 假设：** 复核列表每行都重复步骤标题，摘要段又把全部标准重复一遍，所有者的决定还
@@ -89,15 +131,16 @@
 - **变更：** `src/companion-server.ts` 的 `buildSession` 返回 `evidence`；
   `apps/desktop/ui/app.js` 新增 `verificationMarkup`（系统结论、所有者决定、未自动验证的
   标准、被检查证据数），并重写 `evidenceMarkup`：产物行在观察记录之前，每组最多 60 行，
-  多出的显示"N 条"；`traceMarkup` 在 Run 处于 `waiting_approval` 或 `waiting_review` 时
-  默认展开。`style.css` 增加核验与证据样式；`test/ui-structure.test.ts` 固定这些块。
+  多出的显示"N 条"；`traceMarkup` 对每个 Run（无论是否已结束）都默认展开，所有者自己
+  做过的折叠按会话记忆生效。`style.css` 增加核验与证据样式；`test/ui-structure.test.ts`
+  固定这些块。
 - **Eval：** 在 HEAD 上新界面契约测试失败（`verificationMarkup`、证据清单与轨迹回落都不
   存在）；变更后定向文件为 **12/12**，全量 **759/759**；`npm run typecheck` 与
   `npm run gate` 通过。渲染出的标记被直接执行验证（用假会话跑
   `verificationMarkup`/`evidenceMarkup`/`traceMarkup`），而不只是对源码做正则。复核载荷由
   `test/main-conversation-approvals.test.ts` 覆盖。在所有者 Journal 的隔离副本里，Run
   `91b685cf` 显示「核验结果/需要你的复核」、9 行证据与展开的 43 行轨迹；Run `4ce0db3d`
-  显示「通过/你的决定：接受结果」、3 行产物排在 23 条观察之前，以及折叠的 214 行轨迹。
+  显示「通过/你的决定：接受结果」、3 行产物排在 23 条观察之前，以及展开的 214 行轨迹。
 - **Benchmark run：** 无——确定性界面/API 测试；没有 Provider、模型、数据集或评分参数。
 - **执行链路：** 对比 HEAD 的 `reviewMarkup`（只在 `waiting_review` 显示）与
   `evidenceMarkup`（只有计数）和工作区中的块，新增在 HEAD 上失败的界面契约测试，运行定向
@@ -496,7 +539,7 @@
   并把它们写进步骤证据。未被跟踪的密钥现在可能进入沙箱，取舍条目把它记为推翻条件。
 - **推翻条件：** 从取舍条目复制。
 
-### 2026-11-18 —— 指令里提到的路径不是必需输入（修复通道：未修成）
+### 2026-11-18 —— 指令里提到的路径不是必需输入（修复通道：已修复）
 
 - **目标 / 假设：** 收窄 Native Worker 的缺失输入闸门：仅仅出现在散文里的路径不能让步骤失败，
   而已声明的必需输入缺失时仍然失败——这是 2026-11-05 条目写下的推翻条件。
@@ -558,6 +601,10 @@
   注入 `CLONE_AI_DATA_DIR` 却继承了 `CLONE_AI_HOME`（于是读到修复的轨迹）；
   `linkDependencies` 解引用 `.bin` 符号链接，留下一个找不到 `../lib/tsc.js` 的 tsc 壳。
   分支 `rsi/auto-fix-20261118T0845` 与其 worktree 保留。
+  在 eval 与 worktree 修复（`8702310`、`07f8bb5`）之后的最后一次尝试通过了所有闸门：
+  第一阶段红、第二阶段回归绿、worktree 全套 **759/759**、typecheck 0。通道提交了
+  `fb496e5b`（分支 `rsi/auto-fix-20261118T0913`），该分支已快进合并进 `main`。独立检查：
+  新测试在未打补丁的 `07f8bb5` worktree 上以断言失败，在分支上通过。
 - **Benchmark run：** 无——没有模型基准；通道的 Kernel Run 记录在 Journal 中（第一阶段
   `19252252-6952-4c85-8559-b7168558ceb3`）。
 - **执行链路：** 导出 9 条轨迹（为本次运行把六条无关轨迹移到
