@@ -171,7 +171,7 @@ test("successful writes become artifact evidence the verifier can check", async 
   assert.equal(await readFile(join(directory, "out/note.md"), "utf8"), "hi");
 });
 
-test("a missing input named in the instructions fails instead of allowing invention", async (t) => {
+test("a missing declared required input fails instead of allowing invention", async (t) => {
   const directory = await workspace(t);
   const worker = new NativeAgentWorker({
     id: "n",
@@ -193,6 +193,22 @@ test("a missing input named in the instructions fails instead of allowing invent
   const events: ExecutionEvent[] = [];
   for await (const event of worker.execute({
     ...base,
+    // The path is required because the work order declares it, not because it
+    // appears in the prose. A path only in the instructions no longer fails.
+    // 该路径必需，是因为工作单声明了它，而不是因为它出现在文字里。只出现在指令中的路径
+    // 不再导致失败。
+    workOrder: {
+      id: "wo-1",
+      role: "maker",
+      title: "Read the note",
+      objective: "Read docs/absent.md and write out/summary.md.",
+      inputs: [{ name: "docs/absent.md", description: "The note", required: true }],
+      requiredCapabilities: ["filesystem_read", "filesystem_write"],
+      expectedArtifacts: [],
+      acceptanceCriteria: [],
+      risk: "reversible_write",
+      budget: { maxDurationMs: 10_000, maxAttempts: 1 },
+    },
     step: { ...base.step, instructions: "Read docs/absent.md and write out/summary.md." },
   })) events.push(event);
   const failed = events.find((event) => event.type === "failed");

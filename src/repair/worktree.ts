@@ -15,7 +15,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { access, realpath, rm } from "node:fs/promises";
+import { access, realpath, rm, symlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 export interface CommandResult {
@@ -122,12 +122,17 @@ export async function linkDependencies(worktree: RepairWorktree): Promise<"linke
   if (!existsSync(source)) return "absent";
   const target = join(worktree.path, "node_modules");
   if (existsSync(target)) return "linked";
-  const { cp } = await import("node:fs/promises");
   try {
-    // Dereference: nested symlinks inside node_modules would recreate the same
-    // escape one level down.
-    // 解引用：node_modules 内部还有符号链接时，会在下一层重建同样的逃逸。
-    await cp(source, target, { recursive: true, dereference: true, errorOnExist: false });
+    // One top-level symlink, not a copy. Copying with dereference turned
+    // `node_modules/.bin/tsc` from a symlink into a script whose
+    // `require("../lib/tsc.js")` no longer resolved, so every worktree
+    // typecheck failed. The worker's path gate resolves real targets and
+    // refuses reads/writes outside the workspace, so the link is not an escape.
+    // 一个顶层符号链接，而不是复制。带解引用的复制把 `node_modules/.bin/tsc` 从符号链接
+    // 变成了脚本，其 `require("../lib/tsc.js")` 再也解析不到，于是每个 worktree 的
+    // 类型检查都失败。Worker 的路径闸门会解析真实目标并拒绝工作区之外的读写，因此这个链接
+    // 不是逃逸通道。
+    await symlink(source, target, "dir");
     return "linked";
   } catch {
     return "absent";
