@@ -31,6 +31,51 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — Scanned PDFs and legacy .doc reach the model too
+
+- **Goal / hypothesis:** a scanned PDF or a legacy `.doc` should reach the model
+  like any other document, without cloud OCR, a temp file, or a second authority
+  path. The hypothesis was that a small native helper using PDFKit, Vision and
+  AppKit is enough and stays inside the existing attachment caps.
+- **Trade-off:** [OCR and legacy .doc go through a native macOS helper](../architecture/trade-offs.md#2026-11-18--ocr-and-legacy-doc-go-through-a-native-macos-helper).
+- **Change:** added `apps/desktop/macos/document-tool.swift` (stdin/stdout,
+  `ocr-pdf` and `doc` modes), compiled as `CloneAIDocumentTool` by
+  `scripts/build-macos-app.mjs`; `src/main-agent/document-extract.ts` falls back
+  to OCR when `unpdf` finds no text and routes `.doc` to the helper through an
+  injectable runner; `src/main-agent/attachments.ts` accepts an OLE `.doc`
+  signature and the `application/msword` type; the UI, native panel and daemon
+  installer carry `.doc` and the helper path; tests cover OCR fallback, an empty
+  OCR result, a missing tool, and the `.doc` signature.
+- **Eval:** `node --experimental-strip-types --test test/attachments.test.ts
+  test/document-extract.test.ts test/native-main-agent.test.ts
+  test/desktop-shell.test.ts` — 31/31. `npm test` 742/742; `npm run typecheck`
+  pass; `npm run gate` PASS with an unchanged baseline. The compiled helper read
+  a `textutil`-generated `.doc` and OCR'd a rendered scanned PDF into
+  `Hello from a PDF fixture.` / `Second line with Tom & Jerry.`; the bundled
+  Node resolved the sibling helper and extracted both fixtures without an env
+  var.
+- **Benchmark run:** none — deterministic tests plus native helper exercises; no
+  provider, model, dataset, or scoring parameters.
+- **Execution chain:** checked that `tesseract` is absent, generated `.doc`,
+  scanned and dense fixtures with `textutil`, `cupsfilter` and `sips`, tested
+  AppKit and Vision in a standalone Swift program, wrote the trade-off, built
+  the helper and the Node path, added tests, built the app and verified the
+  helper and the bundled Node. Failures: full-page OCR garbled sparse scans, so
+  the helper tiles and row-groups; `pdf.destroy` is absent on unpdf's proxy, so
+  cleanup uses `cleanup`; a shared-budget test expectation was corrected. A
+  concurrent process reset the working tree and the journal hit a raced
+  `failed → verifying` transition: the code and docs were re-applied, and the
+  journal was backed up and repaired before the app was reopened.
+- **Pros:** local-only, no temp file, one helper for OCR and `.doc`, the existing
+  caps and ledger manifest apply unchanged, and unit tests need no native
+  binary.
+- **Cons / next time:** macOS-only helper; OCR is CPU-bound and imperfect on
+  dense pages; the daemon needs the helper path; only the built app verifies the
+  real frameworks. The concurrent tree reset cost a full re-application.
+- **Reversal condition:** see the trade-off — another engine if Vision is
+  insufficient, `textutil` if AppKit fails, or a bounded worker if OCR becomes
+  common.
+
 ### 2026-11-18 — The window retries its runtime and shows why it stopped
 
 - **Goal / hypothesis:** the window should own the liveness of the runtime it

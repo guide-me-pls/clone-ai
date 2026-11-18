@@ -26,6 +26,40 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-18 —— 扫描 PDF 与旧式 .doc 也能交给模型
+
+- **目标 / 假设：** 扫描 PDF 或旧式 `.doc` 应像其它文档一样进入模型，不使用云端 OCR、
+  不写临时文件、不新增授权路径。假设是：一个使用 PDFKit、Vision 与 AppKit 的小型原生命中
+  助手足够，并能沿用现有附件上限。
+- **取舍：** [OCR 与旧式 .doc 走原生 macOS 助手](../architecture/trade-offs.zh-CN.md#2026-11-18--ocr-与旧式-doc-走原生-macos-助手)。
+- **变更：** 新增 `apps/desktop/macos/document-tool.swift`（stdin/stdout，`ocr-pdf` 与
+  `doc` 模式），由 `scripts/build-macos-app.mjs` 编译为 `CloneAIDocumentTool`；
+  `src/main-agent/document-extract.ts` 在 `unpdf` 找不到文本时回退 OCR，并把 `.doc` 交给
+  可注入的 runner；`src/main-agent/attachments.ts` 接受 OLE `.doc` 签名与
+  `application/msword`；UI、原生面板与守护进程安装器带上 `.doc` 与助手路径；测试覆盖
+  OCR 回退、空 OCR、缺少助手与 `.doc` 签名。
+- **Eval：** `node --experimental-strip-types --test test/attachments.test.ts
+  test/document-extract.test.ts test/native-main-agent.test.ts
+  test/desktop-shell.test.ts` —— 31/31。`npm test` 742/742；`npm run typecheck`
+  通过；`npm run gate` PASS 且 baseline 不变。编译后的助手读取 `textutil` 生成的
+  `.doc`，并把渲染后的扫描 PDF 识别为 `Hello from a PDF fixture.` /
+  `Second line with Tom & Jerry.`；打包 Node 无需环境变量即可从同级目录找到助手并提取
+  两份夹具。
+- **Benchmark run：** 无——确定性测试加原生助手演练；不涉及 Provider、模型、数据集或评分
+  参数。
+- **执行链路：** 确认本机没有 `tesseract`，用 `textutil`、`cupsfilter` 与 `sips` 生成
+  `.doc`、扫描与密集夹具，在独立 Swift 程序中测试 AppKit 与 Vision，写取舍条目，实现助手
+  与 Node 路径，补测试，构建 App 并验证助手与打包 Node。失败：整页 OCR 会把稀疏扫描件
+  读错，因此助手分条并按行重组；unpdf 的 proxy 没有 `pdf.destroy`，改用 `cleanup`；
+  一个共享预算测试的预期被修正。并发进程重置了工作树，journal 也遇到竞态
+  `failed → verifying`：代码与文档被重新应用，先备份并修复 journal，再重新打开 App。
+- **优点：** 全程本地、不写临时文件、OCR 与 `.doc` 共用一个助手；现有上限与台账清单原样
+  生效；单元测试不需要原生二进制。
+- **缺点 / 下次：** 助手仅 macOS；OCR 是 CPU 密集的，密集页面准确率有限；守护进程需要
+  助手路径；只有构建后的 App 验证真实框架。并发重置导致一次完整的重新应用。
+- **推翻条件：** 见取舍条目——Vision 不足时换引擎，AppKit 失败时用 `textutil`，OCR 常见时
+  移到有界 Worker。
+
 ### 2026-11-18 —— 窗口重启运行时，并说明它为什么停下
 
 - **目标 / 假设：** 窗口应当负责它拉起的运行时的活性：死掉的 sidecar 按退避重启，探测
