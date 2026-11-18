@@ -6,6 +6,38 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — A path mentioned in instructions is not a required input
+
+**Decision.** The native worker fails a step for a missing required input only
+when the plan declares that path as an input it must have — not because the path
+merely occurs in the objective, instructions or acceptance criteria. A path that
+was once missing but is later read successfully or written during the run no
+longer counts as missing at the end. The patch itself is produced by the repair
+lane (`npm run repair`) from the exported trace, as AGENTS.md rule 4 requires;
+this entry records the decision the patch must satisfy.
+
+**Why it won.** Run `87c526d5` planned "first re-check vendor/three.module.js:
+the previous two runs reported it missing", and its acceptance criterion asked
+for the file to exist. The worker's first read returned ENOENT, the missing set
+is never cleared, and the guard at `native-agent-worker.ts:348` failed the step
+before any terminal reason — even though the model then found three usable
+copies under `eval-runs/` and never wrote anything. It used 11 of 12 rounds and
+42.7 s, then stopped because the worker prompt also says to stop and report a
+missing file. Three separate submissions failed the same way. The 2026-11-05
+entry that introduced the rule named this reversal condition: legitimate work
+aborted because a path that merely appears in text is treated as required.
+
+**What was given up.** A worker may now spend a step on a path the plan did not
+declare as an input, and report a partial result where the old rule would have
+aborted. The strict check remains for declared inputs, so a missing declared
+input still fails; only the heuristic that turned prose into a requirement is
+gone.
+
+**Reversal condition:** if a worker reports success on a step whose declared
+required input was missing, restore the strict check for declared inputs and
+narrow elsewhere. If planners start declaring inputs broadly to satisfy the
+check, fix the planner instead of widening the rule.
+
 ## 2026-11-18 — Archived memories can be permanently deleted, and archiving comes first
 
 **Decision.** The memory panel gains a permanent delete. An archived memory can
