@@ -6,6 +6,25 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A build-and-verify step gets 40 rounds, and interactive grading is honest
+
+The native worker's default model-call budget rises from 12 to 40: App run
+`91a50a87` wrote a working Forbidden City scene, used the browser tools, and was
+then cut off at its 12th round with "reached its 12-round limit". The
+Forbidden City checker in `--interactive` mode no longer grades video-only
+fields (`browser.timeline-differs`, `setVideoTime`-based throughput,
+`camera.keys`), so an interactive model is graded by orbit/zoom and its own
+contract; the same workspace went from 23/28 to 26/27, the only miss being the
+side pavilions the eval prompt never asked for.
+
+构建并自证的步骤现在有 40 轮，交互评分不再考核视频字段
+
+Native Worker 的默认模型调用预算从 12 提高到 40：App 运行 `91a50a87` 已经写出可用的
+故宫场景并使用浏览器工具，却在第 12 轮被"reached its 12-round limit"切断。故宫检查器在
+`--interactive` 模式下不再评视频专属字段（`browser.timeline-differs`、基于
+`setVideoTime` 的吞吐、`camera.keys`），交互模型改由 orbit/zoom 与自身契约评分；同一
+工作区从 23/28 变为 26/27，唯一未过的是评测提示词从未要求的左右配楼。
+
 ### Scanned PDFs and legacy .doc join through a native helper
 
 A PDF with no text layer now falls back to Vision OCR, and a legacy `.doc` is

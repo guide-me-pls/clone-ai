@@ -6,6 +6,7 @@
     "README.md"
   ],
   "minimumSrcModules": 5,
+  "interactiveMinimumSrcModules": 1,
   "roofTypes": {
     "午门": "重檐庑殿",
     "太和门": "重檐歇山",

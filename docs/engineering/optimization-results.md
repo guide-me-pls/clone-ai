@@ -15,6 +15,23 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — A one-shot build-and-verify step is no longer cut off at 12 rounds
+
+- **Claim:** the native worker's default model-call budget is now 40, so a step
+  that writes a page, renders it, looks at the screenshots through the browser
+  tools, and repairs what it sees can finish in one query. Plan budgets and
+  `CLONE_AI_NATIVE_MAX_ROUNDS` still take precedence.
+- **Evidence:** App run `91a50a87` wrote `index.html`, `src/main.js`,
+  `README.md` and five screenshots, then failed with `The agent reached its
+  12-round limit without a final answer` (12 model calls, 14 tool calls,
+  102,872 tokens, 112.2 s). With the interactive checker fixed to stop grading
+  video-only fields, the same workspace grades **26/27** (orbit 63°, zoom ×0.55,
+  median 33.3 ms/frame), the only miss being side pavilions the eval prompt
+  never asked for.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--the-native-workers-default-round-budget-is-40-not-12),
+  [checker trade-off](../architecture/trade-offs.md#2026-11-18--interactive-grading-stops-asking-for-video-only-fields),
+  [execution chain](optimizations.md#2026-11-18--a-build-and-verify-step-gets-40-rounds-and-interactive-grading-drops-video-only-checks).
+
 ## 2026-11-18 — OCR and legacy .doc reach the model without leaving the machine
 
 - **Claim:** a scanned PDF falls back to Vision OCR and a legacy `.doc` is read

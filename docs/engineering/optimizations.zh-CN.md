@@ -26,6 +26,39 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-18 —— 构建并自证的步骤现在有 40 轮，交互评分去掉视频专属检查
+
+- **目标 / 假设：** 两个缺陷让一个好的交互模型看起来像失败。Native Worker 默认的 12 次
+  模型调用把已经可用的场景在改进途中切断；交互检查器仍在评视频专属字段（时间轴、
+  `setVideoTime`、`camera.keys`、五个源模块）。
+- **取舍：** [Native Worker 的默认轮次预算从 12 改为 40](../architecture/trade-offs.zh-CN.md#2026-11-18--native-worker-的默认轮次预算从-12-改为-40)、
+  [交互评分不再考核视频专属字段](../architecture/trade-offs.zh-CN.md#2026-11-18--交互评分不再考核视频专属字段)。
+- **变更：** `src/workers/native-agent-worker.ts`——`effectiveRoundLimit` 默认 40
+  （计划预算与所有者设置仍优先）；`test/native-agent-worker.test.ts` 固定优先级。
+  `benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs`——在
+  `--interactive` 模式下跳过 `browser.timeline-differs`、用渲染循环而非
+  `setVideoTime` 测量吞吐、跳过 `cameraKeys`、使用 `interactiveMinimumSrcModules`；
+  `verify/expected.json` 新增 `interactiveMinimumSrcModules: 1`。
+- **Eval：** App 运行 `91a50a87` 产出 `index.html`、`src/main.js`、`README.md`、
+  `front.png`、`side-45.png` 和另外三张截图，然后在第 12 轮以
+  `The agent reached its 12-round limit without a final answer` 失败（12 次模型调用、
+  14 次工具调用、102,872 tokens、112.2 秒）。同一工作区以 `--interactive` 评分：检查器
+  变更前 **23/28**（时间轴、cameraKeys 与 `setVideoTime` TypeError）；变更后 **26/27**，
+  `interaction.orbit 63°`、`interaction.zoom ×0.55`、
+  `browser.frame-throughput 中位数 33.3 ms`，唯一失败的是 `model.symmetry`，因为评测
+  提示词没有写 `expected.json` 要求的体仁阁/弘义阁。变更后 `npm test` 与
+  `npm run typecheck` 见提交信息。
+- **执行链路：** 任务在 App 自己的守护进程里运行（内置运行时，工作区
+  `~/Documents/Clone AI`），经 `POST /api/main-agent/query` 提交；审计随执行显示
+  `playwright.browser_navigate`、`browser_resize`、`browser_console_messages` 与
+  `write_file`。手工评工作区暴露了检查器的视频假设；修它是小的确定性编辑，eval 无需再跑
+  一轮模型。
+- **优点：** 分数现在反映模型而不是错误的契约；轮次默认值与 fallback planner 自己给出的
+  40 轮理由一致。
+- **缺点 / 下次：** 提示词与 `expected.json` 对左右配楼仍然不一致；评测提示词应由
+  expected 文件生成，或把这一对降为软检查。40 轮是"规划器不产出 `maxModelCalls`"的权宜之计。
+- **推翻条件：** 从两条取舍条目复制。
+
 ### 2026-11-18 —— 扫描 PDF 与旧式 .doc 也能交给模型
 
 - **目标 / 假设：** 扫描 PDF 或旧式 `.doc` 应像其它文档一样进入模型，不使用云端 OCR、

@@ -114,7 +114,11 @@ const srcDir = join(workspace, "src");
 if (await exists(srcDir)) {
   srcFiles = (await readdir(srcDir, { recursive: true })).filter((name) => name.endsWith(".js") || name.endsWith(".mjs"));
 }
-record("src.modules", srcFiles.length >= expected.minimumSrcModules, `${srcFiles.length} module(s) under src/ (need >= ${expected.minimumSrcModules})`);
+record(
+  "src.modules",
+  srcFiles.length >= (interactive ? expected.interactiveMinimumSrcModules : expected.minimumSrcModules),
+  `${srcFiles.length} module(s) under src/ (need >= ${interactive ? expected.interactiveMinimumSrcModules : expected.minimumSrcModules})`,
+);
 
 const sourceBlob = await (async () => {
   const parts = [];
@@ -296,7 +300,10 @@ try {
 
     const missingFeatures = expected.requiredModelFeatures.filter((feature) => {
       if (feature === "platforms") return !Array.isArray(model.platforms) || model.platforms.length < expected.minimumPlatforms;
-      if (feature === "cameraKeys") return !Array.isArray(model.camera?.keys) || model.camera.keys.length < 3;
+      // Interactive models have a live camera, not timeline keys; requiring
+      // `camera.keys` graded the video contract's field instead of the model.
+      // 交互模型有实时相机而非时间轴关键帧；要求 `camera.keys` 评的是视频契约的字段。
+      if (feature === "cameraKeys") return interactive ? false : !Array.isArray(model.camera?.keys) || model.camera.keys.length < 3;
       if (feature === "props") return !model.props || typeof model.props !== "object";
       return true;
     });
@@ -480,7 +487,12 @@ try {
   record("browser.shadows", sourceShadowMap && declaredShadowLights >= 1,
     sourceShadowMap ? `${declaredShadowLights} shadow-casting light(s) reported` : "no shadowMap/castShadow in source");
 
-  record("browser.timeline-differs", unique >= 3, `${unique}/5 distinct screenshots at t=0/7.5/15/22.5/30`);
+  // A timeline only exists in the video contract. Interactive models are
+  // graded by orbit/zoom below, which a static render cannot pass.
+  // 时间轴只存在于视频契约。交互模型由下方的 orbit/zoom 评分，静态渲染无法通过。
+  if (!interactive) {
+    record("browser.timeline-differs", unique >= 3, `${unique}/5 distinct screenshots at t=0/7.5/15/22.5/30`);
+  }
 
   // Frame throughput: 60 forwards seeks, same path a renderer would use.
   // Interaction: a 3D model is inspectable only if orbiting and zooming really
@@ -513,11 +525,17 @@ try {
   record("interaction.zoom", typeof zoomRatio === "number" && zoomRatio <= expected.maxZoomRatio,
     zoomRatio === null ? "no distance reading" : `distance ×${zoomRatio.toFixed(2)} after wheel-in (need ≤ ${expected.maxZoomRatio})`);
 
-  const timing = await page.evaluate(async () => {
+  // A video contract is measured through its seek API. An interactive model has
+  // no timeline: measure a plain render loop instead of calling setVideoTime,
+  // which does not exist there and used to fail the whole browser section.
+  // 视频契约通过 seek API 测量。交互模型没有时间轴：改为测量普通渲染循环，而不是调用
+  // 并不存在的 setVideoTime——那曾让整个浏览器段判为失败。
+  const timing = await page.evaluate(async (isInteractive) => {
     const durations = [];
     for (let frame = 0; frame < 60; frame += 1) {
       const start = performance.now();
-      window.setVideoTime(frame / 30);
+      if (isInteractive) window.dispatchEvent(new Event("resize"));
+      else window.setVideoTime(frame / 30);
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       durations.push(performance.now() - start);
     }
@@ -527,9 +545,9 @@ try {
       p95Ms: durations[Math.floor(durations.length * 0.95)],
       frames: durations.length,
     };
-  });
+  }, interactive);
   cameraTelemetry = timing;
-  record("browser.frame-throughput", timing.medianMs <= 100, `median ${timing.medianMs.toFixed(1)} ms/frame, p95 ${timing.p95Ms.toFixed(1)} ms (60 seeks)`);
+  record("browser.frame-throughput", timing.medianMs <= 100, `median ${timing.medianMs.toFixed(1)} ms/frame, p95 ${timing.p95Ms.toFixed(1)} ms (60 ${interactive ? "renders" : "seeks"})`);
 } catch (error) {
   record("browser.run", false, error.message.split("\n")[0]);
 } finally {

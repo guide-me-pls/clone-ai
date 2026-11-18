@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
-import { buildInstructions, decideTool, NativeAgentWorker, type NativeModelClient } from "../src/workers/native-agent-worker.ts";
+import { buildInstructions, decideTool, effectiveRoundLimit, NativeAgentWorker, type NativeModelClient } from "../src/workers/native-agent-worker.ts";
 import type { AgentModelRequest, AgentModelResponse } from "../src/agent/loop.ts";
 import { fileTools } from "../src/workers/native-worker-factory.ts";
 import type { ExecutionAssignment, ExecutionEvent } from "../src/core/contracts.ts";
@@ -284,6 +284,16 @@ test("a model-call budget is reported when the loop cannot finish in time", asyn
   assert.ok(failed?.type === "failed");
   assert.equal(failed.report?.category, "budget_exceeded");
   assert.equal(failed.report?.signature, "budget-model-calls");
+});
+
+test("the worker default gives a build-and-verify step 40 rounds, not 12", () => {
+  // A page is built, rendered, looked at and repaired inside one step; 12
+  // stopped App run 91a50a87 with a working scene already written.
+  // 一个页面在同一个步骤里被构建、渲染、查看并修复；12 轮让 App 运行 91a50a87 在场景
+  // 已经写好的情况下被切断。
+  assert.equal(effectiveRoundLimit(undefined, undefined), 40);
+  assert.equal(effectiveRoundLimit(7, undefined), 7);
+  assert.equal(effectiveRoundLimit(undefined, 9), 9);
 });
 
 test("a round limit from the worker default is still reported as a failure", async (t) => {

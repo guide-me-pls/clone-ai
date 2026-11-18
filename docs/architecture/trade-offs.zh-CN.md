@@ -5,6 +5,62 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-18 —— 交互评分不再考核视频专属字段
+
+**决定。** 故宫检查器的 `--interactive` 模式不再评 `browser.timeline-differs`、经
+`setVideoTime` 的 `browser.frame-throughput`，以及 `model.features.cameraKeys`；
+`src.modules` 对交互契约使用单独的最小值 1。
+
+**被否决的备选方案。**
+
+- *两种交付物共用一套契约。* 2026-11-18 决定用交互模型取代视频，但检查器仍保留三条视频
+  专属断言；它们让每个交互模型无论质量如何都失败，使分数失去信号意义。
+- *两种模式都去掉时间轴检查。* 视频契约仍需要它们：帧必须不同，seek 路径必须保持快速。
+- *把失败降级为软检查。* 软检查仍会打印 FAIL，并掩盖"该维度从未被评分"这一事实。
+
+**证据。** 用 `--interactive` 评 App 运行 `91a50a87`：变更前 23/28，其中
+`browser.timeline-differs 1/5 distinct screenshots`（交互页面只有一个视图，不是时间轴）、
+`model.features missing: cameraKeys`（模型有实时相机，不是关键帧）、以及
+`browser.run TypeError: window.setVideoTime is not a function`——最后一条中断了浏览器段
+余下的检查，包括帧吞吐测量。变更后：26/27，唯一失败的是 `model.symmetry`，因为评测提示词
+没有写 `expected.json` 要求的体仁阁/弘义阁。
+
+**代价。** 交互模型不再检查时间轴——这是有意的；它们的交互由 `interaction.orbit` 与
+`interaction.zoom` 评分，静态渲染无法通过。
+
+**推翻条件。** 若交互交付物将来需要随时间动画，增加一个独立开关，而不是复用视频时间轴检查；
+若两种契约再次合一，合并交互分支。
+
+## 2026-11-18 —— Native Worker 的默认轮次预算从 12 改为 40
+
+**决定。** `effectiveRoundLimit` 的优先级不变——计划的 `maxModelCalls`、所有者的
+`CLONE_AI_NATIVE_MAX_ROUNDS`、然后是默认值——但默认值从 12 次模型调用改为 40 次。
+
+**被否决的备选方案。**
+
+- *保留 12，要求每个计划都携带预算。* LLM 规划器产出的步骤没有预算
+  （`plan.created` 里 `budget: null`），实际跑的就是默认值；要求规划器为模型调用做预算，
+  等于让一个可用的默认值依赖一个没人填的字段。
+- *不设默认值（无上限）。* 时长预算就成了唯一的刹车，一个不断发起廉价调用的循环可以在任何
+  轮次信号出现之前烧完整个步骤。
+- *提高到 100。* 观测到每轮代价是数秒与约 8k tokens；40 已覆盖一次"构建—读图—验证—修复"
+  循环，更大的默认值会掩盖一个本应由计划显式预算的步骤。
+
+**证据。** App 运行 `91a50a87`（2026-11-18）已通过 Playwright MCP 写出 `index.html`、
+`src/main.js`、`README.md` 与五张截图，然后在第 12 次模型调用处停止：
+`The agent reached its 12-round limit without a final answer`——14 次工具调用、102,872
+tokens、112.2 秒，场景已经能加载并环绕。Fallback planner 当初给出 40 的理由相同：
+"20 曾把一个能跑的 FPS 在验收中途切断；40 让同一个一次性请求跑到收尾"
+（`src/planning/fallback-planner.ts`）。交互式 3D 在写代码之外多出一轮截图审查循环，
+12 轮覆盖不了。
+
+**代价。** 原本在 12 轮失败的步骤现在最多可能花 40 轮 tokens；10 分钟的工作单时长与工具
+调用预算仍然约束它。没有进展的循环在轮次上限拦住它之前会多浪费一些。
+
+**推翻条件。** 若单步成本成为主要约束，降低默认值并让规划器为每个步骤输出
+`maxModelCalls`；若运行仍在 40 轮处"产出了却被切断"，只在同时给出能覆盖新增轮次的时长预算
+时提高它。
+
 ## 2026-11-18 —— OCR 与旧式 .doc 走原生 macOS 助手
 
 **决定。** App 包内再编译一个 Swift 可执行文件 `CloneAIDocumentTool`。它从 stdin 读文件
