@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The window restarts a stopped runtime and shows why
+
+The desktop shell no longer ends at "本地运行时已停止" with an instruction to reopen the app. In the mode where the app spawns its own sidecar, an exit relaunches it with exponential backoff (1 s doubling to a 30 s cap) and the startup view shows the attempt and the last four stderr lines; a start that passes 30 s without `CLONE_AI_READY` is terminated and restarted. Both modes probe `/api/health` every 5 seconds — two misses restart the runtime, or make the window re-read the launchd endpoint — and a resident attach that finds no endpoint retries every 30 s instead of stopping after 60 s. A failed WebView load on a stale endpoint recovers immediately instead of showing a blank page.
+
+桌面外壳不再停在「本地运行时已停止」并让用户重开应用。在 App 自己拉起 sidecar 的模式下，退出后会按指数退避重启（1 秒起翻倍、上限 30 秒），启动页显示重启次数与 stderr 最后四行；30 秒仍未打印 `CLONE_AI_READY` 的启动会被终止并重启。两种模式每 5 秒探测一次 `/api/health`——连续两次失败会重启运行时，或让窗口重读 launchd 发布的端点；常驻附着读不到端点时每 30 秒重试，而不是 60 秒后停下。陈旧端点导致 WebView 加载失败时立即恢复，而不是显示空白页。
+
 ### The app starts again after a raced journal event
 
 A shared journal can contain a status transition one writer recorded and every later reader would refuse. The projection now reflects the recorded status instead of crashing, while live writers are still checked before they append. The desktop sidecar that had crashed in `hydrate()` on every launch starts and serves normally again; the illegal event stays in the journal as evidence.

@@ -18,7 +18,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     private var startupDotTimer: Timer?
     private var daemon: Process?
     private var stdoutBuffer = ""
-    private var stderrBuffer = ""
+    private var sidecarStderr = ""
     private var localURL: URL?
     private var shuttingDown = false
     private var readyTimer: Timer?
@@ -31,6 +31,13 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     private var developerReloadMarker: URL?
     private var developerReloadStamp: Date?
     private var developerReloadTimer: Timer?
+    private var restartTimer: Timer?
+    private var restartAttempts = 0
+    private var restartScheduled = false
+    private var healthTimer: Timer?
+    private var healthFailures = 0
+    private var residentRetryTimer: Timer?
+    private var lastExitSummary = ""
 
     /**
      * Resident mode: launchd owns the runtime, so quitting this app must not
@@ -166,6 +173,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        stopSupervision()
         // A resident daemon is launchd's child, not ours: killing it here would
         // make quitting the window stop the twin, which is the bug this mode
         // exists to remove. Detach and let launchd keep it.
@@ -438,6 +446,21 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         pageReady = false
     }
 
+    /**
+     * A failed load is the other way a stale endpoint announces itself: the URL
+     * parses, the port is dead. The health probe would find it five seconds
+     * later; failing here recovers at once instead of showing a blank page.
+     * 加载失败是陈旧端点的另一种自白：URL 合法，端口已死。健康探测要五秒后才发现；这里
+     * 立即恢复，而不是显示一张空白页。
+     */
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        if (error as NSError).code == NSURLErrorCancelled { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.shuttingDown, self.localURL != nil else { return }
+            self.recoverFromUnhealthyRuntime(reason: error.localizedDescription)
+        }
+    }
+
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
@@ -460,6 +483,9 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         guard developerRoot != nil, !shuttingDown, !developerRestartPending else { return }
         readyTimer?.invalidate()
         readyTimer = nil
+        restartTimer?.invalidate()
+        restartTimer = nil
+        restartScheduled = false
         localURL = nil
         pageReady = false
         guard let process = daemon, process.isRunning else {
@@ -525,6 +551,13 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             attachToResidentDaemon(reconnecting: reconnecting)
             return
         }
+        readyTimer?.invalidate()
+        readyTimer = nil
+        // Each attempt starts with a clean reason; a timeout or a launch error
+        // fills it before the next failure can be reported.
+        // 每次尝试都从空原因开始；超时或启动错误会在下一次失败上报之前填入它。
+        lastExitSummary = ""
+        sidecarStderr = ""
         guard let resources = Bundle.main.resourceURL else {
             showMessage(title: "启动失败", detail: "找不到应用资源。")
             return
@@ -583,7 +616,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             if data.isEmpty { handle.readabilityHandler = nil; return }
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.stderrBuffer = String((self.stderrBuffer + String(decoding: data, as: UTF8.self)).suffix(4000))
+                self.sidecarStderr = String((self.sidecarStderr + String(decoding: data, as: UTF8.self)).suffix(4000))
             }
         }
         process.terminationHandler = { [weak self] process in
@@ -597,6 +630,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
                     self.daemon = nil
                     self.localURL = nil
                     self.pageReady = false
+                    self.stopHealthMonitor()
                     self.startDaemon(reconnecting: true)
                     return
                 }
@@ -605,11 +639,16 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
                     self.daemon = nil
                     self.localURL = nil
                     self.pageReady = false
+                    self.stopHealthMonitor()
                     self.startDaemon()
                     return
                 }
-                self.showMessage(title: "本地运行时已停止", detail: "请关闭应用后重新打开；如果问题持续，请检查本地配置。")
+                self.daemon = nil
+                if self.lastExitSummary.isEmpty {
+                    self.lastExitSummary = "退出状态 \(process.terminationStatus)"
+                }
                 NSLog("Clone AI sidecar exited with status %d", process.terminationStatus)
+                self.scheduleRuntimeRestart()
             }
         }
         do {
@@ -619,12 +658,15 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             developerRestartPending = false
             stdout.fileHandleForReading.readabilityHandler = nil
             stderr.fileHandleForReading.readabilityHandler = nil
-            showMessage(title: "启动失败", detail: "无法启动应用内的本地运行时。")
+            daemon = nil
             NSLog("Clone AI sidecar launch failed: %@", error.localizedDescription)
+            lastExitSummary = "无法启动：\(error.localizedDescription)"
+            scheduleRuntimeRestart()
+            return
         }
         readyTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
             guard let self, self.localURL == nil, !self.shuttingDown else { return }
-            self.showMessage(title: "启动超时", detail: "本地运行时没有及时就绪。请关闭应用后重新打开。")
+            self.handleStartupTimeout()
         }
     }
 
@@ -651,7 +693,8 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
                 guard let self, !self.shuttingDown else { return }
                 self.residentAttempts += 1
                 if self.residentAttempts > 120 {
-                    self.showMessage(title: "常驻运行时未响应", detail: "launchd 没有发布端点。请运行 scripts/install-daemon.mjs 重新安装。")
+                    self.residentAttempts = 0
+                    self.retryResidentAttach(reason: "launchd 没有在 60 秒内发布端点。")
                     return
                 }
                 self.attachToResidentDaemon(reconnecting: true)
@@ -664,14 +707,216 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         readyTimer = nil
         startupDotTimer?.invalidate()
         startupDotTimer = nil
+        residentRetryTimer?.invalidate()
+        residentRetryTimer = nil
+        restartTimer?.invalidate()
+        restartTimer = nil
+        restartScheduled = false
+        restartAttempts = 0
+        lastExitSummary = ""
         webView.frame = window.contentLayoutRect
         window.contentView = webView
         webView.load(URLRequest(url: url))
+        startHealthMonitor()
         print("CLONE_AI_DESKTOP_READY \(url.absoluteString)")
         fflush(stdout)
     }
 
     private var residentAttempts = 0
+
+    /**
+     * Stop every supervision timer before the process exits. A restart timer
+     * that fires during AppKit's synchronous termination would spawn a sidecar
+     * whose parent is already leaving.
+     *
+     * 退出前停掉所有监管定时器。在 AppKit 同步终止期间触发的重启定时器会拉起一个父进程
+     * 已在离开的 sidecar。
+     */
+    private func stopSupervision() {
+        restartTimer?.invalidate()
+        restartTimer = nil
+        healthTimer?.invalidate()
+        healthTimer = nil
+        residentRetryTimer?.invalidate()
+        residentRetryTimer = nil
+        readyTimer?.invalidate()
+        readyTimer = nil
+        restartScheduled = false
+    }
+
+    /**
+     * Nothing supervises a sidecar the app spawned itself: when it exited, this
+     * view used to become a dead end. Relaunch it with exponential backoff and
+     * keep the last stderr lines on screen, so a crash loop is observable
+     * instead of silent. Resident mode is different — launchd owns that process
+     * and the window follows the endpoint file.
+     *
+     * 自行拉起的 sidecar 没有任何监管：过去它一退出，这个窗口就是终点。现在按指数退避
+     * 重启，并把最后的 stderr 留在屏幕上，使崩溃循环可观察而不是无声。常驻模式不同——
+     * 那个进程属于 launchd，窗口跟随端点文件。
+     */
+    private func scheduleRuntimeRestart() {
+        guard !shuttingDown, !residentRuntime, !developerRestartPending, !restartScheduled else { return }
+        restartScheduled = true
+        restartAttempts += 1
+        stopHealthMonitor()
+        readyTimer?.invalidate()
+        readyTimer = nil
+        localURL = nil
+        pageReady = false
+        let delay = min(30.0, pow(2.0, Double(max(0, restartAttempts - 1))))
+        let seconds = Int(delay.rounded())
+        var detail = "第 \(restartAttempts) 次自动重启，\(seconds) 秒后重试。"
+        if !lastExitSummary.isEmpty { detail += "\n上次退出：\(lastExitSummary)" }
+        if let tail = sidecarStderrTail() { detail += "\n\(tail)" }
+        showMessage(title: "本地运行时已停止，正在自动重启", detail: detail)
+        restartTimer?.invalidate()
+        restartTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            guard let self, !self.shuttingDown else { return }
+            self.restartScheduled = false
+            self.startDaemon(reconnecting: true)
+        }
+    }
+
+    /**
+     * A sidecar that has not printed CLONE_AI_READY after 30 seconds is stuck,
+     * not slow: restart it rather than report a timeout the owner can only
+     * answer by quitting.
+     *
+     * 30 秒仍未打印 CLONE_AI_READY 的 sidecar 是卡住，不是慢：重启它，而不是报一个只能
+     * 靠退出应用回答的超时。
+     */
+    private func handleStartupTimeout() {
+        guard !shuttingDown, localURL == nil else { return }
+        lastExitSummary = "启动超时：30 秒内没有就绪"
+        if let process = daemon, process.isRunning {
+            process.terminate()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self, weak process] in
+                guard let self, !self.shuttingDown, let process, process.isRunning else { return }
+                Darwin.kill(process.processIdentifier, SIGKILL)
+                self.daemon = nil
+                self.scheduleRuntimeRestart()
+            }
+            return
+        }
+        daemon = nil
+        scheduleRuntimeRestart()
+    }
+
+    /** The last lines the sidecar wrote to stderr, bounded for the startup view. 启动页展示所用的 sidecar stderr 尾行（有界）。 */
+    private func sidecarStderrTail() -> String? {
+        let lines = sidecarStderr
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return nil }
+        return String(lines.suffix(4).joined(separator: "\n").suffix(600))
+    }
+
+    /**
+     * A process that is alive but no longer answers is the failure the exit
+     * handler cannot see: the sidecar can hang with its port still open. Probe
+     * the health endpoint the server already exposes; two misses in a row mean
+     * the window must re-attach or restart instead of leaving a page whose every
+     * request fails.
+     *
+     * 进程还活着但不再应答，是退出处理器看不见的失败：sidecar 可能端口还在、服务已卡死。
+     * 探测服务端已经暴露的健康端点；连续两次失败意味着窗口必须重新附着或重启，而不是留下
+     * 一个每个请求都失败的页面。
+     */
+    private func startHealthMonitor() {
+        healthTimer?.invalidate()
+        healthFailures = 0
+        guard localURL != nil else { return }
+        healthTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            self?.probeRuntimeHealth()
+        }
+    }
+
+    private func stopHealthMonitor() {
+        healthTimer?.invalidate()
+        healthTimer = nil
+        healthFailures = 0
+    }
+
+    private func probeRuntimeHealth() {
+        guard !shuttingDown, let base = localURL else { stopHealthMonitor(); return }
+        let url = base.appendingPathComponent("api/health")
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 4
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+            DispatchQueue.main.async {
+                // A probe from the previous runtime must not condemn the one
+                // that replaced it: the URL is the generation token.
+                // 上一个运行时的探测不能给接替它的运行时定罪：URL 就是代际标识。
+                guard let self, !self.shuttingDown, self.localURL == base else { return }
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if error == nil && (200..<300).contains(code) {
+                    self.healthFailures = 0
+                    return
+                }
+                self.healthFailures += 1
+                guard self.healthFailures >= 2 else { return }
+                self.recoverFromUnhealthyRuntime(reason: error?.localizedDescription ?? "HTTP \(code)")
+            }
+        }.resume()
+    }
+
+    private func recoverFromUnhealthyRuntime(reason: String) {
+        guard !shuttingDown else { return }
+        stopHealthMonitor()
+        readyTimer?.invalidate()
+        readyTimer = nil
+        localURL = nil
+        pageReady = false
+        if residentRuntime {
+            retryResidentAttach(reason: "端点无响应：\(reason)")
+            return
+        }
+        lastExitSummary = "健康检查失败：\(reason)"
+        if let process = daemon, process.isRunning {
+            showMessage(title: "本地运行时无响应，正在重启", detail: "健康检查失败：\(reason)")
+            process.terminate()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self, weak process] in
+                guard let self, !self.shuttingDown, let process, process.isRunning else { return }
+                Darwin.kill(process.processIdentifier, SIGKILL)
+                self.daemon = nil
+                self.scheduleRuntimeRestart()
+            }
+            return
+        }
+        daemon = nil
+        scheduleRuntimeRestart()
+    }
+
+    /**
+     * launchd restarts the daemon with a new port and republishes the endpoint;
+     * the window follows the file. Sixty seconds without an endpoint is not the
+     * end of that story, so keep checking every 30 seconds and name the command
+     * that restores the job.
+     *
+     * launchd 会用新端口重启 Daemon 并重新发布端点；窗口跟随该文件。60 秒读不到端点并不是
+     * 故事的终点，因此每 30 秒继续检查，并说明哪条命令能恢复任务。
+     */
+    private func retryResidentAttach(reason: String) {
+        guard !shuttingDown else { return }
+        stopHealthMonitor()
+        readyTimer?.invalidate()
+        readyTimer = nil
+        localURL = nil
+        pageReady = false
+        showMessage(
+            title: "常驻运行时未响应，正在重试",
+            detail: "\(reason)\n每 30 秒重新读取端点；可运行 scripts/install-daemon.mjs 重新安装。"
+        )
+        residentRetryTimer?.invalidate()
+        residentRetryTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
+            guard let self, !self.shuttingDown else { return }
+            self.residentAttempts = 0
+            self.attachToResidentDaemon(reconnecting: true)
+        }
+    }
 
     private func receiveStdout(_ data: Data) {
         stdoutBuffer += String(decoding: data, as: UTF8.self)
@@ -689,9 +934,16 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             readyTimer = nil
             startupDotTimer?.invalidate()
             startupDotTimer = nil
+            restartTimer?.invalidate()
+            restartTimer = nil
+            restartScheduled = false
+            restartAttempts = 0
+            lastExitSummary = ""
+            sidecarStderr = ""
             webView.frame = window.contentLayoutRect
             window.contentView = webView
             webView.load(URLRequest(url: url))
+            startHealthMonitor()
             print("CLONE_AI_DESKTOP_READY \(url.absoluteString)")
             fflush(stdout)
             if ProcessInfo.processInfo.arguments.contains("--preview-pending") {
@@ -742,8 +994,24 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         if window.contentView !== startupView {
             window.contentView = startupView
         }
+        startStartupPulse()
         startupTitle.stringValue = title
         startupDetail.stringValue = detail
+    }
+
+    /** Keep the dot breathing whenever the startup view is on screen. 启动视图在屏上时让圆点一直呼吸。 */
+    private func startStartupPulse() {
+        guard startupDotTimer == nil else { return }
+        startupDotTimer = Timer.scheduledTimer(withTimeInterval: 1.1, repeats: true) { [weak self] _ in
+            guard let layer = self?.startupDot.layer else { return }
+            let animation = CABasicAnimation(keyPath: "opacity")
+            animation.fromValue = 1
+            animation.toValue = 0.38
+            animation.duration = 0.55
+            animation.autoreverses = true
+            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            layer.add(animation, forKey: "startup-pulse")
+        }
     }
 
     private func makeStartupView() -> NSView {
@@ -760,16 +1028,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             startupDot.widthAnchor.constraint(equalToConstant: 22),
             startupDot.heightAnchor.constraint(equalToConstant: 22),
         ])
-        startupDotTimer = Timer.scheduledTimer(withTimeInterval: 1.1, repeats: true) { [weak self] _ in
-            guard let layer = self?.startupDot.layer else { return }
-            let animation = CABasicAnimation(keyPath: "opacity")
-            animation.fromValue = 1
-            animation.toValue = 0.38
-            animation.duration = 0.55
-            animation.autoreverses = true
-            animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            layer.add(animation, forKey: "startup-pulse")
-        }
+        startStartupPulse()
 
         startupTitle = NSTextField(labelWithString: "正在启动 Clone AI")
         startupTitle.font = NSFont.systemFont(ofSize: 22, weight: .semibold)
@@ -780,7 +1039,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         startupDetail.font = NSFont.systemFont(ofSize: 13)
         startupDetail.textColor = NSColor(calibratedRed: 0.38, green: 0.41, blue: 0.38, alpha: 1)
         startupDetail.alignment = .center
-        startupDetail.maximumNumberOfLines = 3
+        startupDetail.maximumNumberOfLines = 8
 
         let stack = NSStackView(views: [startupDot, startupTitle, startupDetail])
         stack.orientation = .vertical

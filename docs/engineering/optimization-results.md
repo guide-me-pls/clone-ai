@@ -15,6 +15,24 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — The window recovers a stopped runtime on its own
+
+- **Claim:** a packaged app whose spawned runtime stops no longer ends at a
+  static "close and reopen" screen: the shell relaunches it with exponential
+  backoff (measured 1, 2, 4, 8 and 16 s), shows the last stderr lines, and both
+  modes probe `/api/health` every 5 seconds so a hung runtime is restarted
+  (non-resident) or re-attached (resident).
+- **Evidence:** `node --experimental-strip-types --test test/desktop-shell.test.ts`
+  — **1/1** with the new assertions; the HEAD shell has no
+  `scheduleRuntimeRestart` or `/api/health` caller and still prints the terminal
+  copy. Manual eval of `dist/Clone AI-2026-11-18T06-53-44-937Z.app` with
+  `CLONE_HOME` at a regular file: five relaunches at 14:55:22.777 / 24.004 /
+  26.241 / 30.443 / 38.632, gaps 1.2 / 2.2 / 4.2 / 8.2 / 16.2 s;
+  `GET /api/health` on a running runtime returns HTTP 200. Full suite
+  **742/742**, typecheck and gate pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--the-window-supervises-its-runtime-retry-probe-and-say-why),
+  [execution chain](optimizations.md#2026-11-18--the-window-retries-its-runtime-and-shows-why-it-stopped).
+
 ## 2026-11-18 — A raced journal event no longer keeps the app from starting
 
 - **Claim:** the companion rebuilds its projection from a shared journal even when one process recorded an illegal `failed -> verifying` transition; the desktop sidecar starts and serves again, while live writers are still refused by `changeStatus`.
