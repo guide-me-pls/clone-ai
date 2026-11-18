@@ -15,6 +15,22 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — A step ends when the model says it is done, not at a round number
+
+- **Claim:** the shared agent loop has no default model-round cap. It continues
+  until the model returns an answer, the turn is aborted, or a duration,
+  tool-call or token budget stops it; an explicit plan budget or
+  `CLONE_AI_NATIVE_MAX_ROUNDS` still bounds a step when set, and the planners no
+  longer write `maxModelCalls`.
+- **Evidence:** `node --experimental-strip-types --test test/agent-loop.test.ts
+  test/native-agent-worker.test.ts test/companion-main-agent.test.ts` — a scripted
+  model that requests tools for 13 rounds and then answers completes, while an
+  explicit `maxRounds: 2` still ends in `max_turns`;
+  `effectiveRoundLimit(undefined, undefined)` is `undefined`. `npm test`
+  756/756, `npm run typecheck` and `npm run gate` pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-worker-stops-when-the-model-stops-no-default-round-cap),
+  [execution chain](optimizations.md#2026-11-18--a-worker-stops-when-the-model-stops-the-default-round-cap-is-gone).
+
 ## 2026-11-18 — The owner's message bubble renders Markdown
 
 - **Claim:** owner messages now render headings, lists, inline/fenced code and

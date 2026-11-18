@@ -11,6 +11,19 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 步骤在模型说完成时结束，而不是撞上某个轮次数字
+
+- **主张：** 共享 Agent 循环不再有默认的模型轮次上限。它一直继续，直到模型给出回答、回合被
+  中止，或时长/工具调用/token 预算把它停下；显式的计划预算或 `CLONE_AI_NATIVE_MAX_ROUNDS`
+  仍可在设置时约束步骤，规划器不再写 `maxModelCalls`。
+- **证据：** `node --experimental-strip-types --test test/agent-loop.test.ts
+  test/native-agent-worker.test.ts test/companion-main-agent.test.ts`——连续 13 轮请求工具
+  后回答的脚本模型能完成，而显式 `maxRounds: 2` 仍以 `max_turns` 结束；
+  `effectiveRoundLimit(undefined, undefined)` 为 `undefined`。`npm test` 756/756，
+  `npm run typecheck` 与 `npm run gate` 通过。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--worker-在模型停下时停下没有默认轮次上限)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--worker-在模型停下时停下默认轮次上限已移除)。
+
 ## 2026-11-18 —— 故宫基准在 App 内端到端通过
 
 - **主张：** 经 App 自己的守护进程、用一段话任务提交的运行 `18569eb4` 现在评为 **28/28**、
