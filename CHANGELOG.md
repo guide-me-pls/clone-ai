@@ -6,6 +6,21 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The load-time view is graded on composition
+
+A Forbidden City model can pass every data and interaction check and still look
+like a floor plan: run `4ce0db3d` graded 26/27 while 太和殿 covered 9.0% of the
+frame height from the default camera. The interactive checker now projects the
+hall's corners through the camera the page reports and requires at least 25% of
+the frame height with the hall inside the frame; the eval prompt states the
+same rule.
+
+默认视角现在按构图评分
+
+故宫模型可以通过全部数据与交互检查，却仍然像平面图：运行 `4ce0db3d` 评为 26/27，而默认
+相机下太和殿只占画面高度的 9.0%。交互检查器现在按页面报告的相机投影主殿角点，要求占画面
+高度至少 25% 且完整落在画面内；评测提示词写明同一条规则。
+
 ### Automation runs in its own clone home
 
 Repair, nightly RSI and eval companions no longer share the owner's `~/.clone`. They resolve `<repo>/.automation/<purpose>` (or `CLONE_AI_AUTOMATION_HOME`), seed only `config.json`/`settings.json`/`providers.json`/`mcp.json`/`policies.json`, and refuse the live home unless `CLONE_AI_ALLOW_OWNER_HOME=1`. The repair lane still reads failed traces from the owner's home, read-only; reports, consumed-trace state and locks live in the isolated home. `scripts/companion-dev.mjs` now requires an explicit isolated home.

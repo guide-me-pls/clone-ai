@@ -307,6 +307,34 @@ file keeps every attempt, including the ones that did not work.
   next variable is the repair model, not the brief.
 - **Reversal condition:** copied from the trade-off entry.
 
+### 2026-11-18 — The load-time view is graded on composition
+
+- **Goal / hypothesis:** a model can satisfy every data and interaction check and
+  still look like a floor plan, because the default camera sits far away and
+  looks down. Grading the hero hall's share of the frame height from the page's
+  own view API turns the owner's complaint into a check.
+- **Trade-off:** [The default view is graded on composition, not only on data](../architecture/trade-offs.md#2026-11-18--the-default-view-is-graded-on-composition-not-only-on-data).
+- **Change:** `benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs`
+  gains `heroFraming()` and the `view.hero-framing` check in interactive mode
+  (projects 太和殿's eight corners through the reported camera, requires ≥ 25%
+  of frame height and the hall inside the frame);
+  `verify/expected.json` adds `heroBuildings` and `minHeroFrameHeightShare`; the
+  eval prompt states the same rule.
+- **Eval:** run `4ce0db3d` graded 26/27 before the check; the same workspace then
+  measured `hero covers 9.0% of frame height, inside=true`, confirming the check
+  separates the overview composition from a hero framing. The rerun after the
+  prompt change is the positive case.
+- **Execution chain:** the first version of the measurement read
+  `view.position.x` directly and produced NaN because the model reports vectors
+  as arrays; the helper now normalises both shapes before projecting. Second
+  measurement: 9.0%.
+- **Pros:** deterministic, free, and tied to what the owner actually sees on
+  load; it cannot be satisfied by reporting a camera the page does not use.
+- **Cons / next time:** a threshold on frame share is a proxy for "looks good";
+  it cannot see ugly but large geometry. The next step, if needed, is a
+  structural check (roof profile, courtyard depth) rather than a larger number.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-18 — The installed daemon resolves the workspace the app uses
 
 - **Goal / hypothesis:** a resident daemon started from the repository treated

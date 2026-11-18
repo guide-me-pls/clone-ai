@@ -525,6 +525,27 @@ try {
   record("interaction.zoom", typeof zoomRatio === "number" && zoomRatio <= expected.maxZoomRatio,
     zoomRatio === null ? "no distance reading" : `distance ×${zoomRatio.toFixed(2)} after wheel-in (need ≤ ${expected.maxZoomRatio})`);
 
+  // Composition: an interactive model can be technically complete and still
+  // read as a floor plan, because the default camera looks down from far away
+  // and the hero hall is a few percent of the frame. Grade the view the owner
+  // sees on load: the hero hall must occupy a meaningful share of the frame
+  // height and sit inside the picture.
+  // 构图：交互模型可以技术上完整，却读起来像一张平面图——默认相机从远处俯视，主殿只占画面
+  // 几个百分点。按所有者加载后第一眼看到的样子评分：主殿必须在画面高度中占可观的份额，且落在
+  // 画面之内。
+  if (interactive) {
+    const framing = heroFraming(model, viewA, expected.heroBuildings);
+    record(
+      "view.hero-framing",
+      framing !== null && framing.frameHeightShare >= expected.minHeroFrameHeightShare && framing.insideFrame,
+      framing === null
+        ? "hero building or view missing"
+        : framing.behindCamera
+          ? "hero is behind the camera"
+          : `hero covers ${(framing.frameHeightShare * 100).toFixed(1)}% of frame height (need ≥ ${(expected.minHeroFrameHeightShare * 100).toFixed(0)}%), inside=${framing.insideFrame}`,
+    );
+  }
+
   // A video contract is measured through its seek API. An interactive model has
   // no timeline: measure a plain render loop instead of calling setVideoTime,
   // which does not exist there and used to fail the whole browser section.
@@ -556,6 +577,75 @@ try {
 }
 record("browser.console", relevantConsole().length === 0 && relevantResponses().length === 0,
   [...relevantConsole(), ...relevantResponses()].slice(0, 3).join(" | ") || "no console errors, no failed requests");
+
+/**
+ * How much of the vertical frame the hero hall covers from the page's own view
+ * API. Works in the page's numbers only: forward, right and up come from
+ * position/target, and corners project through the same perspective as the
+ * camera, so a page cannot pass by reporting a pretty camera it does not use.
+ * 主殿在画面高度中占多大比例，只用页面自己的 view API。前、右、上由 position/target 推出，
+ * 角点按与相机相同的透视投影，页面无法靠报告一个自己没用上的好看相机通过。
+ */
+function heroFraming(model, view, heroNames) {
+  if (!model?.buildings || view?.position === undefined || view?.target === undefined) return null;
+  const building = model.buildings.find((b) => heroNames.includes(b.name));
+  if (!building) return null;
+  // The view API may report vectors as {x,y,z} or as [x,y,z]; the contract
+  // allows either, so the measurement normalises before projecting.
+  // view API 可能以 {x,y,z} 或 [x,y,z] 报告向量；契约允许两种，测量前先归一化。
+  const vec = (value) => Array.isArray(value)
+    ? { x: Number(value[0]) || 0, y: Number(value[1]) || 0, z: Number(value[2]) || 0 }
+    : { x: Number(value?.x) || 0, y: Number(value?.y) || 0, z: Number(value?.z) || 0 };
+  const { fovDeg } = view;
+  const position = vec(view.position);
+  const target = vec(view.target);
+  const forward = { x: target.x - position.x, y: target.y - position.y, z: target.z - position.z };
+  const length = Math.hypot(forward.x, forward.y, forward.z) || 1;
+  const f = { x: forward.x / length, y: forward.y / length, z: forward.z / length };
+  const hint = Math.abs(f.y) > 0.99 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
+  const rightRaw = {
+    x: f.y * hint.z - f.z * hint.y,
+    y: f.z * hint.x - f.x * hint.z,
+    z: f.x * hint.y - f.y * hint.x,
+  };
+  const rightLength = Math.hypot(rightRaw.x, rightRaw.y, rightRaw.z) || 1;
+  const right = { x: rightRaw.x / rightLength, y: rightRaw.y / rightLength, z: rightRaw.z / rightLength };
+  const up = {
+    x: right.y * f.z - right.z * f.y,
+    y: right.z * f.x - right.x * f.z,
+    z: right.x * f.y - right.y * f.x,
+  };
+  const tanHalf = Math.tan((Math.max(1, Number(fovDeg) || 45) * Math.PI) / 360);
+  const width = building.footprint?.widthM ?? 0;
+  const depthM = building.footprint?.depthM ?? 0;
+  const height = building.heightM ?? 0;
+  const cx = building.position?.x ?? 0;
+  const cy = building.position?.y ?? 0;
+  const cz = building.position?.z ?? 0;
+  const corners = [];
+  for (const dx of [-width / 2, width / 2]) {
+    for (const dz of [-depthM / 2, depthM / 2]) {
+      for (const dy of [0, height]) corners.push({ x: cx + dx, y: cy + dy, z: cz + dz });
+    }
+  }
+  const xs = [];
+  const ys = [];
+  for (const point of corners) {
+    const d = { x: point.x - position.x, y: point.y - position.y, z: point.z - position.z };
+    const depth = d.x * f.x + d.y * f.y + d.z * f.z;
+    if (depth <= 0.01) return { behindCamera: true, frameHeightShare: 0, insideFrame: false };
+    const nx = (d.x * right.x + d.y * right.y + d.z * right.z) / (depth * tanHalf);
+    const ny = (d.x * up.x + d.y * up.y + d.z * up.z) / (depth * tanHalf);
+    xs.push(nx);
+    ys.push(ny);
+  }
+  const frameHeightShare = (Math.max(...ys) - Math.min(...ys)) / 2;
+  return {
+    behindCamera: false,
+    frameHeightShare: Number(frameHeightShare.toFixed(4)),
+    insideFrame: Math.max(...xs) <= 1 && Math.min(...xs) >= -1 && Math.max(...ys) <= 1 && Math.min(...ys) >= -1,
+  };
+}
 
 /* ------------------------------------------------------- optional render */
 

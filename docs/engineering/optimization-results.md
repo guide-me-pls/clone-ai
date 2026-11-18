@@ -50,6 +50,19 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-packaged-launch-attaches-when-the-launchagent-is-loaded),
   [execution chain](optimizations.md#2026-11-18--a-finder-launched-app-attaches-to-the-loaded-daemon).
 
+## 2026-11-18 — A complete model is no longer allowed to look like a floor plan
+
+- **Claim:** the interactive checker grades the load-time composition: 太和殿
+  must cover at least 25% of the frame height and sit inside the frame,
+  measured by projecting its corners through the camera the page reports. Run
+  `4ce0db3d` passed 26/27 on data and interaction yet covered 9.0%; the new
+  check fails that view deterministically.
+- **Evidence:** same workspace, before/after the check: `26/27` → `hero covers
+  9.0% of frame height, inside=true`, 26/28 with two hard failures. No model
+  call is spent on grading.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--the-default-view-is-graded-on-composition-not-only-on-data),
+  [execution chain](optimizations.md#2026-11-18--the-load-time-view-is-graded-on-composition).
+
 ## 2026-11-18 — A one-shot build-and-verify step is no longer cut off at 12 rounds
 
 - **Claim:** the native worker's default model-call budget is now 40, so a step

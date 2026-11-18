@@ -98,5 +98,9 @@
   "minDoorStuds": 36,
   "minShadowDarkerShare": 0.02,
   "minOrbitDeg": 10,
-  "maxZoomRatio": 0.9
+  "maxZoomRatio": 0.9,
+  "heroBuildings": [
+    "太和殿"
+  ],
+  "minHeroFrameHeightShare": 0.25
 }
