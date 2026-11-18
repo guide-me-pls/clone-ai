@@ -11,6 +11,27 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 只在文字中提到的路径不再让 Worker 步骤失败
+
+- **主张：** Native Worker 只有在工作单以 `required: true` 声明某输入时，才因该输入缺失而判步骤失败；仅仅出现在目标、指令或验收标准里的路径只是上下文，运行期间后来被读取或写入的路径也不再算缺失。已声明且仍然缺失的必需输入仍会失败。
+- **证据：** 修复通道报告：`status: fixed`、分支 `rsi/auto-fix-20261118T0913`、提交 `fb496e5b`，变更前红色、回归全绿（4 个文件）、worktree 全套 **759/759**、typecheck **0**（`/tmp/clone-repair-automation/rsi/last-run.json`）。独立检查：`test/regression/native-missing-input.test.js` 在未打补丁的 `07f8bb5` worktree 上以断言失败，在分支上通过。分支已快进合并进 `main`。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--指令里提到的路径不是必需输入)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--指令里提到的路径不是必需输入修复通道已修复)。
+
+## 2026-11-18 —— 任务作为独立的 Main Agent 运行，并发由机器约束
+
+- **主张：** 每个任务都是自己的 Main Agent 对话，拥有自己的历史；一个任务在执行子任务，不再
+  阻止另一个任务；并发 Main Agent 回合由跨进程槽位池按 CPU、负载与内存采样限制，
+  `maxConcurrentMainAgents` 是所有者的固定值。
+- **证据：** `test/main-agent-capacity.test.ts` **3/3**、`test/main-agent-slots.test.ts`
+  **4/4**、`test/prompt-lock.test.ts` **4/4**、`test/native-main-agent.test.ts` **8/8**
+  （含对话隔离）、`test/companion-control-plane.test.ts` **18/18**（含"另一个对话的提示不被
+  主对话锁阻塞"与"每个任务有自己的对话与历史"）；全量 **772/772**，`npm run typecheck` 与
+  `npm run gate` 通过。隔离 companion 的浏览器检查：两个示例对话各自只显示自己的消息；新建
+  任务发送自己的 `conversationId`，并在侧栏产生自己的条目。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--每个任务有自己的-main-agent并发由机器实测决定)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--每个任务有自己的-main-agent并发由机器实测决定)。
+
 ## 2026-11-18 —— 核验记录读起来是一个决定，而不是一份重复的清单
 
 - **主张：** 核验卡现在把所有者的决定作为结论，标准变成带编号的短行、重复的步骤标题降为
@@ -30,7 +51,7 @@
   `verificationMarkup`/`evidenceMarkup`/`traceMarkup`）；`npm test` 759/759、
   `npm run typecheck` 与 `npm run gate` 通过。在所有者 Journal 的隔离副本里，Run
   `91b685cf` 显示「核验结果/需要你的复核」、9 行证据与展开的 43 行轨迹；Run `4ce0db3d`
-  显示「通过/你的决定：接受结果」、3 行产物排在 23 条观察之前，以及折叠的 214 行轨迹。
+  显示「通过/你的决定：接受结果」、3 行产物排在 23 条观察之前，以及展开的 214 行轨迹。
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--已结束的-run-仍要显示核验证据与轨迹)、
   [执行链路](optimizations.zh-CN.md#2026-11-18--已结束的-run-保留核验证据与轨迹)。
 

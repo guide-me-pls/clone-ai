@@ -15,6 +15,31 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — A path mentioned only in prose no longer fails a worker step
+
+- **Claim:** the native worker fails a step for a missing required input only when the work order declares that input with `required: true`; a path that merely appears in the objective, instructions or acceptance criteria is context, and a path that is later read or written no longer counts as missing. Declared required inputs that are still missing still fail.
+- **Evidence:** the repair lane's report: `status: fixed`, branch `rsi/auto-fix-20261118T0913`, commit `fb496e5b`, eval before red, regression after green (4 files), full suite **759/759** and typecheck **0** in the worktree (`/tmp/clone-repair-automation/rsi/last-run.json`). Independent check: `test/regression/native-missing-input.test.js` fails with an assertion on an unpatched worktree at `07f8bb5` and passes on the branch. The branch was fast-forwarded into `main`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-path-mentioned-in-instructions-is-not-a-required-input),
+  [execution chain](optimizations.md#2026-11-18--a-path-in-prose-is-not-a-required-input-repair-lane-repaired).
+
+## 2026-11-18 — Tasks run as separate Main Agents, bounded by the machine
+
+- **Claim:** each task is its own Main Agent conversation with its own history;
+  a task executing subtasks no longer blocks another task; concurrent Main
+  Agent turns are bounded by a cross-process pool sampled from CPU, load and
+  memory, with `maxConcurrentMainAgents` as the owner's pin.
+- **Evidence:** `test/main-agent-capacity.test.ts` **3/3**,
+  `test/main-agent-slots.test.ts` **4/4**, `test/prompt-lock.test.ts` **4/4**,
+  `test/native-main-agent.test.ts` **8/8** (including conversation isolation),
+  `test/companion-control-plane.test.ts` **18/18** (including "a prompt in
+  another conversation is not blocked by the main conversation lock" and "each
+  task has its own conversation and its own history"); full suite **772/772**,
+  `npm run typecheck` and `npm run gate` pass. Browser on an isolated
+  companion: two sample conversations each showed only their own messages, and
+  新建任务 sent its own `conversationId` and produced its own sidebar entry.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--each-task-runs-its-own-main-agent-sized-by-the-machine),
+  [execution chain](optimizations.md#2026-11-18--each-task-gets-its-own-main-agent-sized-by-the-machine).
+
 ## 2026-11-18 — A verification record reads as a decision, not a repeated list
 
 - **Claim:** the review card now shows the owner's decision as its verdict, the
@@ -41,7 +66,7 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   `npm run typecheck` and `npm run gate` pass. In an isolated copy of the owner's
   journal, run `91b685cf` showed 核验结果/需要你的复核, nine evidence rows and an
   open 43-row trace; run `4ce0db3d` showed 通过/你的决定：接受结果, three artifact
-  rows ahead of 23 observations, and a collapsed 214-row trace.
+  rows ahead of 23 observations, and an open 214-row trace.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-finished-run-keeps-its-verification-evidence-and-trace-on-screen),
   [execution chain](optimizations.md#2026-11-18--a-finished-run-keeps-its-verification-evidence-and-trace).
 
