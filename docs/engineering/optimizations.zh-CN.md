@@ -26,6 +26,44 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-18 —— 窗口重启运行时，并说明它为什么停下
+
+- **目标 / 假设：** 窗口应当负责它拉起的运行时的活性：死掉的 sidecar 按退避重启，探测
+  `/api/health`，在常驻模式下跟随重新发布的端点，并把捕获的 stderr 显示出来。2026-11-18
+  的现状是静态的"关闭后重新打开"，把所有者送进一个 Journal 早已解释过的循环。
+- **取舍：** [窗口自己监管运行时：重启、探测、并说明原因](../architecture/trade-offs.zh-CN.md#2026-11-18--窗口自己监管运行时重启探测并说明原因)。
+- **变更：** `apps/desktop/macos/main.swift` 新增 `scheduleRuntimeRestart`（指数退避，
+  1 秒起翻倍、上限 30 秒，启动页显示重启次数与 stderr 最后四行）、`handleStartupTimeout`
+  （30 秒没有 `CLONE_AI_READY` 就终止并重启）、`startHealthMonitor` /
+  `probeRuntimeHealth`（每 5 秒 `/api/health`，连续两次失败）、
+  `recoverFromUnhealthyRuntime`、`retryResidentAttach`（每 30 秒重读端点，而不是停下）
+  以及 `didFailProvisionalNavigation`（陈旧端点立即恢复，而不是空白页）。
+  `test/desktop-shell.test.ts` 断言这套接线，并断言旧的终止文案不再存在。
+- **Eval：** `node --experimental-strip-types --test test/desktop-shell.test.ts`
+  —— 变更前：`git show HEAD:apps/desktop/macos/main.swift` 里没有
+  `scheduleRuntimeRestart`、没有 `/api/health` 调用，并且仍打印两次
+  "请关闭应用后重新打开"；变更后：测试 **1/1**，该文案消失
+  （`rg -c scheduleRuntimeRestart` = 7）。手工启动
+  `dist/Clone AI-2026-11-18T06-53-44-937Z.app`（bundle id 改为
+  `ai.clone.desktop.eval`；`CLONE_HOME` 指向一个普通文件，使每次启动都失败）：
+  14:55:22.777、14:55:24.004、14:55:26.241、14:55:30.443、14:55:38.632 五次
+  `Clone AI sidecar exited with status 1`——重启间隔 1.2、2.2、4.2、8.2、16.2 秒，
+  正是本次加入的退避。健康退出走同一个调度器；尝试杀掉健康子进程被权限分类器拒绝，因此该
+  分支未做端到端验证。对一个运行中的运行时，`GET /api/health` 返回 HTTP 200。
+- **Benchmark run：** 无——确定性外壳接线加一次本地启动；没有 Provider、模型、数据集或
+  评分参数。
+- **执行链路：** 先写取舍；改外壳；用构建脚本的 `swiftc` 参数编译；契约测试；
+  `npm test` **742/742**、`npm run typecheck` 与 `npm run gate` 通过；为 eval 构建带时间戳的
+  App（`npm run desktop:mac:build`）；上述失败模式启动；补文档与 CHANGELOG。两次绕行：
+  已提交的测试仍期望 `["docx"]`，而工作区已加入 `.doc`（并发编辑），按当前代码恢复；第一次
+  杀健康子进程被拒绝，改用失败模式启动。
+- **优点：** 窗口现在显示恢复中的状态，而不是死路；stderr 尾行让崩溃循环可诊断；常驻模式
+  每 30 秒继续跟随端点，而不是 60 秒后停下。
+- **缺点 / 下次：** 重启循环按设计是无界的，因此永久损坏的安装会每 30 秒脉动一次，直到所有者
+  退出；健康探测依赖有意免认证的 `/api/health`；卡死（连续两次探测失败）只有源码契约覆盖，
+  未进入手工 eval。
+- **推翻条件：** 见取舍条目。
+
 ### 2026-11-18 —— 投影重建能越过竞态写入的状态转换
 
 - **目标 / 假设：** Journal 是共享且只追加的；即使某个竞态写入者记录了一次后来者会拒绝的状态
@@ -70,8 +108,9 @@
   故宫轨迹（见下）。变更本身没有花费模型调用。
 - **优点：** 决定在没有向轮次有限的 Worker 开放 `docs/` 的情况下到达两个阶段；说明有界且被记录；
   红/绿闸门仍对复现是否真实拥有最终裁决。
-- **缺点 / 下次：** 该能力尚无端到端证明；下一次修复必须在隔离的 `CLONE_AI_HOME` 下运行，避免
-  在运行的桌面 App 与它在同一 Journal 上竞争（拦住这次运行的是那个竞态，不是说明）。
+- **缺点 / 下次：** 该能力尚无端到端证明。第三次运行证明说明确实到达了计划，但配置的模型
+  （`360/openai/gpt-6.1-terra`）仍没有调用 `write_file` 就回答；下一个变量是修复用的模型，
+  而不是说明。
 - **推翻条件：** 从取舍条目复制。
 
 ### 2026-11-18 —— 隔离 worktree 带上所有者未被跟踪的输入
@@ -127,6 +166,12 @@
   在它上面抛错。App 的队列消费者每 2 秒记录同一条错误，直到上面的重放修复落地。06:15 之后
   没有新的 Journal 事件；第二个 worktree 是空的。这是通道与运行中的 App 共享数据目录产生的
   竞态，不是决定闸门的失败。
+  第三次尝试在隔离的 `CLONE_AI_HOME=/tmp/clone-repair-home` 下运行（复制了三条故宫轨迹、
+  同一份 `--decision` 说明、原生 `draft-maker` 跑在 `360/openai/gpt-6.1-terra` 上）：
+  第一阶段（Run `ca32dcb0`）用了 3 次模型调用、3 次工具调用、3,611 个输出 token、58 秒，
+  列出并读完了三条轨迹——计划指令里确实带着决定——然后又一次没有调用 `write_file` 就回答。
+  `not-red` 闸门停下；worktree 与 `main` 只差 `.rsi/`。隔离消除了共享 Journal 竞态，但没有消除
+  模型的"不行动"。
 - **Benchmark run：** 无——没有模型基准；通道的 Kernel Run 记录在 Journal 中（第一阶段
   `19252252-6952-4c85-8559-b7168558ceb3`）。
 - **执行链路：** 导出 9 条轨迹（为本次运行把六条无关轨迹移到
