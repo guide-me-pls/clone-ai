@@ -82,7 +82,7 @@ export class TestCommandVerifier implements Verifier {
       runId: input.run.id,
       passed,
       ...(needsReview ? { needsReview: true, unverifiedCriteria: unverified } : {}),
-      summary: passed ? "Test contract checked." : needsReview ? unverified.join("; ") : `Test verification failed. ${failures.join("; ")}.`,
+      summary: passed ? "Test contract checked." : needsReview ? "Test evidence needs the owner's review." : `Test verification failed. ${failures.join("; ")}.`,
       checkedEvidenceIds: checked,
       createdAt: new Date().toISOString(),
     };

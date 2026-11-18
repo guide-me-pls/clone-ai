@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The verification record stops repeating itself
+
+A finished task's review card printed the step title on every criterion, pasted all criteria again into the summary paragraph, and said the owner's decision twice. The pill now is the decision (`已接受结果` / `已驳回结果`), the criteria are numbered rows with the repeated title on its own muted line, and the summary counts them; new records keep the criteria only in their structured field. Records already stored get the same reading — the UI shortens their legacy summary sentence.
+
+已结束任务的核验卡把步骤标题印在每一条标准上，又在摘要段里把所有标准重复一遍，还把所有者的决定说了两遍。现在标签就是决定（`已接受结果` / `已驳回结果`），标准变成带编号的行、重复的标题单独弱化显示，摘要只给计数；新记录只在结构化字段里保存标准。已存储的记录也按同样方式呈现——界面会把它们的旧摘要句子缩短。
+
 ### Approvals live in the main conversation
 
 Waiting approvals and reviews are now decided from the Main Agent conversation, each card posting to the run id it belongs to; a child task record shows a pointer back instead of a second set of buttons. Derived tasks collapse into a group under the conversation that spawned them, its summary showing the count and the running/waiting/failed split, with the open state remembered per conversation.

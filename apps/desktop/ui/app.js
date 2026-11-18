@@ -1487,20 +1487,44 @@ function reviewMarkup(session) {
 function verificationMarkup(session) {
   const verification = session.verification;
   if (!verification) return "";
+  // The owner's decision is what the task record is about, so it is the
+  // verdict: the pill shows their choice once they made one, and the system's
+  // conclusion moves into the detail line instead of contradicting it.
+  // 所有者作出的决定才是任务记录的重点，因此它就是结论：所有者做出决定后，标签显示他们的
+  // 选择，而系统结论移到细节行里，不与它矛盾。
   const owner = verification.reviewedBy === "owner";
-  const tone = verification.passed ? "ok" : verification.needsReview ? "warn" : "bad";
-  const verdict = verification.passed ? "通过" : verification.needsReview ? "需要你的复核" : "未通过";
-  const ownerLine = owner
-    ? `<span class="verification-owner">你的决定：${verification.passed ? "接受结果" : "不接受结果"}</span>`
-    : verification.needsReview
-      ? `<span class="verification-owner is-pending">等待你的决定</span>`
-      : "";
+  const decided = owner ? (verification.passed ? "已接受结果" : "已驳回结果") : undefined;
+  const tone = owner ? (verification.passed ? "ok" : "bad") : verification.passed ? "ok" : verification.needsReview ? "warn" : "bad";
+  const verdict = decided ?? (verification.passed ? "通过" : verification.needsReview ? "需要你的复核" : "未通过");
+  const ownerLine = !owner && verification.needsReview
+    ? `<span class="verification-owner is-pending">等待你的决定</span>`
+    : "";
+  const systemLine = verification.needsReview && owner
+    ? `<span class="verification-system">系统结论：自动检查通过，${(verification.unverifiedCriteria || []).length} 项标准需人工判断</span>`
+    : "";
+  // Records written before the summary stopped repeating the criteria still
+  // carry the old long sentence; show the count instead of the wall of text.
+  // 在摘要不再重复标准之前写下的记录仍带着旧的长句；显示计数，而不是一堵文字墙。
+  const rawSummary = String(verification.summary ?? "");
+  const legacySummary = rawSummary.startsWith("Checks passed, but these criteria need owner review")
+    ? `自动检查通过；${(verification.unverifiedCriteria || []).length} 项标准需人工判断。`
+    : rawSummary;
+  const summary = legacySummary;
+  // Title and criterion are split so a repeated step title becomes a group
+  // heading while the numbers still come from the stored array.
+  // 标题与标准拆开显示：重复的步骤标题成为分组标题，编号仍来自存储的数组。
   const criteria = (verification.unverifiedCriteria || []).length
-    ? `<ul class="verification-criteria">${verification.unverifiedCriteria.map((criterion) => `<li>${escape(criterion)}</li>`).join("")}</ul>`
+    ? `<ol class="verification-criteria">${verification.unverifiedCriteria.map((criterion) => {
+        const separator = criterion.indexOf(": ");
+        const title = separator > 0 ? criterion.slice(0, separator) : "";
+        const text = separator > 0 ? criterion.slice(separator + 2) : criterion;
+        return `<li>${title ? `<b>${escape(title)}</b><span>${escape(text)}</span>` : `<span>${escape(text)}</span>`}</li>`;
+      }).join("")}</ol>`
     : "";
   return `<section class="activity-card verification-card" data-verification>
     <div class="verification-head"><b>核验结果</b><span class="status-pill ${tone}">${escape(verdict)}</span>${ownerLine}</div>
-    ${verification.summary ? `<p class="verification-summary">${escape(verification.summary)}</p>` : ""}
+    ${summary ? `<p class="verification-summary">${escape(summary)}</p>` : ""}
+    ${systemLine}
     ${criteria}
     <p class="verification-foot">检查了 ${verification.checkedEvidenceIds?.length ?? 0} 条证据${verification.createdAt ? ` · ${time(verification.createdAt)}` : ""}</p>
   </section>`;

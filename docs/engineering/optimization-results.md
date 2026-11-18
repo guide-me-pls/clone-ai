@@ -15,6 +15,36 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — A verification record reads as a decision, not a repeated list
+
+- **Claim:** the review card now shows the owner's decision as its verdict, the
+  criteria as short numbered rows with the repeated step title demoted to a
+  muted line, and a summary that counts them instead of pasting them again; new
+  records store the criteria once.
+- **Evidence:** `test/ui-structure.test.ts` **12/12**,
+  `test/verification.test.ts` **16/16**; browser check rendered 4 numbered rows
+  with a `已接受结果` pill and `检查了 11 条证据`; full suite **759/759**,
+  typecheck and gate pass. Run `18569eb4`'s stored summary is rewritten by the
+  UI because its event is history.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-verification-record-states-a-count-not-a-repeated-list),
+  [execution chain](optimizations.md#2026-11-18--the-verification-record-stops-repeating-itself).
+
+## 2026-11-18 — A finished task record keeps its verification, evidence and artifacts
+
+- **Claim:** the task record of a reviewed run keeps the system verdict, the
+  owner's decision, the unverified criteria and the checked-evidence count after
+  the decision; it lists the artifacts before the observations instead of only
+  counting them; and the trace opens while a decision is pending.
+- **Evidence:** `node --experimental-strip-types --test test/ui-structure.test.ts`
+  — 12/12, including a rendered-markup check (a fake session through
+  `verificationMarkup`/`evidenceMarkup`/`traceMarkup`); `npm test` 759/759,
+  `npm run typecheck` and `npm run gate` pass. In an isolated copy of the owner's
+  journal, run `91b685cf` showed 核验结果/需要你的复核, nine evidence rows and an
+  open 43-row trace; run `4ce0db3d` showed 通过/你的决定：接受结果, three artifact
+  rows ahead of 23 observations, and a collapsed 214-row trace.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-finished-run-keeps-its-verification-evidence-and-trace-on-screen),
+  [execution chain](optimizations.md#2026-11-18--a-finished-run-keeps-its-verification-evidence-and-trace).
+
 ## 2026-11-18 — Approvals are confirmed from the main conversation
 
 - **Claim:** every waiting approval and review can be decided from the Main
