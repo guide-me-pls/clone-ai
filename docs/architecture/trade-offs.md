@@ -63,6 +63,45 @@ that is impossible should a dedicated script become a documented entry point. If
 external users report relying on the `clone-ai` binary, restore a compatibility
 shim or publish a migration path before removing the workaround.
 
+## 2026-11-18 — The audit names every tool a worker called, and 3D is judged by interaction
+
+**Decision.** A Run audit record now carries `executions[].tools`: the ordered
+tool calls of each execution (name, redacted input summary, duration, error),
+capped at 200 with an explicit `…` marker when more were dropped. The audit
+detail renders it as a collapsible list under every execution. Separately, the
+3D capability task is now an **interactive model**: the page must render on
+load, left-drag must change azimuth by ≥10°, wheel must reduce the camera
+distance to ≤0.9×, and `window.getForbiddenCityView()` must report the real
+camera state. A static PNG or a fixed-camera video no longer satisfies the task.
+
+**Evidence.** The owner's report was "我要在 clone app 的审计轨迹看到这些执行的具体
+信息" after a run whose worker had navigated, evaluated and taken four screenshots:
+those calls left **no evidence rows** because MCP tools declare no `pathOf`, and
+the audit record carried only `progressEvents` (a count) plus path-based
+evidence. `AuditExecution` had no field for tool calls at all. The same owner
+rejected the earlier deliverable as "我不想只要一个 png ... 能放大进不同的角度":
+the task demanded a 30-second timeline and a rendered MP4, which is exactly a
+fixed camera, and every check graded data or a still image — none of them could
+tell an inspectable model from a picture of one.
+
+**What it costs.** The record grows by up to 200 small entries per execution;
+`inputSummary` is already redacted and bounded to 240 characters, and the cap
+is stated rather than silent. Interaction checks run two synthetic gestures
+against the page, so a model that supports orbit through keyboard or touch but
+not mouse-drag fails; the requirement is written in the prompt, so this is a
+declared contract rather than a hidden preference. A page that fakes
+`getForbiddenCityView()` could report changes without moving the camera; the
+screenshot at three angles is the evidence that keeps that honest, and a later
+reader can add a pixel-difference check between the post-drag and pre-drag
+frames.
+
+**Reversal condition.** If owners never open the tool list, fold it into the
+existing trace view instead of duplicating it in the record. If mouse-drag-only
+gating blocks a legitimate touch-first model, accept a keyboard/touch gesture as
+an alternative and test whichever the README documents. If a page passes the
+view API checks but its screenshots do not change between angles, replace the
+declared deltas with a frame-difference check.
+
 ## 2026-11-17 — A tool result can carry an image, so a worker can see what it rendered
 
 **Decision.** Tool results may now return images, and MCP image blocks are
@@ -2295,3 +2334,50 @@ network for `npx`.
 despite the local URL surface, or if the MCP child cannot be closed with the
 step, remove the server. If a first-party tool with per-call URL gating lands,
 prefer it over this MCP server.
+
+## 2026-11-17 — A fallback work order gets 40 model calls, not 20
+
+**Decided:** the deterministic fallback planner's default work-order budget rises
+from 20 model calls / 100 tool calls to 40 / 200. The 10-minute duration cap and
+the two-attempt limit stay.
+
+**Why it won.** A one-sentence FPS brief produced a playable game inside 20 calls,
+but the run stopped mid-verification, before headshots, cover or reinforcements
+existed. The same brief with 40 calls produced 10 enemies, headshot damage, a
+reinforcement wave, cover state, crouch/slide/lean and grenades, and used the
+browser tools to check itself. The missing features were exactly the work a
+second verification pass costs.
+
+**What was given up.** Up to 2x model calls per fallback work order. The 40-call
+run took about 62 minutes wall-clock and lost its execution claim before its own
+final report; the artifact was still written and was functionally checked by the
+working agent. The duration cap and claim renewal need a separate fix; 40 is not
+a license for unbounded runs.
+
+**Reversal condition:** if fallback tasks mostly finish inside 20 calls, or the
+extra calls do not change the artifact, revert to 20. If a per-task budget
+planner lands, delete this fixed default.
+
+## 2026-11-17 — Long builds are queued, not held inside the chat turn
+
+**Decided:** the Main Agent charter and the `dispatch_task` description now say
+that a build expected to take more than a minute must be queued with
+`propose_work_plan`; the conversation returns at once and the queue consumer
+runs the worker. `dispatch_task` stays for short, bounded tasks.
+
+**Why it won.** The 40-call FPS build used `dispatch_task`. Its turn took 50
+minutes: a first run timed out inside the call after 12 minutes, then planning
+continued, and the process hit the one-hour background/claim boundary before the
+run's terminal status was written. The queued rerun returned the Main Agent at
+once and finished the run in 211.9 seconds (47 tool calls, 33 model calls), with
+a terminal `waiting_review`. The same artifact was produced; the difference was
+where the waiting happened.
+
+**What was given up.** A build is now two visible phases — the plan, then the
+run — and the owner must watch or return to the run. A workspace that does not
+know about the preview server can still make the worker's browser check fail
+(the worker reported exactly that instead of claiming success).
+
+**Reversal condition:** if `dispatch_task` gains asynchronous progress and a way
+to join a run without blocking the turn, remove the steer and let the model
+choose either path.

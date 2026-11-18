@@ -33,7 +33,14 @@ const outDir = resolve(flag("out", join(here, "out")));
 const port = Number(flag("port", "8130"));
 const renderFrames = Number(flag("frames", "900"));
 const shouldRender = has("render");
+// An interactive model renders on load and is inspected by orbiting; it has no
+// timeline and no render.mjs. The same checker grades both contracts, but the
+// readiness gate and the required deliverables differ.
+// 交互模型加载即渲染、靠环绕观察；它没有时间轴，也没有 render.mjs。同一个检查器评两种契约，
+// 但就绪判据与必需交付物不同。
+const interactive = has("interactive");
 const expected = JSON.parse(await readFile(join(here, "expected.json"), "utf8"));
+const requiredFiles = interactive ? expected.requiredFiles.filter((rel) => rel !== "render.mjs") : expected.requiredFiles;
 
 function loadRequire() {
   const bases = [join(here, "package.json")];
@@ -90,7 +97,7 @@ await mkdir(join(outDir, "screens"), { recursive: true });
 
 /* ---------------------------------------------------------------- static */
 
-const required = expected.requiredFiles;
+const required = requiredFiles;
 const fileState = {};
 for (const rel of required) {
   const path = join(workspace, rel);
@@ -144,7 +151,7 @@ if (await exists(renderPath)) {
   const h264 = /libx264|h264/.test(text);
   const clearErrors = /catch|try\s*\{|process\.exit\(1\)/.test(text);
   renderState = { syntax: syntax.code === 0, frames, ffmpeg, h264, clearErrors };
-  record("render.script-static", syntax.code === 0 && frames && ffmpeg && h264,
+  if (!interactive) record("render.script-static", syntax.code === 0 && frames && ffmpeg && h264,
     `syntax=${syntax.code === 0} frames900=${frames} ffmpeg=${ffmpeg} h264=${h264} errors=${clearErrors}`);
 }
 
@@ -165,7 +172,13 @@ if (testFiles.length > 0) {
   const fail = Number(text.match(/(?:^|\s)(?:ℹ\s*)?#?\s*fail (\d+)/m)?.[1] ?? 0);
   testState = { files: testFiles.length, code: result.code, pass, fail, output: (result.stdout + result.stderr).slice(-8000) };
 }
-record("tests.run", testState.code === 0 && testState.fail === 0, testState.files === 0 ? "no test files found" : `${testState.pass} pass, ${testState.fail} fail (${testState.files} file(s))`);
+if (interactive) {
+  // The interactive task does not require a test suite; tests are reported, not gated.
+  // 交互任务不要求测试套件；测试只报告，不作为门禁。
+  if (testState.files > 0) record("tests.run", testState.code === 0 && testState.fail === 0, `${testState.pass} pass, ${testState.fail} fail (${testState.files} file(s))`);
+} else {
+  record("tests.run", testState.code === 0 && testState.fail === 0, testState.files === 0 ? "no test files found" : `${testState.pass} pass, ${testState.fail} fail (${testState.files} file(s))`);
+}
 await writeFile(join(outDir, "tests.txt"), testState.output || "(no tests)\n");
 
 /* -------------------------------------------------------------- browser */
@@ -202,8 +215,14 @@ let shadowState = null;
 const screenshots = [];
 try {
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: "networkidle", timeout: 120_000 });
-  await page.waitForFunction(() => window.videoReady === true && typeof window.setVideoTime === "function", null, { timeout: 120_000 });
-  record("browser.ready", true, "videoReady && setVideoTime");
+  await page.waitForFunction(
+    interactive
+      ? () => typeof window.getForbiddenCityModel === "function" && typeof window.getForbiddenCityView === "function"
+      : () => window.videoReady === true && typeof window.setVideoTime === "function",
+    null,
+    { timeout: 120_000 },
+  );
+  record("browser.ready", true, interactive ? "model + view API present" : "videoReady && setVideoTime");
   record("browser.no-uncaught-error", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | ") || "none");
 
   const shadows = await page.evaluate(() => {
@@ -372,16 +391,22 @@ try {
   }
 
   // Screenshot differences along the timeline.
-  for (const t of [0, 7.5, 15, 22.5, 30]) {
-    const actual = await page.evaluate(async (time) => {
-      const rendered = window.setVideoTime(time);
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      return rendered;
-    }, t);
-    const file = join(outDir, "screens", `t-${String(t).replace(".", "_")}.png`);
+  const times = interactive ? [null] : [0, 7.5, 15, 22.5, 30];
+  for (const t of times) {
+    const actual = t === null
+      ? await page.evaluate(async () => {
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        return 0;
+      })
+      : await page.evaluate(async (time) => {
+        const rendered = window.setVideoTime(time);
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        return rendered;
+      }, t);
+    const file = join(outDir, "screens", `t-${String(t ?? "default").replace(".", "_")}.png`);
     await page.screenshot({ path: file, type: "png", animations: "disabled", timeout: 60_000 });
     const bytes = await readFile(file);
-    screenshots.push({ t, actual, bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex").slice(0, 16) });
+    screenshots.push({ t, file, actual, bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex").slice(0, 16) });
   }
   const unique = new Set(screenshots.map((s) => s.sha256)).size;
   // Shadows, measured from the captured PNG rather than the WebGL framebuffer:
@@ -405,8 +430,7 @@ try {
   const probeBrowser = await deps.playwright.chromium.launch({ executablePath: process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", headless: true });
   let shadowProbe = { error: "no screenshot to probe" };
   if (shadowShot !== undefined && /^[a-z0-9-]+$/i.test(shadowShot.sha256)) {
-    const shotFile = join(outDir, "screens", `t-${String(shadowShot.t).replace(".", "_")}.png`);
-    const shotBytes = await readFile(shotFile);
+    const shotBytes = await readFile(shadowShot.file);
     const probePage = await probeBrowser.newPage({ viewport: { width: 400, height: 300 } });
     shadowProbe = await probePage.evaluate(async ([url, floor]) => {
       const image = new Image();
@@ -459,6 +483,36 @@ try {
   record("browser.timeline-differs", unique >= 3, `${unique}/5 distinct screenshots at t=0/7.5/15/22.5/30`);
 
   // Frame throughput: 60 forwards seeks, same path a renderer would use.
+  // Interaction: a 3D model is inspectable only if orbiting and zooming really
+  // move the camera. Read the page's own view API before and after a synthetic
+  // drag and a wheel, so a static render cannot pass as an interactive model.
+  // 交互：只有环绕与缩放真的移动相机时，3D 模型才可被观察。在合成拖拽与滚轮前后读取页面自己的
+  // 视图 API，使静态渲染无法冒充交互模型。
+  const viewA = await page.evaluate(() => (typeof window.getForbiddenCityView === "function" ? window.getForbiddenCityView() : null));
+  let orbitDelta = null;
+  let zoomRatio = null;
+  if (viewA !== null && page.viewportSize() !== null) {
+    const size = page.viewportSize();
+    const cx = Math.floor(size.width / 2);
+    const cy = Math.floor(size.height / 2);
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 220, cy, { steps: 12 });
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+    const viewB = await page.evaluate(() => window.getForbiddenCityView());
+    orbitDelta = Math.abs(Number(viewB.azimuthDeg) - Number(viewA.azimuthDeg));
+    const before = Number(viewB.distanceM);
+    await page.mouse.wheel(0, -600);
+    await page.waitForTimeout(150);
+    const viewC = await page.evaluate(() => window.getForbiddenCityView());
+    zoomRatio = before > 0 ? Number(viewC.distanceM) / before : null;
+  }
+  record("interaction.orbit", typeof orbitDelta === "number" && orbitDelta >= expected.minOrbitDeg,
+    viewA === null ? "getForbiddenCityView() missing" : orbitDelta === null ? "no viewport" : `${orbitDelta.toFixed(1)}° azimuth change (need ${expected.minOrbitDeg}°)`);
+  record("interaction.zoom", typeof zoomRatio === "number" && zoomRatio <= expected.maxZoomRatio,
+    zoomRatio === null ? "no distance reading" : `distance ×${zoomRatio.toFixed(2)} after wheel-in (need ≤ ${expected.maxZoomRatio})`);
+
   const timing = await page.evaluate(async () => {
     const durations = [];
     for (let frame = 0; frame < 60; frame += 1) {
