@@ -140,6 +140,9 @@ button { color: inherit; }
 .approval-card h2 { margin: 5px 0 4px; font-size: 15px; letter-spacing: -.02em; }
 .approval-card p { max-width: 590px; margin: 0; color: #d3c5a7; font-size: 13px; }
 .approval-actions { display: flex; gap: 8px; margin-top: 13px; }
+.approval-item { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(141,106,43,.18); }
+.approval-item b { display: block; font-size: 13px; }
+.approval-item p { margin: 3px 0 0; }
 .approve { padding: 8px 11px; border: 0; border-radius: 8px; color: #2c210e; background: var(--warning); font-size: 12px; font-weight: 740; cursor: pointer; }
 .approve:hover { filter: brightness(1.06); }
 .approve:disabled { opacity: .56; cursor: wait; }
@@ -562,3 +565,25 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .authority-decisions { margin-top: 12px; color: #727f90; font-size: 12px; }
 .authority-decisions summary { cursor: pointer; }
 .authority-decisions .au-history { margin-top: 8px; }
+
+/* Verification record and evidence list: what a finished run concluded and
+ * produced, kept on the task record instead of disappearing with the verdict.
+ * 核验记录与证据清单：已结束 Run 得出了什么结论、产出了什么，留在任务记录里，而不是随
+ * 结论一起消失。 */
+.verification-card { padding: 12px 14px; }
+.verification-head { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+.verification-head b { color: #343c49; font-size: 12px; font-weight: 650; }
+.verification-head .status-pill { margin: 0; }
+.verification-owner { margin-left: auto; color: #5c6675; font-size: 11px; }
+.verification-owner.is-pending { color: #9a5a1e; }
+.verification-summary { margin: 0 0 6px; color: #5c6675; font-size: 12px; line-height: 1.55; }
+.verification-criteria { margin: 4px 0 6px; padding-left: 18px; color: #5c6675; font-size: 12px; line-height: 1.6; }
+.verification-foot { margin: 0; color: #8791a1; font-size: 11px; }
+.evidence-list { display: grid; gap: 1px; margin: 0; padding: 0 14px 10px; list-style: none; }
+.evidence-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 8px; padding: 6px 0; border-top: 1px solid #eef1f5; font-size: 12px; }
+.evidence-row:first-child { border-top: 0; }
+.evidence-kind { padding: 0 6px; border-radius: 99px; background: #eef2f9; color: #4a5668; font-size: 10px; line-height: 17px; }
+.evidence-row code { overflow-wrap: anywhere; color: #2f3846; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; }
+.evidence-row span:last-child { grid-column: 2; color: #7b8595; font-size: 11px; }
+.evidence-more { padding: 6px 0; color: #8791a1; font-size: 11px; }
+.activity-card h5 { margin: 4px 14px 2px; color: #5c6675; font-size: 11px; font-weight: 650; }

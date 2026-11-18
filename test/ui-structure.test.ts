@@ -233,6 +233,50 @@ test("approvals are confirmed in the main conversation and child tasks collapse"
   assert.match(app, /data-child-group/);
   assert.match(app, /childGroupSummary/);
   assert.match(auditCss, /\.session-children/);
+  // Approvals and reviews can be pending together; the conversation's single
+  // status pill then reads `waiting_approval`, and the review card must still
+  // render with its own accept/reject pair.
+  // 确认与复核可能同时等待；此时对话唯一的状态标签是 `waiting_approval`，复核卡仍须带
+  // 自己的接受/拒绝按钮出现。
+  const start = app.indexOf("function reviewMarkup(session)");
+  const end = app.indexOf("function verificationMarkup", start);
+  assert.ok(start >= 0 && end > start, "reviewMarkup must render the review list");
+  const reviewMarkup = runInNewContext(
+    `const MAIN_CONVERSATION_ID = "main-agent-conversation"; ${app.slice(start, end)}; reviewMarkup`,
+    { escape: (value: unknown) => String(value ?? "") },
+  ) as (session: unknown) => string;
+  const markup = reviewMarkup({
+    id: "main-agent-conversation",
+    status: "waiting_approval",
+    title: "Clone AI",
+    approvals: [{ runId: "run-approval", title: "Publish the report" }],
+    reviews: [{ runId: "run-review", title: "Review the report", verification: { summary: "A browser check is pending.", unverifiedCriteria: ["The page shows the detail."] } }],
+  });
+  assert.match(markup, /data-review="run-review"/);
+  assert.match(markup, /The page shows the detail\./);
+});
+
+test("a finished run keeps its verification, evidence and trace on the task", async () => {
+  const app = await read("app.js");
+  const css = await read("style.css");
+  // The verdict used to disappear with `waiting_review`, evidence was a bare
+  // count, and the trace only opened when its disclosure was toggled by hand.
+  // The record now survives the owner's decision, lists what the run produced,
+  // and opens the trace while a decision is still pending.
+  // 结论过去随 `waiting_review` 一起消失，证据只有计数，轨迹只能手动展开。现在记录在
+  // 所有者决定后仍然保留、列出 Run 产出了什么，并在仍待决定时展开轨迹。
+  assert.match(app, /function verificationMarkup\(session\)/);
+  assert.match(app, /verification\.reviewedBy === "owner"/);
+  assert.match(app, /data-verification/);
+  assert.match(app, /\$\{verificationMarkup\(session\)\}/);
+  assert.match(app, /function evidenceMarkup\(session\)/);
+  assert.match(app, /session\.evidence/);
+  assert.match(app, /EVIDENCE_KIND\[item\.kind\]/);
+  assert.match(app, /\$\{evidenceMarkup\(session\)\}/);
+  assert.match(app, /disclosureOpen\(session, "trace", fallback\)/);
+  assert.match(app, /session\.status === "waiting_review" \|\| session\.status === "waiting_approval"/);
+  assert.match(css, /\.verification-card\s*\{/);
+  assert.match(css, /\.evidence-list\s*\{/);
 });
 
 test("the owner's message renders markdown like the agent's", async () => {

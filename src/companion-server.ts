@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task } from "./core/contracts.ts";
+import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task, VerificationResult } from "./core/contracts.ts";
 import { EFFORT_LEVELS, isEffortLevel, type EffortLevel } from "./workers/effort.ts";
 import { describeFailureForOwner } from "./core/failure-display.ts";
 import { appendWorkUpdate, describeWorkUpdate, readWorkUpdates } from "./main-agent/work-updates.ts";
@@ -2455,14 +2455,7 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
   // 让侧栏显示真正需要处理的那个问题，而不是一墙副本。
   const groupedSessions = groupDuplicateFailures(allSessions);
 
-  const approvals = visibleRuns
-    .filter((run) => run.status === "waiting_approval" && run.activeStepId !== undefined)
-    .map((run) => ({
-      runId: run.id,
-      title: titleFor(run, tasks),
-      stepId: run.activeStepId!,
-      description: "The next step can affect an external system and needs your approval.",
-    }));
+  const approvals = mainConversationApprovals(visibleRuns, tasks);
   const active = visibleRuns
     .filter((run) => ["planning", "queued", "running", "verifying"].includes(run.status))
     .slice(0, 4)
@@ -2616,10 +2609,12 @@ function toMainAgentTurnSummary(turn: MainAgentTurnRecord): SessionSummary & { u
 }
 
 async function buildMainAgentConversation(dataDirectory: string): Promise<SessionView> {
-  const [history, turnRecords] = await Promise.all([
+  const [history, turnRecords, runtimeView] = await Promise.all([
     readConversation(dataDirectory, 500),
     readMainAgentTurnRecords(dataDirectory),
+    loadRuntimeView(dataDirectory),
   ]);
+  const { runs, tasks, state } = runtimeView;
   const turns = [...turnRecords].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
   const messages: ConversationMessage[] = history.map((message, index) => ({
     id: `history-${index}-${message.session}-${message.at}`,
@@ -2698,12 +2693,42 @@ async function buildMainAgentConversation(dataDirectory: string): Promise<Sessio
         return value;
       })();
   const latestUser = [...history].reverse().find((message) => message.speaker === "user");
+  // The main conversation is the owner's control surface: every waiting run and
+  // every visible subagent is shown here, so a child task record is for reading,
+  // not for finding the decision. 主对话是所有者的操作面：所有等待中的 Run 与可见
+  // subagent 都在这里出现，子任务记录只用于阅读，不再用来寻找决定。
+  const approvals = mainConversationApprovals(runs, tasks);
+  const reviews = mainConversationReviews(runs, tasks, state.verificationByRun);
+  const subagents = Object.values(state.subagents)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    .slice(0, 8)
+    .map((subagent) => ({
+      id: subagent.id,
+      title: subagent.title,
+      agentId: subagent.agentId,
+      role: subagent.role,
+      providerId: subagent.providerId ?? "unknown",
+      status: subagent.status,
+      ...(subagent.summary === undefined ? {} : { summary: subagent.summary }),
+      updatedAt: subagent.updatedAt,
+    }));
+  const finalSummary = approvals.length === 0 && reviews.length === 0
+    ? sessionSummary
+    : {
+        ...sessionSummary,
+        status: approvals.length > 0 ? "waiting_approval" : "waiting_review",
+        preview: approvals.length > 0
+          ? `${approvals.length} 个任务等待你的确认。`
+          : `${reviews.length} 个任务等待你的复核。`,
+      };
   return {
-    ...sessionSummary,
+    ...finalSummary,
     query: latestUser?.text ?? turns.at(-1)?.text ?? "",
     evidenceCount: 0,
-    subagents: [],
-    approvals: [],
+    evidence: [],
+    subagents,
+    approvals,
+    reviews,
     messages,
     recalledMemories: [],
     activity: [],
@@ -2754,6 +2779,14 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
       }));
     });
 
+  const evidence = (state.evidenceByRun[run.id] ?? []).map((item) => ({
+    id: item.id,
+    kind: item.kind,
+    summary: item.summary,
+    ...(item.locator === undefined ? {} : { locator: item.locator }),
+    ...(item.workOrderId === undefined ? {} : { workOrderId: item.workOrderId }),
+    createdAt: item.createdAt,
+  }));
   return {
     ...toSessionSummary(run, tasks, describeRunFailure(run, runEvents).reason),
     query,
@@ -2775,6 +2808,7 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
     ...(state.verificationByRun[run.id] === undefined ? {} : { verification: state.verificationByRun[run.id] }),
     messages: buildConversation(run, query, subagents.length, evidenceCount, runEvents, recalledMemories.length),
     recalledMemories,
+    evidence,
     activity: runEvents.slice(-16).reverse().map(toTimelineItem),
     trace: runEvents.map(toTraceItem),
   };
@@ -2956,6 +2990,64 @@ function compactRun(run: Run, tasks: Record<string, Task>): { runId: string; tit
 
 function titleFor(run: Run, tasks: Record<string, Task>): string {
   return tasks[run.taskId]?.title ?? "Unnamed work";
+}
+
+export interface MainConversationApproval {
+  runId: string;
+  stepId: string;
+  title: string;
+  description: string;
+}
+
+type ApprovalRun = Pick<Run, "id" | "status" | "activeStepId" | "taskId">;
+
+/**
+ * Every waiting run that needs the owner, keyed by the run id the decision must
+ * be posted to. The main conversation and the dashboard share this function so
+ * their counts can never disagree.
+ * 所有需要所有者决定的等待中 Run，带提交决定所需的 Run id。主对话与仪表盘共用此函数，
+ * 两处数量因此不会分歧。
+ */
+export function mainConversationApprovals(
+  runs: ReadonlyArray<ApprovalRun>,
+  tasks: Record<string, Pick<Task, "title">>,
+): MainConversationApproval[] {
+  return runs
+    .filter((run) => run.status === "waiting_approval" && run.activeStepId !== undefined)
+    .map((run) => ({
+      runId: run.id,
+      stepId: run.activeStepId!,
+      title: tasks[run.taskId]?.title ?? "Unnamed work",
+      description: "The next step can affect an external system and needs your approval.",
+    }));
+}
+
+export interface MainConversationReview {
+  runId: string;
+  title: string;
+  verification: VerificationResult;
+}
+
+/**
+ * Waiting reviews joined to the verification that asks for them, so the main
+ * conversation can show criteria and accept/reject the same way a task record
+ * does. 等待复核的 Run 与其验证结果连在一起，使主对话能像任务记录一样显示标准并接受/拒绝。
+ */
+export function mainConversationReviews(
+  runs: ReadonlyArray<ApprovalRun>,
+  tasks: Record<string, Pick<Task, "title">>,
+  verificationByRun: Record<string, VerificationResult>,
+): MainConversationReview[] {
+  return runs.flatMap((run) => {
+    if (run.status !== "waiting_review") return [];
+    const verification = verificationByRun[run.id];
+    if (verification === undefined) return [];
+    return [{
+      runId: run.id,
+      title: tasks[run.taskId]?.title ?? "Unnamed work",
+      verification,
+    }];
+  });
 }
 
 function displayPlanSummary(summary: string): string {
@@ -3339,12 +3431,19 @@ interface ConversationMessage {
 interface SessionView extends SessionSummary {
   query: string;
   evidenceCount: number;
+  /**
+   * What the run actually produced, not just how many items: the task record
+   * lists these so the owner can see the files and reads behind a verdict.
+   * Run 实际产出了什么，而不只是条数：任务记录列出它们，所有者才能看到结论背后的文件与读取。
+   */
+  evidence: Array<{ id: string; kind: string; summary: string; locator?: string; workOrderId?: string; createdAt: string }>;
   plan?: {
     summary: string;
     steps: Array<{ id: string; title: string; risk: string; delegated: boolean; agentId?: string }>;
   };
   subagents: Array<{ id: string; title: string; agentId: string; role: string; providerId: string; status: string; summary?: string; updatedAt: string }>;
-  approvals: Array<{ runId: string; stepId: string; description: string }>;
+  approvals: Array<{ runId: string; stepId: string; title?: string; description: string }>;
+  reviews?: Array<{ runId: string; title: string; verification: VerificationResult }>;
   verification?: import("./core/contracts.ts").VerificationResult;
   messages: ConversationMessage[];
   recalledMemories: Array<{ id: string; summary: string; score: number; matchedTerms: string[] }>;

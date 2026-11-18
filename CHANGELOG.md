@@ -6,6 +6,18 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Approvals live in the main conversation
+
+Waiting approvals and reviews are now decided from the Main Agent conversation, each card posting to the run id it belongs to; a child task record shows a pointer back instead of a second set of buttons. Derived tasks collapse into a group under the conversation that spawned them, its summary showing the count and the running/waiting/failed split, with the open state remembered per conversation.
+
+等待中的确认与复核现在在 Main Agent 主对话里决定，每张卡片提交到所属的 Run id；子任务记录只给出回到主对话的入口，不再有第二套按钮。派生任务折叠在所属对话之下，摘要显示数量与进行中/待确认/需处理分布，展开状态按对话记忆。
+
+### A finished run keeps its verification and evidence
+
+A task record no longer loses the verification card when the owner accepts or rejects a result: it keeps the system verdict, the owner's decision, the unverified criteria and a count of checked evidence. The evidence list now names the artifacts and observations the run produced instead of only counting them, and the execution trace opens by default while a run is still waiting for a decision.
+
+所有者接受或拒绝结果后，任务记录不再丢失核验卡：它保留系统结论、所有者的决定、未自动验证的标准与被检查证据的数量。证据清单现在列出 Run 产出的产物与观察记录，而不只是计数；仍在等待决定的 Run 默认展开执行轨迹。
+
 ### UI edits reach the running window
 
 The resident daemon serves a checkout but read `app.js`, the stylesheets and the view scripts once at startup, so an edit made while it ran could arrive in the window as a script that calls a function the served copy no longer defines — `Can't find variable` on the first click. The daemon now re-reads the asset it is about to serve when `CLONE_AI_DEV_MODE=1` (set by the LaunchAgent installer), and a new UI test fails when `app.js` calls a function it never defines.

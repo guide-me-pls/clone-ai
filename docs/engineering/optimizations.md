@@ -31,6 +31,84 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — Approvals move to the main conversation
+
+- **Goal / hypothesis:** the owner should have one place to decide. The Main
+  Agent conversation aggregates every `waiting_approval` run and every waiting
+  review, each addressed by the run id the decision posts to, so a child task
+  record no longer hides the only buttons that can unblock it. Derived tasks
+  collapse under the conversation that spawned them, keeping the sidebar
+  readable at eleven tasks.
+- **Trade-off:** [Approvals live in the main conversation; child tasks collapse under it](../architecture/trade-offs.md#2026-11-18--approvals-live-in-the-main-conversation-child-tasks-collapse-under-it).
+- **Change:** `src/companion-server.ts` exports `mainConversationApprovals` and
+  `mainConversationReviews`, and the dashboard and main conversation share the
+  approval builder; `buildMainAgentConversation` loads the runtime view and
+  attaches approvals, reviews, visible subagents and a status/preview that
+  reflects them. `apps/desktop/ui/app.js` renders one card per pending run with
+  `data-approve="<runId>"`, a review card with `data-review` that follows the
+  review list rather than the conversation's status pill (a `waiting_approval`
+  status must not hide a waiting review), a pointer card in child records, and a
+  collapsed `<details class="session-children">` group whose open state is
+  remembered per parent; `style.css`/`audit.css` add the card and group styles. `test/main-conversation-approvals.test.ts` covers the server
+  view; `test/ui-structure.test.ts` pins the UI contract.
+- **Eval:** at HEAD the UI contract test failed on
+  `session.id !== MAIN_CONVERSATION_ID` (the red CI run this change answers);
+  after the change
+  `node --experimental-strip-types --test test/ui-structure.test.ts test/main-conversation-approvals.test.ts`
+  is **14/14** and the full suite **758/758**; `npm run typecheck` and
+  `npm run gate` pass. `test/main-conversation-approvals.test.ts` is **3/3**.
+- **Benchmark run:** none — deterministic server/UI tests; no provider, model,
+  dataset or scoring parameters.
+- **Execution chain:** reproduced the red CI test; found the assertion and its
+  trade-off entry committed in `4a911bd` while the implementation stayed in the
+  working tree (`session.id !== MAIN_CONVERSATION_ID` had zero matches at HEAD);
+  reviewed the working-tree diff, ran the UI contract against HEAD (the
+  approvals case failing) and against the working tree (passing), then the full
+  suite, typecheck and gate; docs. No model provider was called; cost: none.
+  Duration was not separately instrumented.
+- **Pros:** one decision surface, and the dashboard and main conversation share
+  one approval builder, so their counts cannot diverge; the collapsed group keeps
+  the sidebar readable while the running/failed split stays visible.
+- **Cons / next time:** the test, trade-off entry and implementation landed in
+  different commits, so `main` was red between them until this commit. The
+  authoring session's steps were not observed here, so this entry records the
+  verification chain rather than the original authoring chain.
+- **Reversal condition:** see the trade-off entry.
+
+### 2026-11-18 — A finished run keeps its verification, evidence and trace
+
+- **Goal / hypothesis:** the task record is where the owner asks what happened.
+  After they accept or reject a result, the verdict, the criteria behind it and
+  the evidence the run produced must stay readable. Evidence should be a list
+  (artifact locators plus observations), not a count, and a run still waiting for
+  a decision should open its trace.
+- **Trade-off:** [A finished run keeps its verification, evidence and trace on screen](../architecture/trade-offs.md#2026-11-18--a-finished-run-keeps-its-verification-evidence-and-trace-on-screen).
+- **Change:** `src/companion-server.ts` returns `evidence` from `buildSession`;
+  `apps/desktop/ui/app.js` adds `verificationMarkup` (system verdict, owner
+  verdict, unverified criteria, checked-evidence count) and rewrites
+  `evidenceMarkup` to list artifact rows before observations with a 60-row cap
+  per group and an "N more" line; `traceMarkup` opens by default while the run is
+  `waiting_approval` or `waiting_review`. `style.css` adds the verification and
+  evidence styles; `test/ui-structure.test.ts` pins the blocks.
+- **Eval:** at HEAD the new UI contract test fails (`verificationMarkup`, the
+  evidence list and the trace fallback do not exist) and the focused file is
+  **9/11**; after the change it is **11/11** and the full suite **758/758**;
+  `npm run typecheck` and `npm run gate` pass. The review payload is covered by
+  `test/main-conversation-approvals.test.ts`.
+- **Benchmark run:** none — deterministic UI/API tests; no provider, model,
+  dataset or scoring parameters.
+- **Execution chain:** compared HEAD's `reviewMarkup` (hidden unless
+  `waiting_review`) and `evidenceMarkup` (a bare count) with the working-tree
+  blocks, added the UI contract test that fails at HEAD, ran the targeted tests
+  and the full gates, docs. No provider call; cost: none; duration not separately
+  instrumented.
+- **Pros:** the record survives the owner's decision; artifacts come before
+  observations; the trace is open exactly while the run is being judged.
+- **Cons / next time:** the evidence list is capped at 60 rows per group, the
+  payload carries those rows, and the contract test is structural (regex over
+  source), not a rendered-DOM check. The authoring session was not observed.
+- **Reversal condition:** see the trade-off entry.
+
 ### 2026-11-18 — A checkout-served daemon serves the file, not its startup copy
 
 - **Goal / hypothesis:** an edit to the UI under a running daemon must reach the

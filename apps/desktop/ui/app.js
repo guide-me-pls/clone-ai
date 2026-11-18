@@ -36,6 +36,13 @@ const state = {
   locale: "zh-CN",
   strings: {},
   attachments: [],
+  openChildGroups: new Set((() => {
+    try {
+      return JSON.parse(localStorage.getItem("clone-ai:child-groups") || "[]");
+    } catch {
+      return [];
+    }
+  })().filter((value) => typeof value === "string")),
 };
 const MAX_ATTACHMENTS = 4;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -307,6 +314,8 @@ const SIDEBAR_MAX = 520;
 let sidebarResizeActive = false;
 function applySidebarWidth(value, persist = true) { const max = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, window.innerWidth - 400)); const width = Math.round(Math.max(SIDEBAR_MIN, Math.min(max, value))); document.documentElement.style.setProperty("--sidebar-width", `${width}px`); document.querySelector(".app-shell").style.setProperty("--sidebar-width", `${width}px`); const handle = $("sidebar-resizer"); handle.setAttribute("aria-valuenow", String(width)); if (persist) localStorage.setItem("clone-ai:sidebar-width", String(width)); }
 function restoreSidebarWidth() { const saved = Number(localStorage.getItem("clone-ai:sidebar-width")); applySidebarWidth(Number.isFinite(saved) ? saved : 278, false); }
+// Evidence kinds the runtime records, in the owner's language. 运行时记录的证据类型，用所有者的语言。
+const EVIDENCE_KIND = { artifact: "产物", observation: "观察", tool_result: "工具结果", receipt: "回执", test: "测试" };
 const statusMeta = (status) => {
   if (status === "waiting_approval") return { label: t("status-waiting"), className: "waiting", dot: "waiting" };
   if (status === "waiting_review") return { label: t("status-review"), className: "waiting", dot: "waiting" };
@@ -325,9 +334,21 @@ function sessionMarkup(session) {
   const relation = child ? "子任务 · " : session.childCount ? `${session.childCount} 个子任务 · ` : "";
   return `<div class="session-item${child ? " is-child" : ""}${session.kind === "conversation" ? " is-conversation" : ""}"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title">${escape(plainPreview(session.title))}</span><span class="session-meta">${escape(relation + metaText)}</span></span></button><button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="${child ? "隐藏这条子任务" : session.kind === "conversation" ? "隐藏对话及其子任务" : "隐藏会话"}">×</button></div>`;
 }
+function childGroupSummary(children) {
+  const active = children.filter((child) => ["planning", "queued", "running", "verifying"].includes(child.status)).length;
+  const waiting = children.filter((child) => ["waiting_approval", "waiting_review"].includes(child.status)).length;
+  const failed = children.filter((child) => ["failed", "cancelled"].includes(child.status)).length;
+  const parts = [];
+  if (active) parts.push(`${active} 进行中`);
+  if (waiting) parts.push(`${waiting} 待确认`);
+  if (failed) parts.push(`${failed} 需处理`);
+  return parts.length ? parts.join(" · ") : "全部已完成";
+}
 function renderSessions(rawSessions) {
-  // A derived task sits under the conversation that spawned it, so one request
-  // never reads as two chats. 派生任务排在其所属对话之下，使一次请求不会读成两个对话。
+  // A derived task sits under the conversation that spawned it, inside a
+  // collapsed group. The conversation row stays the control surface; expanding
+  // shows what is actually running. 派生任务归在其所属对话之下，放在折叠组里。对话行
+  // 是操作面；展开后才看到真正在跑什么。
   const ids = new Set(rawSessions.map((session) => session.id));
   const childrenOf = new Map();
   for (const session of rawSessions) {
@@ -336,27 +357,47 @@ function renderSessions(rawSessions) {
     list.push(session);
     childrenOf.set(session.parentId, list);
   }
-  const sessions = [];
+  const blocks = [];
   for (const session of rawSessions) {
     if (session.parentId !== undefined && ids.has(session.parentId)) continue;
-    sessions.push(session);
-    for (const child of childrenOf.get(session.id) || []) sessions.push(child);
+    const children = childrenOf.get(session.id) || [];
+    const time = Math.max(
+      Date.parse(session.updatedAt) || 0,
+      ...children.map((child) => Date.parse(child.updatedAt) || 0),
+    );
+    blocks.push({ session, children, time });
   }
-  const signature = JSON.stringify([state.selectedId, sessions.map((session) => [session.id, session.title, session.preview, session.status, session.updatedAt, session.parentId, session.childCount]), state.dashboard?.deletedConversations]);
+  const signature = JSON.stringify([
+    state.selectedId,
+    blocks.map((block) => [
+      block.session.id, block.session.title, block.session.preview, block.session.status,
+      block.session.updatedAt, block.session.parentId, block.session.childCount,
+      block.children.map((child) => [child.id, child.title, child.preview, child.status, child.updatedAt]),
+    ]),
+    state.dashboard?.deletedConversations,
+    [...state.openChildGroups],
+  ]);
   if (state.signatures.sessions === signature) return;
   state.signatures.sessions = signature;
-  $("session-count").textContent = String(sessions.length);
+  const total = blocks.reduce((sum, block) => sum + 1 + block.children.length, 0);
+  $("session-count").textContent = String(total);
   // An empty visible list is not an empty sidebar: a hidden conversation still
   // needs its restore control, so the shortcut only applies when nothing is
   // hidden either. 可见列表为空不等于侧栏为空：隐藏的对话仍需要恢复入口，
   // 因此只有确实没有隐藏内容时才走空状态。
-  if (!sessions.length && !(state.dashboard?.deletedConversations || []).length) { $("session-list").innerHTML = `<div class="empty-sessions">${t("empty-sessions").replace("\n", "<br/>")}</div>`; return; }
+  if (!total && !(state.dashboard?.deletedConversations || []).length) { $("session-list").innerHTML = `<div class="empty-sessions">${t("empty-sessions").replace("\n", "<br/>")}</div>`; return; }
   const todayKey = new Date().toDateString();
-  const today = sessions.filter((session) => new Date(session.updatedAt).toDateString() === todayKey);
-  const earlier = sessions.filter((session) => new Date(session.updatedAt).toDateString() !== todayKey);
+  const today = blocks.filter((block) => new Date(block.time).toDateString() === todayKey);
+  const earlier = blocks.filter((block) => new Date(block.time).toDateString() !== todayKey);
+  const blockMarkup = (block) => {
+    const parent = sessionMarkup(block.session);
+    if (!block.children.length) return parent;
+    const open = state.openChildGroups.has(block.session.id) ? " open" : "";
+    return `${parent}<details class="session-children" data-child-group="${escape(block.session.id)}"${open}><summary><span>${block.children.length} 个子任务</span><small>${escape(childGroupSummary(block.children))}</small></summary>${block.children.map((child) => sessionMarkup(child)).join("")}</details>`;
+  };
   const hidden = (state.dashboard?.deletedConversations || []).map((entry) => `<div class="session-item is-hidden-conversation"><span class="session-copy"><span class="session-title">${escape(entry.title)}${entry.childCount ? ` · ${entry.childCount} 个子任务` : ""}</span><span class="session-meta">已隐藏</span></span><button class="session-restore" type="button" data-restore-conversation="${escape(entry.id)}">恢复</button></div>`).join("");
   const hiddenBlock = hidden ? `<div class="session-group">已隐藏</div>${hidden}` : "";
-  $("session-list").innerHTML = `${today.length ? `<div class="session-group">${t("today")}</div>${today.map(sessionMarkup).join("")}` : ""}${earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map(sessionMarkup).join("")}` : ""}${hiddenBlock}`;
+  $("session-list").innerHTML = `${today.length ? `<div class="session-group">${t("today")}</div>${today.map(blockMarkup).join("")}` : ""}${earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map(blockMarkup).join("")}` : ""}${hiddenBlock}`;
 }
 function renderSchedules(schedules, occurrences = [], reportDeliveries = [], reportError = false) {
   state.schedules = schedules;
@@ -1401,12 +1442,105 @@ function displayAgentDetail(agent) { const provider = agent.providerId ? `${prov
 function disclosureOpen(session, name, fallback = false) { return state.openDisclosures.get(session.id)?.get(name) ?? fallback; }
 function planMarkup(session) { if (!session.plan) return ""; const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status); const open = disclosureOpen(session, "plan", fallback) ? " open" : ""; return `<details class="activity-card plan-card" data-disclosure="plan"${open}><summary class="activity-summary">${icon("spark")}<b>执行计划</b><span>${session.plan.steps.length} 步</span></summary><p class="plan-summary">${escape(session.plan.summary)}</p><div class="plan-steps">${session.plan.steps.map((step, index) => `<div class="plan-step"><span class="plan-step-index">${index + 1}</span><b>${escape(step.title)}</b>${step.agentId ? `<em class="plan-step-worker">由 ${escape(step.agentId)} 执行</em>` : ""}<span>${step.delegated ? "委派执行" : step.risk === "read_only" ? "直接处理" : "需确认"}</span></div>`).join("")}</div></details>`; }
 function agentsMarkup(session) { if (!session.subagents.length) return ""; const completed = session.subagents.filter((agent) => agent.status === "completed").length; const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status); const open = disclosureOpen(session, "agents", fallback) ? " open" : ""; return `<details class="activity-card" data-disclosure="agents"${open}><summary class="activity-summary">${icon("spark")}<b>Agent 协作</b><span>${completed}/${session.subagents.length} 已完成</span></summary><div class="agent-list">${session.subagents.map((agent) => { const status = statusMeta(agent.status); return `<div class="agent-row"><span class="status-dot ${status.dot}"></span><div><strong>${escape(displayAgentTitle(agent))}</strong><small>${escape(displayAgentDetail(agent))}</small></div><span class="agent-status">${escape(status.label)}</span></div>`; }).join("")}</div></details>`; }
-function approvalMarkup(session) { if (!session.approvals.length) return ""; return `<section class="approval-card"><div class="approval-kicker">需要你的决定</div><h2>是否继续执行外部动作？</h2><p>${escape(session.approvals[0].description)}</p><div class="approval-actions"><button class="approve" type="button" data-approve="${escape(session.id)}">确认并继续</button><button class="secondary" type="button" data-reject="${escape(session.id)}">拒绝</button></div></section>`; }
-function reviewMarkup(session) { const verification = session.verification; if (session.status !== "waiting_review" || !verification?.needsReview) return ""; const criteria = (verification.unverifiedCriteria || []).map((criterion) => `<li>${escape(criterion)}</li>`).join(""); return `<section class="approval-card"><div class="approval-kicker">${escape(t("status-review"))}</div><h2>${escape(t("review-title"))}</h2><ul>${criteria}</ul><div class="approval-actions"><button class="approve" type="button" data-review="${escape(session.id)}" data-review-decision="accept">${escape(t("review-accept"))}</button><button class="secondary" type="button" data-review="${escape(session.id)}" data-review-decision="reject">${escape(t("review-reject"))}</button></div></section>`; }
+function approvalMarkup(session) {
+  const approvals = session.approvals || [];
+  if (!approvals.length) return "";
+  // Decisions live in the main conversation. A child task record only points
+  // there; posting to its own id would hit the wrong endpoint.
+  // 决定集中在主对话。子任务记录只提供入口；按子任务 id 提交会打到错误端点。
+  if (session.id !== MAIN_CONVERSATION_ID) {
+    return `<section class="approval-card approval-pointer"><div class="approval-kicker">需要你的决定</div><p>这个任务的确认已集中到主对话。</p><div class="approval-actions"><button class="secondary" type="button" data-open-main-conversation>回到主对话确认</button></div></section>`;
+  }
+  const heading = approvals.length === 1 ? "是否继续执行外部动作？" : `${approvals.length} 个任务等待确认`;
+  return `<section class="approval-card"><div class="approval-kicker">需要你的决定</div><h2>${escape(heading)}</h2>${approvals.map((approval) => `<div class="approval-item"><b>${escape(approval.title || session.title)}</b><p>下一步会影响外部系统，需要你的确认。</p><div class="approval-actions"><button class="approve" type="button" data-approve="${escape(approval.runId)}">确认并继续</button><button class="secondary" type="button" data-reject="${escape(approval.runId)}">拒绝</button></div></div>`).join("")}</section>`;
+}
+function reviewMarkup(session) {
+  // Reviews are decisions too: the main conversation shows the criteria and the
+  // accept/reject pair, while a task record only points there. The card follows
+  // the review list, not the conversation's single status pill: approvals and
+  // reviews can be pending at the same time, and a `waiting_approval` pill must
+  // not hide a review the owner still has to answer.
+  // 复核也是决定：主对话显示标准与接受/拒绝，任务记录只提供入口。卡片跟随复核列表，
+  // 而不是对话唯一的状态标签：确认与复核可能同时等待，`waiting_approval` 不能藏起仍需
+  // 所有者回答的复核。
+  if (session.id !== MAIN_CONVERSATION_ID) {
+    if (session.status !== "waiting_review") return "";
+    return `<section class="approval-card approval-pointer"><div class="approval-kicker">等待复核</div><p>这个任务的复核已集中到主对话。</p><div class="approval-actions"><button class="secondary" type="button" data-open-main-conversation>回到主对话复核</button></div></section>`;
+  }
+  const reviews = session.reviews || [];
+  if (!reviews.length) return "";
+  const heading = reviews.length === 1 ? "确认任务结果" : `${reviews.length} 个任务等待复核`;
+  return `<section class="approval-card"><div class="approval-kicker">等待复核</div><h2>${escape(heading)}</h2>${reviews.map((review) => {
+    const criteria = (review.verification.unverifiedCriteria || []).map((criterion) => `<li>${escape(criterion)}</li>`).join("");
+    const summary = criteria.length === 0 && review.verification.summary ? `<p>${escape(review.verification.summary)}</p>` : "";
+    return `<div class="approval-item"><b>${escape(review.title)}</b>${summary}${criteria ? `<ul>${criteria}</ul>` : ""}<div class="approval-actions"><button class="approve" type="button" data-review="${escape(review.runId)}" data-review-decision="accept">接受结果</button><button class="secondary" type="button" data-review="${escape(review.runId)}" data-review-decision="reject">拒绝</button></div></div>`;
+  }).join("")}</section>`;
+}
+
+/**
+ * The record of a finished run: what the system concluded, what the owner
+ * decided, and the criteria behind both. It stays on the task record after the
+ * decision, which is where the owner goes to ask what happened.
+ * 已结束 Run 的记录：系统得出什么、所有者决定了什么，以及两者背后的标准。决定之后它
+ * 仍留在任务记录里——所有者正是回到这里查"发生了什么"。
+ */
+function verificationMarkup(session) {
+  const verification = session.verification;
+  if (!verification) return "";
+  const owner = verification.reviewedBy === "owner";
+  const tone = verification.passed ? "ok" : verification.needsReview ? "warn" : "bad";
+  const verdict = verification.passed ? "通过" : verification.needsReview ? "需要你的复核" : "未通过";
+  const ownerLine = owner
+    ? `<span class="verification-owner">你的决定：${verification.passed ? "接受结果" : "不接受结果"}</span>`
+    : verification.needsReview
+      ? `<span class="verification-owner is-pending">等待你的决定</span>`
+      : "";
+  const criteria = (verification.unverifiedCriteria || []).length
+    ? `<ul class="verification-criteria">${verification.unverifiedCriteria.map((criterion) => `<li>${escape(criterion)}</li>`).join("")}</ul>`
+    : "";
+  return `<section class="activity-card verification-card" data-verification>
+    <div class="verification-head"><b>核验结果</b><span class="status-pill ${tone}">${escape(verdict)}</span>${ownerLine}</div>
+    ${verification.summary ? `<p class="verification-summary">${escape(verification.summary)}</p>` : ""}
+    ${criteria}
+    <p class="verification-foot">检查了 ${verification.checkedEvidenceIds?.length ?? 0} 条证据${verification.createdAt ? ` · ${time(verification.createdAt)}` : ""}</p>
+  </section>`;
+}
+
+/**
+ * What the run produced: artifact rows first (the deliverable), then the
+ * observations behind them. A count alone told the owner "9 条证据" and nothing
+ * about what they were.
+ * Run 产出了什么：先是产物行（交付物），再是支撑它们的观察记录。只给计数只会告诉所有者
+ * "9 条证据"，却说不出它们是什么。
+ */
+function evidenceMarkup(session) {
+  const evidence = Array.isArray(session.evidence) ? session.evidence : [];
+  const count = session.evidenceCount ?? evidence.length;
+  if (!count) return "";
+  if (!evidence.length) return `<div class="evidence">${icon("check")}已记录 ${count} 条可验证证据</div>`;
+  const artifacts = evidence.filter((item) => item.kind === "artifact");
+  const rest = evidence.filter((item) => item.kind !== "artifact");
+  const row = (item) => `<li class="evidence-row"><span class="evidence-kind">${escape(EVIDENCE_KIND[item.kind] ?? item.kind)}</span><code>${escape(item.locator ?? "")}</code><span>${escape((item.summary ?? "").slice(0, 160))}</span></li>`;
+  const list = (items, limit) => items.slice(0, limit).map(row).join("") + (items.length > limit ? `<li class="evidence-more">另有 ${items.length - limit} 条</li>` : "");
+  return `<details class="activity-card" data-disclosure="evidence" open>
+    <summary class="activity-summary">${icon("check")}<b>证据与产物</b><span>${artifacts.length} 个产物 · ${rest.length} 条观察</span></summary>
+    ${artifacts.length ? `<h5>产物</h5><ul class="evidence-list">${list(artifacts, 60)}</ul>` : ""}
+    ${rest.length ? `<h5>证据</h5><ul class="evidence-list">${list(rest, 60)}</ul>` : ""}
+    <p class="au-note">共 ${count} 条，来自 Journal 的 evidence.recorded。</p>
+  </details>`;
+}
 function recalledMemoryMarkup(session) { const memories = session.recalledMemories || []; if (!memories.length) return ""; return `<details class="activity-card" data-disclosure="memory"><summary class="activity-summary">${icon("spark")}<b>本次任务使用的 Memory</b><span>${memories.length} 条</span></summary><div class="agent-list">${memories.map((memory) => `<div class="agent-row"><div><strong>${escape(memory.summary)}</strong><small>匹配：${escape((memory.matchedTerms || []).join("、") || "相关上下文")} · ${Math.round((memory.score || 0) * 100)}%</small></div></div>`).join("")}</div></details>`; }
-function evidenceMarkup(session) { return session.evidenceCount ? `<div class="evidence">${icon("check")}已记录 ${session.evidenceCount} 条可验证证据</div>` : ""; }
-function traceMarkup(session) { const trace = session.trace || session.activity || []; if (!trace.length) return ""; const open = disclosureOpen(session, "trace") ? " open" : ""; return `<details class="activity-card" data-disclosure="trace"${open}><summary class="activity-summary">${icon("check")}<b>本地执行轨迹</b><span>${trace.length} 条</span></summary><div class="trace" data-scroll-region="trace">${trace.map((item, index) => `<div class="trace-row"><b><span class="trace-sequence">#${item.sequence ?? index + 1}</span>${escape(item.label)}</b><p>${time(item.occurredAt)} · ${escape(item.detail)}</p></div>`).join("")}</div></details>`; }
 function setTopbar(session) { if (!session) { $("session-kind").textContent = "个人对话"; $("session-title").textContent = t("new-conversation"); $("session-subtitle").textContent = t("start-intent"); $("session-status").textContent = t("ready"); $("session-status").className = "status-pill"; return; } const status = statusMeta(session.status); $("session-kind").textContent = session.id === MAIN_CONVERSATION_ID ? "个人对话" : "任务记录"; $("session-title").textContent = plainPreview(session.title); $("session-subtitle").textContent = `${plainPreview(session.preview)} · ${time(session.updatedAt)}`; $("session-status").textContent = session.id === MAIN_CONVERSATION_ID && session.status === "completed" ? "已保存" : status.label; $("session-status").className = `status-pill ${status.className}`; }
+function traceMarkup(session) {
+  const trace = session.trace || session.activity || [];
+  if (!trace.length) return "";
+  // A run that still needs the owner opens its trace: the record is what they
+  // are deciding about. A finished run keeps it collapsed but present.
+  // 仍等待所有者的 Run 默认展开轨迹：记录正是他们要判断的对象。已结束的 Run 保持折叠但保留。
+  const fallback = session.status === "waiting_review" || session.status === "waiting_approval";
+  const open = disclosureOpen(session, "trace", fallback) ? " open" : "";
+  return `<details class="activity-card" data-disclosure="trace"${open}><summary class="activity-summary">${icon("check")}<b>本地执行轨迹</b><span>${trace.length} 条</span></summary><div class="trace" data-scroll-region="trace">${trace.map((item, index) => `<div class="trace-row"><b><span class="trace-sequence">#${item.sequence ?? index + 1}</span>${escape(item.label)}</b><p>${time(item.occurredAt)} · ${escape(item.detail)}</p></div>`).join("")}</div></details>`;
+}
 const SCROLL_BOTTOM_THRESHOLD = 28;
 function rememberCurrentScroll() {
   if (!state.selectedId) return;
@@ -1461,7 +1595,7 @@ function restoreDisclosureScrolls(id) {
     });
   });
 }
-function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || session.messages.length === 0); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
+function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || session.messages.length === 0); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
 async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (state.streaming) return; const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.composingNew && (!state.selectedId || !sessions.some((session) => session.id === state.selectedId))) state.selectedId = sessions.find((session) => session.id === MAIN_CONVERSATION_ID)?.id ?? sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
 let activeTurn = null;
@@ -1784,7 +1918,14 @@ async function restoreConversation(id) {
 
 async function deleteSession(id) { const session = (state.dashboard?.sessions || []).find((item) => item.id === id); const message = id === "main-agent-conversation" ? `隐藏这个对话？它的 ${session?.childCount || 0} 个子任务会一起隐藏。审计日志、记忆和备份不受影响，随时可以恢复。` : session?.parentId ? "隐藏这条子任务？审计记录会保留。父对话不受影响。" : "从会话列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。"; if (!(await confirmDialog(message, "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
 $("session-list").addEventListener("click", (event) => { const restore = event.target.closest("[data-restore-conversation]"); if (restore) { void restoreConversation(restore.dataset.restoreConversation); return; } const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
-$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
+$("session-list").addEventListener("toggle", (event) => {
+  const details = event.target;
+  if (!(details instanceof HTMLDetailsElement) || details.dataset.childGroup === undefined) return;
+  if (details.open) state.openChildGroups.add(details.dataset.childGroup);
+  else state.openChildGroups.delete(details.dataset.childGroup);
+  localStorage.setItem("clone-ai:child-groups", JSON.stringify([...state.openChildGroups]));
+}, true);
+$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const openMain = event.target.closest("[data-open-main-conversation]"); if (openMain) { void selectSession(MAIN_CONVERSATION_ID, { scrollToBottom: true }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
 document.querySelector(".settings-nav")?.addEventListener("keydown", (event) => {
