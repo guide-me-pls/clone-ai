@@ -11,6 +11,21 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— OCR 与旧式 .doc 不离开本机就能交给模型
+
+- **主张：** 扫描 PDF 会回退到 Vision OCR，旧式 `.doc` 由编译进 App 的 Swift 助手用
+  AppKit 读取；两者都以有边界的文本块交给模型，沿用现有 50,000/100,000 字符上限。助手从
+  stdin 读、向 stdout 写，Node 侧从不写临时文件。
+- **证据：** `node --experimental-strip-types --test test/attachments.test.ts
+  test/document-extract.test.ts test/native-main-agent.test.ts
+  test/desktop-shell.test.ts` —— 31/31；`npm test` 742/742；typecheck 通过；gate PASS。
+  编译后的助手读取 `textutil` 生成的 `.doc`，并把渲染后的扫描 PDF 识别为
+  `Hello from a PDF fixture.` / `Second line with Tom & Jerry.`；打包 Node 从同级目录
+  找到助手并提取两份夹具。45 行密集夹具从 53 行输出中得到 33 行以 `Line` 开头，OCR 可用
+  但不完美。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--ocr-与旧式-doc-走原生-macos-助手)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--扫描-pdf-与旧式-doc-也能交给模型)。
+
 ## 2026-11-18 —— 窗口自行恢复停掉的运行时
 
 - **主张：** 打包 App 拉起的运行时停止后，窗口不再停在静态的"关闭后重新打开"上：外壳按

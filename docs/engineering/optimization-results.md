@@ -15,6 +15,23 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — OCR and legacy .doc reach the model without leaving the machine
+
+- **Claim:** a scanned PDF falls back to Vision OCR and a legacy `.doc` is read
+  with AppKit through a Swift helper compiled into the app; both reach the model
+  as a delimited text block under the existing 50,000/100,000 character caps.
+  The helper reads stdin and writes stdout, so Node never writes a temp file.
+- **Evidence:** `node --experimental-strip-types --test test/attachments.test.ts
+  test/document-extract.test.ts test/native-main-agent.test.ts
+  test/desktop-shell.test.ts` — 31/31; `npm test` 742/742; typecheck pass; gate
+  PASS. The compiled helper read a `textutil`-generated `.doc` and OCR'd a
+  rendered scanned PDF into `Hello from a PDF fixture.` /
+  `Second line with Tom & Jerry.`; the bundled Node resolved the sibling helper
+  and extracted both fixtures. A 45-line dense fixture produced 33 rows starting
+  with `Line` from a 53-row output, so OCR is usable but not perfect.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--ocr-and-legacy-doc-go-through-a-native-macos-helper),
+  [execution chain](optimizations.md#2026-11-18--scanned-pdfs-and-legacy-doc-reach-the-model-too).
+
 ## 2026-11-18 — The window recovers a stopped runtime on its own
 
 - **Claim:** a packaged app whose spawned runtime stops no longer ends at a

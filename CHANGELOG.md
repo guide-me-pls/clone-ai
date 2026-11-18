@@ -6,6 +6,27 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Scanned PDFs and legacy .doc join through a native helper
+
+A PDF with no text layer now falls back to Vision OCR, and a legacy `.doc` is
+read with AppKit, through `CloneAIDocumentTool` — a Swift helper compiled into
+the app that reads bytes on stdin and writes text on stdout. Nothing goes to a
+cloud OCR service and no temp file is written. OCR renders pages at 2000 px,
+tiles them into bands with row grouping (20 pages, 50k characters), and the
+usual truncation notice applies; dense pages are usable but not perfect. The
+helper is resolved from `CLONE_AI_DOCUMENT_TOOL` or beside the bundled Node; a
+daemon without it refuses OCR/`.doc` with a reason. 742 tests, typecheck and the
+regression gate pass; the compiled helper read a `textutil`-generated `.doc` and
+OCR'd a scanned fixture into the expected sentences.
+
+扫描件 PDF 现在会回退到 Vision OCR，旧式 `.doc` 由 AppKit 读取，二者都通过
+`CloneAIDocumentTool`——编译进 App 的 Swift 助手从 stdin 读字节、向 stdout 写文本。不会
+把文档送到云端 OCR，也不写临时文件。OCR 把每页渲染到 2000px、按条带识别并按行重组
+（20 页、50k 字符），沿用现有截断提示；密集页面可用但不完美。助手从
+`CLONE_AI_DOCUMENT_TOOL` 或打包 Node 的同级目录解析；没有它的守护进程会带原因拒绝
+OCR/`.doc`。742 个测试、typecheck 与回归门均通过；编译后的助手读取了 `textutil` 生成的
+`.doc`，并把扫描夹具识别成预期句子。
+
 ### The window restarts a stopped runtime and shows why
 
 The desktop shell no longer ends at "本地运行时已停止" with an instruction to reopen the app. In the mode where the app spawns its own sidecar, an exit relaunches it with exponential backoff (1 s doubling to a 30 s cap) and the startup view shows the attempt and the last four stderr lines; a start that passes 30 s without `CLONE_AI_READY` is terminated and restarted. Both modes probe `/api/health` every 5 seconds — two misses restart the runtime, or make the window re-read the launchd endpoint — and a resident attach that finds no endpoint retries every 30 s instead of stopping after 60 s. A failed WebView load on a stale endpoint recovers immediately instead of showing a blank page.
@@ -129,11 +150,12 @@ and treats the result like a text document: the model sees a delimited data
 block, while the turn ledger keeps only a name/size manifest. Extracted text
 shares the 50,000/100,000-character caps; a longer file keeps its first part
 with an explicit truncation marker, and the completion notice tells the owner.
-Image-only (scanned) PDFs are refused with "OCR not supported"; legacy `.doc` is
-refused. No file is written to disk. The picker, drag-and-drop and the native
-panel now accept `.pdf` and `.docx`. The focused attachment and extraction
-tests, typecheck and the regression gate pass; fixtures cover a text PDF, a
-`.docx` with XML entities, a scanned PDF, truncation and a broken `.docx`.
+Image-only (scanned) PDFs now fall back to Vision OCR, and legacy `.doc` is read
+through the same native helper (see above). No file is written to disk. The
+picker, drag-and-drop and the native panel now accept `.pdf`, `.docx` and `.doc`.
+The focused attachment and extraction tests, typecheck and the regression gate
+pass; fixtures cover a text PDF, a `.docx` with XML entities, a scanned PDF,
+truncation and a broken `.docx`.
 
 ### Text documents drop into a turn, and stay out of the ledger
 
@@ -192,9 +214,10 @@ extraction and debrief all work.
 （MIT，约 3.1MB，懒加载），`.docx` 用基于 `node:zlib` 的小型 OOXML 读取器——并像文本文档
 一样处理：模型看到有边界的数据块，回合台账只保留文件名/大小清单。提取文本沿用
 50,000/100,000 字符上限；更长文件保留前一部分并写入显式截断标记，完成后提示所有者。
-纯图片（扫描件）PDF 会以“不支持 OCR”拒绝；旧式 `.doc` 也会拒绝。不向磁盘写任何文件。
-选择器、拖拽与原生面板现在接受 `.pdf` 与 `.docx`。附件与提取的聚焦测试、typecheck 与
-回归门均通过；夹具覆盖文本 PDF、带 XML 实体的 `.docx`、扫描 PDF、截断与损坏的 `.docx`。
+纯图片（扫描件）PDF 现在会回退到 Vision OCR，旧式 `.doc` 也由同一原生助手读取（见上）。
+不向磁盘写任何文件。选择器、拖拽与原生面板现在接受 `.pdf`、`.docx` 与 `.doc`。附件与
+提取的聚焦测试、typecheck 与回归门均通过；夹具覆盖文本 PDF、带 XML 实体的 `.docx`、
+扫描 PDF、截断与损坏的 `.docx`。
 
 输入框现在在图片与视频之外接受文本文档：`.md`、`.txt`、`.csv`、`.json`、源码与配置
 文件，以及任何 `text/*`，最多 4 个附件、每个文档 50,000 字符、合计 100,000 字符。文件
