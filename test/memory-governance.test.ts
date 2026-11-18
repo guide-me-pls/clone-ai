@@ -347,3 +347,28 @@ test("archiveIdle archives memories unused for 90 days and spares recalled ones"
   await governance.restore(idle.id);
   assert.deepEqual(await governance.archiveIdle(), []);
 });
+
+test("remove deletes only an archived memory, journals its summary, and drops its versions", async (t) => {
+  const { governance, store, journal, directory } = await setup(t);
+  const authored = await governance.author({ summary: "不再需要的临时偏好：周报用蓝色模板" });
+  await governance.update(authored.id, { content: "补充过的正文" });
+  assert.ok(store.versionsOf(authored.id).length > 0, "an edit must leave a version to delete");
+
+  // An active memory is still in use: deletion is refused until it is archived.
+  // 使用中的记忆仍在使用：归档之前拒绝删除。
+  await assert.rejects(governance.remove(authored.id), /Archive this memory before deleting it/);
+  assert.ok((await readFile(join(directory, "memory", `${authored.id}.md`), "utf8")).includes(authored.summary));
+
+  await governance.archive(authored.id, "manual");
+  const removed = await governance.remove(authored.id);
+
+  assert.equal(removed.id, authored.id);
+  const deleted = (await journal.list()).find((event) => event.type === "memory.deleted");
+  assert.equal((deleted?.payload as { memoryId?: string }).memoryId, authored.id);
+  assert.equal((deleted?.payload as { summary?: string }).summary, authored.summary);
+  assert.equal((await governance.stats()).archived, 0);
+  assert.equal((await governance.list()).length, 0);
+  assert.equal(store.versionsOf(authored.id).length, 0);
+  await assert.rejects(readFile(join(directory, "memory", "archived", `${authored.id}.md`), "utf8"), /ENOENT/);
+  await assert.rejects(governance.remove(authored.id), /does not exist/);
+});

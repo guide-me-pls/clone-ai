@@ -84,6 +84,21 @@ The gate measures the rules around the model, not model quality. A live
 trajectory eval would need recorded cassettes or a sandboxed provider; that is a
 separate, non-CI suite.
 
+
+## Capability benchmark: one-query FPS (`benchmark/capability/shadowport-fps`)
+
+The reliability benchmark above asks whether the harness completes fixed tasks.
+The capability benchmark asks a different question: from a **clean workspace**,
+can one user message produce a playable tactical FPS that the agent verifies
+itself with a browser? The prompt is one paragraph; the workspace rules,
+preview server and Playwright MCP tools carry the rest. An independent checker
+drives the page's public `window.__game` hook and records 17 checks (files,
+classic-script runtime, hook, start, movement, shot damage, three relays,
+extraction, debrief, console errors, external requests).
+
+See [`capability/shadowport-fps/README.md`](capability/shadowport-fps/README.md)
+and its [`ANALYSIS.md`](capability/shadowport-fps/ANALYSIS.md).
+
 ## What this is not
 
 - Not a model benchmark: pass/fail reflects orchestration + the provider's

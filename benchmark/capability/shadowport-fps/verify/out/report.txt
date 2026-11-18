@@ -1,0 +1,17 @@
+PASS file.index.html — index.html
+PASS file.game.js — game.js
+PASS file.vendor/three.iife.js — vendor/three.iife.js
+PASS classic-script — no ES module entry
+PASS local-three — global THREE from the workspace
+PASS hook — state,player,enemies,relays,begin,pause,resume,fire,reload,interact,nearTarget,endGame
+PASS start — {"phase":"playing","health":100,"ammo":30,"enemies":8,"relays":3,"x":0,"z":27}
+PASS enemies — 8 alive
+PASS relays — 3 relays
+PASS movement — moved 2.73 m
+PASS shot — {"fired":true,"before":{"hp":100,"ammo":30},"after":{"hp":-10,"ammo":29}}
+PASS damage — 100 -> -10
+PASS relays-cut — [true,true,true]
+PASS extraction — phase=ended
+PASS debrief — end screen visible
+PASS console — 0 error(s)
+PASS external-requests

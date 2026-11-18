@@ -45,6 +45,7 @@ const MEMORY_DECISION_TYPES = [
   "memory.updated",
   "memory.archived",
   "memory.restored",
+  "memory.deleted",
   "memory.mutation.discarded",
 ] as const;
 
@@ -341,6 +342,43 @@ export class MemoryGovernance {
         payload: { memoryId, restoredAt: entry.updatedAt },
       }, { recordVersionAs: "memory.restored" });
       return entry;
+    });
+  }
+
+  /**
+   * Permanently deletes an archived memory.
+   *
+   * This is the one irreversible memory action, so it is only allowed after the
+   * memory was archived: active memories go through the reversible `archive()`
+   * first, and a stray request cannot destroy a memory the owner is still using.
+   * The journal records the decision — with the summary, so the audit can still
+   * say what was there — before the store removes any file or row. If the
+   * physical removal then fails, the retry journals a second deletion event;
+   * the first one stays as the record of the attempt.
+   *
+   * 永久删除一条已归档的记忆。
+   *
+   * 这是唯一不可逆的记忆动作，因此只允许在记忆归档之后执行：使用中的记忆先走可逆的
+   * `archive()`，越权的请求无法毁掉所有者仍在使用的记忆。Journal 在 Store 移除任何文件
+   * 或行之前记录这次决定——连同摘要，使审计仍能说明那里曾有什么。若随后的物理删除失败，
+   * 重试会再记一条删除事件；第一条保留为尝试的记录。
+   */
+  async remove(memoryId: string): Promise<MemoryEntry> {
+    return this.withLock(async () => {
+      await this.recoverUnlocked();
+      const entry = await this.#store.get(memoryId);
+      if (entry === undefined) throw new Error(`Memory ${memoryId} does not exist.`);
+      if (entry.status !== "archived") throw new Error("Archive this memory before deleting it.");
+      await this.#journal.append({
+        type: "memory.deleted",
+        payload: {
+          memoryId,
+          summary: entry.summary,
+          type: entry.type,
+          deletedAt: new Date().toISOString(),
+        },
+      });
+      return (await this.#store.remove(memoryId)) ?? entry;
     });
   }
 

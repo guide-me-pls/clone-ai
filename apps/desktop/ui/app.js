@@ -39,12 +39,48 @@ const state = {
 };
 const MAX_ATTACHMENTS = 4;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
+const MAX_BINARY_DOCUMENT_BYTES = 10 * 1024 * 1024;
+const MAX_DOCUMENT_CHARS = 50_000;
+const MAX_TOTAL_DOCUMENT_CHARS = 100_000;
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const TEXT_EXTENSIONS = new Set([
+  "txt", "text", "md", "markdown", "mdx", "rst", "adoc", "tex",
+  "csv", "tsv", "json", "jsonl", "ndjson", "yaml", "yml", "toml", "xml", "html", "htm",
+  "css", "scss", "less", "js", "mjs", "cjs", "jsx", "ts", "tsx", "py", "rb", "go", "rs",
+  "java", "kt", "kts", "swift", "c", "h", "cc", "cpp", "hpp", "cs", "php", "sh", "bash",
+  "zsh", "fish", "sql", "log", "ini", "cfg", "conf", "env", "diff", "patch", "graphql",
+  "gql", "proto", "make", "mk",
+]);
+const documentIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>`;
+
+function attachmentDocumentCharacters() {
+  return state.attachments.reduce((total, item) => total + (item.kind === "document" ? item.text.length : 0), 0);
+}
+
+function shortName(name, limit = 22) {
+  const value = String(name ?? "");
+  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 function renderAttachments() {
   const host = $("attachment-preview");
   if (!host) return;
   host.hidden = state.attachments.length === 0;
-  host.innerHTML = state.attachments.map((item, index) => `<div class="attachment-chip" title="${escape(item.name)}"><img src="${item.previewUrl}" alt="${escape(item.name)}" /><button type="button" data-remove-attachment="${index}" aria-label="移除附件">×</button></div>`).join("");
+  host.innerHTML = state.attachments.map((item, index) => {
+    const remove = `<button type="button" data-remove-attachment="${index}" aria-label="移除附件">×</button>`;
+    if (item.kind === "document" || item.kind === "binary-document") {
+      return `<div class="attachment-chip document" title="${escape(item.name)}"><div class="attachment-doc">${documentIcon}<div class="attachment-doc-text"><b>${escape(shortName(item.name))}</b><small>${escape(formatBytes(item.size))}</small></div></div>${remove}</div>`;
+    }
+    return `<div class="attachment-chip" title="${escape(item.name)}"><img src="${item.previewUrl}" alt="${escape(item.name)}" />${remove}</div>`;
+  }).join("");
 }
 
 function readDataUrl(file) {
@@ -54,6 +90,56 @@ function readDataUrl(file) {
     reader.onerror = () => reject(reader.error ?? new Error("读取附件失败。"));
     reader.readAsDataURL(file);
   });
+}
+
+function readText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("读取附件失败。"));
+    reader.readAsText(file);
+  });
+}
+
+function extensionOf(name) {
+  const match = String(name ?? "").toLowerCase().match(/\.([a-z0-9]+)$/);
+  return match?.[1] ?? "";
+}
+
+function isTextDocumentFile(file) {
+  const extension = extensionOf(file.name);
+  // `.ts` is TypeScript and MPEG transport stream at the same time; macOS may
+  // report the video type for a source file. The extension wins for that pair
+  // so a source file is not handed to the video-frame decoder.
+  // `.ts` 同时是 TypeScript 与 MPEG transport stream；macOS 可能把源码报成视频类型。
+  // 对这对冲突让扩展名优先，避免把源码交给视频抽帧器。
+  if (TEXT_EXTENSIONS.has(extension) && (file.type === "video/mp2t" || file.type === "application/x-typescript")) return true;
+  if (file.type.length > 0) {
+    return /^text\/[a-z0-9.+-]+$/.test(file.type)
+      || /^application\/(json|xml|xhtml\+xml|javascript|x-javascript|sql|x-yaml|yaml|toml|x-httpd-php)$/.test(file.type);
+  }
+  return TEXT_EXTENSIONS.has(extension);
+}
+
+function documentMimeType(file) {
+  if ((file.type.startsWith("text/") || /^application\/(json|xml|xhtml\+xml|javascript|x-javascript|sql|x-yaml|yaml|toml|x-httpd-php)$/.test(file.type)) && file.type.length > 0) return file.type;
+  const extension = extensionOf(file.name);
+  if (extension === "md" || extension === "markdown" || extension === "mdx") return "text/markdown";
+  if (extension === "json" || extension === "jsonl" || extension === "ndjson") return "application/json";
+  if (extension === "csv" || extension === "tsv") return "text/csv";
+  return "text/plain";
+}
+
+function binaryDocumentKind(file) {
+  const extension = extensionOf(file.name);
+  const genericType = file.type.length === 0 || file.type === "application/octet-stream" || file.type === "application/zip";
+  if (file.type === "application/pdf" || (genericType && extension === "pdf")) return "pdf";
+  if (file.type === DOCX_MIME || (genericType && extension === "docx")) return "docx";
+  return undefined;
+}
+
+function looksBinaryText(text) {
+  return /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(text);
 }
 
 async function videoFrame(file) {
@@ -79,7 +165,7 @@ async function videoFrame(file) {
     canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
     canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
     const previewUrl = canvas.toDataURL("image/jpeg", 0.86);
-    return { name: `${file.name}（视频帧）`, mimeType: "image/jpeg", data: previewUrl.split(",")[1], previewUrl };
+    return { kind: "image", name: `${file.name}（视频帧）`, mimeType: "image/jpeg", data: previewUrl.split(",")[1], previewUrl };
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -88,18 +174,46 @@ async function videoFrame(file) {
 async function addAttachmentFiles(files) {
   let added = 0;
   for (const file of files) {
-    if (state.attachments.length >= MAX_ATTACHMENTS) { announce(`最多添加 ${MAX_ATTACHMENTS} 个图片或视频。`, true); break; }
+    if (state.attachments.length >= MAX_ATTACHMENTS) { announce(`最多添加 ${MAX_ATTACHMENTS} 个附件。`, true); break; }
     try {
+      if (isTextDocumentFile(file)) {
+        if (file.size > MAX_DOCUMENT_BYTES) { announce(`${file.name} 超过 2MB。`, true); continue; }
+        const text = await readText(file);
+        if (text.length === 0) { announce(`${file.name} 是空文件。`, true); continue; }
+        if (text.length > MAX_DOCUMENT_CHARS) { announce(`${file.name} 超过 ${MAX_DOCUMENT_CHARS} 字符。`, true); continue; }
+        if (attachmentDocumentCharacters() + text.length > MAX_TOTAL_DOCUMENT_CHARS) { announce(`文档合计超过 ${MAX_TOTAL_DOCUMENT_CHARS} 字符。`, true); continue; }
+        if (looksBinaryText(text)) { announce(`${file.name} 看起来不是文本文件。`, true); continue; }
+        state.attachments.push({ kind: "document", name: file.name, mimeType: documentMimeType(file), text, size: file.size });
+        added += 1;
+        continue;
+      }
+      const binaryKind = binaryDocumentKind(file);
+      if (binaryKind !== undefined) {
+        if (file.size > MAX_BINARY_DOCUMENT_BYTES) { announce(`${file.name} 超过 10MB。`, true); continue; }
+        const dataUrl = await readDataUrl(file);
+        state.attachments.push({
+          kind: "binary-document",
+          name: file.name,
+          mimeType: binaryKind === "pdf" ? "application/pdf" : DOCX_MIME,
+          data: dataUrl.split(",")[1],
+          size: file.size,
+        });
+        added += 1;
+        continue;
+      }
       if (file.type.startsWith("video/")) {
         state.attachments.push(await videoFrame(file));
         added += 1;
         continue;
       }
-      if (!/^image\/(png|jpeg|gif|webp)$/.test(file.type)) { announce("只支持 PNG、JPEG、GIF、WebP 图片或视频。", true); continue; }
-      if (file.size > MAX_ATTACHMENT_BYTES) { announce(`${file.name} 超过 5MB。`, true); continue; }
-      const previewUrl = await readDataUrl(file);
-      state.attachments.push({ name: file.name, mimeType: file.type, data: previewUrl.split(",")[1], previewUrl });
-      added += 1;
+      if (/^image\/(png|jpeg|gif|webp)$/.test(file.type)) {
+        if (file.size > MAX_ATTACHMENT_BYTES) { announce(`${file.name} 超过 5MB。`, true); continue; }
+        const previewUrl = await readDataUrl(file);
+        state.attachments.push({ kind: "image", name: file.name, mimeType: file.type, data: previewUrl.split(",")[1], previewUrl });
+        added += 1;
+        continue;
+      }
+      announce("只支持图片、视频、文本类文档与 PDF/.docx。", true);
     } catch (error) {
       announce(error.message || "附件读取失败。", true);
     }
@@ -1145,7 +1259,7 @@ function renderLibrary(library) {
   if (state.signatures.library === signature) return;
   state.signatures.library = signature;
   const stats = library.stats || { active: 0, archived: 0, total: 0, pending: 0, contentDirectory: "" };
-  $("library-overview").innerHTML = `<article class="memory-stat"><b>${stats.active}</b><span>使用中</span></article><article class="memory-stat"><b>${stats.archived}</b><span>已归档</span></article><article class="memory-stat"><b>${stats.pending}</b><span>待确认候选</span></article><article class="memory-stat file-stat"><b>.md</b><span>${escape(stats.contentDirectory || "-")}</span></article>`;
+  $("library-overview").innerHTML = `<button type="button" class="memory-stat" data-memory-filter="active" aria-pressed="false"><b>${stats.active}</b><span>使用中</span></button><button type="button" class="memory-stat" data-memory-filter="archived" aria-pressed="false"><b>${stats.archived}</b><span>已归档</span></button><button type="button" class="memory-stat" data-memory-focus="memory-candidates"><b>${stats.pending}</b><span>待确认候选</span></button><article class="memory-stat file-stat"><b>.md</b><span>${escape(stats.contentDirectory || "-")}</span></article>`;
   const memories = library.memories || [];
   const conflicts = (library.conflicts || []).map((item) => `<article class="memory-card"><b>${escape(t("memory-conflict"))}</b><p>${escape(item.summary)}</p><button class="secondary" type="button" data-memory-conflict="${escape(item.id)}">${escape(t("memory-keep-file"))}</button></article>`).join("");
   const cards = memories.length ? memories.map((item) => `<article class="memory-card library-card" data-library-card="${escape(item.id)}">
@@ -1359,8 +1473,10 @@ async function createSession(query) { const button = $("submit"); button.disable
   document.body.classList.remove("empty-conversation");
   const inner = $("conversation-inner");
   const welcome = inner.querySelector(".welcome"); if (welcome) inner.innerHTML = "";
-  const attachmentMarkup = outgoingAttachments.map((item) => `<img src="${item.previewUrl}" alt="${escape(item.name)}" />`).join("");
-  inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${escape(query || "（已发送图片/视频）")}</div>${attachmentMarkup ? `<div class="message-attachments">${attachmentMarkup}</div>` : ""}</div></div>`);
+  const attachmentMarkup = outgoingAttachments.map((item) => item.kind === "document" || item.kind === "binary-document"
+    ? `<div class="message-attachment-doc">${documentIcon}<span><b>${escape(shortName(item.name, 28))}</b><small>${escape(formatBytes(item.size))}</small></span></div>`
+    : `<img src="${item.previewUrl}" alt="${escape(item.name)}" />`).join("");
+  inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${escape(query || "（已发送附件）")}</div>${attachmentMarkup ? `<div class="message-attachments">${attachmentMarkup}</div>` : ""}</div></div>`);
   const card = document.createElement("div"); card.className = "message clone";
   card.innerHTML = `<div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="tool-timeline" data-tool-timeline hidden></div><div class="clone-text" data-streaming="1" hidden></div></div>`;
   inner.appendChild(card);
@@ -1452,7 +1568,17 @@ async function createSession(query) { const button = $("submit"); button.disable
     const response = await fetch("/api/main-agent/stream", {
       method: "POST",
       headers,
-      body: JSON.stringify({ text: query, turnId, ...(outgoingAttachments.length === 0 ? {} : { attachments: outgoingAttachments.map(({ mimeType, data }) => ({ mimeType, data })) }) }),
+      body: JSON.stringify({
+        text: query,
+        turnId,
+        ...(outgoingAttachments.length === 0 ? {} : {
+          attachments: outgoingAttachments.map((item) => {
+            if (item.kind === "binary-document") return { kind: "document", name: item.name, mimeType: item.mimeType, data: item.data };
+            if (item.kind === "document") return { kind: "document", name: item.name, mimeType: item.mimeType, text: item.text };
+            return { kind: "image", mimeType: item.mimeType, data: item.data };
+          }),
+        }),
+      }),
       signal: controller.signal,
     });
     if (!response.ok || !response.body) { const detail = await response.json().catch(() => ({})); throw new Error(detail.error || `请求失败：${response.status}`); }
@@ -1471,7 +1597,12 @@ async function createSession(query) { const button = $("submit"); button.disable
         const payload = JSON.parse(data);
         if (event === "delta") { revealResponse(); reply += payload.delta; target.textContent = reply; $("conversation").scrollTop = $("conversation").scrollHeight; }
         else if (event === "tool") { noteTool(payload); }
-        else if (event === "done") { result = payload; }
+        else if (event === "done") {
+          result = payload;
+          for (const report of payload.attachmentReports ?? []) {
+            if (report.truncated) announce(t("attachment-truncated").replace("{name}", report.name).replace("{characters}", String(report.characters)));
+          }
+        }
         else if (event === "failed") { failure = payload.error || "Main Agent 调用失败。"; throw new Error(failure); }
       }
     }
@@ -1742,7 +1873,7 @@ $("stop-turn").addEventListener("click", () => stopActiveTurn());
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && activeTurn !== null) { event.preventDefault(); stopActiveTurn(); }
 });
-$("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0 && state.attachments.length === 0) { announce("请输入你想推进的事情，或添加图片/视频。", true); return; } void createSession(query); });
+$("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0 && state.attachments.length === 0) { announce("请输入你想推进的事情，或添加图片/视频/文档。", true); return; } void createSession(query); });
 $("query").addEventListener("input", resizeComposer);
 $("query").addEventListener("paste", async (event) => {
   const files = clipboardAttachmentFiles(event.clipboardData);
@@ -1757,6 +1888,38 @@ $("query").addEventListener("paste", async (event) => {
 $("attach").addEventListener("click", () => $("attachments").click());
 $("attachments").addEventListener("change", async (event) => { const input = event.target; await addAttachmentFiles(input.files || []); input.value = ""; });
 $("attachment-preview").addEventListener("click", (event) => { const remove = event.target.closest("[data-remove-attachment]"); if (!remove) return; state.attachments.splice(Number(remove.dataset.removeAttachment), 1); renderAttachments(); });
+function dragCarriesFiles(event) {
+  return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+}
+let fileDragDepth = 0;
+window.addEventListener("dragenter", (event) => {
+  if (!dragCarriesFiles(event)) return;
+  event.preventDefault();
+  fileDragDepth += 1;
+  document.body.classList.add("dragging-files");
+});
+window.addEventListener("dragover", (event) => {
+  if (!dragCarriesFiles(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+});
+window.addEventListener("dragleave", (event) => {
+  if (!dragCarriesFiles(event)) return;
+  fileDragDepth = Math.max(0, fileDragDepth - 1);
+  if (fileDragDepth === 0) document.body.classList.remove("dragging-files");
+});
+window.addEventListener("drop", (event) => {
+  if (!dragCarriesFiles(event)) return;
+  event.preventDefault();
+  fileDragDepth = 0;
+  document.body.classList.remove("dragging-files");
+  const dropped = Array.from(event.dataTransfer?.files ?? []);
+  if (dropped.length > 0) void addAttachmentFiles(dropped);
+});
+window.addEventListener("dragend", () => {
+  fileDragDepth = 0;
+  document.body.classList.remove("dragging-files");
+});
 // macOS may deliver candidate-confirming Enter just after compositionend.
 // macOS 可能在 compositionend 之后才派发确认候选词的回车。
 const IME_ENTER_GRACE_MS = 100;

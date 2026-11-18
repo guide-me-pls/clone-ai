@@ -11,7 +11,7 @@ import {
   readNativeMainAgentEndpoint,
   runNativeMainAgentTurn,
 } from "../src/main-agent/native-runtime.ts";
-import { appendMainAgentTurnRecord } from "../src/main-agent/turn-audit.ts";
+import { appendMainAgentTurnRecord, readMainAgentTurnRecords } from "../src/main-agent/turn-audit.ts";
 
 function sseResponse(chunks: unknown[]): Response {
   const body = `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`;
@@ -114,6 +114,43 @@ test("the native main agent includes prior turns from the ledger", async (t) => 
   assert.equal(result.reply, "Sure.");
   assert.ok(body?.messages.some((message) => message.role === "user" && String(message.content).includes("blue template")));
   assert.ok(body?.messages.some((message) => message.role === "assistant" && message.content === "Noted."));
+});
+
+test("documents reach the model once while the ledger keeps only the manifest", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-native-documents-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  let body: { messages: Array<{ role: string; content?: unknown }> } | undefined;
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    body = JSON.parse(String(init.body)) as { messages: Array<{ role: string; content?: unknown }> };
+    return sseResponse([
+      { choices: [{ delta: { content: "Read it." } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+  }) as unknown as typeof fetch;
+  const result = await runNativeMainAgentTurn({
+    dataDirectory: directory,
+    text: "Summarize this",
+    ledgerText: "Summarize this\n\n[attached documents: notes.md (11 characters)]",
+    documents: [{ type: "document", name: "notes.md", mimeType: "text/markdown", text: "hello\nworld" }],
+    turnId: "doc-turn",
+    source: "cli",
+    endpoint: { baseUrl: "http://gateway", model: "m" },
+    fetchImpl,
+  });
+  assert.equal(result.reply, "Read it.");
+  const user = body?.messages.find((message) => message.role === "user");
+  const content = typeof user?.content === "string"
+    ? user.content
+    : Array.isArray(user?.content)
+      ? user.content.map((part) => (part as { text?: string }).text ?? "").join("\n")
+      : "";
+  assert.match(content, /<document name="notes\.md" media-type="text\/markdown">/);
+  assert.match(content, /hello\nworld/);
+  const record = (await readMainAgentTurnRecords(directory)).find((turn) => turn.id === "doc-turn");
+  assert.ok(record);
+  assert.match(record!.text, /\[attached documents: notes\.md \(11 characters\)\]/);
+  assert.doesNotMatch(record!.text, /hello\nworld/);
 });
 
 test("the native runtime is the only Main Agent runtime", () => {

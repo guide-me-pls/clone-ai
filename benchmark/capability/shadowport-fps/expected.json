@@ -1,0 +1,21 @@
+{
+  "note": "The public hook contract is part of the task: a benchmark that cannot inspect the game is not a benchmark. The prompt stays one paragraph; the workspace AGENTS.md carries the contract and the browser-verification instructions.",
+  "requiredFiles": [
+    "index.html",
+    "game.js",
+    "vendor/three.iife.js"
+  ],
+  "requiredHooks": [
+    "state",
+    "player",
+    "enemies",
+    "relays",
+    "begin",
+    "fire",
+    "interact"
+  ],
+  "minimumEnemies": 5,
+  "relayCount": 3,
+  "maxConsoleErrors": 0,
+  "allowExternalRequests": false
+}

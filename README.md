@@ -159,6 +159,21 @@ macOS 13.5 or later, and has only been built for Apple Silicon. The app starts w
 `~/Documents/Clone AI` as its default workspace; changing the workspace in Settings is
 persisted under `~/.clone`.
 
+Run `npm run hooks:install` once per clone. It points Git at the tracked `.githooks/`
+directory, where a pre-push hook rebuilds `dist/Clone AI.app` whenever a push to `main`
+touches `src/`, `apps/desktop/`, the package manifest, or the macOS build script. Quit and
+reopen a running window to load the new build. Skip one rebuild with
+`CLONE_AI_SKIP_APP_BUILD=1 git push`.
+
+Composer attachments accept up to 4 files: images and videos (5 MB each), PDF and
+`.docx` files (10 MB each), and text documents such as `.md`, `.txt`, `.csv`, `.json`,
+source and config files (50,000 characters each, 100,000 together). Pick them with the
+paperclip or drop them anywhere on the window. PDF and `.docx` text is extracted inside
+the turn; a scanned PDF needs OCR and is refused, a long document is truncated with a
+notice, and legacy `.doc` or other binary files are refused. A document reaches the
+model for that turn only; the turn ledger keeps its name and size, not its body, so a
+later question about it needs the file again.
+
 Clicking the red window button closes only the window; the local runtime keeps running.
 Click the Dock icon to show the window again. To stop the runtime, right-click the Dock
 icon and choose **Quit**.

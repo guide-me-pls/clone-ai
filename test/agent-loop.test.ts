@@ -515,3 +515,24 @@ test("an answer cut off by the output limit is a failure, not a completed turn",
   assert.equal(result.terminalReason, "model_error");
   assert.match(result.error ?? "", /cut off/);
 });
+
+test("a near-limit turn is told to wrap up and can answer", async () => {
+  const requests: AgentModelRequest[] = [];
+  const model = scriptedModel([
+    { content: "work", toolCalls: [call("t1", "noop")] },
+    { content: "work", toolCalls: [call("t2", "noop")] },
+    { content: "final", toolCalls: [] },
+  ], requests);
+  const result = await runAgentLoop({
+    model,
+    tools: [tool("noop", async () => ({ content: "ok" }))],
+    messages: [userMessage("build it")],
+    maxRounds: 3,
+  });
+  assert.equal(result.terminalReason, "completed");
+  assert.equal(result.reply, "workworkfinal");
+  const notice = requests[1]?.messages.find((message) => message.role === "system" && String(message.content).includes("Budget notice"));
+  assert.ok(notice, "the penultimate round should carry a budget notice");
+  assert.match(String(notice.content), /2 model round\(s\) remain/);
+  assert.match(String(notice.content), /Do not start new work/);
+});

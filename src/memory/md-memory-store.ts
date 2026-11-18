@@ -558,6 +558,63 @@ export class MdMemoryStore {
     return this.update(id, { status: "active" });
   }
 
+  /**
+   * Permanently removes one memory: both possible .md files, the index row,
+   * its search terms and weights, and its version history.
+   *
+   * Files go first. If the process dies between the unlink and the row delete,
+   * the next syncFromFiles() sees a row without a file and folds it into an
+   * archived entry — recoverable. In the other order an orphan .md would be
+   * re-added as a brand-new memory after its deletion was already recorded.
+   * Callers stage no mutation across this call: MemoryGovernance recovers every
+   * pending mutation before it deletes for real.
+   *
+   * 永久移除一条记忆：两个可能位置上的 .md 文件、索引行、检索词与权重，以及版本历史。
+   *
+   * 先删文件。若进程在 unlink 与删行之间死掉，下一次 syncFromFiles() 会看到没有文件的
+   * 行并把它折成归档条目——可恢复。反过来做，遗留的 .md 会在删除已被记录之后被当成新
+   * 记忆重新加入。调用方不会跨这次调用留下暂存变更：MemoryGovernance 在真正删除之前会
+   * 恢复所有待处理变更。
+   */
+  async remove(id: string): Promise<MemoryEntry | undefined> {
+    const entry = await this.get(id);
+    if (entry === undefined) return undefined;
+    for (const path of [this.memoryPath(id, "active"), this.memoryPath(id, "archived")]) {
+      try {
+        await unlink(path);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    this.#db.exec("BEGIN");
+    try {
+      // A staged mutation carries the memory id inside its JSON, not in a
+      // column, so the rows are matched by parsing them. Governance resolves
+      // every pending mutation before it deletes, but a direct store caller
+      // must not leave one that a later recovery would replay into a new row.
+      // 暂存变更把记忆 id 放在 JSON 里而不是列里，因此逐行解析匹配。治理层在删除前会先
+      // 解决所有待处理变更，但直接的 Store 调用方不能留下一条日后被恢复重放成新行的记录。
+      for (const row of this.#db.prepare("SELECT id, entry FROM memory_mutations").all() as Array<{ id: string; entry: string }>) {
+        let staged: unknown;
+        try {
+          staged = JSON.parse(row.entry);
+        } catch {
+          continue;
+        }
+        if ((staged as { entry?: { id?: unknown } }).entry?.id === id) this.#db.prepare("DELETE FROM memory_mutations WHERE id = ?").run(row.id);
+      }
+      this.#db.prepare("DELETE FROM memory_terms WHERE memory_id = ?").run(id);
+      this.#db.prepare("DELETE FROM memory_term_weights WHERE memory_id = ?").run(id);
+      this.#db.prepare("DELETE FROM memory_versions WHERE memory_id = ?").run(id);
+      this.#db.prepare("DELETE FROM memories WHERE id = ?").run(id);
+      this.#db.exec("COMMIT");
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+    return entry;
+  }
+
   /** Moves expired memories to archived and returns their ids. 把过期记忆归档并返回其 id。 */
   async expireDue(): Promise<string[]> {
     const now = new Date().toISOString();

@@ -251,6 +251,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   let rounds = 0;
   let terminalReason: AgentTerminalReason | undefined;
   let terminalError: string | undefined;
+  let budgetNoticeSent = false;
 
   await emit(options, { type: "turn_started", maxRounds });
 
@@ -273,6 +274,23 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       await emit(options, { type: "budget_exhausted", kind: "tokens", limit: options.maxTotalTokens });
       stop("budget_exhausted", `The turn reached its ${options.maxTotalTokens}-token budget.`);
       break;
+    }
+
+    // Reserve the tail of the round budget for a final answer. Without this a
+    // builder keeps polishing until the hard limit and is reported as a failure
+    // even when the artifact is complete. Two rounds remain: one to run the last
+    // essential check, one to answer.
+    // 为最终回答预留轮次尾部。没有这条，构建型任务会一直打磨到硬上限，即使工件已完成也会被判失败。
+    // 剩余两轮：一轮做最后的必要检查，一轮回答。
+    const remainingRounds = maxRounds - round;
+    if (!budgetNoticeSent && remainingRounds <= 2 && remainingRounds > 0) {
+      budgetNoticeSent = true;
+      messages.push({
+        role: "system",
+        content: `Budget notice: only ${remainingRounds} model round(s) remain before the hard limit. `
+          + "Stop exploring, editing and polishing now. Run only the essential final check, then answer with a concise "
+          + "summary of what was built, what was verified, and what remains unverified. Do not start new work.",
+      });
     }
 
     // Two consecutive compactions that remove nothing mean the newest turn alone

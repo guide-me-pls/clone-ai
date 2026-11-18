@@ -338,6 +338,10 @@ export type JournalEventType =
   | "memory.updated"
   | "memory.archived"
   | "memory.restored"
+  // A permanent deletion of an archived memory. The journal keeps the summary:
+  // the files and index rows go, the audit of what was there does not.
+  // 已归档记忆的永久删除。Journal 保留摘要：文件与索引行会消失，对"那里曾有什么"的审计不会。
+  | "memory.deleted"
   | "memory.mutation.discarded"
   | "memory.recalled"
   // The improvement loop: a suggestion derived from outcomes, and the owner's

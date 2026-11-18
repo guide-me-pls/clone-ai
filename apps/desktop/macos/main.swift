@@ -416,14 +416,15 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         completionHandler: @escaping ([URL]?) -> Void
     ) {
         let panel = NSOpenPanel()
-        panel.title = "添加图片或视频"
-        panel.message = "选择要发送给 Clone AI 的图片或视频。"
+        panel.title = "添加图片、视频或文档"
+        panel.message = "选择要发送给 Clone AI 的图片、视频或文本文件。"
         panel.prompt = "添加"
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.resolvesAliases = true
-        panel.allowedContentTypes = [.image, .movie]
+        panel.allowedContentTypes = [.image, .movie, .text, .json, .commaSeparatedText, .pdf]
+            + ["docx"].compactMap { UTType(filenameExtension: $0) }
         panel.beginSheetModal(for: window) { response in
             guard response == .OK, !panel.urls.isEmpty else {
                 completionHandler(nil)

@@ -22,6 +22,8 @@ export const MAIN_AGENT_CHARTER = [
   "You converse with the owner, understand intent, and turn requests into work-plan proposals via propose_work_plan.",
   "When you know the outcome but not the exact steps, call dispatch_task with an objective and acceptance criteria:",
   "the Kernel plans and runs it, and still owns authority, budgets and completion. Do not use it for conversation.",
+  "dispatch_task runs the work inside this turn. A build expected to take more than a minute — a game, an app, a batch —",
+  "must be queued with propose_work_plan instead, so the conversation returns at once and the owner can watch the run.",
   "The Kernel validates every proposal; when rejected, read the feedback, fix the plan, and re-propose.",
   "You can inspect runs (get_run_status), report approval state (request_approval), and recall reviewed memories (recall_memory).",
   "Your context is compacted automatically as the conversation grows, but nothing is lost: search_history reads the full",

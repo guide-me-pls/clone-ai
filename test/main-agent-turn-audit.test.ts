@@ -12,7 +12,7 @@ import {
   readMainAgentTurnRecords,
   recordMainAgentTurnInterrupted,
 } from "../src/main-agent/turn-audit.ts";
-import { loadTurnAudits, projectTurnAudits } from "../src/audit/turn-audit.ts";
+import { loadTurnAudits, projectTurnAudits, searchTurnAudits } from "../src/audit/turn-audit.ts";
 
 async function tempDir(t: TestContext): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-turn-audit-"));
@@ -165,6 +165,11 @@ test("loading turns is newest first and bounded", async (t) => {
     assert.equal(turns.length, 2);
     assert.equal(turns[0]!.input, "turn 2");
     assert.equal(turns[1]!.input, "turn 1");
+
+    const searched = await searchTurnAudits(journal, { limit: 2, query: "turn 1" });
+    assert.equal(searched.total, 1, "the total counts matches across every turn");
+    assert.equal(searched.turns[0]!.input, "turn 1");
+    assert.equal((await searchTurnAudits(journal, { query: "reply 2" })).total, 1, "the reply is searchable");
   } finally {
     (journal as { close?: () => void }).close?.();
   }

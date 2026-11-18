@@ -8,8 +8,8 @@
         "run",
         "companion:dev"
       ],
-      "port": 4319,
-      "url": "http://localhost:4319"
+      "port": 4317,
+      "url": "http://localhost:4317"
     }
   ]
 }

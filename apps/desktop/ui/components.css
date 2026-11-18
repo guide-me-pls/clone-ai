@@ -732,6 +732,14 @@ textarea:focus-visible {
 .memory-tool-row button.primary { border-color: var(--accent); color: #fff; background: var(--accent); }
 .memory-stat { border-color: var(--line); border-radius: 12px; background: var(--surface-raised); }
 .memory-stat b { color: var(--text); }
+/* The overview counts are filters, not decoration. A button keeps the same
+   tile shape; only the cursor and the pressed outline tell the owner it is one.
+   概览计数是筛选控件，不是装饰。按钮保持同样的卡片形状，只有指针与按下描边告诉
+   所有者它可以点。 */
+button.memory-stat { width: 100%; font: inherit; text-align: left; color: inherit; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+button.memory-stat:hover { border-color: var(--accent); }
+button.memory-stat[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+button.memory-stat:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .memory-match { border-left-color: #89ae99; background: #f3f7f4; }
 .context-active,
 .settings-card .settings-value { color: var(--accent); background: var(--accent-soft); }
@@ -1395,8 +1403,20 @@ body.empty-conversation .composer-wrap { padding-top: 0; padding-bottom: 24px; }
 .attachment-chip { position: relative; flex: 0 0 76px; height: 76px; overflow: hidden; border: 1px solid #e2e2e2; border-radius: 9px; background: #f7f7f5; }
 .attachment-chip img { width: 100%; height: 100%; object-fit: cover; }
 .attachment-chip button { position: absolute; top: 3px; right: 3px; display: grid; width: 20px; height: 20px; padding: 0; place-items: center; border: 0; border-radius: 50%; color: #fff; background: rgba(0,0,0,.62); cursor: pointer; }
+.attachment-chip.document { flex: 0 0 auto; width: auto; max-width: 200px; padding: 0 26px 0 10px; }
+.attachment-doc { display: flex; align-items: center; height: 100%; min-width: 0; gap: 8px; color: #4b4f49; }
+.attachment-doc svg { flex: 0 0 22px; width: 22px; height: 22px; }
+.attachment-doc-text { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.attachment-doc-text b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.attachment-doc-text small { color: #8a8d87; font-size: 9.5px; }
 .message-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .message-attachments img { width: 120px; max-height: 120px; object-fit: cover; border: 1px solid #e5e5e5; border-radius: 8px; }
+.message-attachment-doc { display: flex; align-items: center; max-width: 220px; gap: 6px; padding: 6px 9px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fafaf8; color: #4b4f49; }
+.message-attachment-doc svg { flex: 0 0 18px; width: 18px; height: 18px; }
+.message-attachment-doc span { display: flex; flex-direction: column; min-width: 0; }
+.message-attachment-doc b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.message-attachment-doc small { color: #8a8d87; font-size: 9.5px; }
+body.dragging-files .composer { outline: 2px dashed #9aa39a; outline-offset: 3px; background: #fbfbf9; }
 .composer-hint {
   margin-top: 5px;
   color: #b1b4ae;

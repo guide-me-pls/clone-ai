@@ -67,7 +67,7 @@ export function projectTurnAudits(events: readonly JournalEvent[]): MainAgentTur
         status: "started",
         input: typeof payload.input === "string" ? payload.input : "",
         ...(payload.inputTruncated === true ? { inputTruncated: true } : {}),
-        ...(typeof payload.startedAt === "string" ? { startedAt: payload.startedAt } : { startedAt: event.occurredAt }),
+        ...(typeof payload.startedAt === "string" && Number.isFinite(Date.parse(payload.startedAt)) ? { startedAt: payload.startedAt } : { startedAt: event.occurredAt }),
         ...(typeof payload.sessionFile === "string" ? { sessionFile: payload.sessionFile } : {}),
         ...(typeof payload.modelId === "string" ? { modelId: payload.modelId } : {}),
         ...(typeof payload.provider === "string" ? { provider: payload.provider } : {}),
@@ -85,7 +85,9 @@ export function projectTurnAudits(events: readonly JournalEvent[]): MainAgentTur
       source: typeof payload.source === "string" ? payload.source : "unknown",
       status: "started",
       input: "",
-      startedAt: typeof payload.startedAt === "string" ? payload.startedAt : event.occurredAt,
+      startedAt: typeof payload.startedAt === "string" && Number.isFinite(Date.parse(payload.startedAt))
+        ? payload.startedAt
+        : event.occurredAt,
       toolCalls: [],
     };
     byId.set(turnId, {
@@ -104,15 +106,39 @@ export function projectTurnAudits(events: readonly JournalEvent[]): MainAgentTur
   return [...byId.values()];
 }
 
+/**
+ * Project, filter and sort turns newest first. The query is a case-insensitive
+ * substring over the visible fields, so the desktop search covers the whole
+ * journal instead of only the page it already loaded.
+ * 投影、过滤并按新的在前排序回合。查询是对可见字段的不区分大小写子串搜索，因此桌面搜索
+ * 覆盖整个 Journal，而不只是已加载的一页。
+ */
+export async function searchTurnAudits(
+  journal: JournalStore,
+  options: { limit?: number; query?: string } = {},
+): Promise<{ turns: MainAgentTurnAudit[]; total: number }> {
+  const needle = (options.query ?? "").trim().toLowerCase();
+  const turns = projectTurnAudits(await journal.list())
+    .filter((turn) => needle.length === 0 || matchesTurnQuery(turn, needle))
+    .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt));
+  const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
+  return { turns: turns.slice(0, limit), total: turns.length };
+}
+
 export async function loadTurnAudits(
   journal: JournalStore,
-  options: { limit?: number } = {},
+  options: { limit?: number; query?: string } = {},
 ): Promise<MainAgentTurnAudit[]> {
-  const turns = projectTurnAudits(await journal.list());
-  const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
-  return turns
-    .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))
-    .slice(0, limit);
+  return (await searchTurnAudits(journal, options)).turns;
+}
+
+function matchesTurnQuery(turn: MainAgentTurnAudit, needle: string): boolean {
+  const fields: Array<string | undefined> = [
+    turn.turnId, turn.source, turn.status, turn.input, turn.reply, turn.error,
+    turn.modelId, turn.provider, turn.effort,
+    ...turn.toolCalls.flatMap((call) => [call.name, call.inputSummary]),
+  ];
+  return fields.some((field) => field !== undefined && field.toLowerCase().includes(needle));
 }
 
 function parseToolCall(value: unknown): MainAgentTurnToolCall[] {

@@ -126,6 +126,19 @@ npm run desktop:mac:build
 Apple Silicon 版本。应用默认以 `~/Documents/Clone AI` 作为工作目录，在设置中改变后会
 保存在 `~/.clone`。
 
+每个克隆运行一次 `npm run hooks:install`。它让 Git 使用仓库内纳入版本管理的
+`.githooks/`；其中的 pre-push 钩子会在推送 `main` 且改动涉及 `src/`、`apps/desktop/`、
+包清单或 macOS 打包脚本时重新打包 `dist/Clone AI.app`。重新打包后请退出并重新打开正在
+运行的应用窗口，才会加载新构建。单次跳过可用
+`CLONE_AI_SKIP_APP_BUILD=1 git push`。
+
+输入框的附件最多 4 个：图片与视频（各 5MB），PDF 与 `.docx`（各 10MB），以及 `.md`、
+`.txt`、`.csv`、`.json`、源码与配置文件等文本文档（每个 50,000 字符，合计 100,000
+字符）。可用回形针选择，也可拖入窗口任意处。PDF 与 `.docx` 的正文在回合内提取；扫描件
+PDF 需要 OCR，会被拒绝；长文档会截断并提示；旧式 `.doc` 或其他二进制文件会被拒绝。
+文档只在本回合交给模型；回合台账只保留文件名与大小，不保留正文，因此之后追问文档内容
+需要重新附上文件。
+
 点击窗口左上角红色关闭按钮只会关闭窗口，本地运行时继续工作；再次点击 Dock 图标即可
 显示窗口。要停止运行时，请右键点击 Dock 中的 Clone AI 图标并选择“退出”。
 

@@ -434,7 +434,13 @@ export async function recordMainAgentTurnInterrupted(
   if (existing?.status === "completed" || existing?.status === "failed" || existing?.status === "interrupted") {
     return existing;
   }
-  const startedAt = existing?.startedAt ?? input.startedAt ?? new Date().toISOString();
+  // A client-supplied start time is only usable when it parses; a garbled value
+  // would poison every newest-first sort that reads this turn.
+  // 客户端提供的开始时间只有在可解析时才可用；乱码值会破坏所有读取该回合的"新的在前"排序。
+  const requested = typeof input.startedAt === "string" && Number.isFinite(Date.parse(input.startedAt))
+    ? input.startedAt
+    : undefined;
+  const startedAt = existing?.startedAt ?? requested ?? new Date().toISOString();
   const completedAt = new Date().toISOString();
   const capped = redactAndCap(input.error, 4_000);
   let journal: JournalStore | undefined;

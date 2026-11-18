@@ -1,0 +1,97 @@
+{
+  "benchmark": "shadowport-fps",
+  "workspace": "<repo>/eval-runs/2026-11-18-shadowport-clean2/ws",
+  "port": 8140,
+  "at": "2026-11-18T04:54:44.825Z",
+  "checks": [
+    {
+      "id": "file.index.html",
+      "ok": true,
+      "detail": "index.html"
+    },
+    {
+      "id": "file.game.js",
+      "ok": true,
+      "detail": "game.js"
+    },
+    {
+      "id": "file.vendor/three.iife.js",
+      "ok": true,
+      "detail": "vendor/three.iife.js"
+    },
+    {
+      "id": "classic-script",
+      "ok": true,
+      "detail": "no ES module entry"
+    },
+    {
+      "id": "local-three",
+      "ok": true,
+      "detail": "global THREE from the workspace"
+    },
+    {
+      "id": "hook",
+      "ok": true,
+      "detail": "state,player,enemies,relays,begin,pause,resume,fire,reload,interact,nearTarget,endGame"
+    },
+    {
+      "id": "start",
+      "ok": true,
+      "detail": "{\"phase\":\"playing\",\"health\":100,\"ammo\":30,\"enemies\":8,\"relays\":3,\"x\":0,\"z\":27}"
+    },
+    {
+      "id": "enemies",
+      "ok": true,
+      "detail": "8 alive"
+    },
+    {
+      "id": "relays",
+      "ok": true,
+      "detail": "3 relays"
+    },
+    {
+      "id": "movement",
+      "ok": true,
+      "detail": "moved 2.73 m"
+    },
+    {
+      "id": "shot",
+      "ok": true,
+      "detail": "{\"fired\":true,\"before\":{\"hp\":100,\"ammo\":30},\"after\":{\"hp\":-10,\"ammo\":29}}"
+    },
+    {
+      "id": "damage",
+      "ok": true,
+      "detail": "100 -> -10"
+    },
+    {
+      "id": "relays-cut",
+      "ok": true,
+      "detail": "[true,true,true]"
+    },
+    {
+      "id": "extraction",
+      "ok": true,
+      "detail": "phase=ended"
+    },
+    {
+      "id": "debrief",
+      "ok": true,
+      "detail": "end screen visible"
+    },
+    {
+      "id": "console",
+      "ok": true,
+      "detail": "0 error(s)"
+    },
+    {
+      "id": "external-requests",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "passed": true,
+  "screenshot": "<repo>/benchmark/capability/shadowport-fps/verify/out/shadowport.png",
+  "errors": [],
+  "externalRequests": []
+}

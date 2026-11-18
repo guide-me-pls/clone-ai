@@ -11,6 +11,65 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 归档记忆集是一个控件，而且可以清理
+
+- **主张：** 记忆面板的「已归档」计数现在点一下就把列表筛到归档集；一条归档记忆可以永久删除——两个可能位置的 `.md`、索引行、检索词、权重、版本与暂存变更——并在删除文件之前把决定连同摘要记为 `memory.deleted`。使用中的记忆必须先归档，使唯一不可逆的记忆动作离默认视图保持一步。
+- **证据：** `node --experimental-strip-types --test test/md-memory-store.test.ts test/memory-governance.test.ts test/memory-library-api.test.ts test/regression/memory-refresh-focus.test.ts` —— **48/48**。API 用例证明归档→200、使用中→409、未知→404、第二次 DELETE→404、`.md` 消失且没有残留行；存储用例证明 `syncFromFiles()` 不会复活已删除的记忆。`npm test` **734/734**，`npm run typecheck` 通过，`npm run gate` **PASS**（13 个用例、一致率 100%、基线未变）。在隔离的 `CLONE_AI_HOME=/tmp/clone-ai-preview-home` 中，浏览器流程创建 → 归档 → 点击「已归档」 → 删除，最终没有任何 `.md` 文件、`stats 0/0`、一条 `memory.deleted` 事件，归档卡片切换 `aria-pressed`，归档行出现「删除」。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--已归档的记忆可以永久删除且必须先归档)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--归档记忆点一下就能看到也可以永久删除)。
+
+## 2026-11-18 —— PDF 或 .docx 在回合内变成文本
+
+- **主张：** PDF 与 `.docx` 附件在进程内提取，并在该回合以有边界的文本块交给模型，沿用
+  文本文档的 50,000/100,000 字符上限。扫描 PDF 与旧式 `.doc` 会带原因拒绝；超长文档会
+  截断并写入标记、完成后提示。不向磁盘写任何内容，台账只保留文件名/大小。
+- **证据：** `node --experimental-strip-types --test test/attachments.test.ts
+  test/document-extract.test.ts test/native-main-agent.test.ts
+  test/desktop-shell.test.ts` —— 28/28。夹具 `sample.pdf.b64`、`sample.docx.b64`、
+  `scanned.pdf.b64`：文本 PDF 与 `.docx` 提取出预期句子（实体已解码）；纯图片 PDF 以
+  OCR 提示拒绝；20 字符预算产生截断标记与 report；损坏的 `.docx` 被拒绝。聚焦测试
+  28/28；typecheck 与 `npm run gate` 通过。并发 `companion:dev` 占用 4318 端口之前，全量
+  测试为 727/727；之后一次为 731/733，两个失败是该端口上无关的 WhatsApp 网桥
+  `EADDRINUSE`。打包产物自带的 Node 从 `dist/…/runtime` 提取了两份夹具（unpdf 4.1MB）；
+  重建后的 App 输入框显示两个文档 chip，并发出两条 `{kind:"document", data}`。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--pdf-与-docx-在回合之前提取而不是交给模型直接读)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--pdf-与-docx-在模型看到之前变成文本)。
+
+## 2026-11-18 —— 调用审计可搜索、可清理，且不丢证据
+
+- **主张：** **Agent 调用** 标签页在服务端搜索整个共享调用账本，显示 `显示 N / 共 M 条`，
+  并能用可逆墓碑隐藏记录（单条，或已加载的筛选结果）；**含已删除** 可把它们找回来。
+  **主 Agent 回合** 标签页也增加了服务端搜索框。
+- **证据：** `node --experimental-strip-types --test test/invocation-ledger.test.ts
+  test/companion-control-plane.test.ts` —— 10/10 与 15/15；实现前账本测试在导入时失败
+  （`does not provide an export named 'markInvocations'`）。完成后全量测试 735/735 通过。
+  在预览服务器占用 4318 端口期间有一次运行为 733/734，唯一失败是无关的 WhatsApp 桥
+  `EADDRINUSE`；端口释放后复跑为 735/735。在 Browser 面板里用真实
+  账本验证：`只回复 ok` 把 23 条收窄到 3 条并恢复焦点；删除一条后剩 2 条；勾选**含已删除**
+  后它以「已删除」徽标出现，恢复后回到 3 条且无删除标记。账本文件里该 id 的
+  `started`、`completed`、`deleted`、`restored` 齐全，请求原文完好。回合搜索 `故宫`
+  由服务端返回 8 条中的 3 条。用 520 条种子账本验证：最旧记录仍可按 id 打开，而列表页在
+  500 处截断；带空白的 id 会被裁剪，500 字符的 id 返回 400。浏览器里隐藏 → 恢复一个来回，
+  先显示「另有 1 条已隐藏」，恢复后回到 23/23 且无删除标记。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--删除审计里的-agent-调用是墓碑而不是抹掉账本行)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--agent-调用审计可搜索可软删除)。
+
+## 2026-11-18 —— 文本文档随回合移动，而不是进台账
+
+- **主张：** 输入框支持从选择器或全窗口拖入文本文档；模型在该回合收到一个有边界的数据块，
+  而回合台账与历史只保留文件名/大小清单。上限是 4 个附件、每个文档 50,000 字符、合计
+  100,000 字符；PDF 与二进制文件会带原因拒绝。
+- **证据：** `node --experimental-strip-types --test test/attachments.test.ts
+  test/native-main-agent.test.ts` —— 18/18。原生用例捕获 Provider 请求，断言文档正文出现在
+  `<document name="notes.md" media-type="text/markdown">` 中，而
+  `readMainAgentTurnRecords` 只有 `[attached documents: notes.md (11 characters)]`。
+  `npm test` 715/715、`npm run typecheck` 通过、`npm run gate` PASS 且 baseline 不变。
+  在重建 App 的环回服务器上，选择 `notes.md`、拖入 `todo.txt` 与 PNG，得到两个文档 chip 与
+  一个图片 chip；被截获的流请求同时带两份文本正文（`kind:"document"`）与图片 base64，
+  发送后输入框清空。无控制台错误；没有发起模型调用。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--文本文档以内联方式随消息发送pdf-与跨回合文档暂缓)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--文本文档随回合内联不写进工作区)。
+
 ## 2026-11-17 — 细节成为可测量的要求，渲染画面终于体现出来
 
 - **主张：** 故宫基准用计数构件与声明的阴影状态来评建筑细节，而不是任何满足数据契约的渲染都放过；

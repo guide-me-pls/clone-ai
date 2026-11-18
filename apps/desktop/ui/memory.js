@@ -163,7 +163,7 @@
             ? `<button type="button" class="mem-btn" data-mem-undo="${escape(item.id)}">撤销上一次修改</button>`
             : ""}
           ${item.status === "archived"
-            ? `<button type="button" class="mem-btn" data-mem-status="${escape(item.id)}" data-mem-next="active">恢复使用</button>`
+            ? `<button type="button" class="mem-btn" data-mem-status="${escape(item.id)}" data-mem-next="active">恢复使用</button><button type="button" class="mem-btn mem-btn-danger" data-mem-delete="${escape(item.id)}">删除</button>`
             : `<button type="button" class="mem-btn" data-mem-status="${escape(item.id)}" data-mem-next="archived">归档</button>`}
         </div>
       </div>
@@ -185,6 +185,15 @@
       </summary>
       <div class="mem-group-body">${group.items.map(row).join("")}</div>
     </details>`;
+  }
+
+  /** The overview cards are controls: reflect the active filter on them. 概览卡片是控件：让它们反映当前筛选。 */
+  function syncOverview() {
+    const overview = document.getElementById("library-overview");
+    if (overview === null) return;
+    for (const button of overview.querySelectorAll("[data-memory-filter]")) {
+      button.setAttribute("aria-pressed", button.dataset.memoryFilter === state.status ? "true" : "false");
+    }
   }
 
   function render(options = {}) {
@@ -218,13 +227,14 @@
         <span class="mem-count">${visible.length}/${memories.length} 条 · ${groups.length} 组</span>
       </div>
       ${conflicts}
-      <div class="mem-groups">${groups.length ? groups.map((group) => groupBlock(group, searching)).join("") : `<div class="mem-empty">${memories.length ? "没有符合筛选的记忆。" : "记忆库还是空的。写下一条你希望分身长期记住的偏好、边界或事实——它会成为一个你随时可以打开和修改的 .md 文件。"}</div>`}</div>`;
+      <div class="mem-groups">${groups.length ? groups.map((group) => groupBlock(group, searching)).join("") : `<div class="mem-empty">${memories.length ? (state.status === "archived" ? "没有已归档的记忆。归档会让记忆退出召回，但文件仍保留——随时可以恢复或删除。" : "没有符合筛选的记忆。") : "记忆库还是空的。写下一条你希望分身长期记住的偏好、边界或事实——它会成为一个你随时可以打开和修改的 .md 文件。"}</div>`}</div>`;
     // Handing the same library back to this view must not touch the DOM: a real
     // innerHTML assignment replaces the whole subtree, detaching the input the
     // owner is typing into and discarding an unsaved edit. Only a changed picture
     // is worth painting.
     // 把同一份 library 再交给本视图时不得触碰 DOM：真实的 innerHTML 赋值会替换整棵子树，
     // 摘下所有者正在输入的输入框，并丢弃未保存的编辑。只有内容真的变了才值得重绘。
+    syncOverview();
     if (state.paintedAt === root && state.painted === markup) return;
     state.paintedAt = root;
     state.painted = markup;
@@ -275,6 +285,26 @@
     }
   }, true);
 
+  // The counts above the list are controls, not decoration: the archived set is
+  // one click away instead of hidden behind the status select. Those cards are
+  // rendered by the main client, so this listener deliberately does not require
+  // #memory-root containment.
+  // 列表上方的计数是控件而不是装饰：归档集点一下就能看到，而不是藏在状态选择框后面。
+  // 卡片由主客户端渲染，因此这个监听器刻意不要求位于 #memory-root 内。
+  document.addEventListener("click", (event) => {
+    const t = event.target;
+    if (!(t instanceof Element)) return;
+    const filter = t.closest("[data-memory-filter]");
+    if (filter !== null) {
+      state.status = filter.dataset.memoryFilter;
+      render();
+      host()?.scrollIntoView({ block: "start", behavior: "smooth" });
+      return;
+    }
+    const focus = t.closest("[data-memory-focus]");
+    if (focus !== null) document.getElementById(focus.dataset.memoryFocus)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  });
+
   document.addEventListener("click", async (event) => {
     const t = event.target;
     if (!(t instanceof Element) || !host()?.contains(t)) return;
@@ -297,9 +327,34 @@
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ summary: memory.summary, content: memory.content, type: memory.type, sensitivity: memory.sensitivity, status: el.dataset.memNext }),
         });
-        state.signatures.library = null;
+        // The library itself changed, so the main client's signature differs and
+        // the overview repaints on the next refresh. `state` here is this view's
+        // own object; the `state.signatures` write that used to sit here threw a
+        // TypeError and swallowed the success path.
+        // 记忆库本身变了，主客户端的签名因此不同，概览会在下一次 refresh 时重绘。这里的
+        // `state` 是本视图自己的对象；原先这里的 `state.signatures` 写入会抛 TypeError 并
+        // 吞掉成功路径。
         await refresh();
         announce(el.dataset.memNext === "archived" ? "记忆已归档。" : "记忆已恢复使用。");
+      } catch (error) { announce(error.message, true); }
+      return;
+    }
+    if ((el = pick("[data-mem-delete]"))) {
+      const id = el.dataset.memDelete;
+      const memory = (state.library?.memories || []).find((item) => item.id === id);
+      if (memory === undefined) return;
+      // Deletion is irreversible; the archive step before it is the undoable
+      // one. The confirmation says both facts instead of only "are you sure".
+      // 删除不可逆；它之前的归档步骤才是可撤销的那一步。确认框把两件事都说明，而不是只问
+      // "确定吗"。
+      if (!(await confirmDialog(`永久删除“${memory.summary}”？这会移除它的 .md 文件、检索索引和版本记录，无法撤销。`, "永久删除"))) return;
+      try {
+        await api(`/api/memory/governed/${encodeURIComponent(id)}`, { method: "DELETE" });
+        state.details.delete(id);
+        state.open.delete(id);
+        state.editing.delete(id);
+        await refresh();
+        announce("记忆已永久删除。");
       } catch (error) { announce(error.message, true); }
       return;
     }
@@ -312,7 +367,6 @@
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ undo: true }),
         });
-        state.signatures.library = null;
         state.details.delete(id);
         await refresh();
         announce("已撤销上一次修改。");

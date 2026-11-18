@@ -38,6 +38,8 @@
 .mem-btn:hover { background: var(--surface-hover, #f1f4f9); }
 .mem-btn-primary { background: #20242c; border-color: #20242c; color: #fff; }
 .mem-btn-primary:hover { background: #2c323c; }
+.mem-btn-danger { border-color: #e3b4ae; color: #b42318; }
+.mem-btn-danger:hover { background: #fdf2f0; }
 .mem-editor { display: grid; gap: 8px; margin-bottom: 10px; }
 .mem-input, .mem-textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong, #ccd4df); border-radius: 8px; font: inherit; background: var(--surface, #fff); color: inherit; }
 .mem-textarea { resize: vertical; line-height: 1.6; }
