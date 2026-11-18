@@ -6,71 +6,38 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
-## 2026-11-18 — Paired halls may live under props, and the grader looks there
+## 2026-11-18 — The owner's message renders through the markdown path
 
-**Decision.** The symmetry check accepts a paired hall found either in
-`model.buildings` or in `model.props.sideHalls` / `model.props.buildings`, as
-long as both members of the pair carry mirrored positions.
-
-**Alternatives rejected.**
-
-- *Require every building in `buildings`.* The contract says `buildings` is the
-  axial roster; a page that keeps the ten axis halls there and exposes the
-  flanking halls under `props` is following the contract, and run `18569eb4`
-  did exactly that. Failing it graded an array layout, not symmetry.
-- *Add the pair to `buildings` regardless.* That would forbid a legitimate
-  representation and make `namedHallCount` ambiguous.
-
-**Evidence.** Run `18569eb4` added 体仁阁/弘义阁 at x = ∓150, z = 235 with
-`symmetryPair` pointing at each other, under `props.sideHalls`; the check still
-reported "体仁阁/弘义阁 absent" because it only searched `buildings`. After the
-lookup change the same workspace passes 28/28.
-
-**What it costs.** The grader now accepts two shapes, so a page that splits
-buildings across both arrays is harder to reason about; the check tolerates it
-rather than enforcing one layout.
-
-**Reversal condition.** If the contract is tightened to a single `buildings`
-roster, remove the props lookup and state the requirement in the prompt.
-
-## 2026-11-18 — The default view is graded on composition, not only on data
-
-**Decision.** The interactive checker measures how much of the frame height the
-hero hall (太和殿) covers from `getForbiddenCityView()` at load, and requires at
-least 25%; the eval prompt states the same rule. The measurement projects the
-hall's eight corners with the page's own camera numbers (forward/right/up derived
-from position and target, `fovDeg` for the frustum), so it cannot pass by
-reporting a camera the page does not use.
+**Decision.** `messageMarkup` renders both the owner's and the agent's messages
+with `richText`, and the optimistic echo uses the same function. The markdown
+block styles (`.md-heading`, `.md-list-line`) are extended from `.clone-text` to
+`.message-copy`.
 
 **Alternatives rejected.**
 
-- *Grade only the model data and the interaction APIs.* Run `4ce0db3d` passed
-  26/27 by those measures and still looked like a floor plan: the default camera
-  sat 820 m away and 28° up, so 太和殿 covered 9% of the frame height. The
-  owner's complaint ("跟一个平面图一样") was about exactly this, and no check
-  could see it.
-- *Judge the screenshot with a vision model.* Non-deterministic, costs a model
-  call per grading, and would need its own calibration; the projection is exact
-  and free.
-- *Require a fixed camera position.* That grades one author's taste instead of
-  the observable property (the hall fills the frame), and forbids equally good
-  compositions from other angles.
-- *Set the threshold at 50%.* At `fovDeg` 42 a 35 m hall at 50% would have to be
-  within ~90 m, which hides the courtyards and walls that make the scene read as
-  the Forbidden City; 25% keeps the city as context while making the hall the
-  subject.
+- *Leave owner messages escaped with `<br>`.* A pasted task brief showed its
+  `#`, `**`, backticks and list markers literally, which is what made the
+  sent bubble look wrong next to the agent's rendered reply.
+- *Add a "preview" toggle.* Pasting a brief is the common case; making the
+  readable form a second click hides the problem instead of fixing it.
+- *Write a second renderer for owner text.* `richText` already escapes its input
+  before adding markup, which is the security property owner-authored text
+  needs; a second implementation would drift.
 
-**Evidence.** `4ce0db3d` graded 26/27 before this check; the same workspace then
-measured `hero covers 9.0% of frame height, inside=true` with the new check. The
-screenshot at that view shows the axis as a thin strip in a large empty plaza.
+**Evidence.** The owner pasted a multi-section Forbidden City brief (headings,
+inline code, bold, lists) and the sent bubble displayed the literal markdown
+while the agent's replies rendered normally. `richText`
+(`apps/desktop/ui/app.js:1348`) is the same renderer used for replies and
+escapes first; the block styles existed only under `.clone-text`.
 
-**What it costs.** A model that composes a wide establishing shot now fails
-until it moves the default camera closer; the prompt has to say so, or the
-requirement reads as a hidden rule.
+**What it costs.** Owner text is no longer visually byte-exact: headings grow,
+list markers become bullets, code gets a background, and blank-line spacing can
+compress. Selecting the bubble still yields the rendered text. A message is
+HTML-escaped before any markup is added, so injection is not possible.
 
-**Reversal condition.** If owners prefer a wide establishing view by default,
-lower the threshold or grade the closest of the three required screenshots
-instead of the load-time view.
+**Reversal condition.** If an owner needs the exact raw text, add an explicit
+"show raw" toggle rather than removing the renderer. If rendering distorts short
+plain replies, scope it to messages with a heading, list, fence or bold span.
 
 ## 2026-11-18 — Maintenance automation runs in its own clone home
 
@@ -83,7 +50,10 @@ is seeded once with the small config files (`config.json`, `settings.json`,
 `providers.json`, `mcp.json`, `policies.json`), never the journal, memory,
 sessions, turn ledger, token, endpoint or locks; `CLONE_AI_AUTOMATION_REFRESH=1`
 re-seeds them. The repair lane still reads failed traces from the owner's home,
-read-only.
+read-only. `scripts/companion-dev.mjs` falls back to `.automation/preview` when
+no home is supplied, so the preview launch config keeps working without an
+explicit variable, and refuses `~/.clone` unless
+`CLONE_AI_ALLOW_OWNER_HOME=1`.
 
 **Alternatives rejected.**
 
@@ -190,6 +160,72 @@ launchd (a healthy published endpoint probed before deciding), use that and drop
 the `launchctl` call. If the installer can launch the window with the
 environment variable set, set it there and keep this detection only as a
 fallback.
+
+## 2026-11-18 — Paired halls may live under props, and the grader looks there
+
+**Decision.** The symmetry check accepts a paired hall found either in
+`model.buildings` or in `model.props.sideHalls` / `model.props.buildings`, as
+long as both members of the pair carry mirrored positions.
+
+**Alternatives rejected.**
+
+- *Require every building in `buildings`.* The contract says `buildings` is the
+  axial roster; a page that keeps the ten axis halls there and exposes the
+  flanking halls under `props` is following the contract, and run `18569eb4`
+  did exactly that. Failing it graded an array layout, not symmetry.
+- *Add the pair to `buildings` regardless.* That would forbid a legitimate
+  representation and make `namedHallCount` ambiguous.
+
+**Evidence.** Run `18569eb4` added 体仁阁/弘义阁 at x = ∓150, z = 235 with
+`symmetryPair` pointing at each other, under `props.sideHalls`; the check still
+reported "体仁阁/弘义阁 absent" because it only searched `buildings`. After the
+lookup change the same workspace passes 28/28.
+
+**What it costs.** The grader now accepts two shapes, so a page that splits
+buildings across both arrays is harder to reason about; the check tolerates it
+rather than enforcing one layout.
+
+**Reversal condition.** If the contract is tightened to a single `buildings`
+roster, remove the props lookup and state the requirement in the prompt.
+
+## 2026-11-18 — The default view is graded on composition, not only on data
+
+**Decision.** The interactive checker measures how much of the frame height the
+hero hall (太和殿) covers from `getForbiddenCityView()` at load, and requires at
+least 25%; the eval prompt states the same rule. The measurement projects the
+hall's eight corners with the page's own camera numbers (forward/right/up derived
+from position and target, `fovDeg` for the frustum), so it cannot pass by
+reporting a camera the page does not use.
+
+**Alternatives rejected.**
+
+- *Grade only the model data and the interaction APIs.* Run `4ce0db3d` passed
+  26/27 by those measures and still looked like a floor plan: the default camera
+  sat 820 m away and 28° up, so 太和殿 covered 9% of the frame height. The
+  owner's complaint ("跟一个平面图一样") was about exactly this, and no check
+  could see it.
+- *Judge the screenshot with a vision model.* Non-deterministic, costs a model
+  call per grading, and would need its own calibration; the projection is exact
+  and free.
+- *Require a fixed camera position.* That grades one author's taste instead of
+  the observable property (the hall fills the frame), and forbids equally good
+  compositions from other angles.
+- *Set the threshold at 50%.* At `fovDeg` 42 a 35 m hall at 50% would have to be
+  within ~90 m, which hides the courtyards and walls that make the scene read as
+  the Forbidden City; 25% keeps the city as context while making the hall the
+  subject.
+
+**Evidence.** `4ce0db3d` graded 26/27 before this check; the same workspace then
+measured `hero covers 9.0% of frame height, inside=true` with the new check. The
+screenshot at that view shows the axis as a thin strip in a large empty plaza.
+
+**What it costs.** A model that composes a wide establishing shot now fails
+until it moves the default camera closer; the prompt has to say so, or the
+requirement reads as a hidden rule.
+
+**Reversal condition.** If owners prefer a wide establishing view by default,
+lower the threshold or grade the closest of the three required screenshots
+instead of the load-time view.
 
 ## 2026-11-18 — The installed daemon resolves the workspace the app uses
 
@@ -301,6 +337,57 @@ round limit stops it.
 the default and make the planner emit `maxModelCalls` on each step; if runs
 still stop at 40 while producing, raise it only together with a duration budget
 that covers the extra rounds.
+
+## 2026-11-18 — Approvals live in the main conversation; child tasks collapse under it
+
+**Decision.** Every `waiting_approval` run is confirmed from the Main Agent
+conversation, not from its own task record. The main conversation aggregates the
+pending approvals of all visible runs, each with its task title and a
+confirm/reject pair that posts to that run's id; a child task record shows a
+pointer back to the main conversation instead of a second set of buttons. The
+main conversation also aggregates the visible subagents into its collapsible
+Agent 协作 card. In the sidebar, derived child runs are grouped under the
+conversation that spawned them inside a collapsed `<details>` block; its summary
+shows the count and running/failed split, and expanding reveals the child rows.
+
+**Alternatives rejected.**
+
+- *Keep approvals inside each child task.* The owner has to hunt through task
+  records to find what needs a decision, and the main conversation looks finished
+  while a run waits. The screenshot this change answers showed a task record
+  with "需确认" steps and no single control surface.
+- *Put approvals in a global Settings/Audit inbox.* It separates the decision
+  from the conversation and the task context; the Main Agent conversation is
+  already the owner's control surface.
+- *Flatten all child tasks in the sidebar.* With 11 tasks the list reads as
+  siblings of the conversation; the parent/child relation is lost.
+- *Auto-approve low-risk steps.* External actions still cross the authority
+  boundary; the owner's explicit decision stays mandatory.
+
+**Evidence.** `buildMainAgentConversation` returns `approvals: []`,
+`buildSession` returns one approval per run, and `approvalMarkup` posts to
+`session.id`; on the main conversation that id is `main-agent-conversation`, so
+the existing card cannot approve a child run. `renderSessions` already knows
+`parentId` and `childCount` but flattens children into the today/earlier groups.
+The eval is deterministic: a server-side test that the main conversation view
+carries a pending approval with the run id, and a UI contract test for the
+aggregated approval card and the collapsible child group; `npm test`, typecheck
+and the regression gate.
+
+**What it costs.** The main conversation can show several approvals at once
+(capped by the dashboard's visible runs); approving from there reveals the task
+title but not the step detail in the child record, so a pointer link remains.
+Child task records lose their inline action and need one navigation. The sidebar
+group needs remembered open state per parent; its count can lag until refresh
+(the normal session refresh cadence).
+
+**Reversal condition.** If approvals need step-level context that a title cannot
+carry, add a per-run "open task" link beside the main card before restoring task-local
+buttons. If the child list grows beyond a readable count, add filtering or a
+dedicated task list instead of an unbounded details block. If owners report that
+the main card is too far from the task they are reading, restore a single
+read-only reminder in the child record while keeping the decision in the main
+conversation.
 
 ## 2026-11-18 — OCR and legacy .doc go through a native macOS helper
 

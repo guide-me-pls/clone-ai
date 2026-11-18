@@ -40,11 +40,17 @@ same rule.
 相机下太和殿只占画面高度的 9.0%。交互检查器现在按页面报告的相机投影主殿角点，要求占画面
 高度至少 25% 且完整落在画面内；评测提示词写明同一条规则。
 
+### The owner's messages render Markdown
+
+A pasted task brief used to arrive as literal `#`, `**` and backtick text. Owner messages now go through the same renderer as the agent's replies — headings, lists, inline code, fenced code and bold — while staying HTML-escaped first. The optimistic echo uses the same path, so the bubble does not change appearance when the server confirms it.
+
+粘贴的任务说明过去会原样显示 `#`、`**` 与反引号。所有者消息现在和 Agent 回复走同一个渲染器——标题、列表、行内代码、围栏代码与粗体——并且仍然先做 HTML 转义。本地乐观回显也走同一路径，服务端确认后外观不会跳变。
+
 ### Automation runs in its own clone home
 
-Repair, nightly RSI and eval companions no longer share the owner's `~/.clone`. They resolve `<repo>/.automation/<purpose>` (or `CLONE_AI_AUTOMATION_HOME`), seed only `config.json`/`settings.json`/`providers.json`/`mcp.json`/`policies.json`, and refuse the live home unless `CLONE_AI_ALLOW_OWNER_HOME=1`. The repair lane still reads failed traces from the owner's home, read-only; reports, consumed-trace state and locks live in the isolated home. `scripts/companion-dev.mjs` now requires an explicit isolated home.
+Repair, nightly RSI and eval companions no longer share the owner's `~/.clone`. They resolve `<repo>/.automation/<purpose>` (or `CLONE_AI_AUTOMATION_HOME`), seed only `config.json`/`settings.json`/`providers.json`/`mcp.json`/`policies.json`, and refuse the live home unless `CLONE_AI_ALLOW_OWNER_HOME=1`. The repair lane still reads failed traces from the owner's home, read-only; reports, consumed-trace state and locks live in the isolated home. `scripts/companion-dev.mjs` uses `.automation/preview` when no home is set, and refuses the live home.
 
-修复通道、夜间 RSI 与评测 companion 不再共享所有者的 `~/.clone`。它们改用 `<repo>/.automation/<用途>`（或 `CLONE_AI_AUTOMATION_HOME`），只播种 `config.json`/`settings.json`/`providers.json`/`mcp.json`/`policies.json`，并拒绝使用在线 home，除非 `CLONE_AI_ALLOW_OWNER_HOME=1`。修复通道仍从所有者 home 只读地读取失败轨迹；报告、已消费轨迹状态与锁放在隔离 home。`scripts/companion-dev.mjs` 现在要求显式指定隔离 home。
+修复通道、夜间 RSI 与评测 companion 不再共享所有者的 `~/.clone`。它们改用 `<repo>/.automation/<用途>`（或 `CLONE_AI_AUTOMATION_HOME`），只播种 `config.json`/`settings.json`/`providers.json`/`mcp.json`/`policies.json`，并拒绝使用在线 home，除非 `CLONE_AI_ALLOW_OWNER_HOME=1`。修复通道仍从所有者 home 只读地读取失败轨迹；报告、已消费轨迹状态与锁放在隔离 home。`scripts/companion-dev.mjs` 在没有提供 home 时使用 `.automation/preview`，并拒绝在线 home。
 
 ### One Agent invocation can be deleted from its row
 

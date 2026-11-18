@@ -46,7 +46,7 @@ plist 固定了 node 的绝对路径。
 `policies.json`；Journal、记忆、会话、令牌、端点与锁绝不复制。修复通道只读地读取所有者
 home 里的失败轨迹。`CLONE_AI_AUTOMATION_REFRESH=1` 重新播种配置副本；
 `CLONE_AI_ALLOW_OWNER_HOME=1` 是共享在线 home 的显式退路。
-`scripts/companion-dev.mjs` 在没有隔离 home 时拒绝启动。
+`scripts/companion-dev.mjs` 在没有提供 home 时使用 `.automation/preview`，并拒绝在线 home。
 
 ## 4. 配置模型
 

@@ -26,21 +26,27 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
-### 2026-11-18 —— 对称检查在契约允许的任一位置找到配楼
+### 2026-11-18 —— 所有者的消息渲染 Markdown
 
-- **目标 / 假设：** 契约把 `buildings` 定义为中轴名录；页面可以把两翼配楼放在 `props` 下。
-  对称检查只搜索 `buildings`，于是一组正确的配楼被读成缺失。
-- **取舍：** [对称配楼可以放在 props 下，评分器两处都查](../architecture/trade-offs.zh-CN.md#2026-11-18--对称配楼可以放在-props-下评分器两处都查)。
-- **变更：** `benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs` 的对称
-  查找由 `buildings` 加上 `props.sideHalls` 与 `props.buildings` 组成。
-- **Eval：** 运行 `18569eb4` 把体仁阁/弘义阁放在 x = ∓150、z = 235 的
-  `props.sideHalls` 下，评为 27/28，失败项是 "体仁阁/弘义阁 absent"；修改查找后同一
-  工作区评为 **28/28**。
-- **执行链路：** 在运行中的页面读取模型，发现两条记录在 `props.sideHalls` 下，然后放宽
-  查找。无模型成本。
-- **优点：** 评的是属性（位置互为镜像），不是某位作者的数组布局。
-- **缺点 / 下次：** 接受两种形状让契约变松；更干净的做法是单一名录字段加上显式分类。
-- **推翻条件：** 从取舍条目复制。
+- **目标 / 假设：** 让所有者的气泡走与 Agent 回复相同的 `richText` 路径，把粘贴的任务
+  说明从字面 `#`/`**` 变成可读结构；`richText` 先转义，因此对所有者文本也是安全的。
+- **取舍：** [所有者的消息与 Agent 回复走同一条 Markdown 路径](../architecture/trade-offs.zh-CN.md#2026-11-18--所有者的消息与-agent-回复走同一条-markdown-路径)。
+- **变更：** `apps/desktop/ui/app.js` 对所有消息使用 `richText(text)`，本地乐观回显使用
+  `richText(query …)`；`components.css` 把 Markdown 标题/列表样式扩展到 `.message-copy`；
+  `test/ui-structure.test.ts` 断言两处调用与样式钩子。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts` ——
+  加上新断言后 **8/8**（HEAD 的所有者分支仍用 `<br>` 转义）。在隔离的 companion 预览
+  服务器上做浏览器检查：注入的所有者消息产生 **1** 个 `.md-heading`（计算权重 720）、
+  **2** 个 `.md-list-line`、**1** 个 `<b>`、**2** 个 `.md-inline`、**1** 个
+  `pre.md-code`；文本里的 `<script>` 产生 **0** 个 script 节点，`window.__pwned` 保持
+  false。全量 **751/751**，typecheck 与 gate 通过。
+- **Benchmark run：** 无——界面渲染；没有 Provider、模型、数据集或评分参数。
+- **执行链路：** 取舍；渲染器改动；CSS 选择器；契约测试；在隔离 home 上启动预览并检查
+  DOM/样式；文档。
+- **优点：** 所有者的说明读起来像任务本身，两种角色共享同一个先转义的渲染器。
+- **缺点 / 下次：** 视觉空白不再逐字一致，很长的粘贴仍会产生很高的气泡（折叠仍只用于
+  Agent 消息）。
+- **推翻条件：** 见取舍条目。
 
 ### 2026-11-18 —— 自动化在自己的 clone home 里运行
 
@@ -54,7 +60,7 @@
   `failed-traces`），并把报告/状态写入隔离 home；`src/repair/repair-lane.ts` 增加
   `tracesDirectory`；`scripts/nightly-rsi.mjs` 把状态与锁放在 `.automation/nightly`，
   从所有者处读取轨迹；
-  `scripts/companion-dev.mjs` 要求显式隔离 home，并拒绝 `~/.clone`，除非
+  `scripts/companion-dev.mjs` 在没有提供 home 时回落到 `.automation/preview`，并拒绝 `~/.clone`，除非
   `CLONE_AI_ALLOW_OWNER_HOME=1`；`.automation/` 已加入忽略；`test/automation-home.test.ts`
   覆盖默认值、拒绝、覆盖、播种与用途校验。
 - **Eval：** `node --experimental-strip-types --test test/automation-home.test.ts` ——
@@ -123,6 +129,22 @@
 - **缺点 / 下次：** 模式在启动时固定，因此在窗口运行期间安装守护仍需重启窗口；`launchctl`
   调用在启动时同步执行（毫秒级，但仍是一次进程启动）。
 - **推翻条件：** 见取舍条目。
+
+### 2026-11-18 —— 对称检查在契约允许的任一位置找到配楼
+
+- **目标 / 假设：** 契约把 `buildings` 定义为中轴名录；页面可以把两翼配楼放在 `props` 下。
+  对称检查只搜索 `buildings`，于是一组正确的配楼被读成缺失。
+- **取舍：** [对称配楼可以放在 props 下，评分器两处都查](../architecture/trade-offs.zh-CN.md#2026-11-18--对称配楼可以放在-props-下评分器两处都查)。
+- **变更：** `benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs` 的对称
+  查找由 `buildings` 加上 `props.sideHalls` 与 `props.buildings` 组成。
+- **Eval：** 运行 `18569eb4` 把体仁阁/弘义阁放在 x = ∓150、z = 235 的
+  `props.sideHalls` 下，评为 27/28，失败项是 "体仁阁/弘义阁 absent"；修改查找后同一
+  工作区评为 **28/28**。
+- **执行链路：** 在运行中的页面读取模型，发现两条记录在 `props.sideHalls` 下，然后放宽
+  查找。无模型成本。
+- **优点：** 评的是属性（位置互为镜像），不是某位作者的数组布局。
+- **缺点 / 下次：** 接受两种形状让契约变松；更干净的做法是单一名录字段加上显式分类。
+- **推翻条件：** 从取舍条目复制。
 
 ### 2026-11-18 —— 加载时的视角按构图评分
 

@@ -216,3 +216,19 @@ test("invocation rows keep selection and deletion as sibling controls", async ()
   // 批量动作仍读取选择按钮，而不是行动作。
   assert.match(audit, /querySelectorAll\("\[data-au-invocation\]"\)/);
 });
+
+test("approvals are confirmed in the main conversation and child tasks collapse", async () => {
+  const app = await read("app.js");
+  const auditCss = await read("audit.css");
+  // The main conversation owns the decision; a child record only points there.
+  // 主对话拥有决定权；子任务记录只提供入口。
+  assert.match(app, /session\.id !== MAIN_CONVERSATION_ID/);
+  assert.match(app, /data-approve="\$\{escape\(approval\.runId\)\}"/);
+  assert.match(app, /data-open-main-conversation/);
+  // Derived tasks are grouped under their conversation in a collapsible block.
+  // 派生任务折叠在其所属对话之下。
+  assert.match(app, /data-child-group/);
+  assert.match(app, /childGroupSummary/);
+  assert.match(auditCss, /\.session-children/);
+});
+

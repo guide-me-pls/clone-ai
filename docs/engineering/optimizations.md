@@ -31,25 +31,33 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
-### 2026-11-18 — The symmetry check sees paired halls wherever the contract puts them
+### 2026-11-18 — The owner's message renders Markdown
 
-- **Goal / hypothesis:** the contract calls `buildings` the axial roster; a page
-  may expose flanking halls under `props`. The symmetry check only searched
-  `buildings`, so a correct pair read as absent.
-- **Trade-off:** [Paired halls may live under props, and the grader looks there](../architecture/trade-offs.md#2026-11-18--paired-halls-may-live-under-props-and-the-grader-looks-there).
-- **Change:** `benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs`
-  builds the symmetry lookup from `buildings` plus `props.sideHalls` and
-  `props.buildings`.
-- **Eval:** run `18569eb4` placed 体仁阁/弘义阁 at x = ∓150, z = 235 under
-  `props.sideHalls` and graded 27/28 with "体仁阁/弘义阁 absent"; after the
-  lookup change the same workspace grades **28/28**.
-- **Execution chain:** read the model in the running page, found the two records
-  under `props.sideHalls`, then widened the lookup. No model cost.
-- **Pros:** grades the property (mirrored positions), not one author's array
-  layout.
-- **Cons / next time:** two accepted shapes make the contract looser; the cleaner
-  fix would be one roster field with an explicit category.
-- **Reversal condition:** copied from the trade-off entry.
+- **Goal / hypothesis:** rendering the owner's bubble through the same
+  `richText` path as the agent's replies turns a pasted task brief from literal
+  `#`/`**` text into readable structure; `richText` escapes first, so it stays
+  safe for owner-authored text.
+- **Trade-off:** [The owner's message renders through the markdown path](../architecture/trade-offs.md#2026-11-18--the-owners-message-renders-through-the-markdown-path).
+- **Change:** `apps/desktop/ui/app.js` uses `richText(text)` for every message
+  and `richText(query …)` for the optimistic echo; `components.css` extends the
+  markdown heading/list styles to `.message-copy`; `test/ui-structure.test.ts`
+  asserts both call sites and the style hooks.
+- **Eval:** `node --experimental-strip-types --test test/ui-structure.test.ts`
+  — **8/8** with the new assertions (HEAD's owner branch escapes with `<br>`).
+  Browser check on the isolated companion dev server: the injected owner
+  message produced **1** `.md-heading` (computed weight 720), **2**
+  `.md-list-line`, **1** `<b>`, **2** `.md-inline`, **1** `pre.md-code`; a
+  `<script>` in the text produced **0** script nodes and `window.__pwned` stayed
+  false. Full suite **751/751**, typecheck and gate pass.
+- **Benchmark run:** none — UI rendering; no provider, model, dataset or
+  scoring parameters.
+- **Execution chain:** trade-off; renderer change; CSS selectors; contract
+  test; preview server on the isolated home and DOM/Style inspection; docs.
+- **Pros:** the owner's brief reads like the task it is, and both roles share
+  one escaping renderer.
+- **Cons / next time:** visual whitespace is no longer byte-exact, and a very
+  long pasted brief still makes a tall bubble (collapse remains agent-only).
+- **Reversal condition:** see the trade-off entry.
 
 ### 2026-11-18 — Automation runs in its own clone home
 
@@ -65,7 +73,7 @@ file keeps every attempt, including the ones that did not work.
   reports/state under the isolated home; `src/repair/repair-lane.ts` gains
   `tracesDirectory`; `scripts/nightly-rsi.mjs` keeps state and its lock under
   `.automation/nightly` and reads traces from the owner;
-  `scripts/companion-dev.mjs` requires an explicit isolated home and refuses
+  `scripts/companion-dev.mjs` falls back to `.automation/preview` when no home is supplied and refuses
   `~/.clone` unless `CLONE_AI_ALLOW_OWNER_HOME=1`; `.automation/` is ignored;
   `test/automation-home.test.ts` covers the default, refusal, override, seeding
   and purpose validation.
@@ -325,6 +333,26 @@ file keeps every attempt, including the ones that did not work.
   proved the brief reaches the plan, but the configured model
   (`360/openai/gpt-6.1-terra`) still answered without calling `write_file`; the
   next variable is the repair model, not the brief.
+- **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-18 — The symmetry check sees paired halls wherever the contract puts them
+
+- **Goal / hypothesis:** the contract calls `buildings` the axial roster; a page
+  may expose flanking halls under `props`. The symmetry check only searched
+  `buildings`, so a correct pair read as absent.
+- **Trade-off:** [Paired halls may live under props, and the grader looks there](../architecture/trade-offs.md#2026-11-18--paired-halls-may-live-under-props-and-the-grader-looks-there).
+- **Change:** `benchmark/capability/forbidden-city/verify/check-forbidden-city.mjs`
+  builds the symmetry lookup from `buildings` plus `props.sideHalls` and
+  `props.buildings`.
+- **Eval:** run `18569eb4` placed 体仁阁/弘义阁 at x = ∓150, z = 235 under
+  `props.sideHalls` and graded 27/28 with "体仁阁/弘义阁 absent"; after the
+  lookup change the same workspace grades **28/28**.
+- **Execution chain:** read the model in the running page, found the two records
+  under `props.sideHalls`, then widened the lookup. No model cost.
+- **Pros:** grades the property (mirrored positions), not one author's array
+  layout.
+- **Cons / next time:** two accepted shapes make the contract looser; the cleaner
+  fix would be one roster field with an explicit category.
 - **Reversal condition:** copied from the trade-off entry.
 
 ### 2026-11-18 — The load-time view is graded on composition

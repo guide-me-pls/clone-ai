@@ -51,7 +51,8 @@ their own clone home (`<repo>/.automation/<purpose>`, or
 copied. The repair lane reads failed traces from the owner's home read-only.
 `CLONE_AI_AUTOMATION_REFRESH=1` re-seeds the config copy;
 `CLONE_AI_ALLOW_OWNER_HOME=1` is the explicit escape hatch for sharing the live
-home. `scripts/companion-dev.mjs` refuses to start without an isolated home.
+home. `scripts/companion-dev.mjs` uses `.automation/preview` when no home is
+set, and refuses the live home.
 
 ## 4. Configure the model
 

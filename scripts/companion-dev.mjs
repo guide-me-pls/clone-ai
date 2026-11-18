@@ -14,6 +14,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { prepareAutomationHome } from "./automation-home.mjs";
 import { startCompanionServer } from "../src/companion-server.ts";
 
 const port = Number(process.env.PORT ?? process.env.CLONE_AI_PORT ?? 4317);
@@ -25,19 +26,28 @@ const port = Number(process.env.PORT ?? process.env.CLONE_AI_PORT ?? 4317);
 // `~/.clone`，未显式指定 home 的预览就会写所有者的 Journal 并持有 Main Agent 提示锁——
 // 即 2026-11-18 观察到的碰撞。
 const configuredHome = process.env.CLONE_HOME ?? process.env.CLONE_AI_HOME ?? process.env.CLONE_AI_DATA_DIR;
-if (configuredHome === undefined || configuredHome.trim().length === 0) {
-  console.error("companion-dev requires an isolated clone home: set CLONE_AI_DATA_DIR (see scripts/automation-home.mjs).");
-  process.exit(1);
-}
 // The target to avoid is this machine's live runtime home, not whatever
 // CLONE_AI_DATA_DIR currently names: an eval runner sets that variable to its
 // own isolated directory and must be allowed through.
 // 要避开的目标是本机正在使用的运行时 home，而不是 CLONE_AI_DATA_DIR 当前指向的目录：
 // 评测运行会把该变量设成自己的隔离目录，必须放行。
 const liveHome = resolve(join(homedir(), ".clone"));
-if (resolve(configuredHome) === liveHome && process.env.CLONE_AI_ALLOW_OWNER_HOME !== "1") {
+if (configuredHome !== undefined && configuredHome.trim().length > 0
+  && resolve(configuredHome) === liveHome && process.env.CLONE_AI_ALLOW_OWNER_HOME !== "1") {
   console.error(`companion-dev refuses the owner's live clone home (${liveHome}). Set CLONE_AI_DATA_DIR to an isolated directory, or CLONE_AI_ALLOW_OWNER_HOME=1 to override.`);
   process.exit(1);
+}
+if (configuredHome === undefined || configuredHome.trim().length === 0) {
+  // A preview with no home is a normal case (the launch config just runs
+  // `npm run companion:dev`): give it its own home instead of the owner's.
+  // 没有 home 的预览是正常情况（启动配置只运行 `npm run companion:dev`）：给它自己的
+  // home，而不是所有者的。
+  const home = await prepareAutomationHome({
+    repoRoot: resolve(import.meta.dirname, ".."),
+    purpose: "preview",
+  });
+  process.env.CLONE_AI_DATA_DIR = home.dataDirectory;
+  console.log(`companion-dev using isolated home ${home.dataDirectory}`);
 }
 const server = await startCompanionServer({
   port,
