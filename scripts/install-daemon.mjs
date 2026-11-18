@@ -56,6 +56,13 @@ const options = {
   environment: {
     CLONE_AI_RESIDENT_DAEMON: "1",
     CLONE_AI_DESKTOP_CLIENT_PATH: client,
+    // The app resolves its workspace from this variable; without it a daemon
+    // launched from the repo ran every step against the source tree, so a task
+    // that names a file the app workspace has failed with "required input
+    // missing" even though the owner could see it.
+    // App 用这个变量解析工作区；没有它，从仓库启动的 Daemon 会拿源码树当工作区，
+    // 于是点名 App 工作区里存在的文件时，尽管所有者看得到，任务仍以"缺少必需输入"失败。
+    CLONE_AI_DESKTOP_DEFAULT_WORKSPACE: join(home, "Documents", "Clone AI"),
     ...(documentToolAvailable ? { CLONE_AI_DOCUMENT_TOOL: documentTool } : {}),
   },
   launchAgentsDirectory: launchAgents,
