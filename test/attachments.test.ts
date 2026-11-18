@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { attachmentManifest, composeAttachedDocuments, DOCX_MIME_TYPE, parseAttachments } from "../src/main-agent/attachments.ts";
+import { attachmentManifest, composeAttachedDocuments, DOCX_MIME_TYPE, DOC_MIME_TYPE, parseAttachments } from "../src/main-agent/attachments.ts";
 
 const png = (() => {
   const header = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -84,6 +84,14 @@ test("a PDF or .docx with a matching signature is accepted as a binary document"
   }]);
   assert.equal(docx.ok, true);
   if (docx.ok) assert.equal(docx.binaryDocuments[0]!.mimeType, DOCX_MIME_TYPE);
+  const doc = parseAttachments([{
+    kind: "document",
+    name: "legacy.doc",
+    mimeType: DOC_MIME_TYPE,
+    data: Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0x00]).toString("base64"),
+  }]);
+  assert.equal(doc.ok, true);
+  if (doc.ok) assert.equal(doc.binaryDocuments[0]!.mimeType, DOC_MIME_TYPE);
 });
 
 test("a binary document with the wrong signature is refused", () => {
@@ -93,6 +101,9 @@ test("a binary document with the wrong signature is refused", () => {
   const renamed = parseAttachments([{ kind: "document", name: "paper.docx", mimeType: DOCX_MIME_TYPE, data: Buffer.from("%PDF-1.4").toString("base64") }]);
   assert.equal(renamed.ok, false);
   if (!renamed.ok) assert.match(renamed.error, /does not look like a \.docx/);
+  const legacy = parseAttachments([{ kind: "document", name: "paper.doc", mimeType: DOC_MIME_TYPE, data: Buffer.from("not an OLE file").toString("base64") }]);
+  assert.equal(legacy.ok, false);
+  if (!legacy.ok) assert.match(legacy.error, /does not look like a \.doc/);
 });
 
 test("binary documents count toward the shared attachment budget and name rules", () => {

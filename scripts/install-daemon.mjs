@@ -37,6 +37,15 @@ const launchAgents = join(home, "Library", "LaunchAgents");
 const log = join(home, ".clone", "companion.log");
 const entry = join(root, "src", "desktop-sidecar.ts");
 const client = join(root, "apps", "desktop", "ui", "index.html");
+const documentTool = join(root, "dist", "Clone AI.app", "Contents", "Resources", "CloneAIDocumentTool");
+let documentToolAvailable = false;
+try {
+  await access(documentTool);
+  documentToolAvailable = true;
+} catch {
+  // The daemon can still run; OCR and legacy .doc then refuse with a reason.
+  // 守护进程仍可运行；OCR 与旧式 .doc 会带原因拒绝。
+}
 
 const options = {
   label: DAEMON_LABEL,
@@ -47,6 +56,7 @@ const options = {
   environment: {
     CLONE_AI_RESIDENT_DAEMON: "1",
     CLONE_AI_DESKTOP_CLIENT_PATH: client,
+    ...(documentToolAvailable ? { CLONE_AI_DOCUMENT_TOOL: documentTool } : {}),
   },
   launchAgentsDirectory: launchAgents,
 };
