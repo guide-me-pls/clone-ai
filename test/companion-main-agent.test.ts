@@ -254,7 +254,10 @@ test("shutdown completes while an SSE stream is still open", async (t) => {
   const controller = new AbortController();
   t.after(async () => {
     controller.abort();
-    await rm(dataDirectory, { recursive: true, force: true });
+    // The stream's writer can still be closing when the server returns; a
+    // single recursive rm then races an ENOTEMPTY. Retry briefly.
+    // 服务器返回时流的写入方可能仍在关闭；一次性递归删除会撞上 ENOTEMPTY。短暂重试。
+    await rm(dataDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
   // Hold the stream open without letting the turn finish. 保持流打开，不让回合结束。
   const response = await companionFetch(server.url, server.token, "/api/main-agent/stream", {
