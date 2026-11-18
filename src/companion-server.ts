@@ -1805,16 +1805,19 @@ async function handleRequest(
       : randomUUID();
     const callerKind = typeof request.headers["x-clone-caller"] === "string" ? request.headers["x-clone-caller"] : undefined;
     const callerSession = typeof request.headers["x-clone-caller-session"] === "string" ? request.headers["x-clone-caller-session"] : undefined;
+    // A request that names no caller is the owner talking through the desktop
+    // app, not an anonymous client. Recording "unknown" made every owner turn
+    // in the audit unreadable.
+    // 未声明调用方的请求就是所有者通过桌面 App 在说话，而不是匿名客户端。记录成 "unknown" 会让
+    // 审计里每一次所有者回合都读不出是谁。
     const invocation = {
       surface: callerKind === "whatsapp" ? "mobile" as const : "desktop" as const,
-      ...(callerKind === undefined ? {} : {
-        caller: {
-          kind: callerKind,
-          ...(callerSession === undefined ? {} : { sessionId: callerSession }),
-        },
-      }),
+      caller: {
+        kind: callerKind ?? "desktop",
+        ...(callerSession === undefined ? {} : { sessionId: callerSession }),
+      },
     };
-    if (text.length === 0 && attachments.images.length === 0) {
+    if (text.length === 0 && attachments.images.length === 0 && attachments.documents.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
@@ -1849,6 +1852,7 @@ async function handleRequest(
       const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
         onDelta: (delta) => send("delta", { delta }),
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
+        ...(attachments.documents.length === 0 ? {} : { documents: attachments.documents }),
         ...invocation,
         signal: abortController.signal,
         onToolEvent: (event) => send("tool", event),
@@ -1883,16 +1887,19 @@ async function handleRequest(
       : randomUUID();
     const callerKind = typeof request.headers["x-clone-caller"] === "string" ? request.headers["x-clone-caller"] : undefined;
     const callerSession = typeof request.headers["x-clone-caller-session"] === "string" ? request.headers["x-clone-caller-session"] : undefined;
+    // A request that names no caller is the owner talking through the desktop
+    // app, not an anonymous client. Recording "unknown" made every owner turn
+    // in the audit unreadable.
+    // 未声明调用方的请求就是所有者通过桌面 App 在说话，而不是匿名客户端。记录成 "unknown" 会让
+    // 审计里每一次所有者回合都读不出是谁。
     const invocation = {
       surface: callerKind === "whatsapp" ? "mobile" as const : "desktop" as const,
-      ...(callerKind === undefined ? {} : {
-        caller: {
-          kind: callerKind,
-          ...(callerSession === undefined ? {} : { sessionId: callerSession }),
-        },
-      }),
+      caller: {
+        kind: callerKind ?? "desktop",
+        ...(callerSession === undefined ? {} : { sessionId: callerSession }),
+      },
     };
-    if (text.length === 0 && attachments.images.length === 0) {
+    if (text.length === 0 && attachments.images.length === 0 && attachments.documents.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
@@ -1926,6 +1933,7 @@ async function handleRequest(
     try {
       const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
+        ...(attachments.documents.length === 0 ? {} : { documents: attachments.documents }),
         ...invocation,
       });
       sendJson(response, 200, result);
