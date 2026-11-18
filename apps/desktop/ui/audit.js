@@ -20,8 +20,15 @@
     selected: null, loading: false, error: null, raw: false, traces: new Map(),
     review: null, reviewBusy: false, reviewError: null,
     invocations: [], invocationSelected: null, invocationDetail: null,
+    invocationQuery: "", invocationShowDeleted: false, invocationTotal: 0, invocationHidden: 0,
+    turnQuery: "", turnTotal: 0,
     cases: null, improvement: null,
   };
+
+  let invocationSeq = 0;
+  let turnSeq = 0;
+  let invocationTimer;
+  let turnTimer;
 
   const root = () => document.getElementById("audit-root");
   const pct = (value) => (value === null || value === undefined ? "—" : `${Math.round(value * 100)}%`);
@@ -41,15 +48,114 @@
     state.loading = true; state.error = null; render();
     try {
       state.data = await api("/api/audit");
-      state.turns = (await api("/api/audit/turns?limit=100").catch(() => ({ turns: [] }))).turns ?? [];
-      state.invocations = (await api("/api/invocations").catch(() => ({ records: [] }))).records ?? [];
+      await loadTurns().catch(() => { state.turns = []; state.turnTotal = 0; });
+      await loadInvocations().catch(() => { state.invocations = []; state.invocationTotal = 0; });
       state.review = (await api("/api/audit/review").catch(() => ({ review: null }))).review ?? null;
       state.selfcheck = (await api("/api/audit/selfcheck").catch(() => ({ rounds: [] }))).rounds ?? [];
       state.improvement = await api("/api/improvement").catch(() => null);
       state.cases = await api("/api/reporting/bad-cases").catch(() => ({ text: "" }));
       if (state.selected && !state.data.records.some((r) => r.runId === state.selected)) state.selected = null;
+      if (state.invocationSelected && !state.invocations.some((r) => r.id === state.invocationSelected)) { state.invocationSelected = null; state.invocationDetail = null; }
     } catch (error) { state.error = error.message; }
     state.loading = false; render();
+  }
+
+  /**
+   * Turns are searched on the server for the same reason as invocations: the
+   * journal holds every turn, and the view shows only one page of them.
+   * 回合与调用一样在服务端搜索：Journal 保存所有回合，视图只显示其中一页。
+   */
+  async function loadTurns() {
+    const seq = ++turnSeq;
+    const params = new URLSearchParams({ limit: "100" });
+    const q = state.turnQuery.trim();
+    if (q) params.set("q", q);
+    const data = await api(`/api/audit/turns?${params}`);
+    if (seq !== turnSeq) return false;
+    state.turns = data.turns ?? [];
+    state.turnTotal = typeof data.total === "number" ? data.total : state.turns.length;
+    return true;
+  }
+
+  async function refreshTurns(focusQuery = false) {
+    try {
+      if (!(await loadTurns())) return;
+      render();
+      if (focusQuery) restoreFocus("[data-au-turn-query]");
+    } catch (error) { announce(`搜索失败：${error.message}`, true); }
+  }
+
+  /**
+   * The invocation list is filtered and searched on the server: the ledger is
+   * shared across data directories and can hold far more records than one page.
+   * 调用列表在服务端过滤与搜索：账本跨数据目录共享，记录数可能远超一页。
+   */
+  async function loadInvocations() {
+    const seq = ++invocationSeq;
+    const params = new URLSearchParams({ limit: "200" });
+    const q = state.invocationQuery.trim();
+    if (q) params.set("q", q);
+    if (state.invocationShowDeleted) params.set("includeDeleted", "1");
+    let data;
+    try {
+      data = await api(`/api/invocations?${params}`);
+    } catch (error) {
+      // A failed older request must not wipe a newer, successful search.
+      // 失败的上一次请求不能抹掉更新的成功搜索结果。
+      if (seq === invocationSeq) throw error;
+      return false;
+    }
+    if (seq !== invocationSeq) return false;
+    state.invocations = data.records ?? [];
+    state.invocationTotal = typeof data.total === "number" ? data.total : state.invocations.length;
+    state.invocationHidden = typeof data.hidden === "number" ? data.hidden : 0;
+    return true;
+  }
+
+  function restoreFocus(selector) {
+    const next = root()?.querySelector(selector);
+    if (!(next instanceof HTMLInputElement)) return;
+    next.focus();
+    next.setSelectionRange(next.value.length, next.value.length);
+  }
+
+  async function refreshInvocations(focusSelector = null) {
+    try {
+      if (!(await loadInvocations())) return;
+      if (state.invocationSelected && !state.invocations.some((r) => r.id === state.invocationSelected)) {
+        state.invocationSelected = null; state.invocationDetail = null;
+      }
+      render();
+      if (focusSelector) restoreFocus(focusSelector);
+      // A refreshed list can hold a newer reply for the selected record; re-read
+      // it so the detail pane does not keep a stale snapshot.
+      // 刷新后的列表可能带有选中记录更新的回复；重新读取它，避免详情面板保留旧快照。
+      if (state.invocationSelected) await syncSelectedInvocation();
+    } catch (error) { announce(`搜索失败：${error.message}`, true); }
+  }
+
+  async function syncSelectedInvocation() {
+    const id = state.invocationSelected;
+    if (!id) return;
+    try {
+      const detail = (await api(`/api/invocations/${encodeURIComponent(id)}`)).record;
+      if (state.invocationSelected === id) state.invocationDetail = detail;
+    } catch {
+      if (state.invocationSelected === id) state.invocationDetail = undefined;
+    }
+    render();
+  }
+
+  async function markInvocations(ids, deleted) {
+    if (!ids.length) return;
+    try {
+      const result = await api(`/api/invocations/${deleted ? "delete" : "restore"}`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids }),
+      });
+      announce(deleted ? `已隐藏 ${result.changed} 条调用记录，可在「含已删除」里恢复。` : `已恢复 ${result.changed} 条调用记录。`);
+      if (deleted && !state.invocationShowDeleted) { state.invocationSelected = null; state.invocationDetail = null; }
+      await refreshInvocations();
+    } catch (error) { announce(error.message, true); }
   }
 
   const records = () => state.data?.records ?? [];
@@ -356,8 +462,11 @@
   /** Main Agent turns: input, reply, tools, model usage. 主 Agent 回合：输入、回复、工具、模型用量。 */
   function turnsView() {
     const turns = state.turns ?? [];
-    if (!turns.length) return `<p class="au-empty">还没有主 Agent 回合记录。CLI、桌面或 WhatsApp 的每一次对话都会出现在这里。</p>`;
-    return `<div class="au-turns">${turns.map((turn) => {
+    const toolbar = `<div class="au-toolbar"><input type="search" data-au-turn-query placeholder="搜索输入、回复、工具、来源、模型" value="${esc(state.turnQuery)}" aria-label="搜索主 Agent 回合" /><span class="au-count-note">显示 ${num(turns.length)} / 共 ${num(state.turnTotal)} 条</span></div>`;
+    if (!turns.length) {
+      return `${toolbar}<p class="au-empty">${state.turnQuery.trim() ? "没有符合条件的回合记录。" : "还没有主 Agent 回合记录。CLI、桌面或 WhatsApp 的每一次对话都会出现在这里。"}</p>`;
+    }
+    return `${toolbar}<div class="au-turns">${turns.map((turn) => {
       const tone = turn.status === "completed" ? "ok" : turn.status === "failed" ? "bad" : turn.status === "interrupted" ? "warn" : "info";
       const label = turn.status === "completed" ? "完成" : turn.status === "failed" ? "失败" : turn.status === "interrupted" ? "中断" : "进行中";
       const usage = turn.usage ? `<span>${num(turn.usage.totalTokens ?? 0)} tokens</span>${turn.usage.costUsd !== undefined ? `<span>${usd(turn.usage.costUsd)}</span>` : ""}` : "";
@@ -380,15 +489,22 @@
     const list = state.invocations;
     const selected = list.find((record) => record.id === state.invocationSelected);
     const detail = state.invocationDetail;
-    const rows = list.map((record) => `<button type="button" class="au-row${record.id === state.invocationSelected ? " is-selected" : ""}" data-au-invocation="${esc(record.id)}">
+    const deletable = list.filter((record) => !record.deleted);
+    const rows = list.map((record) => `<button type="button" class="au-row${record.id === state.invocationSelected ? " is-selected" : ""}${record.deleted ? " is-deleted" : ""}" data-au-invocation="${esc(record.id)}">
       <span class="au-row-main"><b>${esc(record.caller?.kind ?? "unknown")} · ${esc(record.surface)}</b>
       <small class="au-why">${esc((record.prompt ?? "").replace(/\s+/g, " ").slice(0, 160) || "(no prompt)")}</small></span>
-      <span class="au-row-meta">${badge(record.status === "completed" ? "已完成" : record.status === "failed" ? "失败" : "运行中", record.status === "completed" ? "ok" : record.status === "failed" ? "bad" : "info")}<small>${stamp(record.startedAt)} · ${ms(record.durationMs)}</small></span>
+      <span class="au-row-meta">${badge(record.status === "completed" ? "已完成" : record.status === "failed" ? "失败" : "运行中", record.status === "completed" ? "ok" : record.status === "failed" ? "bad" : "info")}${record.deleted ? badge("已删除", "mute") : ""}<small>${stamp(record.startedAt)} · ${ms(record.durationMs)}</small></span>
     </button>`).join("");
+    const toolbar = `<div class="au-toolbar">
+        <input type="search" data-au-inv-query placeholder="搜索请求、回复、错误、调用者、模型、Run ID" value="${esc(state.invocationQuery)}" aria-label="搜索 Agent 调用" />
+        <label class="au-check"><input type="checkbox" data-au-inv-deleted ${state.invocationShowDeleted ? "checked" : ""}/> 含已删除</label>
+        <span class="au-count-note">显示 ${num(list.length)} / 共 ${num(state.invocationTotal)} 条${state.invocationHidden ? ` · 另有 ${num(state.invocationHidden)} 条已隐藏` : ""}</span>
+        <button type="button" class="au-btn au-btn-bad" data-au-inv-delete-shown ${deletable.length ? "" : "disabled"}>删除这 ${num(deletable.length)} 条</button>
+      </div>`;
     const body = selected === undefined
       ? `<aside class="au-detail"><p class="au-empty">选择左侧一次 Agent 调用，查看调用者、请求、回复、错误、模型和 Run。</p></aside>`
       : `<aside class="au-detail">
-          <div class="au-detail-head"><div><small>${esc(selected.caller?.kind ?? "unknown")} · ${esc(selected.surface)}</small><h4>${esc(selected.prompt.slice(0, 120) || "Agent 调用")}</h4></div>${badge(selected.status === "completed" ? "完成" : selected.status === "failed" ? "失败" : "运行中", selected.status === "completed" ? "ok" : selected.status === "failed" ? "bad" : "info")}</div>
+          <div class="au-detail-head"><div><small>${esc(selected.caller?.kind ?? "unknown")} · ${esc(selected.surface)}</small><h4>${esc(selected.prompt.slice(0, 120) || "Agent 调用")}</h4></div>${badge(selected.status === "completed" ? "完成" : selected.status === "failed" ? "失败" : "运行中", selected.status === "completed" ? "ok" : selected.status === "failed" ? "bad" : "info")}${selected.deleted ? badge("已删除", "mute") : ""}</div>
           <div class="au-chips"><span>${stamp(selected.startedAt)}</span><span>${ms(selected.durationMs)}</span><span>${esc(selected.workspacePath)}</span>${selected.modelId ? `<span>${esc(selected.modelId)}${selected.effort ? ` · ${esc(selected.effort)}` : ""}</span>` : ""}</div>
           <h5>请求</h5><pre class="au-pre">${esc(selected.prompt)}</pre>
           ${detail === null ? `<p class="au-empty">正在读取调用详情…</p>` : detail === undefined ? `<p class="au-empty">无法读取调用详情。</p>` : `
@@ -396,9 +512,16 @@
             ${detail.error ? `<div class="au-callout au-callout-bad"><b>错误</b><pre>${esc(detail.error)}</pre></div>` : ""}
             ${detail.newRuns?.length ? `<h5>产生的 Run</h5><div class="au-chips">${detail.newRuns.map((run) => `<button type="button" class="au-btn" data-au-jump="${esc(run.id)}">${esc(run.id.slice(0, 8))} · ${esc(run.status)}</button>`).join("")}</div>` : ""}
             <h5>运行位置</h5><p class="au-note"><code>${esc(detail.dataDirectory)}</code>${detail.sessionFile ? `<br/><code>${esc(detail.sessionFile)}</code>` : ""}</p>`}
+          <div class="au-actions">${selected.deleted
+            ? `<button type="button" class="au-btn" data-au-inv-restore="${esc(selected.id)}">恢复记录</button>`
+            : `<button type="button" class="au-btn au-btn-bad" data-au-inv-delete="${esc(selected.id)}">删除记录</button>`}</div>
         </aside>`;
-    return `<p class="au-note">这是所有 Agent 调用 Clone AI 的共享账本。即使调用方使用临时数据目录，记录也会写到这里；它记录可见请求与回复，不记录模型私有推理。</p>
-      <div class="au-split"><div class="au-list" role="list">${rows || `<p class="au-empty">还没有 Agent 调用记录。下一次 CLI、桌面或 WhatsApp 调用会出现在这里。</p>`}</div>${body}</div>`;
+    return `<p class="au-note">这是所有 Agent 调用 Clone AI 的共享账本。即使调用方使用临时数据目录，记录也会写到这里；它记录可见请求与回复，不记录模型私有推理。删除只是把记录从这个列表隐藏并标为「已删除」，账本原文保留，可随时恢复。</p>
+      ${toolbar}<div class="au-split"><div class="au-list" role="list">${rows || `<p class="au-empty">${state.invocationQuery.trim()
+        ? "没有符合条件的调用记录。"
+        : state.invocationHidden
+          ? `已隐藏全部 ${num(state.invocationHidden)} 条记录。勾选「含已删除」可查看并恢复。`
+          : "还没有 Agent 调用记录。下一次 CLI、桌面或 WhatsApp 调用会出现在这里。"}</p>`}</div>${body}</div>`;
   }
 
   function render() {
@@ -406,6 +529,13 @@
     if (!host) return;
     const keep = host.querySelector(".au-list")?.scrollTop ?? 0;
     const keepDetail = host.querySelector(".au-detail")?.scrollTop ?? 0;
+    // Rebuilding the root destroys the focused control; remember what the owner
+    // was typing in so an asynchronous re-render does not drop their keystrokes.
+    // 重建根节点会销毁焦点控件；记住所有者正在输入什么，异步重渲染才不会吞掉按键。
+    const active = document.activeElement;
+    const activeField = active instanceof HTMLInputElement && host.contains(active)
+      ? { selector: active.matches("[data-au-inv-query]") ? "[data-au-inv-query]" : active.matches("[data-au-turn-query]") ? "[data-au-turn-query]" : null, start: active.selectionStart, end: active.selectionEnd }
+      : null;
     const tabs = [["overview", "总览"], ["turns", "主 Agent 回合"], ["runs", "运行记录"], ["invocations", "Agent 调用"], ["cases", "坏案例"], ["eval", "评估"]]
       .map(([v, l]) => `<button type="button" class="au-tab${state.view === v ? " is-on" : ""}" data-au-view="${v}">${l}</button>`).join("");
     let body = "";
@@ -418,6 +548,13 @@
       <div class="au-tabs" role="tablist">${tabs}</div>${body}`;
     const list = host.querySelector(".au-list"); if (list) list.scrollTop = keep;
     const side = host.querySelector(".au-detail"); if (side) side.scrollTop = keepDetail;
+    if (activeField?.selector) {
+      const next = host.querySelector(activeField.selector);
+      if (next instanceof HTMLInputElement) {
+        next.focus();
+        next.setSelectionRange(activeField.start ?? next.value.length, activeField.end ?? next.value.length);
+      }
+    }
   }
 
   async function exportJsonl() {
@@ -451,12 +588,7 @@
       state.invocationSelected = el.dataset.auInvocation;
       state.invocationDetail = null;
       render();
-      try {
-        state.invocationDetail = (await api(`/api/invocations/${encodeURIComponent(state.invocationSelected)}`)).record;
-      } catch {
-        state.invocationDetail = undefined;
-      }
-      render();
+      await syncSelectedInvocation();
       return;
     }
     if ((el = pick("[data-au-status]"))) { state.status = el.dataset.auStatus; render(); return; }
@@ -545,16 +677,44 @@
       try { await api(`/api/sessions/${encodeURIComponent(el.dataset.auRestore)}/restore`, { method: "POST" }); announce("会话已恢复。"); await load(); void refresh({ preserveScroll: false }); } catch (error) { announce(error.message, true); }
       return;
     }
+    if ((el = pick("[data-au-inv-delete]"))) {
+      if (!(await confirmDialog("删除这条 Agent 调用记录？它会从审计列表隐藏并标为「已删除」；账本原文保留，勾选「含已删除」后可恢复。", "删除"))) return;
+      await markInvocations([el.dataset.auInvDelete], true);
+      return;
+    }
+    if ((el = pick("[data-au-inv-restore]"))) { await markInvocations([el.dataset.auInvRestore], false); return; }
+    if (pick("[data-au-inv-delete-shown]")) {
+      // Delete exactly the set painted in the list, in case a refresh is mid-flight.
+      // 精确删除列表中画出来的那一组记录，以防刷新尚未完成。
+      const ids = [...(root()?.querySelectorAll("[data-au-invocation]") ?? [])]
+        .filter((row) => !row.classList.contains("is-deleted"))
+        .map((row) => row.dataset.auInvocation);
+      if (!ids.length) return;
+      if (!(await confirmDialog(`删除当前列表里的 ${ids.length} 条 Agent 调用？它们会从审计列表隐藏并标为「已删除」；账本原文保留，勾选「含已删除」后可恢复。`, "删除"))) return;
+      await markInvocations(ids, true);
+      return;
+    }
     if ((el = pick("[data-au-run]"))) { state.selected = el.dataset.auRun; state.raw = false; render(); }
   });
   document.addEventListener("input", (event) => {
     const t = event.target;
     if (t instanceof HTMLInputElement && t.matches("[data-au-query]")) { state.query = t.value; const pos = t.selectionStart; render(); const next = root().querySelector("[data-au-query]"); next?.focus(); next?.setSelectionRange(pos, pos); }
+    if (t instanceof HTMLInputElement && t.matches("[data-au-turn-query]")) {
+      state.turnQuery = t.value;
+      clearTimeout(turnTimer);
+      turnTimer = setTimeout(() => { void refreshTurns(true); }, 250);
+    }
+    if (t instanceof HTMLInputElement && t.matches("[data-au-inv-query]")) {
+      state.invocationQuery = t.value;
+      clearTimeout(invocationTimer);
+      invocationTimer = setTimeout(() => { void refreshInvocations("[data-au-inv-query]"); }, 250);
+    }
   });
   document.addEventListener("change", (event) => {
     const t = event.target;
     if (t instanceof HTMLSelectElement && t.matches("[data-au-provider]")) { state.provider = t.value; render(); }
     if (t instanceof HTMLInputElement && t.matches("[data-au-deleted]")) { state.showDeleted = t.checked; render(); }
+    if (t instanceof HTMLInputElement && t.matches("[data-au-inv-deleted]")) { state.invocationShowDeleted = t.checked; void refreshInvocations("[data-au-inv-deleted]"); }
     if (t instanceof HTMLInputElement && t.matches("[data-au-selfcheck-full]")) { state.selfcheckFull = t.checked; }
   });
 

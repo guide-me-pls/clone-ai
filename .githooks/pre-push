@@ -1,0 +1,115 @@
+#!/usr/bin/env node
+/**
+ * Rebuild dist/Clone AI.app before pushing main.
+ *
+ * The packaged app contains a copy of src/ and apps/desktop/ui/; a push that
+ * changes either one leaves the app stale until someone rebuilds it. This hook
+ * makes the push itself the rebuild point, so "main" and "the app" move
+ * together. It runs only for main and only when a pushed commit touches the
+ * files the bundle carries.
+ *
+ * 推送 main 之前重新打包 dist/Clone AI.app。
+ *
+ * 安装包携带 src/ 与 apps/desktop/ui/ 的副本；推送改了它们却不重打包，App 就会过期。
+ * 这个钩子把"推送"作为重打包点，让 main 与 App 同步前进。只在 main、且被推送的提交
+ * 触及包内文件时运行。
+ *
+ * Skip once with CLONE_AI_SKIP_APP_BUILD=1.
+ */
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+const zeroSha = /^0+$/;
+const bundlePaths = [
+  /^src\//,
+  /^apps\/desktop\//,
+  /^package\.json$/,
+  /^package-lock\.json$/,
+  /^tsconfig\.json$/,
+  /^scripts\/build-macos-app\.mjs$/,
+];
+
+if (process.env.CLONE_AI_SKIP_APP_BUILD === "1") {
+  console.log("[app-build] skipped (CLONE_AI_SKIP_APP_BUILD=1)");
+  process.exit(0);
+}
+
+const input = (() => {
+  // Git feeds the ref lines on stdin; a manual run from a terminal has none. A
+  // TTY read would wait for EOF, so treat it as an empty list.
+  // Git 通过 stdin 传入 ref 行；在终端手工运行时没有这些内容。TTY 读取会等 EOF，
+  // 因此按空列表处理。
+  if (process.stdin.isTTY) return "";
+  try {
+    return readFileSync(0, "utf8");
+  } catch {
+    return "";
+  }
+})();
+
+const root = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+process.chdir(root);
+
+function changedPaths(base, tip) {
+  const output = execFileSync("git", ["diff", "--name-only", base, tip], { encoding: "utf8" });
+  return output.split("\n").filter(Boolean);
+}
+
+let needsBuild = false;
+let reason = "";
+for (const line of input.split("\n")) {
+  const [localRef, localSha, remoteRef, remoteSha] = line.trim().split(/\s+/);
+  if (!localRef || !localSha || !remoteRef) continue;
+  if (localRef !== "refs/heads/main" && remoteRef !== "refs/heads/main") continue;
+  if (zeroSha.test(localSha)) continue;
+  if (!zeroSha.test(remoteSha) && localSha === remoteSha) continue;
+
+  if (zeroSha.test(remoteSha)) {
+    needsBuild = true;
+    reason = "main is being created";
+    break;
+  }
+  const paths = changedPaths(remoteSha, localSha);
+  const hit = paths.find((path) => bundlePaths.some((pattern) => pattern.test(path)));
+  if (hit !== undefined) {
+    needsBuild = true;
+    reason = hit;
+    break;
+  }
+}
+
+if (!needsBuild) {
+  console.log("[app-build] no bundled source change on main; dist/Clone AI.app left as is");
+  process.exit(0);
+}
+
+console.log(`[app-build] rebuilding dist/Clone AI.app (${reason})`);
+try {
+  execFileSync(process.execPath, [join(root, "scripts", "build-macos-app.mjs"), "--replace", "--app-only"], {
+    cwd: root,
+    stdio: "inherit",
+    env: process.env,
+  });
+} catch {
+  console.error("[app-build] rebuild failed; refusing to push a stale app.");
+  console.error("[app-build] fix the build, or push once with CLONE_AI_SKIP_APP_BUILD=1.");
+  process.exit(1);
+}
+
+let running = false;
+try {
+  execFileSync("/usr/bin/pgrep", ["-f", resolve(root, "dist", "Clone AI.app", "Contents", "MacOS", "CloneAI")], {
+    stdio: "ignore",
+  });
+  running = true;
+} catch {
+  // Not running is the normal case.
+  // 没有在运行才是正常情况。
+}
+
+const stamp = execFileSync("git", ["describe", "--always", "--dirty", "--abbrev=7"], { encoding: "utf8" }).trim();
+console.log(`[app-build] dist/Clone AI.app rebuilt from the working tree (${stamp})`);
+if (running) {
+  console.log("[app-build] Clone AI is open: quit and reopen it to load the new build.");
+}

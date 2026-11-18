@@ -65,6 +65,25 @@ test("the shell is internally consistent: ids, assets, and strings", async () =>
   assert.deepEqual(untranslated, [], `markup points at missing strings: ${untranslated.join(", ")}`);
 });
 
+test("the invocation audit exposes server search and reversible delete controls", async () => {
+  const audit = await read("audit.js");
+  // The list is searched on the server, not only in the loaded page.
+  // 列表在服务端搜索，而不是只搜索已加载的一页。
+  assert.match(audit, /\/api\/invocations\?\$\{params\}/);
+  assert.match(audit, /data-au-inv-query/);
+  assert.match(audit, /data-au-inv-deleted/);
+  // Deletion is a reversible tombstone the detail pane can undo.
+  // 删除是可逆墓碑，详情面板可以撤销。
+  assert.match(audit, /data-au-inv-delete=/);
+  assert.match(audit, /data-au-inv-delete-shown/);
+  assert.match(audit, /data-au-inv-restore=/);
+  assert.match(audit, /api\/invocations\/\$\{deleted \? "delete" : "restore"\}/);
+  // Turns are searched on the server too, so the count is not just the loaded page.
+  // 回合也在服务端搜索，因此计数不只代表已加载的一页。
+  assert.match(audit, /\/api\/audit\/turns\?\$\{params\}/);
+  assert.match(audit, /data-au-turn-query/);
+});
+
 test("interactive views style their own truncation, so long text cannot stretch a row", async () => {
   const css = (await read("style.css")) + (await read("components.css")) + (await read("audit.css")) + (await read("memory.css"));
   // One-line previews: the session list must ellipsize rather than wrap. 单行预览：会话列表必须省略号截断而不是换行。

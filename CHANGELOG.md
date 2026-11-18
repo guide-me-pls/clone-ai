@@ -6,6 +6,199 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A one-query FPS capability benchmark, imported audit, and a rebuilt app
+
+Added `benchmark/capability/shadowport-fps/`: a one-paragraph prompt, a
+`setup.mjs` that generates a clean classic-script workspace, and an independent
+17-check checker that drives the page's public `window.__game` hook (files,
+runtime, hook, start, movement, shot damage, three relays, extraction, debrief,
+console errors, external requests). Two clean from-scratch runs: the first
+produced a playable game but its worker checked a stale preview port; the second
+used the matching port, passed 17/17, and its worker used the browser tools with
+zero tool errors (33 model calls, 744k tokens, 312.8 s, 8 enemies, three relays,
+extraction, debrief). `scripts/import-audit.mjs` imports an isolated benchmark
+Run into the owner's `~/.clone` journal, conversation history and invocation
+ledger, so 审计与评估 shows it and `npm run audit:export` exports it. The macOS
+app was rebuilt with the runtime changes (queued long builds, the last-two-round
+budget notice, browser MCP, the 40-call fallback budget):
+`dist/Clone AI-macOS-arm64.dmg` / `.zip`.
+
+新增 `benchmark/capability/shadowport-fps/`：一段话提示词、生成干净 classic-script 工作区的
+`setup.mjs`，以及驱动页面公开 `window.__game` 钩子的独立 17 项检查器（文件、运行时、钩子、
+开始、移动、射击扣血、三处中继、撤离、结算、控制台错误、外部请求）。两轮干净从零运行：第一轮
+产出了可玩游戏，但 Worker 查了过期的预览端口；第二轮用匹配端口，17/17 通过，Worker 使用浏览器
+工具零错误（33 次模型调用、744k tokens、312.8 秒、8 个敌人、三处中继、撤离、结算）。
+`scripts/import-audit.mjs` 把隔离评测 Run 导入所有者的 `~/.clone` Journal、对话历史与调用账本，
+因此「审计与评估」能看到它，`npm run audit:export` 也能导出。macOS App 已用新的运行时改动
+（长构建排队、最后两轮预算提示、浏览器 MCP、fallback 40 次预算）重建：
+`dist/Clone AI-macOS-arm64.dmg` / `.zip`。
+
+
+### Archived memories can be opened with one click and deleted for good
+
+The memory panel's 已归档 count is now a control: clicking it filters the list to the archived set, and the selected card stays visibly pressed. Until now the archived set was only reachable through a status dropdown, and an archived memory could not be removed at all — the panel counted one while the `.md` file sat in `memory/archived/` with no control that could reach it. An archived memory now has a 删除 action: after a confirmation it unlinks both possible `.md` files and deletes the index row, search terms, version history and staged mutations in one transaction; the journal records `memory.deleted` with the summary before the files go. An active memory must be archived first, so the one irreversible action stays one deliberate step from the default view. The `.md` file remains the owner's; the audit of what was there remains in the journal.
+
+记忆库的「已归档」计数现在是一个控件：点一下就把列表筛到归档集，被选中的卡片保持按下状态。此前归档集只能通过状态下拉框看到，而且归档记忆根本无法移除——面板数出一条，`.md` 文件却躺在 `memory/archived/` 里，没有任何控件能碰到它。归档记忆现在有「删除」动作：确认之后，在一个事务里删除两个可能位置的 `.md` 文件、索引行、检索词、版本历史与暂存变更；Journal 在删除文件之前记下 `memory.deleted` 与摘要。使用中的记忆必须先归档，使唯一不可逆的动作离默认视图保持一步。`.md` 文件仍然归所有者；对"那里曾有什么"的审计仍留在 Journal。
+
+### The Agent-call audit can be searched and cleared
+
+The **设置 → 审计与轨迹 → Agent 调用** list now searches the whole shared
+invocation ledger on the server — request, reply, error, caller, workspace,
+model and Run ids — and shows `显示 N / 共 M 条`. Delete appends a tombstone to
+the append-only `~/.clone/audit/invocations.jsonl`: the original lines stay,
+**含已删除** reveals hidden records, and one click restores them. **删除这 N 条**
+applies only to the loaded filtered list and names the count. The **主 Agent
+回合** tab also gained a search box. The focused suites, typecheck and the gate
+pass; the full suite is 735/735 (one earlier run hit a WhatsApp-bridge
+`EADDRINUSE` while another local preview server held its fixed port 4318;
+unrelated to this change, and it passed once the port was free). Search, hide,
+restore and the resulting ledger lines were exercised in the browser against
+real records.
+
+「设置 → 审计与轨迹 → Agent 调用」列表现在在服务端搜索整个共享调用账本——请求、回复、
+错误、调用者、工作区、模型与 Run id——并显示「显示 N / 共 M 条」。删除只是向追加式的
+`~/.clone/audit/invocations.jsonl` 追加墓碑：原始行保留，勾选「含已删除」即可看到隐藏记录并
+一键恢复。「删除这 N 条」只作用于已加载的筛选结果并写明数量。「主 Agent 回合」标签页也增加了
+搜索框。定向测试、typecheck 与 gate 全部通过；全量测试 735/735 通过（期间有一次运行在
+另一个本地预览服务器占用其固定端口 4318 时触发 WhatsApp 桥 `EADDRINUSE`，与本次变更无关，
+端口释放后通过）。搜索、隐藏、恢复与账本行已在浏览器里用真实记录验证。
+
+### Long builds return at once, and the last two rounds are for the answer
+
+A one-sentence game build no longer holds the chat turn. The Main Agent charter
+and the `dispatch_task` description now send work expected to exceed a minute to
+`propose_work_plan`, so the plan is queued and the owner gets control back. The
+same one-paragraph FPS brief that previously spent ~50 minutes inside
+`dispatch_task` (a 12-minute worker timeout, then planning, then an orphaned run
+at the one-hour boundary) now reaches `waiting_review` in 211.9 s queued, and
+487.9 s with the preview server running. The shared agent loop also reserves the
+last two model rounds: it injects a budget notice to stop polishing, run only the
+essential final check, and answer. A 60-round run that produced a complete,
+browser-checked game but never answered now stops at 57 calls and returns a
+summary. The final artifact is a 10-enemy, headshot-capable, three-relay
+extraction FPS that passes the working agent's start/move/shoot/relay/extract
+checks and loads from `file://` with zero external requests.
+
+一句话游戏构建不再占住对话回合。主 Agent 章程与 `dispatch_task` 描述现在把预计超过一分钟的
+工作交给 `propose_work_plan` 排队，所有者立即拿回控制权。同一段 FPS 简报原先在
+`dispatch_task` 里耗约 50 分钟（12 分钟 Worker 超时、继续规划、一小时边界成为孤儿 Run），
+现在排队后 211.9 秒到达 `waiting_review`，预览服务器启动时 487.9 秒到达。共享 Agent 循环还会
+预留最后两轮模型调用：注入预算提示，要求停止打磨、只做最后的必要检查并回答。一次用满 60 轮、
+产出了完整且经浏览器检查的游戏却没有回答的 Run，现在在 57 次调用时停下并返回总结。最终工件是
+一个有 10 个敌人、支持爆头、三处中继撤离的 FPS，通过工作 Agent 的开始/移动/射击/中继/撤离检查，
+并以 `file://` 打开、零外部请求。
+
+
+### PDF and .docx join the attachments
+
+The composer now accepts PDF and `.docx` files up to 10 MB each. The backend
+extracts their text inside the turn — PDF through `unpdf` (MIT, about 3.1 MB,
+lazy-loaded), `.docx` through a small built-in OOXML reader over `node:zlib` —
+and treats the result like a text document: the model sees a delimited data
+block, while the turn ledger keeps only a name/size manifest. Extracted text
+shares the 50,000/100,000-character caps; a longer file keeps its first part
+with an explicit truncation marker, and the completion notice tells the owner.
+Image-only (scanned) PDFs are refused with "OCR not supported"; legacy `.doc` is
+refused. No file is written to disk. The picker, drag-and-drop and the native
+panel now accept `.pdf` and `.docx`. The focused attachment and extraction
+tests, typecheck and the regression gate pass; fixtures cover a text PDF, a
+`.docx` with XML entities, a scanned PDF, truncation and a broken `.docx`.
+
+### Text documents drop into a turn, and stay out of the ledger
+
+The composer now takes text documents beside images and videos: `.md`, `.txt`,
+`.csv`, `.json`, source and config files, and anything typed `text/*`, up to 4
+attachments, 50,000 characters per document and 100,000 across documents. A file
+can be picked from the panel or dropped anywhere in the window; the native
+selector now allows `.text`, `.json` and `.csv`. The UI reads the file as text
+and sends it; the Main Agent turns it into a delimited data block for that turn,
+while the turn ledger and history keep only `[attached documents: …]` names and
+sizes. PDF, Word and binary files are refused with a reason. 715 tests,
+typecheck and the regression gate pass; the rebuilt app was exercised with a
+picked document, a dropped document and a dropped image, and the intercepted
+request carried both bodies without a model call.
+
+### The packaged app is built from the code that was pushed
+
+The window was running a 9 November bundle while the workspace had moved to 17 November:
+`dist/Clone AI.app` carried an old `src/` and UI, and its Swift binary had no
+`WKUIDelegate.runOpenPanelWith…` implementation, so the composer's paperclip did nothing.
+The bundle is rebuilt from the working tree, and `npm run hooks:install` points Git at the
+tracked `.githooks/` so every push to `main` that changes `src/`, `apps/desktop/`, the
+package manifest or the macOS build script rebuilds the app first
+(`CLONE_AI_SKIP_APP_BUILD=1` skips one). Verification: bundled `src/` and
+`apps/desktop/ui/` are byte-identical to the workspace, the binary contains
+`runOpenPanelWithParameters`, the rebuilt app served the composer, and uploading a PNG
+through the file input produced a preview chip.
+
+### Local browser verification, and a one-sentence FPS that clone-ai could check itself
+
+A worker can now open the page it just wrote. `scripts/install-browser-mcp.mjs`
+writes an enabled Playwright MCP server (`@playwright/mcp@0.0.85`) and a narrow
+`127.0.0.1` read policy into the clone home; `scripts/serve-workspace.mjs`
+serves the project read-only on loopback. Only the observation subset is
+declared — navigate, console, snapshot, evaluate, screenshot, keyboard, resize,
+wait, back, close — so `browser_run_code_unsafe`, file upload and drag/drop stay
+invisible to the worker. The worker finally has eyes and hands for web work:
+it can see console errors, assert page state, and leave the owner a screenshot.
+`browser-mcp.ts` carries the declaration and merge logic, with 8 tests; a
+provider-boundary bug found by the eval (assistant messages echoed dotted tool
+names and the next request was rejected with a 400) is fixed and covered by 3
+more tests.
+
+The fallback work-order budget is now 40 model calls / 200 tool calls instead of
+20 / 100. The same one-paragraph FPS brief produced a playable seven-enemy game
+at 20 calls but stopped mid-verification; at 40 it produced ten enemies, headshot
+damage, a reinforcement wave, cover state, crouch/slide/lean, grenades and
+browser checks. The 40-call run outlived its execution claim before its final
+report, so the artifact was functionally checked by the working agent, not
+accepted on the worker's word. The single-file build
+`eval-runs/2026-11-17-fps-cloneai/dist/shadowport.html` loads from `file://` with
+zero external requests and no console errors; start, move, shoot, three relays,
+extraction and debrief all work.
+
+输入框现在接受 PDF 与 `.docx`，每个最大 10MB。后端在回合内提取正文——PDF 用 `unpdf`
+（MIT，约 3.1MB，懒加载），`.docx` 用基于 `node:zlib` 的小型 OOXML 读取器——并像文本文档
+一样处理：模型看到有边界的数据块，回合台账只保留文件名/大小清单。提取文本沿用
+50,000/100,000 字符上限；更长文件保留前一部分并写入显式截断标记，完成后提示所有者。
+纯图片（扫描件）PDF 会以“不支持 OCR”拒绝；旧式 `.doc` 也会拒绝。不向磁盘写任何文件。
+选择器、拖拽与原生面板现在接受 `.pdf` 与 `.docx`。附件与提取的聚焦测试、typecheck 与
+回归门均通过；夹具覆盖文本 PDF、带 XML 实体的 `.docx`、扫描 PDF、截断与损坏的 `.docx`。
+
+输入框现在在图片与视频之外接受文本文档：`.md`、`.txt`、`.csv`、`.json`、源码与配置
+文件，以及任何 `text/*`，最多 4 个附件、每个文档 50,000 字符、合计 100,000 字符。文件
+可从面板选择，也可拖入窗口任意处；原生选择器允许 `.text`、`.json` 与 `.csv`。UI 把文件
+读成文本发送；Main Agent 在当前回合把它拼成有边界的数据块，而回合台账与历史只保留
+`[attached documents: …]` 的名称与大小。PDF、Word 与二进制文件会带原因拒绝。715 个测试、
+typecheck 与回归门均通过；重建后的应用用选择文档、拖入文档与拖入图片实测，被截获的请求
+带着两份正文，且没有发起模型调用。
+
+窗口里跑的是 11 月 9 日的包，而工作区已到 11 月 17 日：`dist/Clone AI.app` 里的 `src/`
+与 UI 都是旧的，Swift 二进制也没有实现 `WKUIDelegate.runOpenPanelWith…`，因此输入框的
+回形针点了没反应。现在安装包改从工作区重新构建；`npm run hooks:install` 让 Git 使用
+纳入版本管理的 `.githooks/`，每次推送 `main` 且改动涉及 `src/`、`apps/desktop/`、包清单
+或 macOS 打包脚本时先重打包（`CLONE_AI_SKIP_APP_BUILD=1` 可跳过单次）。验证：包内
+`src/` 与 `apps/desktop/ui/` 与工作区逐字节一致，二进制含
+`runOpenPanelWithParameters`，重建后的应用加载了输入框，经文件输入上传 PNG 后出现预览
+缩略图。
+
+一个 Worker 现在能打开它刚写好的页面。`scripts/install-browser-mcp.mjs` 会把启用的
+Playwright MCP 服务器（`@playwright/mcp@0.0.85`）与一条很窄的 `127.0.0.1` 只读策略写进
+clone home；`scripts/serve-workspace.mjs` 在环回上只读地服务项目。只声明观察子集——
+导航、控制台、快照、求值、截图、键盘、缩放、等待、后退、关闭——因此
+`browser_run_code_unsafe`、文件上传与拖放对 Worker 不可见。Worker 终于有了做 Web 工作的
+眼睛和手：能看控制台错误、断言页面状态，并给所有者留下截图。`browser-mcp.ts` 承载声明与
+合并逻辑，配 8 个测试；评测发现的一个 Provider 边界缺陷（assistant 消息回显带点号的工具名，
+下一次请求被 400 拒绝）已修复，并新增 3 个测试覆盖。
+
+fallback 工作单预算从 20 次模型调用 / 100 次工具调用提高到 40 / 200。同一段一句话 FPS 简报
+在 20 次调用时产出了可玩的七敌人游戏，却在验收中途停下；40 次调用时产出了十个敌人、爆头伤害、
+一波增援、掩体状态、蹲/滑铲/探头、手雷与浏览器自检。40 次调用那一轮在给出最终报告前丢了执行
+领取，因此工件由工作 Agent 做功能检查，而不是凭 Worker 自述验收。单文件
+`eval-runs/2026-11-17-fps-cloneai/dist/shadowport.html` 可从 `file://` 打开，零外部请求、
+无控制台错误；开始、移动、射击、三处中继、撤离与结算均可用。
+
+
 ### The verifier reads negation, and naming `tests/` no longer demands a test run
 
 A complete delivery was being failed for saying what it did *not* do. The

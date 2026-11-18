@@ -177,6 +177,38 @@ test("deleting the markdown file archives the memory", async (t) => {
   assert.equal((await store.get(preference.id))?.status, "archived");
 });
 
+test("remove deletes the file and the index rows, and a later sync does not resurrect it", async (t) => {
+  const { store, directory } = await openStore(t);
+  const entry = await store.commit({ summary: "发布前完成风险评审并保留回滚方案", type: "procedure", confidence: "high" });
+  const activePath = join(directory, "memory", `${entry.id}.md`);
+  assert.equal((await store.recall("风险评审")).length, 1);
+
+  await store.remove(entry.id);
+
+  await assert.rejects(readFile(activePath, "utf8"), /ENOENT/);
+  assert.equal(await store.get(entry.id), undefined);
+  assert.deepEqual(await store.list(), []);
+  assert.equal((await store.recall("风险评审")).length, 0, "deleted terms must not stay searchable");
+  // The file is gone, so a later sync has nothing to fold back in; in the
+  // reverse order the orphan .md would come back as a new hand-authored memory.
+  // 文件已删除，后续同步没有可折回的内容；反过来做，遗留的 .md 会作为新的手写记忆回来。
+  assert.deepEqual(await store.syncFromFiles(), { added: 0, archived: 0, updated: 0 });
+  assert.deepEqual(await store.list(), []);
+});
+
+test("remove takes the archived file with it", async (t) => {
+  const { store, directory } = await openStore(t);
+  const entry = await store.commit({ summary: "不再适用的归档偏好内容", type: "preference", confidence: "low" });
+  await store.archive(entry.id);
+  const archivedPath = join(directory, "memory", "archived", `${entry.id}.md`);
+  assert.ok((await readFile(archivedPath, "utf8")).includes(entry.summary));
+
+  await store.remove(entry.id);
+
+  await assert.rejects(readFile(archivedPath, "utf8"), /ENOENT/);
+  assert.deepEqual(await store.list(), []);
+});
+
 test("renderMemoryFile and parseMemoryFile round-trip", () => {
   const entry: MemoryEntry = {
     id: "mem-1",

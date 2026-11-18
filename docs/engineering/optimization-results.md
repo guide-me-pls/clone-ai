@@ -15,6 +15,83 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — The archived memory set is a control, and it can be pruned
+
+- **Claim:** the memory panel's 已归档 count now filters the list to the archived set with one click, and an archived memory can be permanently deleted — both possible `.md` paths, its index row, terms, weights, versions and staged mutations — with the decision journaled as `memory.deleted` (summary included) before the files go. An active memory must be archived first, so the only irreversible memory action stays one deliberate step from the default view.
+- **Evidence:** `node --experimental-strip-types --test test/md-memory-store.test.ts test/memory-governance.test.ts test/memory-library-api.test.ts test/regression/memory-refresh-focus.test.ts` — **48/48**. The API case proves archived→200, active→409, unknown→404, a second DELETE→404, the `.md` gone, and zero remaining rows; the store case proves `syncFromFiles()` does not resurrect a deleted memory. `npm test` **734/734**, `npm run typecheck` pass, `npm run gate` **PASS** (13 cases, agreement 100%, baseline unchanged). In an isolated `CLONE_AI_HOME=/tmp/clone-ai-preview-home`, the browser flow create → archive → click 已归档 → delete ended with no `.md` files, `stats 0/0`, one `memory.deleted` event, the archived card switched `aria-pressed`, and the archived row showed 删除.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--archived-memories-can-be-permanently-deleted-and-archiving-comes-first),
+  [execution chain](optimizations.md#2026-11-18--archived-memories-are-one-click-away-and-can-be-deleted-for-good).
+
+## 2026-11-18 — A PDF or .docx becomes text inside the turn
+
+- **Claim:** PDF and `.docx` attachments are extracted in-process and reach the
+  model as a delimited text block in that turn, under the same 50,000/100,000
+  character caps as text documents. Scanned PDFs and legacy `.doc` are refused
+  with reasons; a longer document is truncated with a marker and a completion
+  notice. Nothing is written to disk, and the ledger keeps only names/sizes.
+- **Evidence:** `node --experimental-strip-types --test test/attachments.test.ts
+  test/document-extract.test.ts test/native-main-agent.test.ts
+  test/desktop-shell.test.ts` — 28/28. Fixtures `sample.pdf.b64`,
+  `sample.docx.b64`, `scanned.pdf.b64`: text PDF and `.docx` extract the
+  expected sentences (entities decoded); the image-only PDF is refused with OCR
+  guidance; a 20-character budget produces the truncation marker and report; a
+  broken `.docx` is refused. The focused run is 28/28; typecheck and
+  `npm run gate` PASS. The full suite passed 727/727 before a concurrent
+  `companion:dev` claimed port 4318; a later run was 731/733, the two failures
+  being unrelated WhatsApp-bridge `EADDRINUSE` errors on that port. The built
+  bundle's own Node extracted both fixtures from `dist/…/runtime` (unpdf at
+  4.1 MB), and the rebuilt app's composer showed two document chips and sent two
+  `{kind:"document", data}` entries.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--pdf-and-docx-are-extracted-before-the-turn-not-handed-to-the-model),
+  [execution chain](optimizations.md#2026-11-18--pdf-and-docx-become-text-before-the-model-sees-them).
+
+## 2026-11-18 — The invocation audit can be searched and cleared without losing evidence
+
+- **Claim:** the **Agent 调用** tab searches the whole shared invocation ledger
+  server-side, shows `显示 N / 共 M 条`, and can hide records — individually or
+  the loaded filtered list — with a reversible tombstone; **含已删除** brings
+  them back. The **主 Agent 回合** tab gains a server-side search box too.
+- **Evidence:** `node --experimental-strip-types --test
+  test/invocation-ledger.test.ts test/companion-control-plane.test.ts` — 10/10 and
+  15/15; before implementation the ledger test failed at import
+  (`does not provide an export named 'markInvocations'`). The final full run is
+  735/735. One run while the preview server held port 4318 was 734/735, the only
+  failure being the unrelated WhatsApp-bridge `EADDRINUSE`; after the port was
+  released the suite passed completely. `npm run typecheck` passes and
+  `npm run gate` PASS with an unchanged baseline.
+  In the Browser pane against the real ledger, `只回复 ok` narrowed 23 records
+  to 3 with focus restored; deleting one left 2; **含已删除** showed it with a
+  已删除 badge; restore returned 3 with none deleted. The ledger file held
+  `started`, `completed`, `deleted`, `restored` for that id with the prompt
+  intact. Turns search `故宫` returned 3 of 8 from the server. A 520-record
+  seeded ledger proved the oldest record still opens by id while the list page
+  stops at 500; padded ids are trimmed and a 500-character id is refused (400).
+  A hide → restore round trip in the browser showed `另有 1 条已隐藏`, then
+  returned 23/23 with no deleted rows.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--deleting-an-audit-invocation-is-a-tombstone-not-an-erased-ledger-line),
+  [execution chain](optimizations.md#2026-11-18--agent-invocation-audit-can-be-searched-and-soft-deleted).
+
+## 2026-11-18 — A text document rides in the turn, not in the ledger
+
+- **Claim:** the composer accepts text documents from the picker or a window-wide
+  drop; the model receives them as a delimited data block in that turn, while the
+  turn ledger and history keep only a name/size manifest. Limits are 4
+  attachments, 50,000 characters per document and 100,000 across documents; PDF
+  and binary files are refused with a reason.
+- **Evidence:** `node --experimental-strip-types --test test/attachments.test.ts
+  test/native-main-agent.test.ts` — 18/18. The native case captures the provider
+  request and asserts the document body appears inside
+  `<document name="notes.md" media-type="text/markdown">`, while
+  `readMainAgentTurnRecords` contains only
+  `[attached documents: notes.md (11 characters)]`. `npm test` 715/715,
+  `npm run typecheck` pass, `npm run gate` PASS with an unchanged baseline. On
+  the rebuilt app's loopback server, a picked `notes.md` and a dropped `todo.txt`
+  plus PNG produced two document chips and one image chip; the intercepted stream
+  body carried both text bodies (`kind:"document"`) next to the image's base64,
+  and the composer cleared. No console errors; no model call was made.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--text-documents-attach-inline-pdfs-and-cross-turn-document-text-wait),
+  [execution chain](optimizations.md#2026-11-18--text-documents-ride-in-the-turn-instead-of-the-workspace).
+
 ## 2026-11-17 — Detail is now a measured requirement, and the render finally shows it
 
 - **Claim:** the Forbidden City benchmark grades architectural detail by counted

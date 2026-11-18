@@ -68,9 +68,31 @@ function openMemoryPanel(library?: any) {
   const paints: string[] = [];
   const attached: { isConnected: boolean }[] = [];
   const failures: unknown[] = [];
+  const listeners = new Map<string, Array<(event: any) => unknown>>();
   let markup = "";
 
   const body: any = { isConnected: true, tagName: "BODY", closest: () => null, contains: () => true };
+
+  /** Minimal Element so the view's `target instanceof Element` guard admits a dispatched click. 最小 Element，使视图的 `target instanceof Element` 守卫接受派发的点击。 */
+  class FakeElement {
+    tagName = "BUTTON";
+    dataset: Record<string, string> = {};
+    closest(_selector: string): FakeElement | null { return null; }
+    scrollIntoView(): void {}
+  }
+
+  // The overview is rendered by app.js; memory.js only reflects the filter on it.
+  // The two filter cards are the only ones with data-memory-filter.
+  // 概览由 app.js 渲染；memory.js 只在它上面反映当前筛选。两张筛选卡片是唯一带
+  // data-memory-filter 的元素。
+  const filterButtons = ["active", "archived"].map((value) => ({
+    dataset: { memoryFilter: value },
+    attrs: {} as Record<string, string>,
+    setAttribute(name: string, next: string): void { this.attrs[name] = next; },
+    getAttribute(name: string): string | undefined { return this.attrs[name]; },
+  }));
+  const overview: any = { querySelectorAll: (selector: string) => (selector === "[data-memory-filter]" ? filterButtons : []) };
+  const candidates: any = { scrollIntoView(): void {} };
 
   const base: any = {
     id: "memory-root",
@@ -110,15 +132,20 @@ function openMemoryPanel(library?: any) {
     documentElement: body,
     hasFocus: () => true,
     createElement: () => anyStub(),
-    getElementById: (id: string) => (id === "memory-root" ? root : anyStub()),
+    getElementById: (id: string) => (id === "memory-root" ? root : id === "library-overview" ? overview : id === "memory-candidates" ? candidates : anyStub()),
     querySelector: () => root,
     querySelectorAll: () => [],
-    addEventListener() {},
+    addEventListener(type: string, handler: (event: any) => unknown) {
+      const list = listeners.get(type) ?? [];
+      list.push(handler);
+      listeners.set(type, list);
+    },
     removeEventListener() {},
   };
 
   const env: any = {
     document: documentStub,
+    Element: FakeElement,
     escape,
     // Every endpoint answers with a well-formed empty payload so a background
     // detail fetch cannot throw for a reason unrelated to the poll.
@@ -168,7 +195,12 @@ function openMemoryPanel(library?: any) {
     await settle();
   };
 
-  return { root, body, documentStub, paints, failures, poll };
+  /** Dispatch a document-level event the way a real element click would. 派发一个文档级事件，如同真实的元素点击。 */
+  const dispatch = async (type: string, event: any): Promise<void> => {
+    for (const handler of listeners.get(type) ?? []) await handler(event);
+  };
+
+  return { root, body, documentStub, paints, failures, poll, filterButtons, dispatch, FakeElement };
 }
 
 const library = makeLibrary([
@@ -241,3 +273,37 @@ test("an unrelated data change during the poll keeps the unsaved editor", async 
   assert.equal(textarea.isConnected, true, "a changed poll replaced the editor textarea the owner was typing in");
   assert.equal(textarea.value, "未保存的正文改动", "a changed poll overwrote the unsaved edit");
 });
+
+test("clicking the archived count filters the panel and marks that card pressed", async () => {
+  const panel = openMemoryPanel();
+  const mixed = makeLibrary([
+    {
+      id: "mem-live", summary: "仍在使用的偏好", content: "", type: "preference", status: "active",
+      sensitivity: "private", confidence: "high", accessCount: 1,
+      createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z", sourceRunId: "owner",
+    },
+    {
+      id: "mem-old", summary: "已经归档的旧偏好", content: "", type: "preference", status: "archived",
+      sensitivity: "private", confidence: "high", accessCount: 0,
+      createdAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-02T00:00:00.000Z", sourceRunId: "owner",
+    },
+  ]);
+  mixed.stats = { active: 1, archived: 1, contentDirectory: "/tmp/memory" };
+  await panel.poll(mixed);
+
+  // Default filter is active, and the two cards reflect it. 默认筛选是使用中，两张卡片反映它。
+  assert.equal(panel.filterButtons[0]?.attrs["aria-pressed"], "true");
+  assert.equal(panel.filterButtons[1]?.attrs["aria-pressed"], "false");
+  assert.match(panel.paints.at(-1) ?? "", /仍在使用的偏好/);
+
+  const target = Object.create(panel.FakeElement.prototype);
+  target.closest = (selector: string) => (selector === "[data-memory-filter]" ? panel.filterButtons[1] : null);
+  await panel.dispatch("click", { target });
+
+  assert.equal(panel.filterButtons[1]?.attrs["aria-pressed"], "true", "the archived card must look selected");
+  assert.equal(panel.filterButtons[0]?.attrs["aria-pressed"], "false");
+  const painted = panel.paints.at(-1) ?? "";
+  assert.match(painted, /已经归档的旧偏好/, "the archived memory must become visible");
+  assert.doesNotMatch(painted, /仍在使用的偏好/, "the active memory must leave the filtered list");
+});
+

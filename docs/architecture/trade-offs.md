@@ -6,7 +6,160 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — Archived memories can be permanently deleted, and archiving comes first
+
+**Decision.** The memory panel gains a permanent delete. An archived memory can
+be removed from disk — its `.md` file under `memory/archived/`, its
+`memory-index.db` rows (`memories`, `memory_terms`, `memory_term_weights`,
+`memory_versions`, `memory_mutations`) — and the decision is journaled as
+`memory.deleted`, with the summary, before anything is unlinked. An active
+memory must be archived first. The `已归档` stat card also becomes a filter
+control, so the archived set is one click away instead of hidden behind the
+status `<select>`.
+
+**Alternatives rejected.**
+
+- *Keep archived files forever.* `MdMemoryStore` exposes commit, update, archive,
+  restore, expireDue, syncFromFiles and stats; `MemoryGovernance` journals
+  promote, reject, author, update, undo, archive and restore. Nothing can remove
+  an archived file. The installed home shows the result: the panel counts one
+  archived memory, and `~/.clone/memory/archived/mem-30cddb43-5da.md` sits there
+  with no control that reaches it. "Your files" is only true while you can
+  delete them.
+- *Delete from any status in one step.* The only irreversible memory action
+  would sit one click from the default view. Archive is already the reversible
+  step (`restore()`), so requiring it keeps the lifecycle legible.
+- *Soft-delete or hide the id.* The file, terms and version rows would still be
+  scanned and counted; the owner asked for deletion, not for a hidden row.
+
+**What was given up.** One extra click to delete an active memory; the version
+rows of a deleted memory disappear with it, so a delete cannot be undone. The
+physical delete removes the `.md` file and the index rows, not the audit trail:
+earlier journal events (`memory.authored`, `memory.updated`, `memory.archived`,
+`memory.recalled`) still carry the id and often the summary. Erasing the audit
+is a second, larger decision; this entry does not take it. The store unlinks both
+possible files before deleting rows: if a crash lands between the two, the next
+`syncFromFiles()` folds the row-less file into a new archived entry rather than
+silently resurrecting a deleted active one. In the other order an orphan `.md`
+would be re-added as a new memory.
+
+**Reversal condition:** if owners routinely abandon the archive-first step, add
+a one-step delete with a stronger confirmation. If a retention or recycle-bin
+policy lands, replace the hard delete with it. If a later audit requirement
+needs version rows to outlive the memory, stop deleting `memory_versions` and
+keep a tombstone instead.
+
+## 2026-11-18 — Deleting an audit invocation is a tombstone, not an erased ledger line
+
+**Decision.** The Agent-invocation view gains server-side search across the whole
+shared ledger plus delete/restore. Deleting appends
+`{"phase":"deleted","id":…}` to `~/.clone/audit/invocations.jsonl`; a later
+restore appends `restored`. Reads fold the last such line into a `deleted` flag
+and hide flagged records unless the caller asks for them (`includeDeleted=1`).
+The original `started`/`completed`/`failed` lines are never removed. Bulk delete
+marks only the records currently loaded in the filtered list, so the owner
+always sees what is about to go.
+
+**Alternatives rejected.**
+
+- *Rewrite the JSONL to remove the lines.* The ledger is shared by every surface
+  (CLI, desktop, WhatsApp, external agents) and appended by several processes at
+  once; a read-modify-write can drop a concurrent append. It would also destroy
+  the only evidence of what was asked and answered, which is the opposite of an
+  audit ledger's purpose.
+- *Hide deleted records only in the browser.* Other surfaces and the API would
+  keep showing them, and a refresh would resurrect them.
+- *Keep a separate deleted-ids file.* That splits one append-only truth into two
+  files that can disagree after a crash; a record could stay visible though the
+  owner deleted it, or disappear though it never was.
+- *Delete the Run journal together with the invocation.* They answer different
+  questions (who called versus what ran); deleting one must not silently delete
+  the other's evidence.
+
+**Evidence.** `readInvocations` already folds multiple lines per id (start plus
+end), so a third phase is the same merge, not a new storage path; the ledger
+writes are best-effort appends. The session sidebar already applies the same
+principle: a deleted session is hidden from the list while its audit record
+stays marked deleted, so an eval never loses a run. The hide → search → restore
+path is covered by `test/invocation-ledger.test.ts` and
+`test/companion-control-plane.test.ts`.
+
+**What it costs.** The file still grows; deletion reclaims no disk. A deleted
+record remains readable through `includeDeleted=1` and the REST detail endpoint,
+which is intentional but means this is privacy hygiene, not erasure. Search
+reads and scans the whole ledger per query (debounced in the UI); at the current
+size that is milliseconds, but it is O(file) per search.
+
+**Reversal condition.** If the ledger needs true erasure (a secret in an old
+prompt, a legal deletion request) or compaction because search latency becomes
+visible, add a compaction/redaction step that rewrites the file under an
+exclusive lock; until then tombstones stay.
+
+## 2026-11-18 — PDF and .docx are extracted before the turn, not handed to the model
+
+**Decision.** The composer accepts PDF and `.docx` files up to 10 MB each, next
+to images, videos and text documents. The backend extracts their text inside the
+request — PDF through `unpdf` (a serverless PDF.js build), `.docx` through a
+small built-in OOXML reader over `node:zlib` — and treats the result exactly like
+a text document: it reaches the model in that turn as a delimited data block,
+while the ledger keeps only a name/size manifest. Extracted text shares the
+50,000-characters-per-document and 100,000-characters-total caps; a longer
+document is truncated with an explicit marker and a completion notice rather
+than refused, because the owner cannot know a PDF's character count before
+attaching it. A PDF with no extractable text (a scan) and legacy `.doc` are
+refused with reasons; OCR is not part of this change. No file is written to the
+workspace or a temp directory; the bytes stay in memory.
+
+**Alternatives rejected.**
+
+- *A native PDFKit/textutil helper compiled into the app.* The app is macOS-only
+  today, but this would add a second executable, path plumbing through the Swift
+  shell and the launchd daemon, and tests that depend on system tools. An
+  in-process parser keeps one extraction path for the app and the tests.
+- *`pdfjs-dist` directly.* It is 37.6 MB unpacked; `unpdf` is a 3.1 MB MIT
+  serverless build of the same parser, which is enough for text extraction.
+- *`mammoth`/JSZip for `.docx`.* A `.docx` is a ZIP of XML; a small reader over
+  `node:zlib` handles the document body without another dependency (and its
+  transitive tree) for one format.
+- *OCR (Tesseract) for scanned PDFs.* A large platform-specific dependency for a
+  case that is better refused explicitly until it is requested.
+- *Writing the file into the workspace and letting the model read it.* The Main
+  Agent's file tools are disabled; attachments stay turn-local and do not create
+  a second authority path.
+
+**Evidence.** `npm view` reports `unpdf@2.2.1` under MIT at 3,143,154 bytes
+unpacked, `pdfjs-dist@6.5.438` under Apache-2.0 at 37,616,588, and
+`mammoth@1.13.0` under BSD-2-Clause at 1,671,388. The repository has no
+production PDF, ZIP or Word parser; `unzipper` exists only as a transitive
+development dependency. The app is packaged as a Node runtime, so an
+in-process parser resolves from the bundle like every other dependency. The
+50,000/100,000-character caps already bound the context cost of text documents;
+binary extraction adds CPU, so a 10 MB file cap and a page cap are needed. The
+assumption that `unpdf` extracts the common text-based PDFs used here, and that
+scanned PDFs yield no text, is marked and is checked by the eval fixtures below.
+
+**What it costs.** A 3.1 MB dependency and its transitive tree; lazy-loading
+keeps it out of the sidecar's startup path. PDF parsing is CPU-bound inside the
+request, so a 10 MB or many-page PDF delays the reply; the page cap bounds it.
+Extraction quality depends on the producer: scanned or image-only PDFs are
+refused, and complex layouts lose structure. The `.docx` reader covers standard
+OOXML text runs and paragraphs, not legacy `.doc`, encrypted files or unusual
+field structures. Untrusted PDFs now reach an in-process parser; the owner
+selects the file and the app is local, but this is a new parser surface.
+Truncation means a long document is only partially read.
+
+**Reversal condition.** If `unpdf` fails on common PDFs, switch to
+`pdfjs-dist` or a sandboxed PDFKit helper. If the built-in `.docx` reader fails
+on ordinary Word files, adopt `mammoth`. If scanned PDFs become a common input,
+add OCR deliberately or move extraction to a bounded worker with a timeout. If
+the Gateway gains native document parts, carry the file as a native part
+instead.
+
 ## 2026-11-18 — Text documents attach inline; PDFs and cross-turn document text wait
+
+**Superseded (same day).** PDF and `.docx` are now extracted on the backend; see
+the newer entry above. The inline, turn-local decision for text documents still
+stands.
 
 **Decision.** The composer accepts text-like documents alongside images and
 videos, from the file panel or a drag-and-drop: any `text/*` file plus the
@@ -16,9 +169,9 @@ the file as text and sends it in the request; the Main Agent renders each
 document as a bounded, clearly delimited data block in the current turn. The
 turn ledger and conversation history record the owner's typed message plus a
 manifest (names and sizes), not the document bodies. PDF, binary and compressed
-files are refused with a reason. The native `NSOpenPanel` now allows `.text` in
-addition to `.image` and `.movie`, and the WebView accepts a drop anywhere in
-the window.
+files are refused with a reason. The native `NSOpenPanel` now allows `.text`,
+`.json` and `.commaSeparatedText` in addition to `.image` and `.movie`, and the
+WebView accepts a drop anywhere in the window.
 
 **Alternatives rejected.**
 
@@ -49,8 +202,10 @@ room for the system prompt and history; the loop's token-aware compaction still
 runs if the rest exceeds the threshold. This is an assumption based on the
 common four-characters-per-token estimate, not a measured provider count for
 the attached files. The eval is deterministic: `test/attachments.test.ts` gains
-accept, reject and compose cases, and `test/desktop-shell.test.ts` asserts the
-drop handlers and the native `.text` panel type.
+accept, reject and compose cases, `test/native-main-agent.test.ts` captures the
+provider request and asserts the ledger keeps only the manifest, and
+`test/desktop-shell.test.ts` asserts the drop handlers and the native panel
+types.
 
 **What it costs.** Documents live in the turn that carried them: a later
 follow-up that asks about their contents must reattach the file, because history
@@ -2472,3 +2627,27 @@ raised rather than the notice removed.
 **Reversal condition:** if runs with the notice routinely end with a materially
 worse artifact than runs without it, reserve three rounds or make the reserve
 configurable. If models ignore the notice, make the final round answer-only.
+
+## 2026-11-18 — The capability benchmark owns its own workspace and checker
+
+**Decided:** capability benchmarks get a subdirectory under
+`benchmark/capability/`, a `setup.mjs` that produces a clean workspace, an
+`expected.json`, and an independent checker that drives the artifact's public
+test hook. The existing Forbidden City benchmark keeps its structure; new ones
+follow this shape.
+
+**Why it won.** The Forbidden City benchmark had a workspace, a prompt and a
+checker, but the FPS work first used a hand-prepared workspace and a
+ad-hoc browser script. That made the "one query" claim unverifiable: the result
+depended on what the harness happened to leave in the directory. A generated
+workspace plus an independent checker makes the claim reproducible and keeps
+scoring out of the worker's own report.
+
+**What was given up.** The model must expose a public hook (`window.__game`) that
+the checker can drive; a game with a beautiful private architecture and no hook
+scores as a failure. The checker is behavioural, not aesthetic: it cannot judge
+gunplay, audio or fun.
+
+**Reversal condition:** if a benchmark needs a private, non-inspectable artifact
+to be fair, replace the hook-driven checker with a recorded playtrace; if hook
+driving proves easy to fake, add an independent scripted playthrough.

@@ -52,12 +52,23 @@ test("the native desktop app is the only product entry", async () => {
 
   assert.match(macShell, /NSToolbar/);
   assert.match(macShell, /NSSegmentedControl/);
+  // Attachments carry text documents, PDF and .docx as well as images, and the
+  // window accepts a dropped file instead of only a picker selection.
+  // 附件除图片外也承载文本文档、PDF 与 .docx，窗口接受拖入文件，而不只是选择器选择。
+  assert.match(indexSource, /id="attachments" type="file" accept="[^"]*text\/\*/);
+  assert.match(indexSource, /accept="[^"]*\.pdf[^"]*\.docx/);
+  assert.match(appSource, /isTextDocumentFile/);
+  assert.match(appSource, /binaryDocumentKind/);
+  assert.match(appSource, /attachmentReports/);
+  assert.match(appSource, /addEventListener\("drop"/);
+  assert.match(appSource, /dataTransfer\?\.types/);
   assert.match(macShell, /NSMenu\(title: "视图"\)/);
   assert.match(macShell, /navigationTitles = \["对话", "定时任务", "Agent", "记忆", "设置"\]/);
   assert.match(macShell, /WKUIDelegate/);
   assert.match(macShell, /webView\.uiDelegate = self/);
   assert.match(macShell, /runOpenPanelWith parameters: WKOpenPanelParameters/);
-  assert.match(macShell, /panel\.allowedContentTypes = \[\.image, \.movie\]/);
+  assert.match(macShell, /panel\.allowedContentTypes = \[\.image, \.movie, \.text, \.json, \.commaSeparatedText, \.pdf\]/);
+  assert.match(macShell, /\["docx"\]\.compactMap/);
   assert.match(macShell, /CLONE_AI_DEV_ROOT/);
   assert.match(macShell, /SIGUSR1/);
   assert.match(devDriver, /CLONE_AI_DEV_ROOT: root/);

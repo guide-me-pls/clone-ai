@@ -34,7 +34,8 @@ import {
 } from "./companion-auth.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
 import { ImprovementService } from "./improvement/improvement-service.ts";
-import { parseAttachments } from "./main-agent/attachments.ts";
+import { MAX_TOTAL_DOCUMENT_CHARACTERS, parseAttachments, type DocumentAttachment } from "./main-agent/attachments.ts";
+import { extractBinaryDocuments, type AttachmentReport } from "./main-agent/document-extract.ts";
 import { buildAttention } from "./opportunity/attention.ts";
 import { PersonalStateStore } from "./state/personal-state-store.ts";
 import { sweepConnectors } from "./connectors/connector-registry.ts";
@@ -71,7 +72,7 @@ import { describeHistory, mainAgentSessionDirectory, readConversation, searchHis
 import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/conversation-store.ts";
 import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
 import { listMainAgentModelIds, listMainAgentModels, mainAgentModelReference } from "./main-agent/main-agent-model-catalog.ts";
-import { readInvocation, readInvocations } from "./audit/invocation-ledger.ts";
+import { MAX_INVOCATION_ID_LENGTH, markInvocations, readInvocation, searchInvocations } from "./audit/invocation-ledger.ts";
 import { WhatsAppBindingInputError, WhatsAppSetupService } from "./mobile/whatsapp-setup.ts";
 
 export interface CompanionServerOptions {
@@ -297,6 +298,32 @@ async function runRecordedMainAgentTurn(
   const result = await runMainAgentQuery(dataDirectory, text, { ...options, turnId, source: "companion" });
   if (result.error !== undefined) throw new Error(result.error);
   return result;
+}
+
+/**
+ * Turns the parsed attachments into the documents the Main Agent receives:
+ * text documents as-is, PDF/.docx after extraction, all under the remaining
+ * character budget. The reports let the interface tell the owner when a long
+ * file was shortened.
+ * 把解析后的附件变成 Main Agent 收到的文档：文本文档原样，PDF/.docx 先提取，全部受剩余
+ * 字符预算约束。reports 让界面在长文件被截断时告诉所有者。
+ */
+async function resolveAttachmentDocuments(
+  attachments: Extract<ReturnType<typeof parseAttachments>, { ok: true }>,
+): Promise<
+  | { ok: true; documents: DocumentAttachment[]; reports: AttachmentReport[] }
+  | { ok: false; error: string }
+> {
+  const textCharacters = attachments.documents.reduce((total, document) => total + document.text.length, 0);
+  const extraction = await extractBinaryDocuments(attachments.binaryDocuments, {
+    remainingCharacters: Math.max(0, MAX_TOTAL_DOCUMENT_CHARACTERS - textCharacters),
+  });
+  if (!extraction.ok) return extraction;
+  return {
+    ok: true,
+    documents: [...attachments.documents, ...extraction.documents],
+    reports: extraction.reports,
+  };
 }
 
 /**
@@ -1119,18 +1146,51 @@ async function handleRequest(
   if (url.pathname.startsWith("/api/invocations")) {
     // The invocation ledger is shared across data directories, so an agent that
     // runs with an isolated CLONE_HOME is still visible in the owner's audit.
+    // Deletion is a tombstone appended to the shared file, never a rewrite: the
+    // file is appended to by several processes at once.
     // 调用账本跨数据目录共享，因此使用隔离 CLONE_HOME 的 Agent 仍会出现在所有者审计中。
+    // 删除是追加到共享文件的墓碑，绝不重写文件：多个进程会同时追加它。
     try {
       if (method === "GET" && url.pathname === "/api/invocations") {
         const requested = Number.parseInt(url.searchParams.get("limit") ?? "100", 10);
         const limit = Number.isFinite(requested) ? Math.min(Math.max(requested, 1), 500) : 100;
-        const records = await readInvocations({ dataDirectory: context.dataDirectory, limit });
-        sendJson(response, 200, { records });
+        const result = await searchInvocations({
+          dataDirectory: context.dataDirectory,
+          limit,
+          query: url.searchParams.get("q") ?? "",
+          includeDeleted: url.searchParams.get("includeDeleted") === "1",
+        });
+        sendJson(response, 200, result);
+        return;
+      }
+      const markMatch = /^\/api\/invocations\/(delete|restore)$/.exec(url.pathname);
+      if (method === "POST" && markMatch !== null) {
+        const body = await readJsonBody(request);
+        const ids = Array.isArray(body.ids)
+          ? body.ids
+            .filter((id): id is string => typeof id === "string")
+            .map((id) => id.trim())
+            .filter((id) => id.length > 0)
+          : [];
+        if (ids.length === 0) {
+          sendJson(response, 400, { error: "Choose at least one invocation." });
+          return;
+        }
+        if (ids.length > 1000) {
+          sendJson(response, 400, { error: "Too many invocations in one request." });
+          return;
+        }
+        if (ids.some((id) => id.length > MAX_INVOCATION_ID_LENGTH)) {
+          sendJson(response, 400, { error: "Invocation ids look invalid." });
+          return;
+        }
+        const changed = await markInvocations({ dataDirectory: context.dataDirectory }, ids, markMatch[1] === "delete");
+        sendJson(response, 200, { changed });
         return;
       }
       const match = /^\/api\/invocations\/([^/]+)$/.exec(url.pathname);
       if (method === "GET" && match !== null) {
-        const record = await readInvocation(decodeURIComponent(match[1]!), { dataDirectory: context.dataDirectory, limit: 500 });
+        const record = await readInvocation(decodeURIComponent(match[1]!), { dataDirectory: context.dataDirectory });
         if (record === undefined) sendJson(response, 404, { error: "Unknown invocation." });
         else sendJson(response, 200, { record });
         return;
@@ -1154,10 +1214,11 @@ async function handleRequest(
       if (method === "GET" && url.pathname === "/api/audit/turns") {
         const turnAudit = await import("./audit/turn-audit.ts");
         const requested = Number.parseInt(url.searchParams.get("limit") ?? "100", 10);
-        const turns = await turnAudit.loadTurnAudits(context.journal, {
+        const result = await turnAudit.searchTurnAudits(context.journal, {
           limit: Number.isFinite(requested) ? requested : 100,
+          query: url.searchParams.get("q") ?? "",
         });
-        sendJson(response, 200, { turns });
+        sendJson(response, 200, result);
         return;
       }
       if (method === "GET" && url.pathname === "/api/audit/export") {
@@ -1614,6 +1675,23 @@ async function handleRequest(
     return;
   }
   const governedMatch = url.pathname.match(/^\/api\/memory\/governed\/([^/]+)$/);
+  if (request.method === "DELETE" && governedMatch?.[1] !== undefined) {
+    // Deletion is the one irreversible memory action. The governance layer
+    // refuses an active memory, so the owner must archive first; this route
+    // maps that refusal to 409 rather than a generic 400.
+    // 删除是唯一不可逆的记忆动作。治理层拒绝删除使用中的记忆，所有者必须先归档；本路由把
+    // 这个拒绝映射成 409，而不是笼统的 400。
+    const id = decodeURIComponent(governedMatch[1]);
+    try {
+      const removed = await context.memoryGovernance.remove(id);
+      sendJson(response, 200, { deleted: { id: removed.id, summary: removed.summary } });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "The memory could not be deleted.";
+      const status = /does not exist/.test(message) ? 404 : /Archive this memory before deleting/.test(message) ? 409 : 400;
+      sendJson(response, status, { error: message });
+    }
+    return;
+  }
   if (request.method === "PATCH" && governedMatch?.[1] !== undefined) {
     const id = decodeURIComponent(governedMatch[1]);
     const body = await readJsonBody(request);
@@ -1817,10 +1895,16 @@ async function handleRequest(
         ...(callerSession === undefined ? {} : { sessionId: callerSession }),
       },
     };
-    if (text.length === 0 && attachments.images.length === 0 && attachments.documents.length === 0) {
+    if (text.length === 0 && attachments.images.length === 0 && attachments.documents.length === 0 && attachments.binaryDocuments.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
+    const resolvedAttachments = await resolveAttachmentDocuments(attachments);
+    if (!resolvedAttachments.ok) {
+      sendJson(response, 400, { error: resolvedAttachments.error });
+      return;
+    }
+    const documents = resolvedAttachments.documents;
     // Delay the SSE headers until the Main Agent lock is held. A busy session
     // must remain a readable 409, not an already-open stream.
     // 等到拿到 Main Agent 锁再发 SSE 头。会话正忙时必须仍是可读的 409，而不是已经打开的流。
@@ -1852,12 +1936,15 @@ async function handleRequest(
       const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
         onDelta: (delta) => send("delta", { delta }),
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
-        ...(attachments.documents.length === 0 ? {} : { documents: attachments.documents }),
+        ...(documents.length === 0 ? {} : { documents }),
         ...invocation,
         signal: abortController.signal,
         onToolEvent: (event) => send("tool", event),
       });
-      send("done", result);
+      send("done", {
+        ...result,
+        ...(resolvedAttachments.reports.length === 0 ? {} : { attachmentReports: resolvedAttachments.reports }),
+      });
     } catch (error: unknown) {
       if (!streamOpen) {
         const busy = error instanceof MainAgentBusyError;
@@ -1899,7 +1986,7 @@ async function handleRequest(
         ...(callerSession === undefined ? {} : { sessionId: callerSession }),
       },
     };
-    if (text.length === 0 && attachments.images.length === 0 && attachments.documents.length === 0) {
+    if (text.length === 0 && attachments.images.length === 0 && attachments.documents.length === 0 && attachments.binaryDocuments.length === 0) {
       sendJson(response, 400, { error: "Please enter a request before sending." });
       return;
     }
@@ -1930,13 +2017,21 @@ async function handleRequest(
       });
       return;
     }
+    const resolvedAttachments = await resolveAttachmentDocuments(attachments);
+    if (!resolvedAttachments.ok) {
+      sendJson(response, 400, { error: resolvedAttachments.error });
+      return;
+    }
     try {
       const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
-        ...(attachments.documents.length === 0 ? {} : { documents: attachments.documents }),
+        ...(resolvedAttachments.documents.length === 0 ? {} : { documents: resolvedAttachments.documents }),
         ...invocation,
       });
-      sendJson(response, 200, result);
+      sendJson(response, 200, {
+        ...result,
+        ...(resolvedAttachments.reports.length === 0 ? {} : { attachmentReports: resolvedAttachments.reports }),
+      });
     } catch (error: unknown) {
       if (error instanceof MainAgentBusyError) {
         sendJson(response, 409, { error: error.message });
@@ -3108,13 +3203,13 @@ function asRecord(value: unknown): Record<string, unknown> {
  */
 
 /**
- * The request body cap. It has to clear the attachment cap: four images at
- * 7 MB of base64 each cannot fit in 32 KB, so the old limit rejected every real
- * screenshot with a 500 while `parseAttachments` advertised 7 MB per image.
- * 请求体上限。它必须高于附件上限：四张各 7 MB base64 的图片装不进 32 KB，
- * 因此旧上限会让每张真实截图都得到 500，而 `parseAttachments` 却宣称每张可到 7 MB。
+ * The request body cap. It has to clear the largest attachment set: four PDF or
+ * Word files at 14 MB of base64 each, or a mix with 7 MB images. A 32 KB cap
+ * rejected every real screenshot; 40 MB could still reject four 10 MB PDFs.
+ * 请求体上限。它必须高于最大的附件组合：四个各 14 MB base64 的 PDF/Word，或与 7 MB
+ * 图片混合。32 KB 的上限会拒绝每张真实截图；40 MB 仍可能拒绝四个 10 MB 的 PDF。
  */
-const MAX_BODY_CHARACTERS = 40_000_000;
+const MAX_BODY_CHARACTERS = 60_000_000;
 
 class RequestBodyTooLargeError extends Error {
   constructor() {

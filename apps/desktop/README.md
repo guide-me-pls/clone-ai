@@ -49,6 +49,10 @@ The machine currently needs an arm64 Node.js 24+ runtime for the build; set
 `CLONE_AI_MAC_NODE` to an explicit executable when it is not available at the default
 local runtime path.
 
+Run `npm run hooks:install` once per clone: a tracked pre-push hook rebuilds the bundle on
+every push to `main` that changes `src/`, `apps/desktop/`, the package manifest, or
+`scripts/build-macos-app.mjs`. A running window keeps the old code until it is reopened.
+
 For development, run `npm run desktop:dev`. It still opens the real native `.app`, but the
 app reads TypeScript and WebView assets directly from this workspace. Changes under `src/`
 or `apps/desktop/ui/` automatically restart only the supervised sidecar and reload the

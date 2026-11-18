@@ -32,6 +32,7 @@ import { McpHost, type McpServerConfig } from "../mcp/mcp-host.ts";
 import { frameMcpOutput } from "../workers/mcp-client.ts";
 import { dispatchTaskTool } from "./tools/dispatch-task.ts";
 import { compactTranscript, contextLevels, contextPressure } from "./context-window.ts";
+import { composeAttachedDocuments, type DocumentAttachment } from "./attachments.ts";
 import { TokenCalibrator } from "../agent/token-estimate.ts";
 import { recordPromptSnapshot } from "./prompt-snapshot.ts";
 import {
@@ -88,6 +89,10 @@ export interface NativeMainAgentOptions {
   onToolEvent?: (event: NativeToolEvent) => void;
   /** Images attached to this turn, sent as OpenAI-style data URLs. 本回合附带的图片，以 OpenAI 风格 data URL 发送。 */
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
+  /** Text documents attached to this turn; their bodies reach the model once. 本回合附带的文本文档；正文只交给模型一次。 */
+  documents?: DocumentAttachment[];
+  /** What the turn ledger records when it differs from the model text, such as an attachment manifest. 当写入台账的文本不同于模型文本时使用，例如附件清单。 */
+  ledgerText?: string;
   cwd?: string;
 }
 
@@ -275,7 +280,7 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
   }, { turnId });
   const turn = await beginMainAgentTurn({
     dataDirectory: options.dataDirectory,
-    text: options.text,
+    text: options.ledgerText ?? options.text,
     source: options.source,
     turnId,
     modelId: endpoint.model,
@@ -300,9 +305,12 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
     chars: options.historyChars ?? 0,
   });
   const images = options.images ?? [];
-  const currentText = options.text.length > 0
-    ? options.text
-    : images.length > 0 ? "(see attached image)" : "(empty message)";
+  const documents = options.documents ?? [];
+  const currentText = documents.length > 0
+    ? composeAttachedDocuments(options.text, documents)
+    : options.text.length > 0
+      ? options.text
+      : images.length > 0 ? "(see attached image)" : "(empty message)";
   const userMessage: AgentMessage = images.length === 0
     ? { role: "user", content: currentText }
     : {

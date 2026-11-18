@@ -69,6 +69,18 @@ npm run gate -- --write-baseline
 门禁衡量的是模型周围的规则，而不是模型质量。真实轨迹评估需要录制的 cassette 或沙箱化
 的 Provider；那是另一套不跑在 CI 里的套件。
 
+
+## 能力评测：一次性 FPS（`benchmark/capability/shadowport-fps`）
+
+上面的可靠性基准问的是 harness 能否完成固定任务。能力基准问的是另一个问题：在**干净工作区**里，
+一条用户消息能否产出一个可玩的战术 FPS，并由 Agent 用浏览器自己验收？提示词只有一段话；
+工作区规则、预览服务器与 Playwright MCP 工具承担其余部分。独立检查器驱动页面的公开
+`window.__game` 钩子，记录 17 项检查（文件、classic-script 运行时、钩子、开始、移动、
+射击扣血、三处中继、撤离、结算、控制台错误、外部请求）。
+
+见 [`capability/shadowport-fps/README.zh-CN.md`](capability/shadowport-fps/README.zh-CN.md)
+与其 [`ANALYSIS.zh-CN.md`](capability/shadowport-fps/ANALYSIS.zh-CN.md)。
+
 ## 它不是什么
 
 - 不是模型基准：通过/失败反映编排 + Provider 当天行为，模型抖动会产生抖动结果。

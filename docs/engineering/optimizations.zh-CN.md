@@ -26,6 +26,320 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-18 —— 归档记忆点一下就能看到，也可以永久删除
+
+- **目标 / 假设：** 记忆面板应让所有者不必翻状态下拉框就能看到归档集，并能永久移除一条
+  归档记忆。假设是：一条归档却无法删除的 `.md` 会让"文件归你"只在有条件时成立，并积累出
+  一组没人能清理的记录。
+- **取舍：** [已归档的记忆可以永久删除，且必须先归档](../architecture/trade-offs.zh-CN.md#2026-11-18--已归档的记忆可以永久删除且必须先归档)。
+- **变更：** `src/memory/md-memory-store.ts` 增加 `remove()`（先删除两个可能位置的
+  `.md`，再在一个事务里删除 `memories`、`memory_terms`、`memory_term_weights`、
+  `memory_versions` 与暂存的 `memory_mutations`）；`src/memory/memory-governance.ts`
+  增加 `remove()`（只允许归档记忆，在 Store 动手之前把 `memory.deleted` 与摘要记入
+  Journal）；`src/core/contracts.ts` 增加事件类型；`src/companion-server.ts` 增加
+  `DELETE /api/memory/governed/:id`（归档 200、使用中 409、未知 404）；
+  `apps/desktop/ui/app.js` 把三张计数卡片渲染成筛选按钮；`apps/desktop/ui/memory.js`
+  处理筛选点击、同步 `aria-pressed`、给归档行增加带确认的「删除」，并移除三处
+  `state.signatures.library` 写入——本视图的 `state` 没有 `signatures`，会抛 TypeError，
+  而记忆库本身变化已经足以让主客户端缓存失效；`components.css` 与 `memory.css` 为新按钮
+  加样式。
+- **Eval：** `node --experimental-strip-types --test test/md-memory-store.test.ts
+  test/memory-governance.test.ts test/memory-library-api.test.ts
+  test/regression/memory-refresh-focus.test.ts` —— 48/48。变更前 DELETE 路由落到 404；
+  新的 API 用例证明归档→200、使用中→409、未知→404、第二次 DELETE→404，`.md` 消失且计数
+  递减。`npm test` 734/734，`npm run typecheck` 通过，`npm run gate` PASS（13 个用例、
+  一致率 100%、基线未变）。在隔离的 `CLONE_AI_HOME=/tmp/clone-ai-preview-home` 中于浏览器
+  驱动面板：创建 → 归档 → 点击「已归档」 → 删除；每一步都播报了预期结果，归档卡片切换
+  `aria-pressed`，归档行出现「删除」，确认框带着摘要，临时 home 最终没有任何 `.md` 文件，
+  Journal 里有一条 `memory.deleted`。
+- **Benchmark run：** 无——确定性测试加一次浏览器检查；没有 Provider、模型、数据集或评分参数。
+- **执行链路：** 一次三读者侦察工作流（运行时轨迹、存储生命周期、界面接线；231,442
+  tokens、400 秒）确认了归档/删除边界与崩溃安全顺序；在工作树中直接实现；先跑定向测试，
+  再跑完整套件与门禁；对隔离 home 的浏览器运行抓到既有的 `state.signatures` TypeError
+  （本次顺手修复，因为它吞掉了本动作的成功路径）与 `applyChrome` 重置确认标签的问题
+  （既有行为，未改）。
+- **优点：** 存储测试证明了"不会复活"的顺序；API 测试覆盖三种状态码；隔离的浏览器 home
+  让所有者的真实记忆库没有被碰过。
+- **缺点 / 下次：** 统计标签与确认文字仍是硬编码中文，与记忆视图其余部分一致；英文 locale
+  下仍显示中文。`applyChrome` 每次轮询都会重写 `[data-i18n]` 节点，因此自定义确认标签会在
+  刷新后退回通用「确认」——值得单独修。反复出现的 native-worker 失败已从 Journal 诊断，
+  但本次没有改：它是一条有文档的刻意规则，且按 AGENTS.md 规则 4，修复必须由修复通道产出。
+- **推翻条件：** 见取舍条目。
+
+### 2026-11-18 —— PDF 与 .docx 在模型看到之前变成文本
+
+- **目标 / 假设：** 所有者应能附上 PDF 或 Word 文件并让模型读到其中的文本，而不把文件写进
+  工作区、也不在之后的回合重复发送。假设是：有界的进程内提取——PDF 用 `unpdf`，`.docx`
+  用小型 OOXML 读取器——足以服务一个本地回合，且按需运行的代价可以接受。
+- **取舍：** [PDF 与 .docx 在回合之前提取](../architecture/trade-offs.zh-CN.md#2026-11-18--pdf-与-docx-在回合之前提取而不是交给模型直接读)。
+- **变更：** 新增生产依赖 `unpdf@2.2.1`（MIT）；`src/main-agent/document-extract.ts`
+  提取 PDF（懒加载、300 页上限、图片大小上限、50k 字符上限）与 `.docx`（ZIP 中央目录 +
+  `inflateRawSync` + OOXML 文本），超长时截断并返回 report；`src/main-agent/attachments.ts`
+  接受带签名校验的 PDF/.docx 二进制文档（10MB 上限）并导出字符上限；
+  `src/companion-server.ts` 在两条 Main Agent 路由上解析二进制文档，并在响应中加入
+  `attachmentReports`；UI 发送 `{kind:"document", name, mimeType, data}`，选择器与拖拽
+  接受 `.pdf`/`.docx`，并在截断时提示；原生面板允许 `.pdf` 与 `.docx`；请求体上限提高到
+  60M，以容纳四个 10MB 文件。
+- **Eval：** `node --experimental-strip-types --test test/attachments.test.ts
+  test/document-extract.test.ts test/native-main-agent.test.ts
+  test/desktop-shell.test.ts` —— 28/28。夹具
+  `test/fixtures/sample.pdf.b64`、`sample.docx.b64`、`scanned.pdf.b64`：文本 PDF 与
+  `.docx` 提取出 `Hello from a PDF fixture.` 与
+  `Second line with Tom & Jerry.`（实体已解码）；纯图片 PDF 以 OCR 提示拒绝；20 字符预算
+  触发截断标记与 report；损坏的 `.docx` 被拒绝。聚焦测试 28/28；typecheck 与
+  `npm run gate` 通过。并发运行的 `npm run companion:dev` 占用 4318 端口之前，全量
+  `npm test` 为 727/727；之后一次为 731/733，两个失败是 WhatsApp 网桥测试在该端口上的
+  `EADDRINUSE`。打包产物自带的 Node 从 `dist/…/runtime` 成功提取两份夹具（unpdf 在包内为
+  4.1MB）；重建后的 App 输入框接受两个文件，显示两个文档 chip，并发出两条
+  `{kind:"document", data}`。
+- **Benchmark run：** 无——确定性测试加本地 UI 演练；不涉及 Provider、模型、数据集或评分
+  参数。
+- **执行链路：** 用 `npm view` 比较方案（`unpdf` 3.1MB MIT、`pdfjs-dist` 37.6MB、
+  `mammoth` 1.67MB）；写取舍条目；用 `cupsfilter`、`textutil`、`sips` 生成夹具；安装
+  `unpdf`（npm 清掉了 140 个多余包，开发依赖树保持完整）；实现并测试提取；接通两条路由、
+  UI 与原生面板；跑聚焦测试、全量测试、typecheck 与 gate；重建 App 并验证包内模块与 UI
+  载荷。失败：第一版调用 `pdf.destroy`，unpdf 的 proxy 没有该方法（改用 `cleanup`）；
+  一个共享预算测试原本期待两份都被截断，但实现在预算耗尽后会正确拒绝，因此改了测试；
+  changelog 与 results 文件正被另一个进程编辑，有一处插入需要重做。
+- **优点：** 不写文件、不新增授权路径；App 与测试共用一条提取链路；扫描件与损坏文件带原因
+  失败；懒加载 `unpdf` 保持 sidecar 启动路径轻量。
+- **缺点 / 下次：** 增加 3.1MB 依赖（包内 4.1MB）；PDF 解析是 CPU 密集的，超大文件会推迟
+  回复；扫描 PDF 仍需要 OCR；旧式 `.doc` 被拒绝；UI 演练用桩替换了流，因此没有证明真实
+  Provider 看到了提取文本（确定性的原生测试覆盖了那个边界）。
+- **推翻条件：** 见取舍条目——沙箱化提取器、`unpdf` 失败时改用 `pdfjs-dist` 或 PDFKit、
+  `.docx` 读取器失败时改用 `mammoth`、扫描 PDF 常见时再做 OCR、Gateway 支持原生文档块时
+  改用原生内容块。
+
+### 2026-11-18 —— Agent 调用审计可搜索、可软删除
+
+- **目标 / 假设：** CLI、桌面、WhatsApp 与 eval 的每次调用都追加到同一本共享账本，
+  **Agent 调用** 标签页在账本还远不算大时就已经看不过来了。所有者应当能按任意可见字段
+  找到一次调用，并在不销毁审计证据的前提下清掉噪音。
+- **取舍：** [删除审计里的 Agent 调用是墓碑，而不是抹掉账本行](../architecture/trade-offs.zh-CN.md#2026-11-18--删除审计里的-agent-调用是墓碑而不是抹掉账本行)。
+- **变更：** `src/audit/invocation-ledger.ts` 把 `deleted` / `restored` 两种新账本阶段折叠成
+  `deleted` / `deletedAt`，新增 `searchInvocations`（对请求、回复、错误、调用者、调用界面、
+  工作区、数据目录、模型、Provider、推理强度、命令、回合 id、会话文件与 Run id 做子串搜索）
+  与 `markInvocations`；`src/companion-server.ts` 提供
+  `GET /api/invocations?q=&includeDeleted=1`（带 `total`）以及接收 `{ids}` 的
+  `POST /api/invocations/delete|restore`；`apps/desktop/ui/audit.js` 增加防抖的服务端搜索框、
+  「含已删除」开关、`显示 N / 共 M 条` 计数、详情里的单条删除/恢复，以及针对已加载筛选结果的
+  `删除这 N 条`；`apps/desktop/ui/audit.css` 增加计数样式。`src/audit/turn-audit.ts`
+  新增 `searchTurnAudits`，`GET /api/audit/turns?q=` 现在返回 `{turns, total}`；
+  **主 Agent 回合** 标签页也增加了服务端搜索框（Journal 保存所有回合，视图只显示一页，
+  搜索不能止步于这一页）。
+- **Eval：** `node --experimental-strip-types --test test/invocation-ledger.test.ts
+  test/companion-control-plane.test.ts`。**变更前：** 账本测试在模块导入时失败
+  （`does not provide an export named 'markInvocations'`），API 也没有搜索或删除路径。
+  **变更后：** 10/10 与 15/15。账本测试断言被隐藏记录的请求行仍在文件中，且删除后文件恰好
+  5 行（两次开始、两次完成、一个墓碑），随后恢复它；第二个测试写入 520 条记录，证明最旧的
+  记录仍可按 id 读取，而列表页在上限 500 处截断；第三个测试喂入 `null` 行、空调用者、
+  坏时间戳与未知阶段，证明它们都会被忽略，既不会伪造完成，也不会让搜索抛错。最终全量测试 735/735 通过；在预览服务器
+  占用 4318 端口期间有一次运行为 734/735，唯一失败是无关的 WhatsApp 桥 `EADDRINUSE`，
+  端口释放后复跑通过。`npm run typecheck` 通过；`npm run gate` PASS 且 baseline 不变
+  （13/9 用例，audit 5/4）。
+- **Benchmark run：** 省略——仅确定性测试 eval；没有跑 Provider 或 benchmark。
+- **执行链路：** 单个 Claude Code 会话。先扫描审计视图、调用账本与服务器路由；写下取舍条目
+  与失败的测试；实现账本折叠、API 与界面；跑定向测试，再跑全量测试、typecheck 与 gate；
+  在 Browser 面板里用真实共享账本走了一遍视图；运行四维度对抗评审并逐条验证发现。评审找到
+  一个真实缺陷：详情路由只在最新的 500 条里查 id，导致新搜索命中的旧记录在打开时 404。
+  现在查询会解析一次账本并按 id 直接取；评审还发现带空白与超长的 id，现在会裁剪、限制在
+  200 字符内，且只有存在的 id 才算变更。第二条发现指出回合页把已加载的一页当成总数、搜索
+  也只搜索这一页；现在回合改走服务端 `searchTurnAudits`，返回同样的 `{turns, total}`。
+  第三条更正了测试里关于账本隔离的注释。第二轮针对账本与界面的评审给出九个已核实的缺陷，
+  全部修复：较慢的详情响应会覆盖后来选中的记录；刷新后详情面板可能仍是旧快照；批量删除
+  可能作用于屏幕尚未画出的状态；失败的上一次请求会抹掉更新的搜索结果；空状态把"全部已隐藏"
+  说成"从未有过记录"（服务端现在返回 `hidden`）；重渲染会丢失焦点控件（render 现在恢复焦点
+  与光标）；读取器在 `null` 行或缺少调用者的记录上抛错、把未知阶段当成"已完成"、接受无法
+  解析的时间戳并破坏排序。中断端点也不再信任非日期的 `startedAt`。除评审外无子 Agent、
+  无付费 Provider 调用；约 45 分钟。
+- **优点：** 追加式账本被保留，删除可逆，搜索覆盖整个账本而不是已加载的一页，存储行为与 API
+  契约都有测试覆盖。对抗评审在发布前抓住了详情/上限缺陷。
+- **缺点 / 下次：** 界面只有结构测试，防抖、焦点恢复与确认流程是手工在浏览器里检查的；
+  无头浏览器测试才能抓住这段事件接线的回归。搜索每次都要扫描整个文件——当前规模没问题，
+  但账本增长几个数量级后需要压缩。
+- **推翻条件：** 与取舍条目一致——需要彻底擦除，或搜索延迟变得可见时，墓碑就不够了；
+  届时增加在排他锁下的压缩/脱敏步骤。
+
+### 2026-11-18 —— 文本文档随回合内联，不写进工作区
+
+- **目标 / 假设：** 所有者应该能像递截图一样递来日志、笔记、CSV 或源码——用选择器或拖拽，
+  且文件不写进工作区。假设是：一个有界的内联数据块足以让模型读懂，同时让台账保持小。
+- **取舍：** [文本文档以内联方式随消息发送；PDF 与跨回合文档暂缓](../architecture/trade-offs.zh-CN.md#2026-11-18--文本文档以内联方式随消息发送pdf-与跨回合文档暂缓)。
+- **变更：** `src/main-agent/attachments.ts` 增加 `documents`（只允许文本，按扩展名或 MIME
+  校验，最多 4 个附件、每个 50k 字符、合计 100k，拒绝二进制与带路径的文件名）、
+  `attachmentManifest` 与 `composeAttachedDocuments`；`src/main-agent/native-runtime.ts`
+  拼装模型消息并记录 `ledgerText` 而不是文档正文；`src/application/run-main-query.ts`
+  审计清单；companion 的两条路由都透传 documents；`apps/desktop/ui/{index.html,app.js,components.css}`
+  渲染文档 chip、发送 `{kind:"document", name, mimeType, text}` 并接受全窗口拖入；
+  `apps/desktop/macos/main.swift` 在原生面板允许 `.text`、`.json` 与
+  `.commaSeparatedText`；提示词与 locale 说明文件可拖入。
+- **Eval：** `node --experimental-strip-types --test test/attachments.test.ts
+  test/native-main-agent.test.ts` —— 18/18，其中新增的 fake-provider 用例断言文档块进入
+  模型请求，而回合台账只保留清单。`npm test` 715/715；`npm run typecheck` 通过；
+  `npm run gate` PASS 且 baseline 不变。对重建 App 的环回服务器做浏览器检查时用桩替换
+  `/api/main-agent/stream`：选择 `notes.md`、拖入 `todo.txt` 与 PNG，得到两个文档 chip 与
+  一个图片 chip；捕获的请求带两份文档正文与图片 base64，发送后输入框清空；无控制台错误。
+  随后从重建的 App 选择 `.ts` 源码得到文档 chip 而不是视频帧，`.pdf` 也按预期被拒绝。
+- **Benchmark run：** 无——确定性、离线 eval；不涉及 Provider、模型、数据集或评分参数。
+- **执行链路：** 读只看图片的解析器、两条聊天路由与原生循环；先写取舍条目；扩展解析器并
+  新增 7 个用例（文件共 12 个）；把文档穿过原生运行时与台账；加入 UI chip、拖拽与原生面板
+  类型；重建 `dist/Clone AI.app`（约 1 分钟）并重启；跑聚焦测试、全量测试、typecheck 与
+  gate。浏览器检查用桩替换流，因此没有真实模型调用或 token 消耗，也没有证明真实 Provider
+  接受拼装后的文本。第一版仍允许声明的二进制 MIME 因扩展名像文本而放行，且 macOS 会把
+  `.ts` 报成视频类型；两者在最终构建前都已收紧并复验。
+- **优点：** 不加依赖；文档不离开本回合；清单让审计如实且不重复正文；UI 与服务端应用同一套
+  文本类型规则；`.ts` 按扩展名归为源码，而不会交给视频解码器。
+- **缺点 / 下次：** PDF 与 Word 仍被拒绝；浏览器检查是 Chromium 对着 App 服务器，而不是
+  原生窗口；原生选择器只用编译后的选择器与面板类型验证，没有真实点击。历史只有清单，追问
+  文档内容需要重新附上文件——这是有意的取舍。
+- **推翻条件：** 从取舍条目复制：原生文档内容块、受治理的附件存储、一个经过审查的 PDF
+  提取器，或压缩频繁时降低上限。
+
+### 2026-11-17 —— 最后两轮留给最终回答
+
+- **目标 / 假设：** 已经构建并检查完工件的 Worker 必须在硬轮次上限前停止打磨并回答；否则一个
+  完整工件会被报成失败的 Run。
+- **取舍：** [为最终回答预留最后两轮](../architecture/trade-offs.zh-CN.md#2026-11-17--为最终回答预留最后两轮)。
+- **变更：** `src/agent/loop.ts` 在只剩两轮模型调用时注入 System 预算提示：停止探索与编辑，
+  只做最后的必要检查，并回答做了什么、验证了什么、还有什么未验证。`test/agent-loop.test.ts`
+  增加用例。
+- **Eval：** 同一段 FPS 提示词与工作区。**变更前：** Run `1947de27-…` 把 60 轮全用在打磨上，
+  产出了完整 v4 与浏览器截图，却以“达到 60 轮上限且没有最终回答”失败。**变更后：** Run
+  `bfd514f4-…` 在 57 次模型调用时停下，写出最终回答，并在 471,978 毫秒到达 `waiting_review`；
+  Worker 自己的截图与控制台/状态检查都在工作区里。
+- **Benchmark run：** 命令同上，使用 `home4`；Provider `openai/gpt-6.1-terra`；Main 强度
+  `medium`，Worker `high`、`MAX_ROUNDS=60`、`MAX_TOKENS=24000`；任务为一段话 FPS 简报；结果文件
+  `run4.log`、`run5.log`、`home4/journal.sqlite3`、`ws/shadowport-final-*.png`。
+- **执行链路：** 60 轮运行暴露问题；加入提示并单测；重跑时留出两轮并返回总结。游戏代码没有
+  手工修改。
+- **优点：** Run 以回答收尾，而不是预算失败；Worker 仍有两轮做最后检查。
+- **缺点 / 下次：** 失去两轮打磨；确实需要尾轮的任务应提高预算，而不是移除提示。提示是散文；
+  未来的循环可以让最后一轮只能回答。
+- **推翻条件：** 复制自取舍条目。
+
+### 2026-11-18 —— Shadowport 一次性 FPS 能力评测
+
+- **目标 / 假设：** 能力评测应测量干净工作区的一条用户消息，而不是提示词调过的迭代；
+  评分必须独立于 Worker 自己的报告。
+- **取舍：** [能力评测拥有自己的工作区与检查器](../architecture/trade-offs.zh-CN.md#2026-11-18--能力评测拥有自己的工作区与检查器)。
+- **变更：** 新增 `benchmark/capability/shadowport-fps/`——`prompt.md`（一段话）、
+  `workspace-AGENTS.md` + `setup.mjs`（干净工作区，`vendor/three.iife.js` 由 esbuild 构建）、
+  `expected.json`、`verify/check-shadowport.mjs`（驱动页面公开 `window.__game` 钩子的 17 项检查）。
+  新增 `scripts/import-audit.mjs`，把隔离评测 Run 导入所有者的 `~/.clone` Journal、对话回合与
+  调用账本。
+- **Eval：** 两轮同一段话的干净从零运行。clean1（`c8e69c85`）：22 次模型调用、373,548 tokens、
+  207.1 秒，外部检查器 17/17，但 Worker 自查打到旧端口（8137）并如实失败。clean2（`2e8e10a8`）：
+  33 次模型调用、744,190 tokens、312.8 秒，外部检查器 17/17，Worker 自查**通过**且零工具错误
+  （18 次 `browser_evaluate`、6 张截图、4 次控制台读取），8 个敌人、三处中继、撤离与结算。
+- **Benchmark run：** `CLONE_AI_MAIN_EFFORT=medium node
+  --experimental-strip-types eval-runs/2026-11-17-browser-mcp/run.mjs <workspace>
+  <clone-home> benchmark/capability/shadowport-fps/prompt.md`；Provider
+  `openai/gpt-6.1-terra`；Main `medium`、Worker `high`、`MAX_ROUNDS=60`、
+  `MAX_TOKENS=24000`、工作单 600 秒；结果文件
+  `eval-runs/2026-11-18-shadowport-clean2/run.log`、`home/journal.sqlite3`、
+  `verify/out/report.json`、`audit-shadowport.jsonl`。
+- **执行链路：** 搭建 harness（setup、checker），跑 clean1（端口不匹配），修正端口并重跑
+  clean2，检查 17/17，把 Run 导入 `~/.clone`，导出审计，重建 macOS App。
+- **优点：** 检查器独立且易重跑；工作区可复现；审计导入让评测 Run 出现在所有者的 App 里。
+- **缺点 / 下次：** 每种配置只跑一次，还没有模型对比；因为标准是散文，终态仍是 `waiting_review`。
+- **推翻条件：** 复制自取舍条目。
+
+### 2026-11-17 —— 长构建排队，不占住对话回合
+
+- **目标 / 假设：** 一句话构建应立即返回对话，让排队的 Worker 去跑；在 `dispatch_task` 里同步
+  等待会让慢构建看起来像产品卡死，还可能活过 Run 的领取期限。
+- **取舍：** [长构建排队执行，不再卡在对话回合里](../architecture/trade-offs.zh-CN.md#2026-11-17--长构建排队执行不再卡在对话回合里)。
+- **变更：** 在主 Agent 章程（`src/main-agent/prompt.ts`）与 `dispatch_task` 描述
+  （`src/main-agent/tools/dispatch-task.ts`）中加入规则：预计超过一分钟的工作用
+  `propose_work_plan`；`dispatch_task` 只留给短任务。FPS 工作区的 `AGENTS.md` 也写明同一规则。
+- **Eval：** 同一段 FPS 提示词、同一工作区，两条执行路径。**变更前：** Run `e01cf2cc-…` 用
+  `dispatch_task`；回合约 50 分钟（第一次 Run 在调用内 12 分钟超时，随后继续规划），进程在一小时
+  边界成了孤儿，没有终态。**变更后：** Run `bcc33257-…` 排队；主 Agent 立即返回，Run 在
+  211.9 秒到达 `waiting_review`（47 次工具调用、33 次模型调用）。第二次排队运行（预览服务器
+  已启动）`bfd514f4-…` 在 487.9 秒到达 `waiting_review`（57 次模型调用），写出最终 v5 工件与
+  浏览器截图。
+- **Benchmark run：** 命令 `node --experimental-strip-types
+  eval-runs/2026-11-17-browser-mcp/run.mjs eval-runs/2026-11-17-fps-cloneai/ws
+  eval-runs/2026-11-17-fps-cloneai/home3 eval-runs/2026-11-17-fps-cloneai/prompt.md`；
+  Provider `openai/gpt-6.1-terra`；Main 强度 `medium`，Worker `high`、
+  `MAX_ROUNDS=60`、`MAX_TOKENS=24000`；任务为一段话 FPS 简报；结果文件
+  `eval-runs/2026-11-17-fps-cloneai/run3.log` … `run5.log`、`home3/journal.sqlite3`、
+  `home4/journal.sqlite3`。
+- **执行链路：** 先走 dispatch（12 分钟 Worker 超时发生在调用内部），再改排队；排队运行 211.9 秒
+  返回，但浏览器检查因预览服务器未启动而失败（Worker 如实说明）；服务器起来后的下一轮使用了
+  浏览器并到达 `waiting_review`。
+- **优点：** 对话保持响应，Run 在队列里可见，Worker 的验收证据是真实的。
+- **缺点 / 下次：** 所有者要面对两个阶段；工作区必须知道预览服务器；模型仍可能对长任务选
+  `dispatch_task`。
+- **推翻条件：** 复制自取舍条目。
+
+### 2026-11-17 —— 40 次调用预算让一句话产出一个可玩的 FPS
+
+- **目标 / 假设：** 一段话的游戏请求应产出可玩结果，而不是在第一次验收就停下的文件草稿。
+  fallback planner 的 20 次工作单上限是约束点。
+- **取舍：** [fallback 工作单默认 40 次模型调用，而不是 20](../architecture/trade-offs.zh-CN.md#2026-11-17--fallback-工作单默认-40-次模型调用而不是-20)。
+- **变更：** 把 `src/planning/fallback-planner.ts` 的 `defaultWorkOrderBudget()` 从 20 次模型
+  调用 / 100 次工具调用提高到 40 / 200。游戏代码没有一行是手工写的：工作 Agent 只对 Worker
+  产出的工件做功能检查。
+- **Eval：** 同一命令、同一段一句话提示词、同一工作区，两种预算：
+  `node --experimental-strip-types eval-runs/2026-11-17-browser-mcp/run.mjs
+  eval-runs/2026-11-17-fps-cloneai/ws eval-runs/2026-11-17-fps-cloneai/home
+  eval-runs/2026-11-17-fps-cloneai/prompt.md`。
+  **变更前（20 次）：** Run `ecf3e57e-…` 在 439.5 秒后撞上限；产出了可玩的 7 敌人 FPS、
+  三处中继与撤离，但没有爆头、掩体或增援（备份 `game.v1.js`）。
+  **变更后（40 次）：** Run `e01cf2cc-…` 产出 26 KB 游戏：10 个敌人、爆头伤害、增援波、
+  掩体状态、蹲/滑铲/探头、手雷与浏览器自检；该轮在 3710 秒后丢了执行领取，没给出最终报告。
+  工作 Agent 的功能检查：开始、移动、射击（身体 100→50）、完成三处中继、到达撤离、结算，
+  无控制台错误；单文件版本从 `file://` 打开，零外部请求。
+- **Benchmark run：** 命令同上；Provider `openai/gpt-6.1-terra`；Main 强度 `high`；Worker
+  强度 `high`、`MAX_ROUNDS=60`、`MAX_TOKENS=24000`、单次 600 秒；工作单预算 20 vs 40 次
+  模型调用；任务为一段话 FPS 简报；结果文件
+  `eval-runs/2026-11-17-fps-cloneai/run.log`、`run2.log`、`ws/game.js`、`game.v1.js`、
+  `dist/shadowport.html`、`check/` 截图。
+- **执行链路：** Main Agent 选择 `dispatch_task`，走确定性 fallback planner 与 20 次工作单。
+  20 次时 Worker 写出完整 v1，却在验收中途停下。把默认值提到 40 并用同一段提示词重跑，同一个
+  Worker 补上缺失系统并运行浏览器检查；随后这一轮活得比领取更久。两次失败与一次孤儿 Run 都
+  保留在这里，而不是隐藏。
+- **优点：** 工件真实可玩，提示词仍是一段话，浏览器工具给了 Worker 控制台/状态/截图反馈。
+  40 次预算实质改变了结果。
+- **缺点 / 下次：** 40 次调用那一轮很慢，而且可能丢领取；在继续提高之前要先修时长上限与领取
+  续期。Worker 仍看不见图片，视觉判断仍归所有者。fallback planner 的通用目标是弱 harness；
+  任务特定的计划会把预算花得更好。
+- **推翻条件：** 复制自取舍条目。
+
+### 2026-11-17 —— 通过 Playwright MCP 做本地浏览器验收
+
+- **目标 / 假设：** 能打开自己刚写好的页面、读控制台、断言状态并留下截图的 Worker，会比只能
+  "写完祈祷" 的文件工具 Worker 产出更好的一次性 Web 工件。
+- **取舍：** [通过 Playwright MCP 做本地浏览器验收](../architecture/trade-offs.zh-CN.md#2026-11-17--通过-playwright-mcp-做本地浏览器验收)。
+- **变更：** 新增 `src/integrations/browser-mcp.ts`（服务器配置、仅观察工具声明、窄 localhost
+  策略、合并函数）、`scripts/install-browser-mcp.mjs`、`scripts/serve-workspace.mjs`、
+  `docs/usage/browser-mcp.md` 及中文版、`test/browser-mcp.test.ts`。修复评测发现的 Provider
+  边界缺陷：assistant 消息回显真实工具名（`playwright.browser_navigate`），下一次请求被名称
+  模式 400 拒绝；现在 assistant 工具调用名与工具表一样做 Provider 安全化。新增
+  `test/provider-tool-names.test.ts`。
+- **Eval：** `node --experimental-strip-types eval-runs/2026-11-17-browser-mcp/run.mjs
+  eval-runs/2026-11-17-browser-mcp/ws eval-runs/2026-11-17-browser-mcp/home
+  eval-runs/2026-11-17-browser-mcp/prompt.md`。变更前 Worker 只有四个文件工具、没有浏览器；
+  变更后它读取 `AGENTS.md` 与 `index.html`、导航、等待、读控制台、编辑、再次导航、用
+  `browser_evaluate` 断言画布像素与 `window.__probe`、保存 `screenshot.png`。结果：Run
+  `25521d80-d370-4a56-a45b-897639291b6b`，Worker 32,114 tokens / 12 次模型调用 / 46.6 秒，
+  Run 为 `waiting_review`（散文验收标准无法机器覆盖）；工件与截图正确。
+- **Benchmark run：** 命令同上；Provider `openai/gpt-6.1-terra`；Main 与 Worker 强度
+  `high`；Worker `MAX_ROUNDS=60`、`MAX_TOKENS=24000`、单次 600 秒；任务为一次 HTML 编辑加
+  浏览器自检；无数据集/种子；结果文件
+  `eval-runs/2026-11-17-browser-mcp/run.log`、`.../home/journal.sqlite3`、
+  `.../ws/screenshot.png`。
+- **执行链路：**（1）直接用 clone-ai 的 MCP 客户端探测 `@playwright/mcp@0.0.85`——导航、
+  控制台、求值、截图均可用；（2）编写策略/声明层与安装脚本；（3）第一次运行失败，因为驱动的
+  environment 没有导出给 Provider Registry；（4）第二次运行因未清洗的工具名被 Provider 400；
+  （5）修边界、重跑，Worker 完成自检。两次失败约 1.5 分钟，保留在日志里而不是隐藏。
+- **优点：** 浏览器以十个已声明工具出现，而不是一个不透明 Agent；每次调用都在 Journal 里；
+  截图与控制台错误是真实证据；不需要下载 OS 浏览器。
+- **缺点 / 下次：** Worker 看不见图片，视觉质量仍要靠所有者或 `browser_evaluate`；浏览器不是
+  OS 沙箱；首次 `npx` 启动需要联网。逐次 URL 闸门会比 `--allowed-origins` 更强。
+- **推翻条件：** 复制自取舍条目。
+
 ### 2026-11-17 — 只有桌面的产品界面
 
 - **目标 / 假设：** 让桌面 App 成为唯一产品入口，使仓库不再附带第二个所有者界面和一条

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -12,7 +12,7 @@ import { createRuntimeAssembly } from "../src/core/runtime-factory.ts";
 import { createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import { companionFetch } from "./helpers/companion-api.ts";
-import { beginInvocation } from "../src/audit/invocation-ledger.ts";
+import { beginInvocation, invocationLedgerPath } from "../src/audit/invocation-ledger.ts";
 
 async function companion(t: TestContext): Promise<{ url: string; token: string; dataDirectory: string }> {
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-control-"));
@@ -68,15 +68,124 @@ test("the audit API exposes shared Agent invocations and their visible output", 
   await handle.complete({ reply: "这是可见输出。", newRuns: [{ id: "run-visible", status: "completed" }] });
 
   const listed = await companionFetch(url, token, "/api/invocations");
-  const body = await listed.json() as { records: Array<{ id: string; caller: { kind: string }; status: string; reply?: string }> };
+  const body = await listed.json() as { records: Array<{ id: string; caller: { kind: string }; status: string; reply?: string }>; total: number };
   assert.equal(body.records[0]?.id, handle.id);
   assert.equal(body.records[0]?.caller.kind, "codex");
   assert.equal(body.records[0]?.status, "completed");
   assert.equal(body.records[0]?.reply, "这是可见输出。");
+  assert.equal(body.total, 1);
 
   const detail = await companionFetch(url, token, `/api/invocations/${handle.id}`);
   assert.equal(detail.status, 200);
   assert.equal((await detail.json() as { record: { newRuns: unknown[] } }).record.newRuns.length, 1);
+});
+
+test("invocations can be searched, hidden and restored through the audit API", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const location = { dataDirectory, auditHome: dataDirectory, environment: { HOME: dataDirectory } };
+  const meeting = await beginInvocation({
+    prompt: "整理今天的会议记录",
+    surface: "cli",
+    workspacePath: dataDirectory,
+    dataDirectory,
+    auditHome: dataDirectory,
+    caller: { kind: "claude-code", sessionId: "thread-meeting" },
+    environment: { HOME: dataDirectory },
+  });
+  await meeting.complete({ reply: "会议记录已整理。", newRuns: [{ id: "run-meeting-42", status: "completed" }] });
+  const palace = await beginInvocation({
+    prompt: "重建故宫 3D 模型",
+    surface: "desktop",
+    workspacePath: dataDirectory,
+    dataDirectory,
+    auditHome: dataDirectory,
+    caller: { kind: "codex", sessionId: "thread-palace" },
+    environment: { HOME: dataDirectory },
+  });
+  await palace.complete({ reply: "模型已完成。" });
+
+  const searched = await companionFetch(url, token, `/api/invocations?q=${encodeURIComponent("会议")}`);
+  const found = await searched.json() as { records: Array<{ id: string }>; total: number };
+  assert.deepEqual(found.records.map((record) => record.id), [meeting.id]);
+  assert.equal(found.total, 1);
+
+  const hidden = await companionFetch(url, token, "/api/invocations/delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: [meeting.id] }),
+  });
+  assert.equal(hidden.status, 200);
+  assert.equal((await hidden.json() as { changed: number }).changed, 1);
+
+  const visible = await companionFetch(url, token, "/api/invocations");
+  const visibleBody = await visible.json() as { records: Array<{ id: string }>; total: number };
+  assert.deepEqual(visibleBody.records.map((record) => record.id), [palace.id]);
+  assert.equal(visibleBody.total, 1);
+
+  const withDeleted = await companionFetch(url, token, "/api/invocations?includeDeleted=1");
+  const withDeletedBody = await withDeleted.json() as { records: Array<{ id: string; deleted?: boolean }>; total: number };
+  assert.equal(withDeletedBody.total, 2);
+  assert.equal(withDeletedBody.records.find((record) => record.id === meeting.id)?.deleted, true);
+
+  const detail = await companionFetch(url, token, `/api/invocations/${meeting.id}`);
+  assert.equal(detail.status, 200, "a hidden record stays readable for restore");
+
+  const restored = await companionFetch(url, token, "/api/invocations/restore", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: [meeting.id] }),
+  });
+  assert.equal(restored.status, 200);
+  const afterRestore = await companionFetch(url, token, "/api/invocations");
+  assert.equal((await afterRestore.json() as { total: number }).total, 2);
+
+  // Padded ids are trimmed; an unknown id is not a change; an oversized id is refused.
+  // 带空白的 id 会被裁剪；未知 id 不算变更；超长 id 会被拒绝。
+  const padded = await companionFetch(url, token, "/api/invocations/delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: [` ${palace.id} `] }),
+  });
+  assert.equal((await padded.json() as { changed: number }).changed, 1);
+  const afterPadded = await companionFetch(url, token, "/api/invocations");
+  assert.deepEqual(
+    ((await afterPadded.json() as { records: Array<{ id: string }> }).records).map((record) => record.id),
+    [meeting.id],
+  );
+  await companionFetch(url, token, "/api/invocations/restore", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: [palace.id] }),
+  });
+
+  const stale = await companionFetch(url, token, "/api/invocations/delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: ["does-not-exist"] }),
+  });
+  assert.equal((await stale.json() as { changed: number }).changed, 0);
+
+  const oversized = await companionFetch(url, token, "/api/invocations/delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: ["A".repeat(500)] }),
+  });
+  assert.equal(oversized.status, 400);
+
+  const invalid = await companionFetch(url, token, "/api/invocations/delete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids: [] }),
+  });
+  assert.equal(invalid.status, 400);
+
+  // The test runner sets NODE_TEST_CONTEXT, so beginInvocation's explicit
+  // auditHome and the server's default both resolve to <dataDirectory>/audit;
+  // neither touches the owner's home.
+  // 测试运行器会设置 NODE_TEST_CONTEXT，因此 beginInvocation 的显式 auditHome 与服务器的
+  // 默认解析都指向 <dataDirectory>/audit；两者都不会写所有者主目录。
+  const raw = await readFile(invocationLedgerPath(location), "utf8");
+  assert.match(raw, /整理今天的会议记录/);
 });
 
 test("a non-loopback Origin is refused even with a valid bearer", async (t) => {

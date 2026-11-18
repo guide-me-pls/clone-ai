@@ -64,6 +64,7 @@
 .au-chip { border: 1px solid var(--line-strong, #ccd4df); background: var(--surface, #fff); border-radius: 99px; padding: 4px 12px; font: inherit; cursor: pointer; }
 .au-chip.is-on { background: var(--au-info); border-color: var(--au-info); color: #fff; }
 .au-check { display: inline-flex; gap: 5px; align-items: center; color: var(--subtle, #5c6675); font-size: 12px; }
+.au-count-note { color: var(--muted, #8791a1); font-size: 11.5px; white-space: nowrap; }
 .au-split { display: grid; grid-template-columns: minmax(260px, 2fr) minmax(320px, 3fr); gap: 12px; align-items: start; }
 @media (max-width: 900px) { .au-split { grid-template-columns: 1fr; } }
 .au-list { display: grid; gap: 6px; max-height: 70vh; overflow: auto; padding-right: 2px; }

@@ -11,6 +11,7 @@
  * 移除 Pi 分支意味着端点缺失会清晰失败，而不是静默回退到某个 SDK。
  */
 import type { Run } from "../core/contracts.ts";
+import { attachmentManifest, type DocumentAttachment } from "../main-agent/attachments.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { runNativeMainAgentTurn, type NativeToolEvent } from "../main-agent/native-runtime.ts";
 import { beginInvocation, type InvocationCaller, type InvocationSurface } from "../audit/invocation-ledger.ts";
@@ -34,6 +35,12 @@ export interface MainAgentQueryOptions {
   auditHome?: string;
   /** Images the owner attached to this turn. 所有者在本回合附带的图片。 */
   images?: Array<{ type: "image"; data: string; mimeType: string }>;
+  /**
+   * Text documents the owner attached to this turn. Their bodies reach the
+   * model in this turn only; the ledger keeps a manifest, not the contents.
+   * 所有者在本回合附带的文本文档。正文只在本回合交给模型；台账只记清单，不记内容。
+   */
+  documents?: DocumentAttachment[];
   /**
    * Called for each token as the agent produces it. The deltas exist either
    * way; without a sink they are merely accumulated and delivered at the end,
@@ -61,8 +68,20 @@ export async function runMainAgentQuery(
   text: string,
   options: MainAgentQueryOptions = {},
 ): Promise<MainAgentQueryResult> {
+  const images = options.images ?? [];
+  const documents = options.documents ?? [];
+  const manifest = attachmentManifest(documents);
+  // The ledger records what the owner typed and which documents came with it,
+  // never the document bodies: a later turn must not replay 100k characters it
+  // never asked to see.
+  // 台账记录所有者输入的正文与随行文档清单，绝不记录文档正文：之后的回合不应重放它
+  // 从未要求看到的 100k 字符。
+  const basePrompt = text.length > 0
+    ? text
+    : documents.length > 0 ? "" : images.length > 0 ? "(see attached image)" : "(empty message)";
+  const auditedPrompt = [basePrompt, manifest].filter((part) => part.length > 0).join("\n\n");
   const audit = await beginInvocation({
-    prompt: text.length === 0 ? "(see attached image)" : text,
+    prompt: auditedPrompt,
     surface: options.surface ?? "desktop",
     workspacePath: options.workspacePath ?? process.cwd(),
     dataDirectory,
@@ -74,10 +93,12 @@ export async function runMainAgentQuery(
     const result = await withMainAgentLock(dataDirectory, () => runNativeMainAgentTurn({
       dataDirectory,
       text,
+      ledgerText: auditedPrompt,
       source: options.source ?? "companion",
       ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
       ...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
       ...(options.images === undefined ? {} : { images: options.images }),
+      ...(options.documents === undefined ? {} : { documents: options.documents }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       ...(options.onToolEvent === undefined ? {} : { onToolEvent: options.onToolEvent }),
       onMetadata: (metadata) => audit.note(metadata),

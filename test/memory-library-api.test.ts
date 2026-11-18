@@ -252,3 +252,43 @@ test("one memory reports the runs that actually recalled it", async (t) => {
   const other = await companionFetch(url, token, "/api/memory/governed/does-not-exist");
   assert.equal(other.status, 404);
 });
+
+test("an archived memory can be permanently deleted; an active one must be archived first", async (t) => {
+  const { url, token } = await companion(t);
+  const created = await companionFetch(url, token, "/api/memory/governed", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ summary: "准备删掉的旧偏好内容", content: "已经不再适用。" }),
+  });
+  assert.equal(created.status, 201);
+  const { memory } = await created.json() as { memory: LibraryMemory };
+  const { stats } = await library(url, token);
+
+  const refused = await companionFetch(url, token, `/api/memory/governed/${memory.id}`, { method: "DELETE" });
+  assert.equal(refused.status, 409);
+  assert.match((await refused.json() as { error: string }).error, /Archive this memory before deleting it/);
+  assert.ok((await readdir(stats.contentDirectory)).includes(`${memory.id}.md`), "a refused delete must leave the file alone");
+
+  const archived = await companionFetch(url, token, `/api/memory/governed/${memory.id}`, {
+    method: "PATCH", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status: "archived" }),
+  });
+  assert.equal(archived.status, 200);
+  const archivedPath = join(stats.contentDirectory, "archived", `${memory.id}.md`);
+  assert.ok((await readFile(archivedPath, "utf8")).includes(memory.summary));
+
+  const removed = await companionFetch(url, token, `/api/memory/governed/${memory.id}`, { method: "DELETE" });
+  assert.equal(removed.status, 200);
+  const body = await removed.json() as { deleted: { id: string; summary: string } };
+  assert.equal(body.deleted.id, memory.id);
+  assert.equal(body.deleted.summary, memory.summary);
+
+  const after = await library(url, token);
+  assert.equal(after.memories.some((item) => item.id === memory.id), false);
+  assert.equal(after.stats.archived, 0);
+  assert.equal(after.stats.active, 0);
+  await assert.rejects(readFile(archivedPath, "utf8"), /ENOENT/);
+
+  const again = await companionFetch(url, token, `/api/memory/governed/${memory.id}`, { method: "DELETE" });
+  assert.equal(again.status, 404);
+});

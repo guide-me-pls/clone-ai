@@ -69,8 +69,9 @@ export function dispatchTaskTool(options: DispatchTaskOptions): PlainKernelTool 
     name: "dispatch_task",
     label: "Dispatch Task",
     description:
-      "Ask the Kernel to plan and run one bounded task. Use this for work that must change files or run an executor; "
-      + "answer conversation directly and use propose_work_plan when you already know the exact steps. "
+      "Ask the Kernel to plan and run one bounded task. This call waits for the run, so use it for a short task only; "
+      + "for a build expected to take more than a minute, use propose_work_plan so the work is queued. "
+      + "Answer conversation directly when no files change. "
       + "The objective is the outcome, not the method; acceptance criteria are what the Kernel verifies. "
       + "The Kernel owns planning, authority, budgets and completion. Returns runId, final status and a short summary.",
     parameters: Type.Object({

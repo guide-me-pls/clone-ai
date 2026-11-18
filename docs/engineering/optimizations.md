@@ -31,6 +31,404 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — Archived memories are one click away and can be deleted for good
+
+- **Goal / hypothesis:** the memory panel should let the owner reach the archived
+  set without hunting a dropdown, and remove an archived memory permanently. The
+  hypothesis was that an archived-but-undeletable `.md` makes "your files" only
+  conditionally true and accumulates a set nobody can prune.
+- **Trade-off:** [Archived memories can be permanently deleted, and archiving comes first](../architecture/trade-offs.md#2026-11-18--archived-memories-can-be-permanently-deleted-and-archiving-comes-first).
+- **Change:** `src/memory/md-memory-store.ts` gained `remove()` (both possible
+  `.md` paths unlinked first, then one transaction over `memories`,
+  `memory_terms`, `memory_term_weights`, `memory_versions` and staged
+  `memory_mutations`); `src/memory/memory-governance.ts` gained `remove()`
+  (archive-only, journals `memory.deleted` with the summary before the store
+  acts); `src/core/contracts.ts` added the event type; `src/companion-server.ts`
+  added `DELETE /api/memory/governed/:id` (200 archived, 409 active, 404
+  unknown); `apps/desktop/ui/app.js` renders the three count tiles as filter
+  buttons; `apps/desktop/ui/memory.js` handles the filter clicks, keeps
+  `aria-pressed` in sync, adds a confirmed 删除 action to archived rows, and
+  removed three `state.signatures.library` writes that threw a TypeError (this
+  view's `state` has no `signatures`, and the changed library already invalidates
+  the main client's cache); `components.css` and `memory.css` style the pressed
+  tile and the danger button.
+- **Eval:** `node --experimental-strip-types --test test/md-memory-store.test.ts
+  test/memory-governance.test.ts test/memory-library-api.test.ts
+  test/regression/memory-refresh-focus.test.ts` — 48/48. Before this change the
+  DELETE route fell through to 404; the new API case proves archived→200,
+  active→409, unknown→404, a second DELETE→404, the `.md` gone and the stats
+  decremented. `npm test` 734/734, `npm run typecheck` pass, `npm run gate` PASS
+  (13 cases, agreement 100%, baseline unchanged). In an isolated
+  `CLONE_AI_HOME=/tmp/clone-ai-preview-home`, the panel was driven in the
+  browser: create → archive → click 已归档 → delete; each step announced the
+  expected result, the archived card switched `aria-pressed`, the archived row
+  showed 删除, the confirm dialog carried the summary, and the temp home ended
+  with zero `.md` files and one `memory.deleted` journal event.
+- **Benchmark run:** none — deterministic tests plus a browser check; no
+  provider, model, dataset or scoring parameters.
+- **Execution chain:** one recon workflow with three readers (runtime trace,
+  storage lifecycle, UI wiring; 231,442 tokens, 400 s) confirmed the
+  archive/delete boundary and the crash-safe order; the implementation was made
+  directly in the working tree; targeted tests first, then the full suite and
+  gate; the browser run against an isolated home caught the pre-existing
+  `state.signatures` TypeError (fixed here because it swallowed this action's
+  success path) and the `applyChrome` label reset (pre-existing, left as is).
+- **Pros:** the store test proves the no-resurrection order, the API test covers
+  all three status codes, and the isolated browser home kept the owner's real
+  memory library untouched.
+- **Cons / next time:** the stat labels and the confirm text are hardcoded
+  Chinese, matching the rest of the memory view; an English locale still shows
+  them in Chinese. `applyChrome` rewrites `[data-i18n]` nodes on every poll, so a
+  custom confirm label reverts to the generic 确认 after a refresh — worth a
+  separate fix. The repeated native-worker failure was diagnosed from the journal
+  but not changed here: it is a documented intentional rule, and per AGENTS.md
+  rule 4 any fix must come from the repair lane.
+- **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-18 — PDF and .docx become text before the model sees them
+
+- **Goal / hypothesis:** the owner should be able to attach a PDF or Word file
+  and have the model read its text, without the file being written to the
+  workspace or replayed in later turns. The hypothesis was that bounded
+  in-process extraction — `unpdf` for PDF, a small OOXML reader for `.docx` —
+  is enough for a local turn and cheap enough to run on demand.
+- **Trade-off:** [PDF and .docx are extracted before the turn](../architecture/trade-offs.md#2026-11-18--pdf-and-docx-are-extracted-before-the-turn-not-handed-to-the-model).
+- **Change:** added `unpdf@2.2.1` (MIT) as a production dependency;
+  `src/main-agent/document-extract.ts` extracts PDF (lazy import, 300-page cap,
+  image-size cap, 50k-character cap) and `.docx` (ZIP central directory +
+  `inflateRawSync` + OOXML text), truncates with a marker and returns reports;
+  `src/main-agent/attachments.ts` accepts signed PDF/.docx binary documents up
+  to 10 MB and exports the character limits; `src/companion-server.ts` resolves
+  binary documents on both Main Agent routes and adds `attachmentReports` to the
+  response; the UI sends `{kind:"document", name, mimeType, data}`, accepts
+  `.pdf`/`.docx` from the picker and drop, and announces truncation; the native
+  panel allows `.pdf` and `.docx`; the request body cap rises to 60M for four
+  10 MB files.
+- **Eval:** `node --experimental-strip-types --test test/attachments.test.ts
+  test/document-extract.test.ts test/native-main-agent.test.ts
+  test/desktop-shell.test.ts` — 28/28. Fixtures
+  `test/fixtures/sample.pdf.b64`, `sample.docx.b64`, `scanned.pdf.b64`: the text
+  PDF and `.docx` extract `Hello from a PDF fixture.` and
+  `Second line with Tom & Jerry.` (entities decoded); the image-only PDF is
+  refused with OCR guidance; a 20-character budget truncates with the marker and
+  report; a broken `.docx` is refused. The focused run is 28/28; typecheck and
+  `npm run gate` PASS. A full `npm test` passed 727/727 before a concurrent
+  `npm run companion:dev` claimed port 4318; a later run passed 731/733, the two
+  failures being the WhatsApp-bridge tests' `EADDRINUSE` on that port. The built
+  bundle's own Node extracted both fixtures from `dist/…/runtime` (unpdf is
+  4.1 MB in the bundle), and the rebuilt app's composer accepted both files,
+  showed two document chips, and sent two `{kind:"document", data}` entries.
+- **Benchmark run:** none — deterministic tests plus a local UI exercise; no
+  provider, model, dataset, or scoring parameters.
+- **Execution chain:** compared options with `npm view` (`unpdf` 3.1 MB MIT,
+  `pdfjs-dist` 37.6 MB, `mammoth` 1.67 MB); wrote the trade-off; generated
+  fixtures with `cupsfilter`, `textutil` and `sips`; installed `unpdf` (npm
+  pruned 140 extraneous packages; the dev tree stayed intact); implemented and
+  tested extraction; wired both routes, the UI and the native panel; ran the
+  focused tests, full suite, typecheck and gate; rebuilt the app and verified the
+  bundled module and UI payload. Failures: the first draft called `pdf.destroy`,
+  which unpdf's proxy does not expose (used `cleanup`); a first shared-budget
+  test expected two truncated documents but the implementation correctly refuses
+  once the budget is consumed, so the test was corrected; the changelog and
+  results files were being edited by another process and one insertion had to be
+  re-applied.
+- **Pros:** no file writes and no new authority path; one extraction path for
+  app and tests; scanned and broken files fail with reasons; lazy `unpdf` keeps
+  the sidecar's startup path light.
+- **Cons / next time:** a 3.1 MB dependency (4.1 MB in the bundle); PDF parsing
+  is CPU-bound and a very large file delays the reply; scanned PDFs still need
+  OCR; legacy `.doc` is refused; the UI exercise stubbed the stream, so it did
+  not prove a real provider sees the extracted text (the deterministic native
+  test covers that boundary).
+- **Reversal condition:** see the trade-off — a sandboxed extractor, `pdfjs-dist`
+  or PDFKit if unpdf fails, `mammoth` if the `.docx` reader fails, OCR only if
+  scanned PDFs become common, or native document parts when the Gateway supports
+  them.
+
+### 2026-11-18 — Agent-invocation audit can be searched and soft-deleted
+
+- **Goal / hypothesis:** every CLI, desktop, WhatsApp and eval call appends to
+  one shared ledger, so the **Agent 调用** tab becomes unreadable long before
+  the ledger is large. The owner should be able to find a call by any visible
+  field and remove noise without destroying audit evidence.
+- **Trade-off:** [Deleting an audit invocation is a tombstone, not an erased
+  ledger line](../architecture/trade-offs.md#2026-11-18--deleting-an-audit-invocation-is-a-tombstone-not-an-erased-ledger-line).
+- **Change:** `src/audit/invocation-ledger.ts` folds two more ledger phases
+  (`deleted` / `restored`) into `deleted` / `deletedAt`, adds
+  `searchInvocations` (substring over prompt, reply, error, caller, surface,
+  workspace, data directory, model, provider, effort, command, turn id, session
+  file and Run ids) and `markInvocations`; `src/companion-server.ts` serves
+  `GET /api/invocations?q=&includeDeleted=1` with `total`, plus
+  `POST /api/invocations/delete|restore` taking `{ids}`;
+  `apps/desktop/ui/audit.js` adds a debounced server-backed search box, a
+  含已删除 toggle, a `显示 N / 共 M 条` count, per-record delete/restore in the
+  detail pane and `删除这 N 条` for the loaded filtered list;
+  `apps/desktop/ui/audit.css` adds the count style.
+  `src/audit/turn-audit.ts` gains `searchTurnAudits`, and
+  `GET /api/audit/turns?q=` now returns `{turns, total}`; the **主 Agent 回合**
+  tab gains a server-side search box as well (the journal holds every turn, so the
+  view shows one page and the search must not stop at it).
+- **Eval:** `node --experimental-strip-types --test test/invocation-ledger.test.ts
+  test/companion-control-plane.test.ts`. **Before:** the ledger test file failed
+  at module import (`does not provide an export named 'markInvocations'`), and
+  the API had no search or delete path. **After:** 10/10 and 15/15. The ledger
+  test asserts that a hidden record's prompt line is still in the file and the
+  file has exactly five lines (two starts, two completions, one tombstone),
+  then restores it; a second test seeds 520 records and proves the oldest one is
+  still readable by id while the list page stops at 500; a third feeds a `null`
+  line, a null caller, a bad timestamp and an unknown phase, and proves each is
+  ignored without inventing a completion or throwing on search. The final full run is
+  735/735; one run while the preview server held port 4318 was 734/735, the only
+  failure being the unrelated WhatsApp-bridge `EADDRINUSE`, which passed once
+  the port was released. `npm run typecheck` passes; `npm run gate` PASS with an
+  unchanged baseline (13/9 cases, audit 5/4).
+- **Benchmark run:** omitted — deterministic test-only eval; no provider or
+  benchmark was run.
+- **Execution chain:** one Claude Code session. Scanned the audit view, the
+  invocation ledger and the server routes; wrote the trade-off entry and the
+  failing tests; implemented the ledger fold, API and UI; ran the targeted
+  tests, then the full suite, typecheck and gate; exercised the view in the
+  Browser pane on the real shared ledger; ran a four-dimension adversarial
+  review with per-finding verification. That review found a real defect: the
+  detail route looked up the id only among the newest 500 records, so an old
+  record surfaced by the new whole-ledger search 404'd. The lookup now parses
+  the ledger once and goes straight by id; the same review found padded and
+  oversized ids, which are now trimmed, capped at 200 characters, and only
+  existing ids count as a change. A second finding said the turns tab counted
+  the loaded page as the total and searched only it; turns now use a
+  server-side `searchTurnAudits` and the same `{turns, total}` shape. A third
+  corrected the test comment about ledger isolation. The second review pass over
+  the ledger and UI produced nine verified UI/reader defects, all fixed: a slow
+  detail response could overwrite a later selection; a refresh could paint a
+  stale detail; bulk delete could act on state the screen had not painted; a
+  failed older fetch wiped a newer search; the empty state hid the fact that
+  every match was merely hidden (the server now returns `hidden`); a re-render
+  dropped the focused control (render now restores focus and caret); the reader
+  threw on a `null` line or a record with no caller, read an unknown phase as
+  "completed", and accepted a non-date timestamp that poisoned the sort. The
+  interruption endpoint no longer trusts a non-date `startedAt`. No subagents
+  outside the reviews, no paid provider call; about 45 minutes of work.
+- **Pros:** the append-only ledger is preserved, deletion is reversible, search
+  covers the whole ledger instead of the loaded page, and both the storage
+  behavior and the API contract are covered by tests. The adversarial pass
+  caught the detail/limit defect before it shipped.
+- **Cons / next time:** the UI has structural tests only, so the debounce,
+  focus restoration and confirm flow were checked by hand in the browser; a
+  headless browser test would catch a regression in that event wiring. Search
+  is a full-file scan per query — fine at this size, but compaction will be
+  needed if the ledger grows by orders of magnitude.
+- **Reversal condition:** from the trade-off entry — true erasure or visible
+  search latency makes tombstones insufficient; then add a locked
+  compaction/redaction step.
+
+### 2026-11-18 — Text documents ride in the turn instead of the workspace
+
+- **Goal / hypothesis:** the owner should be able to hand the agent a log, a
+  note, a CSV or a source file the same way they hand it a screenshot — by
+  picking it or dropping it — without the file being written to the workspace.
+  The hypothesis was that an inline, bounded data block is enough for the model
+  and keeps the ledger small.
+- **Trade-off:** [Text documents attach inline; PDFs and cross-turn document
+  text wait](../architecture/trade-offs.md#2026-11-18--text-documents-attach-inline-pdfs-and-cross-turn-document-text-wait).
+- **Change:** `src/main-agent/attachments.ts` gained `documents` (text-only,
+  extension or MIME gated, 4 attachments, 50k per file, 100k total, binary and
+  path names refused), `attachmentManifest` and `composeAttachedDocuments`;
+  `src/main-agent/native-runtime.ts` composes the model message and records
+  `ledgerText` instead of the document bodies; `src/application/run-main-query.ts`
+  audits the manifest; both companion routes pass documents through; the composer
+  in `apps/desktop/ui/{index.html,app.js,components.css}` renders document chips,
+  sends `{kind:"document", name, mimeType, text}` and accepts a window-wide drop;
+  `apps/desktop/macos/main.swift` allows `.text`, `.json` and
+  `.commaSeparatedText` in the native panel; the hint and locale string say files
+  can be dropped.
+- **Eval:** `node --experimental-strip-types --test test/attachments.test.ts
+  test/native-main-agent.test.ts test/desktop-shell.test.ts` — 19 tests pass,
+  including a fake-provider turn that asserts the document block reaches the
+  model and the ledger keeps only the manifest. `npm test` 715/715;
+  `npm run typecheck` pass; `npm run gate` PASS with an unchanged baseline.
+  A browser check against the rebuilt app's loopback server used a stubbed
+  `/api/main-agent/stream`: a picked `notes.md`, a dropped `todo.txt` and a
+  dropped PNG produced two document chips and one image chip; the captured
+  request carried both documents' text and the image's base64 data, and the
+  composer cleared after send. No console errors. A `.ts` source file picked
+  from the rebuilt app became a document chip, not a video frame, and a `.pdf`
+  was refused with the intended message.
+- **Benchmark run:** none — this is a deterministic, offline eval; no provider,
+  model, dataset, or scoring parameters are involved.
+- **Execution chain:** read the image-only parser, both chat routes and the
+  native loop; wrote the trade-off first; extended the parser and its 12 tests
+  (7 new cases); threaded documents through the native runtime and ledger; added
+  the UI chips, drag-and-drop and native panel types; rebuilt `dist/Clone AI.app`
+  (about 1 minute) and relaunched it; ran the focused tests, the full suite,
+  typecheck and the gate. The browser check stubbed the stream, so no model call
+  or token was spent, and it did not prove a real provider accepts the composed
+  text. A declared binary MIME could still fall back to a text-looking extension,
+  and macOS reports `.ts` as a video type; both were closed before the final
+  build and re-checked.
+- **Pros:** no new dependency; the document never leaves the turn; the manifest
+  keeps the audit truthful without duplicating bodies; the UI and backend apply
+  the same text-type rules, and `.ts` resolves to source by extension rather than
+  being sent to the video decoder.
+- **Cons / next time:** PDF and Word are still refused, and the browser check
+  exercised Chromium against the app server rather than the native window; the
+  native picker was verified by the compiled binary's selector and the panel
+  types, not by a real click. History keeps only the manifest, so a follow-up
+  about a document needs the file again — that is the deliberate trade-off.
+- **Reversal condition:** copied from the trade-off: native document parts,
+  a governed attachment store, one vetted PDF extractor, or a lower cap if
+  compaction becomes frequent.
+
+### 2026-11-17 — The last two rounds are reserved for a final answer
+
+- **Goal / hypothesis:** a worker that has built and checked the artifact must
+  stop polishing before the hard round limit and answer; otherwise a complete
+  artifact is reported as a failed run.
+- **Trade-off:** [Reserve the last two rounds for a final answer](../architecture/trade-offs.md#2026-11-17--reserve-the-last-two-rounds-for-a-final-answer).
+- **Change:** `src/agent/loop.ts` now injects a system budget notice when two
+  model rounds remain: stop exploring/editing, run only the essential final
+  check, and answer with built/verified/unverified. Added a test in
+  `test/agent-loop.test.ts`.
+- **Eval:** same one-paragraph FPS prompt and workspace. **Before:** run
+  `1947de27-…` used all 60 rounds polishing, produced a complete v4 with
+  browser screenshots, and failed with “reached its 60-round limit without a
+  final answer”. **After:** run `bfd514f4-…` stopped at 57 model calls, wrote a
+  final answer, and reached `waiting_review` in 471,978 ms; the worker's own
+  screenshots and console/state checks are in the workspace.
+- **Benchmark run:** command as above with `home4`; provider
+  `openai/gpt-6.1-terra`; Main effort `medium`, worker `high`, `MAX_ROUNDS=60`,
+  `MAX_TOKENS=24000`; task: one-paragraph FPS brief; result files
+  `run4.log`, `run5.log`, `home4/journal.sqlite3`, `ws/shadowport-final-*.png`.
+- **Execution chain:** the 60-round run exposed the failure; the notice was
+  added and unit-tested; the rerun stopped with two rounds to spare and returned
+  a summary. No game code was hand-written.
+- **Pros:** the run ends with an answer instead of a budget failure; the worker
+  still gets two rounds for a last check.
+- **Cons / next time:** two rounds of polishing are lost; a task that truly needs
+  the tail must raise the budget, not remove the notice. The notice is prose; a
+  future loop could force the last round to be answer-only.
+- **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-18 — Shadowport one-query FPS capability benchmark
+
+- **Goal / hypothesis:** a capability benchmark should measure one user message
+  from a clean workspace, not a prompt-tuned iteration. Scoring must be
+  independent of the worker's own report.
+- **Trade-off:** [The capability benchmark owns its own workspace and checker](../architecture/trade-offs.md#2026-11-18--the-capability-benchmark-owns-its-own-workspace-and-checker).
+- **Change:** added `benchmark/capability/shadowport-fps/` — `prompt.md` (one
+  paragraph), `workspace-AGENTS.md` + `setup.mjs` (clean workspace with
+  `vendor/three.iife.js` built by esbuild), `expected.json`, and
+  `verify/check-shadowport.mjs` (17 checks driving the page's public
+  `window.__game` hook). Added `scripts/import-audit.mjs` to import an isolated
+  benchmark Run into the owner's `~/.clone` journal, conversation turns and
+  invocation ledger.
+- **Eval:** two clean from-scratch runs of the same one-paragraph prompt.
+  clean1 (`c8e69c85`): 22 model calls, 373,548 tokens, 207.1 s, external checker
+  17/17 but the worker's own browser check hit a stale port (8137) and failed
+  honestly. clean2 (`2e8e10a8`): 33 model calls, 744,190 tokens, 312.8 s,
+  external checker 17/17, worker browser check **passed** with zero tool errors
+  (18 `browser_evaluate`, 6 screenshots, 4 console reads), 8 enemies, three
+  relays, extraction and debrief.
+- **Benchmark run:** `CLONE_AI_MAIN_EFFORT=medium node
+  --experimental-strip-types eval-runs/2026-11-17-browser-mcp/run.mjs <workspace>
+  <clone-home> benchmark/capability/shadowport-fps/prompt.md`; provider
+  `openai/gpt-6.1-terra`; Main `medium`, worker `high`, `MAX_ROUNDS=60`,
+  `MAX_TOKENS=24000`, 600 s work-order; result files
+  `eval-runs/2026-11-18-shadowport-clean2/run.log`,
+  `home/journal.sqlite3`, `verify/out/report.json`,
+  `audit-shadowport.jsonl`.
+- **Execution chain:** built the harness (setup, checker), ran clean1 (port
+  mismatch), fixed the port and reran clean2, checked 17/17, imported the Run
+  into `~/.clone`, exported the audit, rebuilt the macOS app.
+- **Pros:** the checker is independent and cheap to rerun; the workspace is
+  reproducible; the audit import makes benchmark Runs visible in the owner's app.
+- **Cons / next time:** one run per configuration, no model comparison yet;
+  `waiting_review` remains the terminal status because the criteria are prose.
+- **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-17 — Long builds queue instead of holding the chat turn
+
+- **Goal / hypothesis:** a one-sentence build should return the conversation
+  immediately and let a queued worker run; holding the turn inside
+  `dispatch_task` makes a slow build look like a hung product and can outlive
+  the run claim.
+- **Trade-off:** [Long builds are queued, not held inside the chat turn](../architecture/trade-offs.md#2026-11-17--long-builds-are-queued-not-held-inside-the-chat-turn).
+- **Change:** added the rule to the Main Agent charter (`src/main-agent/prompt.ts`)
+  and the `dispatch_task` description (`src/main-agent/tools/dispatch-task.ts`):
+  work expected to exceed a minute uses `propose_work_plan`; `dispatch_task`
+  stays for short tasks. The FPS workspace's `AGENTS.md` states the same.
+- **Eval:** one-paragraph FPS prompt, same workspace, two execution paths.
+  **Before:** run `e01cf2cc-…` used `dispatch_task`; the turn took ~50 minutes
+  (a first run timed out after 12 minutes, then planning), and the run was
+  orphaned at the one-hour boundary with no terminal status.
+  **After:** run `bcc33257-…` queued the plan; the Main Agent returned at once
+  and the run reached `waiting_review` in 211.9 seconds (47 tool calls, 33 model
+  calls). A second queued run with the preview server up, `bfd514f4-…`, reached
+  `waiting_review` in 487.9 seconds (57 model calls) and wrote the final v5
+  artifact plus browser screenshots.
+- **Benchmark run:** command `node --experimental-strip-types
+  eval-runs/2026-11-17-browser-mcp/run.mjs eval-runs/2026-11-17-fps-cloneai/ws
+  eval-runs/2026-11-17-fps-cloneai/home3 eval-runs/2026-11-17-fps-cloneai/prompt.md`;
+  provider `openai/gpt-6.1-terra`; Main effort `medium`, worker `high`,
+  `MAX_ROUNDS=60`, `MAX_TOKENS=24000`; task: one-paragraph FPS brief; result
+  files `eval-runs/2026-11-17-fps-cloneai/run3.log` … `run5.log`,
+  `home3/journal.sqlite3`, `home4/journal.sqlite3`.
+- **Execution chain:** dispatch first (12-minute worker timeout inside the call),
+  then queue; the queued run returned in 211.9 s but its browser check failed
+  because the preview server was not running (the worker said so honestly);
+  with the server up the next run used the browser and reached `waiting_review`.
+- **Pros:** the conversation is responsive, the run is visible in the queue, and
+  the worker's verification evidence is real.
+- **Cons / next time:** two phases for the owner; a workspace must know the
+  preview server; `dispatch_task` still blocks if a model picks it for a long
+  task.
+- **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-17 — A 40-call fallback budget produces a playable FPS from one sentence
+
+- **Goal / hypothesis:** a one-paragraph game request should produce a playable
+  result, not a file-only draft that stops at the first verification pass. The
+  fallback planner's 20-call work-order cap was the binding constraint.
+- **Trade-off:** [A fallback work order gets 40 model calls, not 20](../architecture/trade-offs.md#2026-11-17--a-fallback-work-order-gets-40-model-calls-not-20).
+- **Change:** raised `defaultWorkOrderBudget()` in
+  `src/planning/fallback-planner.ts` from 20 model calls / 100 tool calls to
+  40 / 200. No code was hand-written in the game: the working agent only ran
+  functional checks against the artifact the worker produced.
+- **Eval:** same command, same one-paragraph prompt, same workspace, two budgets:
+  `node --experimental-strip-types eval-runs/2026-11-17-browser-mcp/run.mjs
+  eval-runs/2026-11-17-fps-cloneai/ws eval-runs/2026-11-17-fps-cloneai/home
+  eval-runs/2026-11-17-fps-cloneai/prompt.md`.
+  **Before (20 calls):** run `ecf3e57e-…` stopped at the round limit after
+  439.5 s; it produced a playable 7-enemy FPS with relays and extraction, but no
+  headshots, cover or reinforcements (backup: `game.v1.js`).
+  **After (40 calls):** run `e01cf2cc-…` produced a 26 KB game with 10 enemies,
+  headshot damage, a reinforcement wave, cover state, crouch/slide/lean,
+  grenades and browser checks; the run lost its execution claim after 3710 s
+  before its final report. The working agent's functional check: start, move,
+  shoot (100→50 body damage), complete three relays, reach extraction, debrief,
+  no console errors; the single-file build loads from `file://` with zero
+  external requests.
+- **Benchmark run:** command above; provider `openai/gpt-6.1-terra`; Main
+  effort `high`; worker effort `high`, `MAX_ROUNDS=60`, `MAX_TOKENS=24000`,
+  600 s per call; work-order budget 20 vs 40 model calls; task: one-paragraph
+  FPS brief; result files `eval-runs/2026-11-17-fps-cloneai/run.log`,
+  `run2.log`, `ws/game.js`, `game.v1.js`, `dist/shadowport.html`,
+  `check/` screenshots.
+- **Execution chain:** the Main Agent chose `dispatch_task`, which uses the
+  deterministic fallback planner and a 20-call work order. At 20 the worker
+  wrote a complete v1 but stopped mid-verification. Raising the default to 40
+  and rerunning the identical prompt let the same worker add the missing
+  systems and run browser checks; the run then outlived its claim. Two failed
+  attempts and one orphaned run are kept here rather than hidden.
+- **Pros:** the artifact is real and playable, the prompt stayed a single
+  paragraph, and the browser tool gave the worker console/state/screenshot
+  feedback. The 40-call budget changed the result materially.
+- **Cons / next time:** the 40-call run is slow and can lose its claim; the
+  duration cap and claim renewal need a fix before going higher. The worker
+  still cannot see images, so visual judgment remains with the owner. The
+  fallback planner's generic objective is a weak harness; a task-specific plan
+  would spend the budget better.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-17 — Local browser verification via Playwright MCP
 
 - **Goal / hypothesis:** a worker that can open the page it just wrote, read the

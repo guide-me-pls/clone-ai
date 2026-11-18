@@ -25,6 +25,25 @@
 - 桌面端：**设置 → 审计与轨迹 → Agent 调用**。
 - API：`GET /api/invocations` 与 `GET /api/invocations/:id`。
 
+## 搜索与隐藏
+
+桌面视图在**服务端**搜索整个共享账本，而不只是已经加载的那一页，并显示
+`显示 N / 共 M 条`。匹配是对请求、可见回复、错误、调用者、调用界面、工作区、数据目录、
+模型、Provider、推理强度与 Run id 做不区分大小写的子串搜索。**主 Agent 回合** 标签页
+也以同样方式搜索 Journal。
+
+删除一条记录会向账本追加墓碑（`{"phase":"deleted","id":…}`），并把它从默认列表隐藏。
+原有的开始与回复行永不重写，因为多个进程会同时追加同一个文件。勾选**含已删除**可以看到
+被隐藏的记录并恢复；**删除这 N 条**只标记当前筛选结果里已加载的记录，所有者始终看得到
+将要隐藏什么。这是隐私清洁，不是彻底擦除：原文仍在磁盘上，`includeDeleted=1` 与详情端点
+仍能读到。
+
+- `GET /api/invocations?q=<文本>&limit=<1..500>&includeDeleted=1` 返回
+  `{records, total, hidden}`；`total` 是限制之前的命中总数，`hidden` 是仅因默认排除
+  墓碑而被隐藏的命中数（界面据此说“其余记录都已隐藏”，而不是“一条都没有”）。
+- `POST /api/invocations/delete` 与 `POST /api/invocations/restore` 接收
+  `{ids: string[]}`，返回 `{changed}`。
+
 ## 调用者身份与覆盖
 
 账本会自动识别 `CODEX_THREAD_ID`、`CLAUDE_SESSION_ID` 与

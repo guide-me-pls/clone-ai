@@ -38,6 +38,10 @@ ad-hoc 签名，不是经过 Apple notarization 的 App Store 或互联网分发
 arm64 Node.js 24+；如果运行时不在默认本地缓存路径，可通过 `CLONE_AI_MAC_NODE` 指向
 显式可执行文件。
 
+每个克隆运行一次 `npm run hooks:install`：纳入版本管理的 pre-push 钩子会在推送 `main`
+且改动涉及 `src/`、`apps/desktop/`、包清单或 `scripts/build-macos-app.mjs` 时重新打包
+应用。正在运行的窗口要保持旧代码，直到退出并重新打开。
+
 开发时运行 `npm run desktop:dev`。它打开的仍然是真实的原生 `.app`，但会直接读取当前
 工作区的 TypeScript 和 WebView 资源。修改 `src/` 或 `apps/desktop/ui/` 后，受监督的
 sidecar 会自动重启并刷新窗口；修改 Swift 原生壳时会自动重建 `.app` 并重新启动。编辑
