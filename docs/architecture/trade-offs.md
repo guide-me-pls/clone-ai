@@ -6,6 +6,75 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — A journal replay reflects what was recorded; writers validate
+
+**Decision.** `reduceEvent` applies a recorded `run.status_changed` without
+re-checking the transition table. The live writer (`CloneRuntime.changeStatus`)
+asserts the transition before appending, so an executor's mistake is still
+refused before it becomes a journal event. `assertTransition` remains exported
+and used by `failRun`.
+
+**Why it won.** The desktop app and the repair lane shared one data directory on
+2026-11-18. The app's queue consumer recovered run `19252252` as failed at
+06:14:08 because its lease looked dead, while the lane's own process kept
+executing the same run and appended `verifying` at 06:14:21 — an illegal
+`failed -> verifying` transition. Because the reducer validated transitions
+during replay, the companion could no longer start: `hydrate()` threw, the
+sidecar crashed, and launchd retried it into the same error every 30 s. One
+raced event made the whole journal unreadable. The journal is the audit truth; a
+reader must be able to reconstruct it even when a writer recorded something it
+should not have.
+
+**What was given up.** Replay no longer flags an illegal recorded transition.
+The write-time assert in `changeStatus` keeps the guard on the normal paths;
+`recoverOrphanedRuns` writes its own recovery transitions directly and only uses
+allowed ones. The illegal event stays in the journal as evidence and surfaces in
+the audit instead of crashing every projection rebuild.
+
+**Reversal condition:** if an illegal transition appears in the journal with no
+matching live-writer assertion, add a recovery-time warning (not a throw) that
+names the run and event, or move validation into the journal's append path so a
+bad writer is refused before the event exists.
+
+## 2026-11-18 — A repair plan carries the working agent's decision
+
+**Decision.** `npm run repair` gains `--decision <file>`: a short brief from the
+working agent is included verbatim in both phase instructions, marked as expected
+behavior rather than trace data. The regression phase must encode the behavior
+the decision states; the fix phase must implement it. The lane records the brief
+in its report.
+
+**Alternatives rejected.**
+
+- *Let the worker read the trade-off entry in `docs/`.* The plan deliberately
+  forbids reading `docs/` to save rounds and because the tree describes the
+  project, not the failure. Opening one file for one run would erode that rule
+  for every run.
+- *Put the decision inside a trace.* The traces are untrusted evidence; writing
+  instructions into them would corrupt the boundary the prompt already warns the
+  model about.
+- *Only repair traces that name the production file and the wrong behavior.*
+  That leaves decision-level changes — behavior an older rule intended, now
+  reversed — unrepairable by the lane, which is the gap this run exposed.
+
+**Evidence.** The 2026-11-18 Forbidden City repair stopped at its `not-red` gate:
+phase 1 (run `19252252`) read all three traces, read `vendor/three.module.js`
+(ENOENT), and answered without writing anything. The intended behavior lived in
+the trade-off entry under `docs/architecture/trade-offs.md`, which the plan tells
+the worker not to read. `git status` in the worktree showed only `.rsi/`; no
+production file changed. The gate correctly refused a fix without a failing
+reproduction.
+
+**What was given up.** A few thousand characters of step context, and a new way
+for the working agent to steer a repair. A brief can bias the regression case; the
+lane still requires the case to be red and the fix to pass the full suite, so an
+invented reproduction fails the same gate.
+
+**Reversal condition:** if decision-carrying repairs still produce no red case,
+or the brief biases the worker into a reproduction the trace does not support,
+remove the option and restrict the lane to traces that name the production file
+and the wrong behavior.
+
 ## 2026-11-18 — Untracked workspace files are copied into the isolated worktree
 
 **Decision.** When an external step runs in an isolated git worktree, the owner's
@@ -58,6 +127,11 @@ was once missing but is later read successfully or written during the run no
 longer counts as missing at the end. The patch itself is produced by the repair
 lane (`npm run repair`) from the exported trace, as AGENTS.md rule 4 requires;
 this entry records the decision the patch must satisfy.
+
+**Attempt status (2026-11-18).** The first repair-lane run stopped at its
+`not-red` gate before writing a regression test, so this decision is not yet
+implemented and no production file changed. See the optimization log entry for
+what the worker did instead.
 
 **Why it won.** Run `87c526d5` planned "first re-check vendor/three.module.js:
 the previous two runs reported it missing", and its acceptance criterion asked

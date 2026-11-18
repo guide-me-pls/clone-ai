@@ -15,6 +15,13 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — A raced journal event no longer keeps the app from starting
+
+- **Claim:** the companion rebuilds its projection from a shared journal even when one process recorded an illegal `failed -> verifying` transition; the desktop sidecar starts and serves again, while live writers are still refused by `changeStatus`.
+- **Evidence:** `node --experimental-strip-types --test test/run-state.test.ts test/runtime.test.ts test/run-queue.test.ts test/recovery-concurrency.test.ts` — **19/19**, `npm run typecheck` pass. The sidecar that had crashed in `hydrate()` now prints `CLONE_AI_READY`; `GET /api/dashboard` with the bearer token returns **HTTP 200, 8 sessions**; the 2-second `failed -> verifying` queue error loop stops.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-journal-replay-reflects-what-was-recorded-writers-validate),
+  [execution chain](optimizations.md#2026-11-18--a-projection-rebuild-survives-a-raced-status-transition).
+
 ## 2026-11-18 — An isolated step sees the owner's untracked inputs
 
 - **Claim:** an external step that runs in a git worktree now carries the

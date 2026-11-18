@@ -1725,6 +1725,12 @@ export class CloneRuntime {
 
   private async changeStatus(runId: string, status: RunStatus, activeStepId?: string, reason?: string): Promise<void> {
     const run = this.requireRun(runId);
+    // The write-time half of the state machine. Replay no longer validates a
+    // recorded transition, so an executor's illegal change is refused here,
+    // before it becomes a permanent journal event.
+    // 状态机的写入端。重放不再校验记录中的转换，因此执行器的非法变更在这里、在变成永久
+    // Journal 事件之前被拒绝。
+    assertTransition(run.status, status);
     await this.record({
       type: "run.status_changed",
       taskId: run.taskId,

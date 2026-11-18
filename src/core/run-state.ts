@@ -80,7 +80,13 @@ export function reduceEvent(state: RuntimeProjection, event: JournalEvent): Runt
     case "run.status_changed": {
       const payload = event.payload as { status: RunStatus; activeStepId?: string; reason?: string };
       const run = requireRun(state, event.runId);
-      assertTransition(run.status, payload.status);
+      // Replay reflects the journal; it does not re-litigate it. The live
+      // writer (`CloneRuntime.changeStatus`) asserts the transition before
+      // appending. Validating again here let one raced writer make the whole
+      // journal unreadable and the desktop app unable to start (2026-11-18).
+      // 重放如实反映 Journal，而不是重新审判它。实时写入方（`CloneRuntime.changeStatus`）
+      // 在追加前校验转换。在这里再次校验，会让某个竞态写入者把整本 Journal 变成不可读，
+      // 桌面 App 无法启动（2026-11-18）。
       return {
         ...state,
         runs: {

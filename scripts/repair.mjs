@@ -3,7 +3,7 @@
  * The gated repair lane — a maintenance script, not a product CLI.
  *
  * Usage:
- *   npm run repair -- [--dry-run] [--keep] [--max-traces N] [--agent <id>] [--base <ref>] [--repo <path>]
+ *   npm run repair -- [--dry-run] [--keep] [--max-traces N] [--agent <id>] [--base <ref>] [--repo <path>] [--decision <file>]
  *
  * Every phase of a repair is a Kernel Run in an isolated worktree. The lane
  * commits a branch and never merges or pushes it. The desktop app remains the
@@ -14,6 +14,7 @@
  * 修复的每个阶段都是隔离 worktree 中的 Kernel Run。通道提交分支，绝不合并或推送。
  * 桌面 App 仍是唯一面向所有者的产品界面。
  */
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { prepareCloneHome, resolveClonePaths } from "../src/config/clone-home.ts";
@@ -31,18 +32,42 @@ await prepareCloneHome(paths);
 
 async function run() {
   if (args.includes("--help") || args.includes("-h")) {
-    console.log("Usage: npm run repair -- [--dry-run] [--keep] [--max-traces N] [--agent <id>] [--base <ref>] [--repo <path>]");
+    console.log("Usage: npm run repair -- [--dry-run] [--keep] [--max-traces N] [--agent <id>] [--base <ref>] [--repo <path>] [--decision <file>]");
     return 0;
   }
   if (!Number.isInteger(maxTraces) || maxTraces < 1) {
     console.error("--max-traces must be a positive integer.");
     return 1;
   }
+  // A decision-level repair (reversing an older rule) cannot be inferred from a
+  // trace that only shows the old behavior. The brief is read here, bounded,
+  // and passed into both plan phases as expected behavior, not trace data.
+  // 决定层面的修复（推翻旧规则）无法从只展示旧行为的轨迹中推断。这里读取并限制一份说明，
+  // 把它作为期望行为而不是轨迹数据交给两个计划阶段。
+  const decisionPath = flagValue("--decision");
+  let decision;
+  if (decisionPath !== undefined) {
+    try {
+      decision = (await readFile(resolve(decisionPath), "utf8")).trim();
+    } catch (error) {
+      console.error(`--decision file cannot be read: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+    if (decision.length === 0) {
+      console.error("--decision file is empty.");
+      return 1;
+    }
+    if (decision.length > 8_000) {
+      console.error("--decision text must stay under 8,000 characters.");
+      return 1;
+    }
+  }
   const report = await runRepairLane({
     dataDirectory: paths.dataDirectory,
     repo: resolve(flagValue("--repo") ?? process.cwd()),
     ...(flagValue("--base") === undefined ? {} : { base: flagValue("--base") }),
     ...(flagValue("--agent") === undefined ? {} : { agentId: flagValue("--agent") }),
+    ...(decision === undefined ? {} : { decision }),
     maxTraces,
     dryRun: args.includes("--dry-run"),
     keep: args.includes("--keep"),

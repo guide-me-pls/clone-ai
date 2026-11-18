@@ -11,6 +11,13 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 竞态写入的 Journal 事件不再阻止 App 启动
+
+- **主张：** 即使某个进程记录了一次非法的 `failed -> verifying` 转换，companion 仍能从共享 Journal 重建投影；桌面 sidecar 恢复启动与服务，而实时写入方仍被 `changeStatus` 拒绝。
+- **证据：** `node --experimental-strip-types --test test/run-state.test.ts test/runtime.test.ts test/run-queue.test.ts test/recovery-concurrency.test.ts` —— **19/19**，`npm run typecheck` 通过。此前在 `hydrate()` 崩溃的 sidecar 现在打印 `CLONE_AI_READY`；带 bearer token 的 `GET /api/dashboard` 返回 **HTTP 200、8 个会话**；每 2 秒一次的 `failed -> verifying` 队列错误停止。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--journal-重放如实反映记录写入方负责校验)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--投影重建能越过竞态写入的状态转换)。
+
 ## 2026-11-18 —— 隔离步骤能看到所有者未被跟踪的输入
 
 - **主张：** 在 git worktree 中运行的外部步骤现在会带上所有者未被跟踪、未被忽略的文件，

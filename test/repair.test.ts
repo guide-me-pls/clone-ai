@@ -209,6 +209,29 @@ test("the plan puts the red check between the test phase and the fix phase", () 
   }
 });
 
+test("the working agent's decision reaches both phases as expected behavior", () => {
+  const decision = "A path that merely appears in prose is not a required input; only a declared required input may fail the step.";
+  const steps = repairPlan({ traces: [traceFixture()], agentId: "w", dependenciesLinked: true, decision });
+  for (const step of steps) {
+    assert.match(step.instructions, /A path that merely appears in prose/, "the decision must be visible in both phases");
+    assert.match(step.instructions, /NOT trace data/, "the decision must be marked as expected behavior, not evidence");
+  }
+  // Without a brief, the run keeps the old shape: nothing claims a decision.
+  // 没有说明时保持原样：没有任何文字声称存在决定。
+  const without = repairPlan({ traces: [traceFixture()], agentId: "w", dependenciesLinked: true });
+  assert.doesNotMatch(without[0]!.instructions, /The working agent recorded this decision/);
+  assert.doesNotMatch(without[1]!.instructions, /The working agent recorded this decision/);
+});
+
+test("a dry run reports the decision brief it would inject", async (t) => {
+  const repo = await initRepo(t);
+  const data = await tempDir(t, "clone-repair-data-");
+  await mkdir(join(data, "failed-traces"), { recursive: true });
+  await writeFile(join(data, "failed-traces", "r1.json"), JSON.stringify({ runId: "r1", title: "bug" }));
+  const dry = await runRepairLane({ dataDirectory: data, repo, dryRun: true, decision: "expected behavior", run: runCommand, log: () => undefined });
+  assert.equal(dry.decision, "expected behavior");
+});
+
 test("the lane reports no work when no trace is pending, and a dry run creates nothing", async (t) => {
   const repo = await initRepo(t);
   const data = await tempDir(t, "clone-repair-data-");
