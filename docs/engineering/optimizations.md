@@ -31,6 +31,34 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — A checkout-served daemon serves the file, not its startup copy
+
+- **Goal / hypothesis:** an edit to the UI under a running daemon must reach the
+  window on the next request; pinning the asset snapshot at startup made one
+  concurrent edit surface as `Can't find variable` on the first click.
+- **Trade-off:** [A checkout-served daemon re-reads its client files per request](../architecture/trade-offs.md#2026-11-18--a-checkout-served-daemon-re-reads-its-client-files-per-request).
+- **Change:** `src/companion-server.ts` re-reads the requested asset when
+  `CLONE_AI_DEV_MODE=1`, falling back to the startup snapshot;
+  `scripts/install-daemon.mjs` sets the flag for the resident job.
+  `test/ui-structure.test.ts` gains an undefined-function scan so a source that
+  calls a function it never defines fails the suite.
+- **Eval:** appending a line to `app.js` changed the daemon-served length on the
+  next request (152,768 → 152,778 bytes) without restarting the job; before the
+  change the same request kept returning the 16:09 snapshot (150,805 bytes)
+  while the disk had 152,768. `test/ui-structure.test.ts` **10/10**; full suite
+  **757/757**, typecheck and gate pass.
+- **Benchmark run:** none — deterministic asset serving; no provider, model,
+  dataset or scoring parameters.
+- **Execution chain:** reproduced from the screenshot's error, compared served
+  vs on-disk `app.js`, added per-request reads in dev mode, reinstalled the
+  LaunchAgent so the flag reached the job, verified the live length change,
+  fixed two stale UI-test stubs exposed by the new scan, docs.
+- **Pros:** the window now shows the source on disk; the scan catches the class
+  of break at test time instead of at the first click.
+- **Cons / next time:** up to nine reads per request in development; a broken
+  client file now reaches the window immediately (intended, but visible).
+- **Reversal condition:** see the trade-off entry.
+
 ### 2026-11-18 — The owner's message renders Markdown
 
 - **Goal / hypothesis:** rendering the owner's bubble through the same

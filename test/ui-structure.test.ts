@@ -176,6 +176,7 @@ test("populated conversations stay vertical and empty-state flex requires no mes
     messageMarkup: () => '<div class="message"></div>',
     recalledMemoryMarkup: () => "", planMarkup: () => "", agentsMarkup: () => "",
     evidenceMarkup: () => "", approvalMarkup: () => "", reviewMarkup: () => "", traceMarkup: () => "",
+    verificationMarkup: () => "",
     restoreDisclosureScrolls: () => {}, requestAnimationFrame: () => {}, updateScrollBottom: () => {},
   });
   renderSession(null);
@@ -225,10 +226,56 @@ test("approvals are confirmed in the main conversation and child tasks collapse"
   assert.match(app, /session\.id !== MAIN_CONVERSATION_ID/);
   assert.match(app, /data-approve="\$\{escape\(approval\.runId\)\}"/);
   assert.match(app, /data-open-main-conversation/);
+  assert.match(app, /data-review="\$\{escape\(review\.runId\)\}"/);
+  assert.match(app, /session\.reviews/);
   // Derived tasks are grouped under their conversation in a collapsible block.
   // 派生任务折叠在其所属对话之下。
   assert.match(app, /data-child-group/);
   assert.match(app, /childGroupSummary/);
   assert.match(auditCss, /\.session-children/);
+});
+
+test("the owner's message renders markdown like the agent's", async () => {
+  const app = await read("app.js");
+  const css = await read("components.css");
+  // A pasted task brief used to appear as literal #, ** and backticks in the
+  // owner's bubble while the agent's reply rendered. Both roles now share the
+  // escaping renderer, including the local echo.
+  // 粘贴的任务说明过去会在所有者气泡里原样显示 #、** 与反引号，而 Agent 回复正常渲染。
+  // 现在两种角色共用同一个先转义的渲染器，本地回显也一样。
+  assert.match(app, /const body = richText\(text\);/);
+  assert.match(app, /richText\(query \|\| "（已发送附件）"\)/);
+  assert.match(css, /\.message-copy \.md-heading/);
+  assert.match(css, /\.message-copy \.md-list-line/);
+});
+
+test("every function the UI calls is defined", async () => {
+  // The daemon serves app.js from a snapshot read at startup. A source edit
+  // that reorders or drops a function therefore reaches an already-running
+  // window as a runtime break — "Can't find variable" on the first click — and
+  // no static check noticed. This is the cheap version of that check: every
+  // identifier the UI calls with no other definition in the file must exist.
+  // Daemon 提供的是启动时读取的 app.js 快照。源码改动若重排或丢弃函数，会以运行时错误的
+  // 形式到达已在运行的窗口——第一次点击就 "Can't find variable"——而此前没有任何静态检查。
+  // 这是该检查的廉价版本：UI 调用、且文件里没有其他定义的标识符必须存在。
+  const app = await read("app.js");
+  const defined = new Set<string>();
+  for (const match of app.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)) defined.add(match[1]);
+  for (const match of app.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g)) defined.add(match[1]);
+  for (const match of app.matchAll(/window\.([A-Za-z_$][\w$]*)\s*=/g)) defined.add(match[1]);
+  const called = new Set<string>();
+  for (const match of app.matchAll(/(?<![.\w$])([a-z][A-Za-z0-9_$]*)\s*\(/g)) called.add(match[1]);
+  // Keywords and globals that are not declarations in this file, plus words the
+  // regex picks up from strings and property positions.
+  // 关键词与本文件里并非声明的全局，以及正则从字符串和属性位置误抓的词。
+  const ignored = new Set([
+    "if", "for", "while", "switch", "catch", "return", "typeof", "function", "await", "new",
+    "async", "parseInt", "parseFloat", "isNaN", "encodeURIComponent", "decodeURIComponent",
+    "setTimeout", "clearTimeout", "setInterval", "clearInterval", "fetch", "alert", "confirm",
+    "prompt", "requestAnimationFrame", "structuredClone", "queueMicrotask", "import", "require",
+    "resolve", "reject", "onChoose", "run", "first", "u0000BLOCK",
+  ]);
+  const missing = [...called].filter((name) => !defined.has(name) && !ignored.has(name));
+  assert.deepEqual(missing, [], `app.js calls functions it never defines: ${missing.join(", ")}`);
 });
 

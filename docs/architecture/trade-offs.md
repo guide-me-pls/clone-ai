@@ -6,6 +6,48 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — A checkout-served daemon re-reads its client files per request
+
+**Decision.** The resident daemon runs with `CLONE_AI_DEV_MODE=1` (set by
+`scripts/install-daemon.mjs`). In that mode the companion re-reads the client
+asset it is about to serve — `app.js`, the stylesheets, the other view
+scripts — on each request, falling back to the startup snapshot if a file
+cannot be read. The packaged app, which serves its bundled runtime, keeps the
+snapshot for every file except the HTML, which already re-injects the token per
+request.
+
+**Alternatives rejected.**
+
+- *Restart the daemon after every UI edit.* The window follows the endpoint, so
+  a restart is survivable, but a two-minute edit cycle that requires a restart
+  is exactly what the resident job was meant to remove.
+- *Have the page reload only on an explicit action.* The failure observed on
+  2026-11-18 was not a stale page — the *served* script was missing a function
+  a concurrent edit had moved, so the first click threw "Can't find variable".
+  A manual reload cannot fix a script that is wrong at the source of truth.
+- *Drop the snapshot and re-read everything in production too.* The bundled
+  runtime cannot change under the process; re-reading it buys nothing and adds
+  a failed-read fallback path to the packaged product.
+
+**Evidence.** The daemon started at 16:09:41 read `app.js` once
+(`src/companion-server.ts:370-381`). A concurrent edit landed at 16:12:00 and
+wrote `verificationMarkup`; the process kept serving the 16:09 copy, which
+called `recalledMemoryMarkup` after that function had moved, so clicking a task
+threw `Can't find variable: recalledMemoryMarkup`. `curl app.js` against the
+live daemon returned 150,805 bytes, `rg` found the call but no definition, and
+the disk copy at the same moment had the definition. After the change and a
+reinstall, appending a line to `app.js` changed the served length on the next
+request (152,768 → 152,778 bytes) without restarting the job.
+
+**What it costs.** Up to nine small file reads per request in development, each
+with an error fallback; a syntax error written to a client file reaches the
+window immediately instead of being frozen out. The packaged app is unchanged.
+
+**Reversal condition.** If per-request reads show up in profiling or a
+watcher-based cache (fs events) proves simpler, replace the re-read with the
+watcher. If a shipped build is ever served from a checkout, remove the flag
+from the installer and gate it on an explicit developer command instead.
+
 ## 2026-11-18 — A finished run keeps its verification, evidence and trace on screen
 
 **Decision.** A task record always shows what the run produced: an evidence list

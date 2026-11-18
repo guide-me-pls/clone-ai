@@ -15,6 +15,19 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — UI edits reach the running window without a daemon restart
+
+- **Claim:** the resident daemon, which serves a checkout, now re-reads each
+  client asset per request, so a UI edit lands on the next reload instead of
+  stranding the window on the script it read at startup; a source that calls a
+  function it never defines now fails the UI suite.
+- **Evidence:** appending a line to `app.js` changed the served length on the
+  next request (152,768 → 152,778 bytes) with no restart, where the stale
+  snapshot had served 150,805; `test/ui-structure.test.ts` **10/10**; full suite
+  **757/757**, typecheck and gate pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-checkout-served-daemon-re-reads-its-client-files-per-request),
+  [execution chain](optimizations.md#2026-11-18--a-checkout-served-daemon-serves-the-file-not-its-startup-copy).
+
 ## 2026-11-18 — A step ends when the model says it is done, not at a round number
 
 - **Claim:** the shared agent loop has no default model-round cap. It continues
