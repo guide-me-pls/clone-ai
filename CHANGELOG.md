@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### One Agent invocation can be deleted from its row
+
+The Agent-invocation list now shows a compact 删除 control on each row, beside the selectable record, and 恢复 on a deleted row; the bulk "删除这 N 条" still acts on the filtered list. Delete remains soft — a tombstone, restorable from 含已删除.
+
+Agent 调用列表的每一行现在在可选择的记录旁有一个紧凑的「删除」控件，已删除的行显示「恢复」；批量「删除这 N 条」仍然只作用于当前筛选列表。删除仍是软删除——追加墓碑，可从「含已删除」恢复。
+
 ### The packaged app attaches to the resident daemon
 
 A build launched from Finder carries no environment, so the window used to spawn its own runtime even while the `ai.clone.companion` LaunchAgent was running — two writers on one journal. The window now asks launchd whether the job is loaded and attaches when it is; a checkout without the job still runs its own runtime. Developer builds keep theirs unless `CLONE_AI_RESIDENT_DAEMON=1` is explicit.

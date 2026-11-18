@@ -195,3 +195,24 @@ test("populated conversations stay vertical and empty-state flex requires no mes
   assert.match(css, /\.message\s*\{[^}]*display:\s*block[^}]*width:\s*100%/);
   assert.match(css, /\.message\.person\s*\{[^}]*width:\s*100%/);
 });
+
+test("invocation rows keep selection and deletion as sibling controls", async () => {
+  const audit = await read("audit.js");
+  // A button cannot contain another button, so a per-row delete control forces
+  // the row from a single button into a container with two siblings: the pick
+  // button (data-au-invocation) and the action (delete/restore). The bulk action
+  // still counts pick buttons, so it keeps working.
+  // 按钮里不能再放按钮，因此行级删除控件把整行从单个按钮变成带两个兄弟的容器：选择按钮
+  // （data-au-invocation）与动作（删除/恢复）。批量动作仍按选择按钮计数，因此继续有效。
+  const row = audit.match(/<div class="au-row">[\s\S]*?<\/div>`\)\.join\(""\)/);
+  assert.ok(row !== null, "the invocation row must be a container, not one button");
+  assert.match(row![0], /data-au-invocation=/);
+  assert.match(row![0], /data-au-inv-delete=/);
+  assert.match(row![0], /data-au-inv-restore=/);
+  // The pick button closes before the delete action opens: no nested buttons.
+  // 选择按钮在删除动作打开之前关闭：没有嵌套按钮。
+  assert.match(row![0], /<\/button>\s*\$\{record\.deleted/);
+  // The bulk action still reads the pick buttons, not the row actions.
+  // 批量动作仍读取选择按钮，而不是行动作。
+  assert.match(audit, /querySelectorAll\("\[data-au-invocation\]"\)/);
+});

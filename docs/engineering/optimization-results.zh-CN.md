@@ -11,6 +11,13 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 一条 Agent 调用可以从行上删除
+
+- **主张：** 每条 Agent 调用记录所在的行在可选记录旁自带删除/恢复动作，删除单条不再需要打开详情并滚过 Prompt；批量动作仍作用于筛选后的列表，两者都是软删除。
+- **证据：** `node --experimental-strip-types --test test/ui-structure.test.ts` —— **7/7**。在隔离审计 home 里用三条预置记录的浏览器验证：每行都显示「删除」；删除一条后剩两行，追加墓碑并播报"已隐藏 1 条…"；勾选「含已删除」后该行显示「恢复」，恢复后回到三条并播报"已恢复 1 条…"。没有控制台错误。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--调用列表暴露行级删除控件)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--agent-调用列表的行级删除入口)。
+
 ## 2026-11-18 —— 从 Finder 打开的 App 附着到常驻守护
 
 - **主张：** LaunchAgent `ai.clone.companion` 已加载时，从 Finder 打开的打包 App 附着到它

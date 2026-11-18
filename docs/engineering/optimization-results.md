@@ -15,6 +15,13 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — One Agent invocation can be deleted from its row
+
+- **Claim:** each Agent-invocation row carries its own delete/restore action beside the selectable record, so deleting one record no longer requires opening the detail and scrolling past the prompt; the bulk action remains for the filtered list, and both are soft deletes.
+- **Evidence:** `node --experimental-strip-types --test test/ui-structure.test.ts` — **7/7**. In the browser against an isolated audit home with three seeded records, every row showed 删除; deleting one left two rows with a tombstone and "已隐藏 1 条…"; 含已删除 then showed the row with 恢复, and restoring it returned the third record with "已恢复 1 条…". No console errors.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--the-invocation-list-exposes-a-per-row-delete-control),
+  [execution chain](optimizations.md#2026-11-18--a-per-row-delete-entry-in-the-agent-invocation-list).
+
 ## 2026-11-18 — A Finder-launched app attaches to the resident daemon
 
 - **Claim:** when the LaunchAgent `ai.clone.companion` is loaded, a packaged app

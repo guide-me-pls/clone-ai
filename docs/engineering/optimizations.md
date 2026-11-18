@@ -31,6 +31,35 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — A per-row delete entry in the Agent-invocation list
+
+- **Goal / hypothesis:** the owner should be able to delete one invocation from
+  its row without opening the detail and scrolling past a long prompt; the row
+  must keep selection and deletion as separate controls.
+- **Trade-off:** [The invocation list exposes a per-row delete control](../architecture/trade-offs.md#2026-11-18--the-invocation-list-exposes-a-per-row-delete-control).
+- **Change:** `apps/desktop/ui/audit.js` row template (a `div.au-row` with a pick
+  button and a delete/restore action); `apps/desktop/ui/audit.css`
+  (`.au-row-pick`, `.au-row-action`); `test/ui-structure.test.ts` structural case.
+- **Eval:** `node --experimental-strip-types --test test/ui-structure.test.ts` —
+  **7/7**. Browser check against an isolated audit home with three seeded
+  records: each row showed a 删除 action; deleting one left two rows, appended a
+  `deleted` tombstone and announced "已隐藏 1 条…"; ticking 含已删除 restored the
+  row with a 恢复 action, which brought it back and announced "已恢复 1 条…". No
+  console errors.
+- **Benchmark run:** none — deterministic structural test plus a browser check; no
+  provider, model, dataset or scoring parameters.
+- **Execution chain:** read the existing detail-level action and the bulk handler;
+  restructured the row; styled the pick and action; added the structural test;
+  seeded a temporary `CLONE_AI_AUDIT_HOME` with three records; ran the
+  working-tree companion on port 4320; exercised delete/restore; removed the
+  preview entry.
+- **Pros:** deletion is visible without opening the detail; the bulk action still
+  counts the same pick buttons; no nested interactive elements.
+- **Cons / next time:** the row's focus target changed from the row to the pick
+  button; a keyboard user now needs one extra Tab to reach delete. If more
+  actions arrive, an overflow menu is better.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-18 — A Finder-launched app attaches to the loaded daemon
 
 - **Goal / hypothesis:** a packaged app launched from Finder carries no

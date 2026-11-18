@@ -490,11 +490,16 @@
     const selected = list.find((record) => record.id === state.invocationSelected);
     const detail = state.invocationDetail;
     const deletable = list.filter((record) => !record.deleted);
-    const rows = list.map((record) => `<button type="button" class="au-row${record.id === state.invocationSelected ? " is-selected" : ""}${record.deleted ? " is-deleted" : ""}" data-au-invocation="${esc(record.id)}">
+    const rows = list.map((record) => `<div class="au-row">
+      <button type="button" class="au-row-pick${record.id === state.invocationSelected ? " is-selected" : ""}${record.deleted ? " is-deleted" : ""}" data-au-invocation="${esc(record.id)}" aria-pressed="${record.id === state.invocationSelected ? "true" : "false"}">
       <span class="au-row-main"><b>${esc(record.caller?.kind ?? "unknown")} · ${esc(record.surface)}</b>
       <small class="au-why">${esc((record.prompt ?? "").replace(/\s+/g, " ").slice(0, 160) || "(no prompt)")}</small></span>
       <span class="au-row-meta">${badge(record.status === "completed" ? "已完成" : record.status === "failed" ? "失败" : "运行中", record.status === "completed" ? "ok" : record.status === "failed" ? "bad" : "info")}${record.deleted ? badge("已删除", "mute") : ""}<small>${stamp(record.startedAt)} · ${ms(record.durationMs)}</small></span>
-    </button>`).join("");
+      </button>
+      ${record.deleted
+        ? `<button type="button" class="au-row-action" data-au-inv-restore="${esc(record.id)}" title="恢复这条记录" aria-label="恢复这条记录">恢复</button>`
+        : `<button type="button" class="au-row-action au-row-action-bad" data-au-inv-delete="${esc(record.id)}" title="删除这条记录" aria-label="删除这条记录">删除</button>`}
+    </div>`).join("");
     const toolbar = `<div class="au-toolbar">
         <input type="search" data-au-inv-query placeholder="搜索请求、回复、错误、调用者、模型、Run ID" value="${esc(state.invocationQuery)}" aria-label="搜索 Agent 调用" />
         <label class="au-check"><input type="checkbox" data-au-inv-deleted ${state.invocationShowDeleted ? "checked" : ""}/> 含已删除</label>
