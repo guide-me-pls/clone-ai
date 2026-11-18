@@ -23,8 +23,12 @@
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <!-- launchd does not expand $HOME in PATH either; add /Users/<you>/.local/bin
          as an absolute entry if claude lives there. launchd 同样不展开 PATH 里的 $HOME。 -->
-    <!-- launchd does not expand $HOME in values; leave these unset to use ~/.clone,
-         or write absolute paths. launchd 不会展开值里的 $HOME；留空沿用 ~/.clone，或写绝对路径。 -->
+    <!-- launchd does not expand $HOME in values; leave these unset to use ~/.clone
+         as the owner home (failed traces), or write absolute paths. Reports, state
+         and the lock live in <repo>/.automation/nightly unless
+         CLONE_AI_AUTOMATION_HOME is set. launchd 不会展开值里的 $HOME；留空沿用
+         ~/.clone 作为所有者 home（失败轨迹），或写绝对路径。报告、状态与锁位于
+         <repo>/.automation/nightly，除非设置了 CLONE_AI_AUTOMATION_HOME。 -->
     <key>RSI_NOTIFY_URL</key>
     <string></string>
   </dict>
