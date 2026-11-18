@@ -26,6 +26,62 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-18 —— 确认移到主对话
+
+- **目标 / 假设：** 所有者应当只有一个做决定的地方。Main Agent 主对话聚合所有
+  `waiting_approval` 的 Run 与等待复核项，每项带提交决定所需的 Run id，子任务记录因此
+  不再藏起唯一能解除阻塞的按钮。派生任务折叠在所属对话之下，11 个任务时侧栏仍然可读。
+- **取舍：** [确认集中在主对话，子任务折叠在其下](../architecture/trade-offs.zh-CN.md#2026-11-18--确认集中在主对话子任务折叠在其下)。
+- **变更：** `src/companion-server.ts` 导出 `mainConversationApprovals` 与
+  `mainConversationReviews`，仪表盘与主对话共用同一个确认构造器；
+  `buildMainAgentConversation` 读取运行时视图，挂上确认、复核、可见 subagent 以及反映
+  它们的 status/preview。`apps/desktop/ui/app.js` 为每个待确认 Run 渲染一张带
+  `data-approve="<runId>"` 的卡片、带 `data-review` 的复核卡（跟随复核列表，而不是对话的
+  状态标签——`waiting_approval` 不能藏起等待中的复核）、子任务记录里的入口卡，以及
+  默认折叠的 `<details class="session-children">` 组，展开状态按父级记忆；
+  `style.css`/`audit.css` 增加卡片与分组样式。`test/main-conversation-approvals.test.ts`
+  覆盖服务端视图；`test/ui-structure.test.ts` 固定界面契约。
+- **Eval：** 在 HEAD 上界面契约测试因 `session.id !== MAIN_CONVERSATION_ID` 失败（即促成
+  本次变更的那次红色 CI）；变更后
+  `node --experimental-strip-types --test test/ui-structure.test.ts test/main-conversation-approvals.test.ts`
+  为 **14/14**，全量 **758/758**；`npm run typecheck` 与 `npm run gate` 通过。
+  `test/main-conversation-approvals.test.ts` 为 **3/3**。
+- **Benchmark run：** 无——确定性服务端/界面测试；没有 Provider、模型、数据集或评分参数。
+- **执行链路：** 复现红色 CI 用例；发现断言与取舍条目已在 `4a911bd` 提交，而实现仍留在
+  工作区（HEAD 上 `session.id !== MAIN_CONVERSATION_ID` 零匹配）；审阅工作区差异，分别在
+  HEAD（确认用例失败）与工作区（通过）运行界面契约，再跑全量、typecheck 与 gate；补文档。
+  未调用模型 Provider；成本为零；耗时未单独计量。
+- **优点：** 单一决定面；仪表盘与主对话共用同一个确认构造器，两处数量不会分歧；折叠组在
+  保持侧栏可读的同时仍显示进行中/失败分布。
+- **缺点 / 下次：** 测试、取舍条目与实现落在不同提交里，期间 `main` 一直是红的，直到本次
+  提交才恢复。此处没有观察到编写实现的会话过程，因此本条目记录的是验证链路，而不是最初的
+  编写链路。
+- **推翻条件：** 见取舍条目。
+
+### 2026-11-18 —— 已结束的 Run 保留核验、证据与轨迹
+
+- **目标 / 假设：** 任务记录是所有者追问"发生了什么"的地方。接受或拒绝结果之后，结论、
+  支撑它的标准以及 Run 产出的证据都必须仍然可读。证据应当是清单（产物 locator 加观察记录）
+  而不是计数；仍在等待决定的 Run 应默认展开轨迹。
+- **取舍：** [已结束的 Run 仍要显示核验、证据与轨迹](../architecture/trade-offs.zh-CN.md#2026-11-18--已结束的-run-仍要显示核验证据与轨迹)。
+- **变更：** `src/companion-server.ts` 的 `buildSession` 返回 `evidence`；
+  `apps/desktop/ui/app.js` 新增 `verificationMarkup`（系统结论、所有者决定、未自动验证的
+  标准、被检查证据数），并重写 `evidenceMarkup`：产物行在观察记录之前，每组最多 60 行，
+  多出的显示"N 条"；`traceMarkup` 在 Run 处于 `waiting_approval` 或 `waiting_review` 时
+  默认展开。`style.css` 增加核验与证据样式；`test/ui-structure.test.ts` 固定这些块。
+- **Eval：** 在 HEAD 上新界面契约测试失败（`verificationMarkup`、证据清单与轨迹回落都不
+  存在），定向文件为 **9/11**；变更后为 **11/11**，全量 **758/758**；
+  `npm run typecheck` 与 `npm run gate` 通过。复核载荷由
+  `test/main-conversation-approvals.test.ts` 覆盖。
+- **Benchmark run：** 无——确定性界面/API 测试；没有 Provider、模型、数据集或评分参数。
+- **执行链路：** 对比 HEAD 的 `reviewMarkup`（只在 `waiting_review` 显示）与
+  `evidenceMarkup`（只有计数）和工作区中的块，新增在 HEAD 上失败的界面契约测试，运行定向
+  测试与全部门禁，补文档。未调用 Provider；成本为零；耗时未单独计量。
+- **优点：** 记录在所有者决定后仍然保留；产物排在观察之前；轨迹正好在 Run 被判断期间展开。
+- **缺点 / 下次：** 证据清单每组最多 60 行，载荷会携带这些行；契约测试是结构性的（对源码
+  做正则），不是渲染 DOM 检查；编写实现的会话过程未被观察。
+- **推翻条件：** 见取舍条目。
+
 ### 2026-11-18 —— 服务源码检出的守护提供文件本身，而不是启动时的副本
 
 - **目标 / 假设：** 守护运行期间对界面的编辑必须在下一个请求就到达窗口；启动时固定资源快照

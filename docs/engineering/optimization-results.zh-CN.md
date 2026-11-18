@@ -11,6 +11,27 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 确认从主对话完成
+
+- **主张：** 每个待确认与待复核项都可以在 Main Agent 主对话里决定，每张卡片提交到所属的
+  Run id——包括两者同时等待的情况；子任务记录只给出回到主对话的入口，不再有第二套按钮；
+  派生任务折叠在所属对话之下。
+- **证据：** `node --experimental-strip-types --test test/ui-structure.test.ts
+  test/main-conversation-approvals.test.ts`——**14/14**，而 HEAD 上界面契约因
+  `session.id !== MAIN_CONVERSATION_ID` 失败；`test/main-conversation-approvals.test.ts`
+  **3/3**；全量 **758/758**，typecheck 与 gate 通过。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--确认集中在主对话子任务折叠在其下)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--确认移到主对话)。
+
+## 2026-11-18 —— 已结束的任务记录保留结论与证据
+
+- **主张：** 所有者接受或拒绝结果后，任务记录仍显示系统结论、所有者的决定、未自动验证的
+  标准、Run 产出的证据行（产物在前），以及仍在等待决定时展开的轨迹。
+- **证据：** 新界面契约测试在 HEAD 上失败（**9/11**），变更后通过（**11/11**）；全量
+  **758/758**，typecheck 与 gate 通过。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--已结束的-run-仍要显示核验证据与轨迹)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--已结束的-run-保留核验证据与轨迹)。
+
 ## 2026-11-18 —— 界面编辑无需重启守护即可到达运行中的窗口
 
 - **主张：** 服务源码检出的常驻守护现在按请求重读每个客户端资源，因此界面编辑在下一次加载

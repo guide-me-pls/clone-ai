@@ -15,6 +15,32 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — Approvals are confirmed from the main conversation
+
+- **Claim:** every waiting approval and review can be decided from the Main
+  Agent conversation, each card posting to the run id it belongs to — including
+  when both kinds are pending at once; a child task record points there instead
+  of offering a second set of buttons, and derived tasks sit in a collapsible
+  group under the conversation that spawned them.
+- **Evidence:** `node --experimental-strip-types --test test/ui-structure.test.ts
+  test/main-conversation-approvals.test.ts` — **14/14**, where HEAD fails the UI
+  contract on `session.id !== MAIN_CONVERSATION_ID`;
+  `test/main-conversation-approvals.test.ts` **3/3**; full suite **758/758**,
+  typecheck and gate pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--approvals-live-in-the-main-conversation-child-tasks-collapse-under-it),
+  [execution chain](optimizations.md#2026-11-18--approvals-move-to-the-main-conversation).
+
+## 2026-11-18 — A finished task record keeps its verdict and evidence
+
+- **Claim:** after the owner accepts or rejects a result, the task record still
+  shows the system verdict, the owner's decision, the unverified criteria, the
+  evidence rows the run produced (artifacts first), and a trace that opens while
+  a decision is pending.
+- **Evidence:** the new UI contract test fails at HEAD (**9/11**) and passes with
+  the change (**11/11**); full suite **758/758**, typecheck and gate pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-finished-run-keeps-its-verification-evidence-and-trace-on-screen),
+  [execution chain](optimizations.md#2026-11-18--a-finished-run-keeps-its-verification-evidence-and-trace).
+
 ## 2026-11-18 — UI edits reach the running window without a daemon restart
 
 - **Claim:** the resident daemon, which serves a checkout, now re-reads each
