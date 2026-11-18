@@ -91,10 +91,15 @@ file keeps every attempt, including the ones that did not work.
   `waiting_approval` or `waiting_review`. `style.css` adds the verification and
   evidence styles; `test/ui-structure.test.ts` pins the blocks.
 - **Eval:** at HEAD the new UI contract test fails (`verificationMarkup`, the
-  evidence list and the trace fallback do not exist) and the focused file is
-  **9/11**; after the change it is **11/11** and the full suite **758/758**;
-  `npm run typecheck` and `npm run gate` pass. The review payload is covered by
-  `test/main-conversation-approvals.test.ts`.
+  evidence list and the trace fallback do not exist); after the change the
+  focused file is **12/12** and the full suite **759/759**; `npm run typecheck`
+  and `npm run gate` pass. The rendered markup is exercised directly (a fake
+  session through `verificationMarkup`/`evidenceMarkup`/`traceMarkup`), not only
+  by regex over source. The review payload is covered by
+  `test/main-conversation-approvals.test.ts`. In an isolated copy of the owner's
+  journal, run `91b685cf` renders 核验结果/需要你的复核, nine evidence rows and
+  an open 43-row trace; run `4ce0db3d` renders 通过/你的决定：接受结果, three
+  artifact rows before 23 observations, and a collapsed 214-row trace.
 - **Benchmark run:** none — deterministic UI/API tests; no provider, model,
   dataset or scoring parameters.
 - **Execution chain:** compared HEAD's `reviewMarkup` (hidden unless
@@ -105,8 +110,8 @@ file keeps every attempt, including the ones that did not work.
 - **Pros:** the record survives the owner's decision; artifacts come before
   observations; the trace is open exactly while the run is being judged.
 - **Cons / next time:** the evidence list is capped at 60 rows per group, the
-  payload carries those rows, and the contract test is structural (regex over
-  source), not a rendered-DOM check. The authoring session was not observed.
+  payload carries those rows, and the rendered check stubs the surrounding
+  helpers (no real DOM). The authoring session was not observed.
 - **Reversal condition:** see the trade-off entry.
 
 ### 2026-11-18 — A checkout-served daemon serves the file, not its startup copy
@@ -736,6 +741,16 @@ file keeps every attempt, including the ones that did not work.
   red/green checks. The test currently crashes (`mkdtempSync is not defined`),
   so it is not a valid reproduction either. Branch
   `rsi/auto-fix-20261118T0746` and its worktree are kept; no production change.
+  A sixth attempt ran after the default round cap was removed (Kimi K3.1 Pro,
+  no `CLONE_AI_NATIVE_MAX_ROUNDS`, 30-minute timeout, isolated automation home
+  and worktree root). Phase 1 was red and phase 2's regression cases turned
+  **green** — the first time the lane reached that gate. The fix still read
+  `WorkOrderInput.path`, a field the contract does not have (it has `name`), so a
+  work-order step that declares inputs would crash or never detect a required
+  input; its regression test covered only the prose direction. The `suite` gate
+  also failed: `tsc` could not resolve `../lib/tsc.js` in the linked worktree (a
+  concurrent `node_modules` change) and a desktop-shell test expected an `app.js`
+  regex. Branch `rsi/auto-fix-20261118T0817` and its worktree are kept; no merge.
 - **Benchmark run:** none — no model benchmark; the lane's Kernel run is recorded
   in the journal (phase 1 `19252252-6952-4c85-8559-b7168558ceb3`).
 - **Execution chain:** exported 9 traces (the six unrelated traces were moved to

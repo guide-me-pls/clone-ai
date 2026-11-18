@@ -70,16 +70,19 @@
   多出的显示"N 条"；`traceMarkup` 在 Run 处于 `waiting_approval` 或 `waiting_review` 时
   默认展开。`style.css` 增加核验与证据样式；`test/ui-structure.test.ts` 固定这些块。
 - **Eval：** 在 HEAD 上新界面契约测试失败（`verificationMarkup`、证据清单与轨迹回落都不
-  存在），定向文件为 **9/11**；变更后为 **11/11**，全量 **758/758**；
-  `npm run typecheck` 与 `npm run gate` 通过。复核载荷由
-  `test/main-conversation-approvals.test.ts` 覆盖。
+  存在）；变更后定向文件为 **12/12**，全量 **759/759**；`npm run typecheck` 与
+  `npm run gate` 通过。渲染出的标记被直接执行验证（用假会话跑
+  `verificationMarkup`/`evidenceMarkup`/`traceMarkup`），而不只是对源码做正则。复核载荷由
+  `test/main-conversation-approvals.test.ts` 覆盖。在所有者 Journal 的隔离副本里，Run
+  `91b685cf` 显示「核验结果/需要你的复核」、9 行证据与展开的 43 行轨迹；Run `4ce0db3d`
+  显示「通过/你的决定：接受结果」、3 行产物排在 23 条观察之前，以及折叠的 214 行轨迹。
 - **Benchmark run：** 无——确定性界面/API 测试；没有 Provider、模型、数据集或评分参数。
 - **执行链路：** 对比 HEAD 的 `reviewMarkup`（只在 `waiting_review` 显示）与
   `evidenceMarkup`（只有计数）和工作区中的块，新增在 HEAD 上失败的界面契约测试，运行定向
   测试与全部门禁，补文档。未调用 Provider；成本为零；耗时未单独计量。
 - **优点：** 记录在所有者决定后仍然保留；产物排在观察之前；轨迹正好在 Run 被判断期间展开。
-- **缺点 / 下次：** 证据清单每组最多 60 行，载荷会携带这些行；契约测试是结构性的（对源码
-  做正则），不是渲染 DOM 检查；编写实现的会话过程未被观察。
+- **缺点 / 下次：** 证据清单每组最多 60 行，载荷会携带这些行；渲染检查桩掉了外围辅助函数
+  （不是真实 DOM）；编写实现的会话过程未被观察。
 - **推翻条件：** 见取舍条目。
 
 ### 2026-11-18 —— 服务源码检出的守护提供文件本身，而不是启动时的副本
@@ -517,6 +520,14 @@
   Kernel 以 `failed`（`budget-model-calls`）结束，通道因此停在 `kernel` 闸门，尚未进入
   红/绿检查。该测试目前会崩溃（`mkdtempSync is not defined`），因此也不是有效复现。分支
   `rsi/auto-fix-20261118T0746` 与其 worktree 保留；没有生产改动。
+  第六次尝试在默认轮次上限移除之后运行（Kimi K3.1 Pro、不设
+  `CLONE_AI_NATIVE_MAX_ROUNDS`、30 分钟超时、隔离 automation home 与 worktree 根）。
+  第一阶段变红，第二阶段的回归用例**转绿**——通道第一次走到这道闸门。补丁仍然读取了
+  `WorkOrderInput.path`，而契约里的字段是 `name`，因此带输入声明的 WorkOrder 步骤会崩溃，
+  或者永远检测不到必需输入；它的回归测试只覆盖了文字描述这一侧。`suite` 闸门也失败了：
+  worktree 里链接的 `node_modules` 无法解析 `../lib/tsc.js`（并发的安装改动），外加一个
+  desktop-shell 用例期望 `app.js` 的正则。分支 `rsi/auto-fix-20261118T0817` 与其 worktree
+  保留；没有合并。
 - **Benchmark run：** 无——没有模型基准；通道的 Kernel Run 记录在 Journal 中（第一阶段
   `19252252-6952-4c85-8559-b7168558ceb3`）。
 - **执行链路：** 导出 9 条轨迹（为本次运行把六条无关轨迹移到
