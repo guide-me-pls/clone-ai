@@ -6,6 +6,46 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — A verification record states a count, not a repeated list
+
+**Decision.** `VerificationResult.summary` no longer embeds the unverified
+criteria. The step verifier writes "Automatic checks passed; N of M acceptance
+criteria still need the owner's review", the test plugin writes "Test evidence
+needs the owner's review", and the criteria stay only in `unverifiedCriteria`.
+The record UI renders that field as numbered rows with the step title on a muted
+line, shows the owner's decision as the pill (`已接受结果` / `已驳回结果`) instead
+of a separate "你的决定" line, and rewrites the legacy summary sentence, which it
+identifies by its opening text, into the same count.
+
+**Alternatives rejected.**
+
+- *Keep the summary and drop the criteria list.* The criteria are the thing the
+  owner reviews; the list is the record.
+- *Migrate the stored events.* The journal is append-only history; rewriting it
+  to change a sentence a reader can interpret is worse than interpreting it.
+  The UI does that rewrite for old records.
+- *Shorten each criterion in the verifier.* The step title repeated in every
+  row is what turned six rows into a wall of text; splitting it in the view
+  fixes every record, including ones already stored, without losing the title.
+
+**Evidence.** App run `18569eb4` showed a six-row review list repeating
+"完善故宫模型并进行契约和浏览器验收：" before each clause, and the same six
+clauses again inside the summary paragraph; the pill said "通过" while the line
+beside it said "你的决定：接受结果". The stored payload has
+`unverifiedCriteria.length === 6`, `checkedEvidenceIds.length === 11`.
+
+**What it costs.** Old records without `unverifiedCriteria` keep their summary
+verbatim and gain no list; the summary is no longer self-contained evidence (a
+reader who only stores the summary loses the criteria text — the structured
+field is the contract now). The UI's legacy rewrite is a string prefix match;
+a record whose summary was edited to start with that sentence would be shortened.
+
+**Reversal condition.** If a consumer outside the UI (an export, an email
+report) needs the criteria inside the summary, add a rendered composer that
+joins them at that boundary instead of putting them back in the stored summary.
+If a record type appears whose summary is the only carrier of the criteria,
+keep that type's summary as-is and mark it in the UI.
+
 ## 2026-11-18 — A checkout-served daemon re-reads its client files per request
 
 **Decision.** The resident daemon runs with `CLONE_AI_DEV_MODE=1` (set by

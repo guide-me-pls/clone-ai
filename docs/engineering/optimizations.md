@@ -31,6 +31,37 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — The verification record stops repeating itself
+
+- **Goal / hypothesis:** the review list showed the step title on every row and
+  the summary repeated all criteria again, and the owner's decision appeared
+  twice. Keep the criteria in their structured field, count them in the summary,
+  and let the decision be the pill.
+- **Trade-off:** [A verification record states a count, not a repeated list](../architecture/trade-offs.md#2026-11-18--a-verification-record-states-a-count-not-a-repeated-list).
+- **Change:** `src/core/verification.ts` summary becomes
+  `Automatic checks passed; N of M acceptance criteria still need the owner's
+  review.` with a `reviewableCriteria` helper; `src/core/verifier-plugins.ts`
+  stops copying criteria into its summary; `apps/desktop/ui/app.js` renders
+  numbered rows with the title split out, uses `已接受结果`/`已驳回结果` as the
+  pill and rewrites the legacy summary sentence;
+  `apps/desktop/ui/style.css` restyles the list.
+- **Eval:** `test/ui-structure.test.ts` **12/12** (pill text, removed owner
+  line, title split, legacy rewrite); `test/verification.test.ts` **16/16**;
+  browser check on the isolated companion produced 4 numbered rows, pill
+  `已接受结果`, `检查了 11 条证据`; full suite **759/759**, typecheck and gate pass.
+  The real run `18569eb4` still shows its stored 6-criteria summary rewritten
+  by the UI because the event is history.
+- **Benchmark run:** none — record rendering and summary text; no provider,
+  model, dataset or scoring parameters.
+- **Execution chain:** read the live `/api/sessions/18569eb4…` payload (6
+  criteria, 11 checked evidence ids), changed the two verifier summaries,
+  restyled the card, updated the UI test, preview verification, docs.
+- **Pros:** the record reads as a decision plus a short checklist; new records
+  store the criteria once.
+- **Cons / next time:** old records without `unverifiedCriteria` keep their long
+  summary; the UI's legacy rewrite is a prefix match on the old sentence.
+- **Reversal condition:** see the trade-off entry.
+
 ### 2026-11-18 — Approvals move to the main conversation
 
 - **Goal / hypothesis:** the owner should have one place to decide. The Main

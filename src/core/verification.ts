@@ -184,10 +184,13 @@ export class EvidenceVerifier implements Verifier {
       runId: input.run.id,
       passed,
       ...(needsReview ? { needsReview: true, unverifiedCriteria: unverified } : {}),
+      // The criteria live in their own field; repeating them inside the
+      // summary made the record show the same long text twice.
+      // 标准本身有独立字段；在摘要里再重复一遍会让记录把同一段长文本显示两次。
       summary: passed
         ? `Verified ${input.plan.steps.length} step(s) against the workspace.`
         : needsReview
-          ? `Checks passed, but these criteria need owner review: ${unverified.join("; ")}.`
+          ? `Automatic checks passed; ${unverified.length} of ${reviewableCriteria(input.plan).length} acceptance criteria still need the owner's review.`
           : `Verification failed. ${failures.join("; ")}.`,
       checkedEvidenceIds: input.evidence.map((item) => item.id),
       createdAt: new Date().toISOString(),
@@ -242,6 +245,11 @@ export class EvidenceVerifier implements Verifier {
     }
     return `"${expectation.path}" was promised but does not exist on disk`;
   }
+}
+
+/** Acceptance criteria that could need a review, counted once per clause. 可能需要复核的验收标准，按条计数（不重复）。 */
+function reviewableCriteria(plan: { steps: readonly PlanStep[] }): string[] {
+  return [...new Set(plan.steps.flatMap((step) => step.acceptanceCriteria.map((criterion) => `${step.title}: ${criterion}`)))];
 }
 
 function isFileCriterionCovered(criterion: string, expectations: FileExpectation[]): boolean {

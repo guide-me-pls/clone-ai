@@ -26,6 +26,28 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-18 —— 核验记录不再自我重复
+
+- **目标 / 假设：** 复核列表每行都重复步骤标题，摘要段又把全部标准重复一遍，所有者的决定还
+  出现了两次。把标准留在结构化字段、摘要只给计数，并让决定成为标签。
+- **取舍：** [核验记录只给计数，不再重复整份标准](../architecture/trade-offs.zh-CN.md#2026-11-18--核验记录只给计数不再重复整份标准)。
+- **变更：** `src/core/verification.ts` 的摘要改为
+  `Automatic checks passed; N of M acceptance criteria still need the owner's review.`
+  并新增 `reviewableCriteria`；`src/core/verifier-plugins.ts` 不再把标准抄进摘要；
+  `apps/desktop/ui/app.js` 渲染带编号的行并拆分标题，标签使用 `已接受结果`/`已驳回结果`，
+  并改写旧摘要句子；`apps/desktop/ui/style.css` 重做列表样式。
+- **Eval：** `test/ui-structure.test.ts` **12/12**（标签文案、移除所有者行、标题拆分、旧记录
+  改写）；`test/verification.test.ts` **16/16**；在隔离 companion 上做浏览器检查，得到 4 个
+  带编号行、标签 `已接受结果`、`检查了 11 条证据`；全量 **759/759**，typecheck 与 gate 通过。
+  真实运行 `18569eb4` 因事件已是历史，仍由界面改写其存储的 6 条标准摘要。
+- **Benchmark run：** 无——记录渲染与摘要文本；没有 Provider、模型、数据集或评分参数。
+- **执行链路：** 读取在线 `/api/sessions/18569eb4…` 负载（6 条标准、11 个已检查证据 id）、
+  修改两处核验摘要、重做卡片样式、更新界面测试、预览验证、补文档。
+- **优点：** 记录读起来是"一个决定 + 一份短清单"；新记录只存一次标准。
+- **缺点 / 下次：** 没有 `unverifiedCriteria` 的旧记录保留长摘要；界面的旧记录改写是对旧句子的
+  前缀匹配。
+- **推翻条件：** 见取舍条目。
+
 ### 2026-11-18 —— 确认移到主对话
 
 - **目标 / 假设：** 所有者应当只有一个做决定的地方。Main Agent 主对话聚合所有

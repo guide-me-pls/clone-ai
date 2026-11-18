@@ -577,7 +577,16 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .verification-owner { margin-left: auto; color: #5c6675; font-size: 11px; }
 .verification-owner.is-pending { color: #9a5a1e; }
 .verification-summary { margin: 0 0 6px; color: #5c6675; font-size: 12px; line-height: 1.55; }
-.verification-criteria { margin: 4px 0 6px; padding-left: 18px; color: #5c6675; font-size: 12px; line-height: 1.6; }
+.verification-system { display: block; margin: 0 0 6px; color: #8791a1; font-size: 11px; }
+/* Numbered rows with the step title on its own muted line: the stored criteria
+ * repeat the step title, and flowing them as one paragraph made a wall of text.
+ * 带编号的行，步骤标题单独一行弱化显示：存储的标准会重复步骤标题，把它们排成一段文字
+ * 只会得到一堵文字墙。 */
+.verification-criteria { display: grid; gap: 6px; margin: 6px 0 8px; padding: 0; list-style: none; counter-reset: verification-criterion; }
+.verification-criteria > li { position: relative; padding: 6px 9px 6px 30px; border: 1px solid #eef1f5; border-radius: 8px; background: #fbfcfd; color: #4c5764; font-size: 12px; line-height: 1.55; counter-increment: verification-criterion; white-space: normal; }
+.verification-criteria > li::before { content: counter(verification-criterion); position: absolute; top: 7px; left: 8px; width: 16px; height: 16px; border-radius: 50%; background: #eef2f9; color: #6b7788; font-size: 10px; font-weight: 650; line-height: 16px; text-align: center; }
+.verification-criteria > li b { display: block; margin-bottom: 1px; color: #8791a1; font-size: 10.5px; font-weight: 600; }
+.verification-criteria > li span { display: block; }
 .verification-foot { margin: 0; color: #8791a1; font-size: 11px; }
 .evidence-list { display: grid; gap: 1px; margin: 0; padding: 0 14px 10px; list-style: none; }
 .evidence-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 8px; padding: 6px 0; border-top: 1px solid #eef1f5; font-size: 12px; }

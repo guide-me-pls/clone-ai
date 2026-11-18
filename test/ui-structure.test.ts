@@ -197,6 +197,75 @@ test("populated conversations stay vertical and empty-state flex requires no mes
   assert.match(css, /\.message\.person\s*\{[^}]*width:\s*100%/);
 });
 
+test("a finished task record keeps its verification, evidence and artifacts", async () => {
+  const app = await read("app.js");
+  const blocks = [
+    ["verificationMarkup", app.indexOf("function verificationMarkup(session)"), app.indexOf("function recalledMemoryMarkup", app.indexOf("function verificationMarkup(session)"))],
+    ["traceMarkup", app.indexOf("function traceMarkup(session)"), app.indexOf("const SCROLL_BOTTOM_THRESHOLD", app.indexOf("function traceMarkup(session)"))],
+  ] as const;
+  for (const [name, start, end] of blocks) assert.ok(start >= 0 && end > start, `${name} must exist`);
+  const context = {
+    escape: (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]!)),
+    icon: () => "",
+    time: () => "15:49",
+    disclosureOpen: (_session: unknown, _name: string, fallback = false) => fallback,
+    EVIDENCE_KIND: { artifact: "产物", observation: "观察" },
+  };
+  const markup = runInNewContext(`${blocks.map(([, start, end]) => app.slice(start, end)).join("\n")}; ({ verificationMarkup, evidenceMarkup, traceMarkup })`, context);
+  const session = {
+    id: "run-1",
+    status: "completed",
+    evidenceCount: 2,
+    evidence: [
+      { id: "e1", kind: "artifact", locator: "src/main.js", summary: "write_file wrote src/main.js", createdAt: "2026-11-18T07:49:23.174Z" },
+      { id: "e2", kind: "observation", locator: "README.md", summary: "read_file read README.md", createdAt: "2026-11-18T07:49:23.174Z" },
+    ],
+    verification: {
+      runId: "run-1", passed: true, needsReview: false, reviewedBy: "owner",
+      summary: "Owner accepted the unverified criteria.",
+      unverifiedCriteria: ["审查 RAG 项目代码"],
+      checkedEvidenceIds: ["e1", "e2"],
+      createdAt: "2026-11-18T07:49:23.174Z",
+    },
+    trace: [{ sequence: 1, type: "run.created", label: "创建任务运行", detail: "1 个步骤", occurredAt: "2026-11-18T07:49:23.174Z" }],
+  };
+  const verification = markup.verificationMarkup(session);
+  assert.match(verification, /核验结果/);
+  // The owner's decision is the pill; the old "你的决定：接受结果" line said the
+  // same thing twice next to it.
+  // 所有者的决定就是标签；旧的"你的决定：接受结果"一行在旁边又重复了一遍。
+  assert.match(verification, /已接受结果/);
+  assert.doesNotMatch(verification, /你的决定：/);
+  assert.match(verification, /审查 RAG 项目代码/);
+  assert.match(verification, /检查了 2 条证据/);
+  // A criterion carrying "title: text" renders the title on its own line.
+  // 带"标题: 文本"的标准会把标题单独显示一行。
+  assert.match(verification, /<ol class="verification-criteria">/);
+  const titled = markup.verificationMarkup({
+    ...session,
+    verification: { ...session.verification, unverifiedCriteria: ["完善模型: 首帧可见"] },
+  });
+  assert.match(titled, /<b>完善模型<\/b><span>首帧可见<\/span>/);
+  // A record written before the summary changed still repeats the criteria in
+  // its stored summary; the record shows the count, not the wall of text.
+  // 在摘要改动之前写下的记录仍会在摘要里重复标准；记录显示计数，而不是一堵文字墙。
+  const legacy = markup.verificationMarkup({
+    ...session,
+    verification: { ...session.verification, summary: "Checks passed, but these criteria need owner review: A; B." },
+  });
+  assert.match(legacy, /自动检查通过；1 项标准需人工判断/);
+  assert.doesNotMatch(legacy, /Checks passed, but these criteria need owner review/);
+  const evidence = markup.evidenceMarkup(session);
+  assert.match(evidence, /1 个产物 · 1 条观察/);
+  assert.match(evidence, /src\/main\.js/);
+  assert.match(evidence, /README\.md/);
+  assert.match(evidence, /data-disclosure="evidence" open/);
+  // A run still waiting for the owner opens its trace; a finished one stays collapsed.
+  // 仍等待所有者的 Run 展开轨迹；已结束的保持折叠。
+  assert.match(markup.traceMarkup({ ...session, status: "waiting_review" }), /data-disclosure="trace" open/);
+  assert.doesNotMatch(markup.traceMarkup(session), /data-disclosure="trace" open/);
+});
+
 test("invocation rows keep selection and deletion as sibling controls", async () => {
   const audit = await read("audit.js");
   // A button cannot contain another button, so a per-row delete control forces
