@@ -11,6 +11,20 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 窗口自行恢复停掉的运行时
+
+- **主张：** 打包 App 拉起的运行时停止后，窗口不再停在静态的"关闭后重新打开"上：外壳按
+  指数退避重启（实测 1、2、4、8、16 秒），显示 stderr 尾行；两种模式每 5 秒探测一次
+  `/api/health`，卡死的运行时会被重启（非常驻）或重新附着（常驻）。
+- **证据：** `node --experimental-strip-types --test test/desktop-shell.test.ts` ——
+  加上新断言后 **1/1**；HEAD 的外壳没有 `scheduleRuntimeRestart`、没有 `/api/health`
+  调用，并且仍打印旧文案。用 `CLONE_HOME` 指向普通文件手工启动
+  `dist/Clone AI-2026-11-18T06-53-44-937Z.app`：14:55:22.777 / 24.004 / 26.241 /
+  30.443 / 38.632 五次重启，间隔 1.2 / 2.2 / 4.2 / 8.2 / 16.2 秒；对一个运行中的运行时，
+  `GET /api/health` 返回 HTTP 200。全量 **742/742**，typecheck 与 gate 通过。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--窗口自己监管运行时重启探测并说明原因)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--窗口重启运行时并说明它为什么停下)。
+
 ## 2026-11-18 —— 竞态写入的 Journal 事件不再阻止 App 启动
 
 - **主张：** 即使某个进程记录了一次非法的 `failed -> verifying` 转换，companion 仍能从共享 Journal 重建投影；桌面 sidecar 恢复启动与服务，而实时写入方仍被 `changeStatus` 拒绝。

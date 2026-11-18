@@ -5,6 +5,72 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-18 —— OCR 与旧式 .doc 走原生 macOS 助手
+
+**决定。** App 包内再编译一个 Swift 可执行文件 `CloneAIDocumentTool`。它从 stdin 读文件
+字节、向 stdout 写纯文本；Node 侧不写临时文件。`ocr-pdf` 把每页渲染到 2000px，用 Vision
+的 accurate OCR 按 1024px 条带识别并按行重组（20 页、50k 字符上限），仅在 `unpdf` 找不到
+文本时使用；`doc` 用 AppKit 的 `NSAttributedString` 解析旧式 Word 97 文件。Node 侧从
+`CLONE_AI_DOCUMENT_TOOL`（Swift 外壳设置）或打包 Node 的同级目录解析助手；找不到时 OCR
+与 `.doc` 会带明确原因拒绝。提取器接受测试注入的 runner，因此单元测试不需要该二进制。
+
+**被否决的备选方案。** `tesseract.js`/WASM 会给每次启动增加大型运行时与语言数据，且比
+系统框架慢；本机没有 `tesseract`。`textutil` 处理 `.doc` 需要文件路径与临时文件。云端
+OCR 会把所有者文档送出本机。PDF.js 加 canvas 仍需要 OCR 引擎；PDFKit 与 Vision 已是
+系统框架。
+
+**依据。** `command -v tesseract` 没有输出。AppKit 把 `textutil` 生成的 `.doc` 解析为
+预期文本。Vision 对渲染后的扫描 PDF 整页识别很差（`Second fine with fom & ferry.`），
+分条后正确（`Hello from a PDF fixture.` / `Second line with Tom & Jerry.`）。45 行密集
+夹具从 53 行输出中得到 33 行以 `Line` 开头、32 个唯一行号——可用但不完美；OCR 准确率标为
+**有波动**。
+
+**代价。** App 多一个编译产物与一个助手路径环境变量；在 App 之外由 launchd 启动的守护
+进程没有 OCR/`.doc`，除非提供路径。OCR 是 CPU 密集的（20 页 2000px 可能需要数秒到数十
+秒），请求会等待；分条的行重组可能在条带边界拆开或重复一行。旧式 `.doc` 依赖 AppKit 的
+Word 97 解析器。单元测试使用假 runner；只有构建后的 App 才能验证真实 Vision/AppKit 路径。
+
+**推翻条件。** 若 Vision 准确率不足，改用经过审查的 Tesseract 或其他引擎。若守护进程
+必须支持 OCR，传入助手路径。若 `.doc` 解析失败，退回 `textutil` 加短期临时文件。若 OCR
+成为常见路径，把页数/语言选项显式化，并移到有界 Worker。
+
+## 2026-11-18 —— 窗口自己监管运行时：重启、探测、并说明原因
+
+**决定。** 非常驻路径——打包 App 自己拉起的 sidecar——退出不再是终点。外壳按指数退避
+（1 秒起、翻倍、上限 30 秒）重启它，并把 stderr 的最后四行留在启动页上。两种模式在加载
+URL 后每 5 秒探测一次 `/api/health`；连续两次失败即视为运行时丢失，外壳重新附着（常驻）
+或终止并重启子进程。启动 30 秒仍未打印 `CLONE_AI_READY` 同样处理。常驻附着在 60 秒内
+读不到端点时不再停下，而是每 30 秒重试。
+
+**被否决的备选方案。**
+
+- *保留静态的"关闭后重新打开"提示。* 2026-11-18 那天运行时每次启动都在 `hydrate()` 退出；
+  窗口让所有者重开，所有者照做，下一个进程同样死掉。提示没有给出原因，而携带原因的 stderr
+  被读进一个没有任何地方读取的内存缓冲区。
+- *只依赖 launchd。* `KeepAlive` 能让 Daemon 活着，但从 Finder 打开的打包 App 从不进入
+  常驻模式：这个标志只写在 LaunchAgent 的环境里（`apps/desktop/macos/main.swift:42`、
+  `scripts/install-daemon.mjs:57`），App 包的 Info.plist 没有 `LSEnvironment`。因此窗口
+  拉起的是自己的运行时，也必须自己负责它的活性。
+- *只显示错误、不重启。* 卡死的运行时会留下一个永不恢复的窗口；第一次事故需要的重启没有
+  任何东西去执行。
+
+**证据。** 2026-11-18 的事故：14:24 打包的 sidecar 在 `CloneRuntime.hydrate` 中以
+`Invalid run status transition: failed -> verifying` 退出（run `19252252…` 的 Journal
+序号 525 与 545）。`main.swift` 里没有 `/api/health` 调用，终止处理器之后也没有任何定时器；
+页面里 3 秒一次的重试（`apps/desktop/ui/app.js:1958`）从未运行，因为 WebView 根本没加载。
+用打包的运行时对 `~/.clone` 的副本复现了崩溃，对空目录则正常就绪。launchd 在移除任务前
+记录了 588 次失败。
+
+**代价。** 确定性崩溃的运行时会每 30 秒永远重启，而不是停下一次——重启次数、退避和 stderr
+尾行正是让这个循环可诊断而不是无声的东西。窗口每个 5 秒 tick 发一个回环请求。stderr 尾行
+可能包含供应商或路径信息；它被截断为四行 / 600 字符，并且只留在本地窗口。退出应用仍会停掉
+非常驻子进程；常驻模式仍然只是断开。
+
+**推翻条件。** 如果运行时获得不依赖监管者的活性通道（socket，或 launchd socket 激活），
+用它替换 HTTP 探测。如果观察到自动重启复制了定时任务，或复活了所有者有意停掉的运行时，
+移除自动重启，只保留一个显式的"重新连接"动作。如果 `/api/health` 变成需要认证，把探测
+换成带认证的客户端，而不是放宽这条免认证路由。
+
 ## 2026-11-18 —— Journal 重放如实反映记录；写入方负责校验
 
 **决定。** `reduceEvent` 应用记录中的 `run.status_changed` 时不再重新校验转换表。实时写入方
