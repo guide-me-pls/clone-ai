@@ -93,6 +93,17 @@ test("the native desktop app is the only product entry", async () => {
   assert.match(macShell, /retryResidentAttach/);
   assert.match(macShell, /didFailProvisionalNavigation/);
   assert.match(macShell, /sidecarStderrTail/);
+  // A packaged launch from Finder has no environment: the window asks launchd
+  // whether the job is loaded and attaches instead of spawning a second writer,
+  // while a checkout without the job keeps its private runtime.
+  // 从 Finder 打开的打包启动没有环境：窗口询问 launchd 任务是否已加载并选择附着，而不是
+  // 再拉起一个写者；没有该任务的检出仍保留私有运行时。
+  assert.match(macShell, /launchAgentIsLoaded/);
+  assert.match(macShell, /"\/bin\/launchctl"/);
+  assert.match(macShell, /gui\/\\\(getuid\(\)\)/);
+  assert.match(macShell, /launchAgentLabel = "ai\.clone\.companion"/);
+  assert.match(macShell, /private var residentRuntime = false/);
+  assert.doesNotMatch(macShell, /private var residentRuntime: Bool/);
   assert.doesNotMatch(macShell, /请关闭应用后重新打开/);
   assert.doesNotMatch(macShell, /loadHTMLString/);
 });

@@ -6,6 +6,46 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — A packaged launch attaches when the LaunchAgent is loaded
+
+**Decision.** The window decides resident mode once, at launch. An explicit
+`CLONE_AI_RESIDENT_DAEMON=1` wins; otherwise, for a packaged build (no
+`CLONE_AI_DEV_ROOT`), it runs `launchctl print gui/<uid>/ai.clone.companion`
+and attaches when the job is loaded; without the job it spawns its own runtime.
+Developer builds keep their private runtime unless the variable is explicit.
+
+**Alternatives rejected.**
+
+- *Put `CLONE_AI_RESIDENT_DAEMON=1` in the bundle's `LSEnvironment`.* Every
+  build would become attach-only: a checkout that never installed the daemon
+  (`npm run desktop:mac:build && open "dist/Clone AI.app"`) would wait on an
+  endpoint no process publishes.
+- *Attach whenever `companion-endpoint.json` exists.* The file outlives its
+  writer: on 2026-11-18 it held pid 11243 and port 4317 after that sidecar was
+  gone, while the launchd daemon listened on another port. A window trusting
+  the file would load a dead URL.
+- *Always spawn the runtime.* With the LaunchAgent installed that is two
+  processes writing one journal — the 2026-11-18 `failed -> verifying` race.
+
+**Evidence.** The 14:28 app, launched from Finder, carried no `CLONE_*`
+environment (`ps eww`), so the environment-only `residentRuntime` was false
+while `ai.clone.companion` was running (pid 77407); the window spawned a second
+sidecar. The endpoint file's pid (11243) was already dead, which is why file
+presence is not a liveness signal.
+
+**What it costs.** One `launchctl print` at startup (milliseconds). The mode is
+fixed for the window's lifetime, so installing or removing the daemon does not
+change a running window; the pump installer must tell the owner to relaunch.
+A loaded-but-broken job makes the window wait and retry every 30 s instead of
+falling back to a private runtime — deliberate, because a fallback recreates
+the two-writer state.
+
+**Reversal condition.** If the app can establish the daemon's liveness without
+launchd (a healthy published endpoint probed before deciding), use that and drop
+the `launchctl` call. If the installer can launch the window with the
+environment variable set, set it there and keep this detection only as a
+fallback.
+
 ## 2026-11-18 — Interactive grading stops asking for video-only fields
 
 **Decision.** The Forbidden City checker's `--interactive` mode no longer grades

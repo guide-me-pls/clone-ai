@@ -26,6 +26,34 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-18 —— 从 Finder 打开的 App 附着到已加载的守护
+
+- **目标 / 假设：** 从 Finder 打开的打包 App 没有环境变量，因此只读环境的
+  `residentRuntime` 为假，窗口在 LaunchAgent 已拥有运行时时又拉起一个——两个写者共享一本
+  Journal。改为从 launchd 自己的域判断常驻模式。
+- **取舍：** [打包启动在 LaunchAgent 已加载时选择附着](../architecture/trade-offs.zh-CN.md#2026-11-18--打包启动在-launchagent-已加载时选择附着)。
+- **变更：** `apps/desktop/macos/main.swift` 把 `residentRuntime` 改为在
+  `applicationDidFinishLaunching` 中决定一次的存储标志；`launchAgentIsLoaded()` 运行
+  `/bin/launchctl print gui/<uid>/ai.clone.companion`；开发构建除非显式设置
+  `CLONE_AI_RESIDENT_DAEMON=1`，否则保留私有运行时。`test/desktop-shell.test.ts` 断言这次
+  探测以及该标志是存储值而非计算属性。
+- **Eval：** `node --experimental-strip-types --test test/desktop-shell.test.ts` ——
+  **1/1**。手工验证（LaunchAgent 已加载，pid 75892/78156）：变更前（15:10 构建，无探测）App
+  拉起了子进程 76242 并把 `~/.clone/companion-endpoint.json` 覆盖成自己的 pid；变更后
+  （15:13 构建）App 81494 **没有子进程**，端点仍是守护的 pid 78156，`GET /api/health`
+  返回 200。任务不存在时的分支用变更前的构建观察过（仍拉起自己的运行时）；新二进制的兜底分支
+  只有源码契约覆盖，未再做端到端。全量 **744/744**，typecheck 与 gate 通过。
+- **Benchmark run：** 无——确定性外壳接线加一次本地启动；没有 Provider、模型、数据集或评分参数。
+- **执行链路：** 先写取舍；改 Swift；编译；契约测试；退出运行中的 App；安装 LaunchAgent
+  （`node scripts/install-daemon.mjs`）并确认 health 200；构建了两次——第一次（15:10）与并发
+  写入发生竞态，产出的二进制不含探测，手工 eval 通过"App 仍拉起子进程"发现了它；15:13 重新
+  构建并重跑启动。随后跑测试、补文档、清理 eval 产物。
+- **优点：** 打包 App 现在遵循文档里的模型——窗口附着到常驻守护，而不是与它竞争；没有守护的
+  检出仍能独立运行。
+- **缺点 / 下次：** 模式在启动时固定，因此在窗口运行期间安装守护仍需重启窗口；`launchctl`
+  调用在启动时同步执行（毫秒级，但仍是一次进程启动）。
+- **推翻条件：** 见取舍条目。
+
 ### 2026-11-18 —— 构建并自证的步骤现在有 40 轮，交互评分去掉视频专属检查
 
 - **目标 / 假设：** 两个缺陷让一个好的交互模型看起来像失败。Native Worker 默认的 12 次

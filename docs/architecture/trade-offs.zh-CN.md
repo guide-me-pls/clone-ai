@@ -5,6 +5,36 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-18 —— 打包启动在 LaunchAgent 已加载时选择附着
+
+**决定。** 窗口在启动时只决定一次是否常驻：显式的 `CLONE_AI_RESIDENT_DAEMON=1` 优先；
+否则对打包构建（没有 `CLONE_AI_DEV_ROOT`）运行
+`launchctl print gui/<uid>/ai.clone.companion`，任务已加载就附着；没有该任务则拉起自己的
+运行时。开发构建除非显式设置变量，否则始终保留私有运行时。
+
+**被否决的备选方案。**
+
+- *把 `CLONE_AI_RESIDENT_DAEMON=1` 写进 App 包的 `LSEnvironment`。* 每个构建都会变成只能
+  附着：从未安装过守护的检出（`npm run desktop:mac:build && open "dist/Clone AI.app"`）
+  会一直等待一个没有任何进程发布的端点。
+- *只要 `companion-endpoint.json` 存在就附着。* 文件比它的写者活得久：2026-11-18 它写着
+  pid 11243、端口 4317，而该 sidecar 已经消失，launchd Daemon 在另一个端口上监听。信任
+  文件的窗口会加载一个死 URL。
+- *永远自己拉起运行时。* 在 LaunchAgent 已安装时，就是两个进程写同一本 Journal——
+  2026-11-18 的 `failed -> verifying` 竞态。
+
+**证据。** 14:28 从 Finder 启动的 App 没有任何 `CLONE_*` 环境（`ps eww`），因此只读环境的
+`residentRuntime` 为假，而 `ai.clone.companion` 正在运行（pid 77407）；窗口于是拉起了第二个
+sidecar。端点文件里的 pid（11243）早已死亡，因此"文件存在"不是活性信号。
+
+**代价。** 启动时一次 `launchctl print`（毫秒级）。模式在窗口生命周期内固定，因此安装或
+卸载守护不会改变正在运行的窗口；安装器必须提示所有者重启窗口。任务已加载但坏掉时，窗口会
+等待并每 30 秒重试，而不是回退到私有运行时——这是有意的，因为回退会重建双写者状态。
+
+**推翻条件。** 如果 App 能在不依赖 launchd 的情况下确认 Daemon 活性（决定前先探测一个健康的
+已发布端点），改用该方式并删掉 `launchctl` 调用。如果安装器能在启动窗口时设置环境变量，
+在那里设置，并把本探测只留作兜底。
+
 ## 2026-11-18 —— 交互评分不再考核视频专属字段
 
 **决定。** 故宫检查器的 `--interactive` 模式不再评 `browser.timeline-differs`、经

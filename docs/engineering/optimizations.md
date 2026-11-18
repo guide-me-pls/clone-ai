@@ -31,6 +31,46 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — A Finder-launched app attaches to the loaded daemon
+
+- **Goal / hypothesis:** a packaged app launched from Finder carries no
+  environment, so the environment-only `residentRuntime` was false and the
+  window spawned a second runtime while the LaunchAgent already owned one — two
+  writers on one journal. Decide resident mode from launchd's own domain
+  instead.
+- **Trade-off:** [A packaged launch attaches when the LaunchAgent is loaded](../architecture/trade-offs.md#2026-11-18--a-packaged-launch-attaches-when-the-launchagent-is-loaded).
+- **Change:** `apps/desktop/macos/main.swift` turns `residentRuntime` into a
+  stored flag decided once in `applicationDidFinishLaunching`;
+  `launchAgentIsLoaded()` runs
+  `/bin/launchctl print gui/<uid>/ai.clone.companion`; developer builds keep
+  their private runtime unless `CLONE_AI_RESIDENT_DAEMON=1` is explicit.
+  `test/desktop-shell.test.ts` asserts the detection and that the flag is
+  stored, not computed.
+- **Eval:** `node --experimental-strip-types --test test/desktop-shell.test.ts`
+  — **1/1**. Manual, with the LaunchAgent loaded (pid 75892/78156): before the
+  change (15:10 build, no detection) the app spawned child 76242 and overwrote
+  `~/.clone/companion-endpoint.json` with its pid; after the change (15:13
+  build) app 81494 has **no child**, the endpoint still names the daemon
+  (pid 78156), and `GET /api/health` returns 200. The job-absent branch was
+  observed with the pre-change build (it spawns, as before); the new binary's
+  fallback is covered by the source contract, not re-run end to end. Full
+  suite **744/744**, typecheck and gate pass.
+- **Benchmark run:** none — deterministic shell wiring and a local launch; no
+  provider, model, dataset or scoring parameters.
+- **Execution chain:** trade-off; Swift change; compile; contract test; quit the
+  running app; install the LaunchAgent (`node scripts/install-daemon.mjs`) and
+  confirm health 200; two rebuilds — the first (15:10) raced a concurrent
+  source write and produced a binary without the detection, which the manual
+  eval caught as a spawned child; rebuilt at 15:13 and re-ran the launch. Then
+  tests, docs, and cleanup of the eval artifacts.
+- **Pros:** the packaged app now follows the documented model — the window
+  attaches to the resident daemon instead of competing with it; a checkout
+  without the daemon still works standalone.
+- **Cons / next time:** the mode is fixed at launch, so installing the daemon
+  while the window runs still needs a relaunch; the `launchctl` call runs on the
+  main thread at startup (milliseconds, but it is a process launch).
+- **Reversal condition:** see the trade-off entry.
+
 ### 2026-11-18 — Scanned PDFs and legacy .doc reach the model too
 
 - **Goal / hypothesis:** a scanned PDF or a legacy `.doc` should reach the model
