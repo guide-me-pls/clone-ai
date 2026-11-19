@@ -2582,7 +2582,7 @@ async function createSession(query) { const button = $("submit"); button.disable
 
   const turnId = globalThis.crypto?.randomUUID?.() || `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const turnStartedAt = new Date().toISOString();
-  let reply = ""; let result = null; let failed = false; let failure = ""; let stillOurs = false;
+  let reply = ""; let result = null; let failed = false; let failure = ""; let failureSummary = ""; let failureGuidance = ""; let stillOurs = false;
   const controller = new AbortController();
   // A user stop is not a timeout: the message says who ended the turn.
   // 用户停止不是超时：提示会说明是谁结束了回合。
@@ -2695,7 +2695,12 @@ async function createSession(query) { const button = $("submit"); button.disable
             if (report.truncated) announce(t("attachment-truncated").replace("{name}", report.name).replace("{characters}", String(report.characters)));
           }
         }
-        else if (event === "failed") { failure = payload.error || "Main Agent 调用失败。"; throw new Error(failure); }
+        else if (event === "failed") {
+          failure = payload.error || "Main Agent 调用失败。";
+          failureSummary = payload.errorSummary || "";
+          failureGuidance = payload.errorGuidance || "";
+          throw new Error(failure);
+        }
       }
     }
     if (!result) throw new Error("连接在回复完成前中断。");
@@ -2744,7 +2749,14 @@ async function createSession(query) { const button = $("submit"); button.disable
       target.classList.remove("is-streaming");
       target.hidden = true;
       target.innerHTML = "";
-      target.insertAdjacentHTML("afterend", `<div class="response-error" data-response-error>${escape(t("response-interrupted-detail").replace("{message}", failure))}</div>`);
+      target.insertAdjacentHTML("afterend", failureSummary
+        // The server sends the owner-facing summary with the failure; the raw
+        // error stays available for diagnosis. Without a summary, keep the old
+        // interrupted card.
+        // 服务端随失败发送所有者可读的摘要；原始错误仍可用于诊断。没有摘要时保留旧的
+        // 中断卡片。
+        ? `<div class="log-error" data-response-error><b>错误</b><p>${escape(failureSummary)}</p>${failureGuidance ? `<p class="log-error-guidance">下一步：${escape(failureGuidance)}</p>` : ""}<details class="log-detail"><summary>原始错误</summary><pre>${escape(failure)}</pre></details></div>`
+        : `<div class="response-error" data-response-error>${escape(t("response-interrupted-detail").replace("{message}", failure))}</div>`);
       if (liveStatus) { liveStatus.textContent = "失败"; liveStatus.className = "log-badge log-badge--bad"; }
       card.dataset.logStatus = "failed";
       // Restore into the composer only if the owner is still looking at this
@@ -2772,7 +2784,7 @@ async function createSession(query) { const button = $("submit"); button.disable
       target.classList.remove("is-streaming");
       target.innerHTML = richText(reply);
     }
-    announce(failure, true);
+    announce(failureSummary || failure, true);
   } finally {
     state.streams.delete(conversationId);
     syncComposer();

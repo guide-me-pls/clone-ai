@@ -6,6 +6,13 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A first-send failure shows the reason and next step
+
+A failed turn already said why in the conversation ledger, but a first send with no streamed reply kept its transient error card and skipped the ledger refresh — so the owner saw only the raw loop error ("The agent called get_run_status 5 times…"). The failed SSE event now carries the same owner-facing summary and next step, and the transient card renders them with the raw error in a collapsed 原始错误 detail. It falls back to the old interrupted card when no summary is present.
+
+失败的回合在台账里本来就说原因，但首次发送没有流式正文，会保留临时错误卡并跳过台账刷新——所有者只看到原始循环错误（“The agent called get_run_status 5 times…”）。failed SSE 事件现在携带同样的所有者可读摘要与下一步，临时卡渲染它们，并把原始错误放进折叠的“原始错误”详情。没有摘要时退回旧的中断卡片。
+
+
 ### A failed turn stays visible in the sidebar while its task runs
 
 The conversation row now gives a failed or interrupted latest turn precedence over a running child: the row reads 需要处理 and its preview shows the failure plus "N 个任务仍在执行". A waiting decision still wins, and a completed turn with an active child still reads 运行中. The child row keeps its own status.
