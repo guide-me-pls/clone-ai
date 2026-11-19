@@ -68,6 +68,21 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--the-internal-base-is-the-machine-root-not-a-folder);
   [execution chain](optimizations.md#2026-11-19--the-internal-base-is-the-machine-root-not-a-folder).
 
+## 2026-11-19 — A failed run says why it failed
+
+- **Claim:** a policy denial now records its reason, and a failed verification
+  or rejected review records the verification summary, in `run.status_changed`;
+  `run.failureReason` therefore covers every failure. `get_run_status` prints
+  `Failure:`, `dispatch_task`/`QueryRunResult` return `failureReason`, and the
+  work update/opportunity card read it instead of "没有记录到具体原因".
+- **Evidence:** `test/regression/failure-reason.test.ts` is red before (6
+  failing assertions on policy, verification replay, status reader and
+  `runQuery`) and green after; `npm test` **940/940**, typecheck exit 0, gate
+  **PASS**. Landed as `443aa73` after the protected-path override. Patch and
+  report: `.automation/repair-reports/failure-reason-20261119T0851.{patch,json}`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-failed-run-carries-its-reason-and-the-main-agent-can-read-it);
+  [execution chain](optimizations.md#2026-11-19--a-failed-runs-reason-reaches-the-model-and-the-owner).
+
 ## 2026-11-19 — Alternating and masked polls stop as no progress
 
 - **Claim:** the shared loop now counts each executed call's identity across the
@@ -95,8 +110,8 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   lane suite **919/919**, typecheck 0; on main both regressions plus
   `test/verification.test.ts` and `test/fallback-planner.test.ts` **31/31**,
   full suite **922/922**, gate **PASS**. Landed as `763dcd8` after the
-  protected-path override. Report:
-  `.automation/repair-reports/verifier-20261119T0817.json`.
+  protected-path override. The lane report was later overwritten by a
+  `no-traces` run; the commit and the tests are the evidence.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-search-location-is-not-a-file-promise-and-the-incidents-real-plan-is-the-fixture);
   [execution chain](optimizations.md#2026-11-19--the-verifiers-real-plan-is-the-fixture-search-locations-are-not-file-promises).
 

@@ -377,9 +377,10 @@ that is better than silence.
 carries only the status), 2433/2434 (verification failed; the status payload
 carries only the status), `work-updates.jsonl` line 14 (empty summary), and the
 opportunity at seq 2436 ("没有记录到具体原因"). The audit findings record the
-same evidence. The repair lane must produce a red-first case: a policy-denied
-run and a verification-failed run both expose their reason in the run record,
-`runStatusInfo` and the dispatch result.
+same evidence. The repair lane produced `test/regression/failure-reason.test.ts`;
+it is red before (6 assertions covering the policy denial, the verification
+replay, the status reader and the dispatch result) and green after, and landed
+as `443aa73`.
 
 **Reversal condition.** If reasons make the journal unwieldy or leak data,
 store a truncated summary plus a pointer to the event, or a structured
