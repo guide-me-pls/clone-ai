@@ -45,6 +45,11 @@
             <textarea id="query" rows="1" autocomplete="off" placeholder="告诉 clone-ai 你想推进什么…" aria-label="输入你的请求" data-i18n="query-placeholder" data-i18n-attr="placeholder"></textarea>
             <button class="send" id="submit" type="submit" aria-label="发送" data-i18n="send" data-i18n-attr="aria-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m5 12 14-7-5 14-2.7-5.3L5 12Z"/><path d="m11.3 13.7 3-3"/></svg></button>
             <button class="stop" id="stop-turn" type="button" aria-label="停止本次回答" data-i18n="stop-turn" data-i18n-attr="aria-label" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
+            <div class="composer-options">
+              <label class="composer-option"><span data-i18n="composer-model">模型</span><select id="composer-model" aria-label="模型" data-i18n="composer-model" data-i18n-attr="aria-label"></select></label>
+              <label class="composer-option"><span data-i18n="composer-effort">强度</span><select id="composer-effort" aria-label="推理强度" data-i18n="composer-effort" data-i18n-attr="aria-label"></select></label>
+              <span class="composer-option-note" data-i18n="composer-choice-note">随对话保存</span>
+            </div>
           </form>
           <div class="attachment-preview" id="attachment-preview" hidden></div>
           <div class="composer-hint" data-i18n="composer-hint">Enter 发送 · Shift + Enter 换行 · 截图可粘贴 · 文件可拖入</div>
@@ -190,13 +195,9 @@
               <div class="settings-card" id="config-paths"></div>
               <div class="agent-section-label" data-i18n="interface-language">界面语言</div>
               <div class="memory-tool-row"><select id="config-locale" aria-label="界面语言" data-i18n="language-label" data-i18n-attr="aria-label"><option value="zh-CN">中文</option><option value="en">English</option></select></div>
-              <div class="agent-section-label" data-i18n="main-agent-model">Main Agent 模型</div>
-              <div class="memory-tool-row"><select id="config-main-agent-model" aria-label="Main Agent 模型" data-i18n="model-label" data-i18n-attr="aria-label"><option value="">使用默认模型</option></select><button class="primary" id="config-main-agent-model-save" type="button" data-i18n="save">保存</button></div>
-              <div class="agent-section-label" data-i18n="main-agent-effort">推理强度</div>
-              <div class="memory-tool-row"><select id="config-main-agent-effort" aria-label="推理强度"></select><button class="primary" id="config-main-agent-effort-save" type="button" data-i18n="save">保存</button></div>
               <div class="agent-section-label"><span data-i18n="observation-sources">观察来源</span> <button class="provider-install" id="connector-add" type="button" data-i18n="choose-directory">选择目录…</button></div>
               <div class="connector-list" id="connector-list"></div>
-              <p class="agent-runtime-note" data-i18n="connectors-note">Connector 提供只读观察数据；模型仍可能误解数据里的指令。配置只保存路径与环境变量名，不保存密钥值。</p>
+              <p class="agent-runtime-note" data-i18n="connectors-note">观察来源只读取你点名的目录：每轮开始时读取其中的 .md / .txt 文件（最多 200 个，每份取前 400 字），把标题作为背景事实交给模型。它没有写入或执行权限，也不保存密钥。</p>
             </section>
           </div>
         </div>

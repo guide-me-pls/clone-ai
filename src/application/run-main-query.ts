@@ -75,6 +75,13 @@ export interface MainAgentQueryOptions {
    * 本回合所属的任务。缺省表示所有者的主对话；不同 id 携带不同历史，互不阻塞。
    */
   conversationId?: string;
+  /**
+   * The model and effort the owner picked in the composer for this turn.
+   * Omitted means the persisted Settings default; other surfaces pass neither.
+   * 所有者在输入框中为本回合选择的模型与强度。缺省表示设置里的默认值；其他入口都不传。
+   */
+  model?: string;
+  effort?: string;
 }
 
 export async function runMainAgentQuery(
@@ -133,6 +140,8 @@ export async function runMainAgentQuery(
         ...(options.documents === undefined ? {} : { documents: options.documents }),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
         ...(options.onToolEvent === undefined ? {} : { onToolEvent: options.onToolEvent }),
+        ...(options.model === undefined ? {} : { model: options.model }),
+        ...(options.effort === undefined ? {} : { effort: options.effort }),
         onMetadata: (metadata) => audit.note(metadata),
       }),
       {

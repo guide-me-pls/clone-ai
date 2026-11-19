@@ -114,6 +114,20 @@ export interface NativeMainAgentOptions {
   /** What the turn ledger records when it differs from the model text, such as an attachment manifest. 当写入台账的文本不同于模型文本时使用，例如附件清单。 */
   ledgerText?: string;
   cwd?: string;
+  /**
+   * The model the owner picked for this turn. It overrides the persisted and
+   * environment value for this turn only; omitted keeps the Settings default,
+   * which is what surfaces without a composer (WhatsApp, schedules) rely on.
+   * 所有者为本回合选择的模型。仅覆盖本回合的持久化与环境值；缺省沿用设置默认值，
+   * 没有输入框的入口（WhatsApp、定时）依赖这一行为。
+   */
+  model?: string;
+  /**
+   * The reasoning effort the owner picked for this turn. Omitted keeps the
+   * persisted or environment default. 所有者为本回合选择的推理强度；缺省沿用
+   * 持久化或环境默认值。
+   */
+  effort?: string;
 }
 
 /** One tool-call progress event for the interface. 面向界面的单次工具调用进度事件。 */
@@ -255,8 +269,13 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
   if (resolved.endpoint === undefined) {
     throw new Error(`The native Main Agent needs ${resolved.missing.join(" and ")}. Set them in Settings or in the environment.`);
   }
-  const endpoint = resolved.endpoint;
-  const effort = await readMainAgentEffortPreference(options.dataDirectory, environment);
+  const endpoint = options.model === undefined ? resolved.endpoint : { ...resolved.endpoint, model: options.model };
+  // A turn carries the owner's explicit composer choice when there is one. It
+  // overrides the Settings default for this turn only; without it, WhatsApp and
+  // scheduled turns keep using the persisted/environment value.
+  // 回合携带所有者在输入框中的显式选择（如果有）。它只覆盖本回合的设置默认值；没有选择时，
+  // WhatsApp 与定时回合继续使用持久化/环境值。
+  const effort = options.effort ?? await readMainAgentEffortPreference(options.dataDirectory, environment);
   const conversationId = conversationIdOf(options.conversationId);
   const compiled = await compileMainAgentPrompt({
     dataDirectory: options.dataDirectory,
@@ -381,7 +400,7 @@ ${listing}`;
   let agentResult: AgentLoopResult;
   try {
     agentResult = await runAgentLoop({
-      model: nativeChatModel(endpoint, options.fetchImpl ?? fetch),
+      model: nativeChatModel(endpoint, options.fetchImpl ?? fetch, effort),
       tools: [...nativeAgentTools(tools), ...extraTools],
       messages,
       maxRounds,
@@ -574,7 +593,7 @@ function agentExtraTools(
 }
 
 /** Adapt the streaming chat function to the shared loop's model contract. 把流式 chat 适配到共享循环的模型契约。 */
-function nativeChatModel(endpoint: NativeMainAgentEndpoint, fetchImpl: typeof fetch): AgentModel {
+function nativeChatModel(endpoint: NativeMainAgentEndpoint, fetchImpl: typeof fetch, effort?: string): AgentModel {
   return {
     async complete(request) {
       const reply = await chat(
@@ -584,6 +603,7 @@ function nativeChatModel(endpoint: NativeMainAgentEndpoint, fetchImpl: typeof fe
         fetchImpl,
         request.onDelta,
         request.signal,
+        effort,
       );
       // The provider saw derived names; the loop resolves real tools by name.
       // Provider 看到的是派生名；循环按真实名字解析工具。
@@ -636,6 +656,7 @@ async function chat(
   fetchImpl: typeof fetch,
   onDelta?: (delta: string) => void,
   signal?: AbortSignal,
+  effort?: string,
 ): Promise<NativeReply> {
   const response = await fetchImpl(`${endpoint.baseUrl}/v1/chat/completions`, {
     method: "POST",
@@ -663,6 +684,11 @@ async function chat(
           })),
           tool_choice: "auto",
         }),
+      // The effort the owner chose (or the Settings default) must reach the
+      // provider; recording it in the turn ledger without sending it made the
+      // setting decorative. 所有者选择（或设置默认）的强度必须送达 Provider；
+      // 只写进回合台账而不发送，会让这个设置变成摆设。
+      ...(effort === undefined ? {} : { reasoning_effort: effort }),
       stream: true,
       stream_options: { include_usage: true },
     }),

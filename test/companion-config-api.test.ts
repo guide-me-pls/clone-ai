@@ -608,6 +608,40 @@ test("the streaming endpoint validates input before opening a stream", async (t)
   assert.match((await response.json() as { error: string }).error, /enter a request/i);
 });
 
+test("the owner can set a gateway-declared effort the fallback list omits", async (t) => {
+  const { url, token } = await companion(t);
+  // `ultra` is declared by openai/gpt-6.1-terra but is not in the known
+  // fallback list. The gateway is the authority for a model's levels, so the
+  // setting must accept it instead of refusing a level the model advertises.
+  // `ultra` 由 openai/gpt-6.1-terra 声明，但不在已知兜底列表里。模型档位以网关为
+  // 权威，因此设置必须接受它，而不是拒绝模型宣称支持的档位。
+  const set = await companionFetch(url, token, "/api/config", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mainAgentEffort: " ultra " }),
+  });
+  assert.equal(set.status, 200);
+  assert.equal((await set.json() as { config: { mainAgentEffort?: string } }).config.mainAgentEffort, "ultra");
+
+  const cleared = await companionFetch(url, token, "/api/config", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mainAgentEffort: "" }),
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal((await cleared.json() as { config: { mainAgentEffort?: string } }).config.mainAgentEffort, undefined);
+
+  // A value that is not a name at all is still refused as JSON.
+  // 根本不像名称的值仍以 JSON 拒绝。
+  const notAName = await companionFetch(url, token, "/api/config", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mainAgentEffort: 42 }),
+  });
+  assert.equal(notAName.status, 400);
+  assert.match((await notAName.json() as { error: string }).error, /mainAgentEffort/);
+});
+
 test("a one-character main-agent request is not rejected as too short", () => {
   // Validation is the contract under test; the live model call is covered by
   // the gated integration suite.

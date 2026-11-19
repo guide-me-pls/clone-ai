@@ -27,7 +27,7 @@ import { readNativeMainAgentEndpoint, readPersistedMainAgentEndpoint } from "../
 import { parseUsage } from "../workers/openai-compatible-client.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
-import { EFFORT_LEVELS, isEffortLevel, type EffortLevel } from "../workers/effort.ts";
+import { isEffortLevel } from "../workers/effort.ts";
 import type { JournalStore } from "../core/journal.ts";
 
 export type ReviewActionKind = "main-agent-effort" | "main-agent-model";
