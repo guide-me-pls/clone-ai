@@ -580,7 +580,7 @@ test("a repeated call with the same result stops as no progress", async () => {
   assert.equal(result.rounds, 5);
   assert.equal(result.toolCalls, 5);
   assert.equal(requests.length, 5, "the sixth identical call is never sent");
-  assert.match(result.error ?? "", /poll 5 times in a row/);
+  assert.match(result.error ?? "", /poll 5 times with the same/);
 });
 
 test("a repeated call is warned at three, and a later answer completes", async () => {
@@ -619,7 +619,13 @@ test("the same call with a changing result is progress, not a loop", async () =>
   assert.equal(polls, 6);
 });
 
-test("a changed argument resets the repeat streak", async () => {
+test("a changed argument is a different call identity; four repeats still complete", async () => {
+  // A and B are different identities; A appears four times, below the stop
+  // threshold. The old adjacent-batch rule called this a reset; the guard now
+  // counts each identity, so a fifth A would stop the turn (covered by the
+  // alternating-pair case below).
+  // A 与 B 是不同身份；A 出现四次，低于停止阈值。旧的相邻批次规则把这当作重置；守卫现在按
+  // 身份计数，因此第五次 A 会停下（下面的交替用例覆盖了这一点）。
   const responses: Scripted[] = [
     { content: "checking", toolCalls: [call("a1", "poll", { runId: "run-1" })] },
     { content: "checking", toolCalls: [call("a2", "poll", { runId: "run-1" })] },
@@ -635,6 +641,63 @@ test("a changed argument resets the repeat streak", async () => {
   });
   assert.equal(result.terminalReason, "completed");
   assert.equal(result.toolCalls, 5);
+});
+
+test("an alternating pair of identical polls stops at the fifth repeat", async () => {
+  // Two constant runs polled alternately: no adjacent batch ever matches, so
+  // the old guard completed. The per-call counts still see A five times.
+  // 两个结果不变的 Run 交替轮询：没有任何相邻批次相同，旧守卫会正常完成；按调用计数仍会看到
+  // A 出现五次。
+  const responses: Scripted[] = Array.from({ length: 9 }, (_, index) => ({
+    content: "checking",
+    toolCalls: [call(`p${index}`, "poll", { runId: index % 2 === 0 ? "run-1" : "run-2" })],
+  }));
+  responses.push({ content: "done", toolCalls: [] });
+  const requests: AgentModelRequest[] = [];
+  const result = await runAgentLoop({
+    model: scriptedModel(responses, requests),
+    tools: [tool("poll", async (args) => ({ content: `Run ${String(args.runId)}: running` }), true)],
+    messages: [userMessage("wait for both")],
+  });
+  assert.equal(result.terminalReason, "no_progress");
+  assert.equal(result.rounds, 9);
+  assert.equal(requests.length, 9, "the tenth request is never sent");
+  assert.match(result.error ?? "", /poll 5 times/);
+  const warned = requests[5]?.messages.some(
+    (message) => message.role === "system" && String(message.content).includes("No progress"),
+  );
+  assert.equal(warned, true, "the warning lands after the third A");
+});
+
+test("a changing sibling call does not mask an identical poll", async () => {
+  // get_run_status is parallel-safe, so it can share a batch with a read whose
+  // result changes. That sibling says nothing about the poll; the poll's own
+  // identity still reaches five.
+  // get_run_status 可以并行，因此会与一个结果变化的读取同批。兄弟调用与轮询无关；轮询自己的
+  // 身份仍会出现五次。
+  let ticks = 0;
+  const responses: Scripted[] = Array.from({ length: 8 }, (_, index) => ({
+    content: "checking",
+    toolCalls: [
+      call(`poll-${index}`, "poll", { runId: "run-1" }),
+      call(`tick-${index}`, "tick", {}),
+    ],
+  }));
+  responses.push({ content: "done", toolCalls: [] });
+  const requests: AgentModelRequest[] = [];
+  const result = await runAgentLoop({
+    model: scriptedModel(responses, requests),
+    tools: [
+      tool("poll", async () => ({ content: "Run run-1: running" }), true),
+      tool("tick", async () => ({ content: `tick ${++ticks}` }), true),
+    ],
+    messages: [userMessage("wait for it")],
+  });
+  assert.equal(result.terminalReason, "no_progress");
+  assert.equal(result.rounds, 5);
+  assert.equal(result.toolCalls, 10);
+  assert.equal(requests.length, 5, "the sixth batch is never sent");
+  assert.match(result.error ?? "", /poll 5 times/);
 });
 
 test("reordered JSON keys are the same call", async () => {

@@ -99,13 +99,17 @@ const PROVIDER_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
 
 /**
  * A model that keeps making the same call with the same result is not making
- * progress, even though each round technically adds a request. The loop warns
- * once at three and stops at five. The external gateway that caught the
- * 2026-11-19 polling loop used eight; a local guard must fire before a provider
- * can misreport the stop as a model answer.
- * 模型反复发出同一个调用、得到同样的结果，即使每一轮都多了一次请求，也没有进展。循环在
- * 第三次提示一次，在第五次停下。2026-11-19 的轮询循环被外部网关在第八次拦下；本机守卫必须
- * 更早，才能避免 Provider 把这次停止误报成模型回答。
+ * progress, even though each round technically adds a request. The loop counts
+ * every executed call's identity across the turn, warns at three occurrences and
+ * stops at five. Counting adjacent batches was not enough: an A/B alternation
+ * never repeats adjacently, and a changing call beside an identical poll
+ * changed the whole batch. The external gateway that caught the 2026-11-19
+ * polling loop used eight; a local guard must fire before a provider can
+ * misreport the stop as a model answer.
+ * 模型反复发出同一个调用、得到同样的结果，即使每一轮都多了一次请求，也没有进展。循环按回合
+ * 统计每个已执行调用的身份，在第三次出现时提示、第五次时停下。只比较相邻批次不够：A/B 交替
+ * 从不相邻重复，而相同轮询旁边一个变化的调用会改变整批。2026-11-19 的轮询循环被外部网关在
+ * 第八次拦下；本机守卫必须更早，才能避免 Provider 把这次停止误报成模型回答。
  */
 const REPEAT_WARN_AT = 3;
 const REPEAT_STOP_AT = 5;
@@ -273,11 +277,12 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   let terminalReason: AgentTerminalReason | undefined;
   let terminalError: string | undefined;
   let budgetNoticeSent = false;
-  // The previous batch's identity, so a repeat is detected without an extra
-  // model call or a scan of the transcript.
-  // 上一批调用的指纹；重复检测不需要额外模型调用或扫描转录。
-  let previousBatchFingerprint: string | undefined;
-  let repeatedBatches = 0;
+  // Each executed call's identity and how many times this turn has produced it.
+  // A model that alternates two identical polls, or hides one beside a changing
+  // read, is still making no progress; adjacent-batch equality saw neither.
+  // 本回合每个已执行调用的身份及其出现次数。模型在两个相同轮询之间交替、或把轮询藏在会变化的
+  // 读取旁边，仍然没有进展；相邻批次相等看不见这两种形状。
+  const callRepeats = new Map<string, number>();
 
   await emit(options, { type: "turn_started", ...(maxRounds === undefined ? {} : { maxRounds }) });
 
@@ -407,32 +412,41 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     toolCalls += batch.executed;
     messages.push(...batch.messages);
     if (!batch.budgetHit && batch.executed > 0) {
-      // A batch is identified by what it asked and what came back. Two calls
+      // Each call is identified by what it asked and what came back. Two calls
       // with the same name and arguments can still make progress when the
       // result changes (a status moved, a counter advanced); identical results
-      // cannot. The warning gives the model one round to change approach or
-      // answer, and the stop keeps a provider-side guard from being the only
-      // limit.
-      // 一批调用的身份由"问了什么、得到了什么"决定。同名同参数的调用在结果变化时仍然有进展
-      // （状态推进、计数器增加）；结果相同则没有。提示给模型一轮时间改变做法或作答，停止则
+      // cannot. Counts persist across the turn, so an alternating pair and a
+      // poll masked by a changing sibling both reach the limit. The warning
+      // gives the model one round to change approach or answer, and the stop
+      // keeps a provider-side guard from being the only limit.
+      // 每个调用由"问了什么、得到了什么"决定。同名同参数的调用在结果变化时仍然有进展
+      // （状态推进、计数器增加）；结果相同则没有。计数在整个回合内累计，因此交替的一对、
+      // 以及被变化兄弟调用掩护的轮询都会到达上限。提示给模型一轮时间改变做法或作答，停止则
       // 确保 Provider 侧的守卫不是唯一的上限。
-      const fingerprint = batchFingerprint(response.toolCalls, batch.messages);
-      repeatedBatches = fingerprint === previousBatchFingerprint ? repeatedBatches + 1 : 1;
-      previousBatchFingerprint = fingerprint;
-      const toolNames = [...new Set(response.toolCalls.map((call) => call.name))].join(", ");
-      if (repeatedBatches >= REPEAT_STOP_AT) {
-        await emit(options, { type: "no_progress", tool: toolNames, repeats: repeatedBatches });
+      let repeated = 0;
+      let repeatedTool = "";
+      for (const [index, call] of response.toolCalls.entries()) {
+        const fingerprint = callFingerprint(call, batch.messages[index]);
+        const count = (callRepeats.get(fingerprint) ?? 0) + 1;
+        callRepeats.set(fingerprint, count);
+        if (count > repeated) {
+          repeated = count;
+          repeatedTool = call.name;
+        }
+      }
+      if (repeated >= REPEAT_STOP_AT) {
+        await emit(options, { type: "no_progress", tool: repeatedTool, repeats: repeated });
         stop(
           "no_progress",
-          `The agent called ${toolNames} ${repeatedBatches} times in a row with the same arguments and the same result; `
+          `The agent called ${repeatedTool} ${repeated} times with the same arguments and the same result in this turn; `
             + "the turn was stopped because it was making no progress.",
         );
         break;
       }
-      if (repeatedBatches === REPEAT_WARN_AT) {
+      if (repeated === REPEAT_WARN_AT) {
         messages.push({
           role: "system",
-          content: `No progress: this exact call (${toolNames}) returned the same result ${repeatedBatches} times in a row. `
+          content: `No progress: this exact call (${repeatedTool}) has returned the same result ${repeated} times in this turn. `
             + "Calling it again cannot advance the work. Change the arguments or the approach, use a different tool, "
             + "or answer with what you have now.",
         });
@@ -597,18 +611,15 @@ function applyTotalResultBudget(messages: AgentMessage[], totalChars: number | u
 }
 
 /**
- * Identify one executed tool-call batch by name, canonical arguments and
- * result text. Canonicalizing the arguments means a provider that reorders
- * JSON keys does not defeat the comparison, and the result text is what makes
- * a repeated call "no progress" rather than merely "repeated".
- * 用名称、规范化参数与结果文本标识一批已执行的工具调用。参数规范化使 Provider 重排 JSON
+ * Identify one executed tool call by name, canonical arguments and result text.
+ * Canonicalizing the arguments means a provider that reorders JSON keys does
+ * not defeat the comparison, and the result text is what makes a repeated call
+ * "no progress" rather than merely "repeated".
+ * 用名称、规范化参数与结果文本标识一次已执行的工具调用。参数规范化使 Provider 重排 JSON
  * 键也无法绕过比较；结果文本则把"重复调用"与"没有进展"区分开。
  */
-function batchFingerprint(calls: AgentToolCall[], results: AgentMessage[]): string {
-  return calls.map((call, index) => {
-    const result = results[index];
-    return [call.name, canonicalArguments(call.arguments), result === undefined ? "" : messageText(result)].join("\u0000");
-  }).join("\u0001");
+function callFingerprint(call: AgentToolCall, result: AgentMessage | undefined): string {
+  return [call.name, canonicalArguments(call.arguments), result === undefined ? "" : messageText(result)].join("\u0000");
 }
 
 function canonicalArguments(raw: string): string {

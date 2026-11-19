@@ -6,6 +6,62 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — The no-progress guard counts each call across the turn, not adjacent batches
+
+**Decision.** The shared agent loop now counts, per turn, the identity of every
+executed tool call — tool name, canonicalized arguments and result text — and
+warns when any identity reaches three occurrences and ends the turn with
+`no_progress` at five. Adjacent-batch equality is gone: a different call between
+two identical polls no longer resets the poll's count, and one changing call in
+a batch no longer masks an identical sibling. A call whose result changes is a
+new identity (progress); a changed argument is a different identity.
+
+**Why it won.** The 2026-11-19 audit reproduced two escape shapes on the merged
+guard. (1) Alternating `get_run_status(run-1)` / `get_run_status(run-2)` with
+constant results ran twelve rounds and completed, because no two adjacent
+batches matched. (2) Eight batches of `[get_run_status(run-1), tick]` completed
+because the tick's changing result changed the whole batch fingerprint. Both are
+waiting, not progress. The Main Agent path has no round cap (`bba7896`), and the
+prompt's "never poll" is soft; the guard is the only local bound for these
+shapes.
+
+**Alternatives rejected.**
+
+- *Keep adjacent-batch equality and add a cycle detector for lengths 2..k.* More
+  state, and a cycle can be longer than k; per-identity counting catches any
+  spacing with one map.
+- *Count only consecutive occurrences of the same identity.* That is what the
+  batch rule effectively did; it misses alternation.
+- *Reset all counts when a different call appears.* That reintroduces the same
+  blindness: a model can alternate forever.
+- *Treat a batch with any changing result as progress.* That is exactly the
+  masking shape; a changing sibling says nothing about the poll.
+- *Add a default round or duration cap.* `bba7896` removed the arbitrary cap; a
+  cap stops productive long turns without proving no progress.
+
+**What was given up.** A legitimate identical call repeated five times across a
+turn (even with different work between) is stopped; a turn that re-reads the same
+file with the same result five times ends earlier than before. Counts are per
+turn, not windowed. The result text is compared after the loop's truncation, so
+a result carrying a timestamp or counter is progress. The cost is one map entry
+per executed call: small strings, no model calls.
+
+**Evidence.** The audit's reproductions on `43a34cc`: a twelve-round
+alternation completed, and eight batches of an identical poll plus a changing
+tick completed; both were waiting. New cases in `test/agent-loop.test.ts`: the
+alternation stops at round 9 after the fifth A; the masked poll stops at round 5;
+the exact eight identical polls still stop at 5; A,A,B,A,A completes with four A
+occurrences; a changing result still progresses. Before the change the two new
+cases fail (both complete); after they end as `no_progress`. Full suite and
+typecheck results are recorded in the optimization log.
+
+**Reversal condition.** If a benchmark or an owner's turn is stopped as
+`no_progress` while making real progress (e.g., a legitimate repeated read whose
+result is identical for five occurrences), raise the thresholds, narrow the
+counting to read-only wait tools, or window the counts. If a provider rewrites
+results so identical calls no longer compare equal, fingerprint the
+pre-truncation result.
+
 ## 2026-11-19 — A search location is not a file promise, and the incident's real plan is the fixture
 
 **Decision.** `extractFileExpectations` treats a path as a file promise only when
@@ -462,6 +518,11 @@ polled in a loop. While a run is queued or running, its status text ends with
 `MAIN_AGENT_CHARTER_VERSION` moves to 6. A worker that stops with the new
 reason is reported as `no_progress` instead of `completed`, and
 `describeFailureForOwner` gives the owner a Chinese summary and next step.
+
+**Superseded clause (2026-11-19, later the same day).** The adjacent-batch
+comparison above ("in a row") was replaced by per-call counts across the turn;
+see the entry at the top of this file. The warning at three, the `no_progress`
+stop at five and the snapshot guidance are unchanged.
 
 **Why it won.** On 2026-11-19 the owner's turn `fa63e0f3…` called
 `get_run_status` on run `fa36a720…` eight times between 14:13:59 and 14:14:21;
