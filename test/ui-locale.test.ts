@@ -62,6 +62,15 @@ test("the Agent page shows the detected gateway and a read-only worker catalog",
   // the model picker already names what the gateway serves.
   // 模型数量、网关版本与 API 路径是诊断信息，不是可选项；模型下拉已经列出门户提供的模型。
   assert.doesNotMatch(js, /gateway-details|gatewayApis/);
+  // The loopback endpoint and the raw model id are not owner-facing choices:
+  // the picker shows a friendly model name, and the endpoint belongs to config,
+  // audit and logs.
+  // 回环端点与原始模型 id 不是面向所有者的选择：下拉显示友好模型名，端点属于配置、审计与日志。
+  assert.doesNotMatch(js, /127\.0\.0\.1:3425\/v1/);
+  assert.doesNotMatch(js, /gateway\?\.endpoint/);
+  assert.doesNotMatch(js, /label: "当前模型"/);
+  assert.match(js, /id: "gateway-model"/);
+  assert.match(js, /data-gateway-apply/);
 });
 
 test("the shared component library exposes the primitives used by the UI", async () => {

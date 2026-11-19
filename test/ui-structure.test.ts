@@ -251,16 +251,27 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
       reply: "已整理。",
     }],
   });
-  // The three facts a turn is judged by are present, in order.
-  // 判断一个回合所需的三件事实都在，且按顺序。
-  assert.match(html, /上下文/);
-  assert.match(html, /派发/);
+  // A turn shows its result and the grounds it stands on; the process — the
+  // model, the prompt snapshot's tool table, and every call's input — lives in
+  // the audit and must not come back into the reading column.
+  // 回合显示结果与它所依据的东西；过程——模型、提示词快照的工具表与每次调用的输入——在
+  // 审计页，不得回到阅读栏。
   assert.match(html, /结果/);
-  assert.match(html, /native\/claude-sonnet-5-5 · high/);
-  assert.match(html, /charter v3 · 工具 2 个/);
-  assert.match(html, /此前 2 轮已完成对话/);
-  assert.match(html, /丢弃 12 条 \/ 保留 3 条/);
-  assert.match(html, /dispatch_task/);
+  assert.match(html, /依据/);
+  assert.match(html, /工具调用 1 次/);
+  assert.match(html, /派生任务 1 个/);
+  assert.match(html, /产物/);
+  assert.match(html, /data-open-turn-audit="turn-1"/);
+  assert.match(html, /data-open-turn-conversation="chat"/);
+  assert.match(html, /aria-label="查看审计：整理资料"/);
+  assert.doesNotMatch(html, /log-step-label">上下文/);
+  assert.doesNotMatch(html, /log-step-label">派发/);
+  assert.doesNotMatch(html, /工具表/);
+  assert.doesNotMatch(html, /native\/claude-sonnet-5-5/);
+  assert.doesNotMatch(html, /charter v3/);
+  assert.doesNotMatch(html, /此前 2 轮已完成对话/);
+  assert.doesNotMatch(html, /丢弃 12 条/);
+  assert.doesNotMatch(html, /dispatch_task/);
   assert.match(html, /data-log-run="run-12345678"/);
   assert.match(html, /已整理。/);
   // The owner's request is a right-hand bubble and the answer is the left-hand
@@ -276,6 +287,22 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   assert.match(html, /任务「整理资料」已完成。/);
   assert.doesNotMatch(html, /class="message/);
   assert.match(html, /class="turn-log"/);
+  // The evidence line is the way back to the process: the conversation names no
+  // tools, so the audit must land on exactly this turn. The locator is the turn
+  // id plus the conversation, not the request text: a long request overflows the
+  // GET header limit and the journal stores the request redacted.
+  // 依据行是回到过程的路径：对话不点名工具，因此审计必须精确落在本回合。定位键是
+  // 回合 id 加对话，而不是请求文本：长请求会撑爆 GET 头部上限，Journal 存储的请求已脱敏。
+  assert.match(app, /data-open-turn-audit/);
+  assert.match(app, /CloneAudit\?\.showTurns/);
+  const audit = await read("audit.js");
+  assert.match(audit, /async function showTurns\(turnId, conversationId\)/);
+  assert.match(audit, /state\.view = "turns"/);
+  assert.match(audit, /turnId: id/);
+  assert.match(audit, /filter\.turnId/);
+  assert.match(audit, /refreshTurns\(true\)/);
+  assert.match(audit, /data-au-turn-clear/);
+  assert.match(audit, /window\.CloneAudit = Object\.freeze\(\{ load, showTurns \}\)/);
 
   // A turn the journal never recorded says so instead of inventing a clean run.
   // Journal 没有记录的回合如实说明，而不是编造一次干净的运行。
@@ -285,6 +312,10 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   });
   assert.match(bare, /没有 Journal 记录/);
   assert.match(bare, /好。/);
+  // The audit is a journal projection: without a journal record the control
+  // would be a dead end, so it is absent.
+  // 审计是 Journal 的投影：没有 Journal 记录时控件会是死角，因此不出现。
+  assert.doesNotMatch(bare, /data-open-turn-audit/);
 
   // A cancelled update is not a success: the badge follows the run's status.
   // 已取消的更新不是成功：标签跟随 Run 的状态。
@@ -319,7 +350,29 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   assert.match(failed, /下一步：检查 Provider 与网络后重试。/);
   assert.match(failed, /原始错误/);
   assert.match(failed, /本轮在调用工具前就结束了。/);
+  assert.match(failed, /data-open-turn-audit="t3"/);
   assert.doesNotMatch(failed, /本轮直接回答/);
+
+  // A running turn with no calls yet still has a basis and a way to its record.
+  // 尚未调用工具的运行中回合仍有依据与通往记录的路。
+  const running = markup({
+    id: "chat", kind: "conversation", messages: [],
+    turns: [{ id: "t5", kind: "turn", input: "慢慢来", status: "started", startedAt: "2026-11-18T10:03:00.000Z", journaled: true, compactions: [], toolCalls: [], spawnedRuns: [], priorTurns: 0, priorTurnsOmitted: 0 }],
+  });
+  assert.match(running, /仍在运行；还没有工具调用记录。/);
+  assert.match(running, /data-open-turn-audit="t5"/);
+
+  // Legacy history never entered the journal: it keeps the 结果 shape and says
+  // so instead of offering an audit page that cannot exist.
+  // 旧历史从未进入 Journal：它沿用"结果"结构并如实说明，而不是提供一个不可能存在的审计页。
+  const history = markup({
+    id: "chat", kind: "conversation", messages: [],
+    turns: [{ id: "h1", kind: "history", input: "旧请求", status: "info", startedAt: "2026-11-18T10:04:00.000Z", reply: "旧回答。" }],
+  });
+  assert.match(history, /log-step-label">结果/);
+  assert.match(history, /旧回答。/);
+  assert.match(history, /旧记录没有保存过程。/);
+  assert.doesNotMatch(history, /data-open-turn-audit/);
 
   // Older turns are counted, not silently dropped.
   // 更早的回合会被计数，而不是悄悄丢掉。
@@ -693,6 +746,107 @@ test("the owner's message renders markdown like the agent's", async () => {
   assert.match(css, /\.log-reply \.md-heading/);
 });
 
+test("a Markdown table renders as a table and carries its CSV", async () => {
+  const app = await read("app.js");
+  const css = await read("components.css");
+  const start = app.indexOf("function mdInline(");
+  const end = app.indexOf("function messageMarkup(", start);
+  assert.ok(start >= 0 && end > start, "the table renderer must sit before messageMarkup");
+  const escapeLine = app.match(/^const escape = .*$/m)?.[0];
+  assert.ok(escapeLine, "richText escapes through the shared helper");
+  const richText = runInNewContext(`${escapeLine}\n${app.slice(start, end)}; richText`) as (value: string) => string;
+
+  const html = richText("今天的情况：\n\n| 位置 | 状态 |\n| :--- | ---: |\n| `src/a.js` | **已修改** |\n| b | c |\n\n结束。");
+  assert.match(html, /<table class="md-table">/);
+  assert.match(html, /<th class="md-table-cell md-table-cell--left">位置<\/th>/);
+  assert.match(html, /<th class="md-table-cell md-table-cell--right">状态<\/th>/);
+  assert.match(html, /<td class="md-table-cell md-table-cell--left"><code class="md-inline">src\/a\.js<\/code><\/td>/);
+  assert.match(html, /<td class="md-table-cell md-table-cell--right"><b>已修改<\/b><\/td>/);
+  assert.match(html, /data-export-csv="位置,状态&#10;src\/a\.js,已修改&#10;b,c"/);
+  assert.match(html, />导出 CSV</);
+  assert.doesNotMatch(html, /\| 位置 \|/);
+
+  // A pipe escaped in a cell is content, not a column separator.
+  // 单元格里转义的竖线是内容，不是列分隔符。
+  const escaped = richText("| a \\| b | c |\n| --- | --- |\n| d | e |");
+  assert.match(escaped, /<th class="md-table-cell">a \| b<\/th>/);
+  assert.match(escaped, /data-export-csv="a \| b,c&#10;d,e"/);
+
+  // A line with pipes and no delimiter row is prose, not a table.
+  // 有竖线但没有分隔行的只是普通文本，不是表格。
+  const prose = richText("| a | b |\n不是分隔行");
+  assert.doesNotMatch(prose, /<table/);
+  assert.match(prose, /\| a \| b \|/);
+
+  // A table inside a fenced block stays code.
+  // 围栏代码块里的表格保持为代码。
+  const fenced = richText("```\n| a | b |\n| --- | --- |\n```");
+  assert.doesNotMatch(fenced, /<table/);
+  assert.match(fenced, /<pre class="md-code">/);
+  assert.match(fenced, /\| a \| b \|/);
+
+  // Cell content is escaped before any inline markup is added.
+  // 单元格内容在任何行内标记之前先被转义。
+  const unsafe = richText("| a |\n| --- |\n| <img src=x onerror=alert(1)> |");
+  assert.doesNotMatch(unsafe, /<img/);
+  assert.match(unsafe, /&lt;img src=x onerror=alert\(1\)&gt;/);
+
+  assert.match(css, /\.md-table-wrap\s*\{/);
+  assert.match(css, /\.md-table-export\s*\{/);
+  assert.match(css, /\.md-table-scroll\s*\{[^}]*overflow-x:\s*auto/);
+  // The button is wired into the conversation's one delegated click handler.
+  // 按钮接入对话唯一的委托点击处理器。
+  assert.match(app, /event\.target\.closest\("\[data-export-table\]"\)/);
+  assert.match(app, /exportMarkdownTable\(tableExport\.dataset\.exportCsv/);
+});
+
+test("a table's export control writes CSV through the owner-picked folder", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("function exportMarkdownTable(");
+  const end = app.indexOf("async function addConnector(", start);
+  assert.ok(start >= 0 && end > start, "exportMarkdownTable must be standalone");
+  const source = app.slice(start, end);
+
+  const announced: Array<[string, boolean]> = [];
+  let downloaded: { href?: string; download?: string } | undefined;
+  let downloadedBlob: { parts?: string[] } | undefined;
+  let chosen: { purpose: string; callback: (destination: string) => Promise<void> } | undefined;
+  let posted: { path: string; body: { destination: string; csv: string } } | undefined;
+  const revealed: string[] = [];
+  const run = (window: unknown) => runInNewContext(`${source}; exportMarkdownTable`, {
+    window,
+    announce: (message: string, error: boolean) => announced.push([message, error === true]),
+    chooseNativeDirectory: (purpose: string, callback: (destination: string) => Promise<void>) => { chosen = { purpose, callback }; },
+    api: async (path: string, options: { body: string }) => {
+      posted = { path, body: JSON.parse(options.body) };
+      return { path: "/tmp/out/clone-ai-table.csv", name: "clone-ai-table.csv" };
+    },
+    Blob: class { parts: string[]; constructor(parts: string[]) { this.parts = parts; } },
+    URL: { createObjectURL: (blob: { parts?: string[] }) => { downloadedBlob = blob; return "blob:table"; }, revokeObjectURL: () => {} },
+    document: { createElement: () => { const anchor = { href: "", download: "", click() { downloaded = anchor; } }; return anchor; } },
+    setTimeout: () => {},
+  }) as (csv: string) => void;
+
+  // A browser preview has no native picker: the table becomes a real download.
+  // 浏览器预览没有原生选择器：表格变成一次真实下载。
+  run({})("a,b\n1,2");
+  assert.equal(downloaded?.href, "blob:table");
+  assert.match(downloaded?.download ?? "", /^clone-ai-table-\d{4}-\d{2}-\d{2}\.csv$/);
+  assert.equal(downloadedBlob?.parts?.[0]?.charCodeAt(0), 0xFEFF);
+  assert.deepEqual(announced.at(-1), ["表格已下载为 CSV。", false]);
+
+  // The desktop hands the CSV to the daemon only after the owner picks a folder.
+  // 桌面端只在所有者挑中文件夹之后，才把 CSV 交给 daemon。
+  run({ CloneNative: { chooseDirectory: () => {}, revealInFinder: (path: string) => revealed.push(path) } })("a,b\n1,2");
+  assert.equal(chosen?.purpose, "table-export");
+  await chosen?.callback("/tmp/out");
+  assert.equal(posted?.path, "/api/tables/export");
+  assert.equal(posted?.body.destination, "/tmp/out");
+  assert.equal(posted?.body.csv.charCodeAt(0), 0xFEFF);
+  assert.deepEqual(revealed, ["/tmp/out/clone-ai-table.csv"]);
+  assert.deepEqual(announced.at(-1), ["表格已导出：clone-ai-table.csv", false]);
+});
+
 test("every function the UI calls is defined", async () => {
   // The daemon serves app.js from a snapshot read at startup. A source edit
   // that reorders or drops a function therefore reaches an already-running
@@ -717,7 +871,7 @@ test("every function the UI calls is defined", async () => {
     "async", "parseInt", "parseFloat", "isNaN", "encodeURIComponent", "decodeURIComponent",
     "setTimeout", "clearTimeout", "setInterval", "clearInterval", "fetch", "alert", "confirm",
     "prompt", "requestAnimationFrame", "structuredClone", "queueMicrotask", "import", "require",
-    "resolve", "reject", "onChoose", "run", "first", "u0000BLOCK",
+    "resolve", "reject", "onChoose", "run", "first", "u0000BLOCK", "u0000TABLE", "characters",
   ]);
   const missing = [...called].filter((name) => !defined.has(name) && !ignored.has(name));
   assert.deepEqual(missing, [], `app.js calls functions it never defines: ${missing.join(", ")}`);
@@ -738,7 +892,80 @@ test("the audit explains how each Main Agent turn was assembled", async () => {
   assert.match(audit, /instructionSources/);
   assert.match(audit, /turn\.runs/);
   assert.match(audit, /au-assembly-runs/);
+  // The conversation no longer renders compaction summaries; the audit is their
+  // only home, so it must show the text and the counts.
+  // 对话不再渲染压缩摘要；审计是它们唯一的家，因此必须显示正文与计数。
+  assert.match(audit, /turn\.compactions/);
+  assert.match(audit, /au-assembly-compactions/);
+  // The executed calls, with their inputs and durations, are the other half of
+  // what the conversation dropped; the audit turn card must keep rendering them.
+  // 执行过的调用及其输入与耗时是对话丢掉的另一半；审计回合卡必须继续渲染它们。
+  assert.match(audit, /turn\.toolCalls/);
+  assert.match(audit, /au-turn-tools/);
   assert.match(auditCss, /\.au-assembly/);
+  assert.match(auditCss, /\.au-assembly-compactions/);
+  assert.match(auditCss, /\.au-turn-tools/);
+});
+
+test("the audit keeps the compaction summary the conversation no longer shows", async () => {
+  const audit = await read("audit.js");
+  const start = audit.indexOf("function assemblyBlock(turn)");
+  const end = audit.indexOf("function turnsView", start);
+  assert.ok(start >= 0 && end > start, "assemblyBlock must exist");
+  const assemblyBlock = runInNewContext(`${audit.slice(start, end)}; assemblyBlock`, {
+    esc: (value: unknown) => String(value ?? ""),
+    num: (value: number) => String(value ?? 0),
+    stamp: () => "11:35:00",
+    statusBadge: (status: string) => `<span>${status}</span>`,
+  }) as (turn: unknown) => string;
+  const html = assemblyBlock({
+    conversationId: "conversation-a", modelId: "m", provider: "p", effort: "high",
+    historyMessages: 3, historyTurns: 1,
+    compactions: [{ at: "2026-11-19T03:30:00.000Z", estimatedTokens: 90_000, compactAt: 80_000, droppedMessages: 12, keptMessages: 3, summary: "前面的对话压成一段摘要。" }],
+    snapshot: { charterVersion: 5, hasBriefing: true, instructionSources: [], toolNames: ["dispatch_task"], materialHash: "abcdef" },
+    runs: [], historySearches: [],
+  });
+  // The process the conversation dropped must still be readable in its new home.
+  // 对话丢掉的过程，仍必须能在它的新家读到。
+  assert.match(html, /上下文压缩/);
+  assert.match(html, /丢弃 12 条 \/ 保留 3 条/);
+  assert.match(html, /前面的对话压成一段摘要。/);
+});
+
+test("the audit turn card keeps the tool calls the conversation dropped", async () => {
+  const audit = await read("audit.js");
+  const start = audit.indexOf("function turnsView()");
+  const end = audit.indexOf("function invocationsView", start);
+  assert.ok(start >= 0 && end > start, "turnsView must exist");
+  const turnsView = runInNewContext(`${audit.slice(start, end)}; turnsView`, {
+    state: {
+      turns: [{
+        turnId: "turn-1", conversationId: "conversation-a", source: "companion", status: "completed",
+        modelId: "m", effort: "high", startedAt: "2026-11-19T03:35:00.000Z", durationMs: 1234,
+        input: "整理资料", reply: "已整理。",
+        toolCalls: [{ toolCallId: "c1", name: "dispatch_task", inputSummary: '{"objective":"整理资料"}', durationMs: 3000 }],
+        compactions: [], historySearches: [], runs: [],
+      }],
+      turnTotal: 1, turnFilter: null, turnError: null, turnLoading: false, turnQuery: "",
+    },
+    num: (value: number) => String(value ?? 0),
+    esc: (value: unknown) => String(value ?? ""),
+    badge: (text: string) => `<span>${text}</span>`,
+    ms: (value: number) => `${value} ms`,
+    stamp: () => "11:35",
+    usd: () => "$0",
+    assemblyBlock: () => "",
+  }) as () => string;
+  const html = turnsView();
+  // The landed turn is named by id and conversation, and the call the
+  // conversation no longer shows is still here, with its input and duration.
+  // 落点用 id 与对话点名该回合；对话不再显示的调用仍在这里，带着输入与耗时。
+  assert.match(html, /data-au-turn-id="turn-1"/);
+  assert.match(html, /data-au-turn-conversation="conversation-a"/);
+  assert.match(html, /dispatch_task/);
+  assert.match(html, /"objective":"整理资料"/);
+  assert.match(html, /3000 ms/);
+  assert.match(html, /已整理。/);
 });
 
 test("the audit shows the write scopes a step was checked against", async () => {

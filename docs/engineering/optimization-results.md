@@ -15,6 +15,43 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-19 — A repeated tool call stops the turn locally, and a live run is not polled
+
+- **Claim:** the shared loop now warns at the third consecutive identical call
+  and stops at the fifth with `no_progress`; it identifies a call by tool name,
+  canonicalized arguments and result text, so a call whose result changes is
+  still progress. The Main Agent is told that a run proposed by
+  `propose_work_plan` advances on its own, that `get_run_status` is a snapshot
+  and must not be polled, and a live run's status now says so. A worker stopped
+  this way is reported as `no_progress`, not `completed`, and the owner gets a
+  Chinese summary and next step.
+- **Evidence:** `test/agent-loop.test.ts` **23/26 before** the change (the three
+  failures are the no-progress stop, the warning, and reordered JSON keys) →
+  **26/26 after**; `test/main-agent.test.ts` **16/16**; `npm test` **906/906**;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline unchanged. The
+  production failure is in the owner's journal: turn `fa63e0f3…` called
+  `get_run_status` eight times for run `fa36a720…` with the same `running`
+  projection, and the external gateway's stop was stored as a completed reply.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-repeated-tool-call-stops-the-turn-locally-and-a-queued-run-is-not-polled);
+  [execution chain](optimizations.md#2026-11-19--a-repeated-tool-call-stops-the-turn-locally-so-a-queued-run-is-not-polled).
+
+## 2026-11-19 — A conversation turn shows its result and evidence, not the process
+
+- **Claim:** the conversation's reading column now carries only the request, the
+  result, the produced runs and one 依据 line. The model, prompt snapshot, tool
+  table and every tool call's input are no longer rendered there, and a 查看审计
+  control lands on 主 Agent 回合 with the request as the search.
+- **Evidence:** `test/ui-structure.test.ts` flips from asserting 上下文 / 派发 /
+  the model string / `charter v3` / `dispatch_task` in the conversation markup to
+  asserting they are absent and 结果 / 产物 / 依据 / the audit link are present
+  (**22/22**); `npm test` **901/901**; `npm run typecheck` exit 0; `npm run gate`
+  **PASS**, baseline unchanged. A static render of the real markup and CSS shows
+  a four-call turn as the answer plus `依据 工具调用 4 次 查看审计 ›`, and a
+  dispatched turn as `产物 1` with its run row. The usability gain is assumed;
+  no owner session was measured.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--the-conversation-shows-the-result-and-its-grounds-the-process-moves-to-the-audit);
+  [execution chain](optimizations.md#2026-11-19--a-conversation-turn-shows-its-result-and-evidence-and-the-process-moves-to-the-audit).
+
 ## 2026-11-19 — A direct answer stays in the sidebar, and today's work comes from learned folders
 
 - **Claim:** a request the Main Agent answers without dispatching a task is now
@@ -28,12 +65,33 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   reports **9 files** changed today under `/Users/user/work` and **5
   repositories** with their status (Spotlight **0.13 s** vs a pruned `find` **5.2 s**);
   a live preview turn with `deepseek-v4.1-flash` called the tool first (**573 ms**)
-  and answered with a project-by-project digest; the audit turn card now has a
+  and answered with a project-by-project digest; after the desktop restart, the
+  same tool answered a live turn in the real home (**454 ms**, no dispatch) and
+  the sidebar showed **10 rows** with one 对话 row; the audit turn card now has a
   right-hand request and a left-hand answer, with the lost `.au-turn*` layer restored.
 - **Where:** [trade-off: a request is still a row](../architecture/trade-offs.md#2026-11-19--a-request-that-dispatched-no-task-is-still-a-sidebar-row),
   [trade-off: a turn is an exchange](../architecture/trade-offs.md#2026-11-19--a-turn-is-an-exchange-the-owner-on-the-right-the-twin-on-the-left),
   [trade-off: folders are learned](../architecture/trade-offs.md#2026-11-19--folders-are-learned-from-use-not-configured-todays-changes-come-from-the-machine);
   [execution chain](optimizations.md#2026-11-19--a-new-request-stays-visible-a-turn-reads-as-an-exchange-and-todays-work-comes-from-learned-folders).
+
+## 2026-11-19 — The attachment picker skips the sheet animation
+
+- **Claim:** the native attachment picker uses the app-modal `NSOpenPanel.begin`
+  instead of a window sheet, and its cold construction is warmed 1.5 s after the
+  page is ready. The sheet's ~270 ms animation is gone from every picker, and
+  the first click no longer pays the ~300–660 ms cold build.
+- **Evidence:** `benchmark/attachment-panel.swift`, run on the M5 Pro with the
+  shell's content types: first cold sheet `build=659 ms, visible=984 ms`;
+  construction warm-up `112 ms`; warm sheet `build=100 ms, visible=389 ms`;
+  warm `begin` `build=80 ms, visible=106 ms`. Result file:
+  [`benchmark/results/attachment-panel-2026-11-19T06-21-31Z.json`](../../benchmark/results/attachment-panel-2026-11-19T06-21-31Z.json).
+  `test/desktop-shell.test.ts` pins `panel.begin` and the warm function; full
+  suite **906/906** at the time of this run, `npm run typecheck` and `npm run gate` pass. The packaged
+  app was not instrumented for an absolute click-to-panel number, but after the
+  rebuilt app was relaunched on 2026-11-19 the owner reported the attach
+  interaction now feels fast ("ok了，现在很快了").
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--the-attachment-panel-opens-without-the-sheet-animation),
+  [execution chain](optimizations.md#2026-11-19--the-attachment-panel-appears-in-110-ms-not-a-sheet-animation).
 
 ## 2026-11-19 — The native window is the only UI; the browser preview entry is gone
 

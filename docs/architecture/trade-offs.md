@@ -6,6 +6,303 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — Agent settings show the connection, not the loopback URL or raw model id
+
+**Decision.** Settings → Agent no longer prints the Magpie loopback URL
+(`http://127.0.0.1:3425/v1`) under 本机 Magpie 已连接, and its overview no longer
+has a third 当前模型 stat card repeating the raw provider/model id
+(`deepseek/deepseek-v4.1-flash`). The gateway card keeps the connection
+state, the explanation and the model picker, whose options already show the
+friendly model name. The raw endpoint and id remain in the config file, the
+audit and the logs.
+
+**Alternatives rejected.**
+
+- *Keep the URL as a diagnostic.* It is always the same loopback address; the
+  owner cannot act on it from settings, and when it matters the audit and logs
+  already carry it.
+- *Move the URL into a collapsed 连接详情 disclosure.* Still a path in a settings
+  page whose job is choosing a model; it adds a control to hide something nobody
+  needs there.
+- *Show the friendly model name in the stat card.* The picker directly below
+  already shows it, and the card would duplicate the picker while adding a
+  second place that can go stale.
+- *Remove the gateway card too.* The connection state, the model picker and the
+  "use this model" action live there.
+
+**Evidence.** The two screenshots show the raw `http://127.0.0.1:3425/v1` line
+and a 当前模型 deepseek/deepseek-v4.1-flash card directly above the same
+model's picker. `test/ui-locale.test.ts` already states that model count, version
+and API paths are diagnostics, not choices; it will pin the URL and the third
+stat card out of the page.
+
+**What it costs.** A nonstandard endpoint is not visible on the settings page; a
+reader must use the config file, the audit or the logs. The overview has two
+cards instead of three.
+
+**Reversal condition.** If the owner needs to diagnose a nonstandard endpoint
+from Settings, add a collapsed 连接详情 disclosure or a copy action; do not
+restore a permanent code line. If the model id must be visible for support, show
+it in the audit only.
+
+## 2026-11-19 — A conversation table renders as a table, and exports to CSV on request
+
+**Decision.** The conversation's Markdown renderer (`richText` in
+`apps/desktop/ui/app.js`) learns GFM tables: a header row, a delimiter row
+(`:---:`, `---:`, `---`), body rows, alignment and `\|` escapes. Cells go
+through the same escape-first inline path as the rest of a message, and the
+table renders inside a `.md-table-wrap` with a 导出 CSV control. That control
+posts the table's CSV to a new owner-initiated `POST /api/tables/export`, which
+writes a timestamped `.csv` into the folder the owner chose in the native
+directory picker and then reveals it in Finder. Tables stay Markdown at the
+source; the Main Agent, its charter and the prompt are unchanged.
+
+**Alternatives rejected.**
+
+- *Have the Main Agent turn every table into an Excel/CSV file through a
+  worker.* The Main Agent has no filesystem tool of its own, so every table
+  would need a dispatch, a `files` write scope and possibly an approval; a
+  three-row status table would cost a run and a scope request. The desktop also
+  has no `.xlsx` writer, so the file would be CSV in any case.
+- *Add a third-party Markdown parser.* The hand-written renderer escapes its
+  input first, and its escaping is already covered by the UI tests. A parser
+  would either replace that safety property or require a separate sanitizer,
+  and this local-first app ships no such dependency today.
+- *Keep the raw text and tell the owner to read it elsewhere.* That is the
+  reported defect, not a fix.
+- *Only render tables, with no export.* The owner asked for a file Excel can
+  open; a rendered table alone does not give them one.
+
+**Evidence.** The owner's screenshot of 2026-11-19 shows clone-ai's reply with
+the literal `|位置|状态|` and `|---|` rows: `richText` at
+`apps/desktop/ui/app.js:1605` handles fenced code, inline code, bold, headings
+and lists, but has no table rule, and `test/ui-structure.test.ts` only asserts
+the heading/list styles. The native directory picker and the owner-initiated
+`/api/export` flow already establish the trust boundary this export reuses.
+
+**What was given up.** The hand parser covers the common GFM table subset but
+not multi-line cells (`<br>` inside a cell), inline HTML (escaped everywhere, as
+before), or tables indented by four or more spaces. CSV export flattens cell
+markup to plain text. Each rendered table carries its CSV in a
+`data-export-csv` attribute, so a very large table duplicates its text in the
+DOM; the server bounds the export size. The export route is a new local write
+surface: it accepts only an absolute folder chosen through the native dialog,
+refuses the clone data directory, and writes an exclusive timestamped name, but
+it is still code that did not exist before.
+
+**Reversal condition.** If the owner wants every table delivered as a file
+rather than inline, or tables routinely outgrow the reading column, make a
+worker-produced CSV the default and keep rendering only for short tables. If
+the hand parser mis-renders tables real GFM users write (nested or multi-line
+cells), adopt a maintained GFM parser and re-run the escaping tests. If owners
+never use the export control, or a native save panel becomes available, replace
+the daemon write with the save panel. If the CSV attribute makes the DOM heavy
+in practice, switch to a registry keyed by table id.
+
+## 2026-11-19 — A read-only step's file contract comes from its criteria, and a spaced path is one path
+
+**Decision.** `extractFileExpectations` reads a `read_only` step's file contract
+from its acceptance criteria only. A research step's instructions name input
+locations as context; its criteria name what the result must produce, so only
+the criteria can promise a file. A read_only step whose criterion names a path
+outside the workspace still hard-fails through the existing workspace boundary.
+For a step that writes, instructions and criteria both remain sources, and a
+path containing spaces stays whole: `/Users/user/Documents/Clone AI/out.md` is
+never `AI/out.md`. The verifier keeps its workspace read boundary, its symlink
+refusal and its write rules.
+
+**Why it won.** Run `fa36a720…` was a read-only investigation. Its instructions
+named `/Users/user/.clone` and `/Users/user/Documents/Clone AI/.clone` as
+known locations; its acceptance criteria named no file. The extractor treated
+the instruction paths as promised files, split the second at the space, and the
+verifier failed the run with
+`"/Users/user/.clone" was promised but does not exist on disk; "AI/.clone" was
+promised but does not exist on disk`. `~/.clone` exists; it is a directory
+outside the workspace, and the second path never existed. The worker's report
+was correct. Reading only the criteria removes the context paths without
+weakening the check for a read-only step that does promise a file. A write step
+does have a file contract in both places, and a spaced target path must not be
+truncated.
+
+**Alternatives rejected.**
+
+- *Let the verifier read outside the workspace.* `test/verification.test.ts`
+  pins the opposite ("file verification cannot read outside the authorized
+  workspace or through a symlink"); evidence locators are untrusted, and opening
+  the machine would let a plan make the Kernel read arbitrary files. The
+  workspace boundary is the verifier's read contract, separate from the workers'
+  machine-wide read policy.
+- *Skip file extraction for read_only steps entirely.* That same test uses a
+  read_only step whose acceptance criterion names an outside path and asserts a
+  hard failure; skipping extraction would turn that into review and weaken the
+  boundary. Reading the criteria only keeps the test green.
+- *Only fix the space split.* `/Users/user/.clone` would still be extracted from
+  the read-only step's instructions and fail as a directory outside the
+  workspace.
+- *Require plan authors to quote paths with spaces.* A model-written plan can
+  mention `Clone AI` unquoted; the extractor must not invent `AI/.clone`.
+- *Report an outside-workspace promise as "unverified" instead of failed.* A
+  criterion that promises a file outside the workspace is a real contract
+  violation, and the existing test asserts a failure.
+
+**What was given up.** A read_only step whose instructions (but not criteria)
+promise a file no longer gets that automatic check; that is intended, because an
+instruction path is context. Its prose criteria go to owner review. For write
+steps, path extraction stays a heuristic: a spaced path followed immediately by
+prose is still ambiguous, and only the boundary the failing plan used (a path
+ending before a comma or period) is pinned by the regression case.
+
+**Evidence.** The failed step's instructions contain both paths; its criteria
+contain neither. A local reproduction of the instruction text returns
+`[{"path":"/Users/user/.clone"},{"path":"AI/.clone"}]`; the first is a
+directory, the second is truncated at the space. `/Users/user/.clone` exists.
+The repair lane's regression case must be red for these reasons before the fix
+and green after: a read_only step with context paths only extracts nothing (and
+is not failed for them), while a write step with a spaced path extracts it
+whole. The existing workspace-boundary test must stay green; the full suite and
+typecheck run in the lane.
+
+**Reversal condition.** If read_only steps routinely name real deliverables in
+instructions rather than criteria, add an explicit deliverable marker to the
+plan schema instead of widening the extractor. If plans start quoting every
+path, the extractor can rely on quoted paths and drop the bare-path heuristic.
+
+## 2026-11-19 — A repeated tool call stops the turn locally, and a queued run is not polled
+
+**Decision.** The shared agent loop (Main Agent and every native worker) now
+fingerprints each executed tool-call batch by tool name, canonicalized arguments
+and result text. When the same fingerprint occurs three times in a row it
+appends a system notice to the transcript ("No progress: this exact call
+returned the same result …"); on the fifth consecutive occurrence it ends the
+turn with a new typed terminal reason `no_progress` and an error naming the
+tool and count. A batch whose result differs is progress and resets the streak.
+The Main Agent's charter and the `get_run_status` description now say that a
+run proposed by `propose_work_plan` advances on its own: report its runId and
+end the turn; `get_run_status` returns a snapshot, never waits, and must not be
+polled in a loop. While a run is queued or running, its status text ends with
+"Snapshot only — calling this again does not advance the run."
+`MAIN_AGENT_CHARTER_VERSION` moves to 6. A worker that stops with the new
+reason is reported as `no_progress` instead of `completed`, and
+`describeFailureForOwner` gives the owner a Chinese summary and next step.
+
+**Why it won.** On 2026-11-19 the owner's turn `fa63e0f3…` called
+`get_run_status` on run `fa36a720…` eight times between 14:13:59 and 14:14:21;
+every call returned the same projection (`Run …: running`). The provider
+gateway (Magpie, with its "stop repeated replies" check on) stopped the request
+before the model saw it and returned "这一轮在发给模型之前已被停止…"; Clone AI
+recorded that text as a completed reply (`main-agent-turns.jsonl`, status
+`completed`), and the queued run kept running. The loop has no default round
+cap (bba7896) and no repeated-call detection: its only stops are a final
+answer, abort, and token/tool/duration budgets. The only thing that stopped the
+repetition lived outside this runtime, and its stop looked like an answer
+rather than a failure. The new guard is provider-independent, fires earlier
+(5 vs 8), gives the model one chance to change approach at 3, and records an
+honest failed turn.
+
+**Alternatives rejected.**
+
+- *Rely on the gateway's repetition check.* Not every provider has one; where it
+  exists it is outside the runtime, its threshold is higher, and its stop is
+  recorded as a model reply.
+- *Reintroduce a default `maxRounds`/`maxToolCalls`.* That is the arbitrary cap
+  bba7896 removed; it stops productive long turns without proving no progress.
+- *Make `get_run_status` block until the run changes.* The Main Agent should not
+  wait for queued work — the queue exists so the conversation returns;
+  `dispatch_task` already waits for short work. A blocking read would hold the
+  turn and duplicate that path.
+- *Only stop silently after N repeats.* The model ignored the external hint once
+  already; the warning at 3 gives it a chance to answer, and the typed stop at 5
+  is bounded and visible.
+- *Rewrite the tool result instead of adding a system message.* The result must
+  remain the tool's own output; a system notice is where an instruction belongs,
+  and the loop already inserts one for its remaining-round budget notice.
+
+**What was given up.** A legitimate call that returns identical text five times
+in a row is cut off. A polling read of a slow external system could hit it; the
+model can change the call or answer with what it has. The fingerprint compares
+the result text after the loop's truncation, so a result carrying a timestamp,
+counter or changing content never matches. The cost is one fingerprint per
+batch: small strings, no extra model calls.
+
+**Evidence.** `test/agent-loop.test.ts` is **23/26 before** the change — the
+three failures are the new cases: a constant-result repeat stops at
+`no_progress` on the fifth call, three repeats inject the warning and a later
+answer completes, and reordered JSON keys count as the same call. It is
+**26/26 after**. Five same-call-different-result rounds complete, and a changed
+argument resets the streak. The existing `get_run_status` test asserts the
+snapshot note. `npm test` **906/906**; `npm run typecheck` exit 0; `npm run gate`
+**PASS**, baseline unchanged. The before run used `git show HEAD:src/agent/loop.ts`
+in place, then restored the new file.
+
+**Reversal condition.** If a benchmark or an owner's turn is stopped as
+`no_progress` while it was making real progress (e.g., a legitimate polling read
+of an external job whose status text is unchanged for five checks), raise the
+thresholds, narrow the guard to read-only tools, or fingerprint a progress field
+instead of the result text. If a provider starts rewriting tool results so
+identical calls no longer compare equal, move the fingerprint to the
+pre-truncation result.
+
+## 2026-11-19 — The conversation shows the result and its grounds; the process moves to the audit
+
+**Decision.** A conversation turn renders the owner's request, the result (the
+reply, or the error with its owner-facing summary, next step and raw-error
+disclosure), the runs the turn produced as 产物 rows, and one muted 依据 line:
+how many tools the turn called (and how many of those failed) and how many runs
+it produced, followed by a 查看审计 control. That control opens
+设置 → 审计与轨迹 → 主 Agent 回合 with this turn's request as the search. The
+上下文 block (provider, model and effort; charter version, tool table and
+material hash; history window; deterministic compactions) and the 派发 block
+(every tool call with its input summary and duration) are removed from the
+conversation. Both remain, unchanged, in the audit turn card, together with its
+assembly block, tool list and history searches. The live running card already
+showed only 结果, so settled turns now match it. Task records, approval and
+review cards, and the composer are unchanged.
+
+**Why it won.** The owner's report came with a screenshot whose red box covered
+exactly 上下文 and 派发: "不要显示的这么细了，这些在审计里显示就可以了，对话 query
+只要产物，以及结论，都要有论据的，中间做了什么在审计显示就可以了". That is the
+usability check the 2026-11-18 dispatch-log entry named as its reversal
+condition. The conversation duplicated the audit on every turn: model, prompt
+snapshot, tool table and every call's JSON input sat between the request and
+the reply. Keeping a count and a link instead of the blocks leaves the
+conclusion checkable while the reading column carries the product.
+
+**Alternatives rejected.**
+
+- *Collapse 上下文 and 派发 into `<details>` under the result.* The process would
+  still occupy the conversation, duplicate the audit, and give the same facts
+  two renderings.
+- *Keep the tool table in the 依据 line.* Tool names are process; the audit names
+  every call with its input and duration, which is where a diagnosis belongs.
+- *Drop the provenance line and show only the reply.* A conclusion would then
+  have no path back to how it was reached; "都要有论据" is not met by prose
+  alone.
+- *Move the reply to the audit too.* The reply is the product; without it the
+  conversation becomes a status feed.
+- *Delete the turn log and return to chat bubbles.* The turn's status, error
+  summary and produced runs still belong beside the answer.
+
+**What was given up.** The model, prompt assembly and tool calls are one click
+away instead of in place, and the 依据 line reports counts, not names. The audit
+search keys on the request text, so two turns with identical requests share a
+result set. The conversation payload still carries the fields the audit uses;
+only the render changed.
+
+**Evidence.** The screenshot places the 上下文 panel (model, system prompt, tool
+table) and the 派发 panel (four calls with JSON inputs and durations) above a
+reply that already names what it checked. `audit.js` already renders
+`assemblyBlock(turn)`, `turn.toolCalls`, the reply and the turn's runs; nothing
+it needs is removed. `test/ui-structure.test.ts` previously asserted 上下文 /
+派发 / the model string / the charter line / `dispatch_task` in the conversation
+markup; it now asserts they are absent, that 结果 / 产物 / 依据 and the audit
+control are present, and that the audit exposes the filtered landing.
+`npm test`, `npm run typecheck` and `npm run gate` are rerun for this change.
+
+**Reversal condition.** If owners report that understanding an ordinary answer
+requires opening the audit, or the filtered audit does not land on the turn,
+restore one collapsed 过程 disclosure under the result — never the two full
+steps — or give the audit per-turn anchors.
+
 ## 2026-11-19 — A request that dispatched no task is still a sidebar row
 
 **Decision.** The sidebar lists every request the owner started. A conversation
@@ -339,6 +636,57 @@ hard to hit, increase their row height and restore a subtle hover fill. If the
 named level per block. If the request bubble plus the answer makes each exchange
 too tall, collapse the context steps behind a disclosure rather than shrinking
 the request.
+
+## 2026-11-19 — The attachment panel opens without the sheet animation
+
+**Decision.** The native attachment picker uses `NSOpenPanel.begin` (an
+app-modal floating panel) instead of `beginSheetModal(for:)`, and the shell
+constructs one throwaway panel with the same content types once after the page
+is ready, so the first real click does not pay the cold AppKit/LaunchServices
+construction. The `WKUIDelegate` still returns the selected URLs to the
+WebView; file handling, drag/drop and the allowed content types are unchanged.
+
+**Alternatives rejected.**
+
+- *Keep the sheet.* Measured on the same offscreen window and content types, the
+  sheet became visible in 385–394 ms after a warm construction; `begin` became
+  visible in 112–133 ms. The ~270 ms difference is the sheet animation, and the
+  owner's complaint is click latency.
+- *Reuse one panel object for every click.* `NSOpenPanel` reuse is not
+  documented and carries stale directory/selection state; a throwaway warm
+  construction gives the same framework warm-up without reuse.
+- *Warm by showing and cancelling a panel at launch.* After construction
+  warm-up, a hidden show/cancel saved only ~15–30 ms over construction alone and
+  risks a visible flash or focus steal; rejected.
+- *Set a fixed `directoryURL`.* The first-panel cost was the same for `/tmp`,
+  `~/Downloads`, `~`, and the system default (298–407 ms build, 597–607 ms
+  visible); the directory was not the cause, and a fixed folder would override
+  the owner's last-used location.
+
+**Evidence.** A Swift/AppKit harness (same `allowedContentTypes`, offscreen
+borderless window, Apple M5 Pro) measured: the first panel in a process took
+298–407 ms to build and 597–937 ms to become visible with the sheet; after one
+construction warm-up, 90–113 ms to build and 385–394 ms to become visible with
+the sheet; `begin` took 96–113 ms to build and 112–133 ms to become visible. The
+warm construction alone reduced the next panel's build to 96–111 ms. The
+packaged app's absolute click-to-panel timing is not measured until the app is
+rebuilt; the sheet-vs-`begin` difference is AppKit's sheet animation. The eval
+is a committed harness, `benchmark/attachment-panel.swift`, plus a structural
+test that the delegate uses `panel.begin` and the warm function.
+
+**What it costs.** The picker is a floating app-modal panel rather than a sheet
+attached to the window; the visual anchoring changes. The warm construction
+blocks the main thread for about 300 ms once, scheduled 1.5 s after the page is
+ready, so a click in the first 1.5 s still pays the cold build but already
+benefits from `begin`. File selection time and the native panel's ~110–130 ms
+appearance remain; a file dialog cannot be instant.
+
+**Reversal condition.** If the floating panel feels disconnected, interferes
+with full-screen or window management, or is less accessible than the sheet,
+restore `beginSheetModal` and accept the ~270 ms animation. If the delayed warm
+causes a visible startup hitch or catches a click, move the warm to attach
+hover/focus or remove it. If a future macOS removes the sheet animation or
+anchors `begin`, re-measure and keep the faster presentation.
 
 ## 2026-11-19 — Attachment clicks answer first; bytes stay behind the chip
 

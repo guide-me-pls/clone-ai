@@ -21,7 +21,7 @@
     review: null, reviewBusy: false, reviewError: null,
     invocations: [], invocationSelected: null, invocationDetail: null,
     invocationQuery: "", invocationShowDeleted: false, invocationTotal: 0, invocationHidden: 0,
-    turnQuery: "", turnTotal: 0,
+    turnQuery: "", turnTotal: 0, turnFilter: null, turnError: null, turnLoading: false,
     cases: null, improvement: null,
   };
 
@@ -48,7 +48,16 @@
     state.loading = true; state.error = null; render();
     try {
       state.data = await api("/api/audit");
-      await loadTurns().catch(() => { state.turns = []; state.turnTotal = 0; });
+      // A failure here must not erase a filtered turn that a concurrent
+      // showTurns request loaded; only the newest turn request may clear it.
+      // 这里的失败不能抹掉并发的 showTurns 已加载的筛选回合；只有最新的回合请求才能清空。
+      const turnRequest = turnSeq + 1;
+      await loadTurns().catch(() => {
+        if (turnSeq !== turnRequest) return;
+        state.turns = [];
+        state.turnTotal = 0;
+        state.turnError = "无法读取回合记录。";
+      });
       await loadInvocations().catch(() => { state.invocations = []; state.invocationTotal = 0; });
       state.review = (await api("/api/audit/review").catch(() => ({ review: null }))).review ?? null;
       state.selfcheck = (await api("/api/audit/selfcheck").catch(() => ({ rounds: [] }))).rounds ?? [];
@@ -67,22 +76,43 @@
    */
   async function loadTurns() {
     const seq = ++turnSeq;
+    const filter = state.turnFilter;
     const params = new URLSearchParams({ limit: "100" });
-    const q = state.turnQuery.trim();
+    // The exact filter is sent as the server query (the journal search covers
+    // turn ids) and checked again below: the server search is a substring match
+    // across many fields, so only the matching turn and conversation may stay.
+    // 精确筛选作为服务端 query 发送（Journal 搜索覆盖回合 id），并在下面再次校验：
+    // 服务端搜索是跨多个字段的子串匹配，因此只能留下匹配的回合与对话。
+    const q = filter ? filter.turnId : state.turnQuery.trim();
     if (q) params.set("q", q);
     const data = await api(`/api/audit/turns?${params}`);
     if (seq !== turnSeq) return false;
-    state.turns = data.turns ?? [];
-    state.turnTotal = typeof data.total === "number" ? data.total : state.turns.length;
+    state.turns = (data.turns ?? []).filter((turn) => filter === null
+      || (turn.turnId === filter.turnId && (filter.conversationId === undefined || turn.conversationId === filter.conversationId)));
+    state.turnTotal = filter ? state.turns.length : (typeof data.total === "number" ? data.total : state.turns.length);
+    state.turnError = null;
     return true;
   }
 
   async function refreshTurns(focusQuery = false) {
+    state.turnLoading = true;
     try {
-      if (!(await loadTurns())) return;
+      const loaded = await loadTurns();
+      state.turnLoading = false;
+      if (!loaded) return;
       render();
       if (focusQuery) restoreFocus("[data-au-turn-query]");
-    } catch (error) { announce(`搜索失败：${error.message}`, true); }
+    } catch (error) {
+      state.turnLoading = false;
+      // The settings page covers the conversation, and its empty state would
+      // otherwise read as "this turn was never recorded". Paint the failure in
+      // the view as well as the toast.
+      // 设置页盖住对话，空状态否则会读成"这个回合从未被记录"。除了 toast，也把失败画进
+      // 视图里。
+      state.turnError = error.message;
+      render();
+      announce(`搜索失败：${error.message}`, true);
+    }
   }
 
   /**
@@ -496,6 +526,14 @@
     const runRows = runs.length
       ? `<ul class="au-assembly-runs">${runs.map((run) => `<li><code>${esc(run.id.slice(0, 8))}</code> <b>${esc(run.title ?? run.id)}</b>${run.status ? statusBadge(run.status) : ""}${run.steps?.length ? `<small>${esc(run.steps.join(" → "))}</small>` : ""}</li>`).join("")}</ul>`
       : "本轮未派发任务";
+    // Compaction summaries used to sit in the conversation's 上下文 block. The
+    // audit is now their only home, so it must show the summary text, not just
+    // the count.
+    // 压缩摘要过去放在对话的"上下文"块里。审计现在是它们唯一的家，因此必须显示摘要正文，
+    // 而不只是计数。
+    const compactionRows = turn.compactions.length
+      ? `<ul class="au-assembly-compactions">${turn.compactions.map((compaction) => `<li><span>${stamp(compaction.at)}</span><b>丢弃 ${num(compaction.droppedMessages)} 条 / 保留 ${num(compaction.keptMessages)} 条</b>${compaction.estimatedTokens ? `<small>约 ${num(Math.round(compaction.estimatedTokens))} tokens</small>` : ""}${compaction.summary ? `<p>${esc(compaction.summary)}</p>` : ""}</li>`).join("")}</ul>`
+      : "";
     const material = snapshot?.materialHash ? ` · 材料 ${snapshot.materialHash.slice(0, 8)}` : "";
     const routing = turn.routing
       ? `${turn.routing.decision === "continue" ? "沿用对话" : "新开 Main Agent"} · ${turn.routing.reason}（${turn.routing.source === "model" ? "模型判断" : turn.routing.source === "fallback" ? "模型不可用，按新开处理" : "规则判断"}）`
@@ -517,21 +555,29 @@
         <dt>工具表</dt>${tools}
       </dl>
       <p class="au-note">派发的任务</p>${runRows}
+      ${compactionRows ? `<p class="au-note">上下文压缩</p>${compactionRows}` : ""}
       ${searches ? `<p class="au-note">历史检索</p><ul class="au-assembly-searches">${searches}</ul>` : ""}
     </details>`;
   }
   function turnsView() {
     const turns = state.turns ?? [];
-    const toolbar = `<div class="au-toolbar"><input type="search" data-au-turn-query placeholder="搜索输入、回复、工具、模型、对话、Run、组装" value="${esc(state.turnQuery)}" aria-label="搜索主 Agent 回合" /><span class="au-count-note">显示 ${num(turns.length)} / 共 ${num(state.turnTotal)} 条</span></div>`;
+    const filter = state.turnFilter;
+    const toolbar = `<div class="au-toolbar"><input type="search" data-au-turn-query placeholder="搜索输入、回复、工具、模型、对话、Run、组装" value="${esc(state.turnQuery)}" aria-label="搜索主 Agent 回合" /><span class="au-count-note">显示 ${num(turns.length)} / 共 ${num(state.turnTotal)} 条</span>${filter ? `<button type="button" class="au-btn" data-au-turn-clear>显示全部回合</button>` : ""}</div>`;
+    if (state.turnError) {
+      return `${toolbar}<div class="au-callout au-callout-bad"><b>读取回合失败</b><pre>${esc(state.turnError)}</pre></div>`;
+    }
+    if (!turns.length && state.turnLoading) {
+      return `${toolbar}<p class="au-empty">正在读取回合…</p>`;
+    }
     if (!turns.length) {
-      return `${toolbar}<p class="au-empty">${state.turnQuery.trim() ? "没有符合条件的回合记录。" : "还没有主 Agent 回合记录。CLI、桌面或 WhatsApp 的每一次对话都会出现在这里。"}</p>`;
+      return `${toolbar}<p class="au-empty">${state.turnQuery.trim() || filter ? "没有符合条件的回合记录。" : "还没有主 Agent 回合记录。CLI、桌面或 WhatsApp 的每一次对话都会出现在这里。"}</p>`;
     }
     return `${toolbar}<div class="au-turns">${turns.map((turn) => {
       const tone = turn.status === "completed" ? "ok" : turn.status === "failed" ? "bad" : turn.status === "interrupted" ? "warn" : "info";
       const label = turn.status === "completed" ? "完成" : turn.status === "failed" ? "失败" : turn.status === "interrupted" ? "中断" : "进行中";
       const usage = turn.usage ? `<span>${num(turn.usage.totalTokens ?? 0)} tokens</span>${turn.usage.costUsd !== undefined ? `<span>${usd(turn.usage.costUsd)}</span>` : ""}` : "";
       const tools = turn.toolCalls.length
-        ? `<ul class="au-turn-tools">${turn.toolCalls.map((call) => `<li><code>${esc(call.name)}</code>${call.isError ? badge("错误", "bad") : ""}${call.durationMs !== undefined ? `<em>${ms(call.durationMs)}</em>` : ""}${call.inputSummary ? `<span>${esc(call.inputSummary.slice(0, 240))}</span>` : ""}</li>`).join("")}</ul>`
+        ? `<ul class="au-turn-tools">${turn.toolCalls.map((call) => `<li><code>${esc(call.name)}</code>${call.isError ? badge("错误", "bad") : ""}${call.durationMs !== undefined ? `<em>${ms(call.durationMs)}</em>` : ""}${call.inputSummary ? `<span>${esc(call.inputSummary.slice(0, 400))}</span>` : ""}</li>`).join("")}</ul>`
         : `<p class="au-empty">本轮没有调用工具。</p>`;
       // The owner's request and the twin's answer read as one exchange: the
       // request is a right-aligned bubble, the answer is the left column, and
@@ -542,7 +588,7 @@
       // 所有者的请求与分身的回答读成一次交流：请求是靠右的气泡，回答是左侧一栏，任务组装与
       // 工具证据排在它们下面。过去输入在标题里重复一次、又作为两个相同灰块中的第一个出现；
       // 合并时丢失 .au-turn* 样式后，"混在一起"是诚实的描述。
-      return `<section class="au-card au-turn">
+      return `<section class="au-card au-turn" data-au-turn-id="${esc(turn.turnId)}" data-au-turn-conversation="${esc(turn.conversationId)}">
         <div class="au-turn-head"><span class="au-turn-who">clone-ai</span>${badge(label, tone)}
           <small>${esc(turn.source)} · ${esc(turn.modelId ?? "默认模型")}${turn.effort ? ` · ${esc(turn.effort)}` : ""} · ${stamp(turn.startedAt)}${turn.durationMs !== undefined ? ` · ${ms(turn.durationMs)}` : ""}</small></div>
         <div class="au-turn-exchange">
@@ -615,7 +661,13 @@
     const tabs = [["overview", "总览"], ["turns", "主 Agent 回合"], ["runs", "运行记录"], ["invocations", "Agent 调用"], ["cases", "坏案例"], ["eval", "评估"]]
       .map(([v, l]) => `<button type="button" class="au-tab${state.view === v ? " is-on" : ""}" data-au-view="${v}">${l}</button>`).join("");
     let body = "";
-    if (state.error) body = `<div class="au-callout au-callout-bad"><b>读取审计失败</b><pre>${esc(state.error)}</pre></div>`;
+    // A turn landing must not wait for the whole audit overview, and must not
+    // disappear when the overview request fails: the turn projection succeeds
+    // independently of the run/gateway data. The turns view owns its own error.
+    // 回合落点不应等待整个审计总览，也不应在总览请求失败时消失：回合投影独立于
+    // Run/网关数据成功。回合视图自己显示自己的错误。
+    if (state.view === "turns" && ((state.turns ?? []).length > 0 || state.turnFilter !== null || state.turnQuery.trim() !== "" || state.turnError !== null)) body = turnsView();
+    else if (state.error) body = `<div class="au-callout au-callout-bad"><b>读取审计失败</b><pre>${esc(state.error)}</pre></div>`;
     else if (!state.data) body = `<p class="au-empty">${state.loading ? "正在读取…" : "尚未加载。"}</p>`;
     else if (!state.data.records.length && !(state.turns ?? []).length && !(state.invocations ?? []).length) body = `<p class="au-empty">还没有任何记录。发起一个任务或对话后，这里会出现它的完整轨迹。</p>`;
     else body = state.view === "overview" ? overview() : state.view === "turns" ? turnsView() : state.view === "runs" ? runs() : state.view === "invocations" ? invocationsView() : state.view === "cases" ? casesView() : evaluation();
@@ -659,7 +711,16 @@
     if (!(t instanceof Element) || !root()?.contains(t)) return;
     const pick = (selector) => t.closest(selector);
     let el;
-    if ((el = pick("[data-au-view]"))) { state.view = el.dataset.auView; render(); return; }
+    if ((el = pick("[data-au-view]"))) {
+      state.view = el.dataset.auView;
+      // Choosing the tab is a request for the turn list, not for the one turn a
+      // 依据 link landed on.
+      // 点标签是要求看回合列表，而不是"依据"链接落到的单个回合。
+      if (state.view === "turns") state.turnFilter = null;
+      render();
+      return;
+    }
+    if (pick("[data-au-turn-clear]")) { state.turnFilter = null; state.turnQuery = ""; render(); await refreshTurns(); return; }
     if ((el = pick("[data-au-invocation]"))) {
       state.invocationSelected = el.dataset.auInvocation;
       state.invocationDetail = null;
@@ -776,6 +837,9 @@
     const t = event.target;
     if (t instanceof HTMLInputElement && t.matches("[data-au-query]")) { state.query = t.value; const pos = t.selectionStart; render(); const next = root().querySelector("[data-au-query]"); next?.focus(); next?.setSelectionRange(pos, pos); }
     if (t instanceof HTMLInputElement && t.matches("[data-au-turn-query]")) {
+      // Typing replaces the exact one-turn filter; the owner is searching now.
+      // 输入会取代单个回合的精确筛选：现在由所有者搜索。
+      state.turnFilter = null;
       state.turnQuery = t.value;
       clearTimeout(turnTimer);
       turnTimer = setTimeout(() => { void refreshTurns(true); }, 250);
@@ -794,10 +858,33 @@
     if (t instanceof HTMLInputElement && t.matches("[data-au-selfcheck-full]")) { state.selfcheckFull = t.checked; }
   });
 
+  /**
+   * Land on the one turn a 依据 line names. The locator is the turn id (plus
+   * the conversation id), not the request text: the request can be long enough
+   * for a 431 and is stored redacted, while the id is short and exact. Focus
+   * moves to the turn search so a keyboard user lands inside the opened view.
+   * 落在"依据"行所指的那一个回合。定位键是回合 id（加对话 id），而不是请求文本：
+   * 请求可能长到触发 431，且存储时已脱敏；id 短且精确。焦点移到回合搜索框，键盘用户
+   * 因此落在新打开的视图里。
+   */
+  async function showTurns(turnId, conversationId) {
+    const id = String(turnId ?? "").trim();
+    const conversation = String(conversationId ?? "").trim();
+    state.view = "turns";
+    state.turnQuery = "";
+    state.turnError = null;
+    state.turnLoading = true;
+    state.turnFilter = id.length > 0
+      ? { turnId: id, ...(conversation.length > 0 ? { conversationId: conversation } : {}) }
+      : null;
+    render();
+    await refreshTurns(true);
+  }
+
   // Load whenever the audit section opens. 每次打开审计分区时加载。
   const original = typeof selectSettingsSection === "function" ? selectSettingsSection : undefined;
   if (original) {
     selectSettingsSection = (section) => { original(section); if (section === "audit") void load(); };
   }
-  window.CloneAudit = Object.freeze({ load });
+  window.CloneAudit = Object.freeze({ load, showTurns });
 })();

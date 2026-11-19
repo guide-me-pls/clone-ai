@@ -31,6 +31,169 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — Agent settings stop printing the loopback URL and the duplicate raw model id
+
+- **Goal / hypothesis:** the owner's two screenshots mark the Magpie loopback
+  path (`http://127.0.0.1:3425/v1`) and the 当前模型 card holding
+  `deepseek/deepseek-v4.1-flash` as displays that are not useful. Both are
+  diagnostics, not choices; the model picker directly below already shows the
+  friendly name.
+- **Trade-off:** [Agent settings show the connection, not the loopback URL or raw model id](../architecture/trade-offs.md#2026-11-19--agent-settings-show-the-connection-not-the-loopback-url-or-raw-model-id).
+- **Change:** `apps/desktop/ui/app.js` `renderAgentPage`: remove the
+  `<code>${gateway.endpoint}/v1</code>` line from the Magpie card and drop the
+  third 当前模型 stat card; keep the connection state, the recognition note, the
+  model picker and the apply/refresh/clear actions. No server or config change.
+- **Eval:** `node --experimental-strip-types --test test/ui-locale.test.ts`
+  **4/4**. The new assertions require `127.0.0.1:3425/v1`, `gateway?.endpoint`
+  and `label: "当前模型"` to be absent from `app.js`, and the picker
+  (`id: "gateway-model"`) plus `data-gateway-apply` to remain. On the
+  pre-change source the three absence assertions fail because the URL and card
+  were rendered literally.
+- **Benchmark run:** none — a deterministic UI string contract; no provider,
+  model, dataset, seed, scoring parameters or result file.
+- **Execution chain:** read `renderAgentPage`, wrote the bilingual trade-off,
+  made two targeted edits to `app.js`, added the assertions to
+  `test/ui-locale.test.ts`, and re-checked the file with `grep` because other
+  sessions were editing `app.js` concurrently. One unrelated
+  `test/ui-structure.test.ts` failure (`showTurns(query)` vs the in-progress
+  `showTurns(turnId, conversationId)`) belongs to another session and was not
+  touched. `npm run typecheck` and `npm run gate` were re-run after the edit.
+- **Pros:** the settings page now shows a state and a choice, not a loopback
+  address and a raw identifier; one less place that can go stale.
+- **Cons / next time:** the endpoint is no longer visible in the UI; a
+  nonstandard endpoint requires the config file or logs. Concurrent sessions
+  keep `app.js` hot, so a targeted edit and an immediate re-read are the safe
+  pattern.
+- **Reversal condition:** see the trade-off entry; add a collapsed 连接详情
+  disclosure if endpoint diagnosis from Settings becomes necessary.
+
+### 2026-11-19 — A repeated tool call stops the turn locally, so a queued run is not polled
+
+- **Goal / hypothesis:** the owner's screenshot showed a completed turn whose
+  reply was the provider gateway's "stopped before sending" notice, above three
+  dispatched runs (two failed, one running) and eight identical
+  `get_run_status` calls. The hypothesis was that the Main Agent treated a
+  queued run as something to wait for by polling, and the runtime had no local
+  no-progress guard, so only an external gateway stopped it — and that stop was
+  recorded as a completed answer. Comparing each call with its result inside
+  the shared loop, plus telling the agent that a queued run advances on its own,
+  should end the repetition earlier, independently of the provider, and record
+  an honest failure.
+- **Trade-off:** [a repeated tool call stops the turn locally](../architecture/trade-offs.md#2026-11-19--a-repeated-tool-call-stops-the-turn-locally-and-a-queued-run-is-not-polled).
+- **Change:** `src/agent/loop.ts` adds a batch fingerprint (tool names,
+  canonicalized arguments, result text), `REPEAT_WARN_AT = 3`,
+  `REPEAT_STOP_AT = 5`, the `no_progress` terminal reason and event, and a
+  system notice at the warning. `src/main-agent/prompt.ts` adds "a run proposed
+  by `propose_work_plan` advances on its own … `get_run_status` is a snapshot,
+  not a wait" and bumps the charter to 6.
+  `src/main-agent/tools/kernel-tools.ts` updates the tool description and
+  appends "Snapshot only — this run advances on its own" to a live run.
+  `src/workers/native-agent-worker.ts` reports the new reason as `no_progress`
+  instead of `completed`; `src/core/failure-display.ts` gives the owner a
+  Chinese summary and next step.
+- **Eval:** `node --experimental-strip-types --test test/agent-loop.test.ts`
+  **23/26 before** (three failures: the no-progress stop, the warning, and
+  reordered JSON keys) → **26/26 after**; `test/main-agent.test.ts` **16/16**
+  (the `get_run_status` case now asserts the snapshot line); `npm test`
+  **906/906**; `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline
+  unchanged. The before run replaced `src/agent/loop.ts` with
+  `git show HEAD:src/agent/loop.ts` and restored the new file afterward.
+- **Benchmark run:** none — deterministic loop contract; no provider, model,
+  dataset, split, seed or scoring parameter.
+- **Execution chain:** about 12 minutes, one inline agent. Read the running
+  app's `~/.clone/main-agent-turns.jsonl`, `~/.clone/audit/invocations.jsonl`,
+  the journal (`journal_events`, `run_claims`) and `companion.log`; identified
+  turn `fa63e0f3…` and its eight identical `get_run_status` calls for run
+  `fa36a720…` (06:13:59–06:14:21Z) and the gateway reply stored with status
+  `completed`; read `runAgentLoop`, `run-query.ts`, `dispatch-task.ts`, the
+  charter and `runStatusInfo`; wrote the trade-off entries (EN+ZH), implemented
+  the guard, prompt and tool changes, added six loop tests and the snapshot
+  assertion; ran the targeted tests, a before/after swap of `loop.ts`, the full
+  suite, typecheck and the gate. One failure on the first run: an existing
+  no-round-cap test used twelve identical no-op calls, which the new guard
+  correctly stopped; it now varies the call's arguments and result, because the
+  test is about the absence of a round cap, not about repetition. No retries or
+  external tools beyond the shell.
+- **Pros:** the diagnosis rests on the owner's own journal (exact turn and run
+  ids), not the screenshot alone; the guard sits in the shared loop, so workers
+  inherit it; the new tests fail on the old code for the right reasons; the
+  no-round-cap contract survives because the existing test now makes progress;
+  the prompt and tool description address the behavioural cause, not only the
+  symptom.
+- **Cons / next time:** the guard compares result text, so a legitimate poll of
+  a slow external job whose status text is unchanged for five checks is cut
+  off; the thresholds are constants, not measured from a benchmark. The two
+  failed `dispatch_task` runs in the screenshot are a different defect: a
+  read-only objective was planned as `reversible_write` and denied by the files
+  policy, and that planner problem is still open. The stuck run's claim was
+  also observed expired (`lease_until` 06:25:09, no renewal) without being
+  investigated. Next time: reproduce the read-only dispatch plan and decide
+  whether the planner prompt or the policy needs the fix.
+- **Reversal condition:** if a benchmark or an owner's turn is stopped as
+  `no_progress` while it was making real progress, raise the thresholds, narrow
+  the guard to read-only tools, or fingerprint a progress field instead of the
+  result text; if a provider rewrites tool results so identical calls no longer
+  compare equal, fingerprint the pre-truncation result.
+
+### 2026-11-19 — A conversation turn shows its result and evidence, and the process moves to the audit
+
+- **Goal / hypothesis:** the owner's screenshot showed 上下文 (model, system
+  prompt, tool table) and 派发 (four calls with JSON inputs and timings) between
+  the request and the reply, and asked for the conversation to carry only the
+  product and the conclusion — grounded — with the process in the audit. The
+  hypothesis was that the conversation was duplicating the audit turn card, so
+  removing both blocks and leaving one countable 依据 line plus a filtered audit
+  link would let the reading column carry the answer without losing
+  checkability.
+- **Trade-off:** [the conversation shows the result and its grounds](../architecture/trade-offs.md#2026-11-19--the-conversation-shows-the-result-and-its-grounds-the-process-moves-to-the-audit).
+- **Change:** `apps/desktop/ui/app.js` replaces `logContextMarkup` /
+  `logDispatchMarkup` with `logProductMarkup` (spawned runs as 产物 rows) and
+  `logBasisMarkup` (tool-call count, failures, spawned-run count, and a 查看审计
+  control carrying the request); a turn body now renders only 结果. The
+  conversation click handler opens 设置 → 审计与轨迹 and calls the new
+  `window.CloneAudit.showTurns(request)`, which lands on 主 Agent 回合 with the
+  request as the server-side search. `components.css` drops the unused
+  tool-table/tool-row/context styles and adds the one-line basis styles.
+  `audit.js`/`audit.css` add a 上下文压缩 block, so the compaction summaries the
+  conversation used to show stay readable in their new home.
+  `test/ui-structure.test.ts` flips the conversation assertions, pins the audit
+  landing, and renders `assemblyBlock` to prove the compaction summary survives.
+- **Eval:** `node --experimental-strip-types --test test/ui-structure.test.ts`
+  **22/22**. Before the change the same test asserted 上下文 / 派发 / the model
+  string / `charter v3` / `dispatch_task` in the conversation markup, so it
+  fails on the new markup. `npm test` **901/901**; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**, baseline unchanged. A static render of the real
+  markup and CSS (1000×900) shows a four-call turn as the answer plus
+  `依据 工具调用 4 次 查看审计 ›`, and a dispatched turn as `产物 1` with its
+  run row. The usability gain itself is marked **assumed**: no owner session was
+  measured, only the deterministic contract and a rendered screenshot.
+- **Benchmark run:** none — deterministic UI contract and wiring; no provider,
+  model, dataset, split, seed or scoring parameter.
+- **Execution chain:** one inline pass: `rg`/read over the turn log, the audit
+  turn view, its `/api/audit/turns` projection and the trade-off history; then
+  the trade-off entry (both languages), the render change, the audit landing,
+  CSS cleanup, and the test rewrite. Two test failures were fixed inside the
+  pass: an over-broad `doesNotMatch(/上下文/)` matched the word inside the new
+  aria-label (scoped to the step labels), and the failed-turn basis sentence
+  lacked the period the old assertion expected. The targeted test, the full
+  suite, typecheck and the gate then passed. A three-lens adversarial review
+  workflow (correctness, UX/accessibility, tests/docs) is checking the diff; its
+  outcome is added here when it returns. No provider calls and no benchmark cost.
+- **Pros:** the conversation has one place for the answer and one compact line
+  for its grounds; the audit remains the single searchable copy of the process,
+  so the two views stop drifting. The live running card and the settled turn now
+  share the same 结果 section.
+- **Cons / next time:** the counts in 依据 are not evidence in themselves — the
+  answer must still name what it checked — and the audit landing searches by the
+  request text, so two turns with the same request share a result set. The
+  density has not been checked with the owner in the running app. Next time,
+  pin the aria-label wording in the same pass as the test so the assertion is
+  scoped from the start.
+- **Reversal condition:** if owners report that understanding an ordinary answer
+  requires opening the audit, or the filtered audit does not land on the turn,
+  restore one collapsed 过程 disclosure under the result — never the two full
+  steps — or give the audit per-turn anchors.
+
 ### 2026-11-19 — A new request stays visible, a turn reads as an exchange, and today's work comes from learned folders
 
 - **Goal / hypothesis:** the owner reported three problems from one screenshot:
@@ -62,7 +225,10 @@ file keeps every attempt, including the ones that did not work.
   `deepseek-v4.1-flash` called `recent_file_changes` first (**573 ms**), then
   `get_situation`, and wrote a project-by-project digest from the result; its
   follow-up `dispatch_task` failed (the external operator is disabled) but no
-  longer blocked the answer. `test/companion-control-plane.test.ts` **25/25**:
+  longer blocked the answer. After the desktop restart, a live turn in the
+  owner's real home called `recent_file_changes` first (**454 ms**), answered
+  from it with no dispatch, and the sidebar showed **10 rows** with exactly one
+  对话 row (the old request), preview now carrying the new digest. `test/companion-control-plane.test.ts` **25/25**:
   the old assertion expected **0** conversation rows and now expects both
   `conversation-a` and `conversation-b`. `test/ui-structure.test.ts` **21/21**:
   the old "not chat bubbles" assertion is replaced by right-bubble / left-answer
@@ -98,6 +264,87 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** see each trade-off entry; the common one is "if the
   sidebar becomes noisy, group conversations with their tasks; if learned
   folders are noisy, add a forget action and a two-mention threshold."
+
+### 2026-11-19 — The attachment panel appears in ~110 ms, not a sheet animation
+
+- **Goal / hypothesis:** after the client attachment work landed, the owner's
+  "click upload is very slow" still had no attribution. Measure the packaged
+  WebView's JS path, the 3-second tick, and the native picker separately; the
+  native `NSOpenPanel` was the leading unmeasured suspect. If the sheet
+  animation or the first cold construction dominates, remove those two costs
+  without changing the selected files or the WebView contract.
+- **Trade-off:** [The attachment panel opens without the sheet animation](../architecture/trade-offs.md#2026-11-19--the-attachment-panel-opens-without-the-sheet-animation).
+- **Change:** `apps/desktop/macos/main.swift` — the attachment `WKUIDelegate`
+  now uses `NSOpenPanel.begin` instead of `beginSheetModal(for:)`, and
+  `warmAttachmentPanel()` constructs one throwaway panel with the real content
+  types 1.5 s after the page reports ready (skipped if a real picker already
+  opened). `test/desktop-shell.test.ts` pins the app-modal call, the warm
+  function and the warm flag. `benchmark/attachment-panel.swift` is the new
+  rerunnable native benchmark. The `chooseDirectory` flow keeps its sheet; file
+  types, drag/drop and the returned URLs are unchanged.
+- **Eval:** `swiftc -O -target arm64-apple-macos13.5
+  benchmark/attachment-panel.swift -framework AppKit
+  -framework UniformTypeIdentifiers -o /tmp/attachment-panel &&
+  /tmp/attachment-panel > benchmark/results/attachment-panel-<timestamp>.json`.
+  Result `benchmark/results/attachment-panel-2026-11-19T06-21-31Z.json`:
+  first panel in a fresh process `build=659 ms, visible=984 ms` (sheet);
+  construction warm-up `112 ms`; sheet after construction warm
+  `build=100 ms, visible=389 ms`; sheet after a hidden show/cancel
+  `build=91 ms, visible=370 ms`; `begin` after the warm
+  `build=80 ms, visible=106 ms`. The new presentation therefore removes the
+  ~270 ms sheet animation on every picker, and the warm construction removes
+  the ~300–660 ms first-build cost. `test/desktop-shell.test.ts` passes; full
+  suite **906/906** at the time of this run, `npm run typecheck` and `npm run gate` pass with the
+  baseline unchanged. The packaged app was rebuilt and relaunched after this change;
+  the click-to-panel absolute number was not instrumented, but the owner
+  reported the attach interaction now feels fast ("ok了，现在很快了"). The
+  harness uses the same AppKit panel and content types.
+- **Benchmark run:** `swiftc -O -target arm64-apple-macos13.5
+  benchmark/attachment-panel.swift -framework AppKit
+  -framework UniformTypeIdentifiers -o /tmp/attachment-panel` then
+  `/tmp/attachment-panel > benchmark/results/attachment-panel-2026-11-19T06-21-31Z.json`;
+  no provider or model; parameters: the shell's `allowedContentTypes`, an
+  offscreen 900×600 titled window, an 8 s visibility limit, one cold sheet, a
+  construction warm-up, a hidden show/cancel warm-up, and warm sheet vs
+  `begin`; machine: Apple M5 Pro, 18 cores, macOS 27.0.0; result path above.
+- **Execution chain:** built a minimal Swift + WKWebView harness that served the
+  attachment block from the working tree and from `4f0149e` over loopback and
+  measured generated 12 MP JPEGs, 5 MB PNGs, a 10 MB PDF, 2 MB text and the real
+  8 MB/30 s MP4. WKWebView results: new four-photo attach 233–244 ms with
+  240 px/0.9 KB markup vs old 129 ms with 24.4 MB of data-URL markup and a
+  4032×3024 decode; PDF 2–3 ms; video 1.07 s (all seek/encode variants within
+  1.1–1.2 s; encode only 10–19 ms). A 160 px thumbnail run took 201 ms vs
+  233 ms at 240 px but was not adopted for preview quality. Then measured the
+  live companion read-only: the first 11-endpoint burst took 315 ms, later
+  bursts 34–37 ms, `/api/dashboard` 6.5 KB, the main conversation 9 KB with one
+  turn; `renderSession` took ~13 ms for 27×4k turns and ~70 ms for 60×20k.
+  The 3-second tick was therefore not the seconds-long cost. Finally isolated
+  `NSOpenPanel`: the first cold sheet 984 ms, warm sheet 385–394 ms, app-modal
+  `begin` 112–133 ms, and construction warm-up ~100 ms for the next panel.
+  Implemented the native change and verified the Swift typecheck, the shell
+  test, the full suite, typecheck and gate. The measurement harnesses live in
+  `/tmp` except the committed panel benchmark; the WKWebView harness was not
+  committed because it depends on a generated page and a local video fixture.
+- **Pros:** the change removes the largest measured pre-picker delay with a
+  small, local native edit; it does not touch the WebView contract, file types
+  or attachment payloads; the benchmark is rerunnable and the failure mode
+  (panel mode/sheet UX) is explicit in the trade-off.
+- **Cons / next time:** the floating panel is a visible UX change and the
+  packaged click-to-panel absolute number is still unmeasured; the warm adds a
+  one-time ~300 ms main-thread construction after the page is ready, and a click
+  in the first 1.5 s pays the cold build (though it still gets `begin`). Video
+  frame extraction remains ~1.1 s, photo thumbnail generation ~200–240 ms for
+  four 12 MP photos, and the 160 px alternative was not adopted. The live tick's
+  first 315 ms burst deserves its own look if the owner reports periodic
+  stalls; the whole-pane render is not yet worth a keyed rewrite at the
+  owner's current 9 KB conversation. Next time: rebuild the app and measure
+  click→change→panel-visible in the packaged WebKit before choosing further work.
+- **Reversal condition:** if the floating panel feels disconnected, interferes
+  with full-screen or window management, or is less accessible than the sheet,
+  restore `beginSheetModal` and accept the ~270 ms animation. If the delayed
+  warm causes a visible startup hitch or catches a click, move the warm to
+  attach hover/focus or remove it. If a future macOS removes the sheet
+  animation or anchors `begin`, re-measure and keep the faster presentation.
 
 ### 2026-11-19 — Attachments acknowledge the click first
 

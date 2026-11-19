@@ -392,6 +392,11 @@ export class NativeAgentWorker implements RuntimeAdapter {
           push({ type: "failed", message, report: { providerId: this.providerId, agentId: this.id, category: "timeout", signature: "native-worker-timeout", detail: message }, usage });
           return;
         }
+        if (result.terminalReason === "no_progress") {
+          const message = result.error ?? "The native worker repeated the same tool call without making progress.";
+          push({ type: "failed", message, report: { providerId: this.providerId, agentId: this.id, category: "no_progress", signature: "native-worker-no-progress", detail: message }, usage });
+          return;
+        }
         // A round limit is a limit whether it came from the plan or from the
         // worker's own default. Reporting it as `completed` published a fragment
         // of an unfinished investigation as the step's answer.

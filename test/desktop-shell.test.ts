@@ -74,6 +74,14 @@ test("the native desktop app is the only product entry", async () => {
   assert.match(macShell, /runOpenPanelWith parameters: WKOpenPanelParameters/);
   assert.match(macShell, /panel\.allowedContentTypes = \[\.image, \.movie, \.text, \.json, \.commaSeparatedText, \.pdf\]/);
   assert.match(macShell, /\["docx", "doc"\]\.compactMap/);
+  // The attachment picker is app-modal, not a sheet: the sheet animation cost
+  // ~270 ms before the file view appeared. Its cold construction is warmed
+  // after the page is ready so the first click does not pay it.
+  // 附件选择器是应用级模态而非 sheet：sheet 动画在文件视图出现前约花 270ms。
+  // 页面就绪后预热冷构造，使第一次点击不再支付这份成本。
+  assert.match(macShell, /panel\.begin \{ response in/);
+  assert.match(macShell, /private func warmAttachmentPanel\(\)/);
+  assert.match(macShell, /attachmentPanelWarmed = true/);
   assert.match(macShell, /CLONE_AI_DOCUMENT_TOOL/);
   assert.match(buildScript, /document-tool\.swift/);
   assert.match(buildScript, /CloneAIDocumentTool/);
