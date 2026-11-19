@@ -81,12 +81,10 @@ export function buildFallbackPlan(
   // many. Without this, "只读取 README，不要修改任何文件" contains "项目" and
   // became a draft work order whose required artifact a read-only worker cannot
   // produce; the run failed with "Missing required artifact". A named output
-  // target or a delivery verb still wins: the marker constrains writes, it does
-  // not cancel a requested deliverable.
+  // target still wins, but a bare delivery verb does not override the marker.
   // 只读标记是整条任务的约束，而不是众多交付词之一。没有它，"只读取 README，不要修改
   // 任何文件"因为含"项目"被规划成 draft 工作单，而只读 Worker 产不出要求的工件，Run 以
-  // "Missing required artifact" 失败。点名输出目标或交付动词仍然优先：该标记约束的是
-  // 写入，并不取消被请求的产出。
+  // "Missing required artifact" 失败。点名输出目标仍然优先，但单独的交付动词不能覆盖标记。
   // The no-write clause is removed before looking for delivery verbs: "不要写文件"
   // contains "写", which is a delivery verb everywhere else. Only the clause up to
   // the next comma/period disappears, so a later "但把报告写到…" still counts.
@@ -100,14 +98,23 @@ export function buildFallbackPlan(
   const explicitReadOnly = includesOne(normalized, READ_ONLY_TERMS)
     || (includesOne(normalized, ONLY_READ_TERMS) && includesOne(normalized, NO_WRITE_TERMS));
   const writeTarget = includesOne(withoutNoWriteClauses, WRITE_TARGET_TERMS);
+  const namedWriteTarget = WRITE_TARGET_TERMS.some((term) => {
+    let index = withoutNoWriteClauses.indexOf(term);
+    while (index !== -1) {
+      const following = withoutNoWriteClauses.slice(index + term.length);
+      if (/^\s*(?:文件\s*)?[：:]?\s*[`"'“‘]?(?:\.{0,2}\/|[a-z]:[\\/]|[^\s，,。；;!?"'`“”‘’]+[\\/]|[^\s，,。；;!?"'`“”‘’]+\.[a-z0-9]+(?:\b|$))/i.test(following)) return true;
+      index = withoutNoWriteClauses.indexOf(term, index + term.length);
+    }
+    return false;
+  });
   const positiveWrite = includesOne(withoutNoWriteClauses, POSITIVE_WRITE_VERBS);
   const artifactNoun = includesOne(withoutNoWriteClauses, ARTIFACT_NOUNS);
-  // A bare artifact noun only means "delivery" when no explicit read-only
-  // constraint is present: "只读审查这份报告" is a read, not a request to
-  // write a report. An explicit write verb or named target still wins.
-  // 裸的产物名词只有在没有显式只读约束时才算交付："只读审查这份报告"是读取，不是
-  // 写报告。显式写入动词或点名目标仍然优先。
-  const deliveryRequested = writeTarget || positiveWrite || (!explicitReadOnly && artifactNoun);
+  // Read-only requests yield only to a named output path; verbs and artifact
+  // nouns can describe existing code or files rather than requested delivery.
+  // 只读请求仅让位于点名的输出路径；动词和产物名词可能描述已有代码或文件，而非交付请求。
+  const deliveryRequested = explicitReadOnly
+    ? namedWriteTarget
+    : writeTarget || positiveWrite || artifactNoun;
   // A research request with no deliverable is read-only even without an explicit
   // marker: "看一下这个项目的代码，有什么优化空间" asks for an answer, not a file.
   // 没有交付物的研究请求即使没有显式标记也是只读的："看一下这个项目的代码，有什么优化空间"
