@@ -11,6 +11,37 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-19 —— 网关声明的强度档位会真正送到 Provider，而不是 400
+
+- **主张：** 网关为模型声明的档位不再被 clone-ai 自己的校验拒绝。
+  `360/openai/gpt-6.1-terra` 声明 `none, low, medium, high, xhigh, max, ultra`；
+  `ultra` 此前会从 `POST /api/main-agent/stream` 与 `PATCH /api/config` 得到 HTTP 400，
+  于是输入框与设置页的选择器给出了服务端会拒绝的选项。变更后名称会被去空白、限制在 64
+  字符内，并以 `reasoning_effort` 转发；只有根本不像名称的值（非字符串、空、过长）才被拒绝。
+- **证据：** 在线网关 `curl 127.0.0.1:3425/v1/models` 显示 11 个模型各声明 3–7 档；
+  把 `reasoning_effort` 设为 `off`/`ultra`/`medium`/`xhigh`/`minimal`、跨三个模型探测，
+  每次都是 200。`test/companion-main-agent.test.ts` 断言假 Provider 收到
+  `reasoning_effort: "ultra"`；`test/companion-config-api.test.ts` 通过
+  `PATCH /api/config` 保存并清除 `ultra`，仍拒绝 `42`。`npm test` **934/934**、
+  `npm run typecheck` exit 0、`npm run gate` PASS、baseline 不变。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--推理强度以网关声明为准而不是固定七档)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--强度选择器与服务端的档位名称不一致通道未能启动所有者批准了手写补丁)。
+
+## 2026-11-19 —— 失败任务的教训必须引用失败本身
+
+- **主张：** 从失败 Run 提炼的 procedure 只有在引用记录失败的 Evidence 时才被接受。记录中的
+  记忆 `mem-81aab49b-a11`——引用成功目录列表的任务复述——会被拒绝，而任务里的持久偏好
+  （“以后所有报告默认使用简体中文”）在失败结局 **2/3**、已完成结局 **3/3** 的样本中保留。
+  记忆文件不再把摘要作为正文首行重复一遍。
+- **证据：** `npm run gate` **PASS**，memory **31/31**（五个新用例）；首次全量 `npm test`
+  **930/931**（唯一失败是一条新增纯英文注释，已修复）；typecheck 退出 0。真实模型在记录
+  Run 上每种结局采样 3 次：变更前，**3/3** 次失败结局样本（库里那条 + 两次探针）都产出复述
+  任务的 procedure；变更后，两种结局均为 **0 条保留教训**，已完成结局的偏好 **3/3**、失败
+  结局 **2/3**——
+  `benchmark/results/memory-failure-lesson-2026-11-19T09-11-25-790Z.json`。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--失败任务的教训必须引用失败本身)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--失败任务的教训必须引用失败本身)。
+
 ## 2026-11-19 —— 内部基准是机器根目录
 
 - **主张：** 未显式设置 `CLONE_AI_WORKSPACE` 时，运行时的内部基准是 `/`；任务的相对路径与

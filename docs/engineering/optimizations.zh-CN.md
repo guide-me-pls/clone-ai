@@ -26,6 +26,136 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— 强度选择器与服务端的档位名称不一致；通道未能启动，所有者批准了手写补丁
+
+- **目标 / 假设：** 输入框与设置页的选择器列出 Magpie 网关为当前模型声明的档位
+  （`reasoningLevelsFor`，`apps/desktop/ui/app.js:1528`），但 `PATCH /api/config` 与回合
+  请求体只接受 `src/workers/effort.ts:14` 里的 7 个名称。声明 `none`/`ultra` 的模型
+  （这里是 `360/openai/gpt-6.1-terra`，`reasoning_levels = [none, low, medium, high,
+  xhigh, max, ultra]`）会把这些档位列出来、随后在 `src/companion-server.ts:144` /
+  `:1131` 被 HTTP 400 拒绝；`off`/`minimal` 反过来被接受，却没有任何模型声明。为收窄
+  声明列表而写的 `effortChoices()` 没有调用方。
+- **取舍：** [推理强度以网关声明为准，而不是固定七档](../architecture/trade-offs.zh-CN.md#2026-11-19--推理强度以网关声明为准而不是固定七档)。
+- **变更：** 回合体与 `PATCH /api/config` 接受任何非空强度名称（去空白、
+  `MAX_EFFORT_LENGTH` = 64），而不只是 7 个兜底值。`src/workers/effort.ts` 新增
+  `normalizeEffort` 并删除无人调用的 `effortChoices`；`src/companion-server.ts`
+  （`parseTurnModelAndEffort` 与配置 `PATCH`）、`src/config/clone-config.ts`、
+  `src/main-agent/model-preferences.ts`、`src/application/run-main-query.ts` 与
+  `src/main-agent/native-runtime.ts` 改携带 `string` 而不是 `EffortLevel` 联合类型；
+  `src/audit/self-review.ts` 保留 `isEffortLevel` 作为保守的提案过滤。选择器不变：它本来
+  就列出网关声明的档位。
+- **Eval：** `node --experimental-strip-types --test
+  test/companion-config-api.test.ts test/companion-main-agent.test.ts`。
+  变更前：流式接口对 `ultra` 返回 400 `effort must be one of …`，`PATCH /api/config`
+  同样拒绝。变更后：`PATCH` 保存 `ultra` 并能清除，非字符串仍是 400，而模型声明该档位时
+  假 Provider 收到的请求体带 `reasoning_effort: "ultra"`。`npm test` **934/934**、
+  `npm run typecheck` exit 0、`npm run gate` PASS、baseline 不变。
+- **执行链路：** 读 `parseTurnModelAndEffort` 与两个路由处理器确认拒绝路径；查询在线网关
+  （`curl 127.0.0.1:3425/v1/models`）拿到每个模型声明的档位；对三个模型分别以
+  `reasoning_effort` = `off`/`ultra`/`medium`/`xhigh`/`minimal` 探测网关——全部返回
+  **200**，因此也没有 Provider 层面的失败可以复现。运行 `npm run traces -- export`
+  （写入 25 条轨迹）与 `npm run repair -- --dry-run --max-traces 5`；通道会按 run id
+  取前五条（`09499a28`、`0973bca9`、`16494863`、`2c8b917a`、`32158dc2`），全部与本缺陷
+  无关（工作目录定位、故宫、"执行失败"跟进）。没有一条轨迹提到 effort。这个 400 在
+  任何 Run 被接受之前就抛出，因此 `recordMainAgentTurnInterrupted` 找不到已开始的记录
+  （`src/main-agent/turn-audit.ts:542`），UI 的中断 POST 是空操作；轨迹来自 Run 审计而
+  不是回合台账，所以这次失败没有留下通道能读的东西。
+- **优点：** 通道自己的闸门说了"没有轨迹"，而不是让它拿五条无关失败去跑修复——这正是这道
+  闸门存在的意义。补丁沿用既有的模型 id 契约，而不是再造一份档位列表。
+- **缺点 / 下次：** 通道没有"Run 存在之前的 HTTP 边缘拒绝"这一输入类别，因此真实缺陷
+  完全无法由回路修复。这与 2026-11-17 记录的是同一个缺口（"通道的输入选择器需要一个
+  'verification accepted without a result' 类别"）。补丁是手写的，所以这条记录不提供任何
+  "回路是否有效"的证据；下一次应当先给通道补上这个输入类别，而不是重复这次例外。
+- **推翻条件：** 抄自取舍条目——若某个 Provider 开始以所有者看不见的方式拒绝未知强度，
+  就改为按该 Provider 声明的档位校验（每回合查询一次并缓存），而不是恢复固定列表。
+
+### 2026-11-19 —— 侧栏只剩一个对话入口，主对话是固定的一行
+
+- **目标 / 假设：** 所有者把 新请求 与 对话 读成同一个动作。去掉重复控件，同时保留两种能力：
+  经过路由的新请求，以及一键回到主线程历史的入口。
+- **取舍：** [新请求是唯一的创建入口，主对话是固定的一行](../architecture/trade-offs.zh-CN.md#2026-11-19--新请求是唯一的创建入口主对话是固定的一行)。
+- **变更：** 对话 按钮、它的处理器与 locale key 已移除。`buildDashboard` 在主对话有回合、
+  派发过任务或磁盘上有旧历史时，把它作为 `kind: "conversation"` 的行输出；
+  `capSessionRows` 让它不受 40 个根窗口的截断。`renderSessions` 把这一行固定在 今天/更早
+  之上；`sessionMarkup` 给它固定的“主对话”标题、旧历史预览提示，并且不渲染隐藏控件；
+  `deleteSession` 拒绝删除它。文件：`apps/desktop/ui/index.html`、
+  `apps/desktop/ui/app.js`、`src/desktop/ui-locale.ts`、`src/companion-server.ts`、
+  `src/main-agent/conversation-history.ts`。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts
+  test/ui-locale.test.ts test/regression/ui-sidebar-hidden-restore.test.ts
+  test/companion-control-plane.test.ts test/companion-config-api.test.ts`。
+  变更前：`index.html` 声明 `#open-conversation`，`sessionMarkup` 没有主对话形态，dashboard
+  排除 `main-agent-conversation`，隐藏恢复沙箱里没有主对话行。变更后：5 个文件通过，包括
+  “the main conversation is a pinned row…”“the pinned main conversation survives the
+  sidebar row cap”“an empty main conversation is not a row”，以及只有旧历史时的 dashboard 行。
+  `npm test` 934/934、`npm run typecheck` exit 0、`npm run gate` PASS、baseline 不变。
+  视觉检查：用临时 companion 与带数据的主目录渲染出 新请求 + 固定的 主对话 + 今天的对话，
+  点击 主对话 能打开它；空数据只渲染 新请求 与 最近 0。
+- **Benchmark run：** 无；eval 是确定性测试加浏览器检查。
+- **执行链路：** 先内联查看两个处理器与 dashboard 构建；跑一次 Workflow 设计（3 个提案 +
+  3 个裁判，6 个 Agent，约 930k 子 Agent token，约 16 分钟）；内联实现；裁判指出“空主对话
+  会让重复复活”后做第二遍（presence rule、旧历史提示、cap 测试）；最后跑
+  typecheck/test/gate。失败：最初的“始终输出主对话行”在空数据上重建了重复入口，已修正；
+  一个 dashboard 测试的期望按 presence rule 修正；共享工作树里另一个会话的进行中改动让
+  `test/ui-structure.test.ts` 短暂因无关的 config id 变红（由那个会话解决，本次未触碰）。
+- **优点：** 裁判在提交给所有者之前发现了空行重复与 cap 风险；沙箱驱动真实的
+  `renderSessions`，eval 是行为级而不是源码形状；有数据与空数据两种状态都在浏览器里确认过。
+- **缺点 / 下次：** 三个 max-effort 提案 Agent 在一个很小的设计空间上花了约 16 分钟，
+  更低的强度就够。共享工作树被并发编辑，整套测试运行有噪声，文件必须重新读取。在欢迎面
+  输入新请求后点击会话行仍会丢掉文字；这条既有草稿路径留给独立变更。
+- **成果条目：** 无——收益是结构与所有者指令驱动的，不是可测的提升。
+- **推翻条件：** 如果所有者反馈固定行又读起来像一个动作按钮，或空白请求状态必须在没有
+  线程行的情况下可达，恢复独立的 对话 入口——但永远不要同时为同一个线程提供按钮和行。
+
+### 2026-11-19 —— 失败任务的教训必须引用失败本身
+
+- **目标 / 假设：** 所有者的记忆库里有一条从 Run `16494863…` 提炼出的记忆：
+  “下次应先直接读取…README.md，而不是列出 /Users/qihoo/.clone……”。它是一条复述工作单的
+  procedure，引用的却是一次成功的目录列表。在 Prompt 里标记失败 Evidence，并拒绝没有引用
+  失败行的失败任务 procedure，应当去掉这条坏记忆，同时保留同一任务里的持久偏好
+  （“以后所有报告默认使用简体中文”）。
+- **取舍：** [失败任务的教训必须引用失败本身](../architecture/trade-offs.zh-CN.md#2026-11-19--失败任务的教训必须引用失败本身)。
+- **变更：** `src/memory/memory-hygiene.ts` 新增 `evidenceRecordsFailure` 与
+  `isUngroundedFailureLesson`；`src/memory/memory-pipeline.ts` 拒绝没有失败引用的失败任务
+  procedure，并把 `droppedUngroundedFailureLessons` 与每条候选的 `reason` 记入 Journal；
+  `src/memory/agent-memory-worker.ts` 把失败 Evidence 标成 `[failure]` 并重写失败分支规则。
+  同一次变更还阻止记忆文件重复摘要：`src/memory/md-memory-store.ts` 省略与摘要相同的正文，
+  `MemoryGovernance.promote` 只把来源行作为正文。门禁的 `MemoryCase` 新增 `outcome`、
+  `evidence` 与 `citedEvidence`；五个用例与重新生成的基线钉住规则。
+  `benchmark/memory-failure-lesson.ts` 与 `npm run bench:memory-lesson` 让模型 eval 可复现。
+- **Eval：**
+  - `node --experimental-strip-types --test test/agent-memory-worker.test.ts test/memory-candidate-quality.test.ts test/memory-governance.test.ts test/md-memory-store.test.ts` —— **60/60**。
+  - `npm run gate` —— **PASS**，memory **31/31**（五个新用例；基线 diff 恰好就是这五条）。
+  - `npm run typecheck` —— 退出码 0。
+  - `npm test` —— 第一次全量 **930/931**；唯一失败是一条新增的纯英文注释，已修复。之后的
+    全量运行报告 **926/931**，五个失败是所有者未提交的 `apps/desktop/ui/index.html` 删除了
+    `id="open-conversation"` 导致的桌面壳断言；没有记忆测试涉及，本次变更也未触碰这些断言。
+- **Benchmark run：**
+  - 命令：`npm run bench:memory-lesson -- --samples 3`；Provider 为 `native`，模型
+    `360/deepseek/deepseek-v4.1-flash`；未设 effort、未设 temperature（Provider 默认）；
+    `maxCandidates` 3。
+  - 输入：Run `16494863-1fde-4e58-bb3d-45b432fc3270`，Evidence
+    `faebe5fb-b9a1-4764-a83f-c9de5f55e3c1`（“list_directory read /Users/qihoo/.clone”），
+    目标按记录原样；两种结局各采样 3 次。
+  - 结果：`benchmark/results/memory-failure-lesson-2026-11-19T09-11-25-790Z.json`。
+  - 前后对比：变更前，库里那条加上 **2/2** 次失败结局的新采样都产出了复述任务的 procedure
+    （三种不同措辞）；已完成结局没有产出，偏好出现在采样里。变更后，两种结局都是
+    **0 条保留教训**；已完成结局的偏好 **3/3**，失败结局 **2/3**（一次采样没有候选）。
+- **执行链路：** 阅读记忆流水线、Prompt、门禁、Store 与治理层；从 Journal 查询 Run
+  `16494863…`；用真实 Prompt 对失败结局采样两次、对已完成结局采样两次；实现规则与 Prompt；
+  运行 typecheck、四个定向套件、门禁与全量测试；两次调整 Prompt 措辞（第一版把偏好也压掉，
+  第二版恢复）；新增 benchmark 脚本并跑了 6 次模型调用。该路径不回传用量，因此本次 token
+  成本未计量。
+- **优点：** 规则判断的是 Run 的事实（被引用的 Evidence 是否记录失败），不是措辞相似度的
+  猜测；门禁钉住两个方向；benchmark 使用记录中的原始输入，前后对比可复核。
+- **缺点 / 下次：** 第一版 Prompt 纠正过度，连已完成运行的偏好也返回 `[]`；修法是点名
+  “工作单”而不是“父任务”，并说明任务里嵌入的偏好不是“已被任务暗示的细节”。失败结局里嵌在
+  任务里的偏好仍然比已完成结局更不稳定（2/3 对 3/3）。失败原因只存在于工具错误里的 Run 仍然
+  不产出教训（已记录的代价）。下次先用记录中的任务做探针，再改 Prompt。
+- **推翻条件：** 当失败的工具结果或验证失败能以可引用的 Evidence 记录，且验证器不会把它当作
+  成功观察时，放宽引用要求。如果 benchmark 显示丢掉的有用教训多于阻止的错误记忆，重新审视
+  这条规则。
+
 ### 2026-11-19 —— 内部基准是机器根目录，而不是某个文件夹
 
 - **目标 / 假设：** 任务里的工具、相对路径与验证应当从整台机器出发，而不是从 `~/.clone`
@@ -58,6 +188,56 @@
   `CloneRuntime` 且不传 checkpoint store 时仍会推导工作区内的 checkpoint 路径；Factory 路径
   是唯一的生产路径。
 - **推翻条件：** 复制自取舍条目。
+
+### 2026-11-19 —— 模型与推理强度在输入框按对话选择
+
+- **目标 / 假设：** 所有者问：推理强度为什么只放在设置里，而 Claude Code desktop 把它放在
+  输入框旁。把选择移到输入框、按对话保存，应能让强度成为请求的属性；设置不再保留重复控件。
+  接线时暴露出第二个缺陷：主 Agent 读取了 `mainAgentEffort` 并记入回合台账，却从未
+  把 `reasoning_effort` 放进 Provider 请求，因此该设置此前不起作用。
+- **取舍：** [模型与推理强度在对话框按对话选择](../architecture/trade-offs.zh-CN.md#2026-11-19--模型与推理强度在对话框按对话选择)。
+- **变更：** `src/main-agent/native-runtime.ts` 接受按回合的 `model` 与 `effort` 覆盖，并在主
+  Agent 请求中发送 `reasoning_effort`（`nativeChatModel` → `chat`）；
+  `src/application/run-main-query.ts` 传递选项；`src/companion-server.ts` 在
+  `/api/main-agent/stream` 与 `/api/main-agent/query` 上解析并校验 `model`/`effort`
+  （未知强度在任何模型调用前返回 HTTP 400）。输入框新增两个选择器
+  （`apps/desktop/ui/index.html`、`app.js`、`components.css`），选择按对话存在 localStorage；
+  所有者随后要求移除设置里的模型/强度两行，因此输入框成为唯一入口，空选项表示配置的默认模型与
+  Provider 默认强度。强度列表现在读取网关为所选模型声明的
+  `reasoningLevels`——旧代码读取从未赋值的 `state.gateway`，所以一直显示退回列表。观察来源的
+  说明与空状态现在写清它读什么、不能做什么。
+- **Eval：** `node --experimental-strip-types --test test/companion-main-agent.test.ts`
+  **7/7**；新用例断言假 Provider 收到 `model: "composer-model"` 与
+  `reasoning_effort: "high"`，随后无覆盖的回合收到 `settings-model` 且没有
+  `reasoning_effort`。`test/companion-config-api.test.ts` **22/22** 新增未知强度的
+  HTTP 400 用例；`test/ui-structure.test.ts` **26/26**。在 dev 模式的临时 companion
+  服务上做浏览器检查：
+  选择器改动可持久化、刷新后恢复、切换模型会把强度收敛到网关声明的档位并清掉不支持的档位、
+  用桩替换 fetch 后提交捕获到流请求体里的 `{model, effort}` 并写入了对话键。完整
+  `npm test` **926/926**；`npm run typecheck` 退出 0；`npm run gate` **PASS**，基线未变。
+- **Benchmark run：** 无——确定性契约与 DOM eval；没有 Provider、数据集、切分、种子或评分参数。
+  不写成果条目：这是新的交互与契约，不是可测的性能收益。
+- **执行链路：** 本会话内联完成。先读设置、输入框、路由、运行时、Connector 与网关路径；先写
+  双语取舍；改运行时与接口；加两个测试；实现界面与文案；跑 typecheck 与定向测试；在 4319 端口
+  启动 dev 模式临时 companion 服务，用 Chrome DevTools 驱动页面（改选择、刷新、非法档位重置、
+  桩提交）；修复 DOM 检查发现的选中项重置问题；停止服务。所有者随后要求去掉设置里的两行：
+  移除模板、设置侧的渲染与保存函数、事件监听与失效的文案键，并重跑定向测试。没有 Worker、
+  benchmark 或修复通道——强度缺陷没有失败轨迹（回合会以 Provider 默认强度正常完成），修复由
+  Provider 请求体测试钉住。
+- **优点：** 选择就在写请求的地方；按对话隔离，不影响 WhatsApp 与定时工作；网关声明的档位终于
+  驱动选择器；强度设置终于送达 Provider。
+- **缺点 / 下次：** 按对话存储只在 localStorage，另一个客户端会回退到配置默认值。新请求的选择器
+  是粘性的（保留上次显式选择），而说明写的是"随对话保存"。桌面端不再提供没有输入框的回合的默认
+  强度控件：它来自 `CLONE_AI_MAIN_EFFORT` 或自审动作，默认模型仍通过 Agent 页的网关卡片绑定。
+  模型 id 不在服务端对照目录校验，
+  Provider 仍是权威。结构测试抓不到浏览器检查发现的选中项重置问题；增加一个 DOM 级选择器测试
+  能更早发现这一类。
+- **推翻条件：** 如果 WhatsApp 或定时回合也需要共享按对话的选择，把存储移到服务端、以对话 id
+  为键，并让桌面端读回。如果所有者期望在输入框改一次就成为默认值，让输入框写入
+  `config.json`，删除按对话存储。如果所有者需要在不改环境变量的情况下为没有输入框的回合设置
+  可见的默认强度，在输入框加一个紧凑的"设为默认"动作（或在设置里恢复一个默认控件），而不是
+  两份副本。如果网关的 `reasoningLevels` 对某个 Provider 不可靠，保留退回列表并把选择器标注为
+  建议值。
 
 ### 2026-11-19 —— 无进展守卫按整回合统计每个调用
 

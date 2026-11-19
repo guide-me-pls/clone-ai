@@ -6,11 +6,29 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A model's declared effort levels are accepted, not only the built-in seven
+
+The composer and Settings pickers list the gateway's per-model reasoning levels, and some models declare levels outside clone-ai's built-in set — `360/openai/gpt-6.1-terra` offers `none` and `ultra`. Those appeared in the picker and were then refused with HTTP 400 by the stream/query endpoints and `PATCH /api/config`. The endpoints now accept any non-empty level name (trimmed, at most 64 characters), forward it as `reasoning_effort`, and leave the provider as the authority for what a model accepts. The built-in seven remain the picker's fallback when the gateway declares nothing, and the set a self-review proposal may choose from.
+
+输入框与设置页的选择器列出网关按模型声明的推理档位，而有些模型声明的档位不在 clone-ai 的内置集合里——`360/openai/gpt-6.1-terra` 提供 `none` 与 `ultra`。这些档位出现在选择器里，随后却被流式/查询接口与 `PATCH /api/config` 以 HTTP 400 拒绝。现在这些接口接受任何非空档位名称（去空白、最多 64 字符），以 `reasoning_effort` 转发，并把"模型接受什么"的权威交给 Provider。内置七档仍是网关没有声明时选择器的兜底，也是自审提案可以选择的集合。
+
+### A failed run's lesson must cite the failure
+
+A memory mined from a failed run is now accepted only when it cites evidence that records the failure: the mining prompt marks failing evidence `[failure]`, and a procedure that cites none is refused and journaled with its reason. The recorded memory "下次应先直接读取…README.md…" is the case this closes. Completed-run mining and a durable preference stated inside the task are unchanged. Memory files also stop repeating the summary as the first line of their content.
+
+从失败 Run 提炼的记忆，现在只有在引用记录失败的 Evidence 时才被接受：提炼 Prompt 把失败 Evidence 标成 `[failure]`，没有引用它的 procedure 会被拒绝并把理由记入 Journal。记录中的“下次应先直接读取…README.md……”正是这次修复的用例。已完成 Run 的提炼、以及任务里声明的持久偏好都不变。记忆文件也不再在正文首行重复摘要。
+
+### One sidebar entry starts a request; the main conversation is a pinned row
+
+The 对话 button beside 新请求 is gone: 新请求 is the only way to start a request and keeps the router that decides between continuing a conversation and starting a Main Agent. The main conversation is now the pinned first row of 最近, named 主对话, with the tasks its turns dispatched nested under it like every other thread, and it has no hide control. It appears once the main thread has a turn, a dispatched task, or older on-disk history — an empty install still has only 新请求 — and a hidden main conversation stays hidden with its restore control.
+
+新请求 旁边的 对话 按钮已移除：新请求 是发起请求的唯一入口，并保留"继续相关对话还是新开 Main Agent"的路由器。主对话现在是 最近 里固定的第一行，名为主对话；它各回合派发的任务像其他线程一样嵌套在下面，且没有隐藏控件。它在主线程有回合、派发过任务或磁盘上有旧历史时出现——空数据仍然只有 新请求 一个入口；被隐藏的主对话保持隐藏，并保留恢复控件。
+
 ### The composer chooses the model and reasoning effort for a conversation
 
-The composer now has model and effort pickers beside the send box, saved with the conversation; Settings keeps the default model and effort, which still apply to WhatsApp and scheduled turns. The choice travels with the turn: the stream and query endpoints accept `model` and `effort`, and an unknown effort is refused with HTTP 400 before any model call. Wiring this exposed that the Main Agent recorded `mainAgentEffort` but never sent `reasoning_effort` to the provider — the request now carries it, so the setting and the new picker actually change the reasoning budget. The effort list now uses the gateway's declared levels for the selected model; the previous code read a field that was never assigned and always fell back to the full list. The observation-sources panel now explains that a source only reads `.md`/`.txt` files from the folder you chose and has no write or execute authority.
+The composer now has model and effort pickers beside the send box, saved with the conversation. The Settings model/effort rows are gone: the composer is the only picker, and a turn without one uses the configured default model and the provider's default effort — the same defaults WhatsApp and scheduled turns use, with the default model still bound through the Agent page's gateway card. The choice travels with the turn: the stream and query endpoints accept `model` and `effort`, and an effort that is not a name at all is refused with HTTP 400 before any model call. Wiring this exposed that the Main Agent recorded `mainAgentEffort` but never sent `reasoning_effort` to the provider — the request now carries it, so the setting and the new picker actually change the reasoning budget. The effort list now uses the gateway's declared levels for the selected model; the previous code read a field that was never assigned and always fell back to the full list. The observation-sources panel now explains that a source only reads `.md`/`.txt` files from the folder you chose and has no write or execute authority.
 
-输入框旁现在有模型与推理强度选择器，选择随对话保存；设置里保留默认模型与默认强度，仍对 WhatsApp 与定时回合生效。选择随回合发送：流式与查询接口接受 `model` 与 `effort`，未知强度在任何模型调用前以 HTTP 400 拒绝。接上这条线时发现主 Agent 只记录了 `mainAgentEffort`，从未把 `reasoning_effort` 发给 Provider——现在请求会携带它，设置与新选择器真正改变推理预算。强度列表现在使用网关为所选模型声明的档位；此前的代码读取从未赋值的字段，永远退回完整列表。观察来源面板现在说明：来源只读取所选目录中的 `.md`/`.txt` 文件，没有写入或执行权限。
+输入框旁现在有模型与推理强度选择器，选择随对话保存。设置里的模型/强度两行已移除：输入框是唯一入口，没有选择时使用配置的默认模型与 Provider 默认强度——WhatsApp 与定时回合也使用这些默认值，默认模型仍通过 Agent 页的网关卡片绑定。选择随回合发送：流式与查询接口接受 `model` 与 `effort`，根本不像名称的强度在任何模型调用前以 HTTP 400 拒绝。接上这条线时发现主 Agent 只记录了 `mainAgentEffort`，从未把 `reasoning_effort` 发给 Provider——现在请求会携带它，设置与新选择器真正改变推理预算。强度列表现在使用网关为所选模型声明的档位；此前的代码读取从未赋值的字段，永远退回完整列表。观察来源面板现在说明：来源只读取所选目录中的 `.md`/`.txt` 文件，没有写入或执行权限。
 
 ### The internal base is the machine root
 
