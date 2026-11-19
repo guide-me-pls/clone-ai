@@ -205,6 +205,80 @@ test("the stream forwards tool progress before it forwards the answer", async (t
   }
 });
 
+test("a first-send no_progress turn streams the owner-facing summary", async (t) => {
+  // The 2026-11-19 stop: the model repeats the same poll with the same result.
+  // A first send has no streamed reply, so the transient failure card is the
+  // only thing the owner sees; the SSE payload must carry the same summary and
+  // next step the ledger shows.
+  // 2026-11-19 的停止：模型用相同结果重复同一个轮询。首次发送没有流式正文，所有者看到的只有
+  // 临时失败卡；SSE payload 必须带上台账同样的摘要与下一步。
+  let calls = 0;
+  const modelServer = createServer((request, response) => {
+    if (request.url !== "/v1/chat/completions") { response.writeHead(404); response.end(); return; }
+    calls += 1;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({
+      choices: [{
+        delta: {
+          tool_calls: [{
+            index: 0,
+            id: `call-${calls}`,
+            type: "function",
+            function: { name: "get_run_status", arguments: "{\"runId\":\"missing\"}" },
+          }],
+        },
+      }],
+    })}\n\n`);
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise<void>((resolve) => modelServer.listen(0, "127.0.0.1", resolve));
+  const address = modelServer.address();
+  if (address === null || typeof address === "string") throw new Error("The fake model did not bind a port.");
+  const saved = { model: process.env.CLONE_AI_NATIVE_MODEL, base: process.env.CLONE_AI_NATIVE_BASE_URL };
+  process.env.CLONE_AI_NATIVE_MODEL = "test-model";
+  process.env.CLONE_AI_NATIVE_BASE_URL = `http://127.0.0.1:${address.port}`;
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-companion-no-progress-"));
+  const server = await startCompanionServer({ port: 0, dataDirectory });
+  t.after(async () => {
+    await server.close();
+    modelServer.closeAllConnections?.();
+    await new Promise<void>((resolve) => modelServer.close(() => resolve()));
+    if (saved.model === undefined) delete process.env.CLONE_AI_NATIVE_MODEL;
+    else process.env.CLONE_AI_NATIVE_MODEL = saved.model;
+    if (saved.base === undefined) delete process.env.CLONE_AI_NATIVE_BASE_URL;
+    else process.env.CLONE_AI_NATIVE_BASE_URL = saved.base;
+    await rm(dataDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+  });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await companionFetch(server.url, server.token, "/api/main-agent/stream", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "wait for the run" }),
+      signal: controller.signal,
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /event: failed/);
+    const started = text.indexOf("event: failed");
+    const dataLine = text.slice(started).split("\n").find((part) => part.startsWith("data: "));
+    assert.ok(dataLine, "the failed event carries a payload");
+    const payload = JSON.parse(dataLine.slice("data: ".length)) as {
+      error?: string; errorSummary?: string; errorGuidance?: string;
+    };
+    assert.match(payload.error ?? "", /making no progress/);
+    assert.match(payload.errorSummary ?? "", /已停止以免空转/);
+    assert.match(payload.errorGuidance ?? "", /下一步/);
+    const records = await readMainAgentTurnRecords(dataDirectory);
+    assert.equal(records.at(-1)?.status, "failed");
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
 test("a realistic image attachment is accepted instead of failing on the body cap", async (t) => {
   // The body cap must clear the attachment cap. A 1000x1000 photo is roughly
   // 667 KB of base64, which the old 32 KB body limit rejected outright.

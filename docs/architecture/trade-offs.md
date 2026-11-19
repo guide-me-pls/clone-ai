@@ -6,6 +6,53 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — A first-send failure shows the owner-facing reason, not the raw loop error
+
+**Decision.** The SSE `failed` event carries `errorSummary` and `errorGuidance`
+from `describeFailureForOwner`, and the transient first-send failure card
+renders the summary, the next step and the raw error in a collapsed detail —
+instead of only the raw English loop error. The raw error stays in the payload,
+the ledger and the interruptions record.
+
+**Why it won.** The audit found that the first send with no streamed reply skips
+the ledger refresh (`wasComposing && !reply`), so the raw "The agent called
+get_run_status 5 times … making no progress" was the only text the owner saw.
+The Chinese summary and next step already existed in the ledger, but appeared
+only after a manual refresh. This is the 2026-11-19 no-progress stop itself; the
+owner saw English internals instead of "已停止以免空转".
+
+**Alternatives rejected.**
+
+- *Always refresh on failure.* The first-send guard exists because the refresh
+  can render the welcome screen over the error card; it also costs a round trip
+  on every failure. The SSE payload already has the error; carry the summary
+  with it.
+- *Replace the raw error with the summary.* The raw error is needed for
+  diagnosis; keep it in a collapsed detail and the interruptions record.
+- *Translate only the existing `{message}` template.* The template has no
+  next-step slot, and every failure would get the same sentence.
+- *Make the ledger card the only surface.* That is what failed for a first send;
+  the transient card is what the owner sees.
+
+**What was given up.** The failed event grows by two short strings. The
+transient card and the ledger card are two renderers of the same mapping and can
+drift. The raw error remains in the DOM (collapsed) and in the interruptions
+record.
+
+**Evidence.** The audit recorded the SSE payload carrying only `error`, the UI
+rendering `response-interrupted-detail`, and the first-send refresh guard. The
+new server test scripts five identical `get_run_status` calls: the failed event
+carries the Chinese summary and guidance, and the ledger row is failed. The UI
+structure test asserts the transient card reads `payload.errorSummary` /
+`payload.errorGuidance`. Before the change the event has no summary or guidance
+and the card falls back to the raw template.
+
+**Reversal condition.** If the failure mapping must be localized per UI
+language, send structured fields and render them per locale. If the ledger
+refresh becomes safe for a first send, remove the transient renderer and show
+the ledger card.
+
+
 ## 2026-11-19 — One runtime per clone home: dev mode takes the LaunchAgent down, a second sidecar refuses to start
 
 **Decision.** `npm run desktop:dev` boots the `ai.clone.companion` job out of the

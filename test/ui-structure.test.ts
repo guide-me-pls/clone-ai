@@ -427,6 +427,19 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   assert.match(omitted, /更早的 12 个回合/);
 });
 
+test("the first-send failure card uses the server's owner-facing summary", async () => {
+  // A first send has no streamed reply, so this transient card is the only
+  // failure text the owner sees. It must use the summary and next step the
+  // server sends, not only the raw loop error.
+  // 首次发送没有流式正文，因此这张临时卡是所有者在失败时唯一看到的文字。它必须使用服务端
+  // 发来的摘要与下一步，而不只是原始循环错误。
+  const app = await read("app.js");
+  assert.match(app, /failureSummary = payload\.errorSummary \|\| ""/);
+  assert.match(app, /failureGuidance = payload\.errorGuidance \|\| ""/);
+  assert.match(app, /data-response-error><b>错误<\/b>/);
+  assert.match(app, /log-error-guidance">下一步：/);
+});
+
 test("the transcript separates a turn, a task update, a child run and a record by level", async () => {
   const app = await read("app.js");
   const css = await read("components.css");

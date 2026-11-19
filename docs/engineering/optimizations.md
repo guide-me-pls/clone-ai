@@ -31,6 +31,48 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — A first-send failure shows the owner-facing reason
+
+- **Goal / hypothesis:** the audit found that a first send with no streamed reply
+  skips the ledger refresh, so the transient failure card shows only the raw
+  English loop error. The SSE `failed` event should carry the same
+  `describeFailureForOwner` summary and guidance the ledger records, and the
+  transient card should render them with the raw error collapsed.
+- **Trade-off:** [a first-send failure shows the owner-facing reason](../architecture/trade-offs.md#2026-11-19--a-first-send-failure-shows-the-owner-facing-reason-not-the-raw-loop-error).
+- **Change:** `src/companion-server.ts` sends `errorSummary` and `errorGuidance`
+  with the stream's `failed` event; `apps/desktop/ui/app.js` captures them and
+  renders the summary, "下一步" and a collapsed 原始错误 in the first-send card,
+  falling back to the old interrupted template when no summary is present.
+  `test/companion-main-agent.test.ts` scripts five identical `get_run_status`
+  calls; `test/ui-structure.test.ts` pins the card's fields.
+- **Eval:** the server case is red on the old payload (no `errorSummary`) and
+  green after; `test/companion-main-agent.test.ts` **8/8**,
+  `test/ui-structure.test.ts` **28/28**. In the shared tree `npm test`
+  **945/946** — the one failure is another session's untracked
+  `.claude/launch.json` (moving it aside gives **946/946**); typecheck exit 0;
+  gate **PASS**.
+- **Benchmark run:** none — deterministic SSE/UI contract; no provider, model,
+  dataset, split, seed or scoring parameter.
+- **Execution chain:** the finding came from the 41-agent audit. The fix was
+  inline: read the SSE catch, the ledger's failure renderer and the first-send
+  guard; wrote the bilingual trade-off; added the server payload fields and the
+  transient card; added the scripted five-poll server test and the UI structure
+  assertion; swapped the SSE payload back to the old shape to reproduce the red
+  case, restored it, then ran the full suite, typecheck and gate. The working
+  tree carried three other active sessions' changes; only this feature's code,
+  tests and docs are committed.
+- **Pros:** the first-send card now matches the ledger card's summary and next
+  step; the raw error stays available for diagnosis; the server test exercises
+  the exact 2026-11-19 no-progress shape end to end.
+- **Cons / next time:** the transient and ledger cards are two renderers of one
+  mapping and can drift; the failed event grows by two strings; the summaries
+  are Chinese even in the English UI (the ledger already behaves that way).
+- **Reversal condition:** if the failure mapping must be localized per UI
+  language, send structured fields and render them per locale. If the ledger
+  refresh becomes safe for a first send, remove the transient renderer and show
+  the ledger card.
+
+
 ### 2026-11-19 — The effort picker and the server disagree on level names; the lane could not start, so the owner approved a patch
 
 - **Goal / hypothesis:** the composer and Settings pickers list the levels the

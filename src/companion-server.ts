@@ -2266,7 +2266,13 @@ async function handleRequest(
         });
         return;
       }
-      send("failed", { error: error instanceof Error ? error.message : "The Main Agent failed." });
+      const message = error instanceof Error ? error.message : "The Main Agent failed.";
+      const display = describeFailureForOwner(message);
+      send("failed", {
+        error: message,
+        errorSummary: display.summary,
+        errorGuidance: display.guidance,
+      });
     } finally {
       inFlightTurns.delete(reservation);
       response.off("close", abortOnClose);

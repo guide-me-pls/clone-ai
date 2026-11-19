@@ -15,6 +15,22 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-19 — A first-send no_progress shows the summary and next step
+
+- **Claim:** the failed SSE event carries `errorSummary` and `errorGuidance`, and
+  the first-send failure card renders them with the raw error collapsed. A
+  first-send no-progress stop shows "已停止以免空转" and its next step instead of
+  only the raw English loop error.
+- **Evidence:** the new server case scripts five identical `get_run_status`
+  calls and is red on the old payload (no `errorSummary`), green after;
+  `test/companion-main-agent.test.ts` **8/8**, `test/ui-structure.test.ts`
+  **28/28**; in the shared tree `npm test` **945/946** — the one failure is
+  another session's untracked `.claude/launch.json`, and moving it aside gives
+  **946/946**; typecheck exit 0, gate **PASS**.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-first-send-failure-shows-the-owner-facing-reason-not-the-raw-loop-error);
+  [execution chain](optimizations.md#2026-11-19--a-first-send-failure-shows-the-owner-facing-reason).
+
+
 ## 2026-11-19 — A declared effort level reaches the provider instead of a 400
 
 - **Claim:** a level the gateway declares for a model is no longer refused by

@@ -11,6 +11,19 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-19 —— 首次发送的 no_progress 显示摘要与下一步
+
+- **主张：** failed SSE 事件携带 `errorSummary` 与 `errorGuidance`，首次发送失败卡渲染它们并
+  折叠原始错误。首次发送的无进展停止显示“已停止以免空转”与下一步，而不是只有原始英文循环
+  错误。
+- **证据：** 新的服务端用例脚本化五次相同的 `get_run_status` 调用，在旧 payload 上红（没有
+  `errorSummary`），修复后绿；`test/companion-main-agent.test.ts` **8/8**，
+  `test/ui-structure.test.ts` **28/28**；共享树 `npm test` **945/946**——唯一失败是另一会话
+  未跟踪的 `.claude/launch.json`，移开后 **946/946**；typecheck 退出 0，gate **PASS**。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--首次发送失败显示所有者可读的原因而不是原始循环错误)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--首次发送失败显示所有者可读的原因)。
+
+
 ## 2026-11-19 —— 网关声明的强度档位会真正送到 Provider，而不是 400
 
 - **主张：** 网关为模型声明的档位不再被 clone-ai 自己的校验拒绝。
