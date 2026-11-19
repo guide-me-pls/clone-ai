@@ -58,6 +58,10 @@ test("the Agent page shows the detected gateway and a read-only worker catalog",
   assert.match(js, /const agentRows = settings\.agents\.map/);
   assert.match(js, /t\("workers-enabled"\)/);
   assert.match(js, /t\("gateway-refresh"\)/);
+  // Model count, gateway version and API paths are diagnostics, not choices;
+  // the model picker already names what the gateway serves.
+  // 模型数量、网关版本与 API 路径是诊断信息，不是可选项；模型下拉已经列出门户提供的模型。
+  assert.doesNotMatch(js, /gateway-details|gatewayApis/);
 });
 
 test("the shared component library exposes the primitives used by the UI", async () => {

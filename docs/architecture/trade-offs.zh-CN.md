@@ -73,7 +73,8 @@ Agent"控件；如果所有者重新需要完全手动控制，回退这个界�
 
 **决定。** 设置 → Agent 展示 Magpie 网关的检测状态与模型选择，然后是一份只读的四个内置
 Worker 列表，写明每个 Worker 的角色与用途。手填端点/API Key 表单、本机 Provider 列表，以及
-每个 Worker 的 Provider 下拉与启用开关都被移除。
+每个 Worker 的 Provider 下拉与启用开关都被移除。网关卡片也去掉了模型数量、版本与 API 路径
+徽章：模型下拉已经列出门户提供的模型，状态徽章说明是否在线。
 
 **被否决的备选方案。**
 
@@ -92,14 +93,15 @@ Worker 列表，写明每个 Worker 的角色与用途。手填端点/API Key �
 **证据。** Provider Registry 只有一项；所有默认 Profile 都已启用；线上
 `~/.clone/settings.json` 里每个角色都是启用状态（Provider ID 仍是 `claude-code`，会被
 归一化为 `native`）；`~/.clone/config.json` 里的端点由网关应用路径写入。`app.js` 不再渲染
-`config-base-url`、`data-agent-provider` 或 `data-agent-toggle`，新增的界面结构测试会断言
-它们不存在。
+`config-base-url`、`data-agent-provider`、`data-agent-toggle`、`gateway-details` 或 API
+徽章，新增的界面结构测试会断言它们不存在。
 
 **放弃了什么。** 窗口不再能输入非回环或自定义的网关端点（仍可通过 `/api/config` 或环境
-变量设置）；角色也不能再单独关闭。
+变量设置）；角色也不能再单独关闭；网关版本与支持的 API 表面不再一眼可见。
 
 **推翻条件。** 如果注册了第二个执行 Provider、角色需要因成本或策略独立禁用，或 Magpie
-无法发现所有者需要的端点而手填成为指向模型网关的唯一方式，就恢复对应控件。
+无法发现所有者需要的端点而手填成为指向模型网关的唯一方式，就恢复对应控件。如果诊断 API
+兼容问题需要在 App 内查看版本与 API 表面，也恢复这些徽章（或放进折叠区）。
 
 ## 2026-11-19 —— 先发布就绪端点，再跑首轮维护
 

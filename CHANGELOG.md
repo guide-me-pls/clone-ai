@@ -26,9 +26,9 @@ The desktop no longer asks you to choose between a new conversation and a new ta
 
 ### Agent settings show workers, not wiring
 
-Settings → Agent now shows the detected Magpie gateway with its model picker and a read-only list of the four workers — title, role and what each one is for. The manual endpoint/API-key form, the redundant local-provider list, and the per-worker provider selects and enable switches are gone. Magpie's loopback endpoint is still discovered and pinned when a model is applied, and every worker stays enabled. `test/ui-locale.test.ts` asserts the removed controls stay out of the page.
+Settings → Agent now shows the detected Magpie gateway with its model picker and a read-only list of the four workers — title, role and what each one is for. The manual endpoint/API-key form, the redundant local-provider list, the per-worker provider selects and enable switches, and the gateway card's model-count, version and API-path badges are gone. Magpie's loopback endpoint is still discovered and pinned when a model is applied, and every worker stays enabled. `test/ui-locale.test.ts` asserts the removed controls stay out of the page.
 
-设置 → Agent 现在展示检测到的 Magpie 网关及其模型选择，以及一份只读的四个 Worker 列表——名称、角色与用途。手填端点/API Key 表单、重复的本机 Provider 列表，以及每个 Worker 的 Provider 下拉与启用开关都已移除。应用模型时仍会自动发现并固定 Magpie 的回环端点，所有 Worker 保持启用。`test/ui-locale.test.ts` 会断言这些被移除的控件不再出现在页面里。
+设置 → Agent 现在展示检测到的 Magpie 网关及其模型选择，以及一份只读的四个 Worker 列表——名称、角色与用途。手填端点/API Key 表单、重复的本机 Provider 列表、每个 Worker 的 Provider 下拉与启用开关，以及网关卡片上的模型数量、版本与 API 路径徽章都已移除。应用模型时仍会自动发现并固定 Magpie 的回环端点，所有 Worker 保持启用。`test/ui-locale.test.ts` 会断言这些被移除的控件不再出现在页面里。
 
 ### Readiness is published before the first maintenance pass
 
