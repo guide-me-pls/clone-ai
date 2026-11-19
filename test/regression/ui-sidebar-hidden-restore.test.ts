@@ -191,11 +191,8 @@ function createSidebar(source: string) {
     // an attribute because the pinned row is the merge this suite guards.
     // 本沙箱验证分组逻辑；行标记与小标签用桩，切片仍只包含一个函数。`main` 保留为属性，
     // 因为固定行正是本套件所守护的合并。
-    sessionMarkup: (session: any, options: any = {}) => `<div class="session-item${options.child ? " is-child" : ""}" data-test-session="${session.id}"${options.main ? ' data-main="true"' : ""}>${session.title ?? ""}</div>`,
+    sessionMarkup: (session: any, options: any = {}) => `<div class="session-item" data-test-session="${session.id}"${options.main ? ' data-main="true"' : ""}>${session.title ?? ""}</div>`,
     sessionTime: (session: any) => Date.parse(session.updatedAt) || 0,
-    isZhLocale: () => true,
-    taskCountLabel: (count: number) => `${count} 个任务`,
-    childSummary: () => "已完成",
     MAIN_CONVERSATION_ID: "main-agent-conversation",
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     setTimeout,
@@ -281,7 +278,7 @@ test("the same sandbox reaches the hidden group when a session is visible", asyn
   );
 });
 
-test("the main conversation is the pinned first row and its tasks nest inside it", async () => {
+test("the main conversation is the pinned first row and dispatched runs are not rows", async () => {
   const sidebar = createSidebar(renderSessionsSource);
   const at = new Date().toISOString();
   const main = {
@@ -302,21 +299,22 @@ test("the main conversation is the pinned first row and its tasks nest inside it
   await sidebar.renderSessions(sessions);
   const markup = sidebar.markup();
 
-  // The main conversation is one row, marked as the pinned row, and its task is
-  // nested under it rather than placed under a non-row header.
-  // 主对话是一行，带固定行标记；它的任务嵌套在它下面，而不是放在不可点击的标题下。
+  // The main conversation is one pinned row; the run it dispatched is read in
+  // the audit and is not a row here, nested or otherwise.
+  // 主对话是一行固定行；它派发的 Run 在审计里读，这里不是行——无论嵌套与否。
   assert.match(markup, /data-test-session="main-agent-conversation" data-main="true"/);
-  assert.match(markup, /data-child-group="main-agent-conversation"/);
+  assert.doesNotMatch(markup, /data-child-group=/);
+  assert.doesNotMatch(markup, /session-children/);
   const occurrences = (id: string) => (markup.match(new RegExp(`data-test-session="${id}"`, "g")) ?? []).length;
   assert.equal(occurrences("main-agent-conversation"), 1, "the main conversation is one row");
-  assert.equal(occurrences("run-main"), 1, "the main conversation's task is nested once");
+  assert.equal(occurrences("run-main"), 0, "a dispatched run is not a sidebar row");
   assert.equal(occurrences("conversation-x"), 1, "another conversation is unaffected");
-  // The main row counts once as a top-level row; its nested task does not.
-  // 主对话作为顶层行只计一次；它嵌套的任务不再单独计数。
-  assert.equal(sidebar.count(), "2", "the count is the two top-level rows, not the nested task");
+  // The count is the two conversations, not the run.
+  // 计数是两个对话，不含 Run。
+  assert.equal(sidebar.count(), "2", "the count is the two conversations");
 });
 
-test("the sidebar nests a conversation's tasks and promotes a waiting one", async () => {
+test("the sidebar promotes a waiting task and drops every other run", async () => {
   const sidebar = createSidebar(renderSessionsSource);
   const at = new Date().toISOString();
   const conversation = {
@@ -342,17 +340,20 @@ test("the sidebar nests a conversation's tasks and promotes a waiting one", asyn
   await sidebar.renderSessions(sessions);
   const markup = sidebar.markup();
 
-  // One top-level conversation, its non-waiting child nested, the waiting child
-  // promoted, and the two conversation-less origins in their own groups.
-  // 一个顶层对话，非等待子行内嵌，等待子行被提升；两个没有对话的来源各归其组。
-  assert.match(markup, /data-child-group="conversation-x"/);
+  // The one row a task earns is a decision: the waiting task is promoted into
+  // 需要你处理. Running, completed and conversation-less runs have no row at all.
+  // 任务唯一能挣到的行是"决定"：等待中的任务被提升到 需要你处理。运行中、已完成与没有
+  // 对话的 Run 都没有行。
   assert.match(markup, /class="session-group session-group-needs"/);
-  assert.match(markup, /class="session-group">(?:主对话|session-group-main)</);
-  assert.match(markup, /class="session-group">(?:定时\/自动|session-group-auto)</);
+  assert.doesNotMatch(markup, /session-group-auto/);
+  assert.doesNotMatch(markup, /data-child-group=/);
   const occurrences = (id: string) => (markup.match(new RegExp(`data-test-session="${id}"`, "g")) ?? []).length;
   assert.equal(occurrences("conversation-x"), 1, "the conversation is one row");
-  assert.equal(occurrences("run-running"), 1, "the running task is nested once");
-  assert.equal(occurrences("run-waiting"), 1, "the waiting task is promoted, not repeated in the group");
-  assert.equal(occurrences("run-main"), 1, "the main conversation's task has its own group");
-  assert.equal(occurrences("run-scheduled"), 1, "a conversation-less task sits under 定时/自动");
+  assert.equal(occurrences("run-running"), 0, "a running run is not a row");
+  assert.equal(occurrences("run-waiting"), 1, "the waiting task is promoted once");
+  assert.equal(occurrences("run-main"), 0, "the main conversation's run is not a row");
+  assert.equal(occurrences("run-scheduled"), 0, "a conversation-less run is not a row");
+  // One conversation plus the one decision; the runs contribute nothing.
+  // 一个对话加上那一个决定；Run 不计入。
+  assert.equal(sidebar.count(), "2");
 });

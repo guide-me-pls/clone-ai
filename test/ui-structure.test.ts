@@ -302,7 +302,13 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   assert.match(html, /依据/);
   assert.match(html, /工具调用 1 次/);
   assert.match(html, /派生任务 1 个/);
-  assert.match(html, /产物/);
+  // The spawned runs are not rows in the reading column any more: the sidebar
+  // lists no runs and the conversation lists none either. The one-line 依据
+  // names how many were dispatched and opens the audit.
+  // 派发的 Run 不再作为阅读栏里的行：侧栏不列 Run，对话也不列。一行"依据"说明派发了
+  // 几个，并打开审计。
+  assert.doesNotMatch(html, /产物/);
+  assert.doesNotMatch(html, /data-log-run=/);
   assert.match(html, /data-open-turn-audit="turn-1"/);
   assert.match(html, /data-open-turn-conversation="chat"/);
   assert.match(html, /aria-label="查看审计：整理资料 · 17:13"/);
@@ -314,7 +320,6 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   assert.doesNotMatch(html, /此前 2 轮已完成对话/);
   assert.doesNotMatch(html, /丢弃 12 条/);
   assert.doesNotMatch(html, /dispatch_task/);
-  assert.match(html, /data-log-run="run-12345678"/);
   assert.match(html, /已整理。/);
   // The owner's request is a right-hand bubble and the answer is the left-hand
   // section; the two voices no longer share one clamped title line.
@@ -371,14 +376,15 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   assert.match(cancelled, /已取消/);
   assert.doesNotMatch(cancelled, /log-badge--ok/);
 
-  // A hidden run stays evidence of the dispatch without becoming a dead button.
-  // 隐藏的 Run 仍是派发的证据，但不会变成失效按钮。
+  // A hidden run is not a row either: the conversation no longer lists runs,
+  // so there is no dead button and no "hidden" placeholder to invent.
+  // 隐藏的 Run 也不再是行：对话不再列 Run，因此没有失效按钮，也不需要编造"已隐藏"占位。
   const hidden = markup({
     id: "chat", kind: "conversation", messages: [],
     turns: [{ id: "t2", kind: "turn", input: "派发", status: "completed", startedAt: "2026-11-18T10:00:00.000Z", journaled: true, compactions: [], toolCalls: [], spawnedRuns: [{ id: "run-hidden", hidden: true }], priorTurns: 0, priorTurnsOmitted: 0, reply: "已派发。" }],
   });
-  assert.match(hidden, /任务已隐藏/);
-  assert.doesNotMatch(hidden, /data-log-run="run-hidden"/);
+  assert.doesNotMatch(hidden, /data-log-run=/);
+  assert.doesNotMatch(hidden, /任务已隐藏/);
 
   // A failed turn says why and what to do, and does not claim a direct answer.
   // 失败的回合说明原因与下一步，不会声称自己直接回答。
@@ -481,23 +487,33 @@ test("the transcript separates a turn, a task update, a child run and a record b
   // 任务更新携带自己的 Run 状态，但没有回合眉线：失败或等待中的更新不会看起来只是换了个标签的回合。
   assert.match(html, /data-log-kind="work" data-log-status="waiting_review"/);
   assert.equal((html.match(/class="log-entry-kicker"/g) || []).length, 1);
-  // A dispatched run is a row with a status marker; the whole row stays the
-  // control. The CSS renders it as a hairline on a rail, not a card.
-  // 派发的 Run 是带状态标记的行；整行仍是控件。CSS 把它画成竖线上的细线，而不是卡片。
-  assert.match(html, /data-run-status="completed"/);
-  assert.match(html, /class="log-run-status">完成/);
+  // A dispatched run is not a row in the turn log: runs are read in the audit,
+  // and the turn keeps one 依据 line naming them.
+  // 派发的 Run 不再作为回合日志里的行：Run 在审计里读，回合只保留一行点名它们的"依据"。
+  assert.doesNotMatch(html, /data-run-status="completed"/);
+  assert.match(html, /派生任务 1 个/);
   // The level grammar must live in the final CSS layer: ruled turns, a ruled
-  // note, a status dot on run rows and top-rule records. The turn's identity
-  // strip pins only within its own section, and records flatten only after the
-  // turn log — a task record keeps its card grouping.
-  // 层级语法必须落在最终 CSS 层：分隔的回合、带竖线的页边注、Run 行的状态圆点与顶线记录。
-  // 回合的身份条只在自身章节内吸附；记录只在回合日志之后变平——任务记录保留卡片分组。
+  // note and top-rule records. The turn's identity strip pins only within its
+  // own section, and records flatten only after the turn log — a task record
+  // keeps its card grouping.
+  // 层级语法必须落在最终 CSS 层：分隔的回合、带竖线的页边注与顶线记录。回合的身份条只在
+  // 自身章节内吸附；记录只在回合日志之后变平——任务记录保留卡片分组。
   assert.match(css, /\.log-entry\s*\{[^}]*border-top:\s*1px solid var\(--line\)/);
   assert.match(css, /\.log-entry--work\s*\{[^}]*border-left:\s*2px solid/);
-  assert.match(css, /\.log-run-status::before/);
   assert.match(css, /\.turn-log\s*~\s*\.activity-card\s*\{[^}]*border-top:\s*1px solid/);
   assert.match(css, /\.log-entry-head\s*\{[^}]*position:\s*sticky/);
   assert.match(css, /\.log-entry:not\(\.log-entry--work\):has\(\+ \.log-entry--work\)/);
+  // The answer is the section: with only 结果 left, the 52 px label gutter would
+  // indent every reply and name the obvious. The final layer collapses it to one
+  // column, hides the label, sets the reply at reading size and closes the
+  // section with the 依据 footer and a right-end audit control.
+  // 回答就是章节：只剩"结果"时，52px 标签栏只会缩进每段回复并给显而易见的东西贴标签。
+  // 最终层把它收成一列、隐藏标签、用阅读字号排回复，并以"依据"页脚与行尾审计入口收束章节。
+  assert.match(css, /\.log-step\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)[^}]*gap:\s*0/);
+  assert.match(css, /\.log-step-label\s*\{[^}]*display:\s*none/);
+  assert.match(css, /\.log-reply\s*\{[^}]*font-size:\s*14\.5px[^}]*line-height:\s*1\.75/);
+  assert.match(css, /\.log-basis\s*\{[^}]*padding-top:\s*10px[^}]*border-top:\s*1px solid var\(--line\)/);
+  assert.match(css, /\.log-basis-open\s*\{[^}]*margin-left:\s*auto/);
 });
 
 test("a finished task record keeps its verification, evidence and artifacts", async () => {
@@ -697,27 +713,28 @@ test("decisions are confirmed on the task record that owns the run", async () =>
   // 等待中的决定固定在面板顶部，而不是留在日志末尾。
   assert.match(app, /function decisionDock\(session\)/);
   assert.match(app, /\$\{decisionDock\(session\)\}/);
-  // The sidebar has one top-level kind: a conversation row with its dispatched
-  // tasks nested. A waiting task is promoted into its own section and flagged
-  // in the row; the main conversation is a navigation entry, and runs with no
-  // conversation live under 定时/自动. The audit's record list stays tasks-only
-  // because a conversation is not a Run.
-  // 侧栏顶层只有一种行：对话行与其派发任务的子行。等待中的任务提升到独立分区并在行内标记；
-  // 主对话是导航入口，没有对话的 Run 放在"定时/自动"下。审计的记录列表仍只列任务，
+  // The sidebar is conversations only: no nested run rows, no child-group
+  // disclosures, no 定时/自动 task section. A task waiting for the owner is the
+  // one promoted row; dispatched runs are read in the audit, whose record list
+  // stays tasks-only because a conversation is not a Run.
+  // 侧栏只列对话：没有嵌套的 Run 行、没有子行折叠区、没有"定时/自动"任务分区。唯一被提升的
+  // 行是等待所有者决定的任务；派发的 Run 在审计里读，而审计的记录列表仍只列任务，
   // 因为对话不是 Run。
   assert.match(app, /const conversations = rawSessions\.filter\(\(session\) => session\.kind === "conversation"\)/);
   assert.match(app, /const tasks = rawSessions\.filter\(\(session\) => session\.kind !== "conversation"\)/);
-  assert.match(app, /data-child-group="\$\{escape\(block\.session\.id\)\}"/);
-  assert.match(app, /class="session-children"/);
+  assert.doesNotMatch(app, /data-child-group=/);
+  assert.doesNotMatch(app, /class="session-children"/);
+  assert.doesNotMatch(app, /autoBlock/);
   assert.match(app, /session-group-needs/);
   assert.match(app, /session-group-main/);
-  assert.match(app, /session-group-auto/);
   assert.match(app, /session-flag-approval/);
   assert.match(app, /session-flag-review/);
   assert.match(app, /needs-you/);
-  // The conversation row no longer carries a species badge; nesting says what
-  // a child is. 对话行不再携带种类徽章；嵌套本身说明子行是什么。
+  // A conversation row carries no species badge and no task count; the row is
+  // the whole story.
+  // 对话行不再携带种类徽章，也不带任务计数；这一行就是全部。
   assert.doesNotMatch(app, /class="session-kind"/);
+  assert.doesNotMatch(app, /taskCountLabel/);
   assert.match(app, /const records = sessions\.filter\(\(session\) => session\.kind !== "conversation"\)/);
   assert.doesNotMatch(index, /id="open-conversation"/);
   // The sidebar has one talk entry: 新请求 starts a routed request, and the
@@ -736,8 +753,8 @@ test("decisions are confirmed on the task record that owns the run", async () =>
   assert.match(css, /\.session-flag/);
   assert.match(css, /\.session-item\.is-attention/);
   const auditCss = await read("audit.css");
-  assert.match(auditCss, /\.session-item\.is-child/);
-  assert.match(auditCss, /\.session-children/);
+  assert.doesNotMatch(auditCss, /\.session-item\.is-child/);
+  assert.doesNotMatch(auditCss, /\.session-children/);
 
   const approvalStart = app.indexOf("function approvalMarkup(session)");
   const approvalEnd = app.indexOf("function reviewMarkup", approvalStart);

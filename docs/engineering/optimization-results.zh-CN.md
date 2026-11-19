@@ -21,7 +21,6 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--失败轨迹携带步骤-instructions)；
   [执行链路](optimizations.zh-CN.md#2026-11-19--失败轨迹携带步骤-instructions)。
 
-
 ## 2026-11-19 —— 首次发送的 no_progress 显示摘要与下一步
 
 - **主张：** failed SSE 事件携带 `errorSummary` 与 `errorGuidance`，首次发送失败卡渲染它们并
@@ -34,6 +33,37 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--首次发送失败显示所有者可读的原因而不是原始循环错误)；
   [执行链路](optimizations.zh-CN.md#2026-11-19--首次发送失败显示所有者可读的原因)。
 
+## 2026-11-19 —— 侧栏每个对话一行，而不是每个 Run 一行
+
+- **主张：** 一个对话派发的 Run 不再出现在侧栏。列表是对话（主对话固定在前，然后今天/更早）
+  加上每个等待所有者决定的任务一行；运行中、已完成或没有对话的 Run 都没有行。同样的 Run
+  在 设置 → 审计与轨迹 里仍可一键打开，对话保留一行"依据"点明派发了几个。
+- **证据：** 侧栏沙箱用"运行中任务 + 等待任务 + 主对话任务 + 定时任务"的夹具渲染：三个非
+  等待的 Run 产出 **0** 行 `data-test-session`（变更前各 1 行），等待任务在
+  `session-group-needs` 下恰好 **1** 行，计数从"对话 + Run"降为"对话 + 等待任务"。
+  `test/ui-structure.test.ts` 在源码里找不到 `session-children`、`data-child-group`、
+  `autoBlock` 与 `data-log-run`，回合日志没有 产物 块。`npm run typecheck` exit 0、
+  `npm run gate` PASS、baseline 不变、`npm test` **943/944**（唯一失败来自另一个会话的
+  `.claude/launch.json`，与本次变更无关）。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--侧栏只列对话run-的细节放在审计里)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--侧栏只列对话回合派发的-run-在审计里读)。
+
+## 2026-11-19 —— 一个 clone home 一个运行时，窗口直接附着而不再空等
+
+- **主张：** 只要有守护存活，打包窗口就不再显示"launchd 没有在 60 秒内发布端点"。
+  `npm run desktop:dev` 在会话期间把常驻 LaunchAgent bootout；同一 home 上的第二个
+  companion 会在重放 Journal、声明回合台账或覆盖端点之前拒绝启动。
+- **证据：** `node --experimental-strip-types --test test/companion-singleton.test.ts`
+  ——变更前 **3/3 失败**（第二个 sidecar 在独立进程中启动、同进程第二个服务器启动、死属主
+  的锁什么也挡不住）；变更后 **3/3 通过**，子进程以非零退出并打印
+  `Another Clone AI runtime (pid …) already owns <home>`，端点文件逐字节不变，陈旧锁被
+  回收。变更前的现场观察：launchd 46832 与开发 sidecar 53933 同时存活，端点与回合台账
+  都指向 53933。`npm run typecheck` 退出 0，`npm run gate` PASS（基线不变）；
+  `npm test` 940/944，四个失败位于另一个会话正在编辑的文件中，且都不读取本次变更。
+  修复后的现场：开发会话运行期间 LaunchAgent 不在 launchd 域中，恰好一个 sidecar
+  持有端点与回合台账（`/api/health` 200）；停止驱动会恢复任务并启动一个新守护。
+- **链接：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--每个-clone-home-只跑一个运行时开发模式先卸载-launchagent第二个-sidecar-拒绝启动)、
+  [执行链路](optimizations.zh-CN.md#2026-11-19--开发模式与-launchd-不再在同一个-clone-home-上各跑一个-sidecar)。
 
 ## 2026-11-19 —— 网关声明的强度档位会真正送到 Provider，而不是 400
 
