@@ -27,6 +27,7 @@ import { MAIN_AGENT_HISTORY_TURNS } from "./main-agent/native-runtime.ts";
 import { MainAgentBusyError } from "./main-agent/prompt-lock.ts";
 import { MainAgentCapacityError } from "./main-agent/main-agent-slots.ts";
 import { conversationIdOf, MAIN_AGENT_DEFAULT_CONVERSATION_ID, parseConversationId } from "./main-agent/conversation.ts";
+import { routeConversation, type RouteContext } from "./main-agent/conversation-router.ts";
 import { mainAgentRunConversations } from "./main-agent/run-triggers.ts";
 import {
   authorizeCompanionRequest,
@@ -526,7 +527,39 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
    * `memory.candidate.requested` 转成可审核的候选（未配置时则记录为零候选提炼）。这两件事
    * 正是“分身会注意到事情、会学习”的来源，因此它们属于定时器，而不是属于某个用户动作。
    */
+  /**
+   * Close aborts a maintenance pass that is only *waiting* for a lock. The
+   * extraction lock has no acquisition deadline, and the first pass now starts
+   * after readiness, so without this a held lock would make SIGTERM/SIGINT wait
+   * for a lock release that may never come, until the shell SIGKILLs the
+   * process. The controller does not abort a miner call already holding the
+   * lock; it stops the wait and the rest of the pass.
+   * 关停会中止只在对锁等待中的维护轮。提炼锁没有获取截止时间，而首轮维护现在在就绪之后
+   * 才开始，因此没有它时，被持有的锁会让 SIGTERM/SIGINT 等一个可能永远不会到来的释放，
+   * 直到外壳 SIGKILL 进程。该控制器不会中止已持有锁的提炼调用；它停止等待与后续步骤。
+   */
+  const shutdown = new AbortController();
   const runMaintenance = async (): Promise<void> => {
+    if (shutdown.signal.aborted) return;
+    // The reconcile pass runs before the scan and settles what landed since
+    // the last tick — commitments served by verified runs, occurrences that
+    // passed unsatisfied. The scan then reads the advanced due dates, so a
+    // settled Friday proposes next Friday's card instead of re-proposing a
+    // past one. Order is the loop: observe, settle, then look for new diffs.
+    // 收敛扫描先于机会扫描运行，结算自上次 tick 以来落地的东西——被已验证 Run 服务过的
+    // 承诺、未被满足而错过的周期。机会扫描随后读到推进后的到期时间，因此被结算的周五
+    // 提出的是下一个周五的卡片，而不是重复提出已过去的那个。顺序即环路：观察、结算、
+    // 再找新的差异。
+    await reconcileCommitments(journal).catch(() => undefined);
+    // The scan comes before every lock-taking step. It is the one piece of
+    // maintenance the owner sees on first paint (the opportunity and attention
+    // strips), and both the extraction lock and the governance lock have no
+    // acquisition deadline: putting it after either would let another process
+    // keep the cards empty for as long as it holds the lock.
+    // 机会扫描放在每一个会取锁的步骤之前。它是所有者首屏就能看到的维护产出（机会条与注意力
+    // 条），而提炼锁与治理锁都没有获取截止时间：把它放在任一锁之后，都会让别的进程持锁期间
+    // 卡片一直为空。
+    await opportunityService.scanAndRecord().catch(() => undefined);
     // One-time: candidates the retired deterministic miner wrote are copies of
     // their task objectives, not memories. Rejecting them once, with a reason,
     // stops the review list from asking about work orders forever. A failure is
@@ -543,32 +576,6 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         });
       }
     }
-    // The reconcile pass runs before the scan and settles what landed since
-    // the last tick — commitments served by verified runs, occurrences that
-    // passed unsatisfied. The scan then reads the advanced due dates, so a
-    // settled Friday proposes next Friday's card instead of re-proposing a
-    // past one. Order is the loop: observe, settle, then look for new diffs.
-    // 收敛扫描先于机会扫描运行，结算自上次 tick 以来落地的东西——被已验证 Run 服务过的
-    // 承诺、未被满足而错过的周期。机会扫描随后读到推进后的到期时间，因此被结算的周五
-    // 提出的是下一个周五的卡片，而不是重复提出已过去的那个。顺序即环路：观察、结算、
-    // 再找新的差异。
-    await reconcileCommitments(journal).catch(() => undefined);
-    // Drain every pending job: a completed run must not wait for the next tick
-    // to become something the owner can review, and a job with no miner must
-    // record its zero-candidate extraction so the loop does not retry it
-    // forever.
-    // 排空所有待处理任务：已完成的 Run 不应等到下一次 tick 才变成所有者可审核的东西；
-    // 没有提炼器的任务必须记录零候选提炼，使循环不会永远重试它。
-    try {
-      await assembly.memory.rebuild();
-      for (let drained = 0; drained < 50 && assembly.memory.hasPending(); drained += 1) {
-        await assembly.memory.processNext();
-      }
-    } catch (error: unknown) {
-      logJson("error", "Memory extraction failed; the job remains pending", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
     // Expired memories are already hidden from recall; archiving them makes the
     // state honest and journals the reason. 过期记忆召回时已被隐藏；归档让状态与事实一致并记录原因。
     // The improvement sweep runs before the idle sweep so a memory the loop is
@@ -579,21 +586,42 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         logJson("error", "Improvement sweep failed", { error: error instanceof Error ? error.message : String(error) });
       });
     }
-    if (assembly.conversationMemory !== undefined) {
-      await assembly.conversationMemory.processDue().catch((error: unknown) => {
-        logJson("error", "Conversation memory extraction failed; the batch remains pending", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    }
     await memoryGovernance.archiveIdle().catch((error: unknown) => {
       logJson("error", "Memory idle sweep failed", { error: error instanceof Error ? error.message : String(error) });
     });
     await memoryGovernance.expireDue().catch((error: unknown) => {
       logJson("error", "Memory expiry sweep failed", { error: error instanceof Error ? error.message : String(error) });
     });
-    await opportunityService.scanAndRecord().catch(() => undefined);
     await badCaseLog.appendNew(await journal.list()).catch(() => undefined);
+    if (shutdown.signal.aborted) return;
+    // Drain every pending job: a completed run must not wait for the next tick
+    // to become something the owner can review, and a job with no miner must
+    // record its zero-candidate extraction so the loop does not retry it
+    // forever. This is the only step whose wait can be unbounded, so it runs
+    // last; the signal ends the wait on shutdown and the job stays pending.
+    // 排空所有待处理任务：已完成的 Run 不应等到下一次 tick 才变成所有者可审核的东西；
+    // 没有提炼器的任务必须记录零候选提炼，使循环不会永远重试它。这是唯一可能无限等待的
+    // 步骤，因此放在最后；关停信号结束等待，任务保持待处理。
+    try {
+      await assembly.memory.rebuild();
+      for (let drained = 0; drained < 50 && assembly.memory.hasPending(); drained += 1) {
+        if (shutdown.signal.aborted) return;
+        await assembly.memory.processNext(undefined, { signal: shutdown.signal });
+      }
+    } catch (error: unknown) {
+      if (shutdown.signal.aborted) return;
+      logJson("error", "Memory extraction failed; the job remains pending", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (assembly.conversationMemory !== undefined) {
+      await assembly.conversationMemory.processDue({ signal: shutdown.signal }).catch((error: unknown) => {
+        if (shutdown.signal.aborted) return;
+        logJson("error", "Conversation memory extraction failed; the batch remains pending", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
   };
   let maintenanceInFlight: Promise<void> | undefined;
   let restatedCandidatesRetired = false;
@@ -602,11 +630,20 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     maintenanceInFlight = runMaintenance().finally(() => { maintenanceInFlight = undefined; });
     return maintenanceInFlight;
   };
-  await startMaintenance();
+  const noteMaintenanceFailure = (error: unknown): void => logJson("error", "Maintenance failed", {
+    error: error instanceof Error ? error.message : String(error),
+  });
+  // The first pass runs after the endpoint is published, not before the server
+  // listens: it takes the cross-process memory-extraction lock, whose
+  // acquisition has no deadline. Waiting for it here made one held lock — a
+  // second sidecar mid-extraction, or a miner waiting on a model — look like an
+  // app that never finishes starting: the daemon was alive but never listened,
+  // and the window stayed on 正在连接.
+  // 首轮维护在端点发布之后运行，而不是在服务器监听之前：它会获取跨进程的记忆提炼锁，而该锁
+  // 没有获取截止时间。在这里等待它，使一次持锁——另一个 sidecar 正在提炼，或提炼器正等模型——
+  // 表现得像永远启动不完：Daemon 活着但从不监听，窗口停在"正在连接"。
   const maintenance = setInterval(() => {
-    void startMaintenance().catch((error: unknown) => logJson("error", "Maintenance failed", {
-      error: error instanceof Error ? error.message : String(error),
-    }));
+    void startMaintenance().catch(noteMaintenanceFailure);
   }, 5 * 60_000);
   maintenance.unref();
 
@@ -692,6 +729,12 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const url = `http://${localHost === "::1" ? "[::1]" : localHost}:${address.port}`;
   const endpointStartedAt = new Date().toISOString();
   await persistCompanionEndpoint(dataDirectory, url, endpointStartedAt);
+  // The window can connect now. Periodic work settles the twin's state and may
+  // take a while — or wait on a lock — so it runs behind the published endpoint
+  // instead of in front of it.
+  // 窗口现在可以连接了。周期性工作会收敛分身状态，可能耗时、也可能等锁；因此它在已发布的
+  // 端点之后运行，而不是挡在它前面。
+  void startMaintenance().catch(noteMaintenanceFailure);
   void whatsappSetup.initialize().catch((error: unknown) => {
     logJson("error", "WhatsApp bridge initialization failed", {
       error: error instanceof Error ? error.message : String(error),
@@ -708,6 +751,10 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     close: async () => {
       clearInterval(maintenance);
       if (reportTimer !== undefined) clearInterval(reportTimer);
+      // A pass waiting for the extraction lock must not hold shutdown: abort
+      // the wait first, then let the pass unwind before the stores close.
+      // 等待提炼锁的维护轮不得拖住关停：先中止等待，让维护轮在存储关闭前解除。
+      shutdown.abort();
       const serverClosed = new Promise<void>((resolve, reject) => {
         server.close((error) => (error === undefined ? resolve() : reject(error)));
       });
@@ -1958,6 +2005,36 @@ async function handleRequest(
     }
     return;
   }
+  if (request.method === "POST" && url.pathname === "/api/main-agent/route") {
+    const body = await readJsonBody(request);
+    const text = normalizeMainAgentRequestText(body.text);
+    const turnId = typeof body.turnId === "string" && body.turnId.trim().length > 0
+      ? body.turnId.trim()
+      : randomUUID();
+    let routeContext: RouteContext | undefined;
+    if (body.context !== undefined) {
+      const record = asRecord(body.context);
+      const kind = record.kind;
+      const id = typeof record.id === "string" ? record.id.trim() : "";
+      if ((kind !== "task" && kind !== "conversation") || id.length === 0 || id.length > 200) {
+        sendJson(response, 400, { error: "context must be {kind: \"task\" or \"conversation\", id}." });
+        return;
+      }
+      routeContext = { kind, id };
+    }
+    // Routing is a decision, not a turn: it takes no Main Agent lock, runs no
+    // tool, and journals its reason before the turn starts.
+    // 路由是一个决定，不是一个回合：不取 Main Agent 锁、不运行工具，并在回合开始前写入理由。
+    const route = await routeConversation({
+      dataDirectory: context.dataDirectory,
+      text,
+      turnId,
+      ...(routeContext === undefined ? {} : { context: routeContext }),
+    });
+    sendJson(response, 200, route);
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/main-agent/stream") {
     const body = await readJsonBody(request);
     const conversation = parseConversationId(body.conversationId);
@@ -3131,6 +3208,10 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
   const conversationId = conversationIdOf(
     typeof triggerPayload.conversationId === "string" ? triggerPayload.conversationId : undefined,
   );
+  // Only a run the Main Agent proposed has a dispatcher to show. A task created
+  // by a desktop request has no Main Agent conversation.
+  // 只有 Main Agent 提案的 Run 才有可显示的派发者。桌面请求创建的任务没有 Main Agent 对话。
+  const dispatchedBy = triggerPayload.source === "main-agent" ? conversationId : undefined;
   const activeStep = run.activeStepId === undefined ? undefined : plan?.steps.find((step) => step.id === run.activeStepId);
   const approvals = run.status === "waiting_approval" && run.activeStepId !== undefined
     ? [{
@@ -3180,6 +3261,7 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
   return {
     ...toSessionSummary(run, tasks, describeRunFailure(run, runEvents).reason),
     conversationId,
+    ...(dispatchedBy === undefined ? {} : { dispatchedBy }),
     query,
     evidenceCount,
     plan: plan === undefined
@@ -3871,6 +3953,8 @@ interface SessionSummary {
   preview: string;
   /** The conversation that asked for this run; the task record uses it to route a follow-up. 请求该 Run 的对话；任务记录用它来路由后续消息。 */
   conversationId?: string;
+  /** The Main Agent conversation that dispatched this run, when it was a Main Agent proposal. 派发该 Run 的 Main Agent 对话（当它由 Main Agent 提案时）。 */
+  dispatchedBy?: string;
   /** Set for a run derived from a conversation: it is a task of that chat, not another chat. 由对话派生出的 Run 会带此字段：它是该对话的任务，而不是另一个对话。 */
   parentId?: string;
   /** On the conversation: how many task runs belong to it. 对话上：属于它的任务数。 */

@@ -457,6 +457,8 @@ test("a derived task belongs to the conversation, and hiding the chat hides it t
     assert.equal(before.sessions.some((session) => session.kind === "conversation"), false);
     const child = before.sessions.find((session) => session.id === run.id);
     assert.equal(child?.conversationId, "main-agent-conversation", "the run is a task of the conversation that spawned it");
+    const runView = await (await companionFetch(url, token, `/api/sessions/${run.id}`)).json() as { dispatchedBy?: string };
+    assert.equal(runView.dispatchedBy, "main-agent-conversation", "the task record names the Main Agent that dispatched it");
     assert.deepEqual(before.deletedConversations, []);
 
     const hidden = await companionFetch(url, token, "/api/sessions/main-agent-conversation", { method: "DELETE" });
@@ -765,4 +767,55 @@ test("a bare run id is refused as a conversation id", async (t) => {
     body: JSON.stringify({ text: "hello", conversationId: "3f7c2c26-1f6b-4c3e-9f4d-2a1b3c4d5e6f" }),
   });
   assert.equal(response.status, 400);
+});
+
+test("a new request is routed to an existing or a new Main Agent", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const at = new Date().toISOString();
+  await appendMainAgentTurnRecord(dataDirectory, {
+    id: "route-turn",
+    text: "整理报告",
+    status: "completed",
+    startedAt: at,
+    completedAt: at,
+    reply: "已整理。",
+    conversationId: "conversation-a",
+  });
+
+  const continued = await companionFetch(url, token, "/api/main-agent/route", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "继续刚才的报告", context: { kind: "conversation", id: "conversation-a" } }),
+  });
+  assert.equal(continued.status, 200);
+  const continuedBody = await continued.json() as { decision: string; conversationId: string; source: string };
+  assert.equal(continuedBody.decision, "continue");
+  assert.equal(continuedBody.conversationId, "conversation-a");
+  assert.equal(continuedBody.source, "rule");
+
+  const fresh = await companionFetch(url, token, "/api/main-agent/route", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "做一个完全不同的东西" }),
+  });
+  assert.equal(fresh.status, 200);
+  const freshBody = await fresh.json() as { decision: string; conversationId: string };
+  assert.equal(freshBody.decision, "new");
+  assert.match(freshBody.conversationId, /^conversation-/);
+  assert.notEqual(freshBody.conversationId, "conversation-a");
+
+  const invalid = await companionFetch(url, token, "/api/main-agent/route", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "hello", context: { kind: "other", id: "x" } }),
+  });
+  assert.equal(invalid.status, 400);
+
+  const journal = createJournalStore(dataDirectory);
+  try {
+    const routed = (await journal.list()).filter((event) => event.type === "conversation.routed");
+    assert.equal(routed.length, 2);
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
 });

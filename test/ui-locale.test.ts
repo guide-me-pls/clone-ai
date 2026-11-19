@@ -16,8 +16,8 @@ test("English and Chinese chrome tables cover the same keys", () => {
     assert.ok(zh[key].length > 0, `zh-CN empty ${key}`);
     assert.ok(en[key].length > 0, `en empty ${key}`);
   }
-  assert.equal(zh["new-session"], "新建任务");
-  assert.equal(en["new-session"], "New task");
+  assert.equal(zh["new-session"], "新请求");
+  assert.equal(en["new-session"], "New request");
 });
 
 test("the desktop HTML marks chrome so config.locale can replace it", async () => {
@@ -44,6 +44,20 @@ test("the desktop HTML marks chrome so config.locale can replace it", async () =
   assert.match(js, /function saveWhatsAppBinding/);
   assert.match(js, /function plainPreview/);
   assert.doesNotMatch(js, /agent-auto-mode|data-agent-auto-mode/);
+});
+
+test("the Agent page shows the detected gateway and a read-only worker catalog", async () => {
+  const js = await readFile(join(process.cwd(), "apps/desktop/ui/app.js"), "utf8");
+  // Magpie's loopback endpoint is discovered and pinned by the apply action;
+  // there is no manual endpoint or credential form.
+  // Magpie 的回环端点由应用动作发现并固定；页面上没有手填端点或凭据表单。
+  assert.doesNotMatch(js, /config-base-url|config-api-key|data-endpoint-save/);
+  // Every worker is on, so there is no provider binding or enable switch to render.
+  // 每个 Worker 都已启用，因此没有 Provider 绑定或启用开关可渲染。
+  assert.doesNotMatch(js, /data-agent-provider|data-agent-toggle/);
+  assert.match(js, /const agentRows = settings\.agents\.map/);
+  assert.match(js, /t\("workers-enabled"\)/);
+  assert.match(js, /t\("gateway-refresh"\)/);
 });
 
 test("the shared component library exposes the primitives used by the UI", async () => {

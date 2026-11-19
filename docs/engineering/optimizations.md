@@ -31,6 +31,157 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — Agent settings show workers, not wiring
+
+- **Goal / hypothesis:** the Agent page exposed controls for states that no
+  longer vary: a manual endpoint/API-key form next to an auto-discovered
+  gateway, a one-row provider list, and per-role provider selects and enable
+  switches even though the only provider is `native` and every role defaults to
+  enabled. Replacing them with a read-only worker catalog should make the page
+  describe what runs instead of asking the owner to configure it.
+- **Trade-off:** [The Agent settings page is a catalog, not a control
+  panel](../architecture/trade-offs.md#2026-11-19--the-agent-settings-page-is-a-catalog-not-a-control-panel).
+- **Change:** `apps/desktop/ui/app.js` — removed the endpoint form and its
+  save/clear handlers, the local-provider list and install/access controls, and
+  the role provider select/switch; the remaining worker rows show role,
+  description and purpose. `src/desktop/ui-locale.ts` — retitled the section to
+  Workers, added `workers-enabled`, removed the keys that only served the
+  deleted controls, and dropped stale Pi wording from the gateway note.
+  `apps/desktop/ui/components.css` — removed the endpoint, provider-path and
+  role-select rules. `test/ui-locale.test.ts` — asserts the removed controls
+  stay absent and the worker catalog renders.
+- **Eval:** `node --experimental-strip-types --test test/ui-locale.test.ts`.
+  Before the change the new test fails on `config-base-url` (the form is still
+  rendered); after the change it passes. `npm test` **848/848**, `npm run
+  typecheck` exit 0, `npm run gate` **PASS**. Browser preview of the agents
+  panel: 0 inputs, 1 select (the gateway model picker), 0 provider/enable
+  controls, and 4 worker rows.
+- **Execution chain:** one working agent (this session), direct edits in the
+  checkout; no subagents or benchmark runs. The page structure was read from
+  `app.js`; the provider and role defaults were verified against
+  `src/workers/provider-catalog.ts`, `src/config/worker-settings.ts`, and the
+  live `~/.clone/settings.json`. A second session was writing unrelated
+  routing/audit changes in the same checkout during this work; the edits shared
+  `app.js` and `ui-locale.ts` but touched disjoint regions, and the two stale
+  `new-session` assertions were reconciled with that session's `新请求` rename
+  so the suite could pass. No retries or failures of this change.
+- **Pros:** the diff is local to the UI, the locale tables stay symmetric, and
+  the test pins the absence of the deleted controls rather than a screenshot.
+- **Cons / next time:** the test is textual, so it proves the wiring is gone
+  but not that the rendered rows look right; a browser pass is still needed for
+  layout. The backend `PATCH /api/settings/agents` and `/api/config` endpoint
+  fields remain for older clients, which keeps a little dead surface.
+- **Reversal condition:** restore the matching control if a second execution
+  provider is registered, if roles need independent disabling for cost or
+  policy, or if Magpie cannot discover an endpoint the owner needs and manual
+  entry becomes the only way to point the app at a model gateway.
+
+### 2026-11-19 — Readiness is published before the first maintenance pass
+
+- **Goal / hypothesis:** the desktop window waits for
+  `companion-endpoint.json`, which the daemon writes only after binding its
+  port. The first maintenance pass ran before that point and takes the
+  cross-process memory-extraction lock, whose acquisition has no deadline. If
+  the pass runs after the endpoint is published instead, a slow or blocked pass
+  can no longer keep the window on 正在连接.
+- **Trade-off:** [publish readiness before the first maintenance
+  pass](../architecture/trade-offs.md#2026-11-19--publish-readiness-before-the-first-maintenance-pass).
+- **Change:** `src/companion-server.ts` — removed `await startMaintenance()`
+  from the pre-listen path; the first pass starts fire-and-forget right after
+  `persistCompanionEndpoint`, with failures logged through `noteMaintenanceFailure`.
+  Inside the pass, lock-independent work now runs before the extraction drain:
+  reconcile → opportunity scan → legacy candidate cleanup → improvement sweep →
+  idle/expiry sweeps → bad-case report, then `rebuild`/`processNext` and
+  conversation memory last. A `shutdown` AbortController aborts a pass that is
+  only *waiting* for the extraction lock; `close()` aborts it before awaiting
+  the pass. `src/core/workspace-lock.ts` — `run`, `acquireExternalLock` and
+  `waitForLegacyLock` accept an AbortSignal and check it on each 50 ms retry;
+  an operation that already holds the lock is never cancelled.
+  `src/memory/memory-pipeline.ts` and
+  `src/memory/conversation-memory-pipeline.ts` pass the signal through
+  `processNext`/`processJob`/`processDue`. `test/companion-config-api.test.ts`
+  now waits for the one-time legacy-candidate cleanup instead of assuming it
+  finishes before `startCompanionServer` returns. New tests:
+  `test/companion-startup-readiness.test.ts` — readiness under a held lock, an
+  opportunity card present while it is held, and `close()` under 2 s while it is
+  still held.
+- **Eval:** `node --experimental-strip-types --test
+  test/companion-startup-readiness.test.ts` — final two-test run: **62.7 ms**
+  and **18.9 ms**, both green. Before the readiness change the first test fails
+  in **4.04 s** with `startCompanionServer did not publish readiness while the
+  extraction lock was held` (the test allows 4 s). The scan and shutdown cases
+  were verified red against the first version of the change by the independent
+  review's probes: `/api/opportunities` returned **0** cards while the lock was
+  held, and `close()` was still pending after **2 s**; both pass under the
+  final code. Final full suite **848/848** (the tree also carries concurrent
+  sessions' changes); both new tests pass; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**.
+  Measurement harness on a copy of the real clone home with eight
+  `memory.candidate.requested` pending (the `extracted` and `proposed` rows
+  removed) and `BEGIN IMMEDIATE` held on
+  `<home>/memory-extraction-lock/.clone/workspace-execution.sqlite3`:
+  `node /tmp/clone-startup-measure.mjs /tmp/clone-home-hang-tJjQVr 15000` — no
+  `CLONE_AI_READY` within 15 s before; **178 ms** and **170 ms** across two
+  runs after. Control with the lock free: **246 ms** (before), close to the
+  post-change numbers. Live journal copy: `~/.clone` (8 requests, 1.2 MB
+  journal). Browser against the isolated server while the lock was still held:
+  `#startup-screen` and `.app-shell` both reached `ready`; the initial 15 API
+  calls started at 70 ms and the last finished at 282 ms, all HTTP 200 — no
+  request handler waited for the maintenance pass.
+- **Benchmark run:** none — deterministic tests and a local startup
+  measurement; no provider, dataset, or scoring parameters.
+- **Execution chain:** observed the live symptom first (launchd job
+  `ai.clone.companion`, PID 80762 alive from 2026-11-18 17:53:26 to
+  2026-11-19 09:45 with no listening socket and no endpoint file; the desktop
+  window showed 正在连接). Read `apps/desktop/macos/main.swift` (the attach
+  loop and retries), `src/companion-server.ts` (the pre-listen order),
+  `src/core/workspace-lock.ts` (unbounded `BEGIN IMMEDIATE` retry) and
+  `src/memory/memory-pipeline.ts` (`processJob` takes that lock). Wrote the
+  trade-off entry, then wrote the regression test and watched it fail on the
+  unchanged code. Moved the pass after `persistCompanionEndpoint`, ran the test
+  green, updated the legacy-cleanup test, and ran targeted tests, the then-green
+  full suite, typecheck and gate. Then ran an independent three-lens review
+  workflow (correctness, eval validity, documentation; three agents, 234 tool
+  calls, 138,869 subagent tokens, 11.3 min). It found two real gaps: the
+  opportunity scan sat behind the extraction drain (probe: 0 cards while
+  locked), and `close()` hung on the lock wait (probe: pending after 2 s). Added
+  the scan-before-drain ordering, the abortable lock wait, a second test pinning
+  both, pinned `CLONE_AI_MEMORY_MINING=off` for the extraction-marker assertion,
+  and cleared the readiness timer on the rejection path. Re-ran: both tests
+  green, typecheck 0, gate PASS.
+  Failures and retries: the first reproduction deleted only
+  `memory.candidate.extracted`, but `processedRuns` treats a proposal with no
+  extraction marker as processed, so the server started in 202 ms; deleting
+  `memory.candidate.proposed` as well produced the pending job and the 15 s
+  hang. The legacy-cleanup test failed after the change until it waited for the
+  background pass. The review's two major findings required a second
+  implementation round. No provider or model call was made by the work itself;
+  cost: none. Duration: roughly 35 minutes end to end, including the 11-minute
+  review.
+- **Pros:** the window no longer depends on unbounded background work; the
+  opportunity and attention surfaces are current even while the extraction lock
+  is held; shutdown remains graceful because the wait is abortable; the
+  red-first tests pin the exact failures; the review-before-ship loop caught
+  both second-order defects; the final full suite is **848/848**.
+- **Cons / next time:** the abort covers the lock wait, not a miner call that
+  already holds the lock, so a shutdown during a long call still waits for it
+  (the shell bounds it with SIGKILL). An approve, review, or scheduled run can
+  contend with the first drain for the extraction lock, as with any periodic
+  pass. The live app was not relaunched for an end-to-end timing. Two sidecars
+  on one home (an app-spawned dev sidecar and the launchd daemon) were observed,
+  which makes the lock scenario real, but the multi-writer setup was not
+  changed. Next time, run the adversarial review before the full-suite pass so
+  the record has one final state rather than an intermediate one.
+- **Reversal condition:** reverse the readiness move if a request served before
+  the first pass completes starts returning observably stale state on first
+  paint and the fix is not to have that route await `startMaintenance()`; also
+  reverse if lock acquisition becomes bounded and the first pass is measured
+  fast enough that waiting for it buys visible freshness at startup. Reverse
+  the scan-before-drain ordering if the scan ever needs extraction results (it
+  does not today) or starts duplicating the drain's work. Reverse the abort if
+  a pass cancelled during shutdown leaves derived state the next start cannot
+  rebuild (today the pending job stays journaled and is re-enqueued).
+
 ### 2026-11-18 — The list is tasks, decisions are per task, and the audit shows the assembly
 
 - **Goal / hypothesis:** after conversations became per-task, the sidebar still

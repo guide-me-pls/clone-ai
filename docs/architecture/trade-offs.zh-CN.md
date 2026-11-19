@@ -5,6 +5,129 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-19 —— 只有一个"新请求"动作；由 Clone AI 路由到 Main Agent
+
+**决定。** 桌面端只保留一个"新请求"动作，不再让所有者选择"新建对话"还是"新建任务"。在某个
+对话里输入，就由该对话的 Main Agent 处理。新请求会先路由：明确的续接线索（"继续""刚才"
+"上次""这个任务""continue""that task"）沿用所选对话，没有选择时沿用最近的对话；明确的新目标
+线索（"新项目""另一个任务""new project"）或没有上下文时新开一个 Main Agent；有选中对话但语义
+含糊时，问模型"沿用还是新开"，模型不可用则失败即新开。每个决定以 `conversation.routed` 写入
+Journal，带理由与来源，并显示在审计的组装块里。任务记录标出派发它的 Main Agent，并提供打开该
+对话的按钮。
+
+**被否决的备选方案。**
+
+- *保留"新建对话"与"新建任务"两个控件。* 这正是当前的学习成本：所有者必须知道哪个概念会创建
+  Main Agent。
+- *总是新开 Main Agent。* 每次追问都会丢掉它所指的上下文，并割裂所有者的记忆。
+- *总是沿用上一个 Main Agent。* 一个上下文会无界增长，互不相关的任务会读到彼此的历史。
+- *只用规则。* 关键词能处理"继续上次"，但分不清"把这个方案再改一下"与"另一个项目也这样做"；
+  含糊的中间地带需要语义。
+- *每条消息都问模型。* 显式选中对话已经回答了大多数消息，为它们再付一次路由调用没有收益。
+
+**证据。** 2026-11-19 所有者的要求：新建对话/新建任务的区分学习成本太高，应由 Clone AI 判断
+用新的还是以前的 Main Agent。所需管道已经存在：`conversationId` 划定锁、历史与槽位
+（`src/application/run-main-query.ts`），`mainAgentRunConversations` 把派发的 Run 映射回其
+对话，因此路由与任务记录那行都不需要新存储。只有"有选中对话的含糊新请求"才会触发模型路由。
+
+**代价。** 含糊的新请求多一次模型调用（有界、temperature 0、短输出）；误路由会在审计中可见，
+但不能自动搬移，所有者需要在目标对话里重发。关键词线索是启发式，可能误判。在对话里显式输入会
+完全绕过路由器，这是逃生口。
+
+**推翻条件。** 如果误路由频繁或额外调用不可接受，把路由器改成纯规则，或恢复显式的"新开 Main
+Agent"控件；如果所有者重新需要完全手动控制，回退这个界面动作，但保留写入 Journal 的路由决定与
+任务记录的派发者。
+
+## 2026-11-19 —— Agent 设置页是目录，不是控制面板
+
+**决定。** 设置 → Agent 展示 Magpie 网关的检测状态与模型选择，然后是一份只读的四个内置
+Worker 列表，写明每个 Worker 的角色与用途。手填端点/API Key 表单、本机 Provider 列表，以及
+每个 Worker 的 Provider 下拉与启用开关都被移除。
+
+**被否决的备选方案。**
+
+- *保留手填端点与 API Key 作为兜底。* 网关探测已经发现回环端点，"使用此模型"会在回合
+  运行前持久化它（`src/companion-server.ts:1154-1158`）。手填是在重复 App 自己会写的值，
+  而且所有者要求只用 Magpie。
+- *保留 Provider 下拉。* `src/workers/provider-catalog.ts` 只注册一个 Provider（`native`）；
+  `normalize()` 会把已不认识的保存值回退为 `native`（`src/config/worker-settings.ts:154-177`）。
+  线上的 `settings.json` 每个角色仍写着 `claude-code`，而运行时从不使用它——控件展示的是
+  运行时不承认的选择。
+- *保留启用开关。* 四个默认值都是 `enabled: true`，`direct-responder` 还是 `required`。
+  所有者要求全部 Worker 开启；开关暗示了一个产品已不再提供的策略选择。
+- *保留 Provider 列表。* `GET /api/agents` 只合成一行（`src/companion-server.ts:1510`），
+  它只是复述 Worker 目录，而且安装状态永远不会变化。
+
+**证据。** Provider Registry 只有一项；所有默认 Profile 都已启用；线上
+`~/.clone/settings.json` 里每个角色都是启用状态（Provider ID 仍是 `claude-code`，会被
+归一化为 `native`）；`~/.clone/config.json` 里的端点由网关应用路径写入。`app.js` 不再渲染
+`config-base-url`、`data-agent-provider` 或 `data-agent-toggle`，新增的界面结构测试会断言
+它们不存在。
+
+**放弃了什么。** 窗口不再能输入非回环或自定义的网关端点（仍可通过 `/api/config` 或环境
+变量设置）；角色也不能再单独关闭。
+
+**推翻条件。** 如果注册了第二个执行 Provider、角色需要因成本或策略独立禁用，或 Magpie
+无法发现所有者需要的端点而手填成为指向模型网关的唯一方式，就恢复对应控件。
+
+## 2026-11-19 —— 先发布就绪端点，再跑首轮维护
+
+**决定。** `startCompanionServer` 先绑定回环端口并发布
+`companion-endpoint.json`，再运行首轮后台维护。首轮维护在端点发布后立即以
+fire-and-forget 方式启动；失败会记录日志，并由既有的五分钟定时器重试。窗口连接不再等待
+记忆提炼、承诺收敛、机会扫描等周期性工作。维护轮内部，不取锁的工作先运行——承诺收敛、
+机会扫描、旧候选清理、改进扫描、闲置/过期扫描与坏案例报告——提炼与对话排空最后运行。
+`close()` 会中止仅在*等待*提炼锁的维护轮，因此别的进程持锁时关停仍能完成。
+
+**被否决的备选方案。**
+
+- *继续等待维护完成（现状）。* 该轮会获取跨进程的记忆提炼锁，其 `BEGIN IMMEDIATE`
+  每 50 毫秒重试一次且没有截止时间（`src/core/workspace-lock.ts:56-64`）。只要锁被持有——
+  另一个 sidecar 正在提炼，或提炼器正在等模型——"启动慢"就变成"启动永远不结束"：
+  Daemon 活着但从不监听，桌面外壳停在"正在连接"。
+- *维护轮内部保持原顺序。* 机会条与注意力条是所有者首屏就能看到的维护产出。把扫描放在
+  提炼排空之后，会让它们在锁被持有期间一直为空——这正是本决定必须避免的推翻条件。
+- *给 `startMaintenance()` 套一个超时。* 超时无法取消锁等待，只会丢弃 Promise，而重试
+  循环仍在运行；阈值也任意。就绪仍然与窗口并不需要的工作耦合。
+- *改为给锁获取设定时限。* 这会改变所有调用方的跨进程串行化语义；而一个合理但缓慢的
+  提炼器仍会拖慢就绪。
+- *把整个组装都移到 `listen` 之后。* 改动大得多：每个请求处理器都需要已经构建好的
+  Journal、配置与治理。维护轮是唯一一个耗时不受输入约束的 `listen` 前步骤。
+- *让 `close()` 继续等待被阻塞的维护轮。* 因为维护轮现在在就绪之后才启动，外壳的 SIGTERM
+  处理器进入的 close 可能永远不会返回；唯一的界限是外壳的 SIGKILL。中止锁等待是保持
+  优雅关停的窄修法。
+
+**证据。**
+
+- 现场：launchd 任务 `ai.clone.companion` 的 PID 80762 从 2026-11-18 17:53:26 存活到
+  2026-11-19 09:45（15 小时 51 分），却没有监听套接字
+  （`lsof -nP -p 80762 -iTCP -sTCP:LISTEN` 没有它的行），也没有
+  `~/.clone/companion-endpoint.json`；桌面窗口停在"正在连接常驻运行时"。同一日志里有多条
+  `Scheduled dispatch failed; its outcome needs review — database is locked`，与锁竞争一致。
+- 确定性复现：复制真实 clone home，删除八条 `memory.candidate.extracted` /
+  `memory.candidate.proposed`（使八条 `memory.candidate.requested` 处于待处理状态），
+  再由一个持有进程对
+  `<home>/memory-extraction-lock/.clone/workspace-execution.sqlite3` 执行
+  `BEGIN IMMEDIATE`。sidecar 在 15 秒内没有打印 `CLONE_AI_READY`；锁空闲时同一 home
+  246 毫秒就绪。机制：`await startMaintenance()` 位于 `server.listen` 与
+  `persistCompanionEndpoint` 之前（`src/companion-server.ts:605` 对
+  `:681` 与 `:694`），而 `processJob` 会获取提炼锁
+  （`src/memory/memory-pipeline.ts:176`）。
+- 对本次变更第一版（只移动就绪、保留原维护顺序、无中止）的独立审查，在持锁的临时 home 上
+  用探针验证了两个缺口：`/api/opportunities` 在锁释放前返回 **0** 张卡片；`close()` 在 2 秒
+  后仍未返回。两者现在都由 `test/companion-startup-readiness.test.ts` 钉住：锁仍被持有时
+  到期卡片已经存在，且 close 在不释放锁的情况下 2 秒内返回。
+
+**代价。** 中止只覆盖*等待*提炼锁的维护轮，不覆盖已经进入提炼调用的那一轮；长调用期间的
+关停仍会等那次调用（外壳用 SIGKILL 兜底）。在首轮排空持有锁时，确认、复核或定时任务里调用
+`processNext` 会等待当前提炼，就像任何周期性维护轮期间一样；本次变更让最大的排空与首批请求
+重叠。扫描排在排空之前，因此首屏不受影响。
+
+**推翻条件。** 如果首轮维护完成前提供的某个请求开始返回所有者首屏可见的陈旧状态——例如
+尚未结算的承诺或缺少的机会卡片——且修复方式不是让该路由等待 `startMaintenance()`，
+就应推翻本决定。若锁获取变得有界，且测量显示首轮维护足够快、等待它能换来首屏可见的新鲜度，
+同样应当推翻。
+
 ## 2026-11-18 —— 直接回答就是 direct_response 步骤的证据
 
 **决定。** 当单 Agent 步骤的 `requiredCapabilities` 含 `direct_response` 时，它必须能凭

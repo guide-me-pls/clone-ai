@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { JournalStore } from "../core/journal.ts";
+import type { WorkspaceLockOptions } from "../core/workspace-lock.ts";
 import { readTypes } from "../core/journal-types.ts";
 import type { Evidence, MemoryCandidate, NewJournalEvent } from "../core/contracts.ts";
 import { conversationJobsFromEvents, type ConversationTurn } from "./conversation-memory-worker.ts";
@@ -68,13 +69,13 @@ export class ConversationMemoryPipeline {
   }
 
   /** Drains every un-mined conversation batch, oldest first. 按从旧到新的顺序排空每个尚未提炼的对话批次。 */
-  async processDue(): Promise<MemoryCandidate[]> {
+  async processDue(options: WorkspaceLockOptions = {}): Promise<MemoryCandidate[]> {
     const drained: MemoryCandidate[] = [];
     // Conversation mining reads only its own request/extraction markers and the
     // evidence each request cites.
     // 对话提炼只读自己的请求/提炼标记，以及每个请求引用的证据。
     for (const job of conversationJobsFromEvents(await readTypes(this.#journal, CONVERSATION_TYPES))) {
-      const candidates = await this.#pipeline.processJob(job);
+      const candidates = await this.#pipeline.processJob(job, options);
       await this.#journal.append({
         type: "memory.conversation.extracted",
         runId: job.run.id,

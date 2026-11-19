@@ -6,6 +6,18 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Agent settings show workers, not wiring
+
+Settings → Agent now shows the detected Magpie gateway with its model picker and a read-only list of the four workers — title, role and what each one is for. The manual endpoint/API-key form, the redundant local-provider list, and the per-worker provider selects and enable switches are gone. Magpie's loopback endpoint is still discovered and pinned when a model is applied, and every worker stays enabled. `test/ui-locale.test.ts` asserts the removed controls stay out of the page.
+
+设置 → Agent 现在展示检测到的 Magpie 网关及其模型选择，以及一份只读的四个 Worker 列表——名称、角色与用途。手填端点/API Key 表单、重复的本机 Provider 列表，以及每个 Worker 的 Provider 下拉与启用开关都已移除。应用模型时仍会自动发现并固定 Magpie 的回环端点，所有 Worker 保持启用。`test/ui-locale.test.ts` 会断言这些被移除的控件不再出现在页面里。
+
+### Readiness is published before the first maintenance pass
+
+The desktop window now connects as soon as the companion server binds its loopback port and publishes `companion-endpoint.json`. The first background maintenance pass — memory extraction, commitment reconciliation, opportunity scanning and the one-time legacy-candidate cleanup — starts right after that instead of running before the server listens. A held memory-extraction lock or a miner waiting on a model could previously leave the daemon alive but invisible, with the window stuck on 正在连接; with eight pending extractions and the lock held, the sidecar now reaches ready in about 170 ms instead of never becoming ready while the lock was held. The opportunity and attention strips are scanned before the extraction drain, so their cards stay current while another process holds the lock, and shutdown aborts a pass that is only waiting for it. `test/companion-startup-readiness.test.ts` pins readiness, card freshness and close under a held lock.
+
+桌面窗口现在在伴随服务器绑定回环端口并发布 `companion-endpoint.json` 后立即连接。首轮后台维护——记忆提炼、承诺收敛、机会扫描以及一次性旧候选清理——改为在端点发布之后立即开始，而不是挡在服务器监听之前。此前，被持有的记忆提炼锁或等待模型的提炼器会让 Daemon 活着却不可见，窗口停在"正在连接"；在八条待提炼请求且锁被持有时，sidecar 现在约 170 毫秒就绪，而不是锁被持有时始终无法就绪。机会条与注意力条在提炼排空之前扫描，因此别的进程持锁时卡片仍然最新；关停会中止仅在等待该锁的维护轮。`test/companion-startup-readiness.test.ts` 钉住就绪、卡片新鲜度与持锁时的 close。
+
 ### Task records own the decision; the audit shows the assembly
 
 The sidebar now lists only dispatched tasks. A waiting task is promoted into its own "需要你的确认" section with an explicit flag, and its approval/review card — with the step and the accept/reject buttons — is decided on the task record itself; the main conversation no longer aggregates decisions, and the 对话 control opens the main thread. Every Main Agent turn in 审计 now has a collapsed "任务组装" block: the conversation, the history window, the model, the prompt materials (charter version, briefing, instruction files, tool table) and the runs the turn dispatched with their steps and status.

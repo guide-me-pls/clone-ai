@@ -433,3 +433,37 @@ test("the audit keeps the prompt materials and the briefing flag", async (t) => 
   assert.equal(projected.snapshot.hasBriefing, true);
   assert.deepEqual(projected.snapshot.toolNames, ["get_authority"]);
 });
+
+test("the audit carries the routing decision", async (t) => {
+  const directory = await tempDir(t);
+  const turn = await beginMainAgentTurn({
+    dataDirectory: directory,
+    text: "继续刚才的报告",
+    source: "companion",
+    turnId: "turn-route",
+    conversationId: "conversation-a",
+  });
+  const journal = createJournalStore(directory);
+  try {
+    await journal.append({
+      type: "conversation.routed",
+      payload: {
+        turnId: "turn-route",
+        decision: "continue",
+        conversationId: "conversation-a",
+        candidateConversationId: "conversation-a",
+        reason: "explicit continuation",
+        source: "rule",
+      },
+    });
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
+  await finishMainAgentTurn(turn, { status: "completed", reply: "好的" });
+  const projected = projectTurnAudits(await journalEvents(directory)).find((turnAudit) => turnAudit.turnId === "turn-route");
+  assert.ok(projected?.routing);
+  assert.equal(projected.routing.decision, "continue");
+  assert.equal(projected.routing.conversationId, "conversation-a");
+  assert.equal(projected.routing.source, "rule");
+  assert.match(projected.routing.reason, /continuation/);
+});

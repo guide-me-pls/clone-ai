@@ -39,14 +39,17 @@ test("the native desktop app is the only product entry", async () => {
   assert.match(indexSource, /id="data-export-choose"/);
   assert.match(appSource, /"\/api\/authority\/domains"/);
   assert.match(appSource, /"\/api\/export"/);
-  // The agent page reads providers from state; a bare binding blocked the
-  // first refresh after the merge that introduced it.
-  // Agent 页面从 state 读取 providers；裸绑定曾在引入它的合并后阻塞首次刷新。
-  assert.match(appSource, /const providerRows = state\.providers\.map/);
-  assert.match(appSource, /const providerById = new Map\(state\.providers\.map/);
-  assert.match(appSource, /const installed = state\.providers\.filter/);
-  assert.match(appSource, /const missing = state\.providers\.filter/);
-  assert.match(appSource, /const options = state\.providers\.map/);
+  // The agent page describes the worker catalog; the provider list and the
+  // per-role binding/enable controls were removed with the single native
+  // provider. Magpie's endpoint is discovered by the apply action instead of a
+  // manual endpoint form.
+  // Agent 页面只描述 Worker 目录；本机 Provider 列表与逐角色绑定/启用控件已随唯一的
+  // 原生 Provider 一起移除。Magpie 端点由应用动作发现，而不是手填表单。
+  assert.match(appSource, /const agentRows = settings\.agents\.map/);
+  assert.match(appSource, /t\("roles-bindings"\)/);
+  assert.match(appSource, /t\("workers-enabled"\)/);
+  assert.doesNotMatch(appSource, /data-agent-provider|data-agent-toggle/);
+  assert.doesNotMatch(appSource, /config-base-url|config-api-key/);
   assert.match(auditSource, /"\/api\/reporting\/bad-cases"/);
   assert.match(auditSource, /\/api\/improvement\/suggestions\//);
   assert.match(auditSource, /\/cancel/);

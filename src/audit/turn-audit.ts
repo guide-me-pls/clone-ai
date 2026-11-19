@@ -75,6 +75,16 @@ export interface MainAgentTurnRun {
   steps?: string[];
 }
 
+/** Why a new request went to a new Main Agent or an existing conversation. 新请求为何去往新的 Main Agent 或已有对话。 */
+export interface MainAgentTurnRouting {
+  decision: "new" | "continue";
+  conversationId: string;
+  candidateConversationId?: string;
+  reason: string;
+  source: string;
+  model?: string;
+}
+
 export interface MainAgentTurnAudit {
   turnId: string;
   source: string;
@@ -104,6 +114,8 @@ export interface MainAgentTurnAudit {
   historyMessages?: number;
   /** The runs this turn dispatched, with their titles, steps and last known status. 本回合派发的 Run 及其标题、步骤与最后已知状态。 */
   runs: MainAgentTurnRun[];
+  /** Which Main Agent handled the request, and why. 哪个 Main Agent 处理了请求，以及原因。 */
+  routing?: MainAgentTurnRouting;
   /** The prompt materials the model was given, when capture succeeded. 模型拿到的提示词材料，捕获成功时存在。 */
   snapshot?: MainAgentTurnPromptSnapshot;
   startedAt: string;
@@ -217,7 +229,8 @@ export function projectTurnAudits(events: readonly JournalEvent[]): MainAgentTur
   // 工具，已完成的回合能在派发旁显示上下文组装。
   for (const event of events) {
     if (event.type !== "agent.tool_started" && event.type !== "agent.tool_completed"
-      && event.type !== "main_agent.context_compacted" && event.type !== "main_agent.prompt_snapshot") continue;
+      && event.type !== "main_agent.context_compacted" && event.type !== "main_agent.prompt_snapshot"
+      && event.type !== "conversation.routed") continue;
     const payload = asRecord(event.payload);
     const turnId = typeof payload.turnId === "string" ? payload.turnId : undefined;
     if (turnId === undefined) continue;
@@ -239,6 +252,20 @@ export function projectTurnAudits(events: readonly JournalEvent[]): MainAgentTur
     if (event.type === "main_agent.context_compacted") {
       const compaction = parseCompaction(payload, event.occurredAt);
       if (compaction !== undefined) turn.compactions.push(compaction);
+      continue;
+    }
+    if (event.type === "conversation.routed") {
+      // The route event names the conversation it chose, so resolveTurn can
+      // find the turn even though it starts after this event.
+      // 路由事件点名它选中的对话，因此 resolveTurn 能在回合开始之前就找到它。
+      turn.routing = {
+        decision: payload.decision === "continue" ? "continue" : "new",
+        conversationId: typeof payload.conversationId === "string" ? payload.conversationId : turn.conversationId,
+        ...(typeof payload.candidateConversationId === "string" ? { candidateConversationId: payload.candidateConversationId } : {}),
+        reason: typeof payload.reason === "string" ? payload.reason : "",
+        source: typeof payload.source === "string" ? payload.source : "rule",
+        ...(typeof payload.model === "string" ? { model: payload.model } : {}),
+      };
       continue;
     }
     const snapshot = parseSnapshot(payload);
@@ -367,6 +394,7 @@ function matchesTurnQuery(turn: MainAgentTurnAudit, needle: string): boolean {
       ...turn.snapshot.instructionWarnings,
     ]),
     ...turn.runs.flatMap((run) => [run.id, run.title, run.status, ...(run.steps ?? [])]),
+    turn.routing?.reason, turn.routing?.source, turn.routing?.model, turn.routing?.candidateConversationId,
   ];
   return fields.some((field) => field !== undefined && field.toLowerCase().includes(needle));
 }

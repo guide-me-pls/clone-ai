@@ -19,6 +19,14 @@ const state = {
   // 按对话记录正在运行的回合。一个任务的流不应锁住另一个任务的输入框；回合完成也只能改变
   // 它所属对话的选择状态。
   streams: new Map(),
+  // A new-request send is being routed to a Main Agent; a periodic refresh must
+  // not wipe the live card before the stream starts.
+  // 新请求正在被路由到 Main Agent；周期刷新不得在流开始前抹掉实时卡片。
+  routing: false,
+  // What was selected when "新请求" was pressed, so the router can decide between
+  // continuing it and starting a fresh Main Agent.
+  // 按下"新请求"时选中的内容，供路由器在沿用与新开 Main Agent 之间判断。
+  routeContext: null,
   streaming: false,
   sessionEpoch: 0,
   refreshTimer: null,
@@ -27,7 +35,6 @@ const state = {
   disclosureScrollPositions: new Map(),
   schedules: [],
   settings: null,
-  providers: [],
   gateways: [],
   gatewayLoading: false,
   situation: null,
@@ -414,8 +421,8 @@ function renderSchedules(schedules, occurrences = [], reportDeliveries = [], rep
 }
 function agentRoleLabel(role) { return ({ direct: t("role-direct"), research: t("role-research"), draft: t("role-draft"), review: t("role-review"), external: t("role-external") }[role] || role); }
 function providerLabel(id) { return ({ "codex-cli": "Codex CLI", "claude-code": "Claude Code", pi: "Pi" }[id] || id); }
-function renderSettings(settings, providers) {
-  state.settings = settings; state.providers = providers;
+function renderSettings(settings) {
+  state.settings = settings;
   renderAgentPage();
 }
 function renderGateways(gateways) {
@@ -460,125 +467,34 @@ function renderAgentPage() {
         <div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}${mainAgentModel ? ui.button({ label: t("gateway-clear"), variant: "ghost", attributes: { "data-gateway-clear": "" } }) : ""}</div>
       </div>`
     : `<div class="gateway-controls"><div class="c-cluster">${ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-gateway-refresh": "" } })}</div><span class="gateway-hint">${escape(gateway?.running && gateway.modelCount > 0 ? t("gateway-pi-hint") : gateway?.error || t("gateway-start-hint"))}</span></div>`;
-  // A manual endpoint is the fallback when no gateway is running: an app
-  // launched from Finder has an empty environment, so the value must be
-  // persisted in config.json or every turn fails.
-  // 手填端点是网关未运行时的兜底：从 Finder 启动的 App 环境为空，因此该值必须持久化到
-  // config.json，否则每个回合都会失败。
-  const currentBaseUrl = state.config?.config?.mainAgentBaseUrl || "";
-  const hasKey = state.config?.config?.hasMainAgentApiKey === true;
-  const endpointForm = `<div class="gateway-controls gateway-endpoint">
-      <label class="gateway-endpoint__field">端点地址<input type="url" id="config-base-url" placeholder="http://127.0.0.1:3425" value="${escape(currentBaseUrl)}" autocomplete="off" spellcheck="false"></label>
-      <label class="gateway-endpoint__field">API Key<input type="password" id="config-api-key" placeholder="${hasKey ? "已保存，留空则不修改" : "可选"}" autocomplete="off"></label>
-      <div class="c-cluster">${ui.button({ label: "保存端点", iconName: "check", variant: "secondary", attributes: { "data-endpoint-save": "" } })}${hasKey ? ui.button({ label: "清除密钥", variant: "ghost", attributes: { "data-endpoint-clear-key": "" } }) : ""}</div>
-      <span class="gateway-hint">${currentBaseUrl ? `当前保存：${escape(currentBaseUrl)}` : "未保存端点；环境变量仍可覆盖本次运行。"}</span>
-    </div>`;
   const gatewayCard = ui.card({
     title: "Magpie Gateway",
-    subtitle: "Clone AI 内置 Agent 的模型端点；不再通过 Pi 或其他 Agent SDK 转发。",
+    subtitle: "Clone AI 的模型端点，由本机 Magpie Gateway 提供。",
     tone: gateway?.running ? "accent" : "warning",
     className: "agent-gateway",
     actions: gatewayBadge,
-    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}${endpointForm}</div>`,
+    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
   });
-  const providerById = new Map(state.providers.map((provider) => [provider.id, provider]));
-  const installed = state.providers.filter((provider) => provider.installed);
-  const missing = state.providers.filter((provider) => !provider.installed);
-  const providerRows = state.providers.map((provider) => {
-    const unrestricted = provider.hostAccess === "unrestricted";
-    const access = provider.executionBlocked
-      ? t("worker-blocked")
-      : unrestricted
-        ? t("worker-unrestricted")
-        : provider.sandbox === "seatbelt"
-          ? t("worker-sandboxed")
-          : t("worker-runnable");
-    const accessBadge = provider.executionBlocked
-      ? ui.badge(access, "warning")
-      : unrestricted
-        ? ui.badge(access, "warning")
-        : ui.badge(access, "success", { dot: true });
-    const effortLevels = Array.isArray(provider.efforts) ? provider.efforts : [];
-    const effortSelect = effortLevels.length
-      ? `<select class="agent-effort-select" data-provider-effort="${escape(provider.id)}" aria-label="${escape(t("provider-effort"))} · ${escape(provider.title)}"><option value="">${escape(t("effort-default"))}</option>${effortLevels.map((level) => `<option value="${escape(level)}"${provider.effort === level ? " selected" : ""}>${escape(level)}</option>`).join("")}</select>`
-      : "";
-
-    const action = provider.installed
-      ? provider.executionBlocked
-        ? ui.button({
-            label: t("worker-allow"),
-            variant: "secondary",
-            className: "c-button--compact",
-            attributes: { "data-provider-access": provider.id, "data-allow": "true" },
-          })
-        : unrestricted
-          ? ui.button({
-              label: t("worker-disable"),
-              variant: "secondary",
-              className: "c-button--compact",
-              attributes: { "data-provider-access": provider.id, "data-allow": "false" },
-            })
-          : ui.badge(t("worker-default"), "success", { dot: true })
-      : provider.installable
-        ? ui.button({
-            label: t("install"),
-            variant: "primary",
-            className: "c-button--compact",
-            attributes: { "data-install-provider": provider.id },
-          })
-        : ui.badge(t("manual-install"), "neutral");
-    const status = provider.installed
-      ? ui.badge(t("detected"), "success", { dot: true })
-      : provider.installable
-        ? ui.badge(t("installable"), "warning")
-        : ui.badge(t("missing"), "danger");
-    const source = provider.resolutionSource === "path"
-      ? t("resolution-path")
-      : provider.resolutionSource === "known-directory"
-        ? t("resolution-fallback")
-        : provider.resolutionSource === "absolute"
-          ? t("resolution-explicit")
-          : "";
-    const meta = `${status}${provider.userConfigured ? ui.badge(t("user-config"), "accent") : ""}<span>${escape(provider.command)}</span>${accessBadge}${source ? `<span>${escape(source)}</span>` : ""}`;
-    return ui.listRow({
-      leading: ui.providerMark(provider.title, provider.id),
-      title: provider.title,
-      description: `${t("provider-purpose")} · ${provider.command}`,
-      meta: `<span class="c-cluster">${meta}</span>${provider.resolvedPath ? `<code class="agent-provider-path" title="${escape(provider.resolvedPath)}">${escape(provider.resolvedPath)}</code>` : ""}`,
-      actions: `${effortSelect}${action}`,
-      tone: provider.installed ? "default" : "warning",
-    });
-  }).join("");
   const agentRows = settings.agents.map((agent) => {
-    const provider = providerById.get(agent.providerId);
-    const options = state.providers.map((candidate) => ({
-      value: candidate.id,
-      label: `${providerLabel(candidate.id)}${candidate.installed ? "" : ` · ${t("missing")}`}`,
-      disabled: !candidate.installed,
-    }));
     const description = agent.role === "external" ? t("external-unavailable") : agent.description;
     const purpose = agent.role === "external" ? t("external-unavailable-detail") : agent.purpose;
     return ui.listRow({
       leading: ui.providerMark("Built-in", "native"),
       title: agent.title,
       description,
-      meta: `${ui.badge(agentRoleLabel(agent.role), "neutral")}${provider?.installed ? ui.badge(providerLabel(agent.providerId), "accent") : ui.badge(`${providerLabel(agent.providerId)} · ${t("missing")}`, "warning")}<span>${escape(purpose)}</span>`,
-      actions: `<div class="c-cluster">${ui.select({ options, value: agent.providerId, className: "agent-role-select", attributes: { "data-agent-provider": agent.id, "aria-label": `${t("provider-for")} ${agent.title}` } })}${ui.switchControl({ checked: agent.enabled, disabled: agent.required, label: agent.required ? t("required-role") : agent.enabled ? t("disable-role") : t("enable-role"), attributes: { "data-agent-toggle": agent.id } })}</div>`,
-      tone: provider?.installed ? "default" : "warning",
+      meta: `${ui.badge(agentRoleLabel(agent.role), "neutral")}<span>${escape(purpose)}</span>`,
     });
   }).join("");
   host.innerHTML = `<div class="agent-page">
     ${ui.sectionHeader({
       eyebrow: t("agent-page-eyebrow"),
       title: t("agents-title"),
-      description: "Main Agent 由 Clone AI 自己持有；模型只提供推理能力，不再由 Pi 或外部 Provider 驱动。",
+      description: "Main Agent 由 Clone AI 自己持有；模型由本机 Magpie Gateway 提供。",
       actions: ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-settings-refresh": "" } }),
     })}
     <div class="c-stat-grid agent-overview">${ui.stat({ label: "Main Agent", value: "内置", detail: "Clone AI 原生工具循环", tone: "success" })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length} ${t("gateway-models-usable")}` : "等待模型端点", tone: gateway?.running && exposedModels.length ? "success" : "warning" })}${ui.stat({ label: "当前模型", value: mainAgentModel || "未选择", detail: gateway?.running ? "通过 Magpie Gateway" : "选择模型后开始对话" })}</div>
     ${gatewayCard}
-    <div class="agent-section-head"><div><h3>${t("local-providers")}</h3><p>${t("providers-section-lead")}</p></div><div class="c-segmented" aria-label="${escape(t("providers-state"))}">${ui.badge(`${installed.length} ${t("connected")}`, "success", { dot: true })}${missing.length ? ui.badge(`${missing.length} ${t("installable")}`, "warning") : ""}</div></div>
-    <div id="provider-registry" class="c-list agent-provider-list">${providerRows || ui.emptyState({ iconName: "terminal", title: t("empty-providers"), body: t("empty-providers-body") })}</div>
-    <div class="agent-section-head"><div><h3>${t("roles-bindings")}</h3><p>${t("roles-section-lead")}</p></div></div>
+    <div class="agent-section-head"><div><h3>${t("roles-bindings")}</h3><p>${t("roles-section-lead")}</p></div><div class="c-segmented">${ui.badge(t("workers-enabled"), "success", { dot: true })}</div></div>
     <div id="agent-settings-list" class="c-list agent-role-list">${agentRows}</div>
     <p class="agent-role-note">${escape(t("agents-note"))}</p>
   </div>`;
@@ -601,35 +517,6 @@ async function refreshGateways({ announceFailure = false } = {}) {
     renderAgentPage();
   }
 }
-async function saveEndpoint() {
-  const baseUrl = $("config-base-url")?.value?.trim() || "";
-  const apiKeyInput = $("config-api-key");
-  const apiKey = apiKeyInput?.value ?? "";
-  const body = { mainAgentBaseUrl: baseUrl };
-  // An empty key field means "keep the stored one"; only an explicit clear
-  // removes it, so re-saving a URL cannot silently drop the credential.
-  // 空的密钥字段表示"保留已存的"；只有显式清除才会移除它，因此重存地址不会悄悄丢掉凭据。
-  if (apiKey.trim().length > 0) body.mainAgentApiKey = apiKey.trim();
-  try {
-    const result = await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    if (state.config) state.config.config = result.config;
-    if (apiKeyInput) apiKeyInput.value = "";
-    state.signatures.agentPage = "";
-    await refresh({ preserveScroll: true });
-    announce(baseUrl ? "端点已保存。" : "端点已清除。");
-  } catch (error) { announce(error.message, true); }
-}
-
-async function clearEndpointKey() {
-  try {
-    const result = await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ mainAgentApiKey: "" }) });
-    if (state.config) state.config.config = result.config;
-    state.signatures.agentPage = "";
-    await refresh({ preserveScroll: true });
-    announce("API Key 已清除。");
-  } catch (error) { announce(error.message, true); }
-}
-
 async function useGatewayModel() {
   const model = $("gateway-model")?.value;
   if (!model) {
@@ -1393,6 +1280,7 @@ function welcomeMarkup() {
       <span class="welcome-eyebrow">开始新任务</span>
       <h2>今天想推进什么？</h2>
       <p>直接描述目标，或贴一段上下文。我会先拆解、准备和验证；会影响外部世界的动作会先停下来问你。</p>
+      <p class="welcome-routing">发送时 clone-ai 会判断：继续相关对话，还是新开一个 Main Agent。</p>
     </div>
   </div>`;
 }
@@ -1765,15 +1653,28 @@ function decisionDock(session) {
   const cards = `${approvalMarkup(session)}${reviewMarkup(session)}`;
   return cards.length === 0 ? "" : `<div class="decision-dock">${cards}</div>`;
 }
-function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || !sessionHasContent(session)); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } const conversation = session.kind === "conversation"; const conversationLog = conversation ? turnLogMarkup(session) : ""; const showWelcome = conversation && conversationLog.length === 0; content.innerHTML = showWelcome ? `${decisionDock(session)}${welcomeMarkup()}` : `<div class="day-divider">${day(session.updatedAt)}</div>${decisionDock(session)}${conversation ? conversationLog : session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
+function dispatchSourceMarkup(session) {
+  // A task record names the Main Agent that asked for it. The label shows a
+  // short id, the title keeps the full one, and the button opens that
+  // conversation so "which Main Agent dispatched this" is one click away.
+  // 任务记录标出请求它的 Main Agent。标签显示短 id，标题保留完整 id，按钮打开该对话，
+  // 使"哪个 Main Agent 派发的"只需一次点击。
+  if (session.kind === "conversation" || typeof session.dispatchedBy !== "string") return "";
+  const main = session.dispatchedBy === MAIN_CONVERSATION_ID;
+  const short = session.dispatchedBy.replace(/^conversation-/, "").slice(0, 12);
+  const label = main ? "主对话的 Main Agent" : `对话 ${short}… 的 Main Agent`;
+  return `<div class="dispatch-source"><span>派发者</span><button type="button" class="dispatch-source-open" data-open-conversation="${escape(session.dispatchedBy)}" title="${escape(session.dispatchedBy)}">${escape(label)}</button></div>`;
+}
+function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || !sessionHasContent(session)); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } const conversation = session.kind === "conversation"; const conversationLog = conversation ? turnLogMarkup(session) : ""; const showWelcome = conversation && conversationLog.length === 0; content.innerHTML = showWelcome ? `${decisionDock(session)}${welcomeMarkup()}` : `<div class="day-divider">${day(session.updatedAt)}</div>${dispatchSourceMarkup(session)}${decisionDock(session)}${conversation ? conversationLog : session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; state.newConversationId = null; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); syncComposer(); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
 async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) {
+  if (state.routing) return;
   // A live stream owns only the selected conversation's view; a background
   // turn in another task must not stop the sidebar from updating.
   // 运行中的流只拥有所选对话的视图；另一个任务的后台回合不应阻止侧栏更新。
   if (state.selectedId && state.streams.has(state.selectedId)) return;
   if (!state.selectedId && state.composingNew && state.newConversationId && state.streams.has(state.newConversationId)) return;
-  const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; const selectedIsConversation = state.selectedId === MAIN_CONVERSATION_ID || (state.selectedId?.startsWith("conversation-") ?? false) || (state.selectedId?.startsWith("whatsapp:") ?? false); if (!state.composingNew && (!state.selectedId || (!sessions.some((session) => session.id === state.selectedId) && !selectedIsConversation))) state.selectedId = sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
+  const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; const selectedIsConversation = state.selectedId === MAIN_CONVERSATION_ID || (state.selectedId?.startsWith("conversation-") ?? false) || (state.selectedId?.startsWith("whatsapp:") ?? false); if (!state.composingNew && (!state.selectedId || (!sessions.some((session) => session.id === state.selectedId) && !selectedIsConversation))) state.selectedId = sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
 function currentStream() {
   if (state.selectedId) return state.streams.get(state.selectedId);
   if (state.composingNew && state.newConversationId) return state.streams.get(state.newConversationId);
@@ -1798,17 +1699,22 @@ async function createSession(query) { const button = $("submit"); button.disable
   // 每个任务都是自己的 Main Agent 对话：有自己的历史，可以在另一个任务的子任务仍在执行时
   // 运行。从任务记录发出的消息进入派生它的对话。
   const selectedSession = (state.dashboard?.sessions || []).find((session) => session.id === state.selectedId);
-  const conversationId = state.composingNew
-    ? (state.newConversationId || (state.newConversationId = mintConversationId()))
+  // A new request has no Main Agent yet: the router chooses one below. A
+  // message sent inside a conversation goes to that conversation.
+  // 新请求还没有 Main Agent：路由器在下方选择。在某个对话里发送则进入该对话。
+  let conversationId = state.composingNew
+    ? ""
     : selectedSession?.kind === "conversation"
       ? selectedSession.id
       : selectedSession?.conversationId ?? selectedSession?.parentId ?? MAIN_CONVERSATION_ID;
-  if (state.streams.has(conversationId)) {
+  if (conversationId && state.streams.has(conversationId)) {
     announce("这个任务仍在处理中；等它结束，或先停止它再发送。", true);
     syncComposer();
     return;
   }
   const wasComposing = state.composingNew;
+  const routeContext = state.routeContext;
+  state.routeContext = null;
   const ownedSelection = () => state.selectedId === conversationId
     || (state.composingNew && state.newConversationId === conversationId);
   // The message and a live reply card appear before the request is sent. A model
@@ -1904,8 +1810,7 @@ async function createSession(query) { const button = $("submit"); button.disable
     stoppedByOwner = true;
     controller.abort();
   };
-  state.streams.set(conversationId, { stop: stopTurn });
-  syncComposer();
+  state.routing = false;
   let stallTimer = null;
   const armStallTimer = () => {
     if (stallTimer !== null) clearTimeout(stallTimer);
@@ -1915,6 +1820,36 @@ async function createSession(query) { const button = $("submit"); button.disable
   try {
     const headers = { "content-type": "application/json" };
     if (window.CLONE_AI_TOKEN) headers["x-clone-ai-token"] = window.CLONE_AI_TOKEN;
+    if (wasComposing) {
+      // The owner typed a new request; Clone AI decides whether it continues a
+      // conversation or starts a new Main Agent. The pending card is already
+      // visible, so a model tie-break shows as normal thinking time.
+      // 所有者输入的是一个新请求；由 Clone AI 判断它是继续某个对话还是新开 Main Agent。
+      // 等待卡已经可见，因此模型裁决只表现为正常的思考时间。
+      state.routing = true;
+      try {
+        const route = await api("/api/main-agent/route", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text: query, turnId, ...(routeContext === null ? {} : { context: routeContext }) }),
+        });
+        conversationId = typeof route.conversationId === "string" && route.conversationId.length > 0
+          ? route.conversationId
+          : mintConversationId();
+        state.newConversationId = conversationId;
+        announce(route.decision === "continue" ? "clone-ai 判断这次沿用相关对话。" : "clone-ai 判断这次新开一个 Main Agent。");
+      } catch {
+        conversationId = mintConversationId();
+        state.newConversationId = conversationId;
+        announce("无法判断用哪个 Main Agent，已新开一个。", true);
+      } finally {
+        state.routing = false;
+      }
+    }
+    if (!conversationId) conversationId = mintConversationId();
+    if (state.streams.has(conversationId)) throw new Error("这个对话仍在处理中；等它结束再发送。");
+    state.streams.set(conversationId, { stop: stopTurn });
+    syncComposer();
     const response = await fetch("/api/main-agent/stream", {
       method: "POST",
       headers,
@@ -2116,26 +2051,6 @@ async function createSchedule(query) { const button = $("schedule-create"); cons
 async function setScheduleEnabled(id, enabled) { try { await api(`/api/schedules/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }) }); await refresh(); announce(enabled ? "定时任务已启用。" : "定时任务已暂停。"); } catch (error) { announce(error.message, true); } }
 async function resolveScheduleOccurrence(id, resolution) { const message = resolution === "retry" ? t("schedule-retry-confirm") : t("schedule-dismiss-confirm"); if (!(await confirmDialog(message, t("confirm")))) return; try { await api(`/api/schedules/occurrences/${encodeURIComponent(id)}/resolve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resolution }) }); await refresh(); announce(t("schedule-resolved")); } catch (error) { announce(error.message, true); } }
 async function resolveReportDelivery(day, resolution) { const message = resolution === "retry" ? t("report-retry-confirm") : t("report-dismiss-confirm"); if (!(await confirmDialog(message, t("confirm")))) return; try { await api(`/api/reporting/deliveries/${encodeURIComponent(day)}/resolve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resolution, confirmChecked: true }) }); await refresh(); announce(t("schedule-resolved")); } catch (error) { await refresh(); announce(error.message, true); } }
-async function updateAgent(id, update, message) { try { await api(`/api/settings/agents/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(update) }); await refresh(); announce(message); } catch (error) { announce(error.message, true); await refresh(); } }
-async function setAgentEnabled(id, enabled) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { enabled }, agent ? `${agent.title}${enabled ? "已启用" : "已关闭"}。` : "Agent 设置已更新。"); }
-async function setAgentProvider(id, providerId) { const agent = state.settings?.agents.find((candidate) => candidate.id === id); await updateAgent(id, { providerId }, agent ? `${agent.title} 已绑定到 ${providerLabel(providerId)}。` : "Agent Provider 已更新。"); }
-async function installProvider(id) { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector(`[data-install-provider="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { await api(`/api/agents/${encodeURIComponent(id)}/install`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); await refresh(); announce(`${providerLabel(id)} 已安装并完成检测。`); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
-/** Pin the reasoning effort of one worker CLI; the gateway reports which levels its model offers. 固定某个 worker CLI 的推理强度；网关会报告其模型支持的档位。 */
-async function setProviderEffort(id, effort) {
-  try {
-    const current = await api("/api/settings/providers");
-    const provider = current.providers.find((item) => item.id === id);
-    if (!provider) throw new Error("Provider not found.");
-    const next = { ...provider };
-    if (effort) next.effort = effort; else delete next.effort;
-    await api("/api/settings/providers", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) });
-    await refresh({ preserveScroll: true });
-    announce(t("effort-saved"));
-  } catch (error) { announce(error.message, true); }
-}
-
-async function setProviderHostAccess(id, allow) { if (allow && !(await confirmDialog(t("worker-allow-warning"), t("worker-allow")))) return; try { const current = await api("/api/settings/providers"); const provider = current.providers.find((item) => item.id === id); if (!provider) throw new Error("Provider not found."); const next = { ...provider }; if (allow) { next.hostAccess = "unrestricted"; next.acknowledgeUnrestrictedHostAccess = true; } else delete next.hostAccess; await api("/api/settings/providers", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) }); await refresh(); announce(t("worker-access-saved")); } catch (error) { announce(error.message, true); } }
-async function installMissingProviders() { if (!(await confirmDialog(t("install-warning"), t("install")))) return; const button = document.querySelector("[data-install-missing]"); if (button) { button.disabled = true; button.querySelector("span").textContent = t("installing"); } try { const result = await api("/api/agents/install-missing", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ acknowledgeGlobalInstall: true }) }); state.signatures.agentPage = ""; await refresh(); announce(result.installed.length ? `已自动安装 ${result.installed.length} 个 Provider。` : "没有可自动安装的缺失 Provider。"); } catch (error) { announce(error.message, true); await refresh(); } }
 async function searchMemories(query) { try { const result = await api(`/api/memory/governed/recall?q=${encodeURIComponent(query)}`); renderMemorySearch(result.matches || []); } catch (error) { announce(error.message, true); } }
 function confirmDialog(message, okLabel) { return new Promise((resolve) => { const modal = $("confirm-modal"); $("confirm-message").textContent = message; const ok = $("confirm-ok"); ok.textContent = okLabel || "确认"; modal.setAttribute("aria-hidden", "false"); const done = (result) => { modal.setAttribute("aria-hidden", "true"); ok.onclick = $("confirm-cancel").onclick = modal.onclick = null; resolve(result); }; ok.onclick = () => done(true); $("confirm-cancel").onclick = () => done(false); modal.onclick = (event) => { if (event.target === modal) done(false); }; }); }
 async function restoreConversation(id) {
@@ -2155,7 +2070,7 @@ $("session-list").addEventListener("toggle", (event) => {
   else state.openChildGroups.delete(details.dataset.childGroup);
   localStorage.setItem("clone-ai:child-groups", JSON.stringify([...state.openChildGroups]));
 }, true);
-$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const logRun = event.target.closest("[data-log-run]"); if (logRun) { void selectSession(logRun.dataset.logRun); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
+$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const logRun = event.target.closest("[data-log-run]"); if (logRun) { void selectSession(logRun.dataset.logRun); return; } const openConversation = event.target.closest("[data-open-conversation]"); if (openConversation) { void selectSession(openConversation.dataset.openConversation, { scrollToBottom: true }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
 document.querySelector(".settings-nav")?.addEventListener("keydown", (event) => {
@@ -2195,7 +2110,6 @@ $("data-export-reveal").addEventListener("click", revealExport);
 $("config-workspace-reveal").addEventListener("click", revealWorkspace);
 $("config-main-agent-model-save").addEventListener("click", () => void saveMainAgentModel());
 $("config-main-agent-effort-save").addEventListener("click", () => void saveMainAgentEffort());
-document.addEventListener("change", (event) => { const select = event.target instanceof Element && event.target.closest("[data-provider-effort]"); if (select && select.value !== undefined) void setProviderEffort(select.dataset.providerEffort, select.value); });
 $("config-locale")?.addEventListener("change", () => void saveLocale());
 $("connector-add").addEventListener("click", () => void addConnector());
 $("connector-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-connector-remove]"); if (remove) void removeConnector(remove.dataset.connectorRemove); });
@@ -2222,7 +2136,6 @@ $("whatsapp-open-meta").addEventListener("click", openMetaDeveloperConsole);
 $("schedule-form").addEventListener("submit", (event) => { event.preventDefault(); void createSchedule($("schedule-query").value.trim()); });
 $("schedule-kind").addEventListener("change", renderScheduleOptions);
 $("schedule-list").addEventListener("click", (event) => { const report = event.target.closest("[data-report-day]"); if (report) { void resolveReportDelivery(report.dataset.reportDay, report.dataset.resolution); return; } const occurrence = event.target.closest("[data-schedule-occurrence]"); if (occurrence) { void resolveScheduleOccurrence(occurrence.dataset.scheduleOccurrence, occurrence.dataset.resolution); return; } const button = event.target.closest("[data-schedule-toggle]"); if (button) void setScheduleEnabled(button.dataset.scheduleToggle, button.dataset.scheduleEnabled === "true"); });
-$("agent-page").addEventListener("change", (event) => { const target = event.target; const toggle = target.closest("[data-agent-toggle]"); if (toggle) { void setAgentEnabled(toggle.dataset.agentToggle, toggle.checked); return; } const provider = target.closest("[data-agent-provider]"); if (provider) void setAgentProvider(provider.dataset.agentProvider, provider.value); });
 $("agent-page").addEventListener("click", (event) => {
   const refresh = event.target.closest("[data-settings-refresh], [data-gateway-refresh]");
   if (refresh) { void refreshGateways({ announceFailure: true }); return; }
@@ -2230,14 +2143,6 @@ $("agent-page").addEventListener("click", (event) => {
   if (applyGateway) { void useGatewayModel(); return; }
   const clearGateway = event.target.closest("[data-gateway-clear]");
   if (clearGateway) { void clearGatewayModel(); return; }
-  const access = event.target.closest("[data-provider-access]");
-  if (access) { void setProviderHostAccess(access.dataset.providerAccess, access.dataset.allow === "true"); return; }
-  const install = event.target.closest("[data-install-provider]");
-  if (install) { void installProvider(install.dataset.installProvider); return; }
-  const installMissing = event.target.closest("[data-install-missing]");
-  if (installMissing) { void installMissingProviders(); return; }
-  if (event.target.closest("[data-endpoint-save]")) { void saveEndpoint(); return; }
-  if (event.target.closest("[data-endpoint-clear-key]")) { void clearEndpointKey(); }
 });
 $("audit-session-list").addEventListener("click", (event) => { const button = event.target.closest("[data-open-audit-run]"); if (button) { closeSettings(); void selectSession(button.dataset.openAuditRun); } });
 $("memory-candidates").addEventListener("click", (event) => { const promote = event.target.closest("[data-promote-candidate]"); if (promote) { void decideCandidate(promote.dataset.promoteCandidate, "promote"); return; } const reject = event.target.closest("[data-reject-candidate]"); if (reject) void decideCandidate(reject.dataset.rejectCandidate, "reject"); });
@@ -2246,7 +2151,7 @@ $("library-create").addEventListener("click", () => void createLibraryMemory());
 $("opportunity-strip").addEventListener("click", (event) => { const settings = event.target.closest("[data-open-failure-settings]"); if (settings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const accept = event.target.closest("[data-accept-opportunity]"); if (accept) { void decideOpportunity(accept.dataset.acceptOpportunity, "accept"); return; } const dismiss = event.target.closest("[data-dismiss-opportunity]"); if (dismiss) void decideOpportunity(dismiss.dataset.dismissOpportunity, "dismiss"); });
 $("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
-$("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; state.newConversationId = mintConversationId(); $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); syncComposer(); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
+$("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); const selected = (state.dashboard?.sessions || []).find((session) => session.id === state.selectedId); const selectedConversation = state.selectedId === MAIN_CONVERSATION_ID || (state.selectedId?.startsWith("conversation-") ?? false) || (state.selectedId?.startsWith("whatsapp:") ?? false) ? state.selectedId : selected?.conversationId; state.routeContext = selectedConversation ? { kind: "conversation", id: selectedConversation } : null; state.routing = false; if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; state.newConversationId = null; $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); syncComposer(); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
 $("open-conversation").addEventListener("click", () => { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(MAIN_CONVERSATION_ID, { scrollToBottom: true }); });
 $("stop-turn").addEventListener("click", () => stopActiveTurn());
 document.addEventListener("keydown", (event) => {

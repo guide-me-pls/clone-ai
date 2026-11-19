@@ -687,10 +687,6 @@ textarea:focus-visible {
 .gateway-summary__copy code { display: block; overflow: hidden; margin-top: 4px; color: var(--muted); font: 10.5px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 .gateway-details { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .gateway-controls { display: grid; gap: 8px; }
-.gateway-endpoint { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line, #e3e7ee); }
-.gateway-endpoint__field { display: grid; gap: 4px; font-size: 12px; color: var(--muted, #8791a1); }
-.gateway-endpoint__field input { padding: 7px 9px; border: 1px solid var(--line, #e3e7ee); border-radius: 8px; font: inherit; color: inherit; background: var(--surface, #fff); }
-.gateway-endpoint__field input:focus { outline: 2px solid var(--accent, #3468f6); outline-offset: 1px; }
 
 .gateway-controls__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
 .gateway-hint { color: var(--muted); font-size: 10.5px; line-height: 1.55; }
@@ -698,12 +694,8 @@ textarea:focus-visible {
 .agent-section-head:first-child { margin-top: 0; }
 .agent-section-head h3 { margin: 0; color: var(--text); font-size: 12px; font-weight: 750; letter-spacing: .01em; }
 .agent-section-head p { margin: 3px 0 0; color: var(--muted); font-size: 10.5px; }
-.agent-provider-path { display: block; overflow: hidden; margin-top: 7px; color: var(--muted); font: 10px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.agent-provider-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .agent-role-list .c-list-row { min-height: 82px; }
-.agent-role-select { width: 158px; }
 .agent-role-note { margin: 12px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.55; }
-.provider-filter { min-width: 180px; }
 .agent-empty-inline { padding: 11px 0; color: var(--muted); font-size: 11px; }
 
 .settings-card,
@@ -822,7 +814,6 @@ button.memory-stat:focus-visible { outline: 2px solid var(--accent); outline-off
   .c-list-row { grid-template-columns: auto minmax(0, 1fr); }
   .c-list-row__actions { grid-column: 1 / -1; justify-content: flex-end; padding-top: 3px; }
   .gateway-controls__row { grid-template-columns: 1fr; }
-  .agent-role-select { width: 100%; }
   .c-segmented { max-width: 100%; overflow-x: auto; }
   .response-pending { grid-template-columns: auto minmax(0, 1fr); }
   .response-pending__time { grid-column: 2; justify-self: start; }
@@ -1526,7 +1517,6 @@ body.empty-conversation .composer-wrap { padding-bottom: 18px; }
 .agent-worker-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
 .agent-worker-purpose { max-width: 100%; overflow: hidden; color: var(--muted, #8791a1); text-overflow: ellipsis; white-space: nowrap; }
 .agent-worker-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.agent-worker-actions .agent-effort-select { min-width: 92px; }
 
 /* Plan rows name the worker that will run the step. 计划行点名执行该步骤的 Worker。 */
 .plan-step-worker { padding: 1px 6px; border-radius: 6px; color: #3468f6; background: rgba(52, 104, 246, .08); font-size: 11px; font-style: normal; }

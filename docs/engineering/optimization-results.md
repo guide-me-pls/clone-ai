@@ -15,6 +15,38 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-19 — Readiness no longer waits for the first maintenance pass
+
+- **Claim:** the companion server publishes its loopback endpoint and answers
+  `/api/health` before running the first background maintenance pass. A held
+  memory-extraction lock — another sidecar mid-extraction, or a miner waiting
+  on a model — can no longer leave the daemon alive but invisible with the
+  desktop window stuck on 正在连接. With eight pending extractions and the lock
+  held, the sidecar now reaches ready in about 170 ms instead of never within
+  the 15 s harness timeout; the lock-free control is 246 ms. Inside the pass,
+  the opportunity scan runs before the extraction drain, so the deadline cards
+  the owner sees on first paint are current while the lock is held; `close()`
+  aborts a pass that is only waiting for the lock, so shutdown stays graceful
+  instead of hanging until SIGKILL.
+- **Evidence:** `test/companion-startup-readiness.test.ts` — three pinned
+  behaviors: readiness while the extraction lock is held, a deadline card
+  visible through `/api/opportunities` while it is still held, and `close()`
+  returning in under 2 s without releasing it. The first case was red before the
+  change (fails in 4.04 s with `startCompanionServer did not publish readiness
+  while the extraction lock was held`) and green after; the scan and shutdown
+  cases were verified red against the first version of the change by the
+  independent review's probes (`0` cards until release; close pending after
+  2 s). Final isolated run: **62.7 ms** / **18.9 ms**, both green. Startup
+  measurement on a copy of the live home,
+  `node /tmp/clone-startup-measure.mjs /tmp/clone-home-hang-tJjQVr 15000`:
+  no `CLONE_AI_READY` within 15 s before, **178 ms** / **170 ms** after.
+  Full suite **848/848**, `npm run typecheck` exit 0, `npm run gate` **PASS**.
+  Live symptom: launchd PID 80762 was alive for 15 h 51 m with no listening
+  socket and no endpoint file; the window showed 正在连接.
+- **Where:** [trade-off: publish readiness before the first maintenance
+  pass](../architecture/trade-offs.md#2026-11-19--publish-readiness-before-the-first-maintenance-pass),
+  [execution chain](optimizations.md#2026-11-19--readiness-is-published-before-the-first-maintenance-pass).
+
 ## 2026-11-18 — Task records own the decision, and the audit shows the assembly
 
 - **Claim:** the sidebar lists dispatched tasks only; a waiting task is promoted

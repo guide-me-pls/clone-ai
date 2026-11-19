@@ -494,9 +494,13 @@
       ? `<ul class="au-assembly-runs">${runs.map((run) => `<li><code>${esc(run.id.slice(0, 8))}</code> <b>${esc(run.title ?? run.id)}</b>${run.status ? statusBadge(run.status) : ""}${run.steps?.length ? `<small>${esc(run.steps.join(" → "))}</small>` : ""}</li>`).join("")}</ul>`
       : "本轮未派发任务";
     const material = snapshot?.materialHash ? ` · 材料 ${snapshot.materialHash.slice(0, 8)}` : "";
+    const routing = turn.routing
+      ? `${turn.routing.decision === "continue" ? "沿用对话" : "新开 Main Agent"} · ${turn.routing.reason}（${turn.routing.source === "model" ? "模型判断" : turn.routing.source === "fallback" ? "模型不可用，按新开处理" : "规则判断"}）`
+      : "直接由所选对话处理";
     return `<details class="au-assembly"><summary>任务组装 · ${num(runs.length)} 个 Run${material}</summary>
       <dl class="au-assembly-grid">
         <dt>对话</dt><dd>${esc(conversation)}</dd>
+        <dt>路由</dt><dd>${esc(routing)}</dd>
         <dt>历史窗口</dt><dd>${esc(history + compactions)}</dd>
         <dt>模型</dt><dd>${esc(model)}</dd>
         <dt>提示词材料</dt><dd>${esc(materials)}</dd>

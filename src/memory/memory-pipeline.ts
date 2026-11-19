@@ -1,6 +1,6 @@
 import type { Evidence, JournalEvent, MemoryCandidate, NewJournalEvent, Run, Task } from "../core/contracts.ts";
 import type { JournalStore } from "../core/journal.ts";
-import { workspaceExecutionLock } from "../core/workspace-lock.ts";
+import { workspaceExecutionLock, type WorkspaceLockOptions } from "../core/workspace-lock.ts";
 import { readForRun, readTypes } from "../core/journal-types.ts";
 import { isTaskRestatement, redactMemoryPii } from "./memory-hygiene.ts";
 
@@ -111,10 +111,10 @@ export class MemoryPipeline {
     }
   }
 
-  async processNext(runId?: string): Promise<MemoryCandidate[]> {
+  async processNext(runId?: string, options: WorkspaceLockOptions = {}): Promise<MemoryCandidate[]> {
     const index = runId === undefined ? 0 : this.#pending.findIndex((job) => job.run.id === runId);
     const job = index < 0 ? undefined : this.#pending.splice(index, 1)[0];
-    return job === undefined ? [] : await this.processJob(job);
+    return job === undefined ? [] : await this.processJob(job, options);
   }
 
   /**
@@ -124,7 +124,7 @@ export class MemoryPipeline {
    * 处理一个从 Journal 构建、而非来自内存队列的任务。供对话路径使用：它的任务累积在
    * Journal 中，否则重启后永远不会被处理。
    */
-  async processJob(job: PendingMemoryJob): Promise<MemoryCandidate[]> {
+  async processJob(job: PendingMemoryJob, options: WorkspaceLockOptions = {}): Promise<MemoryCandidate[]> {
     try {
       const process = async (): Promise<MemoryCandidate[]> => {
         await this.#journal.reload?.();
@@ -173,7 +173,7 @@ export class MemoryPipeline {
         ]);
         return durable;
       };
-      return this.#lockPath === undefined ? await process() : await workspaceExecutionLock.run(this.#lockPath, process);
+      return this.#lockPath === undefined ? await process() : await workspaceExecutionLock.run(this.#lockPath, process, options);
     } catch (error) {
       this.enqueue(job.run, job.task, job.evidence, job.outcome);
       throw error;
