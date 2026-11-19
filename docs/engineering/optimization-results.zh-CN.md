@@ -11,6 +11,19 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-19 —— Worker 可读整机，写入仍受限
+
+- **主张：** Worker 可以读取本机任何可读位置，受保护位置除外；写入仍只落在工作区与 Kernel
+  授权的写入根内；当前目录之外被点名的项目会被读取，而不是回答"在工作区之外"。
+- **证据：** `test/path-gate.test.ts`（外部读取放行、同一路径写入被拒、授权写入根放行、
+  `~/.ssh` 被拒）、`test/native-worker-tools.test.ts`（工作区外无 Scope 读取）、
+  `test/native-agent-worker.test.ts` 与 `test/mcp.test.ts`（读取路径不受限、写入仍受限）、
+  `test/companion-main-agent.test.ts`（提示词说明整机是可读范围）、
+  `test/native-worker-tools.test.ts` 中 `read_file` 对设备的拒绝；全量 **862/862**，
+  `npm run typecheck` 通过。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--整台电脑就是工作区读取不设边界)、
+  [执行链路](optimizations.zh-CN.md#2026-11-19--整台电脑就是工作区仅限读取)。
+
 ## 2026-11-19 —— Main Agent 可以按需召回另一个任务的上下文
 
 - **主张：** `search_history` 默认检索全部任务对话，每条结果带对话与时间，可收窄到当前对话，

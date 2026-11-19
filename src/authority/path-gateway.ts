@@ -13,7 +13,13 @@ import { homedir } from "node:os";
 import { canonicalPath, forbiddenRoots, isForbiddenPath, pathWithin, type Scope } from "./scope.ts";
 
 export interface EffectiveGrants {
-  /** Canonical directories/files the process may read in addition to its workspace. 除工作空间外可读的规范路径。 */
+  /**
+   * Canonical directories/files a `files` read scope named. The native tool gate
+   * no longer needs them for reads (the machine is the readable surface); they
+   * remain for the macOS profile's `strictReads` mode and for the audit.
+   * 由 `files` 读取 Scope 点名的规范路径。原生工具闸门已不需要它们来放行读取（整机都是可读
+   * 范围）；它们仍供 macOS profile 的 `strictReads` 模式与审计使用。
+   */
   readRoots: string[];
   /** Canonical directories/files the process may write, always including the workspace. 可写的规范路径，始终包含工作空间。 */
   writeRoots: string[];

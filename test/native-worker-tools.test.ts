@@ -52,6 +52,32 @@ test("a granted read root outside the workspace is readable through its absolute
   assert.match(result.output, /OUTSIDE_READ_OK/);
 });
 
+test("a file outside the workspace reads without a read scope", async (t) => {
+  const directory = await workspace(t);
+  const outside = await mkdtemp(join(tmpdir(), "clone-tools-unscoped-"));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await writeFile(join(outside, "note.md"), "UNSCOPED_READ_OK\n", "utf8");
+  const target = join(outside, "note.md");
+  // The workspace bounds writes, not reads: no scope is needed to read.
+  // 工作区约束写入而不是读取：读取不需要 Scope。
+  const grants = resolveGrants([], { workspace: directory });
+  assert.equal(decideTool({ risk: "read", grants, workspace: directory, path: target }).allowed, true);
+  const read = fileTools().find((tool) => tool.name === "read_file")!;
+  const result = await read.run({ name: "read_file", input: { path: target } }, { workspace: directory });
+  assert.notEqual(result.isError, true);
+  assert.match(result.output, /UNSCOPED_READ_OK/);
+});
+
+test("read_file refuses a device instead of reading it forever", async (t) => {
+  const directory = await workspace(t);
+  const read = fileTools().find((tool) => tool.name === "read_file")!;
+  // /dev/null exists on macOS and Linux and is a character device, not a file.
+  // /dev/null 在 macOS 与 Linux 上存在，是字符设备而不是文件。
+  const result = await read.run({ name: "read_file", input: { path: "/dev/null" } }, { workspace: directory });
+  assert.equal(result.isError, true);
+  assert.match(result.output, /not a regular file/);
+});
+
 test("a long file is read in named windows with an explicit total", async (t) => {
   const directory = await workspace(t);
   const body = Array.from({ length: 1_200 }, (_, index) => `line ${index + 1}`).join("\n");

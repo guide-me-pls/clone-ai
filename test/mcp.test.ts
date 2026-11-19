@@ -189,7 +189,7 @@ test("a server's tool is offered to the worker only when the step granted its ri
   assert.match(seen[0] ?? "", /^true:No tool named net\.fetch is available/);
 });
 
-test("a tool that names a path is checked per call against the granted scopes", async (t) => {
+test("a read tool may name a path outside the workspace; reads are not confined", async (t) => {
   const workspace = await tempDir(t, "clone-mcp-path-");
   const grants = resolveGrants([], { workspace });
   const spec = mcpToolSpecs({
@@ -199,7 +199,9 @@ test("a tool that names a path is checked per call against the granted scopes", 
   }, { callTool: async (_s, _t, input) => ({ text: `read ${String(input.path)}`, isError: false }), listTools: async () => [] })[0]!;
   assert.equal(spec.pathOf?.({ path: "inside.md" }), "inside.md");
   assert.equal(decideTool({ risk: spec.risk, grants, workspace, path: spec.pathOf?.({ path: "inside.md" }) }).allowed, true);
-  assert.equal(decideTool({ risk: spec.risk, grants, workspace, path: spec.pathOf?.({ path: "../escape.md" }) }).allowed, false);
+  // The workspace bounds writes, not reads: an MCP read tool may name any path.
+  // 工作区约束写入而不是读取：MCP 读取工具可以点名任何路径。
+  assert.equal(decideTool({ risk: spec.risk, grants, workspace, path: spec.pathOf?.({ path: "../escape.md" }) }).allowed, true);
 });
 
 test("a disabled server's tools are never exposed by the client", async () => {

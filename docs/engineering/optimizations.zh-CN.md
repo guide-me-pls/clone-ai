@@ -26,6 +26,41 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— 整台电脑就是工作区（仅限读取）
+
+- **目标 / 假设：** 所有者的模型是：这个 Agent 没有项目工作区，本机就是工作区，所有地方都可读，
+  操作由工具权限与所有者审批校验。旧闸门让读取遵守步骤工作区与读取 Scope，于是外部被点名的
+  项目得到"在工作区之外"的回答，读一次还需要计划/审批轮次。让读取覆盖整机、写入继续受限、
+  保留受保护清单。
+- **取舍：** [整台电脑就是工作区：读取不设边界](../architecture/trade-offs.zh-CN.md#2026-11-19--整台电脑就是工作区读取不设边界)。
+- **变更：** `src/workers/native-agent-worker.ts`——`decideTool` 放行除 `isForbiddenPath`
+  之外的任何读取路径，拒绝写入根之外的写入，`.rsi` 证据保护改为解析绝对路径；
+  `buildInstructions` 与 Worker system prompt 写明读写分界。`src/main-agent/prompt.ts`
+  ——charter（版本 3）与 `workspaceGuidance` 说明整机是可读范围、读取不需要 Scope、只读步骤
+  可以定位并读取被点名的项目；版本 2 → 3。`src/main-agent/tools/kernel-tools.ts`——计划描述
+  说明读取不需要 Scope。`src/workers/native-worker-factory.ts`——read/list 描述改为"整机
+  任何位置"，write/edit 改为"工作区或授权的写入根"，`read_file` 拒绝设备或 FIFO 而不是在
+  其上阻塞。`src/authority/path-gateway.ts`——`readRoots` 注明只用于沙箱与审计。
+  `src/repair/worktree.ts`——`node_modules` 链接注释不再声称读取会被拒绝。
+- **Eval：** 聚焦命令 `node --experimental-strip-types --test test/path-gate.test.ts
+  test/native-agent-worker.test.ts test/native-worker-tools.test.ts test/mcp.test.ts
+  test/companion-main-agent.test.ts`——**50/50**。变更前：工作区外的读取返回
+  `outside the step's granted scopes`，Worker 与 Main Agent 提示词都说工作区外读取会被拒绝。
+  变更后：读取放行；同一路径的写入仍被拒绝；授权的写入根放行；`~/.ssh` 下的读取作为受保护
+  位置被拒绝；设备文件被拒绝而不是被读取。全量 **862/862**，`npm run typecheck` 通过。
+- **Benchmark run：** 无——确定性测试；没有 Provider、模型、数据集、种子或评分参数。
+- **执行链路：** 检查闸门、授权解析、提示词与测试；先提交此前的工作树，使本次变更独立；写取舍
+  条目，修改闸门与提示词，更新四个受影响的测试文件并新增四个用例；聚焦运行 50/50；第一次
+  全量运行发现 `test/native-client.test.ts` 中一条过时的提示词断言（期待 "will be refused"），
+  更新后重跑 861/861。那之后又补了设备文件的常规文件保护，因为整机读取让 `/dev/zero` 变得
+  可达，然后重跑全量。没有模型调用；耗时主要在全量测试（每次约 7 秒）。
+- **优点：** 边界现在与所有者的模型及 OS profile 一致（后者本就允许读取其他位置）；写入仍经过
+  唯一可测试的闸门；受保护位置在任何 Scope 之前检查，整机读取不会打开密钥。
+- **缺点 / 下次：** Worker 现在可以把任何可读文件送进模型，而且没有搜索工具——发现目录只能
+  手工 `list_directory`。如果探索被证明浪费，加入有界搜索工具，而不是重新收窄读取。
+- **推翻条件：** 如果某次运行泄漏凭据或无关个人文件，或产品服务于不止一个人，就要求外部根
+  声明读取 Scope 并启用 `strictReads`；保留受保护清单。
+
 ### 2026-11-19 —— Main Agent 可以跨任务对话检索
 
 - **目标 / 假设：** 自动上下文按对话隔离；在另一个任务里确定的事实或决定，除非所有者重说或记忆
