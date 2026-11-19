@@ -25,7 +25,7 @@ import { randomUUID } from "node:crypto";
 import type { Evidence, MemoryCandidate, MemorySensitivity, MemoryType } from "../core/contracts.ts";
 import { readNativeMainAgentEndpoint, readPersistedMainAgentEndpoint } from "../main-agent/native-runtime.ts";
 import type { MemoryWorker, PendingMemoryJob } from "./memory-pipeline.ts";
-import { hasDurableMemoryText } from "./memory-hygiene.ts";
+import { evidenceRecordsFailure, hasDurableMemoryText } from "./memory-hygiene.ts";
 
 export interface AgentMemoryWorkerOptions {
   /** Injected completion; defaults to the configured native endpoint. 注入的补全；默认使用已配置的原生端点。 */
@@ -105,9 +105,11 @@ async function completeWithNativeEndpoint(prompt: string, dataDirectory?: string
  * 唯一的提炼 Prompt。Evidence 摘要是仅有的输入事实；模型必须引用它们，不得编造。
  */
 export function miningPrompt(job: PendingMemoryJob): string {
-  const evidenceLines = job.evidence.map((item) => (
-    `- ${item.id}: [${item.kind}] ${item.summary}${item.locator === undefined ? "" : ` (${item.locator})`}`
-  )).join("\n");
+  const evidenceLines = job.evidence.map((item) => {
+    const failure = job.outcome === "failed" && evidenceRecordsFailure(item.summary) ? " [failure]" : "";
+    const locator = item.locator === undefined ? "" : ` (${item.locator})`;
+    return `- ${item.id}: [${item.kind}]${failure} ${item.summary}${locator}`;
+  }).join("\n");
   return [
     "You are the memory miner for Clone AI. Extract durable memory candidates from the task evidence below.",
     "Answer with JSON only (an array of at most 3 objects, no prose, no code fence) to out/candidates.json: the worker writes that file from your answer.",
@@ -120,11 +122,20 @@ export function miningPrompt(job: PendingMemoryJob): string {
     "- sourceEvidenceIds must be ids from the list below. Never invent an id.",
     "- Only durable knowledge: preferences, standing procedures, decisions, project facts.",
     "- Skip one-off details, credentials, and anything already implied by the task itself.",
+    "- Never restate or paraphrase the task's work order (what you were asked to do). If the only content is",
+    "  the work order, return [].",
+    "- A durable preference, rule, decision, or fact the owner stated inside the task is not a work-order",
+    "  restatement and is not an implied detail: keep it under its own type, citing an evidence line from the run.",
     "- Set expiresAt only for time-bound knowledge (a deadline, a temporary setting, a current-state fact);",
     "  leave it out for stable preferences and standing procedures.",
     ...(job.outcome === "failed" ? [
-      "- This task FAILED. Extract lessons instead: type \"procedure\", one sentence on what went wrong and what to do",
-      "  differently next time, grounded in the cited evidence. If the evidence shows no clear cause, return [].",
+      "- This task FAILED. Evidence lines marked [failure] record what actually went wrong; unmarked lines do not.",
+      "- If at least one line is marked [failure], extract at most one lesson: type \"procedure\", one sentence on what",
+      "  failed and the general rule that avoids it next time. The lesson must cite at least one [failure] line.",
+      "- If no line is marked [failure], return []: a lesson with no observed failure is a guess.",
+      "- Do not restate the work order as a lesson, and do not recommend something the failure contradicts.",
+      "- A durable preference or rule the owner stated in the task is not a lesson: extract it separately under",
+      "  its own type, even when the task failed.",
     ] : []),
     "",
     `Parent task: ${job.task.objective}`,

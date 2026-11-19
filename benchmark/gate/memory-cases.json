@@ -210,6 +210,62 @@
       "summary": "Conversation with the owner",
       "expected": "drop",
       "note": "Conversation mining uses this fixed objective; echoing it is not a memory either."
+    },
+    {
+      "id": "failed-lesson-without-failure-evidence",
+      "title": "A lesson from a failed run whose evidence only shows success",
+      "objective": "只读任务：读取当前工作区根目录的 README.md，不要修改任何文件。然后在最终答复中原样包含这句话：以后所有报告默认使用简体中文。",
+      "summary": "下次应先直接读取当前工作区根目录的 README.md，而不是列出 /Users/qihoo/.clone，并在最终答复中原样包含指定句子。",
+      "type": "procedure",
+      "outcome": "failed",
+      "evidence": ["list_directory read /Users/qihoo/.clone"],
+      "expected": "drop",
+      "note": "The recorded 2026-11-19 memory. The directory listing records success, not the missing README; the lesson is a restatement of the task, not an observed cause."
+    },
+    {
+      "id": "failed-lesson-citing-failure",
+      "title": "A lesson that cites the failing test evidence",
+      "objective": "修复发布脚本",
+      "summary": "发布前先跑完整测试；这次跳过测试导致了一次回归。",
+      "type": "procedure",
+      "outcome": "failed",
+      "evidence": ["npm test failed: 2 assertions in test/release.test.ts"],
+      "expected": "keep",
+      "note": "The evidence records the failure the lesson explains."
+    },
+    {
+      "id": "failed-lesson-citing-only-success",
+      "title": "A lesson that cites a successful line while a failure line exists",
+      "objective": "修复发布脚本",
+      "summary": "发布前先跑完整测试；这次跳过测试导致了一次回归。",
+      "type": "procedure",
+      "outcome": "failed",
+      "evidence": ["npm test failed: 2 assertions in test/release.test.ts", "release script edited"],
+      "citedEvidence": [2],
+      "expected": "drop",
+      "note": "Citing any evidence is not enough: the citation must be the failure the lesson claims."
+    },
+    {
+      "id": "failed-run-preference-not-a-lesson",
+      "title": "A preference stated during a failed run",
+      "objective": "整理本周报告",
+      "summary": "以后所有报告默认使用简体中文。",
+      "type": "preference",
+      "outcome": "failed",
+      "evidence": ["list_directory read /Users/qihoo/reports"],
+      "expected": "keep",
+      "note": "The failure-grounding rule applies to procedure lessons, not to a durable preference the owner stated."
+    },
+    {
+      "id": "completed-run-lesson-not-gated",
+      "title": "A procedure from a completed run is not failure-gated",
+      "objective": "修复发布脚本",
+      "summary": "发布前先跑完整测试。",
+      "type": "procedure",
+      "outcome": "completed",
+      "evidence": ["release script edited"],
+      "expected": "keep",
+      "note": "The rule only applies when the run failed."
     }
   ]
 }

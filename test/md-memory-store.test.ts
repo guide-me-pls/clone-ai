@@ -59,6 +59,18 @@ test("commit writes the markdown file with front matter and the sqlite row", asy
   assert.ok((await store.list()).some((item) => item.id === entry.id));
 });
 
+test("a memory whose content equals its summary is written once", async (t) => {
+  const { store, directory } = await openStore(t);
+  // No content supplied: prepareCommit falls back to the summary, and the file
+  // must still state it only once.
+  // 未提供正文：prepareCommit 回退到摘要，文件仍必须只写一次。
+  const entry = await store.commit({ summary: "周报模板用蓝色", type: "preference", confidence: "high" });
+
+  const file = await readFile(join(directory, "memory", `${entry.id}.md`), "utf8");
+  assert.equal(file.split("周报模板用蓝色").length - 1, 1);
+  assert.equal(parseMemoryFile(file)?.content, "周报模板用蓝色");
+});
+
 test("recall matches Chinese bigrams and Latin words with governance filters", async (t) => {
   const { store } = await openStore(t);
   const [release, preference, secret] = await seed(store);

@@ -105,7 +105,12 @@ export class MemoryGovernance {
       }
       const redactedSummary = redactMemoryPii(candidate.summary);
       const sourceLine = `Source: ${candidate.sourceEvidenceIds.map((id) => `evidence:${id}`).join(", ")}`;
-      const redactedContent = redactMemoryPii(`${candidate.summary}\n\n${sourceLine}`);
+      // The summary is the file's first body line; content carries only what
+      // the summary does not, namely provenance. Repeating the summary here
+      // made every mined .md read the same sentence twice.
+      // 摘要是文件正文首行；正文只携带摘要没有的内容，即来源。此前在这里重复摘要，使每条
+      // 提炼出的 .md 都把同一句话读两遍。
+      const redactedContent = redactMemoryPii(sourceLine);
       let sensitivity = overrides.sensitivity ?? candidate.sensitivity ?? "private";
       // Public recall would serve the raw candidate to workers; PII stays secret.
       // 公开召回会把原始候选交给 Worker；含 PII 的记忆保持 secret。
