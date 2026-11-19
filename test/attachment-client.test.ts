@@ -257,21 +257,25 @@ test("a transient read failure is retried instead of cached", async () => {
   const file = new CountingFile([pngBytes(64)], "flaky.png", { type: "image/png" }, counts);
   const original = file.arrayBuffer.bind(file);
   let calls = 0;
+  let fail = true;
   file.arrayBuffer = async () => {
     calls += 1;
-    // The base64 path tries the native encoder first, then FileReader; both
-    // reads must fail before the request reports the transient failure.
-    // base64 路径先试原生编码器、再试 FileReader；两次读取都失败后，请求才报告瞬时失败。
-    if (calls <= 2) throw new Error("transient");
+    if (fail) throw new Error("transient");
     return await original();
   };
   const outcome = await api.prepareAttachment(file);
   assert.ok(outcome.item);
+  // The first request may read once (FileReader-only runtimes) or twice (a
+  // runtime with native toBase64 falls back to FileReader); every read fails.
+  // 第一次请求可能读一次（只有 FileReader 的运行时），也可能读两次（有原生 toBase64
+  // 的运行时回退到 FileReader）；每次读取都失败。
   const first = await api.attachmentsForRequest([outcome.item]);
   assert.equal(first.ok, false);
+  assert.ok(calls >= 1, "the failed request must have read the file");
+  fail = false;
   const second = await api.attachmentsForRequest([outcome.item]);
   assert.equal(second.ok, true);
-  assert.equal(calls, 3);
+  assert.ok(calls >= 2, "the retry must reread the file");
 });
 
 test("a failed send restores the originals first, within the cap", () => {
