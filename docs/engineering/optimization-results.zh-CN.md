@@ -11,6 +11,87 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-19 —— 被记录的验证计划不再因自己的搜索路径失败
+
+- **主张：** 在真实的 `fa36a720` `plan.created` 步骤上，`extractFileExpectations` 现在返回
+  `[]`；“package.json / pnpm-workspace.yaml”里的斜杠与“里的线索”的搜索位置不再变成文件承诺，
+  而真实交付物（包括带空格的绝对路径）仍会被检查。
+- **证据：** 新回归修复前红（`["/ pnpm-workspace.yaml","/Users/user/.clone"]`），修复后绿
+  （`[]`）；通道完整套件 **919/919**，typecheck 0；main 上两个回归加
+  `test/verification.test.ts` 与 `test/fallback-planner.test.ts` 共 **31/31**，完整套件
+  **922/922**，gate **PASS**。在保护路径越权批准后以 `763dcd8` 落地。报告：
+  `.automation/repair-reports/verifier-20261119T0817.json`。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--搜索位置不是文件承诺回归用例必须使用事故里的真实计划)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--验证器以真实计划为-fixture搜索位置不是文件承诺)。
+
+## 2026-11-19 —— 只读 dispatch 目标在 fallback planner 里保持只读
+
+- **主张：** 写着“只读 / 不修改”的 `dispatch_task` 目标，不再因为描述了带“保存 / 写”字样的代码
+  就变成 `reversible_write` 计划。两条被记录的目标都规划成一次 `read-only-lookup`，而点名的写入
+  目标仍然规划为交付。
+- **证据：** 回归用例 `test/regression/fallback-read-only-dispatch.test.ts` 修复前红（两个计划都是
+  `prepare/reversible_write`，带 draft 子代理），修复后绿；通道完整测试 **919/919**，typecheck
+  退出 0；main 上回归用例加 `test/fallback-planner.test.ts` 共 **13/13**。通道报告：
+  `.automation/repair-reports/planner-20261119T0812.json`。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--只读标记压过裸写入动词fallback-planner)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--只读-dispatch-目标不再被规划成写入)。
+
+## 2026-11-19 —— 没有配置的工作目录
+
+- **主张：** “工作目录”设置与持久化文件夹已移除；写入必须点名确切目标，默认没有文件夹可写；
+  运行时锁与执行数据库位于 clone home；验证器通过步骤声明的写 Scope 验证基准之外的写入。
+- **证据：** `test/write-scopes.test.ts` **12/12**、`test/authority.test.ts` **12/12**、
+  `test/companion-config-api.test.ts` **17/17**、`test/verification.test.ts` **17/17**；
+  黄金路径、混沌（杀进程/重启）与修复通道测试通过；完整套件 **918/919**（一个无关失败来自
+  另一会话的 `.claude/launch.json`）；typecheck 退出 0；gate **PASS**，基线只有一行变化
+  （`policy/local-write-allowed`：allowed → `policy/local-write-without-scope-denied`：
+  denied）。所有者的请求就是可用性证据；没有测量所有者会话。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--没有配置的工作目录写入自己点名目标)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--没有配置的工作目录写入自己点名目标)。
+
+## 2026-11-19 —— 以目录引入的路径不是文件承诺，带空格的路径保持完整
+
+- **主张：** 验证器不再因为指令把目录作为上下文引入（“数据目录 /path”）而判失败；带空格的绝对
+  文件路径被完整提取。两条被点名的形式已处理；但这次补丁**没有**清掉记录中只读排查的真实计划
+  文本（见下方更正）。
+- **证据：** 修复通道的回归用例 **1/1**；`test/verification.test.ts` **16/16**；main 上完整
+  套件 **916/916**；typecheck 退出 0；gate **PASS**；用**缩减后**的指令文本复现返回
+  `extracted: []` 与 `needsReview`；带空格的写入路径返回
+  `[{"path":"/Users/user/Documents/Clone AI/out.md"}]`。以提交 `6dc13f0` 落地；此前通道的
+  保护路径闸门拒绝了它，所有者明确批准了这个已验证的补丁。
+- **更正（2026-11-19，审计后）：** 用真实 `plan.created` 步骤（journal seq 1818）在合并后的
+  提取器上重放，仍返回两个假承诺——`/Users/user/.clone` 与新增的
+  `/ pnpm-workspace.yaml`——`EvidenceVerifier` 仍然 `passed:false`。fixture 使用的是缩减后的
+  指令。随后用真实指令重跑的修复通道在所有者批准后以 `763dcd8` 落地；
+  修正后的决定见 `trade-offs.zh-CN.md` 的“搜索位置不是文件承诺”条目。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--以目录引入的路径不是文件承诺带空格的路径是一个路径)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--验证路径的修复由通道产出被保护路径闸门拒收由所有者批准合入)。
+
+## 2026-11-19 —— Agent 设置显示模型选择，而不是接线
+
+- **主张：** 设置 → Agent 不再暴露 Magpie 回环地址（`http://127.0.0.1:3425/v1`），也不再
+  重复显示原始 provider/model id 的"当前模型"卡；连接状态、说明与友好的模型下拉保留。
+- **证据：** `test/ui-locale.test.ts` **4/4** 断言 URL、`gateway?.endpoint` 表达式与
+  `label: "当前模型"` 不存在，而 `id: "gateway-model"` 与 `data-gateway-apply` 仍存在；
+  新 sidecar 启动后的线上页面只显示两张概览卡、没有端点；`npm test` **910/910**、
+  `npm run typecheck` 退出 0、`npm run gate` **PASS**。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--agent-设置只显示连接不显示回环路径或原始模型-id)、
+  [执行链路](optimizations.zh-CN.md#2026-11-19--agent-设置不再打印回环地址与重复的原始模型-id)。
+
+## 2026-11-19 —— 对话里的表格渲染成表格，并可按需导出 CSV
+
+- **主张：** 回复里的 GFM 表格现在在对话中渲染成真正的表格——表头、对齐、单元格内的行内
+  代码与粗体、转义的竖线、窄窗口下的横向滚动——而不是字面的 `|` 与 `---` 行。每张渲染出的
+  表格都带一个"导出 CSV"控件，把带时间戳的 CSV 写进所有者挑中的文件夹，Excel 可直接打开。
+- **证据：** `test/ui-structure.test.ts` **24/24**（解析、对齐、转义竖线、围栏代码块隔离、
+  HTML 转义、CSV 载荷、浏览器下载与原生选择器接线）；`test/desktop-only-surface.test.ts`
+  **5/5**（CSV 逐字节写入；空表、相对路径、不存在的目录与数据目录都被拒绝）；`npm test`
+  **910/910**；`npm run typecheck` 退出 0；`npm run gate` **PASS**，baseline 不变。用真实
+  标记与样式在 1024×900 与 375×812 下静态渲染，表格与控件可见，页面没有横向溢出。可用性
+  收益在此检查之外为假设；没有测量所有者会话。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--对话里的表格渲染成表格并可按需导出-csv)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--对话里的表格渲染成表格并可按需导出-csv)。
+
 ## 2026-11-19 —— 重复的工具调用在本机停下，运行中的 Run 不被轮询
 
 - **主张：** 共享循环现在在第三次连续相同调用时提示，在第五次以 `no_progress` 停止；它用工具名、
@@ -29,12 +110,13 @@
 ## 2026-11-19 —— 对话回合只显示结果与依据，不显示过程
 
 - **主张：** 对话的阅读栏现在只承载请求、结果、派生的 Run 与一行"依据"。模型、提示词快照、
-  工具表与每次工具调用的输入不再渲染在那里；"查看审计"控件以本请求为搜索词落在"主 Agent
-  回合"。
+  工具表与每次工具调用的输入不再渲染在那里；"查看审计"控件按回合 id 与对话 id 精确筛到
+  本回合，落在"主 Agent 回合"。
 - **证据：** `test/ui-structure.test.ts` 从断言对话标记里有"上下文 / 派发 / 模型字符串 /
-  `charter v3` / `dispatch_task`"改为断言它们不存在，且"结果 / 产物 / 依据 / 审计入口"存在
-  （**22/22**）；`npm test` **901/901**；`npm run typecheck` 退出 0；`npm run gate`
-  **PASS**，baseline 不变。用真实标记与 CSS 做静态渲染：四次调用的回合显示为回答加
+  `charter v3` / `dispatch_task`"改为断言它们不存在，且"结果 / 产物 / 依据 / 审计入口"存在，
+  渲染 `assemblyBlock` 验证压缩摘要、渲染 `turnsView` 验证被移除的工具清单（**26/26**）；
+  `npm test` **916/916**；`npm run typecheck` 退出 0；`npm run gate` **PASS**，baseline
+  不变。用真实标记与 CSS 做静态渲染：四次调用的回合显示为回答加
   `依据 工具调用 4 次 查看审计 ›`；派发任务的回合显示 `产物 1` 与其 Run 行。可用性收益为
   假设；没有测量所有者会话。
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--对话只显示结果与依据过程移入审计页)；
