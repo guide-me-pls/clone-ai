@@ -31,6 +31,182 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — The verifier's real plan is the fixture: search locations are not file promises
+
+- **Goal / hypothesis:** the merged `6dc13f0` fixed two synthetic sentences but
+  not the recorded plan. Replaying the real `plan.created` step still produced
+  two false promises (`/ pnpm-workspace.yaml` from "package.json /
+  pnpm-workspace.yaml", `/Users/qihoo/.clone` from "…里的线索") and
+  `EvidenceVerifier` still failed. Making the real instructions the fixture and
+  treating a slash-separated alternative or a search location as context should
+  clear the actual failure without widening the verifier's roots.
+- **Trade-off:** [a search location is not a file promise](../architecture/trade-offs.md#2026-11-19--a-search-location-is-not-a-file-promise-and-the-incidents-real-plan-is-the-fixture).
+- **Change:** `src/core/verification.ts` — the absolute-path pattern now
+  requires a path character after `/`, and a path followed by 里的线索 is
+  context, not a promise. `test/regression/verifier-real-plan.test.ts` builds the
+  exact `plan.created` step and asserts `[]`. Produced by the repair lane;
+  `src/core/verification.ts` is on the protected-path list, so the lane stopped
+  after the phases; the owner explicitly approved the verified patch. The
+  working agent committed it on the lane branch, rebased it onto main
+  (`5fd39f2`) and fast-forwarded main to `763dcd8`.
+- **Eval:** lane phase 1 **red** on the real step (actual
+  `["/ pnpm-workspace.yaml","/Users/qihoo/.clone"]` vs `[]`), phase 2 **green**;
+  the lane's full suite **919/919**, typecheck exit 0. A local revert of the
+  production patch reproduces the red case; the merged code extracts `[]` and
+  an `EvidenceVerifier` replay no longer fails on those promises. On main: both
+  regressions + `test/verification.test.ts` + `test/fallback-planner.test.ts`
+  **31/31**; full suite **922/922**; typecheck exit 0; gate **PASS**.
+- **Benchmark run:** none — a deterministic verifier contract; no provider,
+  model, dataset, split, seed or scoring parameter.
+- **Execution chain:** two lane runs. Run 1 (`8464295d`) failed the
+  `regression-missing` gate after **19.6 s / 22,047 tokens / 5 model calls**:
+  `FailedTrace.plan` carries only `id/title/risk/agentId`, so the worker could
+  not obtain the real instructions and stopped. The decision brief was rewritten
+  with the exact `plan.created` step from journal seq 1818 (instructions and
+  acceptance criteria); run 2 (`acb18e4b`, phase 1) wrote the red case in
+  **156.3 s / 25,747 tokens / 5 calls**; the fix run (`97df7d67`) edited the
+  verifier in **54.8 s / 38,739 tokens / 6 calls**; the protected-path gate then
+  stopped the lane. After the owner's approval the working agent committed the
+  staged patch, rebased it onto main and fast-forwarded. No retries after the
+  successful run.
+- **Pros:** the fixture is the recorded plan, not a paraphrase; the red case is
+  the actual two false promises; the fix is five lines and keeps the workspace
+  boundary, the `写入 missing.md` failure and the spaced-deliverable case green.
+- **Cons / next time:** `FailedTrace.plan` omits instructions and acceptance
+  criteria, so a plan- or verification-level defect cannot be reproduced from
+  the trace alone; the first lane run was wasted. Export the failing step's
+  instructions and acceptance criteria, or always carry them in a decision
+  brief. The extractor remains a prose heuristic; the trade-off names an
+  explicit `deliverables` field as the durable alternative. The protected-path
+  override was necessary and narrow, but a verifier fix cannot land without an
+  owner decision.
+- **Reversal condition:** if a real promised file is suppressed, add an
+  explicit deliverable marker (a plan field or a "generate/write exactly this
+  path" rule) rather than another exclusion word. If plans quote paths as
+  evidence rather than deliverables, stop scanning instructions for file
+  promises and rely on the step's declared scopes.
+
+### 2026-11-19 — A read-only dispatch objective no longer plans as a write
+
+- **Goal / hypothesis:** the two `dispatch_task` runs in the 2026-11-19 loop
+  were denied because the fallback planner read "读取/保存…配置的代码" and
+  "读写…配置的代码" as delivery. Making an explicit read-only marker outrank bare
+  verbs unless a path is named as the target should let the same objectives plan
+  as one read-only lookup instead of failing 3–4 ms after queuing.
+- **Trade-off:** [a read-only marker outranks a bare write verb](../architecture/trade-offs.md#2026-11-19--a-read-only-marker-outranks-a-bare-write-verb-in-the-fallback-planner).
+- **Change:** `src/planning/fallback-planner.ts` — `namedWriteTarget` requires a
+  write-target cue to be followed by a path; for an `explicitReadOnly` request
+  only that named target yields delivery. The regression
+  `test/regression/fallback-read-only-dispatch.test.ts` uses the two recorded
+  objectives and asserts no `reversible_write` step or subagent. Produced by the
+  repair lane as commit `b9d6b764`, fast-forwarded to main after the working
+  agent re-ran the red/green checks.
+- **Eval:** lane phase 1 **red** (1 failing assertion; the test lists both
+  `prepare`/`draft` violations), phase 2 **green**; full suite **919/919**;
+  typecheck exit 0. On main after the merge:
+  `node --experimental-strip-types --test test/regression/fallback-read-only-dispatch.test.ts test/fallback-planner.test.ts`
+  **13/13**. A local replay on the pre-fix planner returns
+  `prepare/reversible_write` for both real objectives; the merged planner
+  returns `read-only-lookup` for both, while
+  "不要修改现有文件，但把报告写到 out/report.md" stays `prepare/draft` and a
+  plain drafting request still drafts.
+- **Benchmark run:** none — a deterministic planner contract; no provider,
+  model, dataset, seed or scoring parameter.
+- **Execution chain:** the two traces (`09499a28`, `2c8b917a`) were staged into
+  an isolated trace-only clone home so the lane would not also consume three
+  unrelated pending traces. `npm run repair -- --max-traces 2 --decision …`
+  produced branch `rsi/auto-fix-20261119T0812` in ~92 s: phase 1 **41 s /
+  42,059 tokens / 7 model calls**, phase 2 **41.5 s / 38,878 tokens / 6 model
+  calls**. The worktree was removed on success; the working agent created a
+  disposable verification worktree, reverted the planner patch to reproduce the
+  red case (`['0: step prepare', '0: subagent draft', '1: step prepare',
+  '1: subagent draft']`), restored it, ran the real objectives and counter-cases,
+  then fast-forwarded main. No retries.
+- **Pros:** the phase-1 test is built from the recorded objectives, so the
+  red/green signal is the incident's own text; the precedence rule also fixes
+  "只读检查保存配置的代码"; the named-target counter-case is preserved; the
+  lane's full-suite gate caught nothing because the change is confined to one
+  predicate.
+- **Cons / next time:** the fix is still a keyword policy. A read-only request
+  whose only delivery cue is a bare verb plus an artifact ("只写一份报告") is now
+  planned read-only unless it names a target; the trade-off records that
+  limitation. The trace's `plan` entry carries no instructions (see the
+  verifier entry), so the lane cannot reproduce a plan-level defect from the
+  trace alone; the decision brief had to restate the two objectives.
+- **Reversal condition:** if a benchmark or an owner's dispatch is planned
+  read-only while the owner asked for a file without naming a target, add a
+  deliverable marker (an explicit `deliverables` field, or a "只写/只生成/只输出 +
+  artifact" rule) rather than re-enabling bare verbs. If plans start naming a
+  target for every deliverable, rely on `writeTarget` alone.
+
+### 2026-11-19 — There is no configured working directory; a write names its targets
+
+- **Goal / hypothesis:** the owner's screenshot showed the 工作目录 setting and
+  asked to remove it: "这个工作目录不要了，没有工作目录，整个电脑都是工作空间". With
+  reads already machine-wide and writes scope-required (4f0149e, 7e80c41), the
+  remaining owner-facing folder and the implicit workspace fallback were the
+  last places a folder acted as a permission; removing them, and letting the
+  verifier read a step's declared scope, should make the whole computer usable
+  without a configured folder.
+- **Trade-off:** [there is no configured working directory](../architecture/trade-offs.md#2026-11-19--there-is-no-configured-working-directory-a-write-names-its-targets).
+- **Change:** removed the 工作目录 UI (`index.html`, `app.js`, `ui-locale.ts`),
+  the `workspacePath` config field (`clone-config.ts`), the public config/paths
+  fields and the PATCH handling (`companion-server.ts`), and the launch config's
+  config read (`launch-config.ts`). `write-scopes.ts` no longer falls back to
+  the workspace; `policy-engine.ts` denies a `reversible_write` step with no
+  write scope (the repair lane's writable sandbox is exempt through
+  `runtime-factory.ts`). Runtime locks and the execution database moved to
+  `<clone home>/workspace-runtime` (`clone-home.ts`). The prompt's
+  `workspaceGuidance` became `machineGuidance()` with no current folder
+  (charter 7). The verifier's roots are the internal base plus the step's
+  declared files write scopes (`verification.ts`, `verified-workspace-path.ts`).
+  The companion server's internal base is `CLONE_AI_WORKSPACE` or the clone
+  home, not the app's cwd.
+- **Eval:** `test/write-scopes.test.ts` **12/12** (a no-target write gets no
+  scope; the authority denies it; a named target follows the approval ladder);
+  `test/authority.test.ts` **12/12**; `test/companion-config-api.test.ts`
+  **17/17** (a `workspacePath` PATCH is refused, the locale remains durable);
+  `test/verification.test.ts` **17/17** (a file outside the base verifies
+  through the step's scope; the same path without the scope still fails);
+  `test/clone-home.test.ts`, `test/desktop-launch-config.test.ts`,
+  `test/ui-structure.test.ts`, `test/companion-main-agent.test.ts`,
+  `test/golden-path.test.ts`, `test/kill-restart.test.ts` and
+  `test/repair.test.ts` pass. Full suite **918/919**; the single failure is
+  `test/desktop-only-ui.test.ts` because another session created
+  `.claude/launch.json` at 15:03 during this work — not from this change.
+  `npm run typecheck` exit 0. `npm run gate` **PASS** after regenerating the
+  baseline for the intended `policy/local-write-without-scope-denied` case; the
+  baseline diff is one line.
+- **Benchmark run:** none — deterministic policy, verifier and UI contracts; the
+  gate's policy suite is the eval.
+- **Execution chain:** one inline session. Read the config/UI/policy/runtime/
+  prompt/verifier paths, wrote the bilingual trade-off, then removed in layers:
+  write scopes and the policy denial; config/UI/server/launch; the clone-home
+  runtime path; the prompt; the verifier roots. Initial failures: the repair
+  lane's sandbox had no scope (added the `writableSandbox` exemption); the
+  golden path and the chaos fixture relied on the default folder (added explicit
+  scopes); two contract tests encoded the old prompt/default behavior (updated).
+  The gate caught the intended policy change; regenerated the baseline and
+  reviewed the one-line diff. A concurrent session created `.claude/launch.json`
+  during the run, leaving one unrelated suite failure; it was not touched.
+- **Pros:** one owner-visible concept removed end to end (setting, config, API,
+  prompt, default scope); the repair lane still works; a write outside the
+  internal base verifies through its declared scope; the gate's baseline makes
+  the intended behavior change reviewable.
+- **Cons / next time:** project instructions and relative paths now use an
+  internal base (the clone home for the server); automatic project rules are
+  usually absent and relative write targets are not scoped. Diff and test
+  contracts are still base-relative. The edit touched files another session was
+  editing (`app.js`, `ui-structure`, docs); the concurrent `.claude/launch.json`
+  shows the cost of whole-tree work. Next time: introduce the verifier's scope
+  roots together with the write-scope removal, and wait for concurrent UI work
+  to settle before editing the same files.
+- **Reversal condition:** if the agent cannot load a project's rules or run its
+  tests without an owner-chosen folder, add a learned or per-request folder (the
+  folder the request names, not a global setting), or a per-step working
+  directory. If verification of scoped writes proves insufficient, widen the
+  verifier to the step's scopes for diff and test contracts too.
+
 ### 2026-11-19 — The sidebar's top level is the conversation, with its tasks nested
 
 - **Goal / hypothesis:** the owner's complaint was that having both 对话 and
@@ -146,6 +322,135 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** see the trade-off entry; add a collapsed 连接详情
   disclosure if endpoint diagnosis from Settings becomes necessary.
 
+### 2026-11-19 — A conversation table renders as a table and exports to CSV
+
+- **Goal / hypothesis:** the owner's screenshot showed clone-ai's reply with a
+  literal `|位置|状态|` / `|---|` block and asked whether a table could be an
+  Excel-openable file instead of Markdown. The hypothesis was that the ugliness
+  was a renderer gap, not a data problem: `richText` escaped and styled
+  headings, lists, code and bold but had no table rule, so a GFM table arrived
+  as pipes. Rendering the table, and attaching the CSV it already contains,
+  would make the conversation readable and still give the owner the file.
+- **Trade-off:** [a conversation table renders as a table, and exports to CSV on request](../architecture/trade-offs.md#2026-11-19--a-conversation-table-renders-as-a-table-and-exports-to-csv-on-request).
+- **Change:** `apps/desktop/ui/app.js` adds a GFM table subset to `richText`
+  (`mdInline`, `splitTableRow`, `tableAlignments`, `extractMarkdownTables`,
+  `csvCell`, `markdownTableMarkup`); a table renders in `.md-table-wrap` with a
+  导出 CSV button whose `data-export-csv` attribute holds the CSV (newlines as
+  `&#10;` so the message pass cannot turn them into `<br>`).
+  `exportMarkdownTable` uses the native folder picker and
+  `POST /api/tables/export`, or a Blob download in a browser preview.
+  `src/companion-server.ts` adds the endpoint (absolute existing folder, outside
+  the data directory, 5 MB cap, exclusive `clone-ai-table-<stamp>.csv`).
+  `components.css` styles the table, scroller and control.
+  `apps/desktop/macos/main.swift` gives the picker a table-export title.
+  `test/ui-structure.test.ts` adds parser, escaping, CSV, browser-download and
+  native-picker wiring tests; `test/desktop-only-surface.test.ts` adds the
+  endpoint test.
+- **Eval:** `node --experimental-strip-types --test test/ui-structure.test.ts`
+  **24/24**; `node --experimental-strip-types --test
+  test/desktop-only-surface.test.ts` **5/5**; `npm test` **910/910**;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline unchanged.
+  Against the old renderer the same table input renders as
+  `"| 位置 | 状态 |<br>| --- | --- |<br>| a | b |"` with no table element
+  (verified with `git show ba5d3a1:apps/desktop/ui/app.js`), so the new table
+  assertions fail without the change. A static render of the real
+  `richText` output plus the four UI stylesheets at 1024×900 and 375×812 shows
+  the table, the 导出 CSV control, no page horizontal overflow
+  (`scrollWidth === innerWidth`), and word-boundary wrapping on mobile. The
+  endpoint test writes the CSV and reads it back byte for byte. The usability
+  gain is observed in the static render; no owner session was measured.
+- **Benchmark run:** none — deterministic UI contract and wiring; no provider,
+  model, dataset, split, seed or scoring parameter.
+- **Execution chain:** one inline pass: read `richText`, the conversation click
+  handler, the native directory picker and the `/api/export` route; write the
+  trade-off (both languages); implement the parser/renderer, export control,
+  endpoint and native picker label; add the two test files' cases; run the
+  targeted tests, full suite, typecheck and gate; render the real markup in a
+  static page and check 1024 and 375 with the Browser pane. Failures fixed in
+  the pass: the message pass converted the CSV's newlines to `<br>` inside the
+  attribute (encoded them as `&#10;`); an escaped-pipe assertion targeted the
+  header as a body cell; the pre-existing uncommitted turn-audit test still
+  expected the request as the locator while the source uses the turn id plus
+  conversation id (updated the stale assertion); and `overflow-wrap: anywhere`
+  split "Clone" mid-word on mobile (switched the cell to `break-word`). No
+  provider calls and no benchmark cost.
+- **Pros:** every existing message re-renders as a table when reopened; the
+  export stays owner-initiated and needs no Worker, write scope or approval;
+  escaping is unchanged because cells go through the escape-first inline path;
+  the table and the CSV share one parse, so what the owner sees is what Excel
+  receives.
+- **Cons / next time:** the hand parser covers the common GFM subset — no
+  multi-line cells, inline HTML or four-space-indented tables. The CSV is
+  duplicated in a DOM attribute. The picker's new title needs an app rebuild,
+  though export works against an old shell. The 5 MB cap is enforced but not
+  exercised by a test.
+- **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-19 — The verifier path fix was produced by the lane, refused by the protected-path gate, and merged by the owner
+
+- **Goal / hypothesis:** the recorded read-only investigation failed verification
+  on two paths its instructions introduced as directories
+  (`/Users/qihoo/.clone` and `/Users/qihoo/Documents/Clone AI/.clone`). The fix
+  should treat a directory-introduced path as context, and keep a spaced
+  absolute file path whole, without opening the verifier's workspace boundary.
+- **Trade-off:** [a directory-introduced path is not a file promise](../architecture/trade-offs.md#2026-11-19--a-path-introduced-as-a-directory-is-not-a-file-promise-and-a-spaced-path-is-one-path).
+- **Change:** the repair lane produced a 15-line change to
+  `src/core/verification.ts` plus
+  `test/regression/fa36a720-directory-and-spaced-path.test.ts` in
+  `.claude/worktrees/rsi-20261119T0641`. `scripts/nightly-rsi-policy.mjs` lists
+  `src/core/verification.ts` in `PROTECTED`, so the lane stopped with
+  `failedGate: "protected-path"` after both phases completed. The owner
+  explicitly approved merging the verified patch; it landed as commit
+  `6dc13f0` on main. The protected-path policy is unchanged.
+- **Eval:** the lane's phase-1 test was red (**1 failing assertion**); after the
+  fix, the regression test is **1/1**, `test/verification.test.ts` **16/16**, and
+  the lane's full suite exited **0** (`evalAfter.tests.status: 0`). Post-merge on
+  main: regression + verification **17/17**, full suite **916/916**, typecheck
+  exit 0, gate **PASS**. A local reproduction of the **reduced** instruction
+  text against the merged code returns `extracted: []` and a `needsReview`
+  result instead of a failure; a spaced write path returns
+  `[{"path":"/Users/qihoo/Documents/Clone AI/out.md"}]`. The lane did not record
+  `regressionAfter` because the protected-path gate stopped before that check.
+- **Correction (2026-11-19, after the audit):** the `extracted: []` sentence
+  above used a reduced form of the instructions. Replaying the actual
+  `plan.created` step (journal seq 1818) on the merged extractor returns
+  `"/ pnpm-workspace.yaml"` (the slash in "package.json /
+  pnpm-workspace.yaml") and `"/Users/qihoo/.clone"` (a search location in
+  "…里的线索"), and `EvidenceVerifier` still returns `passed:false`. The
+  regression fixture covered only the two synthetic sentences. A follow-up lane
+  repair with the real instructions (and a red-first
+  `test/regression/verifier-real-plan.test.ts`) produced a verified patch on
+  `src/core/verification.ts`; the owner approved it and it landed as commit
+  `763dcd8`. The replacement trade-off entry is at the top of `trade-offs.md`.
+- **Benchmark run:** none — deterministic verifier contract; no provider, model,
+  dataset, split, seed or scoring parameter.
+- **Execution chain:** about 8 minutes of lane time plus verification, one inline
+  agent, four lane runs. The first three decision briefs were stopped after
+  review because they conflicted with existing tests: machine-wide verifier
+  reads contradict the workspace-boundary test; skipping extraction for
+  read_only steps breaks both that test and the `写入 missing.md` case; requiring
+  a write verb breaks the "file expectations distinguish paths" case. The fourth
+  brief (directory marker + spaced absolute paths, boundary unchanged) produced
+  the patch; phase 1 was red, phase 2 green, and the protected-path gate
+  rejected the diff. The owner then approved the verified patch; I committed it
+  on the lane branch and fast-forwarded main to `6dc13f0`, then re-ran the
+  regression, `test/verification.test.ts`, the full suite, typecheck and gate on
+  main. Earlier runs left worktrees `rsi-20261119T0634/0638/0639`.
+- **Pros:** the lane's gates worked as designed — the case had to be red first,
+  the suite had to pass, and the protected-path check refused a change to the
+  verifier itself. The owner's override was explicit and narrow (one verified
+  patch, not a policy change). The patch is small, and both the new case and the
+  existing verifier suite are green on main.
+- **Cons / next time:** I did not read `scripts/nightly-rsi-policy.mjs` before
+  choosing the target, so the first three runs were spent on briefs the existing
+  tests ruled out. A verifier bug cannot be committed by this lane without an
+  owner override; the policy still says so, and this merge is one recorded
+  exception. Next time: read the protected list first and surface the policy
+  decision to the owner before running the lane.
+- **Reversal condition:** the trade-off's reversal condition; additionally, the
+  owner may change the protected-path policy, which would make this a normal
+  lane repair instead of an override.
+
 ### 2026-11-19 — A repeated tool call stops the turn locally, so a queued run is not polled
 
 - **Goal / hypothesis:** the owner's screenshot showed a completed turn whose
@@ -204,10 +509,14 @@ file keeps every attempt, including the ones that did not work.
   off; the thresholds are constants, not measured from a benchmark. The two
   failed `dispatch_task` runs in the screenshot are a different defect: a
   read-only objective was planned as `reversible_write` and denied by the files
-  policy, and that planner problem is still open. The stuck run's claim was
-  also observed expired (`lease_until` 06:25:09, no renewal) without being
-  investigated. Next time: reproduce the read-only dispatch plan and decide
-  whether the planner prompt or the policy needs the fix.
+  policy. That planner defect was fixed later the same day by the repair lane
+  (commit `b9d6b764`; see the read-only dispatch entry). The earlier note that
+  the stuck run's claim was "observed expired (`lease_until` 06:25:09, no
+  renewal)" is **not supported** by the current data: the row's `lease_until`
+  equals the release-at-completion time (06:25:46.153Z), `attempt` is 1, no
+  orphan-recovery event exists, and no row with 06:25:09 is present. Treat that
+  observation as unverified. Next time: check the claim/release transition in
+  `run_claims` before inferring a lease lapse.
 - **Reversal condition:** if a benchmark or an owner's turn is stopped as
   `no_progress` while it was making real progress, raise the thresholds, narrow
   the guard to read-only tools, or fingerprint a progress field instead of the
@@ -228,24 +537,34 @@ file keeps every attempt, including the ones that did not work.
 - **Change:** `apps/desktop/ui/app.js` replaces `logContextMarkup` /
   `logDispatchMarkup` with `logProductMarkup` (spawned runs as 产物 rows) and
   `logBasisMarkup` (tool-call count, failures, spawned-run count, and a 查看审计
-  control carrying the request); a turn body now renders only 结果. The
-  conversation click handler opens 设置 → 审计与轨迹 and calls the new
-  `window.CloneAudit.showTurns(request)`, which lands on 主 Agent 回合 with the
-  request as the server-side search. `components.css` drops the unused
-  tool-table/tool-row/context styles and adds the one-line basis styles.
-  `audit.js`/`audit.css` add a 上下文压缩 block, so the compaction summaries the
-  conversation used to show stay readable in their new home.
-  `test/ui-structure.test.ts` flips the conversation assertions, pins the audit
-  landing, and renders `assemblyBlock` to prove the compaction summary survives.
+  control carrying the turn id and conversation id); a turn body now renders
+  only 结果. An unjournaled turn gets no link, a running turn with no calls says
+  so and still links, and a legacy history turn keeps the 结果 shape with an
+  honest "no process was saved" basis. The conversation click handler opens
+  设置 → 审计与轨迹 and calls `window.CloneAudit.showTurns(turnId, conversationId)`,
+  which lands on 主 Agent 回合 filtered by the exact turn and conversation and
+  focuses the turn search. `components.css` drops the unused
+  tool-table/tool-row/context styles, adds the one-line basis styles and gives
+  the control a 24 px hit area. `audit.js`/`audit.css` add a 上下文压缩 block, so
+  the compaction summaries the conversation used to show stay readable in their
+  new home; `turn.toolCalls` (input up to 400 chars) remains the executed-call
+  record, and the turn card carries `data-au-turn-id` / `data-au-turn-conversation`.
+  The turns view owns its own error and loading state, a section-open failure no
+  longer wipes a newer filtered turn, and the render no longer gates the turns
+  view on the audit overview. `test/ui-structure.test.ts` flips the conversation
+  assertions, pins the turn-id landing, renders `assemblyBlock` to prove the
+  compaction summary survives, and renders `turnsView` to prove the tool list
+  survives.
 - **Eval:** `node --experimental-strip-types --test test/ui-structure.test.ts`
-  **22/22**. Before the change the same test asserted 上下文 / 派发 / the model
+  **26/26**. Before the change the same test asserted 上下文 / 派发 / the model
   string / `charter v3` / `dispatch_task` in the conversation markup, so it
-  fails on the new markup. `npm test` **901/901**; `npm run typecheck` exit 0;
+  fails on the new markup. `npm test` **916/916**; `npm run typecheck` exit 0;
   `npm run gate` **PASS**, baseline unchanged. A static render of the real
   markup and CSS (1000×900) shows a four-call turn as the answer plus
   `依据 工具调用 4 次 查看审计 ›`, and a dispatched turn as `产物 1` with its
-  run row. The usability gain itself is marked **assumed**: no owner session was
-  measured, only the deterministic contract and a rendered screenshot.
+  run row; an expanded audit render shows the 上下文压缩 summary. The usability
+  gain itself is marked **assumed**: no owner session was measured, only the
+  deterministic contract and rendered screenshots.
 - **Benchmark run:** none — deterministic UI contract and wiring; no provider,
   model, dataset, split, seed or scoring parameter.
 - **Execution chain:** one inline pass: `rg`/read over the turn log, the audit
@@ -254,20 +573,32 @@ file keeps every attempt, including the ones that did not work.
   CSS cleanup, and the test rewrite. Two test failures were fixed inside the
   pass: an over-broad `doesNotMatch(/上下文/)` matched the word inside the new
   aria-label (scoped to the step labels), and the failed-turn basis sentence
-  lacked the period the old assertion expected. The targeted test, the full
-  suite, typecheck and the gate then passed. A three-lens adversarial review
-  workflow (correctness, UX/accessibility, tests/docs) is checking the diff; its
-  outcome is added here when it returns. No provider calls and no benchmark cost.
+  lacked the period the old assertion expected. The targeted test, typecheck
+  and the gate then passed. A three-lens adversarial review workflow
+  (correctness, UX/accessibility, tests/docs) then ran over the diff: 20 agents,
+  2.0M subagent tokens, 1,008 tool calls, 18.4 minutes, 11 confirmed findings
+  (2 high, 7 medium, 2 low) and 6 rejected. The high findings were the
+  request-text locator overflowing the 16 KiB GET header limit (HTTP 431) and
+  the eval never pinning the audit's tool list; the mediums were journal
+  redaction vs. the raw request, an unjournaled dead link, focus, the
+  accessible name, the audit-failure race, the audit render gate, and the
+  trade-off's "unchanged" claim about compactions. All were fixed: the link now
+  carries the turn id and conversation, the audit filters by both, unjournaled
+  turns get no link, the search is focused and the failure painted in the view,
+  the compaction text has an audit block, and the tests render both audit
+  pieces. The full suite was re-run after the fixes (**916/916**). No provider
+  calls and no benchmark cost.
 - **Pros:** the conversation has one place for the answer and one compact line
   for its grounds; the audit remains the single searchable copy of the process,
-  so the two views stop drifting. The live running card and the settled turn now
-  share the same 结果 section.
+  so the two views stop drifting. The settled turn is request, result, products
+  and grounds; the live card keeps a transient tool timeline while the turn
+  streams.
 - **Cons / next time:** the counts in 依据 are not evidence in themselves — the
-  answer must still name what it checked — and the audit landing searches by the
-  request text, so two turns with the same request share a result set. The
-  density has not been checked with the owner in the running app. Next time,
-  pin the aria-label wording in the same pass as the test so the assertion is
-  scoped from the start.
+  answer must still name what it checked — and the audit landing is a one-turn
+  filter the owner must clear to browse. The density has not been checked with
+  the owner in the running app. Next time, run the adversarial review before
+  declaring the eval complete: it found the link's failure modes and the
+  unpinned audit side that the first test pass missed.
 - **Reversal condition:** if owners report that understanding an ordinary answer
   requires opening the audit, or the filtered audit does not land on the turn,
   restore one collapsed 过程 disclosure under the result — never the two full

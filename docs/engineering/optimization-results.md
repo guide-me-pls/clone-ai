@@ -15,6 +15,112 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-19 — The recorded verifier plan no longer fails on its own search paths
+
+- **Claim:** on the actual `fa36a720` `plan.created` step,
+  `extractFileExpectations` now returns `[]`; the slash in
+  "package.json / pnpm-workspace.yaml" and the "里的线索" search location no
+  longer become file promises, while real deliverables (including spaced
+  absolute paths) are still checked.
+- **Evidence:** the new regression is red before
+  (`["/ pnpm-workspace.yaml","/Users/qihoo/.clone"]`) and green after (`[]`);
+  lane suite **919/919**, typecheck 0; on main both regressions plus
+  `test/verification.test.ts` and `test/fallback-planner.test.ts` **31/31**,
+  full suite **922/922**, gate **PASS**. Landed as `763dcd8` after the
+  protected-path override. Report:
+  `.automation/repair-reports/verifier-20261119T0817.json`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-search-location-is-not-a-file-promise-and-the-incidents-real-plan-is-the-fixture);
+  [execution chain](optimizations.md#2026-11-19--the-verifiers-real-plan-is-the-fixture-search-locations-are-not-file-promises).
+
+## 2026-11-19 — Read-only dispatch objectives stay read-only in the fallback planner
+
+- **Claim:** `dispatch_task` objectives that say 只读 / 不修改 no longer become a
+  `reversible_write` plan just because they mention 保存 / 写 in the code they
+  describe. Both recorded objectives plan as one `read-only-lookup`, while a
+  named write target still plans delivery.
+- **Evidence:** the regression
+  `test/regression/fallback-read-only-dispatch.test.ts` is red before (both
+  plans `prepare/reversible_write` with a draft subagent) and green after; the
+  lane's full suite is **919/919** and typecheck exit 0; on main the regression
+  plus `test/fallback-planner.test.ts` is **13/13**. Lane report:
+  `.automation/repair-reports/planner-20261119T0812.json`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-read-only-marker-outranks-a-bare-write-verb-in-the-fallback-planner);
+  [execution chain](optimizations.md#2026-11-19--a-read-only-dispatch-objective-no-longer-plans-as-a-write).
+
+## 2026-11-19 — There is no configured working directory
+
+- **Claim:** the 工作目录 setting and the persisted folder are gone; a write must
+  name its exact target and no folder is writable by default; runtime locks and
+  the execution database live in the clone home; the verifier verifies a write
+  outside the internal base through the step's declared write scope.
+- **Evidence:** `test/write-scopes.test.ts` **12/12**, `test/authority.test.ts`
+  **12/12**, `test/companion-config-api.test.ts` **17/17**,
+  `test/verification.test.ts` **17/17**; the golden path, chaos (kill/restart)
+  and repair-lane tests pass; full suite **918/919** (one unrelated failure from
+  another session's `.claude/launch.json`); typecheck exit 0; gate **PASS** with
+  a one-line baseline change (`policy/local-write-allowed`:
+  allowed → `policy/local-write-without-scope-denied`: denied). The owner's
+  request is the usability evidence; no owner session was measured.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--there-is-no-configured-working-directory-a-write-names-its-targets);
+  [execution chain](optimizations.md#2026-11-19--there-is-no-configured-working-directory-a-write-names-its-targets).
+
+## 2026-11-19 — A directory-introduced path is not a promised file, and a spaced path stays whole
+
+- **Claim:** the verifier no longer fails a run because its instructions
+  introduced a directory as context (`数据目录 /path`), and an absolute file path
+  containing spaces is extracted whole. The two named forms are handled; the
+  recorded read-only investigation's real plan text was **not** cleared by this
+  patch (see the correction below).
+- **Evidence:** the repair lane's regression case **1/1**;
+  `test/verification.test.ts` **16/16**; full suite on main **916/916**;
+  typecheck exit 0; gate **PASS**; a reproduction of the recorded instruction
+  text returns `extracted: []` and `needsReview`; a spaced write path returns
+  `[{"path":"/Users/qihoo/Documents/Clone AI/out.md"}]`. Landed as commit
+  `6dc13f0`, after the lane's protected-path gate refused it and the owner
+  explicitly approved the verified patch.
+- **Correction (2026-11-19 audit):** replaying the real `plan.created` step
+  (journal seq 1818) on the merged extractor returns two false promises —
+  `/Users/qihoo/.clone` and a new `/ pnpm-workspace.yaml` — and
+  `EvidenceVerifier` still returns `passed:false`. The fixture used reduced
+  instructions. A follow-up lane patch with the real instructions landed as
+  `763dcd8` after the owner approved it; the corrected decision is the "search
+  location is not a file promise" entry in `trade-offs.md`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-path-introduced-as-a-directory-is-not-a-file-promise-and-a-spaced-path-is-one-path);
+  [execution chain](optimizations.md#2026-11-19--the-verifier-path-fix-was-produced-by-the-lane-refused-by-the-protected-path-gate-and-merged-by-the-owner).
+
+## 2026-11-19 — Agent settings show the model choice, not the wiring
+
+- **Claim:** Settings → Agent no longer exposes the Magpie loopback URL
+  (`http://127.0.0.1:3425/v1`) or a duplicate 当前模型 card with the raw
+  provider/model id; the connection state, explanation and friendly model
+  picker remain.
+- **Evidence:** `test/ui-locale.test.ts` **4/4** asserts the URL, the
+  `gateway?.endpoint` expression and `label: "当前模型"` are absent while
+  `id: "gateway-model"` and `data-gateway-apply` remain; a live page after the
+  new sidecar started shows exactly two overview cards and no endpoint; `npm
+  test` **910/910**, `npm run typecheck` exit 0, `npm run gate` **PASS**.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--agent-settings-show-the-connection-not-the-loopback-url-or-raw-model-id),
+  [execution chain](optimizations.md#2026-11-19--agent-settings-stop-printing-the-loopback-url-and-the-duplicate-raw-model-id).
+
+## 2026-11-19 — A conversation table renders as a table and exports to CSV
+
+- **Claim:** a GFM table in a reply now renders as a real table in the
+  conversation — header, alignment, inline code and bold in cells, escaped
+  pipes, horizontal scrolling on narrow windows — instead of the literal `|`
+  and `---` rows. Every rendered table carries a 导出 CSV control that writes a
+  timestamped CSV into the folder the owner picks; Excel opens it directly.
+- **Evidence:** `test/ui-structure.test.ts` **24/24** (parser, alignment,
+  escaped pipes, code-fence isolation, HTML escaping, CSV payload, browser
+  download and native-picker wiring); `test/desktop-only-surface.test.ts`
+  **5/5** (the CSV is written byte for byte; empty, relative, missing and
+  data-directory targets are refused); `npm test` **910/910**;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline unchanged. A
+  static render of the real markup and styles at 1024×900 and 375×812 shows the
+  table and control with no page horizontal overflow. The usability gain is
+  assumed beyond that check; no owner session was measured.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-conversation-table-renders-as-a-table-and-exports-to-csv-on-request);
+  [execution chain](optimizations.md#2026-11-19--a-conversation-table-renders-as-a-table-and-exports-to-csv).
+
 ## 2026-11-19 — A repeated tool call stops the turn locally, and a live run is not polled
 
 - **Claim:** the shared loop now warns at the third consecutive identical call
@@ -40,15 +146,17 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Claim:** the conversation's reading column now carries only the request, the
   result, the produced runs and one 依据 line. The model, prompt snapshot, tool
   table and every tool call's input are no longer rendered there, and a 查看审计
-  control lands on 主 Agent 回合 with the request as the search.
+  control lands on 主 Agent 回合 filtered to that turn by its id and
+  conversation.
 - **Evidence:** `test/ui-structure.test.ts` flips from asserting 上下文 / 派发 /
   the model string / `charter v3` / `dispatch_task` in the conversation markup to
-  asserting they are absent and 结果 / 产物 / 依据 / the audit link are present
-  (**22/22**); `npm test` **901/901**; `npm run typecheck` exit 0; `npm run gate`
-  **PASS**, baseline unchanged. A static render of the real markup and CSS shows
-  a four-call turn as the answer plus `依据 工具调用 4 次 查看审计 ›`, and a
-  dispatched turn as `产物 1` with its run row. The usability gain is assumed;
-  no owner session was measured.
+  asserting they are absent and 结果 / 产物 / 依据 / the audit link are present,
+  renders `assemblyBlock` for the compaction summary and `turnsView` for the
+  dropped tool list (**26/26**); `npm test` **916/916**; `npm run typecheck` exit
+  0; `npm run gate` **PASS**, baseline unchanged. A static render of the real
+  markup and CSS shows a four-call turn as the answer plus
+  `依据 工具调用 4 次 查看审计 ›`, and a dispatched turn as `产物 1` with its
+  run row. The usability gain is assumed; no owner session was measured.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--the-conversation-shows-the-result-and-its-grounds-the-process-moves-to-the-audit);
   [execution chain](optimizations.md#2026-11-19--a-conversation-turn-shows-its-result-and-evidence-and-the-process-moves-to-the-audit).
 

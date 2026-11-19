@@ -6,11 +6,53 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A read-only dispatch task is no longer planned as a write
+
+`dispatch_task` with an objective that says 只读 / 不修改 no longer becomes a `reversible_write` plan just because it mentions 保存 / 写 in the code it describes. The fallback planner now lets the explicit read-only marker outrank a bare delivery verb; only a named write target (写到 / 保存到 / 输出到 plus a path) still turns a read-only request into a delivery plan. Both recorded 2026-11-19 objectives now plan as one read-only lookup instead of a write step that the files policy denied 3–4 ms after queuing. The repair lane produced the patch and the regression case; the regression is red before and green after.
+
+带“只读 / 不修改”的 `dispatch_task` 目标，不再因为描述了带“保存 / 写”字样的代码就变成 `reversible_write` 计划。fallback planner 现在让显式只读标记压过裸交付动词；只有点名的写入目标（写到 / 保存到 / 输出到 加路径）才会把只读请求变成交付计划。2026-11-19 的两条被记录目标现在规划为一次只读查找，而不是被 files 策略在入队 3–4ms 后拒绝的写入步骤。补丁与回归用例由修复通道产出；回归用例修复前红、修复后绿。
+
+### A video attachment's frame comes from AVFoundation
+
+A video chosen through the attachment picker now gets its preview frame from macOS AVFoundation instead of the WebView's `<video>` media pipeline: one 1280 px JPEG at 1 s, measured at 160 ms on the first run and 13 ms thereafter, versus 1,065–1,277 ms for the same 8 MB/30 s/1080p file in WKWebView. Drag/drop and pasted videos, or a failed extraction, still use the HTML path. The model receives the same single JPEG frame and the attachment payload is unchanged.
+
+通过附件选择器选中的视频，预览帧现在来自 macOS AVFoundation，而不是 WebView 的 `<video>` 媒体管线：1 秒处的一张 1280px JPEG，实测第一次 160ms、之后 13ms；同一个 8MB/30 秒/1080p 文件在 WKWebView 中要 1,065–1,277ms。拖放/粘贴的视频或抽取失败仍走 HTML 路径。模型收到同样的单张 JPEG 帧，附件载荷不变。
+
+### There is no working-directory setting
+
+The 工作目录 setting is gone: the app no longer asks for or stores a folder, and the config API no longer exposes one. Reads still reach any readable location except protected ones; a write must name its exact target as a files write scope, and no folder is writable by default — a write that names no target is denied instead of falling back to the workspace. Runtime locks and the execution database live under `~/.clone/workspace-runtime`, not in a project folder. The Main Agent's prompt says the computer is the workspace and no longer names a current folder. A write outside the internal base can be verified when the step declares the scope that contains it. The repair lane's isolated worktree remains writable without a per-step scope.
+
+工作目录设置已移除：App 不再询问或保存文件夹，配置接口也不再暴露它。读取仍可到达受保护位置之外的任何可读位置；写入必须把确切目标声明为 files 写 Scope，默认没有文件夹可写——没有点名目标的写入会被拒绝，而不是回退到工作区。运行时锁与执行数据库位于 `~/.clone/workspace-runtime`，不再放在项目文件夹里。主 Agent 的 Prompt 说明整台电脑就是工作空间，不再点名当前文件夹。基准之外、但位于步骤声明 Scope 内的写入可以被验证。修复通道的隔离 worktree 仍无需每步 Scope 即可写。
+
 ### The sidebar's top level is the conversation, and tasks nest inside it
 
 The sidebar now has one top-level kind: a conversation. The tasks its turns dispatched are collapsible children, with a count and a running/waiting/failed summary. Tasks dispatched by the main conversation sit under a non-row 主对话 header; scheduled, repair and opportunity runs sit under 定时/自动. A waiting child is still promoted into 需要你的确认, so a decision is never hidden inside a collapsed group. The owner-facing words are now 新请求 (the action), 对话 (the thread), 任务 (one bounded Run) and 定时 (the schedule); 最近任务, the peer 任务记录 kind, 任务对话 and 个人对话 are gone, and a task record's top bar is a breadcrumb back to its conversation. A task with no conversation no longer sends a follow-up into the main conversation: sending from its record starts a new request. The dashboard row is the thread, named by its first request, and its status aggregates waiting > running > recent failure > completed.
 
 侧栏现在只有一种顶层行：对话。回合派发的任务是可折叠的子行，摘要显示数量与运行中/待确认/失败的分布。主对话派发的任务放在不可点击的"主对话"标题下；定时、修复与机会卡 Run 放在"定时/自动"下。等待中的子任务仍被提升到"需要你的确认"，决定不会被折叠组藏起来。所有者词表现在是"新请求（动作）、对话（线程）、任务（一次有界 Run）、定时（计划规则）"；"最近任务"、作为并列种类的"任务记录"、"任务对话"与"个人对话"已移除，任务记录顶栏改为回到所属对话的面包屑。没有对话的任务不再把追问送进主对话：从它的记录发送会作为新请求开始。Dashboard 的行是线程，以第一个请求命名，状态聚合为等待 > 运行中 > 最近失败 > 已完成。
+
+### A directory introduced in a plan is not a promised file, and a spaced path stays whole
+
+Verification no longer fails a run because a plan mentioned a directory as context — 数据目录 /path, 项目运行目录 /path, "the data directory /path" — or because an absolute file path contains a space. A path that is genuinely a file promise is still checked, including one with spaces (`/Users/qihoo/Documents/Clone AI/out.md` is now extracted whole instead of `AI/out.md`). The verifier's workspace read boundary, symlink refusal and write authorization are unchanged. The two named forms are handled; this did **not** clear the recorded investigation's real plan, which still yielded two false promises and failed verification. The follow-up patch, with the real plan as its fixture, then landed as `763dcd8` after the owner approved it; that step now yields no file promises. The repair lane produced both patches.
+
+验证不再因为计划把目录作为上下文提及（数据目录 /path、项目运行目录 /path、"the data directory /path"）或因为绝对文件路径含空格而判失败。真正的文件承诺仍会被检查，包括带空格的路径（`/Users/qihoo/Documents/Clone AI/out.md` 现在作为完整路径提取，而不是 `AI/out.md`）。验证器的工作区读取边界、符号链接拒绝与写入授权不变。两条被点名的形式已处理；但这**没有**清掉记录中只读排查的真实计划——它仍然产出两个假承诺并验证失败。后续补丁以真实计划为 fixture，在所有者批准后以 `763dcd8` 落地；该步骤不再产出文件承诺。两个补丁都由修复通道产出。
+
+### The audit view renders without waiting for gateway usage
+
+The audit list now caches the Magpie gateway's usage rows for 15 seconds and waits at most 1 second for that optional enrichment, down from 2 seconds. A slow or missing gateway therefore cannot make every open of 设置 → 审计与轨迹 wait; the journal-backed run records, verdicts, errors and traces render without it. On this machine, the live `/api/audit` first call was 2,290 ms and the gateway's 499 KB usage response took 429 ms; the cached fetch now measures 438 ms first and 0 ms second, and the audit projection itself is about 60 ms. Usage can be up to 15 seconds stale.
+
+审计列表现在缓存 Magpie 网关的用量行 15 秒，并把这项可选补充的等待限制在 1 秒（原先 2 秒）。因此慢或缺失的网关不会让每次打开 设置 → 审计与轨迹 都等待；由 Journal 支撑的 Run 记录、判定、错误与轨迹无需它即可渲染。在本机，线上 `/api/audit` 第一次为 2,290ms，网关 499KB 用量响应耗时 429ms；缓存后的拉取测得第一次 438ms、第二次 0ms，审计投影本身约 60ms。用量可能陈旧最多 15 秒。
+
+### A table in the conversation renders as a table and exports to CSV
+
+A reply can contain a Markdown table, and the conversation used to show the pipes and `---` rows literally. A GFM table now renders as a real table — header row, alignment, inline code and bold inside cells, escaped pipes — with horizontal scrolling on narrow windows. Every rendered table carries a 导出 CSV control: it asks for a folder and writes a timestamped `.csv` there (Excel opens it directly), then reveals it in Finder; a browser preview downloads the file instead. The export is an owner action: it needs no Worker, write scope or approval, refuses the clone data directory, and caps the file at 5 MB. Existing conversations re-render with tables when reopened.
+
+clone-ai 的回复里可以包含 Markdown 表格，而对话此前会把竖线和 `---` 行原样显示。GFM 表格现在会渲染成真正的表格——表头、对齐、单元格内的行内代码与粗体、转义的竖线——窄窗口下可横向滚动。每张渲染出的表格都带一个"导出 CSV"控件：选择一个文件夹后，把带时间戳的 `.csv` 写进去（Excel 可直接打开），并在 Finder 中定位；浏览器预览则改为下载文件。导出是所有者动作：不需要 Worker、写作用域或批准，拒绝 clone 数据目录，并把文件限制在 5 MB。重新打开既有对话时，表格也会以表格形态重新渲染。
+
+### Agent settings show the model choice, not the wiring
+
+Settings → Agent no longer prints the Magpie loopback address (`http://127.0.0.1:3425/v1`) under 本机 Magpie 已连接, and its overview no longer repeats a 当前模型 card with the raw provider/model id. The connection state, the explanation, the model picker and the 使用此模型 action remain; the endpoint and id stay in the config file, the audit and the logs.
+
+设置 → Agent 不再在"本机 Magpie 已连接"下打印 Magpie 回环地址（`http://127.0.0.1:3425/v1`），概览也不再重复显示原始 provider/model id 的"当前模型"卡。连接状态、说明、模型下拉与"使用此模型"动作保留；端点与 id 仍留在配置文件、审计与日志里。
 
 ### A repeated tool call stops the turn instead of looping until the provider stops it
 
@@ -20,9 +62,9 @@ The shared agent loop now warns once when the same call returns the same result 
 
 ### A turn shows its result and evidence; the process moves to the audit
 
-A conversation no longer renders the 上下文 block (model, system prompt, tool table, history window, compactions) or the 派发 block (every tool call with its JSON input and duration) for a turn. A turn now shows your request, the result, the runs it produced as 产物 rows, and one muted 依据 line — how many tools it called, how many failed, how many tasks it spawned — with a 查看审计 control that opens 设置 → 审计与轨迹 → 主 Agent 回合 with this request as the search. The audit keeps the full assembly, tool list and history searches. The live running card already showed only 结果, so a settled turn now matches it.
+A conversation no longer renders the 上下文 block (model, system prompt, tool table, history window, compactions) or the 派发 block (every tool call with its JSON input and duration) for a turn. A turn now shows your request, the result, the runs it produced as 产物 rows, and one muted 依据 line — how many tools it called, how many failed, how many tasks it spawned — with a 查看审计 control that opens 设置 → 审计与轨迹 → 主 Agent 回合 filtered to that turn by its id. The audit keeps the full assembly, tool list and history searches, and now shows compaction summaries in a 上下文压缩 block; a turn with no journal record gets no link instead of a dead one. The live running card keeps its transient tool timeline while the turn streams.
 
-对话不再为每个回合渲染"上下文"块（模型、系统提示、工具表、历史窗口、压缩）与"派发"块（每次工具调用及其 JSON 输入与耗时）。一个回合只显示你的请求、结果、本回合派生的 Run（"产物"行），以及一行低调的"依据"——调用了多少次工具、多少次失败、派生了多少个任务——并带一个"查看审计"控件，打开 设置 → 审计与轨迹 → 主 Agent 回合 并以本请求作为搜索词。审计页保留完整的任务组装、工具清单与历史检索。运行中的实时卡片本来就只显示"结果"，落定后的回合现在与它一致。
+对话不再为每个回合渲染"上下文"块（模型、系统提示、工具表、历史窗口、压缩）与"派发"块（每次工具调用及其 JSON 输入与耗时）。一个回合只显示你的请求、结果、本回合派生的 Run（"产物"行），以及一行低调的"依据"——调用了多少次工具、多少次失败、派生了多少个任务——并带一个"查看审计"控件，打开 设置 → 审计与轨迹 → 主 Agent 回合 并按回合 id 精确筛到本回合。审计页保留完整的任务组装、工具清单与历史检索，并新增"上下文压缩"块显示压缩摘要；没有 Journal 记录的回合不再给出失效链接，而是不显示控件。运行中的实时卡片在流式进行时保留临时的工具时间线。
 
 ### A request that dispatched no task stays in the sidebar
 

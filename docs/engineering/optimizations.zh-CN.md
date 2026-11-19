@@ -26,6 +26,125 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— 验证器以真实计划为 fixture：搜索位置不是文件承诺
+
+- **目标 / 假设：** 已合并的 `6dc13f0` 只修了两条合成句子，没有清掉被记录的计划。用真实
+  `plan.created` 步骤重放，仍产出两个假承诺（`/ pnpm-workspace.yaml` 来自
+  “package.json / pnpm-workspace.yaml”；`/Users/qihoo/.clone` 来自“……里的线索”），
+  `EvidenceVerifier` 仍然失败。把真实指令作为 fixture，并把斜杠分隔的备选项或搜索位置当作
+  上下文，应能清掉真实失败，同时不放宽验证器的根。
+- **取舍：** [搜索位置不是文件承诺](../architecture/trade-offs.zh-CN.md#2026-11-19--搜索位置不是文件承诺回归用例必须使用事故里的真实计划)。
+- **变更：** `src/core/verification.ts`——绝对路径模式要求 `/` 后紧跟路径字符；被“里的线索”
+  跟随的路径是上下文而不是承诺。`test/regression/verifier-real-plan.test.ts` 构造真实的
+  `plan.created` 步骤并断言 `[]`。由修复通道产出；`src/core/verification.ts` 在保护路径清单里，
+  通道在阶段完成后停下；所有者显式批准了这个已验证的补丁。工作 Agent 在通道分支上提交，把它
+  rebase 到 main（`5fd39f2`）并 fast-forward 到 `763dcd8`。
+- **Eval：** 通道第一阶段在真实步骤上为 **红**（实际
+  `["/ pnpm-workspace.yaml","/Users/qihoo/.clone"]` 对 `[]`），第二阶段为 **绿**；通道完整套件
+  **919/919**，typecheck 退出 0。本地回退生产补丁可以复现红色；合并后的代码提取 `[]`，
+  `EvidenceVerifier` 重放不再因这两个承诺失败。main 上：两个回归 + `test/verification.test.ts`
+  + `test/fallback-planner.test.ts` 共 **31/31**；完整套件 **922/922**；typecheck 退出 0；
+  gate **PASS**。
+- **Benchmark run：** 无——确定性的验证契约；不涉及 Provider、模型、数据集、切分、种子或评分参数。
+- **执行链路：** 两次通道运行。第一次（`8464295d`）在 `regression-missing` 闸门失败，耗时
+  **19.6 秒 / 22,047 token / 5 次模型调用**：`FailedTrace.plan` 只有
+  `id/title/risk/agentId`，worker 拿不到真实指令而停下。决定说明改写为 journal seq 1818 的
+  真实 `plan.created` 步骤（指令 + 验收标准）；第二次（`acb18e4b` 第一阶段）在
+  **156.3 秒 / 25,747 token / 5 次调用** 内写出红色用例；修复运行（`97df7d67`）在
+  **54.8 秒 / 38,739 token / 6 次调用** 内修改验证器；随后保护路径闸门停下通道。所有者批准后，
+  工作 Agent 提交已暂存的补丁，rebase 到 main 并 fast-forward。成功那次之后没有重试。
+- **优点：** fixture 是被记录的计划而不是改写版；红色用例就是真实发生的两个假承诺；五行修复
+  同时保持工作区边界、`写入 missing.md` 失败与带空格交付路径用例为绿。
+- **缺点 / 下次：** `FailedTrace.plan` 不带 instructions 与验收标准，因此计划层或验证层的缺陷
+  无法仅凭轨迹复现；第一次通道运行被浪费。应导出失败步骤的 instructions 与 acceptance criteria，
+  或始终把它们放进决定说明。提取器仍是散文启发式；取舍条目把显式 `deliverables` 字段列为长期
+  替代。保护路径越权是必要且狭窄的，但验证器修复不可能绕过所有者决定。
+- **推翻条件：** 如果真实的被承诺文件被漏掉，就加入显式交付标记（计划字段，或“生成/只写这个
+  路径”规则），而不是再加一个排除词。如果计划中的路径只是证据引用而不是交付物，就停止从指令里
+  扫描文件承诺，改依赖步骤声明的 Scope。
+
+### 2026-11-19 —— 只读 dispatch 目标不再被规划成写入
+
+- **目标 / 假设：** 2026-11-19 死循环里的两个 `dispatch_task` run 被拒绝，是因为
+  fallback planner 把“读取/保存…配置的代码”和“读写…配置的代码”读成交付。让显式只读标记
+  压过裸动词（除非请求点名了一个目标路径），同样的目标应规划为一次只读查找，而不是入队后
+  3–4ms 就失败。
+- **取舍：** [只读标记压过裸写入动词](../architecture/trade-offs.zh-CN.md#2026-11-19--只读标记压过裸写入动词fallback-planner)。
+- **变更：** `src/planning/fallback-planner.ts`——`namedWriteTarget` 要求写入目标线索后面
+  真的跟一个路径；对 `explicitReadOnly` 请求，只有这个点名目标才算交付。回归用例
+  `test/regression/fallback-read-only-dispatch.test.ts` 直接使用两条被记录的目标，断言没有
+  `reversible_write` 的步骤或子代理。由修复通道产出为提交 `b9d6b764`；工作 Agent 重跑红/绿
+  检查后 fast-forward 到 main。
+- **Eval：** 通道 phase 1 **红**（1 条断言失败；用例列出两个 `prepare`/`draft` 违规），
+  phase 2 **绿**；完整测试 **919/919**；typecheck 退出 0。合并后在 main 上运行
+  `node --experimental-strip-types --test test/regression/fallback-read-only-dispatch.test.ts test/fallback-planner.test.ts`
+  **13/13**。本地用修复前的 planner 重放两条真实目标都得到 `prepare/reversible_write`；合并后的
+  planner 对两者都得到 `read-only-lookup`，而“不要修改现有文件，但把报告写到 out/report.md”仍是
+  `prepare/draft`，普通写作请求仍然产出 draft。
+- **Benchmark run：** 无——确定性的 planner 契约；没有 Provider、模型、数据集、切分或评分参数。
+- **执行链路：** 两条轨迹（`09499a28`、`2c8b917a`）被放进一个只含轨迹的隔离 clone home，避免
+  通道顺带消费另外三条待处理轨迹。`npm run repair -- --max-traces 2 --decision …` 产出分支
+  `rsi/auto-fix-20261119T0812`，耗时约 92 秒：phase 1 **41 秒 / 42,059 token / 7 次模型调用**，
+  phase 2 **41.5 秒 / 38,878 token / 6 次模型调用**。成功后 worktree 被移除；工作 Agent 建了一个
+  临时验证 worktree，把 planner 补丁回退以复现红（`['0: step prepare', '0: subagent draft',
+  '1: step prepare', '1: subagent draft']`），恢复后跑真实目标与反例，再 fast-forward main。
+  没有重试。
+- **优点：** 用例直接用事故的目标文本，红/绿信号就是事故本身的文本；优先级规则同时修好了
+  “只读检查保存配置的代码”；点名目标的反例保持不变；改动只落在一个判定函数里，完整测试没有
+  出现新的失败。
+- **缺点 / 下次：** 这仍是关键词策略。只读请求若唯一的交付线索是“裸动词 + 产物”（如“只写一份
+  报告”）且没有点名目标，现在会被规划成只读；取舍条目记录了这个限制。轨迹的 `plan` 条目不带
+  instructions（见验证器条目），所以通道无法仅凭轨迹复现计划层面的缺陷；决定说明必须重述两条
+  目标。
+- **推翻条件：** 如果 benchmark 或所有者的某次派发被规划成只读，而所有者其实要一个没有点名目标的
+  文件，就加入交付标记（显式 `deliverables` 字段，或“只写/只生成/只输出 + 产物”规则），而不是重新
+  启用裸动词。如果计划开始为每个交付物点名目标，就只依赖 `writeTarget`。
+
+### 2026-11-19 —— 没有配置的工作目录；写入自己点名目标
+
+- **目标 / 假设：** 所有者的截图显示了“工作目录”设置，并要求移除它：“这个工作目录不要了，
+  没有工作目录，整个电脑都是工作空间”。读取已经覆盖整机、写入已经携带 Scope（4f0149e、
+  7e80c41），剩下的所有者文件夹与隐式工作区兜底是最后两个把文件夹当权限的地方；移除它们，
+  并让验证器读取步骤声明的 Scope，应该能让整台电脑在没有配置文件夹时可用。
+- **取舍：** [没有配置的工作目录](../architecture/trade-offs.zh-CN.md#2026-11-19--没有配置的工作目录写入自己点名目标)。
+- **变更：** 移除“工作目录”界面（`index.html`、`app.js`、`ui-locale.ts`）、
+  `workspacePath` 配置字段（`clone-config.ts`）、公开配置/路径字段与 PATCH 处理
+  （`companion-server.ts`），以及启动配置对配置的读取（`launch-config.ts`）。
+  `write-scopes.ts` 不再回退到工作区；`policy-engine.ts` 拒绝没有写 Scope 的
+  `reversible_write` 步骤（修复通道的可写沙箱通过 `runtime-factory.ts` 豁免）。运行时锁与
+  执行数据库移到 `<clone home>/workspace-runtime`（`clone-home.ts`）。Prompt 的
+  `workspaceGuidance` 变为不带当前文件夹的 `machineGuidance()`（charter 7）。验证器的根是
+  内部基准加上步骤声明的 files 写 Scope（`verification.ts`、`verified-workspace-path.ts`）。
+  伴随服务器的内部基准是 `CLONE_AI_WORKSPACE` 或 clone home，而不是 App 的 cwd。
+- **Eval：** `test/write-scopes.test.ts` **12/12**（没有目标的写入没有 Scope；权限策略拒绝它；
+  点名目标后走审批阶梯）；`test/authority.test.ts` **12/12**；
+  `test/companion-config-api.test.ts` **17/17**（`workspacePath` 的 PATCH 被拒绝，locale 仍
+  持久）；`test/verification.test.ts` **17/17**（基准之外的文件通过步骤 Scope 验证；同一路径
+  没有 Scope 仍失败）；`test/clone-home.test.ts`、`test/desktop-launch-config.test.ts`、
+  `test/ui-structure.test.ts`、`test/companion-main-agent.test.ts`、
+  `test/golden-path.test.ts`、`test/kill-restart.test.ts` 与 `test/repair.test.ts` 通过。
+  完整套件 **918/919**；唯一失败是 `test/desktop-only-ui.test.ts`，因为另一个会话在这次工作
+  期间（15:03）创建了 `.claude/launch.json`——不是本次变更造成的。`npm run typecheck` 退出 0。
+  为预期的 `policy/local-write-without-scope-denied` 用例重写基线后，`npm run gate`
+  **PASS**；基线差异只有一行。
+- **Benchmark run：** 无——确定性策略、验证与 UI 契约；门禁的策略套件就是 eval。
+- **执行链路：** 一次内联作业。阅读配置/UI/策略/运行时/Prompt/验证路径，写双语取舍，然后分层
+  移除：写 Scope 与策略拒绝；配置/UI/服务器/启动；clone-home 运行时路径；Prompt；验证器根。
+  初始失败：修复通道的沙箱没有 Scope（增加 `writableSandbox` 豁免）；黄金路径与混沌夹具依赖
+  默认文件夹（加入显式 Scope）；两个契约测试编码了旧的 Prompt/默认行为（更新）。
+  门禁捕获了预期的策略变化；重写基线并审查一行差异。并发会话在运行期间创建了
+  `.claude/launch.json`，留下一个无关的套件失败；没有触碰它。
+- **优点：** 一个面向所有者的概念被端到端移除（设置、配置、API、Prompt、默认 Scope）；修复
+  通道仍可工作；基准之外的写入通过声明的 Scope 验证；门禁基线让预期的行为变化可审查。
+- **缺点 / 下次：** 项目指令与相对路径现在使用内部基准（服务器上是 clone home）；自动项目规则
+  通常不存在，相对写入目标不会被 Scope 化。Diff 与测试契约仍以基准为准。这次编辑触碰了另一个
+  会话正在改的文件（`app.js`、`ui-structure`、docs）；并发的 `.claude/launch.json` 显示了
+  整树作业的代价。下次：把验证器的 Scope 根与写 Scope 移除放在一起，并在编辑同一批文件前等
+  并发 UI 工作稳定。
+- **推翻条件：** 如果 Agent 在没有所有者选择文件夹的情况下无法加载项目规则或运行测试，就加入
+  一个学到的或按请求给出的文件夹（请求里点名的那个，而不是全局设置），或加入每步的工作目录。
+  如果对带 Scope 写入的验证不足，就把验证器的 diff 与测试契约也扩展到步骤的 Scope。
+
 ### 2026-11-19 —— 侧栏顶层是对话，任务内嵌其中
 
 - **目标 / 假设：** 所有者的抱怨是"既有对话又有任务，学习成本太高"。假设成本不来自两个运行时对象
@@ -98,6 +217,95 @@
   `app.js` 持续处于热状态，定点修改后立刻复核是安全的做法。
 - **推翻条件：** 见取舍条目；如果必须从设置页诊断端点，增加折叠的"连接详情"。
 
+### 2026-11-19 —— 对话里的表格渲染成表格，并可按需导出 CSV
+
+- **目标 / 假设：** 所有者的截图里，clone-ai 的回复显示的是字面 `|位置|状态|` 与 `|---|`
+  块，并问表格能否用 Excel 之类可直接打开的文件，而不是 Markdown。假设是：难看的原因是
+  渲染器缺口，而不是数据本身——`richText` 会转义并渲染标题、列表、代码与粗体，却没有表格
+  规则，GFM 表格于是以竖线原文到达。把表格渲染出来，并把表格本来就含有的 CSV 一并交付，
+  既能让对话可读，也仍然给所有者文件。
+- **取舍：** [对话里的表格渲染成表格，并可按需导出 CSV](../architecture/trade-offs.zh-CN.md#2026-11-19--对话里的表格渲染成表格并可按需导出-csv)。
+- **变更：** `apps/desktop/ui/app.js` 给 `richText` 增加 GFM 表格子集
+  （`mdInline`、`splitTableRow`、`tableAlignments`、`extractMarkdownTables`、
+  `csvCell`、`markdownTableMarkup`）；表格渲染在 `.md-table-wrap` 中，带一个"导出 CSV"
+  按钮，按钮的 `data-export-csv` 属性保存 CSV（换行写成 `&#10;`，使消息渲染不会把它们变成
+  `<br>`）。`exportMarkdownTable` 走原生目录选择器与 `POST /api/tables/export`，浏览器
+  预览则回退为 Blob 下载。`src/companion-server.ts` 新增该端点（绝对路径、已存在的文件夹、
+  数据目录之外、5 MB 上限、独占的 `clone-ai-table-<stamp>.csv`）。`components.css` 增加
+  表格、滚动容器与控件的样式。`apps/desktop/macos/main.swift` 给选择器增加表格导出标题。
+  `test/ui-structure.test.ts` 新增解析、转义、CSV、浏览器下载与原生选择器接线测试；
+  `test/desktop-only-surface.test.ts` 新增端点测试。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts` **24/24**；
+  `node --experimental-strip-types --test test/desktop-only-surface.test.ts` **5/5**；
+  `npm test` **910/910**；`npm run typecheck` 退出 0；`npm run gate` **PASS**，baseline
+  不变。用 `git show ba5d3a1:apps/desktop/ui/app.js` 验证：同一段输入渲染为
+  `"| 位置 | 状态 |<br>| --- | --- |<br>| a | b |"`，没有表格元素，因此新增的表格断言
+  在没有本次变更时会失败。用真实 `richText` 输出与四份 UI 样式表做静态渲染，在 1024×900 与 375×812 下看到
+  表格与"导出 CSV"控件，页面没有横向溢出（`scrollWidth === innerWidth`），移动端按词边界
+  换行。端点测试写入 CSV 并逐字节读回。可用性收益来自静态渲染的观察；没有测量所有者会话。
+- **Benchmark run：** 无——确定性 UI 契约与接线；不涉及 Provider、模型、数据集、切分、种子
+  或评分参数。
+- **执行链路：** 一次内联作业：阅读 `richText`、对话点击处理器、原生目录选择器与
+  `/api/export` 路由；写取舍条目（中英）；实现解析器/渲染器、导出控件、端点与原生选择器
+  标题；新增两个测试文件的用例；跑目标测试、全量测试、typecheck 与 gate；把真实标记渲染成
+  静态页面，在 Browser 面板检查 1024 与 375。本次修复的失败：消息渲染会把 CSV 的换行变成
+  属性里的 `<br>`（改为 `&#10;`）；转义竖线的断言把表头当成数据单元格；既有的未提交审计
+  测试仍期望以请求作为定位键，而源码已改用回合 id 加对话 id（更新了过期断言）；
+  `overflow-wrap: anywhere` 在移动端把 "Clone" 从词中间拆开（单元格改用 `break-word`）。
+  没有 Provider 调用，也没有 benchmark 成本。
+- **优点：** 所有既有消息在重新打开时都会以表格重新渲染；导出由所有者发起，不需要 Worker、
+  写作用域或批准；单元格走既有的"先转义"路径，转义语义不变；表格与 CSV 共用一次解析，
+  所有者看到的就是 Excel 收到的。
+- **缺点 / 下次：** 手写解析器覆盖常见 GFM 子集——不支持单元格内换行、行内 HTML 或缩进四个
+  空格的表格。CSV 在 DOM 属性里重复一份。选择器的新标题需要重建 App 才能看到，不过旧壳也能
+  导出。5 MB 上限有实现，但没有测试真正触发它。
+- **推翻条件：** 从取舍条目复制。
+
+### 2026-11-19 —— 验证路径的修复由通道产出、被保护路径闸门拒收、由所有者批准合入
+
+- **目标 / 假设：** 记录中的只读排查因为两条被指令以目录引入的路径
+  （`/Users/qihoo/.clone` 与 `/Users/qihoo/Documents/Clone AI/.clone`）在验证中失败。修复
+  应把以目录引入的路径当作上下文，并让带空格的绝对文件路径保持完整，同时不打开验证器的
+  工作区边界。
+- **取舍：** [以目录引入的路径不是文件承诺](../architecture/trade-offs.zh-CN.md#2026-11-19--以目录引入的路径不是文件承诺带空格的路径是一个路径)。
+- **变更：** 修复通道产出了对 `src/core/verification.ts` 的 15 行改动，以及
+  `test/regression/fa36a720-directory-and-spaced-path.test.ts`，在
+  `.claude/worktrees/rsi-20261119T0641`。`scripts/nightly-rsi-policy.mjs` 把
+  `src/core/verification.ts` 列在 `PROTECTED`，因此通道在两个阶段完成后以
+  `failedGate: "protected-path"` 停下。所有者明确批准合入这个已验证的补丁；它以提交
+  `6dc13f0` 落地到 main。保护路径策略不变。
+- **Eval：** 通道的第一阶段用例为红（**1 条失败断言**）；修复后回归用例 **1/1**，
+  `test/verification.test.ts` **16/16**，通道的完整套件退出 **0**
+  （`evalAfter.tests.status: 0`）。合并后在 main 上：回归 + 验证 **17/17**，完整套件
+  **916/916**，typecheck 退出 0，gate **PASS**。用**缩减后**的指令文本在合并后的代码上复现：
+  返回 `extracted: []` 与 `needsReview`，不再是失败；带空格的写入路径返回
+  `[{"path":"/Users/qihoo/Documents/Clone AI/out.md"}]`。通道没有记录 `regressionAfter`，
+  因为保护路径闸门在那项检查之前就停下了。
+- **更正（2026-11-19，审计后）：** 上面的 `extracted: []` 使用的是缩减后的指令。用真实
+  `plan.created` 步骤（journal seq 1818）在合并后的提取器上重放，返回
+  `"/ pnpm-workspace.yaml"`（来自“package.json / pnpm-workspace.yaml”里的斜杠）与
+  `"/Users/qihoo/.clone"`（来自“……里的线索”的搜索位置），`EvidenceVerifier` 仍然
+  `passed:false`；fixture 只覆盖了两条合成句子。随后用真实指令（以及先红的
+  `test/regression/verifier-real-plan.test.ts`）重跑修复通道，产出了对
+  `src/core/verification.ts` 的已验证补丁；所有者批准后以 `763dcd8` 落地。
+  修正后的取舍条目在 `trade-offs.zh-CN.md` 顶部。
+- **Benchmark run：** 无——确定性验证契约；不涉及 Provider、模型、数据集、切分、种子或评分参数。
+- **执行链路：** 约 8 分钟的通道时间加验证，一次内联作业，四次通道运行。前三份决定说明在评审后
+  被停下，因为它们与既有测试冲突：整机读取验证与工作区边界测试矛盾；对只读步骤跳过提取会
+  同时破坏该测试与 `写入 missing.md` 用例；要求写入动词会破坏“file expectations distinguish
+  paths”用例。第四份说明（目录标记 + 带空格的绝对路径，边界不变）产出了补丁；第一阶段为红，
+  第二阶段为绿，保护路径闸门拒绝了差异。随后所有者批准了已验证的补丁；我在通道分支上提交，
+  并把 main 快进到 `6dc13f0`，然后在 main 上重跑回归、`test/verification.test.ts`、完整套件、
+  typecheck 与 gate。更早的运行留下了 worktree `rsi-20261119T0634/0638/0639`。
+- **优点：** 通道的闸门按设计工作——用例必须先红、完整套件必须通过、保护路径检查拒绝了对
+  验证器本身的改动。所有者的越权是明确且狭窄的（一个已验证的补丁，不是策略变更）。补丁很小，
+  新用例与既有验证套件在 main 上都绿。
+- **缺点 / 下次：** 我在选目标之前没有读 `scripts/nightly-rsi-policy.mjs`，因此前三次运行
+  花在了被既有测试排除的说明上。验证器的 bug 在没有所有者越权时不能由这条通道提交；策略仍然
+  如此，这次合并是一条有记录的例外。下次：先读保护清单，并把策略决定在运行通道之前交给所有者。
+- **推翻条件：** 取舍条目的推翻条件；此外，所有者可以修改保护路径策略，这会把本次变成正常的
+  通道修复，而不是越权。
+
 ### 2026-11-19 —— 重复的工具调用在本机停下，排队中的 Run 不再被轮询
 
 - **目标 / 假设：** 所有者的截图显示一个"完成"的回合，回复是 Provider 网关的"发给模型之前已被
@@ -134,9 +342,12 @@
   既有测试现在有进展而保留；提示与工具描述处理的是行为原因，不只是症状。
 - **缺点 / 下次：** 守卫比较结果文本，因此对慢速外部任务的合法轮询若连续五次状态文本不变，
   会被截停；阈值是常量，不是 benchmark 测量出来的。截图里两个失败的 `dispatch_task` 是另一个
-  缺陷：只读目标被规划成 `reversible_write`，被 files 策略拒绝；这个 Planner 问题仍然开放。
-  卡住的 Run 的领取也已观察到过期（`lease_until` 06:25:09，未续租），但没有深入排查。下次：
-  复现只读目标经 `dispatch_task` 的规划结果，决定该改 Planner 提示还是策略。
+  缺陷：只读目标被规划成 `reversible_write`，被 files 策略拒绝。该 Planner 缺陷已在同一天由
+  修复通道修掉（提交 `b9d6b764`；见只读 dispatch 条目）。先前"卡住的 Run 的领取已观察到过期
+  （`lease_until` 06:25:09，未续租）"的说法**不被当前数据支持**：该行的 `lease_until` 等于
+  完成时的释放时间（06:25:46.153Z），`attempt` 为 1，没有 orphan-recovery 事件，表里也不存在
+  06:25:09 的行。把那次观察当作未证实。下次：在推断租约失效之前，先核对 `run_claims` 的
+  claim/release 转换。
 - **推翻条件：** 如果某个 benchmark 或所有者的回合并未取得进展却被判为 `no_progress`，提高
   阈值、把守卫收窄到只读工具，或改为对"进展字段"取指纹；如果 Provider 改写工具结果、使相同
   调用不再比较相等，就对截断前的结果取指纹。
@@ -149,32 +360,44 @@
   筛选的审计入口，就能让阅读栏承载回答而不失去可核查性。
 - **取舍：** [对话显示结果与依据](../architecture/trade-offs.zh-CN.md#2026-11-19--对话只显示结果与依据过程移入审计页)。
 - **变更：** `apps/desktop/ui/app.js` 用 `logProductMarkup`（派生的 Run 作为"产物"行）与
-  `logBasisMarkup`（工具调用次数、失败次数、派生任务数，以及携带请求的"查看审计"控件）替换
-  `logContextMarkup` / `logDispatchMarkup`；回合正文只渲染"结果"。对话的点击处理器打开
-  设置 → 审计与轨迹，并调用新的 `window.CloneAudit.showTurns(request)`，落在"主 Agent 回合"
-  并以本请求作为服务端搜索词。`components.css` 删除不再使用的上下文/工具表/工具行样式，新增
-  单行依据样式。`audit.js`/`audit.css` 增加"上下文压缩"块，使对话过去显示的压缩摘要仍能在
-  新家读到。`test/ui-structure.test.ts` 翻转对话断言，固定审计落点，并渲染 `assemblyBlock`
-  证明压缩摘要仍在。
-- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts` **22/22**。
+  `logBasisMarkup`（工具调用次数、失败次数、派生任务数，以及携带回合 id 与对话 id 的
+  "查看审计"控件）替换 `logContextMarkup` / `logDispatchMarkup`；回合正文只渲染"结果"。
+  无 Journal 记录的回合不给链接；尚未调用工具的运行中回合如实说明但仍可链接；旧历史回合沿用
+  "结果"结构，并写明"没有保存过程"。对话的点击处理器打开 设置 → 审计与轨迹，并调用
+  `window.CloneAudit.showTurns(turnId, conversationId)`，落在"主 Agent 回合"并按精确回合与
+  对话筛选，同时把焦点移到回合搜索框。`components.css` 删除不再使用的上下文/工具表/工具行
+  样式，新增单行依据样式，并给控件 24px 的点击高度。`audit.js`/`audit.css` 增加"上下文压缩"
+  块，使对话过去显示的压缩摘要仍能在新家读到；`turn.toolCalls`（输入最多 400 字）继续是执行
+  调用的记录，回合卡带 `data-au-turn-id` / `data-au-turn-conversation`。回合视图自带错误与
+  加载状态，分区加载失败不再抹掉更新的筛选回合，渲染也不再让回合视图等待审计总览。
+  `test/ui-structure.test.ts` 翻转对话断言，固定回合 id 落点，渲染 `assemblyBlock` 证明压缩
+  摘要仍在，并渲染 `turnsView` 证明工具清单仍在。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts` **26/26**。
   变更前同一测试断言对话标记里有"上下文 / 派发 / 模型字符串 / `charter v3` / `dispatch_task`"，
-  因此在新标记上会失败。`npm test` **901/901**；`npm run typecheck` 退出 0；`npm run gate`
+  因此在新标记上会失败。`npm test` **916/916**；`npm run typecheck` 退出 0；`npm run gate`
   **PASS**，baseline 不变。用真实标记与 CSS 做静态渲染（1000×900）：四次调用的回合显示为
-  回答加 `依据 工具调用 4 次 查看审计 ›`；派发任务的回合显示 `产物 1` 与其 Run 行。可用性收益
-  本身标为**假设**：没有测量所有者会话，只有确定性契约与一张渲染截图。
+  回答加 `依据 工具调用 4 次 查看审计 ›`；派发任务的回合显示 `产物 1` 与其 Run 行；展开的
+  审计渲染显示"上下文压缩"摘要。可用性收益本身标为**假设**：没有测量所有者会话，只有确定性
+  契约与渲染截图。
 - **Benchmark run：** 无——确定性 UI 契约与接线；不涉及 Provider、模型、数据集、切分、种子或
   评分参数。
 - **执行链路：** 一次内联作业：用 `rg`/读取回合日志、审计回合视图、它的 `/api/audit/turns`
   投影与取舍历史；然后写取舍条目（双语）、改渲染、接审计落点、清理 CSS、重写测试。作业中修掉
   两个测试失败：过宽的 `doesNotMatch(/上下文/)` 命中了新 aria-label 里的词（改为只匹配步骤
-  标签），以及失败回合的依据句缺少旧断言期望的句号。随后目标测试、全量测试、typecheck 与
-  gate 通过。一个三视角的对抗审查工作流（正确性、UX/可访问性、测试/文档）正在检查
-  diff；其结论在返回后补记到这里。没有 Provider 调用与 benchmark 成本。
+  标签），以及失败回合的依据句缺少旧断言期望的句号。随后目标测试、typecheck 与 gate 通过。
+  一个三视角的对抗审查工作流（正确性、UX/可访问性、测试/文档）随后检查 diff：20 个 Agent、
+  2.0M 子 Agent tokens、1,008 次工具调用、18.4 分钟、11 条确认问题（2 高、7 中、2 低）、
+  6 条被驳回。两条高优先级是：请求文本定位键撑爆 16 KiB GET 头部（HTTP 431），以及 eval
+  从未固定审计侧的工具清单；中优先级包括 Journal 脱敏与原始请求不一致、无 Journal 时的死链接、
+  焦点、可访问名称、审计失败竞态、审计渲染门控，以及取舍条目里"压缩原样保留"的错误陈述。
+  全部已修：链接改为携带回合 id 与对话 id，审计按两者精确筛选；无 Journal 不给链接；搜索框
+  获得焦点且失败画进视图；压缩正文在审计有块；测试渲染两个审计部件。修复后重跑全量
+  （**916/916**）。没有 Provider 调用与 benchmark 成本。
 - **优点：** 对话里只剩回答与一行紧凑的依据；审计页仍是过程唯一的可搜索副本，两处视图不再
-  漂移。运行中的实时卡片与落定回合现在共用同一个"结果"章节。
-- **缺点 / 下次：** "依据"里的计数本身不是论据——回答仍须写明查了什么——且审计落点按请求
-  文本搜索，请求相同的两个回合会共享结果集。密度尚未在运行中的 App 里与所有者确认。下次在
-  改测试的同一遍里就固定 aria-label 的措辞，让断言从一开始就有明确范围。
+  漂移。落定回合是请求、结果、产物与依据；实时卡片在流式进行时保留临时的工具时间线。
+- **缺点 / 下次：** "依据"里的计数本身不是论据——回答仍须写明查了什么——且审计落点是单回合
+  筛选，所有者要清掉才能浏览。密度尚未在运行中的 App 里与所有者确认。下次在宣布 eval 完成
+  之前就跑对抗审查：它找到了第一遍测试漏掉的链接失败模式与未固定的审计侧。
 - **推翻条件：** 如果所有者反馈"理解一个普通回答必须打开审计"，或带筛选的审计没有落在对应
   回合，就在结果下方恢复一个折叠的"过程"披露——不要恢复两个完整步骤——或给审计加上按回合的
   锚点。

@@ -6,6 +6,185 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — A search location is not a file promise, and the incident's real plan is the fixture
+
+**Decision.** `extractFileExpectations` treats a path as a file promise only when
+the plan names it as a deliverable. A path introduced as a search location or a
+directory context (数据目录, 候选位置, "里的线索", a slash-separated list such as
+`package.json / pnpm-workspace.yaml`) is context, not a promised file; a spaced
+absolute deliverable path stays whole. The regression test uses the actual
+`plan.created` instructions of run `fa36a720`, and it must be red before the
+fix: the current extractor returns `"/ pnpm-workspace.yaml"` and
+`"/Users/qihoo/.clone"` from those instructions.
+
+**Why it won.** Commit `6dc13f0` was claimed to clear this trace, but it fixes
+only two synthetic sentences. Replaying the real step (journal seq 1818) on the
+merged extractor still yields two false promises, and an `EvidenceVerifier`
+replay still returns `passed: false`; the lane's regression fixture
+(`test/regression/fa36a720-directory-and-spaced-path.test.ts`) contains neither
+the candidate-location sentence nor the slash list. The added absolute-path
+pattern also introduced a new false positive (`/ pnpm-workspace.yaml`) by
+accepting a slash followed by whitespace. Verification must be judged on the
+recorded plan, not on a reduced paraphrase of it.
+
+**Alternatives rejected.**
+
+- *Add more exclusion words.* The real plan supplies a second mention ("里的线索")
+  and a slash list; each new sentence can add another form. A keyword exclusion
+  list is what produced the false positives in the first place.
+- *Widen the verifier's roots so `/Users/qihoo/.clone` exists.* The path is a
+  directory mentioned as a place to search, not a file deliverable; accepting it
+  would hide a false promise instead of removing it.
+- *Skip file expectations for every read-only step.* The `写入 missing.md` case
+  and the workspace-boundary test need real promises to stay checked; a
+  read-only step can still promise a file it wrote nothing to.
+- *Add a `deliverables` field to the plan schema now.* That is the durable fix
+  named by the previous entry's reversal condition, but it changes the plan
+  contract and every planner; do it only if the prose heuristic keeps failing.
+
+**What was given up.** A plan that mentions a real file only as context ("read
+`/x/y.md` and summarize") no longer makes that file a required deliverable;
+verification falls back to the step's observations. A plan that means a
+deliverable but phrases it only as a location list is not verified as a
+promise. The extractor remains a prose heuristic; a novel phrasing can still
+misclassify.
+
+**Evidence.** Journal seq 1818 (the real step) and my reproduction on the
+current tree: `[{"path":"/ pnpm-workspace.yaml"},{"path":"/Users/qihoo/.clone"}]`.
+The pre-`6dc13f0` extractor returned `["/Users/qihoo/.clone", "AI/.clone"]`, so
+one false promise is replaced by another and one is new. The repair lane
+produced `test/regression/verifier-real-plan.test.ts` from the real instructions
+(red before, green after); it landed as commit `763dcd8`.
+
+**Reversal condition.** If a real promised file is suppressed, add an explicit
+deliverable marker (a plan field or a "generate/write exactly this path" rule)
+rather than another exclusion word. If plans quote paths as evidence rather
+than deliverables, stop scanning instructions for file promises and rely on the
+step's declared scopes.
+
+## 2026-11-19 — A read-only marker outranks a bare write verb in the fallback planner
+
+**Decision.** When a request carries an explicit read-only marker (只读, 不要修改,
+review only, …) and names no write target (写到 / 保存到 / 输出到 / write to with a
+path), `buildFallbackPlan` no longer treats a bare write verb (保存, 写, 渲染, …)
+as a delivery request. The rule becomes
+`deliveryRequested = writeTarget || (!explicitReadOnly && (positiveWrite || artifactNoun))`.
+A named write target still wins; a request without a read-only marker keeps the
+existing delivery terms. The two `dispatch_task` objectives from 2026-11-19 then
+plan as one read-only lookup instead of `reversible_write`.
+
+**Why it won.** The two dispatch runs (`2c8b917a`, `09499a28`) were denied at
+policy 3–4 ms after queuing: the auto-plan classified "读取/保存…配置的代码" and
+"读写…配置的代码" as delivery because `保存`/`写` are in `POSITIVE_WRITE_VERBS`,
+and the planner's `positiveWrite` branch is an unconditional OR. The denied
+plan carried a workspace write scope and the files domain was observe-only. The
+denial reason did not reach the Main Agent (a separate defect), so it
+re-dispatched and then abandoned `dispatch_task` for a hand-written read-only
+plan — the path that ended in eight `get_run_status` polls.
+
+**Alternatives rejected.**
+
+- *Blacklist the phrases "读取/保存" and "读写".* The next objective will phrase
+  the mention differently; the rule would stay a list of known sentences.
+- *Rely on the policy denial to make the model re-plan.* `dispatch_task` and
+  `get_run_status` do not carry the denial reason today; relying on it leaves
+  the duplicate dispatch loop in place.
+- *Restore the workspace write fallback.* That is the implicit permission the
+  owner removed in the entry above.
+- *Use a planner model call.* It costs a model call per dispatch, and the
+  fallback planner exists for the no-planner path; this is a precedence rule,
+  not a judgment call.
+- *Require a read-only marker to be the whole request.* The real objectives
+  contain other instructions; the marker appears at the end.
+
+**What was given up.** "不要修改现有文件，只写一份报告" with no named target is
+now planned read-only; the owner must name the output target, which the
+no-working-directory decision already requires for any write. A request whose
+only delivery cue is a bare verb alongside a read-only marker is answered as an
+investigation rather than a write. The planner remains a keyword policy; a
+novel phrasing can still misclassify.
+
+**Evidence.** Journal seq 1785/1792/1794/1795 and 1799/1806/1808/1809: both
+objectives say 只读/不修改, both plans are `prepare/reversible_write`, both
+denials are `The files domain is observe-only`, and both runs fail in 3–4 ms.
+Reproduction on the current tree gives the same plans. A simulation over the 11
+literal inputs in `test/fallback-planner.test.ts` changed zero classifications;
+`不要修改现有文件，但把报告写到 out/report.md` stays a draft because a named
+target wins. The repair lane produces the red/green case from the two recorded
+objectives; this entry records its before/after result.
+
+**Reversal condition.** If a benchmark or an owner's dispatch is planned
+read-only while the owner asked for a file without naming a target, add a
+deliverable marker (an explicit `deliverables` field, or a "只写/只生成/只输出 +
+artifact" rule) rather than re-enabling bare verbs. If plans start naming a
+target for every deliverable, rely on `writeTarget` alone.
+
+## 2026-11-19 — There is no configured working directory; a write names its targets
+
+**Decision.** The owner-facing 工作目录 setting, the `workspacePath` config
+field, the public path display and the saved-path restart notice are removed.
+The app no longer asks for or persists a working folder. A write step that names
+no target gets no files write scope: the Kernel no longer proposes the workspace
+as a fallback, and the authority policy denies such a step because it named no
+target. `ensureWriteScopes` adds scopes only for targets named in the step or
+the request. An internal base folder remains an implementation detail — the
+server uses `CLONE_AI_WORKSPACE` if set, otherwise the clone home — for relative
+paths, project-instruction lookup, the verifier's default root and legacy
+migration; it is not configurable and not a permission. Runtime locks and the
+execution database move from `<base>/.clone` to
+`<clone home>/workspace-runtime`. The verifier may read a file inside the
+internal base or inside a write scope the step declared; a read-only promise
+outside both still fails. The prompt no longer names a current workspace:
+the computer is the workspace, reads are open, writes name targets, and no
+folder is writable by default. Charter version 7.
+
+**Why it won.** The owner's request came with the screenshot of the 工作目录
+setting: "这个工作目录不要了，没有工作目录，整个电脑都是工作空间，修改一下代码".
+The 2026-11-19 decisions (4f0149e, 7e80c41) already made reads machine-wide and
+every write carry a scope; the setting and the implicit workspace fallback were
+the last places a folder acted as a permission. The project's learned-folders
+decision also says working folders are learned from use, never configured as a
+setting.
+
+**Alternatives rejected.**
+
+- *Keep the setting as an optional default folder.* The owner asked to remove
+  it, and a global folder setting is what the learned-folders decision rejects.
+- *Make the whole machine the verifier's read surface.* The workspace-boundary
+  test and untrusted evidence locators say the verifier reads only paths the
+  owner authorized; the step's declared write scope is that authorization.
+- *Remove the internal base entirely.* Relative paths, project-instruction
+  lookup and existing verification need a base; the clone home is a safe
+  non-project one.
+- *Default writes to the clone home.* That is still an invented default, and it
+  is not where an owner's deliverables belong.
+- *Relax the protected-path policy.* No protected file is opened by this change;
+  the scope and base checks stay.
+
+**What was given up.** The app no longer loads a project's AGENTS.md/CLAUDE.md
+from an owner-chosen folder; the internal base (the clone home by default)
+usually has none, so the agent must read project rules through a step. Relative
+paths in plans resolve against the internal base; plans should use absolute
+targets. Automatic verification of a file outside the base requires the step's
+write scope to contain it; a read-only step's outside promise still fails. Diff
+and test contracts remain base-relative; a plan testing another project needs a
+scope and an absolute command. Existing `workspacePath` values in `config.json`
+are ignored and disappear on the next write.
+
+**Evidence.** The owner's screenshot and instruction; `src/config/clone-config.ts`
+persisted the field, `apps/desktop/ui/index.html` and `app.js` exposed it,
+`src/authority/write-scopes.ts` fell back to it, and `src/config/clone-home.ts`
+put the runtime database inside it. Tests pin the new contract: the UI and config
+no longer offer the setting, a no-target write gets no scope and is denied, the
+runtime database lives under the clone home, and the verifier accepts a file
+under a step's declared scope outside the base.
+
+**Reversal condition.** If the agent cannot load a project's rules or run its
+tests without an owner-chosen folder, add a learned or per-request folder (the
+folder the request names, not a global setting), or a per-step working
+directory. If verification of scoped writes proves insufficient, widen the
+verifier to the step's scopes for diff and test contracts too.
+
 ## 2026-11-19 — The sidebar's top level is the conversation; tasks nest inside it
 
 **Decision.** The sidebar exposes one top-level kind per section. A conversation
@@ -187,73 +366,84 @@ never use the export control, or a native save panel becomes available, replace
 the daemon write with the save panel. If the CSV attribute makes the DOM heavy
 in practice, switch to a registry keyed by table id.
 
-## 2026-11-19 — A read-only step's file contract comes from its criteria, and a spaced path is one path
+## 2026-11-19 — A path introduced as a directory is not a file promise, and a spaced path is one path
 
-**Decision.** `extractFileExpectations` reads a `read_only` step's file contract
-from its acceptance criteria only. A research step's instructions name input
-locations as context; its criteria name what the result must produce, so only
-the criteria can promise a file. A read_only step whose criterion names a path
-outside the workspace still hard-fails through the existing workspace boundary.
-For a step that writes, instructions and criteria both remain sources, and a
-path containing spaces stays whole: `/Users/qihoo/Documents/Clone AI/out.md` is
-never `AI/out.md`. The verifier keeps its workspace read boundary, its symlink
-refusal and its write rules.
+**Decision.** `extractFileExpectations` no longer turns a path into a file
+promise when the clause immediately before it ends with a directory word
+(目录, 文件夹, directory, folder). A plan that says "数据目录
+/Users/qihoo/.clone" names an input location, not a file it promises to
+produce. A path that is a file promise, including an absolute path containing
+spaces, is kept whole: `Write /tmp/verify/Clone AI/out.md` extracts the full
+path, never `AI/out.md`. The verifier keeps its workspace read boundary, its
+symlink refusal and its write rules; nothing outside the workspace becomes
+readable.
 
 **Why it won.** Run `fa36a720…` was a read-only investigation. Its instructions
-named `/Users/qihoo/.clone` and `/Users/qihoo/Documents/Clone AI/.clone` as
-known locations; its acceptance criteria named no file. The extractor treated
-the instruction paths as promised files, split the second at the space, and the
-verifier failed the run with
-`"/Users/qihoo/.clone" was promised but does not exist on disk; "AI/.clone" was
-promised but does not exist on disk`. `~/.clone` exists; it is a directory
-outside the workspace, and the second path never existed. The worker's report
-was correct. Reading only the criteria removes the context paths without
-weakening the check for a read-only step that does promise a file. A write step
-does have a file contract in both places, and a spaced target path must not be
-truncated.
+introduced `/Users/qihoo/.clone` as 数据目录 and
+`/Users/qihoo/Documents/Clone AI/.clone` as 项目运行目录. The extractor treated
+both as promised files, split the second at the space, and the verifier failed
+the run with `"/Users/qihoo/.clone" was promised but does not exist on disk;
+"AI/.clone" was promised but does not exist on disk`. The first path is an
+existing directory outside the workspace; the second never existed. The worker's
+report was correct. A directory is an input location, not a deliverable; only a
+file promise belongs in the verifier's file contract. The space fix covers an
+actual file target.
 
 **Alternatives rejected.**
 
-- *Let the verifier read outside the workspace.* `test/verification.test.ts`
-  pins the opposite ("file verification cannot read outside the authorized
-  workspace or through a symlink"); evidence locators are untrusted, and opening
-  the machine would let a plan make the Kernel read arbitrary files. The
-  workspace boundary is the verifier's read contract, separate from the workers'
-  machine-wide read policy.
-- *Skip file extraction for read_only steps entirely.* That same test uses a
-  read_only step whose acceptance criterion names an outside path and asserts a
-  hard failure; skipping extraction would turn that into review and weaken the
-  boundary. Reading the criteria only keeps the test green.
-- *Only fix the space split.* `/Users/qihoo/.clone` would still be extracted from
-  the read-only step's instructions and fail as a directory outside the
-  workspace.
-- *Require plan authors to quote paths with spaces.* A model-written plan can
-  mention `Clone AI` unquoted; the extractor must not invent `AI/.clone`.
-- *Report an outside-workspace promise as "unverified" instead of failed.* A
-  criterion that promises a file outside the workspace is a real contract
-  violation, and the existing test asserts a failure.
+- *Read the file contract only from acceptance criteria for read_only steps.*
+  Two existing tests deliberately take a path from a read_only step and assert a
+  hard failure: "a read-only step that promises a missing file fails" uses
+  `写入 `missing.md`` in the instructions, and the workspace-boundary test names
+  the path in its acceptance criterion. Removing instruction paths for
+  read_only steps would turn the first into review and weaken the contract.
+- *Ignore every path in a read_only step.* Same problem: the missing-file test
+  expects a failure.
+- *Require a write verb for every path.* The "file expectations distinguish
+  paths and explicit root-level deliverables from code" test expects
+  `Review docs/nightly-rsi.md`, `Inspect lib\runtime.ts` and others to be
+  extracted without a write verb.
+- *Let the verifier read outside the workspace.* The workspace-boundary test
+  pins a hard failure; evidence locators are untrusted, and opening the machine
+  would let a plan make the Kernel read arbitrary files.
+- *Only fix the space split.* The two directory paths would still be extracted
+  and fail.
 
-**What was given up.** A read_only step whose instructions (but not criteria)
-promise a file no longer gets that automatic check; that is intended, because an
-instruction path is context. Its prose criteria go to owner review. For write
-steps, path extraction stays a heuristic: a spaced path followed immediately by
-prose is still ambiguous, and only the boundary the failing plan used (a path
-ending before a comma or period) is pinned by the regression case.
+**What was given up.** A real file path behind a directory word ("the report
+directory /tmp/out.md") is treated as context. Only absolute paths get the
+space-aware treatment; a relative path with spaces is still ambiguous. The
+extractor remains a heuristic over prose.
 
-**Evidence.** The failed step's instructions contain both paths; its criteria
-contain neither. A local reproduction of the instruction text returns
-`[{"path":"/Users/qihoo/.clone"},{"path":"AI/.clone"}]`; the first is a
-directory, the second is truncated at the space. `/Users/qihoo/.clone` exists.
-The repair lane's regression case must be red for these reasons before the fix
-and green after: a read_only step with context paths only extracts nothing (and
-is not failed for them), while a write step with a spaced path extracts it
-whole. The existing workspace-boundary test must stay green; the full suite and
-typecheck run in the lane.
+**Evidence.** The failed step's instructions say "已知数据目录
+/Users/qihoo/.clone，项目运行目录 /Users/qihoo/Documents/Clone AI/.clone。" Both
+clauses end with 目录. The current extractor returns both paths (the second
+truncated), and the verifier reports both missing. `/Users/qihoo/.clone` exists
+as a directory. The existing `写入 missing.md` and workspace-boundary cases must
+stay hard failures. The repair lane's regression case must be red before the
+fix and green after: a 数据目录 path yields no file expectation, and a spaced
+absolute file path is extracted whole. The lane produced that case and a green
+patch (new case **1/1**, `test/verification.test.ts` **16/16**, full suite exit
+**0**), but `src/core/verification.ts` is in the lane's `PROTECTED` list, so the
+lane refused to commit it. The owner explicitly approved merging the verified
+patch; it landed as commit `6dc13f0`. Post-merge on main: regression +
+verification **17/17**, full suite **916/916**, typecheck exit 0, gate
+**PASS**.
 
-**Reversal condition.** If read_only steps routinely name real deliverables in
-instructions rather than criteria, add an explicit deliverable marker to the
-plan schema instead of widening the extractor. If plans start quoting every
-path, the extractor can rely on quoted paths and drop the bare-path heuristic.
+**Correction (2026-11-19, after the audit).** The sentence above that the
+recorded investigation's paths are handled is wrong. The fixture reduced the
+instructions to the two directory sentences; the real `plan.created` step
+(journal seq 1818) also says "候选位置包括 … 以及 /Users/qihoo/.clone 里的线索"
+and "package.json / pnpm-workspace.yaml". On the merged extractor those produce
+`/Users/qihoo/.clone` again and a new false promise `/ pnpm-workspace.yaml`, and
+an `EvidenceVerifier` replay still fails (`passed:false`). The replacement entry
+at the top of this file records the corrected decision and uses the real
+instructions as the fixture. The 1/1 fixture and the 16/16 result above describe
+the synthetic forms only.
+
+**Reversal condition.** If plans routinely put a real file path behind a
+directory word, add an explicit deliverable marker to the plan schema instead of
+the marker heuristic. If plans start quoting every path, rely on quoted paths.
+If relative paths with spaces become common, extend the space handling to them.
 
 ## 2026-11-19 — A repeated tool call stops the turn locally, and a queued run is not polled
 
@@ -337,14 +527,16 @@ reply, or the error with its owner-facing summary, next step and raw-error
 disclosure), the runs the turn produced as 产物 rows, and one muted 依据 line:
 how many tools the turn called (and how many of those failed) and how many runs
 it produced, followed by a 查看审计 control. That control opens
-设置 → 审计与轨迹 → 主 Agent 回合 with this turn's request as the search. The
-上下文 block (provider, model and effort; charter version, tool table and
-material hash; history window; deterministic compactions) and the 派发 block
-(every tool call with its input summary and duration) are removed from the
-conversation. Both remain, unchanged, in the audit turn card, together with its
-assembly block, tool list and history searches. The live running card already
-showed only 结果, so settled turns now match it. Task records, approval and
-review cards, and the composer are unchanged.
+设置 → 审计与轨迹 → 主 Agent 回合 filtered to this turn by its turn id and
+conversation id. The 上下文 block (provider, model and effort; charter version,
+tool table and material hash; history window; deterministic compactions) and
+the 派发 block (every tool call with its input summary and duration) are removed
+from the conversation. The audit keeps the assembly block, the tool list with
+inputs and durations, and the history searches; the compaction summaries, which
+only the conversation rendered, move into a new 上下文压缩 block there. The live
+running card keeps its transient tool timeline while the turn streams; once the
+turn settles, the entry is request, result, products and grounds. Task records,
+approval and review cards, and the composer are unchanged.
 
 **Why it won.** The owner's report came with a screenshot whose red box covered
 exactly 上下文 and 派发: "不要显示的这么细了，这些在审计里显示就可以了，对话 query
@@ -362,6 +554,12 @@ conclusion checkable while the reading column carries the product.
   two renderings.
 - *Keep the tool table in the 依据 line.* Tool names are process; the audit names
   every call with its input and duration, which is where a diagnosis belongs.
+- *Keep the request text as the link's search key.* The first implementation
+  did: `entry.input` is up to 20,000 characters, so a long Chinese request
+  overflows the server's 16 KiB GET header limit and returns 431, and the
+  journal stores the request redacted, so a request containing a phone number
+  or email matches nothing. The turn id is short, stable and searchable, and
+  the conversation id keeps a reused id in another task out of the landing.
 - *Drop the provenance line and show only the reply.* A conclusion would then
   have no path back to how it was reached; "都要有论据" is not met by prose
   alone.
@@ -372,19 +570,23 @@ conclusion checkable while the reading column carries the product.
 
 **What was given up.** The model, prompt assembly and tool calls are one click
 away instead of in place, and the 依据 line reports counts, not names. The audit
-search keys on the request text, so two turns with identical requests share a
-result set. The conversation payload still carries the fields the audit uses;
-only the render changed.
+landing is a one-turn filter, not a search; the owner clears it to browse the
+list. The conversation payload still carries the fields the audit uses; only the
+render changed.
 
 **Evidence.** The screenshot places the 上下文 panel (model, system prompt, tool
 table) and the 派发 panel (four calls with JSON inputs and durations) above a
-reply that already names what it checked. `audit.js` already renders
-`assemblyBlock(turn)`, `turn.toolCalls`, the reply and the turn's runs; nothing
-it needs is removed. `test/ui-structure.test.ts` previously asserted 上下文 /
-派发 / the model string / the charter line / `dispatch_task` in the conversation
-markup; it now asserts they are absent, that 结果 / 产物 / 依据 and the audit
-control are present, and that the audit exposes the filtered landing.
-`npm test`, `npm run typecheck` and `npm run gate` are rerun for this change.
+reply that already names what it checked. `audit.js` renders `assemblyBlock(turn)`,
+`turn.toolCalls`, the reply and the turn's runs. `test/ui-structure.test.ts`
+previously asserted 上下文 / 派发 / the model string / the charter line /
+`dispatch_task` in the conversation markup; it now asserts they are absent, that
+结果 / 产物 / 依据 and the audit control are present, renders `assemblyBlock` to
+prove the compaction summary survives, renders `turnsView` to prove the tool
+list survives, and pins the turn-id landing. A three-lens adversarial review of
+the first implementation found the request-key failures, an unjournaled dead
+link, focus and label gaps, and that the compaction summary had no audit home;
+the shipped code fixes each. `npm test` **916/916**, `npm run typecheck` exit 0,
+`npm run gate` **PASS**, baseline unchanged.
 
 **Reversal condition.** If owners report that understanding an ordinary answer
 requires opening the audit, or the filtered audit does not land on the turn,
