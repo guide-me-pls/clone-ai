@@ -6,6 +6,94 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — The sidebar's top level is the conversation; tasks nest inside it
+
+**Decision.** The sidebar exposes one top-level kind per section. A conversation
+row is the thread; the Runs its turns dispatched are collapsible children
+(default collapsed, with a count and a running/waiting/failed distribution). Runs
+the main conversation dispatched sit under a non-row 主对话 header; Runs with no
+conversation — scheduled, repair-lane, opportunity and external requests — sit
+under 定时/自动. The main conversation stays the fixed navigation entry, never a
+row. The parent row's status is the aggregate waiting > running > recent failure
+> completed; its title is the conversation's first request, so the row does not
+churn every turn; its preview follows the latest turn or child. Task records
+keep their decision dock, evidence, verification and Agent rows. A waiting child
+is promoted into the 需要你的确认 section, not left inside a collapsed group.
+The owner-facing vocabulary is four words: 新请求 (the action), 对话 (the
+thread), 任务 (one bounded Run), 定时 (the schedule rule). 最近任务, 任务记录 as
+a peer kind, 任务对话 and 个人对话 are retired. `buildSession` no longer defaults
+a missing trigger `conversationId` to the main conversation: a send from a
+conversation-less task record is routed as a new request, not silently into the
+main thread.
+
+This supersedes the "no conversation rows" clause of the 2026-11-18 "The task
+record is the unit" entry — its reversal condition anticipated owners wanting to
+switch among several conversations — and inherits the 2026-11-19 "A request that
+dispatched no task is still a sidebar row" reversal condition ("group the
+conversation and its child tasks into one collapsible row"). The
+decisions-on-the-task-record clause of 2026-11-18 stands unchanged.
+
+**Alternatives rejected.**
+
+- *Keep the flat mixed list.* A row is a conversation or a Run depending on
+  whether the request dispatched work, so the owner must know the dispatch
+  outcome to read the list. "任务" then names the new-request action, the
+  最近任务 list, a schedule rule, a Run record and a child Run at once.
+- *One "session" object with work records inside it.* The runtime has no session
+  object; a conversation is a turn-ledger scope. Threadless Runs would need a
+  synthetic conversation, a new persisted thread-attachment index and a second
+  id space. Moving decisions to the session top also reverses the tested
+  2026-11-18 contract that decisions live on the task record.
+- *Task-only: one request is one task.* A direct answer creates no Run by design
+  (`proposePlanToKernel` refuses a one-step `direct_response`), and one
+  conversation can contain several turns and several Runs. Calling the
+  conversation "the task's transcript" inverts the containment and either fakes
+  Runs for answers or hides a thread inside a task.
+- *Nest threadless Runs under a fake conversation.* Scheduled, repair and
+  opportunity Runs have no conversation; `buildSession` papers over this today
+  by defaulting to the main conversation — exactly the misrouting this change
+  removes.
+
+**Evidence.** The runtime has three layers, not two. A conversation is the
+turn-ledger, context-window, prompt-lock and history-search scope and has no
+execution terminal state; a Kernel Task is the immutable request header and has
+no status; a Kernel Run is the governed execution with plan, authority, budget,
+evidence, verification and terminal states (`src/core/contracts.ts:31-46`,
+`src/core/runtime.ts:407-433`). `mainAgentRunConversations` maps a Run to a
+conversation only for `source === "main-agent"`
+(`src/main-agent/run-triggers.ts:20-47`); a direct answer creates no Run
+(`src/main-agent/tools/kernel-tools.ts:135-146`); scheduled and desktop requests
+create Runs with no conversation. The current UI shows the collision:
+`sessionMarkup` badges a conversation row with 对话 (`apps/desktop/ui/app.js:664`),
+`setTopbar` prints 个人对话 / 任务对话 / 任务记录 (`app.js:1932`), the buttons say
+新请求 / 对话 / 定时任务 and the list header is 最近任务
+(`apps/desktop/ui/index.html:21-25`), while the locale already calls the action
+新请求 (`src/desktop/ui-locale.ts:12`). The 2026-11-18 build `a575fdb` already
+rendered conversation rows with `.session-children`; the 2026-11-19 flatten
+removed the renderer but left its CSS (`apps/desktop/ui/audit.css:134-145`), the
+`openChildGroups` state and `parentId`/`childCount` in `SessionSummary`
+(`src/companion-server.ts:3999-4013`). The eval is deterministic: a dashboard
+case with one conversation and two spawned Runs must return one conversation row
+with `childCount: 2` and two child rows carrying `parentId`; the UI contract
+must show the nested group and the 主对话/定时 groups; the waiting child must
+appear in the promoted section and not twice.
+
+**What it costs.** One nesting level. A one-request/one-Run conversation renders
+a parent and a nearly identical child; the parent title is the first request, so
+it stays stable, but it can be stale after a topic change. A conversation with
+many Runs needs the collapsed group and the promoted waiting section to stay
+readable. The learning-cost gain is *assumed*: no owner usability check was run.
+The deterministic eval shows the intended shape, not a measured reduction in
+learning time. No benchmark applies: this is a UI/read-model contract, not a
+provider or orchestration change.
+
+**Reversal condition.** If grouped rows make dispatched work hard to find, add a
+flat task filter or fall back to the task-only list; if the parent/child
+duplication for one-request/one-Run conversations confuses owners, collapse a
+single-child group into the parent row. Do not hide direct answers again. If
+owners need every Run as a top-level row, add a "tasks" view rather than removing
+the conversation parent.
+
 ## 2026-11-19 — Agent settings show the connection, not the loopback URL or raw model id
 
 **Decision.** Settings → Agent no longer prints the Magpie loopback URL

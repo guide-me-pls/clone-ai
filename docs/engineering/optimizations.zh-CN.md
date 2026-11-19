@@ -26,6 +26,53 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— 侧栏顶层是对话，任务内嵌其中
+
+- **目标 / 假设：** 所有者的抱怨是"既有对话又有任务，学习成本太高"。假设成本不来自两个运行时对象
+  的存在，而来自扁平混合列表与不稳定的所指：一行是对话还是 Run，取决于这次请求有没有派发工作；
+  "任务"同时指新请求动作、列表标题、计划规则、Run 记录与子 Run。只保留一种顶层行——对话——把
+  Run 嵌在下面，再把没有对话行的 Run 放进"主对话/定时"分组，应当只剩一个层级与每层一个词。
+- **取舍：** [侧栏顶层是对话，任务内嵌其中](../architecture/trade-offs.zh-CN.md#2026-11-19--侧栏顶层是对话任务内嵌其中)。
+- **变更：** `src/companion-server.ts` 为每个对话生成一行，给任务行补 `parentId`/`childCount`，
+  聚合父行状态（等待 > 运行中 > 最近失败 > 已完成），在根行上限内保留子行，并停止
+  `buildSession` 把没有对话的 Trigger 默认成主对话。`apps/desktop/ui/app.js` 把任务行嵌到对话行
+  下，提升等待中的子任务，把主对话的任务放进不可点击的"主对话"标题下、把没有对话的 Run 放进
+  "定时/自动"，从没有对话的任务记录发送时走新请求路由，并用"新请求/对话/任务/定时"词表替换
+  种类徽章与顶栏标签。`apps/desktop/ui/index.html`、`src/desktop/ui-locale.ts` 与桌面 README
+  的标签同步。
+- **Eval：** `node --experimental-strip-types --test test/companion-control-plane.test.ts test/ui-structure.test.ts test/ui-locale.test.ts test/regression/ui-sidebar-hidden-restore.test.ts`
+  —— **59/59**。新增的确定性用例：一个对话带两个派生 Run 时返回一个对话行
+  （`childCount: 2`，聚合 `waiting_approval`）与两个带 `parentId` 的子行；侧栏沙箱渲染一个父行
+  与一个内嵌的运行中子行，等待子行只提升一次，主对话任务与定时 Run 各归其组。变更前，新的服务端
+  用例会失败（没有对话行，没有 `parentId`/`childCount`），沙箱用例也会失败（没有
+  `data-child-group`）；旧测试固定的正是"没有 `data-child-group`"与"对话"徽章。**在只含本次改动的
+  隔离树里**（HEAD 加侧栏改动，不含并行重构），`npm test` **917/917** 通过、`npm run typecheck`
+  通过、`npm run gate` **PASS** 且 `baseline unchanged`；定向套件在该树为 **58/58**（共享树
+  还多一条并行 UI 用例，因此是 59/59）。共享工作区的全量套件是 **908/919**，11 条失败：六条修复
+  通道用例、一条 20 秒的 killed-executor 并发用例、一条写作用域默认值用例、一条配置工作区指令用
+  例、一条 golden path 用例，以及一条由未跟踪的 `.claude/launch.json` 触发的浏览器预览入口用例。
+  没有一条触碰侧栏代码；共享树的 `npm run gate` 仍报告并行写作用域重构带来的
+  `policy/local-write-allowed` 基线变化（`allowed -> denied`）。
+- **Benchmark run：** 无——这是确定性的 UI/读模型契约；没有 Provider、模型、数据集、种子或评分参数。
+- **执行链路：** 一个 9 Agent 的工作流先梳理运行时、界面与决策历史，再生成三套候选模型，并由三个
+  视角评分（25.9 分钟，1.37M 子 Agent tokens，563 次工具调用）。随后主 Agent 写双语取舍、实现
+  服务端读模型与界面、补两个 eval，并反复跑定向套件。链路中两次修正：子任务组摘要重复计算了等待
+  子行（摘要只看可见子行）；回归沙箱需要为切片外的行/标签辅助函数提供桩。共享工作区还带着并行
+  重构，因此提交在 detached worktree 里从 HEAD 加本次改动重建；在该树 `npm test` 917/917、
+  typecheck 与 gate 均通过。拆分需要一次手工 hunk 复核：并行重构在同一测试 hunk 里加了针对工作区
+  的否定断言；这些断言从提交中移除，HEAD 原有的工作区断言保留。
+- **优点：** 层级与运行时关系一致，而不是发明一个会话对象；复用了既有的
+  `.session-children`/`.is-child` CSS、`openChildGroups` 状态与 `parentId`/`childCount` 字段；
+  等待中的子任务仍在第一页；新 eval 固定了父/子关系与提升后的决定。
+- **缺点 / 下次：** 共享工作区里同时进行着 workspacePath/写作用域重构，那棵树因本次改动之外的原因
+  变红。最后用 detached worktree 从 HEAD 加本次改动单独构建提交，得到 917/917 与 gate PASS；
+  下次应一开始就在隔离树里做，而不是事后拆提交。一请求一 Run 的情况仍会显示父行与几乎同名的子行；
+  学习成本收益是假设——没有做所有者可用性实测。`optimization-results.md` 不写条目：确定性 eval
+  固定的是形状，不是实测的学习时间下降。
+- **推翻条件：** 如果分组行让派发的工作难以找到，加一个扁平任务过滤器，或退回只列任务的列表；
+  如果一请求一 Run 的父/子重复让所有者困惑，把单子任务的组折进父行。不要再次隐藏直接回答。
+  如果所有者需要每个 Run 都是顶层行，加一个"任务"视图，而不是移除对话父行。
+
 ### 2026-11-19 —— Agent 设置不再打印回环地址与重复的原始模型 id
 
 - **目标 / 假设：** 所有者两张截图把 Magpie 回环路径（`http://127.0.0.1:3425/v1`）和显示
