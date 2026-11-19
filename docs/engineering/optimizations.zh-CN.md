@@ -26,6 +26,34 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— 失败轨迹携带步骤 instructions
+
+- **目标 / 假设：** 验证器修复的第一次通道运行在 `regression-missing` 闸门失败，因为暂存轨迹的
+  `plan[0].instructions` 缺失：`FailedTrace.plan` 只有 `id/title/risk/agentId`。从
+  `plan.created` 携带步骤的 instructions、验收标准、能力、scopes 与子代理数量，应让通道只凭
+  轨迹复现计划层或验证层失败。
+- **取舍：** [失败轨迹携带步骤 instructions](../architecture/trade-offs.zh-CN.md#2026-11-19--失败轨迹携带步骤-instructions)。
+- **变更：** `src/audit/failed-traces.ts` 新增 `FailedTraceStep`，把 `plan.created` 的完整
+  步骤映射进轨迹（instructions 与验收标准脱敏，每个字符串受现有 1500 字符脱敏上限约束；携带
+  scopes 与子代理数量）。没有计划事件时退回缩减的审计 plan。
+  `test/failed-traces.test.ts` 给 fixture 加上这些字段并断言它们在脱敏后仍然存在。
+- **Eval：** 新断言在旧导出形状上红（没有 `instructions`），修复后绿；
+  `test/failed-traces.test.ts` **3/3**；`npm test` **946/946**；`npm run typecheck` 退出 0；
+  `npm run gate` **PASS**，baseline 不变。
+- **Benchmark run：** 无——确定性的轨迹导出契约；不涉及 Provider、模型、数据集、切分、种子或
+  评分参数。
+- **执行链路：** 缺口由验证器通道失败的运行 `8464295d`（“the staged trace's
+  plan[0].instructions is missing”）与重试时把 journal seq 1818 粘进决定说明发现。修复在本会话
+  内联完成：阅读导出器、run-audit 的 plan 投影与通道 Prompt；写双语取舍；扩展类型与映射；更新
+  fixture 与断言；把导出器换回旧实现复现红色；跑完整测试、typecheck 与 gate。
+- **优点：** 修复通道不再依赖工作 Agent 重述步骤；轨迹自包含；字段已脱敏且有界；缩减的退回
+  路径让旧轨迹仍可读。
+- **缺点 / 下次：** 每个文本字段最多多 1500 字符，宽计划最多八步；上限可能截断真实指令；
+  scopes 未逐字段脱敏（其资源本来就在 evidence 里）。
+- **推翻条件：** 如果轨迹大到无法暂存或携带，就只导出失败点名的步骤，或导出脱敏计划加一个计划
+  id。如果脱敏跟不上新增字段，先丢 `scopes`，再考虑丢 instructions。
+
+
 ### 2026-11-19 —— 首次发送失败显示所有者可读的原因
 
 - **目标 / 假设：** 审计发现，没有流式正文的首次发送会跳过台账刷新，临时失败卡只显示原始英文

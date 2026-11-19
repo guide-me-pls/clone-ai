@@ -14,7 +14,20 @@ function eventsOf(options: { retries?: number; cancelled?: boolean; withLabel?: 
     event({ ...base, sequence: 1, type: "trigger.received", payload: { id: "g1", kind: "query", summary: "整理周报", occurredAt: base.occurredAt, payload: {} } }),
     event({ ...base, sequence: 2, type: "task.created", taskId: "t1", payload: { id: "t1", title: "整理周报", objective: "整理", acceptanceCriteria: [], createdAt: base.occurredAt, triggerId: "g1" } }),
     event({ ...base, sequence: 3, type: "run.created", taskId: "t1", runId: "run-1", payload: { id: "run-1", taskId: "t1" } }),
-    event({ ...base, sequence: 4, type: "plan.created", taskId: "t1", runId: "run-1", payload: { summary: "整理", steps: [{ id: "s1", title: "扫描", risk: "read_only", agentId: "draft-maker" }] } }),
+    event({ ...base, sequence: 4, type: "plan.created", taskId: "t1", runId: "run-1", payload: {
+      summary: "整理",
+      steps: [{
+        id: "s1",
+        title: "扫描",
+        risk: "read_only",
+        agentId: "draft-maker",
+        instructions: "Read the workspace README and report owner@example.com without the ghp_fakefake12345678 token.",
+        acceptanceCriteria: ["README read", "owner@example.com is not echoed"],
+        requiredCapabilities: ["research", "filesystem_read"],
+        scopes: [{ domain: "files", resource: "/tmp/work", access: "read" }],
+        subagents: [],
+      }],
+    } }),
   ];
   let sequence = 5;
   for (let index = 0; index < (options.retries ?? 1); index += 1) {
@@ -45,6 +58,16 @@ test("an explicit failure becomes one trace with a redacted reason", () => {
   assert.equal(trace.failure?.reason?.includes("owner@example.com"), false);
   assert.match(trace.failure?.reason ?? "", /\[redacted|redacted/);
   assert.equal(trace.plan[0]?.title, "扫描");
+  // The repair lane reproduces a plan-level failure from this text; it must
+  // carry the step's instructions and criteria, with PII and tokens redacted.
+  // 修复通道靠这段文字复现计划层失败；它必须携带步骤指令与标准，并脱敏 PII 与 token。
+  assert.match(trace.plan[0]?.instructions ?? "", /Read the workspace README/);
+  assert.equal(trace.plan[0]?.instructions?.includes("owner@example.com"), false);
+  assert.equal(trace.plan[0]?.instructions?.includes("ghp_fakefake12345678"), false);
+  assert.equal(trace.plan[0]?.acceptanceCriteria?.some((item) => item.includes("owner@example.com")), false);
+  assert.deepEqual(trace.plan[0]?.requiredCapabilities, ["research", "filesystem_read"]);
+  assert.deepEqual(trace.plan[0]?.scopes, [{ domain: "files", resource: "/tmp/work", access: "read" }]);
+  assert.equal(trace.plan[0]?.subagents, 0);
   assert.equal(trace.executions[0]?.providerId, "pi");
 });
 

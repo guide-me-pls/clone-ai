@@ -33,6 +33,20 @@ import type { JournalEvent } from "../core/contracts.ts";
 import type { JournalStore } from "../core/journal.ts";
 import { readConversation } from "../main-agent/conversation-history.ts";
 
+export interface FailedTraceStep {
+  id: string;
+  title: string;
+  risk: string;
+  agentId?: string;
+  /** The step's own instructions, redacted and capped. 步骤自身的指令，已脱敏并截断。 */
+  instructions?: string;
+  /** Checkable criteria the step promised, redacted. 步骤承诺的可核对标准，已脱敏。 */
+  acceptanceCriteria?: string[];
+  requiredCapabilities?: string[];
+  scopes?: unknown;
+  subagents?: number;
+}
+
 export interface FailedTrace {
   schemaVersion: 1;
   id: string;
@@ -43,7 +57,7 @@ export interface FailedTrace {
   title: string;
   objective?: string;
   request?: string;
-  plan: Array<{ id: string; title: string; risk: string; agentId?: string }>;
+  plan: FailedTraceStep[];
   failure?: { stage: string; category?: string; reason?: string };
   executions: Array<{
     stepId: string;
@@ -149,12 +163,43 @@ function toTrace(record: RunAuditRecord, events: readonly JournalEvent[], signal
     .map((event) => redact(String((event.payload as { message?: string }).message ?? "")))
     .filter((line) => line.length > 0)
     .slice(-5);
-  const plan = (record.plan ?? []).map((step) => ({
-    id: step.id,
-    title: redact(step.title),
-    risk: step.risk,
-    ...(step.agentId === undefined ? {} : { agentId: step.agentId }),
-  }));
+  const planEvent = events.filter((event) => event.type === "plan.created").at(-1);
+  const planSteps = planEvent === undefined
+    ? []
+    : Array.isArray((planEvent.payload as { steps?: unknown }).steps)
+      ? (planEvent.payload as { steps: Array<Record<string, unknown>> }).steps
+      : [];
+  const plan: FailedTraceStep[] = planSteps.length > 0
+    ? planSteps.map((step) => ({
+      id: String(step.id ?? ""),
+      title: redact(String(step.title ?? "")),
+      risk: String(step.risk ?? ""),
+      ...(typeof step.agentId === "string" ? { agentId: step.agentId } : {}),
+      ...(typeof step.instructions === "string" ? { instructions: redact(step.instructions) } : {}),
+      ...(Array.isArray(step.acceptanceCriteria)
+        ? {
+          acceptanceCriteria: step.acceptanceCriteria
+            .filter((value): value is string => typeof value === "string")
+            .map(redact),
+        }
+        : {}),
+      ...(Array.isArray(step.requiredCapabilities)
+        ? {
+          requiredCapabilities: step.requiredCapabilities
+            .filter((value): value is string => typeof value === "string"),
+        }
+        : {}),
+      ...(step.scopes === undefined ? {} : { scopes: step.scopes }),
+      ...(Array.isArray(step.subagents) ? { subagents: step.subagents.length } : {}),
+    }))
+    : (record.plan ?? []).map((step) => ({
+      id: step.id,
+      title: redact(step.title),
+      risk: step.risk,
+      ...(step.agentId === undefined ? {} : { agentId: step.agentId }),
+      ...(step.scopes === undefined ? {} : { scopes: step.scopes }),
+      subagents: step.subagents,
+    }));
   return {
     schemaVersion: 1,
     id: record.runId,
