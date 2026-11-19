@@ -239,6 +239,40 @@
   两份副本。如果网关的 `reasoningLevels` 对某个 Provider 不可靠，保留退回列表并把选择器标注为
   建议值。
 
+### 2026-11-19 —— 失败的原因到达模型与所有者
+
+- **目标 / 假设：** 审计发现原因在四个界面缺失：policy 拒绝的 Run 只写
+  `{status:"failed"}`，验证失败也只写这个，`dispatch_task` 只回状态，工作更新/机会卡没有可引用
+  的内容。把 policy 理由或验证摘要带进 `run.status_changed`，应当让每次失败都设置
+  `run.failureReason`，并让 `get_run_status`、`dispatch_task`、工作更新与机会卡说明原因。
+- **取舍：** [失败的 Run 携带原因](../architecture/trade-offs.zh-CN.md#2026-11-19--失败的-run-携带原因主-agent-能读到)。
+- **变更：** `src/core/runtime.ts` 在 policy 拒绝时传 `decision.reason`，在验证失败或被拒绝
+  复核时传验证摘要（截 500 字符）；`src/application/run-query.ts` 给
+  `QueryRunResult`/`toQueryResult` 加 `failureReason`；`src/main-agent/tools/dispatch-task.ts`
+  返回它；`src/main-agent/tools/kernel-tools.ts` 对失败的 Run 打印 `Failure:`；
+  `src/companion-server.ts` 让 `recordWorkUpdate` 回退到 `run.failureReason`。
+  `test/regression/failure-reason.test.ts` 覆盖 policy 拒绝、验证失败、`runStatusInfo` 与
+  `runQuery` 结果。
+- **Eval：** 通道第一阶段用例 **6 条断言红**，修复后绿；通道完整套件 **930/930**，typecheck
+  退出 0。main 上：回归 **6/6**，完整套件 **940/940**，typecheck 退出 0，gate **PASS**。
+  本地回退五个生产文件可复现红（policy、验证重放、状态读取与 `runQuery` 派发都失败）。
+- **Benchmark run：** 无——确定性的展示契约；不涉及 Provider、模型、数据集、切分、种子或评分参数。
+- **执行链路：** 两次通道运行。第一次产出部分补丁（`runtime.ts` + `kernel-tools.ts`），在
+  保护路径闸门停下；phase 1 **32.5 秒 / 84,801 token / 7 次调用**，修复 **44.1 秒 / 116,619
+  token / 11 次调用**；它漏掉了派发结果与工作更新。决定说明随后明确要求
+  `QueryRunResult`/`dispatch_task` 与 `recordWorkUpdate`。第二次产出完整补丁，在闸门停下；
+  phase 1 **52.5 秒 / 113,651 token / 7 次调用**，修复 **84.5 秒 / 473,405 token / 16 次
+  调用**。所有者批准了这个 protected 补丁；共享工作树按功能提交后，把保留的补丁应用到 main
+  （通道 worktree 已被清理，因此来源是
+  `.automation/repair-reports/failure-reason-20261119T0851.patch`）。第一次的部分补丁未使用。
+- **优点：** 原因在 Run 记录里持久，并且对模型（派发/状态）与所有者（工作更新/机会卡）可见；
+  回归覆盖两类失败与两类读者；保护路径闸门在所有者批准前拒绝了补丁。
+- **缺点 / 下次：** 工作更新的回退只有一行，没有直接测试；policy 理由是散文，可能点名路径
+  （脱敏与 500 字符截断仍生效）；第一次通道因为说明没点名派发结果，浪费了约 200k token；
+  轨迹仍不带步骤 instructions，说明只能自带场景。
+- **推翻条件：** 如果理由让 Journal 变得臃肿或泄露数据，就存截断摘要加事件指针，或结构化
+  category/scope。如果读者需要机器可读的原因，就加字段而不是散文。
+
 ### 2026-11-19 —— 无进展守卫按整回合统计每个调用
 
 - **目标 / 假设：** 事故后的审计在相邻批次守卫（43a34cc）上复现了两种等待形状：两个结果不变的

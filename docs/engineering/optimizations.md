@@ -333,6 +333,59 @@ file keeps every attempt, including the ones that did not work.
   unreliable for a provider, keep the fallback list and label the picker as
   advisory.
 
+### 2026-11-19 — A failed run's reason reaches the model and the owner
+
+- **Goal / hypothesis:** the audit found the reason missing at four surfaces: a
+  policy-denied run wrote only `{status:"failed"}`, a verification failure wrote
+  the same, `dispatch_task` returned only status, and the work update/opportunity
+  had nothing to cite. Carrying the policy reason or verification summary into
+  `run.status_changed` should set `run.failureReason` for every failure and let
+  `get_run_status`, `dispatch_task`, the work update and the opportunity card
+  show why.
+- **Trade-off:** [a failed run carries its reason](../architecture/trade-offs.md#2026-11-19--a-failed-run-carries-its-reason-and-the-main-agent-can-read-it).
+- **Change:** `src/core/runtime.ts` passes `decision.reason` on a policy denial
+  and the verification summary (capped at 500 characters) on a failed
+  verification or rejected review; `src/application/run-query.ts` adds
+  `failureReason` to `QueryRunResult`/`toQueryResult`;
+  `src/main-agent/tools/dispatch-task.ts` returns it;
+  `src/main-agent/tools/kernel-tools.ts` prints `Failure:` for a failed run;
+  `src/companion-server.ts` makes `recordWorkUpdate` fall back to
+  `run.failureReason`. `test/regression/failure-reason.test.ts` covers the
+  policy-denied run, the verification-failed run, `runStatusInfo` and the
+  `runQuery` result.
+- **Eval:** the lane's phase-1 case was **red with 6 failing assertions** and is
+  green after; the lane's full suite is **930/930**, typecheck exit 0. On main:
+  the regression **6/6**, full suite **940/940**, typecheck exit 0, gate
+  **PASS**. A local revert of the five production files reproduces the red case
+  (policy, verification replay, status reader and `runQuery` dispatch all fail).
+- **Benchmark run:** none — deterministic surfacing contract; no provider,
+  model, dataset, split, seed or scoring parameter.
+- **Execution chain:** two lane runs. The first produced a partial patch
+  (`runtime.ts` + `kernel-tools.ts`) and stopped at the protected-path gate
+  after **32.5 s / 84,801 tokens / 7 calls** (phase 1) and **44.1 s / 116,619
+  tokens / 11 calls** (fix); it omitted the dispatch result and the work update.
+  The decision brief was sharpened to require `QueryRunResult`/`dispatch_task`
+  and `recordWorkUpdate`. The second run produced the full patch and stopped at
+  the gate after **52.5 s / 113,651 tokens / 7 calls** and **84.5 s / 473,405
+  tokens / 16 calls**. The owner approved the protected patch; after the shared
+  working tree was committed feature by feature, the preserved patch was applied
+  to main (the lane worktree had been cleaned, so
+  `.automation/repair-reports/failure-reason-20261119T0851.patch` was the
+  source). The first partial patch was not used.
+- **Pros:** the reason is durable in the run record and visible to the model
+  (dispatch/status) and the owner (work update/opportunity); the regression
+  covers both failure kinds and both readers; the protected-path gate refused
+  the patch until the owner approved it.
+- **Cons / next time:** the work-update fallback is one line without a direct
+  test; a policy reason is prose and may name a path (redaction and the 500-char
+  cap apply); the first lane run wasted about 200k tokens because the brief did
+  not name the dispatch result; the trace still carries no step instructions, so
+  the brief had to supply the scenarios.
+- **Reversal condition:** if reasons make the journal unwieldy or leak data,
+  store a truncated summary plus a pointer to the event, or a structured
+  category/scope. If readers need machine-readable causes, add fields instead of
+  prose.
+
 ### 2026-11-19 — The no-progress guard counts each call across the turn
 
 - **Goal / hypothesis:** the post-incident audit reproduced two waiting shapes

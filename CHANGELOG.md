@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A failed run says why it failed
+
+The Kernel now records a policy denial's reason, or the verification summary (capped at 500 characters) on a failed verification or rejected review, in the run's status. `run.failureReason` therefore covers every failure; `get_run_status` prints `Failure:`, `dispatch_task` returns `failureReason`, and the work update and opportunity card read it instead of "没有记录到具体原因". Worker failures keep their existing message.
+
+Kernel 现在把 policy 拒绝的理由，或验证失败/复核拒绝的验证摘要（截 500 字符）写进 Run 的状态。因此 `run.failureReason` 覆盖每一次失败；`get_run_status` 打印 `Failure:`，`dispatch_task` 返回 `failureReason`，工作更新与机会卡读取它，而不是“没有记录到具体原因”。Worker 失败沿用原有消息。
+
 ### A model's declared effort levels are accepted, not only the built-in seven
 
 The composer and Settings pickers list the gateway's per-model reasoning levels, and some models declare levels outside clone-ai's built-in set — `openai/gpt-6.1-terra` offers `none` and `ultra`. Those appeared in the picker and were then refused with HTTP 400 by the stream/query endpoints and `PATCH /api/config`. The endpoints now accept any non-empty level name (trimmed, at most 64 characters), forward it as `reasoning_effort`, and leave the provider as the authority for what a model accepts. The built-in seven remain the picker's fallback when the gateway declares nothing, and the set a self-review proposal may choose from.

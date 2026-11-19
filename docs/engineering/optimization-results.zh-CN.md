@@ -52,6 +52,19 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--内部基准是机器根目录而不是某个文件夹)；
   [执行链路](optimizations.zh-CN.md#2026-11-19--内部基准是机器根目录而不是某个文件夹)。
 
+## 2026-11-19 —— 失败的 Run 说明失败原因
+
+- **主张：** policy 拒绝现在把理由、验证失败或被拒绝复核把验证摘要写进
+  `run.status_changed`；因此 `run.failureReason` 覆盖每一次失败。`get_run_status` 打印
+  `Failure:`，`dispatch_task`/`QueryRunResult` 返回 `failureReason`，工作更新与机会卡读取它，
+  而不是“没有记录到具体原因”。
+- **证据：** `test/regression/failure-reason.test.ts` 修复前红（policy、验证重放、状态读取与
+  `runQuery` 共 6 条断言），修复后绿；`npm test` **940/940**，typecheck 退出 0，gate
+  **PASS**。在保护路径越权批准后以 `443aa73` 落地。补丁与报告：
+  `.automation/repair-reports/failure-reason-20261119T0851.{patch,json}`。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--失败的-run-携带原因主-agent-能读到)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--失败的原因到达模型与所有者)。
+
 ## 2026-11-19 —— 交替轮询与被掩护的轮询都以无进展停止
 
 - **主张：** 共享循环现在按整回合统计每个已执行调用的身份。两个相同的 `get_run_status` 轮询
@@ -71,8 +84,8 @@
 - **证据：** 新回归修复前红（`["/ pnpm-workspace.yaml","/Users/user/.clone"]`），修复后绿
   （`[]`）；通道完整套件 **919/919**，typecheck 0；main 上两个回归加
   `test/verification.test.ts` 与 `test/fallback-planner.test.ts` 共 **31/31**，完整套件
-  **922/922**，gate **PASS**。在保护路径越权批准后以 `763dcd8` 落地。报告：
-  `.automation/repair-reports/verifier-20261119T0817.json`。
+  **922/922**，gate **PASS**。在保护路径越权批准后以 `763dcd8` 落地。通道报告后来被一次
+  `no-traces` 运行覆盖；以提交与测试为证据。
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--搜索位置不是文件承诺回归用例必须使用事故里的真实计划)；
   [执行链路](optimizations.zh-CN.md#2026-11-19--验证器以真实计划为-fixture搜索位置不是文件承诺)。
 
