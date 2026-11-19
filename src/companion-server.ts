@@ -74,7 +74,7 @@ import { readConnectorSettings, writeConnectorSettings } from "./connectors/conn
 import { compileBriefing } from "./main-agent/situation-briefing.ts";
 import { buildFallbackPlan } from "./planning/fallback-planner.ts";
 import { reconcileCommitments } from "./state/commitment-reconciler.ts";
-import { describeHistory, mainAgentSessionDirectory, readConversation, searchHistory } from "./main-agent/conversation-history.ts";
+import { describeHistory, hasStoredMainConversation, mainAgentSessionDirectory, readConversation, searchHistory } from "./main-agent/conversation-history.ts";
 import { listOwnerConversations, readCurrentSessionPointer } from "./main-agent/conversation-store.ts";
 import { inspectMagpieGateway } from "./integrations/magpie-gateway.ts";
 import { listMainAgentModelIds, listMainAgentModels, mainAgentModelReference } from "./main-agent/main-agent-model-catalog.ts";
@@ -2781,10 +2781,29 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
     list.push(session);
     childrenByConversation.set(session.parentId, list);
   }
-  const conversationSessions = conversationRowsFromTurns(turns, {
-    excludeConversationIds: deletedConversationIds,
-    childrenByConversation,
-  });
+  // The main conversation is a row like any other, pinned by the UI at the top
+  // of 最近: it is where the owner's original thread and the tasks it dispatched
+  // live. An empty main conversation is not a row — it would open the same
+  // welcome as 新请求 and recreate the duplication this merge removes. It
+  // appears once it has a turn, a dispatched task, or legacy history on disk,
+  // and stays hidden when the owner hid it.
+  // 主对话与其他对话一样是一行，由界面固定在 最近 顶部：所有者最初的线程与它派发的任务
+  // 都在这里。空的主对话不是一行——它与 新请求 打开同一个欢迎面，会重建本次合并要去掉的
+  // 重复。它有回合、派发过任务或磁盘上有旧历史时才出现；被所有者隐藏时保持隐藏。
+  const mainRecords = turns.filter((turn) => conversationIdOf(turn.conversationId) === MAIN_AGENT_SESSION_ID);
+  const mainChildren = childrenByConversation.get(MAIN_AGENT_SESSION_ID) ?? [];
+  const showMainRow = !deletedConversationIds.has(MAIN_AGENT_SESSION_ID)
+    && (mainRecords.length > 0 || mainChildren.length > 0 || await hasStoredMainConversation(dataDirectory));
+  const mainRows = showMainRow
+    ? [conversationRow(MAIN_AGENT_SESSION_ID, mainRecords, mainChildren)]
+    : [];
+  const conversationSessions = [
+    ...conversationRowsFromTurns(turns, {
+      excludeConversationIds: deletedConversationIds,
+      childrenByConversation,
+    }),
+    ...mainRows,
+  ];
   // Runs the Main Agent proposed are tasks of the conversation that asked for
   // them, not sibling chats: one request must not read as two conversations in
   // the sidebar, and a task spawned from a new task stays under that task.
@@ -2994,12 +3013,12 @@ function toMainAgentTurnSummary(
  *
  * The row's title is the first request, so the sidebar does not rename a thread
  * every turn; the preview and status follow the latest turn or child. The main
- * conversation never appears: it is the owner's control surface, not a row. A
- * hidden conversation stays hidden.
+ * conversation is not built here: `buildDashboard` adds it as the pinned row.
+ * A hidden conversation stays hidden.
  * 每个对话一行，派发的 Run 作为子行。
  *
  * 标题取第一个请求，侧栏不会每回合重命名线索；预览与状态跟随最近的回合或子任务。主对话
- * 永不出现：它是所有者的操作面，不是一行。被隐藏的对话保持隐藏。
+ * 不在这里构建：由 `buildDashboard` 作为固定行补上。被隐藏的对话保持隐藏。
  */
 function conversationRowsFromTurns(
   turns: readonly MainAgentTurnRecord[],
@@ -3023,36 +3042,58 @@ function conversationRowsFromTurns(
   // 而不是生成一条点开就 404 的对话行。
   const ids = new Set(turnsByConversation.keys());
   ids.delete(MAIN_AGENT_SESSION_ID);
-  return [...ids].map((conversationId) => {
-    const records = (turnsByConversation.get(conversationId) ?? [])
-      .sort((left, right) => Date.parse(left.completedAt ?? left.startedAt) - Date.parse(right.completedAt ?? right.startedAt));
-    const first = records[0];
-    const latest = records.at(-1);
-    const children = [...(options.childrenByConversation.get(conversationId) ?? [])]
-      .sort((left, right) => right.updatedAtMs - left.updatedAtMs);
-    // Children are sorted newest first, so the earliest one is last and names
-    // a thread that has runs but no turn ledger row.
-    // 子行按最新在前排序，最早的一条在末尾；没有回合台账行的线程用它命名。
-    const firstChild = children.at(-1);
-    const title = first === undefined
-      ? firstChild?.title ?? "Main Agent 对话"
-      : toMainAgentTurnSummary(first, conversationId).title;
-    const status = conversationStatus(latest, children);
-    const updatedAtMs = Math.max(
-      latest === undefined ? 0 : Date.parse(latest.completedAt ?? latest.startedAt),
-      ...children.map((child) => child.updatedAtMs),
-    );
-    return {
-      id: conversationId,
-      title,
-      status,
-      updatedAt: new Date(updatedAtMs).toISOString(),
-      preview: conversationPreview(status, records, children),
-      kind: "conversation" as const,
-      childCount: children.length,
-      updatedAtMs,
-    };
-  });
+  return [...ids].map((conversationId) => conversationRow(
+    conversationId,
+    turnsByConversation.get(conversationId) ?? [],
+    options.childrenByConversation.get(conversationId) ?? [],
+  ));
+}
+
+/**
+ * One conversation row built from its ledger turns and dispatched children.
+ * Every conversation uses it, the pinned main conversation included, so the
+ * sidebar has one row shape rather than a special case for the owner's original
+ * thread. An empty main conversation gets an empty preview; the UI names it and
+ * supplies its own empty hint.
+ * 一个由台账回合与派发子行构建的对话行。所有对话都用它，包括固定的主对话，因此侧栏
+ * 只有一种行形态，而不是为所有者最初的线程准备特例。空的主对话得到空预览；界面负责
+ * 命名它并给出空状态提示。
+ */
+function conversationRow(
+  conversationId: string,
+  records: readonly MainAgentTurnRecord[],
+  children: readonly DashboardSession[],
+): DashboardSession {
+  const ordered = [...records]
+    .sort((left, right) => Date.parse(left.completedAt ?? left.startedAt) - Date.parse(right.completedAt ?? right.startedAt));
+  const first = ordered[0];
+  const latest = ordered.at(-1);
+  const sortedChildren = [...children]
+    .sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+  // Children are sorted newest first, so the earliest one is last and names
+  // a thread that has runs but no turn ledger row.
+  // 子行按最新在前排序，最早的一条在末尾；没有回合台账行的线程用它命名。
+  const firstChild = sortedChildren.at(-1);
+  const title = first === undefined
+    ? firstChild?.title ?? "Main Agent 对话"
+    : toMainAgentTurnSummary(first, conversationId).title;
+  const status = conversationStatus(latest, sortedChildren);
+  const updatedAtMs = Math.max(
+    latest === undefined ? 0 : Date.parse(latest.completedAt ?? latest.startedAt),
+    ...sortedChildren.map((child) => child.updatedAtMs),
+  );
+  return {
+    id: conversationId,
+    title,
+    status,
+    updatedAt: new Date(updatedAtMs).toISOString(),
+    preview: ordered.length === 0 && sortedChildren.length === 0
+      ? ""
+      : conversationPreview(status, ordered, sortedChildren),
+    kind: "conversation" as const,
+    childCount: sortedChildren.length,
+    updatedAtMs,
+  };
 }
 
 /** A Run still occupying a slot or waiting on the owner. 仍占槽位或等待所有者的 Run 状态。 */
@@ -3104,19 +3145,23 @@ function conversationPreview(
 
 /**
  * Cap root sessions, not rows: a conversation's children travel with it so a
- * slice cannot orphan a task. 按根会话截断，而不是按行：对话的子行随它一起保留，
- * 切片不会让任务失去父行。
+ * slice cannot orphan a task. The main conversation is pinned — it is always
+ * kept even when it falls outside the recent window, because it is the fixed
+ * entry to the owner's original thread.
+ * 按根会话截断，而不是按行：对话的子行随它一起保留，切片不会让任务失去父行。主对话是
+ * 固定的：即使落在最近窗口之外也始终保留，因为它是所有者最初线程的固定入口。
  */
 function capSessionRows(sessions: readonly DashboardSession[], limit: number): DashboardSession[] {
   const byId = new Map(sessions.map((session) => [session.id, session]));
   const hasConversationParent = (session: DashboardSession): boolean =>
     session.parentId !== undefined
-    && session.parentId !== MAIN_AGENT_SESSION_ID
     && byId.get(session.parentId)?.kind === "conversation";
   const roots = sessions.filter((session) => !hasConversationParent(session));
-  const keptRoots = [...roots]
-    .sort((left, right) => right.updatedAtMs - left.updatedAtMs)
-    .slice(0, limit);
+  const orderedRoots = [...roots]
+    .sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+  const keptRoots = orderedRoots.slice(0, limit);
+  const pinned = orderedRoots.find((session) => session.id === MAIN_AGENT_SESSION_ID);
+  if (pinned !== undefined && !keptRoots.includes(pinned)) keptRoots.push(pinned);
   const keptIds = new Set(keptRoots.map((session) => session.id));
   const children = sessions.filter((session) => {
     const parentId = session.parentId;

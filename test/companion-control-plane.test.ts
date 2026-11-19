@@ -386,6 +386,10 @@ test("the sidebar shows tasks, not one session per conversational turn", async (
     const ids = body.sessions.map((session) => session.id);
     assert.equal(ids.includes(chat.run.id), false, "a conversational turn must not become a sidebar session");
     assert.equal(ids.includes(task.run.id), true, "a real task stays in the sidebar");
+    // No main turn, no task under it and no legacy session file: the main
+    // conversation is not a row, so 新请求 is the only talk entry.
+    // 没有主对话回合、没有它的任务、也没有旧会话文件：主对话不成行，新请求 是唯一入口。
+    assert.equal(ids.includes("main-agent-conversation"), false, "an empty main conversation is not a row");
     // The run is still a durable fact; only its presentation changed. Run 仍是持久事实，只改变呈现。
     assert.ok(await assembly.runtime.getRun(chat.run.id));
   } finally {
@@ -449,13 +453,15 @@ test("a derived task belongs to the conversation, and hiding the chat hides it t
     })}\n`, "utf8");
 
     const before = await (await companionFetch(url, token, "/api/dashboard")).json() as {
-      sessions: Array<{ id: string; conversationId?: string; kind?: string }>;
+      sessions: Array<{ id: string; conversationId?: string; kind?: string; childCount?: number }>;
       deletedConversations: unknown[];
     };
-    // Conversations are not rows when their task is a row: the run names the
-    // conversation that spawned it, and the task represents the request.
-    // 任务已成为行时对话不再单独成行：Run 携带派生它的对话，任务代表这次请求。
-    assert.equal(before.sessions.some((session) => session.kind === "conversation" && session.id === "main-agent-conversation"), false);
+    // The main conversation is a row, and the run its turn dispatched is its
+    // task. The row stays even when it has no turns of its own.
+    // 主对话是一行，它回合派发的 Run 是它的任务。即使它自己没有回合，这一行仍在。
+    const mainRow = before.sessions.find((session) => session.kind === "conversation" && session.id === "main-agent-conversation");
+    assert.ok(mainRow, "the main conversation is a row");
+    assert.equal(mainRow?.childCount, 1, "the run is nested under the main conversation");
     const child = before.sessions.find((session) => session.id === run.id);
     assert.equal(child?.conversationId, "main-agent-conversation", "the run is a task of the conversation that spawned it");
     const runView = await (await companionFetch(url, token, `/api/sessions/${run.id}`)).json() as { dispatchedBy?: string };
@@ -469,6 +475,7 @@ test("a derived task belongs to the conversation, and hiding the chat hides it t
       deletedConversations: Array<{ id: string; childCount: number }>;
     };
     assert.equal(afterDelete.sessions.some((session) => session.id === run.id), false, "the child is hidden with its chat");
+    assert.equal(afterDelete.sessions.some((session) => session.id === "main-agent-conversation"), false, "a hidden main conversation is not a row");
     assert.equal(afterDelete.deletedConversations.length, 1);
     assert.equal(afterDelete.deletedConversations[0]?.childCount, 1);
     const gone = await companionFetch(url, token, "/api/sessions/main-agent-conversation");
@@ -627,8 +634,11 @@ test("each task has its own conversation and its own history", async (t) => {
   assert.equal(dashboardResponse.status, 200);
   const dashboard = await dashboardResponse.json() as { sessions: Array<{ id: string; kind?: string }> };
   // A request that dispatched no task is still a row: the twin answered it, and
-  // the owner must be able to reopen it. The main conversation is not a row.
-  // 没有派发任务的请求仍然是一行：分身回答了它，所有者必须能重新打开。主对话不是一行。
+  // the owner must be able to reopen it. This home has no main turn, no task
+  // under the main conversation and no legacy session file, so the main
+  // conversation is not a row.
+  // 没有派发任务的请求仍然是一行：分身回答了它，所有者必须能重新打开。这份数据没有
+  // 主对话回合、它下面没有任务、也没有旧会话文件，因此主对话不成行。
   const conversationRows = dashboard.sessions.filter((session) => session.kind === "conversation");
   assert.deepEqual(new Set(conversationRows.map((session) => session.id)), new Set(["conversation-a", "conversation-b"]));
   assert.equal(conversationRows.some((session) => session.id === "main-agent-conversation"), false);
@@ -659,6 +669,43 @@ test("each task has its own conversation and its own history", async (t) => {
   assert.equal(view.turns?.[0]?.reply, "已整理。");
   assert.equal(view.turns?.[0]?.status, "completed");
   assert.ok(view.turns?.every((turn) => !turn.input.includes("写周报")));
+});
+
+test("the pinned main conversation survives the sidebar row cap", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const recent = new Date().toISOString();
+  const old = "2020-01-01T00:00:00.000Z";
+  for (let index = 0; index < 41; index += 1) {
+    await appendMainAgentTurnRecord(dataDirectory, {
+      id: `turn-${index}`,
+      text: `请求 ${index}`,
+      status: "completed",
+      startedAt: recent,
+      completedAt: recent,
+      reply: `回复 ${index}`,
+      conversationId: `conversation-${index}`,
+    });
+  }
+  await appendMainAgentTurnRecord(dataDirectory, {
+    id: "turn-main",
+    text: "最初的主对话",
+    status: "completed",
+    startedAt: old,
+    completedAt: old,
+    reply: "旧的回复",
+    conversationId: "main-agent-conversation",
+  });
+
+  const dashboard = await (await companionFetch(url, token, "/api/dashboard")).json() as {
+    sessions: Array<{ id: string }>;
+  };
+  const ids = dashboard.sessions.map((session) => session.id);
+  // The cap keeps the 40 newest roots; the main conversation is older than all
+  // of them and must still be there, or the fixed entry disappears on a busy
+  // home.
+  // 截断保留最新的 40 个根；主对话比它们都旧，仍必须在场，否则繁忙数据上固定入口会消失。
+  assert.equal(ids.filter((id) => id.startsWith("conversation-")).length, 40);
+  assert.equal(ids.includes("main-agent-conversation"), true);
 });
 
 test("the conversation log is bounded and counts the turns it omitted", async (t) => {

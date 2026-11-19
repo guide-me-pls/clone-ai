@@ -684,8 +684,16 @@ function childSummary(children) {
 const sessionTime = (session) => Date.parse(session.updatedAt) || 0;
 function sessionMarkup(session, options = {}) {
   const status = statusMeta(session.status);
-  const preview = plainPreview(session.preview) || status.label;
-  const metaText = options.context ? `${options.context} · ${preview}` : preview;
+  // The main conversation has a fixed name and no hide control: its content
+  // title would churn every turn, and it is the one thread the sidebar always
+  // keeps. Every other conversation is named by its first request.
+  // 主对话使用固定名称且没有隐藏控件：内容标题会每回合变化，而且它是侧栏始终保留的唯一
+  // 线程。其他对话由第一个请求命名。
+  const main = options.main === true;
+  const preview = plainPreview(session.preview);
+  const metaText = options.context
+    ? `${options.context} · ${preview || status.label}`
+    : main && !preview ? t("main-conversation-legacy") : preview || status.label;
   // Waiting for the owner is a state, not a footnote: a task that needs a
   // decision says so in the row, not only in its preview text.
   // 等待所有者是一种状态，不是脚注：需要决定的任务在行内明说，而不只写在预览里。
@@ -704,18 +712,25 @@ function sessionMarkup(session, options = {}) {
   // 顶层是对话，行内不再加"对话"徽章；嵌套本身说明了子行是什么。任务记录是另一个目的地，
   // 不是与对话并列的行种类。
   const deleteLabel = conversation ? "隐藏这个对话" : "隐藏这条任务";
-  return `<div class="${classes}"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title-row"><span class="session-title">${escape(plainPreview(session.title))}</span>${flag}</span><span class="session-meta">${escape(metaText)}</span></span></button><button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="${deleteLabel}">×</button></div>`;
+  const deleteControl = main
+    ? ""
+    : `<button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="${deleteLabel}">×</button>`;
+  const title = main ? t("session-group-main") : plainPreview(session.title);
+  return `<div class="${classes}"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title-row"><span class="session-title">${escape(title)}</span>${flag}</span><span class="session-meta">${escape(metaText)}</span></span></button>${deleteControl}</div>`;
 }
 function renderSessions(rawSessions) {
   // One row kind at the top: a conversation. The Runs its turns dispatched are
-  // children. Runs with no conversation sit under 定时/自动; the main
-  // conversation is a navigation entry, so its tasks sit under a non-row
-  // 主对话 header. A waiting task is still promoted to the top section, because
-  // a decision on page two is a decision missed.
-  // 顶层只有一种行：对话。回合派发的 Run 是它的子行。没有对话的 Run 放在"定时/自动"下；
-  // 主对话是导航入口，它的任务放在不可点击的"主对话"标题下。等待中的任务仍被提升到顶部分区，
-  // 因为埋在下方的决定等于漏掉的决定。
+  // children. Runs with no conversation sit under 定时/自动. The main
+  // conversation is the pinned first row rather than a second navigation
+  // control: it is a thread like any other, and its tasks nest inside it. A
+  // waiting task is still promoted to the top section, because a decision on
+  // page two is a decision missed.
+  // 顶层只有一种行：对话。回合派发的 Run 是它的子行。没有对话的 Run 放在"定时/自动"下。
+  // 主对话是固定的第一行，而不是第二个导航控件：它与其他线程一样，任务嵌套在它里面。
+  // 等待中的任务仍被提升到顶部分区，因为埋在下方的决定等于漏掉的决定。
   const conversations = rawSessions.filter((session) => session.kind === "conversation");
+  const mainConversation = conversations.find((session) => session.id === MAIN_CONVERSATION_ID);
+  const otherConversations = conversations.filter((session) => session.id !== MAIN_CONVERSATION_ID);
   const tasks = rawSessions.filter((session) => session.kind !== "conversation");
   const conversationById = new Map(conversations.map((session) => [session.id, session]));
   const parentOf = (task) => task.parentId !== undefined
@@ -739,7 +754,7 @@ function renderSessions(rawSessions) {
     const parent = task.parentId === undefined ? undefined : conversationById.get(task.parentId);
     return parent ? shortName(plainPreview(parent.title), 24) : t("session-group-auto");
   };
-  const blocks = conversations.map((session) => {
+  const blocks = otherConversations.map((session) => {
     const children = (childrenOf.get(session.id) || []).sort(byTime);
     return {
       session,
@@ -748,15 +763,20 @@ function renderSessions(rawSessions) {
       time: Math.max(sessionTime(session), ...children.map(sessionTime)),
     };
   }).sort((left, right) => right.time - left.time);
-  const mainTasks = (childrenOf.get(MAIN_CONVERSATION_ID) || [])
-    .filter((task) => !waitingIds.has(task.id))
-    .sort(byTime);
+  const mainChildren = (childrenOf.get(MAIN_CONVERSATION_ID) || []).sort(byTime);
+  const mainTasks = mainChildren.filter((task) => !waitingIds.has(task.id));
   const standaloneTasks = tasks
     .filter((task) => parentOf(task) === undefined && !waitingIds.has(task.id))
     .sort(byTime);
   // Count the rows the owner can see at the top level, not the children hidden
-  // inside their conversation. 计数所有者能看到的顶层行，而不是藏在对话里的子行。
-  const total = conversations.length + waitingTasks.length + mainTasks.length + standaloneTasks.length;
+  // inside their conversation. The main row counts once whether or not it has
+  // children; without the row (an older payload) its tasks count on their own.
+  // 计数所有者能看到的顶层行，而不是藏在对话里的子行。主对话行无论有没有子行都只算一行；
+  // 没有该行时（较旧的载荷）它的任务各自计数。
+  const total = otherConversations.length
+    + (mainConversation === undefined ? mainTasks.length : 1)
+    + waitingTasks.length
+    + standaloneTasks.length;
   $("session-count").textContent = String(total);
   const signature = JSON.stringify([
     state.selectedId,
@@ -777,14 +797,11 @@ function renderSessions(rawSessions) {
   const waitingBlock = waitingTasks.length
     ? `<div class="session-group session-group-needs">${escape(t("needs-you"))} · ${waitingTasks.length}</div>${waitingTasks.map((task) => sessionMarkup(task, { child: parentOf(task) !== undefined, context: parentLabel(task) })).join("")}`
     : "";
-  const mainBlock = mainTasks.length
-    ? `<div class="session-group">${escape(t("session-group-main"))}</div>${mainTasks.map((task) => sessionMarkup(task, { child: true })).join("")}`
-    : "";
   const todayKey = new Date().toDateString();
   const today = blocks.filter((block) => new Date(block.time).toDateString() === todayKey);
   const earlier = blocks.filter((block) => new Date(block.time).toDateString() !== todayKey);
-  const conversationBlock = (block) => {
-    const parent = sessionMarkup(block.session);
+  const conversationBlock = (block, options = {}) => {
+    const parent = sessionMarkup(block.session, options);
     if (!block.visible.length) return parent;
     const open = state.openChildGroups.has(block.session.id) ? " open" : "";
     const waitingCount = block.children.length - block.visible.length;
@@ -794,8 +811,22 @@ function renderSessions(rawSessions) {
     ].filter(Boolean).join(" · ");
     return `${parent}<details class="session-children" data-child-group="${escape(block.session.id)}"${open}><summary><span>${taskCountLabel(block.children.length)}</span><small>${escape(summary)}</small></summary>${block.visible.map((child) => sessionMarkup(child, { child: true })).join("")}</details>`;
   };
-  const todayBlock = today.length ? `<div class="session-group">${t("today")}</div>${today.map(conversationBlock).join("")}` : "";
-  const earlierBlock = earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map(conversationBlock).join("")}` : "";
+  // The main conversation is the pinned first row, above the chronological
+  // groups. A payload without it still shows its tasks under the 主对话 header
+  // rather than dropping them.
+  // 主对话是固定的第一行，位于按时间排列的分区之上。缺少该行的载荷仍把它的任务放在
+  // "主对话"标题下，而不是丢掉。
+  const mainBlock = mainConversation !== undefined
+    ? conversationBlock({
+        session: mainConversation,
+        children: mainChildren,
+        visible: mainChildren.filter((child) => !waitingIds.has(child.id)),
+      }, { main: true })
+    : mainTasks.length
+      ? `<div class="session-group">${escape(t("session-group-main"))}</div>${mainTasks.map((task) => sessionMarkup(task, { child: true })).join("")}`
+      : "";
+  const todayBlock = today.length ? `<div class="session-group">${t("today")}</div>${today.map((block) => conversationBlock(block)).join("")}` : "";
+  const earlierBlock = earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map((block) => conversationBlock(block)).join("")}` : "";
   const autoBlock = standaloneTasks.length
     ? `<div class="session-group">${escape(t("session-group-auto"))}</div>${standaloneTasks.map((task) => sessionMarkup(task)).join("")}`
     : "";

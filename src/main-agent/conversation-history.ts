@@ -91,6 +91,22 @@ export function mainAgentSessionDirectory(dataDirectory: string): string {
 }
 
 /**
+ * Whether the main conversation has any stored session file, without parsing
+ * it. The sidebar uses this to keep an entry for a home whose main history
+ * predates the turn ledger; a directory listing is enough for that decision and
+ * costs no JSONL decode on the dashboard poll.
+ * 主对话是否有任何已落盘的会话文件，且不解析它。侧栏用它为“主对话历史早于回合台账”
+ * 的数据保留入口；这个判断只需目录列举，dashboard 轮询无需解码 JSONL。
+ */
+export async function hasStoredMainConversation(dataDirectory: string): Promise<boolean> {
+  try {
+    return (await readdir(mainAgentSessionDirectory(dataDirectory))).some((name) => name.endsWith(".jsonl"));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Searches the owner's conversation history for a query.
  *
  * Out-of-context entries are ranked ahead of visible ones at equal relevance:

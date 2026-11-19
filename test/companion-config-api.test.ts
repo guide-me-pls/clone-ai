@@ -247,8 +247,9 @@ test("a persisted Main Agent session is still visible after reopening", async (t
 
   const dashboard = await companionFetch(url, token, "/api/dashboard");
   const dashboardBody = await dashboard.json() as { sessions: Array<{ id: string; title: string }> };
-  // The conversation is not a sidebar row; its view must still reopen. 对话不是侧栏行，但它的视图仍能重新打开。
-  assert.equal(dashboardBody.sessions.some((session) => session.id === "main-agent-conversation"), false);
+  // The main conversation is the pinned sidebar row, and its view must reopen.
+  // 主对话是侧栏固定的行，它的视图必须能重新打开。
+  assert.equal(dashboardBody.sessions.some((session) => session.id === "main-agent-conversation"), true);
 
   const conversation = await companionFetch(url, token, "/api/sessions/main-agent-conversation");
   const conversationBody = await conversation.json() as {
