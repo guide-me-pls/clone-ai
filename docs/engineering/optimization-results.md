@@ -15,6 +15,21 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-19 — Alternating and masked polls stop as no progress
+
+- **Claim:** the shared loop now counts each executed call's identity across the
+  turn. Two identical `get_run_status` polls alternated with each other, or one
+  poll sharing a batch with a read whose result changes, still reach the warning
+  at three and the `no_progress` stop at five. A call whose result changes is
+  still progress, and the exact eight-poll incident still stops at five.
+- **Evidence:** the two new `test/agent-loop.test.ts` cases are red on the
+  pre-change loop (both complete) and green after; the full file is **28/28**.
+  The alternation stops at round 9, the masked poll at round 5, the eight
+  identical polls at round 5; A,A,B,A,A completes. `npm test` **924/924**,
+  typecheck exit 0, gate **PASS**.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--the-no-progress-guard-counts-each-call-across-the-turn-not-adjacent-batches);
+  [execution chain](optimizations.md#2026-11-19--the-no-progress-guard-counts-each-call-across-the-turn).
+
 ## 2026-11-19 — The recorded verifier plan no longer fails on its own search paths
 
 - **Claim:** on the actual `fa36a720` `plan.created` step,

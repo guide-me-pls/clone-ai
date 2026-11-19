@@ -31,6 +31,56 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — The no-progress guard counts each call across the turn
+
+- **Goal / hypothesis:** the post-incident audit reproduced two waiting shapes
+  that the adjacent-batch guard (43a34cc) missed: an A/B alternation of two
+  constant `get_run_status` polls completed after twelve rounds, and eight
+  batches of an identical poll plus a changing sibling completed because the
+  sibling changed the whole-batch fingerprint. Counting each executed call's own
+  identity across the turn should stop both without reintroducing a round cap.
+- **Trade-off:** [the no-progress guard counts each call across the turn](../architecture/trade-offs.md#2026-11-19--the-no-progress-guard-counts-each-call-across-the-turn-not-adjacent-batches).
+- **Change:** `src/agent/loop.ts` replaces `batchFingerprint`/`previousBatchFingerprint`
+  with a per-call `callFingerprint` and a `Map` of counts across the turn. Any
+  identity reaching three gets the system warning; five emits `no_progress` and
+  ends the turn, naming the call. The warning and error now say "in this turn"
+  rather than "in a row". `test/agent-loop.test.ts` updates the message
+  assertion and the changed-argument case, and adds the alternating-pair and
+  changing-sibling cases.
+- **Eval:** the two new cases fail on the pre-change loop (both complete), and
+  the first guard case fails only because its error-message assertion changed;
+  after the change `test/agent-loop.test.ts` is **28/28**. The exact eight-poll
+  incident still stops at round 5; the alternation stops at round 9 (the fifth
+  A); the masked poll stops at round 5; A,A,B,A,A completes with four A
+  occurrences; a changing result still progresses. `npm test` **924/924**;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline unchanged.
+- **Benchmark run:** none — a deterministic loop contract; no provider, model,
+  dataset, split, seed or scoring parameter.
+- **Execution chain:** the shapes came from the 41-agent audit workflow (39 min,
+  3.35M subagent tokens, 1,940 tool calls). The fix was inline in this session:
+  read `loop.ts` and the guard tests, wrote the bilingual trade-off, implemented
+  the per-call map, added the two cases, ran the targeted suite, swapped
+  `loop.ts` back to HEAD to reproduce the red cases, restored the new file, then
+  ran the full suite, typecheck and gate. No separate workers or retries. The
+  repair lane was not used because there is no failed run trace for a
+  synthetic-alternation shape; this is a guard-policy optimization with a
+  deterministic eval, not a repair of a recorded failure.
+- **Pros:** one map catches any spacing (alternation, longer cycles, masked
+  siblings) without a round or duration cap; the exact incident and the
+  reordered-JSON case still stop at 5; a result that changes is still progress;
+  the behavior is pinned by two red-first cases.
+- **Cons / next time:** the guard is stricter: five identical reads across a
+  turn stop even when unrelated work sits between them. Counts are not windowed;
+  a long investigation that re-reads the same file with the same result five
+  times will end earlier than before. The result text is still the progress
+  signal, so a provider that rewrites identical results could evade it.
+- **Reversal condition:** if a benchmark or an owner's turn is stopped as
+  `no_progress` while making real progress (e.g., a legitimate repeated read
+  whose result is identical for five occurrences), raise the thresholds, narrow
+  the counting to read-only wait tools, or window the counts. If a provider
+  rewrites results so identical calls no longer compare equal, fingerprint the
+  pre-truncation result.
+
 ### 2026-11-19 — The verifier's real plan is the fixture: search locations are not file promises
 
 - **Goal / hypothesis:** the merged `6dc13f0` fixed two synthetic sentences but
@@ -475,6 +525,9 @@ file keeps every attempt, including the ones that did not work.
   `src/workers/native-agent-worker.ts` reports the new reason as `no_progress`
   instead of `completed`; `src/core/failure-display.ts` gives the owner a
   Chinese summary and next step.
+- **Superseded (2026-11-19, later the same day):** the adjacent-batch ("in a
+  row") rule was replaced by per-call counts across the turn; see the entry at
+  the top of this file. The thresholds and the snapshot guidance are unchanged.
 - **Eval:** `node --experimental-strip-types --test test/agent-loop.test.ts`
   **23/26 before** (three failures: the no-progress stop, the warning, and
   reordered JSON keys) → **26/26 after**; `test/main-agent.test.ts` **16/16**

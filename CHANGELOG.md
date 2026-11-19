@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The no-progress guard counts a repeated call across the turn
+
+The shared agent loop now counts each executed call's identity — tool name, arguments (ignoring JSON key order) and result text — across the whole turn, not only against the previous batch. Two identical polls alternated with each other, or a poll sharing a batch with a read whose result changes, now get the same warning at three and the `no_progress` stop at five. A call whose result changes is still progress, and a changed argument is a different call. The exact 2026-11-19 eight-poll shape still stops at five, and no round cap is reintroduced.
+
+共享 Agent 循环现在按整回合统计每个已执行调用的身份——工具名、参数（忽略 JSON 键顺序）与结果文本——不再只与上一批比较。两个相同轮询彼此交替，或一个轮询与结果变化的读取同批，现在同样在第三次提示、第五次以 `no_progress` 停止。结果变化的调用仍算进展，参数变化是不同调用。2026-11-19 的八次轮询形状仍在第五次停止，且没有重新引入轮次上限。
+
 ### A read-only dispatch task is no longer planned as a write
 
 `dispatch_task` with an objective that says 只读 / 不修改 no longer becomes a `reversible_write` plan just because it mentions 保存 / 写 in the code it describes. The fallback planner now lets the explicit read-only marker outrank a bare delivery verb; only a named write target (写到 / 保存到 / 输出到 plus a path) still turns a read-only request into a delivery plan. Both recorded 2026-11-19 objectives now plan as one read-only lookup instead of a write step that the files policy denied 3–4 ms after queuing. The repair lane produced the patch and the regression case; the regression is red before and green after.
