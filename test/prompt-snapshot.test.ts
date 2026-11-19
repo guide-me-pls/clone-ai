@@ -129,6 +129,7 @@ test("every registered Kernel tool is visible to provenance", async (t) => {
     "propose_work_plan",
     "read_memory",
     "recall_memory",
+    "recent_file_changes",
     "record_state",
     "request_approval",
     "search_history",

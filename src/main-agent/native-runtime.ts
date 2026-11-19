@@ -271,7 +271,7 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
   let searchTurn: MainAgentTurnContext | undefined;
   const tools = nativeTools(options.dataDirectory, conversationId, options.cwd, options.signal, (info) => {
     if (searchTurn !== undefined) void recordNativeHistorySearch(searchTurn, info);
-  });
+  }, options.text);
   // Skills and MCP are opt-in per turn: without roots or servers the tool table
   // and prompt are exactly what they were before.
   // 技能与 MCP 是按回合显式开启的：没有根目录或服务器时，工具表与 Prompt 与之前完全相同。
@@ -776,9 +776,15 @@ function nativeTools(
   workspacePath?: string,
   signal?: AbortSignal,
   onSearch?: (info: { query: string; scope: HistorySearchScope; limit: number; hitCount: number; hits: Array<{ conversationId: string; at: string; score: number; excerpt?: string; source?: string }> }) => void,
+  ownerText?: string,
 ): PlainKernelTool[] {
   return [
-    ...kernelToolDefinitions({ dataDirectory, conversationId, ...(workspacePath === undefined ? {} : { workspacePath }) }),
+    ...kernelToolDefinitions({
+      dataDirectory,
+      conversationId,
+      ...(workspacePath === undefined ? {} : { workspacePath }),
+      ...(ownerText === undefined ? {} : { query: ownerText }),
+    }),
     dispatchTaskTool({
       dataDirectory,
       conversationId,

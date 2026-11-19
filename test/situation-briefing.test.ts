@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -7,6 +7,7 @@ import test, { type TestContext } from "node:test";
 import { JsonlJournalStore } from "../src/core/journal.ts";
 import { writeConnectorSettings, sweepConnectors, readConnectorSettings } from "../src/connectors/connector-registry.ts";
 import { compileBriefing, renderBriefing } from "../src/main-agent/situation-briefing.ts";
+import { appendMainAgentTurnRecord } from "../src/main-agent/turn-audit.ts";
 import { PersonalStateStore } from "../src/state/personal-state-store.ts";
 
 const OWNER = { authoredBy: "owner" as const };
@@ -156,4 +157,30 @@ test("background work that finished is in the briefing, with evidence counts", a
   const briefing = await compileBriefing({ journal, dataDirectory: directory, workspacePath: directory, now, includeObservations: false });
   assert.match(briefing.text, /Recently finished background work/);
   assert.match(briefing.text, /completed: 整理周报并写盘 \(run run-abcd, 1 evidence item/);
+});
+
+test("the briefing carries the folders learned from past requests", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-briefing-folders-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const work = join(directory, "work");
+  await mkdir(join(work, "proj", ".git"), { recursive: true });
+  await writeFile(join(work, "proj", "README.md"), "# 项目", "utf8");
+  await appendMainAgentTurnRecord(directory, {
+    id: "turn-folders",
+    text: `只读 ${join(work, "proj", "README.md")}，说明项目。`,
+    status: "completed",
+    startedAt: "2026-11-19T09:00:00.000Z",
+    completedAt: "2026-11-19T09:00:05.000Z",
+    conversationId: "conversation-folders",
+  });
+  const journal = new JsonlJournalStore(join(directory, "journal.jsonl"));
+  const briefing = await compileBriefing({
+    journal,
+    dataDirectory: directory,
+    workspacePath: directory,
+    home: directory,
+    includeObservations: false,
+  });
+  assert.match(briefing.text, /Folders you have worked in/);
+  assert.equal(briefing.folders[0]?.path, await realpath(work));
 });

@@ -11,6 +11,49 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-19 —— 直接作答留在侧栏，今天的工作来自学到的文件夹
+
+- **主张：** 主 Agent 没有派发任务就作答的请求，现在是侧栏里的一条"对话"行；整理今天的工作信息
+  能说出分身从使用中学到的文件夹下今天真正变化了哪些文件——不需要文件夹设置、Connector 或
+  Worker Run。
+- **证据：** `test/companion-control-plane.test.ts` 从期望 **0** 条对话行改为期望
+  `conversation-a` 与 `conversation-b`（**25/25**）；`test/known-folders.test.ts` +
+  `test/recent-changes.test.ts` **8/8**；`test/ui-structure.test.ts` **21/21**；线上工具在
+  所有者机器上报告 `/Users/qihoo/work` 下今天 **9 个文件** 变化、**5 个仓库** 及其状态
+  （Spotlight **0.13 秒**，裁剪 `find` **5.2 秒**）；一次使用 `deepseek-v4.1-flash` 的
+  真实预览回合先调用该工具（**573 毫秒**），并给出了按项目组织的摘要；审计回合卡现在有
+  右侧请求与左侧回答，丢失的 `.au-turn*` 层已恢复。
+- **位置：** [取舍：请求仍是一行](../architecture/trade-offs.zh-CN.md#2026-11-19--没有派发任务的请求仍是侧栏的一行)、
+  [取舍：回合是一次交流](../architecture/trade-offs.zh-CN.md#2026-11-19--回合是一次交流所有者在右分身在左)、
+  [取舍：文件夹是学到的](../architecture/trade-offs.zh-CN.md#2026-11-19--文件夹是学到的不是配置的今天的修改来自本机)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--新请求留在侧栏回合读成交流今天的工作来自学到的文件夹)。
+
+## 2026-11-19 —— 原生窗口是唯一的界面；浏览器预览入口已移除
+
+- **主张：** 仓库只暴露一个界面入口：已安装的原生窗口及其受监督的 `port: 0` loopback
+  服务。`.claude/launch.json`、`scripts/companion-dev.mjs` 与 `companion:dev` 脚本已删除，
+  Claude 会话不能再启动一个与 App 相似、却写第二个 clone home 的浏览器页面。归档评测重放
+  仍以 `CLONE_AI_PORT` 直接启动服务器。
+- **证据：** `test/desktop-only-ui.test.ts` 在移除前失败（`.claude/launch.json` 仍在），
+  移除后 **2/2** 通过；`npm test` **884/884**；`npm run typecheck` exit 0；
+  `npm run gate` **PASS**；停掉三个预览服务器后，4317/4318/4319 上没有监听。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--已安装窗口是唯一的界面浏览器预览入口被移除)、
+  [执行链路](optimizations.zh-CN.md#2026-11-19--浏览器预览入口被移除原生窗口是唯一的界面)。
+
+## 2026-11-19 —— Agent 协作 的行打开拥有它的任务记录
+
+- **主张：** 主对话 Agent 协作 卡片里的每个子 Agent 行都能一次点击打开拥有它的任务记录；
+  目标卡片展开、对应行被滚入视野一次，悬停时标题显示下划线且光标为指针。自己记录内的行保持
+  纯文本。
+- **证据：** `test/agent-collaboration-link.test.ts` **1/1**（对话与任务记录都返回子 Agent
+  的 `runId`）、`test/ui-structure.test.ts`（记录外是按钮、记录内是纯行、一次性焦点、点击
+  接线、悬停下划线）、全套 **876** 个测试 / **875** 通过且 WhatsApp 文件在空闲端口上通过
+  （共享工作区上的最终重跑 **885/885**）、
+  `npm run typecheck` 与 `npm run gate` 通过；浏览器预览中点击后落到记录、卡片展开且行在
+  视野内，Playwright 悬停报告 `underline` 与 `pointer`。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--agent-协作的行打开拥有它的任务记录)、
+  [执行链路](optimizations.zh-CN.md#2026-11-19--agent-协作-的行打开解释它的记录)。
+
 ## 2026-11-19 —— Worker 可读整机，每个写入都携带 Scope
 
 - **主张：** Worker 可以读取本机任何可读位置，受保护位置除外；没有文件夹（包括工作区）默认

@@ -26,6 +26,200 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— 新请求留在侧栏，回合读成交流，今天的工作来自学到的文件夹
+
+- **目标 / 假设：** 所有者从一张截图报告了三个问题：(a) 整理今天的工作信息 找不到
+  `~/work` 下的修改记录，因为 Main Agent 没有文件/变更工具、也没有 connector；
+  (b) 直接作答的新请求从左栏消失；(c) 审计回合卡把请求与回复混成两个相同的灰块。假设分别
+  是：Dashboard 只列任务 Run；审计样式在更早的合并中丢失；"今天"的上下文从未有过文件变化
+  来源。
+- **取舍：** [请求仍是一行](../architecture/trade-offs.zh-CN.md#2026-11-19--没有派发任务的请求仍是侧栏的一行)、
+  [回合是一次交流](../architecture/trade-offs.zh-CN.md#2026-11-19--回合是一次交流所有者在右分身在左)、
+  [文件夹是学到的](../architecture/trade-offs.zh-CN.md#2026-11-19--文件夹是学到的不是配置的今天的修改来自本机)。
+- **变更：** `src/main-agent/known-folders.ts` 从回合台账与 `task.created` 事件学习并渲染
+  文件夹；`src/main-agent/tools/recent-changes.ts` 新增只读工具 `recent_file_changes`
+  （Spotlight 加有界遍历、Git status/log、受保护路径拒绝）；`situation-briefing.ts`、
+  `prompt.ts`、`native-runtime.ts`、`kernel-tools.ts` 与 `/api/situation` 携带文件夹记忆与
+  工具；`companion-server.ts` 为没有可见任务的对话增加行，任务可见的对话仍由那些任务行代表；
+  `app.js` 不再过滤对话、标注"对话"，并在实时与落定日志里渲染右侧请求气泡与左侧回答；
+  `audit.js`/`audit.css` 以两侧交流恢复丢失的 `.au-turn*` 层。charter 版本升到 5。
+- **Eval：** `node --experimental-strip-types --test test/known-folders.test.ts test/recent-changes.test.ts`
+  **8/8**（模块与用例此前不存在；线上工具现在返回 `~/work` 今天变化的 9 个文件与 5 个仓库，
+  旧路径回答"没有素材"）。一次真实的预览回合使用 `deepseek-v4.1-flash`，先调用
+  `recent_file_changes`（**573 毫秒**），再调用 `get_situation`，并据结果写出了按项目组织的
+  摘要；随后的 `dispatch_task` 失败（外部执行 Agent 已关闭），但不再挡住回答。`test/companion-control-plane.test.ts` **25/25**：旧断言期望
+  **0** 条对话行，现在期望 `conversation-a` 与 `conversation-b` 两条。
+  `test/ui-structure.test.ts` **21/21**：旧的"不是聊天气泡"断言被右侧气泡 / 左侧回答与审计
+  两侧断言替换。`npm test` 首次全量 **900 个测试、899 通过、1 失败**：
+  `whatsapp-bridge.test.ts` 的"a queued message resumes…"在四个并发会话下 5.1 秒超时；
+  单独运行 **21/21** 通过，第二次全量 **900/900** 通过（6.0 秒）。`npm run typecheck`
+  退出 0；`npm run gate` **PASS**，baseline 不变。
+- **Benchmark run：** 无——三项变更都是确定性契约与 UI/接线；不涉及 provider、模型、数据集、
+  切分、种子、评分参数或结果文件。
+- **执行链路：** 一个五读者的只读工作流梳理了侧栏、审计视图、Main Agent 上下文、运行时数据
+  模型与仓库惯例（约 29 分钟、1.13M 子 Agent tokens、673 次工具调用）。它发现审计的
+  `.au-turn*` CSS 在 9e24cd8 / 2a3ac95 的合并中被删除、运行中的 daemon（11:07 启动）仍是
+  charter v2、整理今天的工作信息 的线上回合只调用了四个只读工具。另有四个会话在同一检出中
+  编辑；所有者选择等待，热文件静默后才编辑。实现先服务端（新模块、简报、提示词、工具、
+  Dashboard），再界面与测试。失败：`extractFolders` 起初把中文标点吞进路径，什么都学不到；
+  `folderCollection` 用 realpath 与非规范 home 比较，返回项目而不是 `~/work`；首次全量测试
+  遇到 WhatsApp 时序抖动。均已修复或重跑。
+- **优点：** 变更确定、只读；文件夹学习不需要新存储或设置；同一份列表供给简报、工具与情境
+  面板；侧栏对一次请求只表示一次。
+- **代价 / 下次：** 首次 UI 验证时有四个会话同时改同一批文件，多等了约 20 分钟，并在
+  `renderSessions` 上接近冲突；下次应先把 UI 工作放进独立 worktree。`recent_file_changes`
+  依赖 Spotlight 获得速度，在未建索引的巨大目录树上会变慢。文件夹记忆还没有"忘记"操作。
+- **推翻条件：** 见三条取舍条目；共同的推翻条件是"侧栏太吵时把对话与任务收进可折叠行；
+  学到的文件夹太吵时增加忘记操作并要求点名两次"。
+
+### 2026-11-19 —— 附件先回应点击
+
+- **目标 / 假设：** 所有者报告在 18 核 M5 Pro 上选择附件也"特别慢"。假设是点击本身并不吃
+  CPU：旧路径把每个文件串行处理，把每个字节读成全分辨率 data URL，再插进 76px chip 与实时
+  卡片，而且在整批完成前什么都不显示。先在读字节前画出 chip，让独立文件并发准备，DOM 里只
+  保留小缩略图，把读取与编码放到 chip 之后。服务端只在测量证明有收益的地方利用多核。
+- **取舍：** [附件先回应点击，字节留在 chip 之后](../architecture/trade-offs.zh-CN.md#2026-11-19--附件先回应点击字节留在-chip-之后)。
+- **变更：** `apps/desktop/ui/app.js`——在 change 处理器里先画占位 chip；按输入顺序的 3 路
+  预取池（`prefetchAttachments`）；240px 缩略图（`imagePreviewUrl`，`createImageBitmap`，
+  失败回退 object URL）；后台载荷预取（`Uint8Array.prototype.toBase64()` /
+  `FileReader` 回退）；每次 await 后重新检查四附件上限与 100,000 字符预算；
+  `createSession` 等待最新批次；发送失败按身份在四附件上限内恢复；瞬时读取失败可重试；
+  blob URL 在移除/替换/卸载时撤销；`applyChrome` 跳过未变化的 i18n 写入；刷新单飞；准备
+  附件期间最多跳过五秒刷新；回合结束后的刷新移到流槽位释放之后。
+  `apps/desktop/ui/components.css` 增加虚线"准备中"状态。
+  `test/attachment-client.test.ts` 是新的确定性 eval。
+  `benchmark/results/attachment-client-2026-11-19T04-02-00Z.json` 记录手工浏览器测量。
+  服务端提取路径有意不动。
+- **Eval：** `node --experimental-strip-types --test test/attachment-client.test.ts`
+  **12/12**（慢读取结束前 chip 已出现、并发准备且保持输入顺序、重叠批次仍受全局三路读取
+  上限约束、四附件上限与 100,000 字符预算、保留 File + blob 预览而不是 data URL、载荷被
+  真实 `parseAttachments` 接受、一次编码在两次请求间复用、FileReader 回退、失败后保留
+  附件、瞬时读取可重试、发送失败在上限内恢复原附件、已连接卡片/已恢复条目保留预览 URL）。
+  既有的 `test/ui-structure.test.ts`、
+  `test/desktop-only-surface.test.ts`、`test/ui-locale.test.ts`、
+  `test/attachments.test.ts`、`test/document-extract.test.ts` 与
+  `test/desktop-shell.test.ts` 通过。全量 **899/899**（本次运行时），`npm run typecheck` 通过，
+  `npm run gate` 通过且基线未变。Chromium 前后对比：四张 5MB 图片 94ms → 3ms 生成按序
+  blob 预览（含伪图片准备为 14ms）；四张 12MP 照片 69ms 生成四张 240px 缩略图（每张
+  4.9KB），旧路径为 94ms 加全分辨率解码；图片载荷 3ms、10MB PDF 载荷 8ms（后台）；
+  10MB PDF 附加 0ms，2MB 文本拒绝 4ms。UI 调查测得旧路径四张 7.35MB JPEG data URL 的
+  `innerHTML` 插入 115.8ms、主线程最大空档 270.8ms，而同样图片用 blob URL 为 2.5ms 与
+  18.2ms。
+- **Benchmark run：** `node --experimental-strip-types benchmark/attachment-client.ts
+  --old-ref 4f0149e --new apps/desktop/ui/app.js --runs 3 --read-ms 10`；无
+  Provider/模型；fixture：四个 5MB image/png、一个图片/PDF/文本混合批次、六个 1MB 图片
+  （测试上限）；参数：四附件、`--read-ms 10` 模拟读取延迟、`--runs 3`、3 路客户端池；
+  机器：Apple M5 Pro、18 核、25.8GB 内存、macOS 27.0.0、Node 26.8.1；结果：
+  `benchmark/results/attachment-client-2026-11-19T04-14-38-659Z.json`。中位数：四张图片
+  旧路径 attach 68ms / `data:` 预览 4 / maxActive 1，新路径 attach 0ms / `blob:` 预览 4 /
+  maxActive 4（后台编码）；混合批次 58ms → 12ms；六个文件 53ms → 0ms，接受四个。VM 没有
+  `createImageBitmap`，因此新版本走 object URL 回退。另一次手工 Chromium 测量（四张 12MP
+  照片、真实 8MB MP4）记录在
+  `benchmark/results/attachment-client-2026-11-19T04-02-00Z.json`；这些都不是 WKWebView
+  数字，且为近似值。
+- **执行链路：** 先在桌面界面的 Chromium 里复现旧路径，测得 5MB 图片 44ms、10MB PDF
+  15ms、四张 5MB 图片 94ms、8MB MP4 首帧 561ms。运行十二个 Agent 的工作流（五个只读调查、
+  三个独立设计、三个评审与一个综合）。调查测得四个 PDF 串行 273ms、`Promise.all` 356ms；
+  同一个 `unpdf` 文档并发 `getPage` 抛出 `DataCloneError`；20 页扫描 PDF 串行 2.34s、
+  四页并发 2.10s。评审拒绝了服务端 Worker 池与按 key 重写转录。实现客户端路径；验证期间
+  发现并修复三个缺陷：结构守卫把 `prepare` 回调参数误报为未定义函数（改为直接内联
+  `prepareAttachment`）；`createImageBitmap` 已经缩放后，缩略图分支仍返回全分辨率 URL
+  （删掉提前返回）；缓存失败的载荷让瞬时读取失败变成永久失败（拒绝时删除缓存）。VM 测试
+  需要 IIFE 包装，因为 `runInNewContext` 不接受顶层 `return`。一次全量测试因并发会话正在
+  删除浏览器预览入口而在 `test/desktop-only-ui.test.ts` 失败；该编辑落定后全量通过。该会话
+  在验证期间还新增了 `recent_file_changes` Kernel 工具；它的 prompt-snapshot 期望补上一个
+  名字后，共享套件 **899/899** 通过。工作流与验证约 35 分钟；产品侧没有花 Provider token，
+  工作流的模型成本未计量。
+- **优点：** 每个被否决的方向都有测量支撑（服务端并行、页级并发、OCR 并发、Worker 线程），
+  eval 是确定性的，且覆盖审查发现的真实竞态；点击路径不再携带数 MB 字符串或串行等待。
+  线程数保持很低，优化没有给 sidecar 增加打包或内存风险。
+- **缺点 / 下次：** 暂不写成果条目：没有测量打包后的 WKWebView 与原生 `NSOpenPanel`，因此
+  在打包计时显示真实收益之前，这条优化只作为本日志里的实验。整页转录重建（4k 字符时
+  11.6 + 40.4ms，20k 时 21 + 120.4ms）与每 3 秒的会话 fetch/`JSON.parse` 仍在，按 key
+  渲染被推迟。扫描 PDF 仍在发送时支付原生逐页 OCR 时间；四个大型文本 PDF 仍串行提取
+  （约 1.1s），因为本次拒绝了 Worker 池。`readJsonBody` 的逐块 UTF-8 损坏是正确性 bug，
+  必须走修复通道，不能手改。下次：先给打包后的点击路径加计时，再在原生面板、会话 fetch
+  短路与按 key 转录渲染之间选择。
+- **推翻条件：** 如果在打包后的 App 中剖析发现原生 `NSOpenPanel` 或服务端提取主导等待，就
+  停止优化这条路径，并为那一层另写取舍。如果四个大二进制以 base64 形式常驻造成内存压力，
+  改回发送时读取。如果发送时编码变得可见（>100ms）或在慢速卷上失败，改为在空闲回调里预编码
+  并缓存。如果目标 WebView 不支持 `createImageBitmap` 缩放，保留 object URL 回退或去掉
+  缩略图。如果四张大图在 3 路准备下造成内存压力，把并发降到 1–2。如果扫描版 PDF 成为常见
+  输入，用多样的多页 fixture 与有界 Worker 模型重新评估 OCR，并记录 benchmark。
+
+### 2026-11-19 —— 浏览器预览入口被移除；原生窗口是唯一的界面
+
+- **目标 / 假设：** 第二个界面入口与 App 长得完全一样，却写另一个 clone home，让所有者
+  把预览任务当成 App 任务去阅读、批准和重试。移除浏览器面，使固定端口的页面不再可能被
+  当成产品，同时保留原生窗口受监督的 loopback 服务。
+- **取舍：** [已安装窗口是唯一的界面；浏览器预览入口被移除](../architecture/trade-offs.zh-CN.md#2026-11-19--已安装窗口是唯一的界面浏览器预览入口被移除)。
+- **变更：** 删除 `.claude/launch.json`（它唯一的条目在 4317 启动 `npm run companion:dev`）、
+  `scripts/companion-dev.mjs` 与 `companion:dev` 包脚本；把
+  `eval-runs/2026-11-17-forbidden-city/run-task.sh` 与
+  `eval-runs/2026-11-18-interactive/run-task.sh` 迁移到
+  `CLONE_AI_PORT=$PORT node --experimental-strip-types src/companion-server.ts`
+  （该目录被 git 排除，因此 harness 迁移只是本机重放修复）；
+  更新 `docs/usage/local-setup.md` 及其中文版、`README.md` 与 `apps/desktop/README.md`；
+  新增 `test/desktop-only-ui.test.ts`。桌面 sidecar（`port: 0`）、
+  `src/companion-server.ts` 与 WebView 资源未动。
+- **Eval：** `node --experimental-strip-types --test test/desktop-only-ui.test.ts`——变更前
+  **1 通过 / 1 失败**，失败信息点名 launch 配置（`true !== false`），且
+  `scripts/companion-dev.mjs` 与 `companion:dev` 仍在；变更后 **2/2 通过**。
+  `npm test`：**884/884，0 失败**。`npm run typecheck`：exit 0。
+  `npm run gate`：**PASS**（13 个用例、9 个已判定、一致率 100%、falsePass 0、
+  falseFail 0；策略 14/14、审计 4/4 已标注、记忆 26/26；基线未变）。停掉三个预览服务器后，
+  `lsof -nP -iTCP:4317 -iTCP:4318 -iTCP:4319` 无输出。
+- **Benchmark run：** 无——仅确定性测试的 eval；没有 Provider、模型、数据集、种子或评分参数
+  变化。
+- **执行链路：** 一个只读调查 workflow，三个 Agent（进程拓扑、数据来源、移除影响；
+  464.5 秒，137,755 子 Agent tokens）确认了三个预览服务器、隔离的
+  `.automation/preview` home 与 2026-11-18 失败的移除任务。然后在本会话中：先写两份取舍
+  条目；新增契约测试并跑变更前（预期失败）；删除 launch 配置、脚本与 npm 条目；迁移两个
+  评测 harness；更新活动文档；停掉运行中的预览服务器；跑聚焦测试、全套、typecheck 与 gate；
+  写本条目与成果条目。没有重试。
+- **优点：** 前后对比是一条确定性命令；第二个测试钉住 App 的 `port: 0` loopback，移除不会
+  误删正确的服务器；评测 harness 仍可通过直接服务器入口重放。
+- **缺点 / 下次：** 最初 2026-11-18 的移除请求作为 Worker 任务运行，在碰到仓库之前就失败，
+  所以这个面留了下来；修复晚了一天，还要跨两个 Journal 调查。停预览服务器也会中断正在使用
+  它们的并发 Claude 会话；以后移除前应先检查活跃的预览使用者。`.automation/preview` 下的
+  预览数据作为证据保留，它不属于 App。
+- **推翻条件：** 从取舍条目复制：如果某类 UI 缺陷只能在浏览器里复现，重新引入一个独立
+  home、带明显标识、拒绝 `~/.clone`、并自带"绝不写所有者 Journal"测试的预览工具；无头 CI
+  的 UI 判定应是 `port: 0` 的测试 harness，而不是产品界面。
+
+### 2026-11-19 —— Agent 协作 的行打开解释它的记录
+
+- **目标 / 假设：** 主对话聚合了来自多个 Run 的子 Agent。这些行只有名称与状态，没有目的地，
+  想找到失败的那个任务只能在侧栏里搜同名标题。让每一行打开所属 Run 的任务记录并落到该行，
+  同时用悬停下划线让可点击性可见。
+- **取舍：** [Agent 协作的行打开拥有它的任务记录](../architecture/trade-offs.zh-CN.md#2026-11-19--agent-协作的行打开拥有它的任务记录)。
+- **变更：** `src/companion-server.ts` 在 `buildSession` 与 `buildMainAgentConversation`
+  两处为子 Agent 行补上 `runId`，并更新 `SessionView` 类型；`apps/desktop/ui/app.js` 在子
+  Agent 的 Run 不是当前记录时把行渲染成按钮，记录一次性的 `agentFocus`，强制展开目标记录的
+  Agent 协作 卡片并把对应行滚入视野；`apps/desktop/ui/components.css` 增加悬停下划线、指针
+  光标与焦点环。自己记录内的行保持纯 `div`。
+- **Eval：** 新增 `test/agent-collaboration-link.test.ts` **1/1**（预置 SQLite Journal：
+  对话与任务记录都返回子 Agent 所属的 `runId`）；`test/ui-structure.test.ts` 新增用例
+  （记录外是按钮、记录内是纯行、强制展开并标出焦点行、点击接线、悬停下划线）。变更前 UI 用例
+  因缺少 `data-open-agent-run` 失败，服务端用例因缺少 `runId` 失败。全套 **876** 个测试、
+  **875** 通过；唯一失败是 `test/whatsapp-bridge.test.ts`（`EADDRINUSE 4318`，一个开发用
+  companion 占着端口），改用 `CLONE_AI_WHATSAPP_PORT=4399` 后 **21/21** 通过；在共享
+  工作区上（另一会话编辑之后）最终重跑 **885/885** 通过。
+  `npm run typecheck` 与 `npm run gate` 通过。浏览器预览：预置两个子 Agent，点击一行后落到
+  任务记录、卡片展开且行已滚入视野；Playwright 悬停报告 `underline` 与 `pointer`。
+- **Benchmark run：** 无——确定性测试与浏览器检查；没有 Provider、模型、数据集、种子或评分参数。
+- **执行链路：** 一个工作 Agent（本会话），在检出中直接编辑；没有子 Agent、workflow 或
+  benchmark。先读面板、两个会话构建函数与既有的 `data-log-run` 导航；先写取舍；再加载荷字段与
+  界面；编写两份测试；跑聚焦测试（绿）、全套（一个环境性的 WhatsApp 端口失败，换 4399 后
+  重跑绿）、typecheck 与 gate（绿）；向预览 home 的 SQLite Journal 预置数据并在浏览器里验证
+  点击与悬停。除端口重跑外没有重试。
+- **优点：** 目的地来自 Journal 已拥有的数据（没有新路由）；点击沿用既有的 `selectSession`
+  路径；没有独立 Run 的行退化为文本，因此任务记录内的卡片外观不变。
+- **缺点 / 下次：** 点击会离开当前对话，回去要依赖侧栏的对话行；首次 reveal 会滚过任务的
+  机会卡片。如果工作单将来拥有自己的转录，独立查看页会更好。
+- **推翻条件：** 如果 Agent 协作 卡片获得内联的子 Agent 转录（或子 Agent 成为一等会话），
+  应打开那份详情而不是父任务记录；如果悬停链接被证明难以发现，应加常驻箭头而不是增加颜色。
+
 ### 2026-11-19 —— 写入按步骤授权，而不是按工作区
 
 - **目标 / 假设：** 所有者的模型是 personal agent：没有工作区，读取覆盖整机，每个写入都经过

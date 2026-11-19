@@ -617,3 +617,19 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .evidence-row span:last-child { grid-column: 2; color: #7b8595; font-size: 11px; }
 .evidence-more { padding: 6px 0; color: #8791a1; font-size: 11px; }
 .activity-card h5 { margin: 4px 14px 2px; color: #5c6675; font-size: 11px; font-weight: 650; }
+
+/* A conversation row is a request the twin answered without dispatching a
+ * task. The pill keeps it distinguishable from a task record in the same list.
+ * 对话行是分身没有派发任务就作答的请求。小标签让它在同一列表中与任务记录可区分。 */
+.session-kind {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid #d7dcd4;
+  border-radius: 999px;
+  color: #6d756b;
+  font-size: 9px;
+  font-weight: 680;
+  letter-spacing: .02em;
+  line-height: 1.6;
+  white-space: nowrap;
+}

@@ -28,6 +28,7 @@ import { MemoryGovernance } from "../../memory/memory-governance.ts";
 import type { RegisteredToolSnapshot } from "../prompt-snapshot.ts";
 import { sampleCapacity, type CapacitySnapshot } from "../../core/capacity.ts";
 import { CloneConfigStore } from "../../config/clone-config.ts";
+import { recentFileChangesTool } from "./recent-changes.ts";
 
 export interface KernelToolsOptions {
   dataDirectory: string;
@@ -46,6 +47,12 @@ export interface KernelToolsOptions {
    * 这些工具所属的对话。由任务提案的 Run 记录在该任务下，侧栏与其删除因此保持一致。
    */
   conversationId?: string;
+  /**
+   * The owner's current request. A folder named in it becomes known to the
+   * folder memory on this turn, not one turn later.
+   * 所有者当前的请求。其中点名的文件夹在本回合就成为文件夹记忆的一部分，而不是晚一个回合。
+   */
+  query?: string;
   /**
    * Called once for every tool as it is registered, so prompt provenance hashes
    * the table the model actually received instead of a hand-maintained copy.
@@ -629,6 +636,7 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
           journal,
           dataDirectory: options.dataDirectory,
           workspacePath: paths.workspacePath,
+          ...(options.query === undefined ? {} : { query: options.query }),
           ...(params.dueSoonHours === undefined ? {} : { dueSoonHours: params.dueSoonHours }),
           ...(params.includeObservations === undefined ? {} : { includeObservations: params.includeObservations }),
         });
@@ -671,6 +679,12 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
       };
     },
   });
+
+  register(recentFileChangesTool({
+    dataDirectory: options.dataDirectory,
+    ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+    ...(options.query === undefined ? {} : { query: options.query }),
+  }));
 
   register({
     name: "search_history",

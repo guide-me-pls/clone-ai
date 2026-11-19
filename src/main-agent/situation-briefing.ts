@@ -3,6 +3,7 @@ import type { Situation } from "../state/personal-state.ts";
 import { renderObservationsAsFacts, type ConnectorReadResult } from "../connectors/connector.ts";
 import { sweepConnectors } from "../connectors/connector-registry.ts";
 import type { JournalStore } from "../core/journal.ts";
+import { knownOwnerFolders, renderKnownFolders, type KnownFolder } from "./known-folders.ts";
 
 /**
  * Compiles what the Main Agent should know before it answers anything.
@@ -36,11 +37,23 @@ export interface BriefingInput {
   /** Skip connector reads when only state is needed. 只需要状态时跳过 Connector 读取。 */
   includeObservations?: boolean;
   maxObservations?: number;
+  /**
+   * The owner's current request. A folder named in it becomes part of the
+   * remembered set for this turn, so "work文件夹" is understood immediately
+   * rather than one turn late.
+   * 所有者当前的请求。其中点名的文件夹在本回合就进入记忆集合，因此"work文件夹"
+   * 立即被理解，而不是晚一个回合。
+   */
+  query?: string;
+  /** Home-directory seam for tests. 测试用的 home 切口。 */
+  home?: string;
 }
 
 export interface Briefing {
   situation: Situation;
   observations: readonly ConnectorReadResult[];
+  /** Folders the twin learned from the owner's past requests. 分身从所有者过去请求中学到的文件夹。 */
+  folders: readonly KnownFolder[];
   /** The text injected into the agent's context. 注入 Agent 上下文的文本。 */
   text: string;
 }
@@ -63,10 +76,24 @@ export async function compileBriefing(input: BriefingInput): Promise<Briefing> {
       limitPerConnector: input.maxObservations ?? 10,
     })).results;
 
+  // Folders are learned, not configured: the persisted turn ledger is the
+  // source, so the twin knows where the owner works after the first request
+  // that names a folder, and keeps knowing after a restart.
+  // 文件夹是学到的，不是配置的：来源是持久化的回合台账，因此所有者第一次点名文件夹后
+  // 分身就知道它在哪里工作，重启后仍然知道。
+  const folders = await knownOwnerFolders(input.dataDirectory, {
+    ...(input.query === undefined ? {} : { query: input.query }),
+    ...(input.home === undefined ? {} : { home: input.home }),
+    now,
+    events,
+  }).catch(() => [] as KnownFolder[]);
+  const folderText = renderKnownFolders(folders);
+
   return {
     situation,
     observations,
-    text: `${renderBriefing(situation, observations)}${renderRecentWork(events, now)}`,
+    folders,
+    text: `${renderBriefing(situation, observations)}${folderText.length === 0 ? "" : `\n\n${folderText}`}${renderRecentWork(events, now)}`,
   };
 }
 

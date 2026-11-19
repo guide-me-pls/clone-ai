@@ -29,8 +29,7 @@
     "repair": "node --experimental-strip-types scripts/repair.mjs",
     "audit:export": "node --experimental-strip-types scripts/audit-export.mjs",
     "bench:journal": "node --experimental-strip-types benchmark/journal-stress.ts",
-    "bench:consistency": "node --experimental-strip-types benchmark/memory-consistency.ts",
-    "companion:dev": "node --experimental-strip-types scripts/companion-dev.mjs"
+    "bench:consistency": "node --experimental-strip-types benchmark/memory-consistency.ts"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

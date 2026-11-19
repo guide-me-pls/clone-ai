@@ -45,8 +45,8 @@ plist 固定了 node 的绝对路径。
 `~/.clone` 播种一次 `config.json`/`settings.json`/`providers.json`/`mcp.json`/
 `policies.json`；Journal、记忆、会话、令牌、端点与锁绝不复制。修复通道只读地读取所有者
 home 里的失败轨迹。`CLONE_AI_AUTOMATION_REFRESH=1` 重新播种配置副本；
-`CLONE_AI_ALLOW_OWNER_HOME=1` 是共享在线 home 的显式退路。
-`scripts/companion-dev.mjs` 在没有提供 home 时使用 `.automation/preview`，并拒绝在线 home。
+`CLONE_AI_ALLOW_OWNER_HOME=1` 是共享在线 home 的显式退路。不存在浏览器预览：
+已安装窗口是唯一的界面；UI 开发请用 `npm run desktop:dev`。
 
 ## 4. 配置模型
 
