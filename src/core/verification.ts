@@ -75,7 +75,7 @@ export function extractFileExpectations(step: PlanStep): FileExpectation[] {
     // A period inside a filename is not a sentence boundary.
     // 文件名中的点不是句子边界。
     for (const sentence of assertion.split(/\n|(?<=[。！？；])|(?<=[.!?;])(?=\s|$)/)) {
-      const absolute = /(?:^|[\s(（`"'])(\/(?:[A-Za-z0-9._\\-]+(?:[ \t]+[A-Za-z0-9._\\-]+)*\/)*[A-Za-z0-9._\\-]*(?:[ \t]+[A-Za-z0-9._\\-]+)*?\.[A-Za-z0-9]{1,8})(?=[\s)）`"',.，。;；:：]|$)/g;
+      const absolute = /(?:^|[\s(（`"'])(\/(?=[A-Za-z0-9._\\-])(?:[A-Za-z0-9._\\-]+(?:[ \t]+[A-Za-z0-9._\\-]+)*\/)*[A-Za-z0-9._\\-]*(?:[ \t]+[A-Za-z0-9._\\-]+)*?\.[A-Za-z0-9]{1,8})(?=[\s)）`"',.，。;；:：]|$)/g;
       const quoted = /[`"']([^`"'\s]+)[`"']/g;
       const bare = /(?:^|[\s(（])([A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8})(?=[\s)）,.，。;；:：]|$)/g;
       // Reserve complete paths even when excluded, so a suffix cannot become a separate promise.
@@ -94,6 +94,9 @@ export function extractFileExpectations(step: PlanStep): FileExpectation[] {
           const prefix = sentence.slice(0, candidateStart).replace(/[`"']$/, "");
           const suffix = sentence.slice(match.index + match[0].length);
           if (/(?:目录|文件夹|\bdirectory|\bfolder)\s*[:：]?\s*$/i.test(prefix)) continue;
+          // A location searched for clues is context, not a promised file.
+          // 搜索线索的位置是上下文，并非承诺交付的文件。
+          if (/^\s*(?:里|中|内)的线索/.test(suffix)) continue;
           if (/[A-Za-z_$][\w.$]*\s*\($/.test(prefix) || /^\s*\(/.test(suffix)) continue;
           // A file the sentence says not to claim is not a deliverable; reading
           // it as one punishes the plan for being honest.
