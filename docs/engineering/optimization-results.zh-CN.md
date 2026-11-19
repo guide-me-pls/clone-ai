@@ -58,6 +58,20 @@
   [取舍：文件夹是学到的](../architecture/trade-offs.zh-CN.md#2026-11-19--文件夹是学到的不是配置的今天的修改来自本机)；
   [执行链路](optimizations.zh-CN.md#2026-11-19--新请求留在侧栏回合读成交流今天的工作来自学到的文件夹)。
 
+## 2026-11-19 —— 视频附件的画面来自 AVFoundation
+
+- **主张：** 通过原生选择器选中的视频，现在由 `AVAssetImageGenerator` 产出 1280×720 JPEG
+  帧，而不是 WebView 媒体管线；抽帧等待从约 1.1 秒降到冷 0.16 秒 / 热 0.013 秒。拖放、粘贴
+  与抽取失败仍回退到 HTML `<video>` 路径。
+- **证据：** `benchmark/video-frame.swift` 在 8.2MB/30 秒/1080p fixture 上：**第一次
+  160ms、热 13ms**，164,786 字节 JPEG；
+  [`benchmark/results/video-frame-2026-11-19T07-14-36Z.json`](../../benchmark/results/video-frame-2026-11-19T07-14-36Z.json)。
+  同一文件的 WKWebView `<video>` 路径为 1,065–1,277ms，所有 seek/metadata/`toBlob` 变体
+  1,112–1,222ms，编码 10–19ms。`test/attachment-client.test.ts` **13/13**（含原生帧用例）；
+  Swift 外壳 typecheck 通过；全量 **916/916**（本次运行时）；typecheck 与 gate 通过。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--视频附件的画面来自-avfoundation)、
+  [执行链路](optimizations.zh-CN.md#2026-11-19--视频帧来自-avfoundation而不是-webview-媒体管线)。
+
 ## 2026-11-19 —— 审计视图不再等待网关用量
 
 - **主张：** 审计列表把 Magpie 用量行缓存 15 秒，并把可选网关等待限制在 1 秒；慢或缺失的

@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Darwin
 import Foundation
 import UniformTypeIdentifiers
@@ -31,6 +32,10 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
     // click. 附件面板第一次构造是冷的（AppKit/LaunchServices）；页面就绪后预热一次，
     // 把这份成本移出第一次点击。
     private var attachmentPanelWarmed = false
+    // Video frames come from AVFoundation instead of WKWebView's media pipeline;
+    // extraction runs off the main thread. 视频帧来自 AVFoundation，而不是 WKWebView 的
+    // 媒体管线；抽取在主线程之外运行。
+    private let videoFrameQueue = DispatchQueue(label: "ai.clone.video-frame", qos: .userInitiated, attributes: .concurrent)
     private var developerRoot: URL?
     private var developerRestartPending = false
     private var developerReloadMarker: URL?
@@ -148,6 +153,36 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
               openURL: (url) => window.webkit.messageHandlers.cloneFolderPicker.postMessage({
                 action: "openURL",
                 url: url
+              }),
+              onVideoFrame: (key, dataUrl) => {
+                const waiters = window.CloneNativeVideoWaiters;
+                const waiter = waiters ? waiters[key] : undefined;
+                if (typeof waiter === "function") {
+                  delete waiters[key];
+                  waiter(dataUrl ?? undefined);
+                  return;
+                }
+                if (typeof dataUrl === "string" && dataUrl.length > 0) {
+                  (window.CloneNativeVideoFrames ??= {})[key] = dataUrl;
+                }
+              },
+              videoFrame: (key) => new Promise((resolve) => {
+                const frames = window.CloneNativeVideoFrames;
+                const ready = frames ? frames[key] : undefined;
+                if (typeof ready === "string") {
+                  delete frames[key];
+                  resolve(ready);
+                  return;
+                }
+                const waiters = (window.CloneNativeVideoWaiters ??= {});
+                const timer = setTimeout(() => {
+                  delete waiters[key];
+                  resolve(undefined);
+                }, 1500);
+                waiters[key] = (dataUrl) => {
+                  clearTimeout(timer);
+                  resolve(typeof dataUrl === "string" && dataUrl.length > 0 ? dataUrl : undefined);
+                };
               })
             };
             """,
@@ -493,12 +528,78 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         // answer faster, and the selected URLs reach the WebView the same way.
         // sheet 在文件视图出现前要播放约 270ms 动画；应用级模态面板约 120ms 出现。
         // 所有者要求点击更快响应，选中的 URL 仍以同样方式交回 WebView。
-        panel.begin { response in
+        panel.begin { [weak self] response in
             guard response == .OK, !panel.urls.isEmpty else {
                 completionHandler(nil)
                 return
             }
+            // Start the native frame extraction before WebKit delivers the
+            // files; the page's videoFrame waits for it and falls back to HTML
+            // video if it fails. 在 WebKit 交付文件之前开始原生抽帧；页面的
+            // videoFrame 会等待它，失败时回退到 HTML video。
+            self?.deliverVideoFrames(panel.urls)
             completionHandler(panel.urls)
+        }
+    }
+
+    private func isVideoURL(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+        return type.conforms(to: .movie) || type.conforms(to: .video)
+    }
+
+    private func videoFrameKey(for url: URL) -> String? {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let size = values.fileSize else { return nil }
+        return "\(url.lastPathComponent):\(size)"
+    }
+
+    /**
+     * One 1280 px JPEG at 1 s (0.1 s for very short clips). AVFoundation reads
+     * the local file directly; WKWebView's media pipeline needed ~1.1 s for the
+     * same 8 MB video. 1 秒处的一张 1280px JPEG（很短的文件用 0.1 秒）。
+     * AVFoundation 直接读取本地文件；WKWebView 的媒体管线对同一个 8MB 视频约需 1.1 秒。
+     */
+    private func videoFrameDataURL(_ url: URL) -> String? {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 1280, height: 1280)
+        for seconds in [1.0, 0.1] {
+            guard let image = try? generator.copyCGImage(
+                at: CMTime(seconds: seconds, preferredTimescale: 600),
+                actualTime: nil
+            ) else { continue }
+            guard let data = NSBitmapImageRep(cgImage: image).representation(
+                using: .jpeg,
+                properties: [.compressionFactor: 0.86]
+            ) else { continue }
+            return "data:image/jpeg;base64,\(data.base64EncodedString())"
+        }
+        return nil
+    }
+
+    /**
+     * Extracts every selected video concurrently and hands each frame to the
+     * page by name:size. A null result tells the page to fall back immediately
+     * instead of waiting for the 1.5 s timeout.
+     * 并发抽取每个选中的视频，并按 name:size 把帧交给页面。null 结果让页面立即回退，
+     * 而不是等满 1.5 秒超时。
+     */
+    private func deliverVideoFrames(_ urls: [URL]) {
+        for url in urls where isVideoURL(url) {
+            guard let key = videoFrameKey(for: url) else { continue }
+            videoFrameQueue.async { [weak self] in
+                let frame = self?.videoFrameDataURL(url)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    let keyLiteral = self.javaScriptStringLiteral(key)
+                    let frameLiteral = frame.map { self.javaScriptStringLiteral($0) } ?? "null"
+                    self.webView.evaluateJavaScript(
+                        "window.CloneNative?.onVideoFrame?.(\(keyLiteral), \(frameLiteral));"
+                    )
+                }
+            }
         }
     }
 

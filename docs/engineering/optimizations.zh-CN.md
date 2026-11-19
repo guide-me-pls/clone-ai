@@ -227,6 +227,49 @@
 - **推翻条件：** 见三条取舍条目；共同的推翻条件是"侧栏太吵时把对话与任务收进可折叠行；
   学到的文件夹太吵时增加忘记操作并要求点名两次"。
 
+### 2026-11-19 —— 视频帧来自 AVFoundation，而不是 WebView 媒体管线
+
+- **目标 / 假设：** 视频是剩余附件里最慢的一类。WebView 的 `<video>` 元素对 8MB/30 秒/
+  1080p MP4 的装载与 seek 约 1.1 秒；原生 AVFoundation 图像生成器可以直接读取本地文件，
+  应以快得多的速度产出同样的 1280px 帧。
+- **取舍：** [视频附件的画面来自 AVFoundation](../architecture/trade-offs.zh-CN.md#2026-11-19--视频附件的画面来自-avfoundation)。
+- **变更：** `apps/desktop/macos/main.swift`——引入 AVFoundation，增加并发的
+  `videoFrameQueue`，对通过原生选择器选中的视频在 1 秒处（短文件回退 0.1 秒）用
+  `AVAssetImageGenerator` 抽取 1280px JPEG，并按 `name:size` 经
+  `window.CloneNative.onVideoFrame` 交给页面；`window.CloneNative.videoFrame` 最多等
+  1.5 秒。`apps/desktop/ui/app.js` 新增 `nativeVideoFrame(file)`，在 HTML `<video>` 路径
+  之前尝试；拖放、粘贴、缺少桥接或抽取失败仍走 WebView 路径。
+  `test/attachment-client.test.ts` 增加原生帧用例；`test/desktop-shell.test.ts` 钉住
+  Swift 桥；`benchmark/video-frame.swift` 是可重跑的原生测量。
+- **Eval：** `node --experimental-strip-types --test test/attachment-client.test.ts`
+  **13/13**；`main.swift` 的 `swiftc -typecheck` 通过；全量 **916/916**（本次运行时）；
+  `npm run typecheck` 与 `npm run gate` 通过且基线未变。8.2MB、30 秒、1080p fixture 上的
+  原生 benchmark：**第一次 160ms / 热 13ms**，1280×720、164,786 字节。同一个文件的
+  WKWebView `<video>` 路径为 1,065–1,277ms；所有 load/seek/`toBlob` 变体为
+  1,112–1,222ms，JPEG 编码只占 10–19ms。
+- **Benchmark run：** 先
+  `swiftc -O -target arm64-apple-macos13.5 benchmark/video-frame.swift
+  -framework AppKit -framework AVFoundation -o /tmp/video-frame-bench`，再
+  `/tmp/video-frame-bench > benchmark/results/video-frame-2026-11-19T07-14-36Z.json`；
+  无 Provider/模型；参数：1 秒时间点、`maximumSize` 1280、JPEG 0.86、三次试验；机器：
+  Apple M5 Pro、18 核、macOS 27.0.1；结果路径如上。
+- **执行链路：** 用 Swift/WKWebView harness 测量 HTML `<video>` 路径的 loadeddata/
+  metadata、1 秒/0.1 秒/不 seek 与 `toBlob`；全部约 1.1 秒，因此成本在媒体管线装载而不是
+  编码。对同一文件测得 `AVAssetImageGenerator` 160/13/13ms。实现原生桥与 JS 回退，加入
+  原生帧 eval 与结构检查，编译 Swift 外壳，并运行聚焦测试、typecheck 与 gate。页面可能在
+  `videoFrame` 调用之前或之后收到帧；两条路径都由帧表与 waiter 覆盖。拖放/粘贴视频没有
+  原生文件 URL，仍走 WebView。
+- **优点：** 常见的视频选择器流程从约 1.1 秒降到冷 0.16 秒 / 热 0.013 秒，同时保持同样的
+  1280×720 JPEG 与附件载荷；回退保留了所有其他视频来源；桥很小，选中文件的键稳定。
+- **缺点 / 下次：** 原生帧可能与 WebKit 略有差异（AVFoundation 应用旋转；HDR 或不常见编码
+  可能失败并回退）；拖放/粘贴视频仍约 1.1 秒；name 与 size 都相同的两个不同视频会共用一帧；
+  1 秒时间点可能不适合很短的片段（0.1 秒回退）。帧以一次性 data URL 经
+  `evaluateJavaScript` 传递。下次：在重建后的 App 里测试真实的 HDR/旋转手机视频与拖放视频。
+- **推翻条件：** 如果 AVFoundation 对常见所有者视频出现旋转、偏色或不支持，就把原生路径限定
+  在它能处理的格式，其余回退；如果 HTML 路径变快，移除桥。如果 1 秒时间点对很短的视频不合适，
+  在抽取前按资产时长夹取。如果键匹配被证明脆弱，改为把选中的 URL 显式传给页面，而不是靠
+  元数据匹配。
+
 ### 2026-11-19 —— 审计视图不再等待网关的用量历史
 
 - **目标 / 假设：** 打开 设置 → 审计与轨迹 感觉慢。审计列表把可选的 Magpie 用量联到每个
