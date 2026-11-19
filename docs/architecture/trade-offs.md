@@ -6,99 +6,71 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
-## 2026-11-19 — A failed trace carries the step's instructions
+## 2026-11-19 — The answer is the section; the 结果 gutter is retired
 
-**Decision.** `FailedTrace.plan` now carries each step's `instructions`, redacted
-`acceptanceCriteria`, `requiredCapabilities`, `scopes` and `subagents` count, read
-from the run's `plan.created` event. The repair lane can reproduce a plan- or
-verification-level failure from the trace alone instead of the working agent
-restating the step in a decision brief.
+**Decision.** A turn's answer starts at the section's left edge. The 52 px
+label gutter existed to separate 上下文 / 派发 / 结果 on one axis; only 结果
+remains, so the gutter no longer reserves a column. The 结果 label is hidden in
+the conversation, the reply (or the error) is set at 14.5 px / 1.75 in the full
+reading measure, and the 依据 line becomes the section's footer: a hairline above
+it, the counts at the left, and 查看审计 pushed to the right end. The same rules
+cover the live streaming card and legacy history entries, because they share the
+same `.log-step` container. The label stays in the markup, hidden, so a turn
+that regains in-place steps can restore the gutter by rule instead of rebuilding
+the markup.
 
-**Why it won.** The verifier repair's first lane run failed the
-`regression-missing` gate because `FailedTrace.plan` held only
-`id/title/risk/agentId`; the worker could not obtain `plan[0].instructions` and
-stopped without writing a case. The real instructions were in the journal and
-had to be pasted into the decision brief for the retry. A trace that cannot
-reproduce the plan is not the self-contained hand-off its module claims to be.
-
-**Alternatives rejected.**
-
-- *Add only `instructions`.* Acceptance criteria and capabilities are what the
-  regression test asserts against and what the worker needs to choose the
-  production file; carrying them together costs little.
-- *Point the lane at the owner's journal.* The lane runs in an isolated clone
-  home and a worktree; the owner's journal is not its input, and a path into it
-  would break the isolation the lane is built on.
-- *Re-export the trace at lane time from the live journal.* The trace is the
-  evidence of what failed; regenerating it can see a moved-on journal and a
-  different plan.
-- *Keep the reduced plan and require a decision brief.* That is the workaround
-  this replaces; it makes every plan-level repair depend on a human/agent
-  reading the journal.
-
-**What was given up.** Traces grow: the real step instructions are about 1 KB,
-each string is capped by the existing redaction (1,500 characters), and a wide
-plan carries up to eight steps. Redaction and the cap can lose detail the
-worker would otherwise read. The trace remains a copy, not the journal.
-
-**Evidence.** The verifier lane's first run (`8464295d`) failed
-`regression-missing` with "the staged trace's plan[0].instructions is missing";
-the retry succeeded only after the brief pasted journal sequence 1818. The new
-test in `test/failed-traces.test.ts` adds instructions, criteria, capabilities
-and scopes to the fixture and asserts the trace carries them redacted.
-
-**Reversal condition.** If traces become too large to stage or carry, export
-only the steps the failure names, or a sanitized plan plus a plan id the lane
-can read from a copied fixture. If redaction cannot keep up with the added
-fields, drop `scopes` before dropping instructions.
-
-
-## 2026-11-19 — A first-send failure shows the owner-facing reason, not the raw loop error
-
-**Decision.** The SSE `failed` event carries `errorSummary` and `errorGuidance`
-from `describeFailureForOwner`, and the transient first-send failure card
-renders the summary, the next step and the raw error in a collapsed detail —
-instead of only the raw English loop error. The raw error stays in the payload,
-the ledger and the interruptions record.
-
-**Why it won.** The audit found that the first send with no streamed reply skips
-the ledger refresh (`wasComposing && !reply`), so the raw "The agent called
-get_run_status 5 times … making no progress" was the only text the owner saw.
-The Chinese summary and next step already existed in the ledger, but appeared
-only after a manual refresh. This is the 2026-11-19 no-progress stop itself; the
-owner saw English internals instead of "已停止以免空转".
+**Why it won.** The owner's 2026-11-19 screenshot of a stopped turn (three failed
+runs, a long reply in a 52 px shaft) came with "这种展示不好看". The turn had just
+lost its 产物 rows to the change recorded in "The sidebar is conversations only;
+run detail lives in the audit"; what remained was a 13.5 px paragraph indented
+into the gutter, then a 10.5 px 依据 line with the audit control buried among
+its facts — the silhouette of a build log holding one line of content. Once the
+runs left, nothing was left for the gutter to separate: it only narrowed every
+answer by 64 px and labelled the obvious. The label stays as markup because the
+history and live paths share it; hiding it in CSS is one reversible rule and
+keeps those paths single-sourced.
 
 **Alternatives rejected.**
 
-- *Always refresh on failure.* The first-send guard exists because the refresh
-  can render the welcome screen over the error card; it also costs a round trip
-  on every failure. The SSE payload already has the error; carry the summary
-  with it.
-- *Replace the raw error with the summary.* The raw error is needed for
-  diagnosis; keep it in a collapsed detail and the interruptions record.
-- *Translate only the existing `{message}` template.* The template has no
-  next-step slot, and every failure would get the same sentence.
-- *Make the ledger card the only surface.* That is what failed for a first send;
-  the transient card is what the owner sees.
+- *Keep the gutter, enlarge the reply inside it.* The 64 px loss and the label
+  remain; an empty 52 px column beside one paragraph is the log look itself.
+- *Remove the label from the markup and restore it if steps return.* Three paths
+  (turn, history, live card) share the step container; deleting the label means
+  editing all three and the test that pins history, for a visual rule a single
+  selector already expresses.
+- *Put 依据 on its own row without a rule.* It then reads as one more small
+  line under the answer. The hairline is what makes it the section's close; the
+  right-aligned control gives the footer an end.
+- *Shorten the 依据 facts to make room for the link.* The counts are the grounds
+  the owner asked to keep ("都要有论据"); placement must not drop them.
+- *Wrap the whole answer in a card again.* The card was removed deliberately on
+  2026-11-19 ("The transcript separates a turn, a task update and a child run by
+  structure"); the fix is type and rhythm, not a container.
 
-**What was given up.** The failed event grows by two short strings. The
-transient card and the ledger card are two renderers of the same mapping and can
-drift. The raw error remains in the DOM (collapsed) and in the interruptions
-record.
+**Evidence.** Before: `.log-step` was a 52 px + 1 fr grid, `.log-reply` 13.5 px /
+1.68, and `.log-basis` 10.5 px with no rule and the audit link inline after the
+facts. After, measured in the browser at 1240×900: `.log-step` computes to a
+760 px single column, `.log-reply` 14.5 px, `.log-basis` a 1 px top rule, and
+`.log-basis-open` is pushed to the column's end. The same four states were
+rendered at 1240×900 and 720×900: a completed answer with a heading and list, a
+failed turn with the error block and 下一步, a legacy history entry, and the
+owner's stopped-turn shape. `test/ui-structure.test.ts` pins the final layer:
+one-column `.log-step`, hidden `.log-step-label`, 14.5 px reply, footed 依据 with
+a top rule, and `margin-left: auto` on the audit control.
 
-**Evidence.** The audit recorded the SSE payload carrying only `error`, the UI
-rendering `response-interrupted-detail`, and the first-send refresh guard. The
-new server test scripts five identical `get_run_status` calls: the failed event
-carries the Chinese summary and guidance, and the ledger row is failed. The UI
-structure test asserts the transient card reads `payload.errorSummary` /
-`payload.errorGuidance`. Before the change the event has no summary or guidance
-and the card falls back to the raw template.
+**What it costs.** The answer has no visible "结果" label; the author overline
+and the top rule name the level instead. A long reply is wider and slightly
+larger, so it occupies more vertical space. The audit link sits at the far right,
+further from the counts it explains, and on widths near 640 px the footer wraps
+with the link on its own line at the right. The label remains in the DOM as dead
+markup for readers of the source until the live/history paths stop sharing the
+step container.
 
-**Reversal condition.** If the failure mapping must be localized per UI
-language, send structured fields and render them per locale. If the ledger
-refresh becomes safe for a first send, remove the transient renderer and show
-the ledger card.
-
+**Reversal condition.** If a turn regains in-place steps (上下文 / 派发 return to
+the conversation), restore the gutter and show the labels. If the missing 结果
+label makes the section ambiguous, name the level in the head overline instead of
+re-adding a gutter. If the wider measure makes long answers hard to scan, cap the
+reply's measure near 68 cjk characters rather than shrinking the type.
 
 ## 2026-11-19 — One runtime per clone home: dev mode takes the LaunchAgent down, a second sidecar refuses to start
 
@@ -109,18 +81,19 @@ the driver exits. Independently, `startCompanionServer` takes a directory lock
 and refuses to start while another live process owns it, naming the owner's pid.
 
 **Why it won.** The dev driver's only exclusion was `pkill` on
-`src/desktop-sidecar.ts`. launchd's `KeepAlive` restarts that job in
-milliseconds — the unified log shows `service inactive: ai.clone.companion` at
-16:37:11, 16:55:47, 17:38:55 and 17:41:50 on 2026-11-19, each immediately
-followed by a new instance — so the dev app's own sidecar always became a second
-writer on the owner's home. At 17:44 `ps` showed the launchd daemon (pid 46832)
+`src/desktop-sidecar.ts`. launchd's `KeepAlive` restarts that job — the unified
+log records `service inactive: ai.clone.companion` at 16:37:11, 16:55:47,
+17:38:55 and 17:41:50 on 2026-11-19, and the 17:41:50 restart coincides with the
+dev driver's child app spawn and a new daemon that published at 17:41:52 — so
+the dev app's own sidecar always became a second writer on the owner's home. At 17:44 `ps` showed the launchd daemon (pid 46832)
 and the dev sidecar (pid 53933) both alive; `companion-endpoint.json` named
 53933 and `main-agent-turn-owner.json` was claimed by it too. When the dev
 sidecar closed, `clearCompanionEndpointIfOwned` deleted that file although 46832
 was still serving. A packaged window then read no endpoint, waited 120 × 0.5 s,
-and showed the reported card, "launchd 没有在 60 秒内发布端点" — the screenshot
-was taken at 17:38 after the same fight, and the daemon republished at 17:38:55
-when the dev supervisor's `pkill` made launchd restart it. A deterministic
+and showed the reported card, "launchd 没有在 60 秒内发布端点" — the screenshot is
+timestamped 17:38:59. The daemon republished at 17:38:55, when launchd recorded
+the old instance inactive and spawned a new one; the window recovered on its
+30-second retry. A deterministic
 reproduction (two servers on one temporary home) repeats the sequence: A
 publishes `:64237`, B overwrites with `:64239`, B `close()` removes the file,
 and A still answers `/api/health` with 200.
@@ -160,7 +133,10 @@ lists the restarts. The two-server reproduction and the red regression test are
 `test/companion-singleton.test.ts`. The repair lane could not take this defect:
 its trigger is a failed Run trace, and this failure happens before any run
 exists (the same gap recorded for the 2026-11-19 effort fix); the owner approved
-the direct patch.
+the direct patch. Live after the fix (18:29–18:33): the job was absent from
+launchd's domain while the dev session ran, exactly one sidecar owned the
+endpoint and the turn ledger with `/api/health` 200, and stopping the driver
+restored the job and started a new daemon.
 
 **Reversal condition.** If launchd gains a supported "pause KeepAlive without
 unloading" or the app can hand the job to the dev driver without bootout,
@@ -169,6 +145,56 @@ replace the bootout. If a legitimate workflow needs two sidecars on one home
 read-only mode; do not remove the lock. If the lock ever blocks a test or tool
 that intentionally shares a home, that path must be given its own home, not an
 exception in the daemon.
+
+## 2026-11-19 — The sidebar is conversations only; run detail lives in the audit
+
+**Decision.** The sidebar no longer nests the Runs a turn dispatched. A
+conversation is one row — the main conversation pinned first, then today and
+earlier — with no `N 个任务` summary and no child rows; runs with no
+conversation (scheduled, repair, opportunity) no longer appear there either.
+The one exception is a task waiting for the owner: it stays in the 需要你处理
+section, because a decision that is invisible is a decision missed. The
+conversation pane drops the 产物 rows that listed spawned runs; each turn keeps
+its reply and the one-line 依据 with 查看审计. Every run stays reachable in
+设置 → 审计与轨迹, whose record list already opens a run's session.
+
+**Why it won.** The owner's 2026-11-19 report, reading a conversation with three
+failed runs: "只显示主对话…子agent怎么执行任务的都放在审计里面…这样太乱了，
+最后都不知道哪个是哪个，每次对话只有返回结果". The 2026-11-19 entry "The
+sidebar's top level is the conversation, and tasks nest inside it" made each
+dispatched run a child row; with several runs per turn the sidebar became a
+process log, and two runs with similar titles were indistinguishable. The audit
+already lists every execution record with 查看记录, so the detail has a home.
+
+**Alternatives rejected.**
+
+- *Keep nesting but collapse by default.* The summary line ("3 个任务 · 3 个失败")
+  still changes every turn and still counts runs the owner cannot tell apart;
+  the clutter is the count, not the expansion.
+- *Keep only failed runs as children.* Which runs appear would change with
+  status, so a task's position would move, and two similarly named runs would
+  still be ambiguous.
+- *Drop the 需要你处理 section too.* The opportunity strip only carries
+  failed/cancelled cards, so an approval would wait with no visible entry point.
+
+**What was given up.** Opening a run from the conversation requires the audit.
+The sidebar no longer shows how many runs a conversation spawned or any
+background run with no conversation; the conversation no longer shows run ids
+inline. A hidden conversation's restore row no longer reports its task count.
+
+**Evidence.** `test/regression/ui-sidebar-hidden-restore.test.ts` renders the
+sidebar sandbox: before, a conversation's running and waiting tasks appear as
+`data-test-session` rows and the count includes them; after, the running and
+scheduled tasks are absent, the waiting task appears once under
+`session-group-needs`, and the count is conversations plus waiting tasks.
+`test/ui-structure.test.ts` asserts the sidebar source has no
+`session-children`, no `session-group-auto` and no `data-child-group`, and the
+turn log has no `data-log-run`. `npm test` 934/934, `npm run typecheck` exit 0,
+`npm run gate` PASS.
+
+**Reversal condition.** If owners cannot find a running or scheduled run, add a
+status filter (or a dedicated 运行 view) in the audit rather than re-nesting runs
+in the sidebar.
 
 ## 2026-11-19 — Reasoning effort is whatever the gateway declares, not a fixed seven
 
@@ -493,6 +519,98 @@ default" action to the composer (or restore a single default control in
 Settings) rather than two copies. If the gateway's `reasoningLevels` proves
 unreliable for a provider, keep the fallback list and label the picker as
 advisory.
+
+## 2026-11-19 — A failed trace carries the step's instructions
+
+**Decision.** `FailedTrace.plan` now carries each step's `instructions`, redacted
+`acceptanceCriteria`, `requiredCapabilities`, `scopes` and `subagents` count, read
+from the run's `plan.created` event. The repair lane can reproduce a plan- or
+verification-level failure from the trace alone instead of the working agent
+restating the step in a decision brief.
+
+**Why it won.** The verifier repair's first lane run failed the
+`regression-missing` gate because `FailedTrace.plan` held only
+`id/title/risk/agentId`; the worker could not obtain `plan[0].instructions` and
+stopped without writing a case. The real instructions were in the journal and
+had to be pasted into the decision brief for the retry. A trace that cannot
+reproduce the plan is not the self-contained hand-off its module claims to be.
+
+**Alternatives rejected.**
+
+- *Add only `instructions`.* Acceptance criteria and capabilities are what the
+  regression test asserts against and what the worker needs to choose the
+  production file; carrying them together costs little.
+- *Point the lane at the owner's journal.* The lane runs in an isolated clone
+  home and a worktree; the owner's journal is not its input, and a path into it
+  would break the isolation the lane is built on.
+- *Re-export the trace at lane time from the live journal.* The trace is the
+  evidence of what failed; regenerating it can see a moved-on journal and a
+  different plan.
+- *Keep the reduced plan and require a decision brief.* That is the workaround
+  this replaces; it makes every plan-level repair depend on a human/agent
+  reading the journal.
+
+**What was given up.** Traces grow: the real step instructions are about 1 KB,
+each string is capped by the existing redaction (1,500 characters), and a wide
+plan carries up to eight steps. Redaction and the cap can lose detail the
+worker would otherwise read. The trace remains a copy, not the journal.
+
+**Evidence.** The verifier lane's first run (`8464295d`) failed
+`regression-missing` with "the staged trace's plan[0].instructions is missing";
+the retry succeeded only after the brief pasted journal sequence 1818. The new
+test in `test/failed-traces.test.ts` adds instructions, criteria, capabilities
+and scopes to the fixture and asserts the trace carries them redacted.
+
+**Reversal condition.** If traces become too large to stage or carry, export
+only the steps the failure names, or a sanitized plan plus a plan id the lane
+can read from a copied fixture. If redaction cannot keep up with the added
+fields, drop `scopes` before dropping instructions.
+
+## 2026-11-19 — A first-send failure shows the owner-facing reason, not the raw loop error
+
+**Decision.** The SSE `failed` event carries `errorSummary` and `errorGuidance`
+from `describeFailureForOwner`, and the transient first-send failure card
+renders the summary, the next step and the raw error in a collapsed detail —
+instead of only the raw English loop error. The raw error stays in the payload,
+the ledger and the interruptions record.
+
+**Why it won.** The audit found that the first send with no streamed reply skips
+the ledger refresh (`wasComposing && !reply`), so the raw "The agent called
+get_run_status 5 times … making no progress" was the only text the owner saw.
+The Chinese summary and next step already existed in the ledger, but appeared
+only after a manual refresh. This is the 2026-11-19 no-progress stop itself; the
+owner saw English internals instead of "已停止以免空转".
+
+**Alternatives rejected.**
+
+- *Always refresh on failure.* The first-send guard exists because the refresh
+  can render the welcome screen over the error card; it also costs a round trip
+  on every failure. The SSE payload already has the error; carry the summary
+  with it.
+- *Replace the raw error with the summary.* The raw error is needed for
+  diagnosis; keep it in a collapsed detail and the interruptions record.
+- *Translate only the existing `{message}` template.* The template has no
+  next-step slot, and every failure would get the same sentence.
+- *Make the ledger card the only surface.* That is what failed for a first send;
+  the transient card is what the owner sees.
+
+**What was given up.** The failed event grows by two short strings. The
+transient card and the ledger card are two renderers of the same mapping and can
+drift. The raw error remains in the DOM (collapsed) and in the interruptions
+record.
+
+**Evidence.** The audit recorded the SSE payload carrying only `error`, the UI
+rendering `response-interrupted-detail`, and the first-send refresh guard. The
+new server test scripts five identical `get_run_status` calls: the failed event
+carries the Chinese summary and guidance, and the ledger row is failed. The UI
+structure test asserts the transient card reads `payload.errorSummary` /
+`payload.errorGuidance`. Before the change the event has no summary or guidance
+and the card falls back to the raw template.
+
+**Reversal condition.** If the failure mapping must be localized per UI
+language, send structured fields and render them per locale. If the ledger
+refresh becomes safe for a first send, remove the transient renderer and show
+the ledger card.
 
 ## 2026-11-19 — A failed turn stays visible in the sidebar while its child run is active
 

@@ -64,13 +64,6 @@ const state = {
   // 点击要求查看的子 Agent 行，直到它的记录渲染出来。从那里而不是记录顶部开始，
   // 才是"跳转进去"的意思。
   agentFocus: null,
-  openChildGroups: new Set((() => {
-    try {
-      return JSON.parse(localStorage.getItem("clone-ai:child-groups") || "[]");
-    } catch {
-      return [];
-    }
-  })().filter((value) => typeof value === "string")),
 };
 const MAX_ATTACHMENTS = 4;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -669,18 +662,6 @@ function mintConversationId() {
   const suffix = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return `conversation-${suffix}`;
 }
-const isZhLocale = () => (state.locale || "zh-CN") === "zh-CN";
-const taskCountLabel = (count) => isZhLocale() ? `${count} 个任务` : `${count} task${count === 1 ? "" : "s"}`;
-function childSummary(children) {
-  const active = children.filter((child) => ["planning", "queued", "running", "verifying"].includes(child.status)).length;
-  const waiting = children.filter((child) => child.status === "waiting_approval" || child.status === "waiting_review").length;
-  const failed = children.filter((child) => child.status === "failed" || child.status === "cancelled").length;
-  const parts = [];
-  if (active) parts.push(isZhLocale() ? `${active} 个进行中` : `${active} running`);
-  if (waiting) parts.push(isZhLocale() ? `${waiting} 个待确认` : `${waiting} waiting`);
-  if (failed) parts.push(isZhLocale() ? `${failed} 个失败` : `${failed} failed`);
-  return parts.join(" · ") || (isZhLocale() ? "已完成" : "Completed");
-}
 const sessionTime = (session) => Date.parse(session.updatedAt) || 0;
 function sessionMarkup(session, options = {}) {
   const status = statusMeta(session.status);
@@ -704,13 +685,12 @@ function sessionMarkup(session, options = {}) {
       : "";
   const needs = session.status === "waiting_approval" || session.status === "waiting_review";
   const conversation = session.kind === "conversation";
-  const child = options.child === true;
-  const classes = `session-item${needs ? " is-attention" : ""}${conversation ? " is-conversation" : ""}${child ? " is-child" : ""}`;
-  // The top level is the conversation, so the row no longer carries a 对话
-  // badge; nesting says what a child is. A task record is a different
-  // destination, not a peer kind of row.
-  // 顶层是对话，行内不再加"对话"徽章；嵌套本身说明了子行是什么。任务记录是另一个目的地，
-  // 不是与对话并列的行种类。
+  const classes = `session-item${needs ? " is-attention" : ""}${conversation ? " is-conversation" : ""}`;
+  // A row is a conversation, except for the one task that needs the owner: it
+  // is promoted into 需要你处理 because a decision that is invisible is a
+  // decision missed. Everything else a turn dispatched is read in the audit.
+  // 行就是对话；唯一的例外是需要所有者决定的任务：它被提升到 需要你处理，因为看不见的
+  // 决定等于漏掉的决定。回合派发的其他东西都在审计里读。
   const deleteLabel = conversation ? "隐藏这个对话" : "隐藏这条任务";
   const deleteControl = main
     ? ""
@@ -719,70 +699,42 @@ function sessionMarkup(session, options = {}) {
   return `<div class="${classes}"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title-row"><span class="session-title">${escape(title)}</span>${flag}</span><span class="session-meta">${escape(metaText)}</span></span></button>${deleteControl}</div>`;
 }
 function renderSessions(rawSessions) {
-  // One row kind at the top: a conversation. The Runs its turns dispatched are
-  // children. Runs with no conversation sit under 定时/自动. The main
-  // conversation is the pinned first row rather than a second navigation
-  // control: it is a thread like any other, and its tasks nest inside it. A
-  // waiting task is still promoted to the top section, because a decision on
-  // page two is a decision missed.
-  // 顶层只有一种行：对话。回合派发的 Run 是它的子行。没有对话的 Run 放在"定时/自动"下。
-  // 主对话是固定的第一行，而不是第二个导航控件：它与其他线程一样，任务嵌套在它里面。
-  // 等待中的任务仍被提升到顶部分区，因为埋在下方的决定等于漏掉的决定。
+  // The sidebar lists conversations and nothing else. The Runs a turn
+  // dispatched are read in 设置 → 审计与轨迹: nesting them here turned the
+  // sidebar into a process log, and two runs with similar titles were
+  // indistinguishable. A task waiting for the owner is the one exception — it
+  // is promoted into 需要你处理, because a decision that is invisible is a
+  // decision missed. The main conversation is the pinned first row rather than
+  // a second navigation control.
+  // 侧栏只列对话，别的都不列。回合派发的 Run 在 设置 → 审计与轨迹 里读：把它们嵌套在这里
+  // 会让侧栏变成过程日志，两条标题相近的 Run 无法区分。唯一例外是等待所有者决定的任务——
+  // 它被提升到 需要你处理，因为看不见的决定等于漏掉的决定。主对话是固定的第一行，而不是
+  // 第二个导航控件。
   const conversations = rawSessions.filter((session) => session.kind === "conversation");
   const mainConversation = conversations.find((session) => session.id === MAIN_CONVERSATION_ID);
   const otherConversations = conversations.filter((session) => session.id !== MAIN_CONVERSATION_ID);
   const tasks = rawSessions.filter((session) => session.kind !== "conversation");
   const conversationById = new Map(conversations.map((session) => [session.id, session]));
-  const parentOf = (task) => task.parentId !== undefined
-    && (conversationById.has(task.parentId) || task.parentId === MAIN_CONVERSATION_ID)
-    ? task.parentId
-    : undefined;
-  const childrenOf = new Map();
-  for (const task of tasks) {
-    const parentId = parentOf(task);
-    if (parentId === undefined) continue;
-    const list = childrenOf.get(parentId) || [];
-    list.push(task);
-    childrenOf.set(parentId, list);
-  }
   const needsOwner = (session) => session.status === "waiting_approval" || session.status === "waiting_review";
   const byTime = (left, right) => sessionTime(right) - sessionTime(left);
   const waitingTasks = tasks.filter(needsOwner).sort(byTime);
-  const waitingIds = new Set(waitingTasks.map((session) => session.id));
   const parentLabel = (task) => {
     if (task.parentId === MAIN_CONVERSATION_ID) return t("session-group-main");
     const parent = task.parentId === undefined ? undefined : conversationById.get(task.parentId);
     return parent ? shortName(plainPreview(parent.title), 24) : t("session-group-auto");
   };
-  const blocks = otherConversations.map((session) => {
-    const children = (childrenOf.get(session.id) || []).sort(byTime);
-    return {
-      session,
-      children,
-      visible: children.filter((child) => !waitingIds.has(child.id)),
-      time: Math.max(sessionTime(session), ...children.map(sessionTime)),
-    };
-  }).sort((left, right) => right.time - left.time);
-  const mainChildren = (childrenOf.get(MAIN_CONVERSATION_ID) || []).sort(byTime);
-  const mainTasks = mainChildren.filter((task) => !waitingIds.has(task.id));
-  const standaloneTasks = tasks
-    .filter((task) => parentOf(task) === undefined && !waitingIds.has(task.id))
-    .sort(byTime);
-  // Count the rows the owner can see at the top level, not the children hidden
-  // inside their conversation. The main row counts once whether or not it has
-  // children; without the row (an older payload) its tasks count on their own.
-  // 计数所有者能看到的顶层行，而不是藏在对话里的子行。主对话行无论有没有子行都只算一行；
-  // 没有该行时（较旧的载荷）它的任务各自计数。
-  const total = otherConversations.length
-    + (mainConversation === undefined ? mainTasks.length : 1)
-    + waitingTasks.length
-    + standaloneTasks.length;
+  const ordered = [...otherConversations].sort(byTime);
+  // Count what the owner can see: conversations plus the decisions waiting for
+  // them. A dispatched run that needs nothing from the owner is not a row.
+  // 计数是所有者能看到的东西：对话加上等待他决定的任务。不需要所有者做任何事的派发 Run
+  // 不是一行。
+  const total = ordered.length + (mainConversation === undefined ? 0 : 1) + waitingTasks.length;
   $("session-count").textContent = String(total);
   const signature = JSON.stringify([
     state.selectedId,
     rawSessions.map((session) => [
       session.id, session.title, session.preview, session.status,
-      session.updatedAt, session.kind, session.parentId, session.childCount,
+      session.updatedAt, session.kind, session.parentId,
     ]),
     state.dashboard?.deletedConversations,
   ]);
@@ -795,44 +747,17 @@ function renderSessions(rawSessions) {
   // 因此只有确实没有隐藏内容时才走空状态。
   if (!total && !deleted.length) { $("session-list").innerHTML = `<div class="empty-sessions">${t("empty-sessions").replace("\n", "<br/>")}</div>`; return; }
   const waitingBlock = waitingTasks.length
-    ? `<div class="session-group session-group-needs">${escape(t("needs-you"))} · ${waitingTasks.length}</div>${waitingTasks.map((task) => sessionMarkup(task, { child: parentOf(task) !== undefined, context: parentLabel(task) })).join("")}`
+    ? `<div class="session-group session-group-needs">${escape(t("needs-you"))} · ${waitingTasks.length}</div>${waitingTasks.map((task) => sessionMarkup(task, { context: parentLabel(task) })).join("")}`
     : "";
   const todayKey = new Date().toDateString();
-  const today = blocks.filter((block) => new Date(block.time).toDateString() === todayKey);
-  const earlier = blocks.filter((block) => new Date(block.time).toDateString() !== todayKey);
-  const conversationBlock = (block, options = {}) => {
-    const parent = sessionMarkup(block.session, options);
-    if (!block.visible.length) return parent;
-    const open = state.openChildGroups.has(block.session.id) ? " open" : "";
-    const waitingCount = block.children.length - block.visible.length;
-    const summary = [
-      childSummary(block.visible),
-      waitingCount ? (isZhLocale() ? `${waitingCount} 个待确认` : `${waitingCount} waiting`) : "",
-    ].filter(Boolean).join(" · ");
-    return `${parent}<details class="session-children" data-child-group="${escape(block.session.id)}"${open}><summary><span>${taskCountLabel(block.children.length)}</span><small>${escape(summary)}</small></summary>${block.visible.map((child) => sessionMarkup(child, { child: true })).join("")}</details>`;
-  };
-  // The main conversation is the pinned first row, above the chronological
-  // groups. A payload without it still shows its tasks under the 主对话 header
-  // rather than dropping them.
-  // 主对话是固定的第一行，位于按时间排列的分区之上。缺少该行的载荷仍把它的任务放在
-  // "主对话"标题下，而不是丢掉。
-  const mainBlock = mainConversation !== undefined
-    ? conversationBlock({
-        session: mainConversation,
-        children: mainChildren,
-        visible: mainChildren.filter((child) => !waitingIds.has(child.id)),
-      }, { main: true })
-    : mainTasks.length
-      ? `<div class="session-group">${escape(t("session-group-main"))}</div>${mainTasks.map((task) => sessionMarkup(task, { child: true })).join("")}`
-      : "";
-  const todayBlock = today.length ? `<div class="session-group">${t("today")}</div>${today.map((block) => conversationBlock(block)).join("")}` : "";
-  const earlierBlock = earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map((block) => conversationBlock(block)).join("")}` : "";
-  const autoBlock = standaloneTasks.length
-    ? `<div class="session-group">${escape(t("session-group-auto"))}</div>${standaloneTasks.map((task) => sessionMarkup(task)).join("")}`
-    : "";
-  const hidden = deleted.map((entry) => `<div class="session-item is-hidden-conversation"><span class="session-copy"><span class="session-title">${escape(entry.title)}${entry.childCount ? ` · ${taskCountLabel(entry.childCount)}` : ""}</span><span class="session-meta">已隐藏</span></span><button class="session-restore" type="button" data-restore-conversation="${escape(entry.id)}">恢复</button></div>`).join("");
+  const today = ordered.filter((session) => new Date(sessionTime(session)).toDateString() === todayKey);
+  const earlier = ordered.filter((session) => new Date(sessionTime(session)).toDateString() !== todayKey);
+  const mainBlock = mainConversation === undefined ? "" : sessionMarkup(mainConversation, { main: true });
+  const todayBlock = today.length ? `<div class="session-group">${t("today")}</div>${today.map((session) => sessionMarkup(session)).join("")}` : "";
+  const earlierBlock = earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map((session) => sessionMarkup(session)).join("")}` : "";
+  const hidden = deleted.map((entry) => `<div class="session-item is-hidden-conversation"><span class="session-copy"><span class="session-title">${escape(entry.title)}</span><span class="session-meta">已隐藏</span></span><button class="session-restore" type="button" data-restore-conversation="${escape(entry.id)}">恢复</button></div>`).join("");
   const hiddenBlock = hidden ? `<div class="session-group">已隐藏</div>${hidden}` : "";
-  $("session-list").innerHTML = `${waitingBlock}${mainBlock}${todayBlock}${earlierBlock}${autoBlock}${hiddenBlock}`;
+  $("session-list").innerHTML = `${waitingBlock}${mainBlock}${todayBlock}${earlierBlock}${hiddenBlock}`;
 }
 function renderSchedules(schedules, occurrences = [], reportDeliveries = [], reportError = false) {
   state.schedules = schedules;
@@ -1962,26 +1887,6 @@ const LOG_STATUS = {
 };
 function logStatus(status) { const [label, tone] = LOG_STATUS[status] || [status || "未知", "mute"]; return { label, tone }; }
 function logDuration(ms) { return ms === undefined ? "" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`; }
-function logProductMarkup(entry) {
-  const runs = entry.spawnedRuns || [];
-  if (runs.length === 0) return "";
-  // A produced run is the turn's product, not its process: it stays beside the
-  // answer as an openable row. The tool calls that asked for it — with their
-  // inputs and durations — live in the audit.
-  // 派生的 Run 是回合的产物，不是过程：它作为可打开的行留在回答旁边。请求它的工具调用
-  // 及其输入、耗时在审计页。
-  // A hidden run has no openable session: it stays evidence of the product, but
-  // it is not a button that would land on a 404 and reset the selection.
-  // 隐藏的 Run 没有可打开的会话：它仍是产物的证据，但不做成按钮——那会落到 404 并重置选择。
-  // A child run is a subordinate row, not a card: it sits on a connector under
-  // the product heading, carries a status dot, and keeps the openable id as its
-  // affordance.
-  // 子 Run 是次级行，而不是卡片：它挂在产物标题下的连接线上，带状态点，并保留可打开的 id。
-  const rows = runs.map((run) => run.hidden
-    ? `<span class="log-run log-run--hidden" data-run-status="hidden"><span class="log-run-dot" aria-hidden="true"></span><code>${escape(String(run.id).slice(0, 8))}</code><span class="log-run-title">任务已隐藏</span></span>`
-    : `<button class="log-run" type="button" data-log-run="${escape(run.id)}"${run.status ? ` data-run-status="${escape(run.status)}"` : ""}><span class="log-run-dot" aria-hidden="true"></span><code>${escape(String(run.id).slice(0, 8))}</code><span class="log-run-title">${escape(plainPreview(run.title) || "任务 Run")}</span>${run.status ? `<em class="log-run-status">${escape(logStatus(run.status).label)}</em>` : ""}<span class="log-run-open" aria-hidden="true">›</span></button>`).join("");
-  return `<div class="log-runs log-products"><b>产物<span class="log-runs-count">${runs.length}</span></b>${rows}</div>`;
-}
 function logBasisMarkup(entry, conversationId) {
   // The grounds a conclusion stands on, kept to one line: how much this turn
   // consulted and where its record is. The model, the prompt snapshot and every
@@ -2055,7 +1960,7 @@ function logEntryMarkup(entry, conversationId) {
   // 旧历史条目从未进入 Journal，因此如实说明：回复仍是产物，但没有可链接的过程。
   const body = history
     ? `<div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}<div class="log-basis"><b>依据</b><span>旧记录没有保存过程。</span></div></div></div>`
-    : `<div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}${logProductMarkup(entry)}${logBasisMarkup(entry, conversationId)}</div></div>`;
+    : `<div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}${logBasisMarkup(entry, conversationId)}</div></div>`;
   return `${logQueryMarkup(entry.input)}<article class="log-entry" data-log-kind="${escape(entry.kind)}" data-log-status="${escape(entry.status)}">${head}<div class="log-entry-body">${body}</div></article>`;
 }
 function workLogMarkup(message) {
@@ -2901,14 +2806,7 @@ async function deleteSession(id) {
   if (id === MAIN_CONVERSATION_ID) { announce("主对话始终保留在列表中。", true); return; }
   const session = (state.dashboard?.sessions || []).find((item) => item.id === id); const message = session?.kind === "conversation" ? `隐藏这个对话？它的 ${session?.childCount || 0} 个任务会一起隐藏。审计日志、记忆和备份不受影响，随时可以恢复。` : session?.parentId ? "隐藏这条任务？它会从所属对话中隐藏，审计记录会保留。" : "从列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。"; if (!(await confirmDialog(message, "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
 $("session-list").addEventListener("click", (event) => { const restore = event.target.closest("[data-restore-conversation]"); if (restore) { void restoreConversation(restore.dataset.restoreConversation); return; } const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
-$("session-list").addEventListener("toggle", (event) => {
-  const details = event.target;
-  if (!(details instanceof HTMLDetailsElement) || details.dataset.childGroup === undefined) return;
-  if (details.open) state.openChildGroups.add(details.dataset.childGroup);
-  else state.openChildGroups.delete(details.dataset.childGroup);
-  localStorage.setItem("clone-ai:child-groups", JSON.stringify([...state.openChildGroups]));
-}, true);
-$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const turnAudit = event.target.closest("[data-open-turn-audit]"); if (turnAudit) { openSettings(); selectSettingsSection("audit"); window.CloneAudit?.showTurns?.(turnAudit.dataset.openTurnAudit || "", turnAudit.dataset.openTurnConversation || ""); return; } const logRun = event.target.closest("[data-log-run]"); if (logRun) { void selectSession(logRun.dataset.logRun); return; } const agentRun = event.target.closest("[data-open-agent-run]"); if (agentRun) { state.agentFocus = { runId: agentRun.dataset.openAgentRun, agentId: agentRun.dataset.agentId }; void selectSession(agentRun.dataset.openAgentRun); return; } const openConversation = event.target.closest("[data-open-conversation]"); if (openConversation) { void selectSession(openConversation.dataset.openConversation, { scrollToBottom: true }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const tableExport = event.target.closest("[data-export-table]"); if (tableExport) { exportMarkdownTable(tableExport.dataset.exportCsv || ""); return; } const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
+$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const turnAudit = event.target.closest("[data-open-turn-audit]"); if (turnAudit) { openSettings(); selectSettingsSection("audit"); window.CloneAudit?.showTurns?.(turnAudit.dataset.openTurnAudit || "", turnAudit.dataset.openTurnConversation || ""); return; } const agentRun = event.target.closest("[data-open-agent-run]"); if (agentRun) { state.agentFocus = { runId: agentRun.dataset.openAgentRun, agentId: agentRun.dataset.agentId }; void selectSession(agentRun.dataset.openAgentRun); return; } const openConversation = event.target.closest("[data-open-conversation]"); if (openConversation) { void selectSession(openConversation.dataset.openConversation, { scrollToBottom: true }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const tableExport = event.target.closest("[data-export-table]"); if (tableExport) { exportMarkdownTable(tableExport.dataset.exportCsv || ""); return; } const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
 document.querySelector(".settings-nav")?.addEventListener("keydown", (event) => {

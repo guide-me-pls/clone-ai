@@ -97,6 +97,15 @@ test("the native desktop app is the only product entry", async () => {
   assert.match(devDriver, /CLONE_AI_DEV_ROOT: root/);
   assert.match(devDriver, /apps", "desktop", "ui"/);
   assert.match(devDriver, /--app-only/);
+  // launchd's KeepAlive restarts a killed resident job, so the dev driver must
+  // take the job out of the domain for its session instead of relying on
+  // `pkill`; otherwise the dev sidecar and the resident daemon write one home.
+  // launchd 的 KeepAlive 会重启被杀掉的常驻任务，因此开发驱动必须在会话期间把任务
+  // 从域中卸下，而不能只靠 `pkill`；否则开发 sidecar 与常驻守护会同写一个 home。
+  assert.match(devDriver, /ai\.clone\.companion/);
+  assert.match(devDriver, /bootout/);
+  assert.match(devDriver, /bootstrap/);
+  assert.match(devDriver, /resumeResidentDaemon/);
   // The window is not a dead end when the runtime it spawned stops: it
   // relaunches with exponential backoff, probes the health route the server
   // already exposes, follows a republished endpoint in resident mode, and

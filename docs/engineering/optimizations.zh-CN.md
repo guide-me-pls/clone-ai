@@ -53,7 +53,6 @@
 - **推翻条件：** 如果轨迹大到无法暂存或携带，就只导出失败点名的步骤，或导出脱敏计划加一个计划
   id。如果脱敏跟不上新增字段，先丢 `scopes`，再考虑丢 instructions。
 
-
 ### 2026-11-19 —— 首次发送失败显示所有者可读的原因
 
 - **目标 / 假设：** 审计发现，没有流式正文的首次发送会跳过台账刷新，临时失败卡只显示原始英文
@@ -81,6 +80,125 @@
 - **推翻条件：** 如果失败映射需要按界面语言本地化，就发送结构化字段并按语言渲染。如果首次发送的
   台账刷新变得安全，就移除临时渲染器，直接显示台账卡。
 
+### 2026-11-19 —— 回合的回答读作章节本身，而不是一行日志
+
+- **目标 / 假设：** 产物 行移入审计后，剩下的回合块仍是一副构建日志的剪影——13.5px 的回复
+  缩进在 52px 的标签栏里，随后是一行 10.5px 的"依据"，审计入口埋在事实之间。让回答成为
+  章节自己的正文，应当使普通回答读起来像回答，同时计数与审计仍在一行之外。
+- **取舍：** [回答就是章节本身；"结果"标签栏退场](../architecture/trade-offs.zh-CN.md#2026-11-19--回答就是章节本身结果标签栏退场)。
+- **变更：** `apps/desktop/ui/components.css` —— 在最终层追加一段：`.log-step` 收成单列，
+  `.log-step-label` 隐藏，`.log-reply` 设为 14.5px / 1.75，`.log-basis` 加上顶线并把
+  `.log-basis-open` 推到行尾；640px 规则保持同一形状。没有标记、服务端或数据变更：回合、
+  历史与实时卡共用 `.log-step`，一个选择器覆盖三条路径。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts`。新增五条
+  最终层断言（单列 `.log-step`、隐藏标签、14.5px 回复、带顶线的"依据"页脚、审计控件右对齐）
+  对 `git show HEAD:apps/desktop/ui/components.css` **全部 FAIL**，变更后 **27/27 通过**。
+  视觉检查在工作树标记于浏览器中以 1240×900 与 720×900 渲染四种状态：带标题与列表的完成
+  回答、带错误块与"下一步"的失败回合、旧历史条目、以及所有者截图中被停止回合的形状。改后
+  实测：`.log-step` 760px 单列、`.log-reply` 14.5px、`.log-basis` 1px 顶线，审计链接落在
+  列尾。改前：52px + 1fr 网格、13.5px / 1.68、无分隔线的依据、链接紧跟事实。
+- **Benchmark run：** 无——确定性的 CSS 契约与本地视觉检查；不涉及 Provider、模型、数据集、
+  切分、种子或评分参数。
+- **执行链路：** 一个会话。读取 `apps/desktop/ui/app.js` 的回合日志标记、最终 CSS 层与塑造
+  它们的取舍条目；把所有者的回合（三个失败 Run，以及工作树中移除它们之后的形状）复刻成链接
+  真实样式表的静态 fixture，放在本地 HTTP 服务后面；用 Playwright 在 1240×900 截取改前状态；
+  写一段 CSS；重载后发现样式表被缓存（计算值仍是旧的），给 fixture 的 URL 加版本号后重测；
+  两种宽度渲染四种状态；确认工作树中仍带（隐藏）标签的标记渲染结果一致。无模型调用；含
+  fixture 与文档约 20 分钟。
+- **优点：** 没有标记或服务端改动；一段可逆的 CSS；吸附的作者条、层级语法、错误提示块与
+  640px 布局都未动；改前/改后在两张截图里一目了然。
+- **缺点 / 下次：** fixture 是手写的，因此预览证明的是 CSS 面对我喂给它的形状，而不是运行时
+  生成的标记——`test/ui-structure.test.ts` 覆盖真实函数。标签仍留在 DOM 里（隐藏），源码
+  读者只能相信注释。视觉判断来自工作的 Agent，而不是所有者；所有者应在重新构建的 App 里
+  确认结果。被缓存的样式表多花了一轮测量；一开始就让 fixture 给样式表地址带上版本号即可避免。
+- **推翻条件：** 若回合恢复就地步骤，恢复标签栏并显示标签；若缺少"结果"标签让章节产生歧义，
+  在作者眉线里点明层级；若更宽的版心让长回答难以扫读，把回复的版心限制在约 68 个汉字，而不是
+  缩小字号。
+
+### 2026-11-19 —— 侧栏只列对话；回合派发的 Run 在审计里读
+
+- **目标 / 假设：** 所有者无法在侧栏里分辨 Run——每个回合派发的 Run 都嵌套在所属对话下，
+  每组还带着一行 `N 个任务 · N 个失败`，每回合都在变。只显示对话，把 Run 的细节移到
+  设置 → 审计与轨迹，那里本来就列出每条执行记录。
+- **取舍：** [侧栏只列对话；Run 的细节放在审计里](../architecture/trade-offs.zh-CN.md#2026-11-19--侧栏只列对话run-的细节放在审计里)。
+- **变更：** `renderSessions` 渲染对话（主对话固定在前，然后今天 / 更早），并且只为等待
+  所有者决定的任务渲染一行 需要你处理；子行折叠区、`定时/自动` 分区与每个对话的任务计数
+  都已移除。`childSummary`、`taskCountLabel` 与 `state.openChildGroups`（及其 toggle
+  处理器）删除，`audit.css` 里的 `.session-children` 与 `.session-item.is-child` 规则
+  也删除。回合日志去掉 `logProductMarkup`：一个回合只保留回复与一行"依据 / 查看审计"。
+  文件：`apps/desktop/ui/app.js`、`apps/desktop/ui/audit.css`、
+  `test/ui-structure.test.ts`、`test/regression/ui-sidebar-hidden-restore.test.ts`。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts
+  test/regression/ui-sidebar-hidden-restore.test.ts test/desktop-only-ui.test.ts`。
+  变更前：侧栏沙箱把 `run-running` 与 `run-main` 渲染成 `data-test-session` 行并计入
+  计数，回合日志里带 `data-log-run`；变更后：这些 Run 不再出现，等待中的任务只在
+  `session-group-needs` 下出现一次，计数是对话数加等待任务数，回合日志没有 产物 块。
+  `npm run typecheck` exit 0、`npm run gate` PASS、baseline 不变。`npm test`
+  **943/944**——唯一失败是 `test/desktop-only-ui.test.ts` 的"the repository exposes no
+  browser preview entry"，由另一个会话的 `.claude/launch.json`（17:51，指向
+  `design-preview/`）造成，与本次变更无关。
+- **执行链路：** 读 `renderSessions`、`sessionMarkup`、`turnLogMarkup`、审计记录列表与
+  两个测试文件；确认等待审批的任务没有别的入口（机会条只承载失败/取消的 Run）后才保留
+  需要你处理 分区；实现渲染器与回合日志裁剪；更新结构测试与回归测试；跑了三轮测试
+  （两处断言修正：`session-group-auto` 标签仍用于没有所属对话的等待任务；该夹具没有主对话，
+  因此计数是 2）。另一个会话正在编辑 `docs/architecture/trade-offs*` 并预览同一个回合日志，
+  因此没有删除暂未使用的 `.log-run*` CSS。
+- **优点：** 侧栏现在每个对话一行，也不再每回合变化；Run 的细节集中在本来就有"查看记录"
+  的审计里。
+- **缺点 / 下次：** 从对话打开 Run 现在要绕经审计。`.log-run*` CSS 在应用里已是死代码，
+  要等并行的预览工作落地或删除。这次没有先与并行会话协调；共享文档本可能冲突（实际没有）。
+- **推翻条件：** 抄自取舍条目——若所有者找不到运行中或定时的 Run，在审计里加状态筛选
+  （或专门的"运行"视图），而不是把 Run 重新嵌套回侧栏。
+
+### 2026-11-19 —— 开发模式与 launchd 不再在同一个 clone home 上各跑一个 sidecar
+
+- **目标 / 假设：** 窗口报出“launchd 没有在 60 秒内发布端点”，而当时有健康的守护在运行。
+  假设是端点文件被开发 App 自己的 sidecar 删掉了：`npm run desktop:dev` `pkill` 了
+  launchd 守护，`KeepAlive` 又把它拉起来，两个进程共享一个 home。让开发模式独占（bootout）
+  并在第二个 sidecar 触碰 Journal 之前拒绝它，应当只留下一个写者与一个已发布端点。
+- **取舍：** [每个 clone home 只跑一个运行时](../architecture/trade-offs.zh-CN.md#2026-11-19--每个-clone-home-只跑一个运行时开发模式先卸载-launchagent第二个-sidecar-拒绝启动)。
+- **变更：** `scripts/desktop-dev.mjs` 在启动开发 App 之前把 `ai.clone.companion` 从 GUI
+  域中 bootout，退出时用同一份 plist bootstrap（含同步 `exit` 处理器）。
+  `src/companion-instance.ts` 新增按 home 的目录锁（`companion-runtime.lock`，复用
+  `tryAcquireDirectoryLock`）与 `CompanionAlreadyRunningError`；
+  `src/companion-server.ts` 在 `prepareCloneHome` 之后、`migrateLegacyCloneHome`、重放
+  Journal 与 `claimMainAgentTurnOwner` 之前取得锁，并在 `close()` 与启动失败路径释放。
+  `test/companion-singleton.test.ts` 覆盖跨进程拒绝、同进程拒绝与死属主锁的回收；
+  `test/desktop-shell.test.ts` 钉住驱动 `bootout`/`bootstrap` 的契约。
+- **Eval：** `node --experimental-strip-types --test test/companion-singleton.test.ts`。
+  变更前：第二个 sidecar 在独立进程中启动（测试超时仍存活）、同进程第二个服务器启动、
+  死属主的锁什么也挡不住——**3/3 失败**。变更后：**3/3 通过**，子进程以非零退出并打印
+  `Another Clone AI runtime (pid …) already owns <home>`，端点文件逐字节不变，陈旧锁被
+  回收并在关闭时释放。`test/desktop-shell.test.ts` **1/1**。`npm run typecheck`
+  退出 0，`npm run gate` PASS（基线不变）。`npm test` **940/944**；四个失败都位于另一个
+  会话在运行期间正在编辑的文件（`test/desktop-only-ui.test.ts` 看到该会话的
+  `.claude/launch.json` 预览入口；`test/ui-structure.test.ts` 与
+  `test/regression/ui-sidebar-hidden-restore.test.ts` 与该会话进行中的侧栏标记不一致）；
+  它们都不读取本次变更的文件。
+- **Benchmark run：** 无——确定性的进程与契约测试；没有 Provider、模型、数据集或评分参数。
+- **执行链路：** 所有者报告了卡片；`ps` 显示 launchd 守护（46832）与开发 sidecar（53933）
+  同时存活，端点与回合台账都指向 53933；
+  `log show --predicate 'eventMessage CONTAINS "service inactive: ai.clone.companion"'`
+  显示 2026-11-19 有四次重启；其中 17:41:50 的一次与开发驱动的子 App 启动同秒发生，
+  随后新守护在 17:41:52 发布端点，证明 `pkill` 无法排除该任务。在临时
+  home 上做的双服务器复现（A `:64237`、B `:64239`、B 关闭删除文件、A 健康仍 200）把缺陷
+  变成确定性。`npm run traces -- export` 写出 25 条轨迹；`npm run repair -- --dry-run
+  --max-traces 5` 会消费五条无关轨迹（工作目录查找、故宫、"执行失败"跟进）——本失败发生在
+  任何 Run 存在之前，通道没有输入类（与 2026-11-19 强度修复同一缺口）。所有者批准了直接
+  补丁。回归测试先红（3/3 失败），随后加入锁与 bootout，再转绿。修复后的现场验证
+  （18:29–18:33）：重启 `npm run desktop:dev` 打印 `resident daemon paused`；
+  `launchctl print` 随后报告服务不存在；恰好一个 sidecar（21256）持有端点与回合台账，
+  `/api/health` 返回 200。停止驱动打印 `resident daemon restored`，launchd 启动守护
+  22001；再次启动驱动会再次暂停它，窗口由 sidecar 28188 在 `:63631` 服务。约 55 分钟，
+  无 Provider 成本。
+- **优点：** 修复落在监管契约上，而不是卡片上；复现与回归测试都在独立进程中驱动真实的
+  sidecar 入口；端点逐字节比较能抓住“服务器已启动”断言会漏掉的覆盖。
+- **缺点 / 下次：** 应用修复需要重启一次开发会话（在打开的窗口下换掉运行时）；驱动被
+  SIGKILL 时任务会保持未加载，直到登录或安装器恢复。锁按 home 划分，没有跨用户方案；
+  launchd 的 bootout/bootstrap 仅限 macOS（该驱动本来就只支持 macOS）。通道仍没有
+  "Run 之前就失败"这一输入类。
+- **成果条目：** [一个 clone home 一个运行时，窗口直接附着而不再空等](../engineering/optimization-results.zh-CN.md#2026-11-19--一个-clone-home-一个运行时窗口直接附着而不再空等)。
+- **推翻条件：** 从取舍条目复制。
 
 ### 2026-11-19 —— 强度选择器与服务端的档位名称不一致；通道未能启动，所有者批准了手写补丁
 

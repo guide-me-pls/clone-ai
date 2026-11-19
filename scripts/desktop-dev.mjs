@@ -3,7 +3,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { watch } from "node:fs";
 import { stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -22,6 +22,61 @@ let reloadTimer = null;
 let rebuildTimer = null;
 let rebuilding = false;
 const expectedExits = new WeakSet();
+
+const daemonLabel = "ai.clone.companion";
+const daemonDomain = `gui/${process.getuid()}`;
+const daemonPlist = join(homedir(), "Library", "LaunchAgents", `${daemonLabel}.plist`);
+let residentDaemonPaused = false;
+
+function launchctl(...args) {
+  try {
+    execFileSync("/bin/launchctl", args, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * launchd's KeepAlive restarts a killed job within milliseconds, so `pkill`
+ * alone never makes room for the dev sidecar: the resident daemon returns and
+ * both processes write one clone home. Boot the job out for the dev session
+ * instead. Its plist stays on disk, so a login and the installer both restore
+ * it; `resumeResidentDaemon` restores it when this driver exits.
+ *
+ * launchd 的 KeepAlive 会在毫秒级重启被杀的任务，因此单靠 `pkill` 永远无法给开发
+ * sidecar 让位：常驻守护会回来，两个进程同写一个 clone home。开发会话改为把任务
+ * bootout；plist 仍在磁盘上，登录与安装器都能恢复它，本驱动退出时由
+ * `resumeResidentDaemon` 恢复。
+ */
+function pauseResidentDaemon() {
+  if (residentDaemonPaused || !launchctl("print", `${daemonDomain}/${daemonLabel}`)) return;
+  residentDaemonPaused = launchctl("bootout", `${daemonDomain}/${daemonLabel}`);
+  if (residentDaemonPaused) {
+    console.log("[desktop:dev] resident daemon paused for this dev session");
+  } else {
+    console.warn("[desktop:dev] could not pause the resident daemon; the sidecar lock will name the owner");
+  }
+}
+
+function resumeResidentDaemon() {
+  if (!residentDaemonPaused) return;
+  residentDaemonPaused = false;
+  if (launchctl("bootstrap", daemonDomain, daemonPlist)) {
+    console.log("[desktop:dev] resident daemon restored");
+  } else {
+    console.warn(`[desktop:dev] could not restore the resident daemon; run: launchctl bootstrap ${daemonDomain} ${daemonPlist}`);
+  }
+}
+
+// Registered before the first build: a build failure or a signal during startup
+// must still give the twin back. Exit handlers may run only synchronous work,
+// and `launchctl bootstrap` is synchronous.
+// 在第一次构建之前注册：启动期间的构建失败或信号也必须把分身还回去。退出处理器只能运行
+// 同步工作，而 `launchctl bootstrap` 是同步的。
+process.once("exit", resumeResidentDaemon);
+process.once("SIGINT", () => void shutdown().then(() => process.exit(0)));
+process.once("SIGTERM", () => void shutdown().then(() => process.exit(0)));
 
 async function modifiedAt(path) {
   try {
@@ -155,9 +210,11 @@ async function shutdown() {
   clearTimeout(reloadTimer);
   clearTimeout(rebuildTimer);
   await stopApp();
+  resumeResidentDaemon();
 }
 
 async function main() {
+  pauseResidentDaemon();
   if (await appNeedsBuild()) buildApp();
   await launchApp();
 
@@ -165,9 +222,6 @@ async function main() {
   watchTree(join(root, "apps", "desktop", "ui"), (name) => /\.(?:html|css|js|svg|png)$/.test(name), scheduleRuntimeReload);
   watchTree(join(root, "apps", "desktop", "macos"), (name) => name === "main.swift", scheduleNativeRebuild);
   watch(join(root, "package.json"), () => scheduleRuntimeReload("package.json"));
-
-  process.once("SIGINT", () => void shutdown().then(() => process.exit(0)));
-  process.once("SIGTERM", () => void shutdown().then(() => process.exit(0)));
 }
 
 void main().catch((error) => {

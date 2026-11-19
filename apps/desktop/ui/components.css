@@ -2132,3 +2132,30 @@ button.agent-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--acc
   .log-run { grid-template-columns: minmax(0, 1fr) auto; padding: 9px 0; }
   .log-run code, .log-run-open { display: none; }
 }
+
+/* The answer is the section — final pass.
+ * A turn now carries one step (the reply, or the error), not the old
+ * 上下文 / 派发 / 结果 trio, so the label gutter only indented every answer and
+ * named the obvious: 13.5 px prose in a 52 px shaft read like a build log. The
+ * answer starts at the section's left edge at reading size; the grounds close
+ * the section behind a hairline with the audit control at the far end. The
+ * label stays in the markup for legacy history, but the lane no longer reserves
+ * a column for it.
+ * 回答就是章节本身——最后一层。回合现在只有一个步骤（回复或错误），而不是过去的
+ * 上下文 / 派发 / 结果 三件套，因此标签栏只会缩进每一段回答、给显而易见的东西贴标签：
+ * 52px 竖槽里的 13.5px 正文读起来像构建日志。现在回答从章节左缘以阅读字号开始；依据以
+ * 一条细线收束章节，审计入口落在行尾。标签仍留在旧历史的标记里，但这条通道不再为它
+ * 保留一整列。 */
+.log-step { grid-template-columns: minmax(0, 1fr); gap: 0; }
+.log-step-label { display: none; }
+.log-step-body { gap: 14px; }
+.log-reply { font-size: 14.5px; line-height: 1.75; }
+.log-reply .md-heading { font-size: 14.5px; }
+.log-reply .md-list-line { grid-template-columns: 19px minmax(0, 1fr); }
+.log-reply .md-inline { font-size: 12.5px; }
+.log-basis { margin-top: 0; padding-top: 10px; border-top: 1px solid var(--line); font-size: 11px; }
+.log-basis-open { margin-left: auto; }
+@media (max-width: 640px) {
+  .log-step { gap: 0; }
+  .log-reply { font-size: 14px; }
+}

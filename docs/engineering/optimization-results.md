@@ -28,7 +28,6 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-failed-trace-carries-the-steps-instructions);
   [execution chain](optimizations.md#2026-11-19--a-failed-trace-carries-the-steps-instructions).
 
-
 ## 2026-11-19 — A first-send no_progress shows the summary and next step
 
 - **Claim:** the failed SSE event carries `errorSummary` and `errorGuidance`, and
@@ -44,6 +43,48 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-first-send-failure-shows-the-owner-facing-reason-not-the-raw-loop-error);
   [execution chain](optimizations.md#2026-11-19--a-first-send-failure-shows-the-owner-facing-reason).
 
+## 2026-11-19 — The sidebar holds one row per conversation, not one per run
+
+- **Claim:** a conversation's dispatched runs no longer appear in the sidebar.
+  The list is conversations (main pinned, then today/earlier) plus one row per
+  task waiting on the owner; a running, completed, or conversation-less run has
+  no row. The same runs are still one click away in 设置 → 审计与轨迹, and the
+  conversation keeps a one-line 依据 naming how many were dispatched.
+- **Evidence:** the sidebar sandbox renders a fixture with a running task, a
+  waiting task, a main-conversation task and a scheduled run: the three
+  non-waiting runs produce **0** `data-test-session` rows (before: 1 each), the
+  waiting task produces exactly **1** under `session-group-needs`, and the count
+  drops from conversations + runs to conversations + waiting tasks.
+  `test/ui-structure.test.ts` finds no `session-children`, no `data-child-group`,
+  no `autoBlock` and no `data-log-run` in the source, and the turn log carries
+  no 产物 block. `npm run typecheck` exit 0, `npm run gate` PASS, baseline
+  unchanged, `npm test` **943/944** (the one failure is a concurrent chat's
+  `.claude/launch.json`, not this change).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--the-sidebar-is-conversations-only-run-detail-lives-in-the-audit);
+  [execution chain](optimizations.md#2026-11-19--the-sidebar-lists-conversations-a-turns-runs-are-read-in-the-audit).
+
+## 2026-11-19 — A clone home has one runtime, so the window attaches instead of waiting
+
+- **Claim:** a packaged window no longer shows "launchd 没有在 60 秒内发布端点"
+  while a daemon is alive. `npm run desktop:dev` boots the resident LaunchAgent
+  out for its session, and a second companion on the same home refuses to start
+  before it hydrates the journal, claims the turn ledger or overwrites the
+  endpoint.
+- **Evidence:** `node --experimental-strip-types --test test/companion-singleton.test.ts`
+  — before the change **3/3 failed** (a second sidecar started in a separate
+  process, a second server started in the same process, a dead owner's lock
+  blocked nothing); after **3/3 pass**, the child exits nonzero with
+  `Another Clone AI runtime (pid …) already owns <home>`, the endpoint file is
+  byte-identical, and the stale lock is reclaimed. Live observation before the
+  fix: launchd pid 46832 and dev sidecar 53933 both alive, endpoint and
+  turn-owner file both naming 53933. `npm run typecheck` exit 0, `npm run gate`
+  PASS (baseline unchanged); `npm test` 940/944 with four failures in files a
+  concurrent session was editing, none of them reading this change. Live after
+  the fix: the LaunchAgent was absent while the dev session ran, one sidecar
+  owned the endpoint and turn ledger (`/api/health` 200), and stopping the
+  driver restored the job and started a new daemon.
+- **Links:** [trade-off](../architecture/trade-offs.md#2026-11-19--one-runtime-per-clone-home-dev-mode-takes-the-launchagent-down-a-second-sidecar-refuses-to-start),
+  [execution chain](optimizations.md#2026-11-19--dev-mode-and-launchd-no-longer-run-two-sidecars-on-one-clone-home).
 
 ## 2026-11-19 — A declared effort level reaches the provider instead of a 400
 

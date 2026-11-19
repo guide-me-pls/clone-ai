@@ -71,7 +71,6 @@ file keeps every attempt, including the ones that did not work.
   redaction cannot keep up with the added fields, drop `scopes` before dropping
   instructions.
 
-
 ### 2026-11-19 — A first-send failure shows the owner-facing reason
 
 - **Goal / hypothesis:** the audit found that a first send with no streamed reply
@@ -113,6 +112,174 @@ file keeps every attempt, including the ones that did not work.
   refresh becomes safe for a first send, remove the transient renderer and show
   the ledger card.
 
+### 2026-11-19 — The turn answer reads as the section, not a log line
+
+- **Goal / hypothesis:** after the 产物 rows moved to the audit, the remaining
+  turn block still had a build-log silhouette — a 13.5 px reply indented into a
+  52 px label gutter, then a 10.5 px 依据 line with the audit control buried in
+  its facts. Making the answer the section's own text should let an ordinary
+  answer read like an answer, while the counts and the audit stay one line away.
+- **Trade-off:** [the answer is the section; the 结果 gutter is retired](../architecture/trade-offs.md#2026-11-19--the-answer-is-the-section-the-结果-gutter-is-retired).
+- **Change:** `apps/desktop/ui/components.css` — one appended final-layer block:
+  `.log-step` collapses to a single column, `.log-step-label` is hidden,
+  `.log-reply` is set at 14.5 px / 1.75, `.log-basis` gains a top hairline and
+  `.log-basis-open` is pushed to the right end; a 640 px rule keeps the same
+  shape. No markup, server or data change: the turn, history and live-card
+  paths share `.log-step`, so one selector covers all three.
+- **Eval:** `node --experimental-strip-types --test test/ui-structure.test.ts`.
+  Five new final-layer assertions (single-column `.log-step`, hidden label,
+  14.5 px reply, footed 依据, right-aligned audit control) are **FAIL against
+  `git show HEAD:apps/desktop/ui/components.css`** and **pass 27/27** after. The
+  visual check rendered the working-tree markup in a browser at 1240×900 and
+  720×900 in four states: completed answer with a heading and list, failed turn
+  with the error block and 下一步, legacy history entry, and the stopped-turn
+  shape from the owner's screenshot. Computed after: `.log-step` 760 px single
+  column, `.log-reply` 14.5 px, `.log-basis` 1 px top rule, audit link at the
+  column's end. Before: 52 px + 1 fr grid, 13.5 px / 1.68, borderless basis, link
+  inline after the facts.
+- **Benchmark run:** none — a deterministic CSS contract and a local visual
+  check; no provider, model, dataset, split, seed or scoring parameters.
+- **Execution chain:** one session. Read the turn-log markup in
+  `apps/desktop/ui/app.js`, the final CSS layer and the trade-off entries that
+  shaped them; reproduced the owner's turn (three failed runs, then the
+  working-tree shape without them) as a static fixture linking the real
+  stylesheets behind a local HTTP server; captured the before state with
+  Playwright at 1240×900; wrote one CSS block; reloaded and found the served
+  stylesheet cached (old computed values), cache-busted the fixture URLs and
+  re-measured; rendered four states at two widths; confirmed the working-tree
+  markup with the still-present (hidden) label renders identically. No model
+  calls; roughly 20 minutes including the fixture and docs.
+- **Pros:** no markup or server change; one reversible CSS block; the sticky
+  identity strip, level grammar, error callout and 640 px layout are untouched;
+  the before/after is visible in one screenshot pair.
+- **Cons / next time:** the fixture was hand-written, so the preview proves the
+  CSS against the shapes I fed it, not against runtime-generated markup —
+  `test/ui-structure.test.ts` covers the real functions. The label remains in the
+  DOM, hidden, so a source reader must trust the comment. The visual judgment
+  was the working agent's, not the owner's; the owner should confirm the result
+  in the rebuilt app. The served-CSS cache cost one measurement round; a fixture
+  that version-stamps its stylesheet URLs from the start avoids it.
+- **Reversal condition:** if a turn regains in-place steps, restore the gutter
+  and show the labels; if the missing 结果 label makes the section ambiguous,
+  name the level in the head overline; if the wider measure makes long answers
+  hard to scan, cap the reply's measure near 68 cjk characters rather than
+  shrinking the type.
+
+### 2026-11-19 — The sidebar lists conversations; a turn's runs are read in the audit
+
+- **Goal / hypothesis:** the owner could not tell runs apart in the sidebar —
+  every turn's dispatched runs nested under its conversation, each group
+  carrying a `N 个任务 · N 个失败` line that changed on every turn. Show
+  conversations only and move run detail to 设置 → 审计与轨迹, which already
+  lists every execution record.
+- **Trade-off:** [the sidebar is conversations only; run detail lives in the audit](../architecture/trade-offs.md#2026-11-19--the-sidebar-is-conversations-only-run-detail-lives-in-the-audit).
+- **Change:** `renderSessions` renders conversations (main pinned, then today /
+  earlier) plus a 需要你处理 row only for a task waiting on the owner; the
+  child-group disclosure, the `定时/自动` section and the per-conversation task
+  count are gone. `childSummary`, `taskCountLabel` and `state.openChildGroups`
+  (with its toggle handler) are deleted, as are the `.session-children` and
+  `.session-item.is-child` rules in `audit.css`. The turn log drops
+  `logProductMarkup`; a turn keeps the reply and the one-line 依据 with
+  查看审计. Files: `apps/desktop/ui/app.js`, `apps/desktop/ui/audit.css`,
+  `test/ui-structure.test.ts`, `test/regression/ui-sidebar-hidden-restore.test.ts`.
+- **Eval:** `node --experimental-strip-types --test
+  test/ui-structure.test.ts test/regression/ui-sidebar-hidden-restore.test.ts
+  test/desktop-only-ui.test.ts`. Before: the sidebar sandbox rendered
+  `run-running` and `run-main` as `data-test-session` rows and counted them, and
+  the turn log contained `data-log-run`; after: those runs are absent, the
+  waiting task appears once under `session-group-needs`, the count is
+  conversations plus waiting tasks, and the turn log has no `产物` block.
+  `npm run typecheck` exit 0, `npm run gate` PASS, baseline unchanged.
+  `npm test` **943/944** — the one failure is
+  `test/desktop-only-ui.test.ts` "the repository exposes no browser preview
+  entry", caused by a concurrent chat's `.claude/launch.json` (17:51) for
+  `design-preview/`, not by this change.
+- **Execution chain:** read `renderSessions`, `sessionMarkup`, `turnLogMarkup`,
+  the audit record list and the two test files; checked that waiting approvals
+  are not surfaced anywhere else (the opportunity strip carries only
+  failed/cancelled runs) before keeping the 需要你处理 section; implemented the
+  renderer and the turn-log trim; updated the structural and regression tests;
+  ran the suite three times (two assertion fixes: the `session-group-auto`
+  label is still used for a waiting task with no conversation, and the fixture
+  has no main conversation so its count is 2). A concurrent chat is editing
+  `docs/architecture/trade-offs*` and previewing the same turn log, so the
+  unused `.log-run*` CSS was left in place rather than deleted under them.
+- **Pros:** the sidebar is now one row per conversation with no churn on every
+  turn; the audit is the single place for run detail that already had 查看记录.
+- **Cons / next time:** opening a run from a conversation now costs a trip
+  through the audit. The `.log-run*` CSS is dead in the app until the
+  concurrent preview work lands or removes it. The concurrent session was not
+  coordinated first; the shared docs could have collided (they did not).
+- **Reversal condition:** copied from the trade-off — if owners cannot find a
+  running or scheduled run, add a status filter (or a dedicated 运行 view) in the
+  audit rather than re-nesting runs in the sidebar.
+
+### 2026-11-19 — Dev mode and launchd no longer run two sidecars on one clone home
+
+- **Goal / hypothesis:** the window reported "launchd 没有在 60 秒内发布端点"
+  while a healthy daemon was running. The hypothesis was that the endpoint file
+  had been removed by the dev app's own sidecar: `npm run desktop:dev` pkills the
+  launchd daemon, `KeepAlive` restarts it, and the two processes share one home.
+  Giving dev mode exclusive ownership (bootout) and refusing a second sidecar
+  before it touches the journal should leave one writer and one published
+  endpoint.
+- **Trade-off:** [one runtime per clone home](../architecture/trade-offs.md#2026-11-19--one-runtime-per-clone-home-dev-mode-takes-the-launchagent-down-a-second-sidecar-refuses-to-start).
+- **Change:** `scripts/desktop-dev.mjs` boots `ai.clone.companion` out of the
+  GUI domain before launching the dev app and bootstraps the same plist on exit
+  (including a synchronous `exit` handler). `src/companion-instance.ts` adds the
+  per-home directory lock (`companion-runtime.lock`, reusing
+  `tryAcquireDirectoryLock`) and `CompanionAlreadyRunningError`;
+  `src/companion-server.ts` takes the lock after `prepareCloneHome` and before
+  `migrateLegacyCloneHome`, the journal hydrate and `claimMainAgentTurnOwner`,
+  releasing it in `close()` and on a failed startup. `test/companion-singleton.test.ts`
+  covers cross-process refusal, same-process refusal and a dead owner's lock;
+  `test/desktop-shell.test.ts` pins the driver's `bootout`/`bootstrap` contract.
+- **Eval:** `node --experimental-strip-types --test test/companion-singleton.test.ts`.
+  Before: the second sidecar started in a separate process (test timed out as
+  live), a second server in the same process started, and a dead owner's lock
+  blocked nothing — **3/3 failed**. After: **3/3 pass**, the child exits nonzero
+  with `Another Clone AI runtime (pid …) already owns <home>`, the endpoint
+  stays byte-identical, and the stale lock is reclaimed and released.
+  `test/desktop-shell.test.ts` **1/1**. `npm run typecheck` exit 0, `npm run gate`
+  PASS (baseline unchanged). `npm test` **940/944**; the four failures are in
+  files a concurrent session was editing during the run (`test/desktop-only-ui.test.ts`
+  sees that session's `.claude/launch.json` preview entry, and
+  `test/ui-structure.test.ts` / `test/regression/ui-sidebar-hidden-restore.test.ts`
+  disagree with its in-flight sidebar markup); none of them reads this change's
+  files.
+- **Benchmark run:** none — deterministic process and contract tests; no
+  provider, model, dataset or scoring parameters.
+- **Execution chain:** the owner reported the card; `ps` showed the launchd
+  daemon (46832) and a dev sidecar (53933) alive together, the endpoint and the
+  turn-owner file both naming 53933; `log show --predicate 'eventMessage CONTAINS
+  "service inactive: ai.clone.companion"'` showed four restarts on 2026-11-19;
+  the 17:41:50 one coincides with the dev driver's child app spawn and a new
+  daemon that published at 17:41:52, proving `pkill` cannot exclude the job. A two-server reproduction on a temporary home (A `:64237`, B `:64239`,
+  B close deletes the file, A health 200) made the defect deterministic.
+  `npm run traces -- export` wrote 25 traces; `npm run repair -- --dry-run
+  --max-traces 5` would consume five unrelated ones (working-directory lookups,
+  Forbidden City, "执行失败" follow-ups) — this harness failure exists before any
+  Run, so the lane has no input (same gap as the 2026-11-19 effort fix). The
+  owner approved the direct patch. The regression test was red first (3/3
+  failed), then the lock and bootout were added, then green. Live after the
+  fix (18:29–18:33): restarting `npm run desktop:dev` logged `resident daemon
+  paused`; `launchctl print` then reported no such service; exactly one sidecar
+  (21256) owned the endpoint and the turn ledger, and `/api/health` returned
+  200. Stopping the driver logged `resident daemon restored` and launchd started
+  daemon 22001; starting the driver again paused it and the window served from
+  sidecar 28188 on `:63631`. About 55 minutes, no provider cost.
+- **Pros:** the fix addresses the supervision contract rather than the card;
+  the reproduction and the regression test both drive the real sidecar entry in
+  a separate process; the endpoint byte comparison catches an overwrite that a
+  "server started" assertion would miss.
+- **Cons / next time:** applying the fix needs one restart of the dev session
+  (it swaps the runtime under the open window); a SIGKILL of the driver leaves
+  the job unloaded until login or the installer restores it. The lock is per
+  home and has no cross-user story; launchd's bootout/bootstrap is macOS-only
+  (the driver already is). The lane still has no input class for failures that
+  happen before a Run exists.
+- **Result entry:** [A clone home has one runtime, so the window attaches instead of waiting](../engineering/optimization-results.md#2026-11-19--a-clone-home-has-one-runtime-so-the-window-attaches-instead-of-waiting).
+- **Reversal condition:** copied from the trade-off entry.
 
 ### 2026-11-19 — The effort picker and the server disagree on level names; the lane could not start, so the owner approved a patch
 

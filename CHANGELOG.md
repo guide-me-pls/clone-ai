@@ -12,13 +12,29 @@ Failed traces now include each step's instructions, acceptance criteria, require
 
 失败轨迹现在包含每个步骤的 instructions、验收标准、所需能力、scopes 与子代理数量（已脱敏并截断），修复通道可以只凭轨迹复现计划或验证失败。验证器修复的第一次通道运行正是因为轨迹只有步骤 id、标题与风险而失败。
 
-
 ### A first-send failure shows the reason and next step
 
 A failed turn already said why in the conversation ledger, but a first send with no streamed reply kept its transient error card and skipped the ledger refresh — so the owner saw only the raw loop error ("The agent called get_run_status 5 times…"). The failed SSE event now carries the same owner-facing summary and next step, and the transient card renders them with the raw error in a collapsed 原始错误 detail. It falls back to the old interrupted card when no summary is present.
 
 失败的回合在台账里本来就说原因，但首次发送没有流式正文，会保留临时错误卡并跳过台账刷新——所有者只看到原始循环错误（“The agent called get_run_status 5 times…”）。failed SSE 事件现在携带同样的所有者可读摘要与下一步，临时卡渲染它们，并把原始错误放进折叠的“原始错误”详情。没有摘要时退回旧的中断卡片。
 
+### A turn's answer starts at the section's left edge
+
+The reply in a conversation turn is no longer indented into the 52 px label gutter: the 结果 label is hidden, the answer is set at 14.5 px in the full reading width, and the 依据 line closes the section behind a hairline with 查看审计 pushed to the right end. Failed turns, legacy history entries and the live streaming card use the same rules, since they share the step container; narrow widths keep the same shape. No data, server or behaviour change.
+
+对话回合的回复不再缩进到 52px 的标签栏里："结果"标签隐藏，回答以 14.5px 铺满阅读栏，"依据"以一条细线收束章节，"查看审计"推到行尾。失败回合、旧历史条目与实时流式卡片共用同一套规则，因为它们共享步骤容器；窄宽度保持同一形状。没有数据、服务端或行为变更。
+
+### The sidebar lists conversations only; run detail is in the audit
+
+A turn's dispatched runs no longer nest under their conversation. The sidebar shows conversations — the main conversation pinned first, then today and earlier — with no `N 个任务` line and no child rows; a run with no conversation (scheduled, repair, opportunity) no longer appears there either. The only task that still earns a row is one waiting for you: it stays in 需要你处理, because a decision that is invisible is a decision missed. The conversation pane drops the 产物 list of spawned runs; each turn keeps its reply and the one-line 依据 with 查看审计, and every run remains reachable in 设置 → 审计与轨迹.
+
+派发的 Run 不再嵌套在所属对话下。侧栏只显示对话——主对话固定在前，然后是今天与更早——没有 `N 个任务` 那行，也没有子行；没有对话的 Run（定时、修复、机会）也不再出现在那里。唯一仍占一行的任务是在等你决定的那个：它留在 需要你处理，因为看不见的决定等于漏掉的决定。对话区去掉列出派发 Run 的 产物 列表；每个回合保留回复与一行"依据 / 查看审计"，所有 Run 仍可在 设置 → 审计与轨迹 打开。
+
+### Dev mode and the resident daemon no longer run two sidecars on one clone home
+
+`npm run desktop:dev` used to kill the launchd-supervised daemon; `KeepAlive` restarted it immediately, so the dev app's own sidecar and the resident daemon wrote the same journal, turn ledger and endpoint. When the dev sidecar exited it deleted the endpoint the other process still served, and a window opened at that moment showed "launchd 没有在 60 秒内发布端点" until the daemon republished. The dev driver now boots `ai.clone.companion` out for its session and restores it on exit, and a companion takes a per-home lock (`companion-runtime.lock`) before hydrating the journal: a second sidecar exits with the owner's pid instead of starting. `test/companion-singleton.test.ts` covers the refusal and stale-lock reclamation; the driver's bootout/bootstrap contract is pinned in `test/desktop-shell.test.ts`.
+
+`npm run desktop:dev` 过去会杀掉 launchd 托管的守护；`KeepAlive` 立刻把它重启，于是开发 App 自己的 sidecar 与常驻守护同写一本 Journal、同一份回合台账与端点。开发 sidecar 退出时会删除另一个进程仍在服务的端点，此时打开的窗口会一直显示"launchd 没有在 60 秒内发布端点"，直到守护重新发布。开发驱动现在在会话期间把 `ai.clone.companion` bootout，退出时恢复；companion 在重放 Journal 之前取得按 home 的锁（`companion-runtime.lock`）：第二个 sidecar 会带着属主 pid 退出而不是启动。`test/companion-singleton.test.ts` 覆盖拒绝与陈旧锁回收；驱动的 bootout/bootstrap 契约钉在 `test/desktop-shell.test.ts`。
 
 ### A failed turn stays visible in the sidebar while its task runs
 

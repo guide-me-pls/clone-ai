@@ -38,6 +38,7 @@ import {
   persistCompanionEndpoint,
   persistCompanionToken,
 } from "./companion-auth.ts";
+import { acquireCompanionInstanceLock } from "./companion-instance.ts";
 import { MemoryGovernance } from "./memory/memory-governance.ts";
 import { ImprovementService } from "./improvement/improvement-service.ts";
 import { MAX_TOTAL_DOCUMENT_CHARACTERS, parseAttachments, type DocumentAttachment } from "./main-agent/attachments.ts";
@@ -403,6 +404,14 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
   });
   await prepareCloneHome(paths);
+  // One runtime per clone home: the lock is taken before the journal is
+  // hydrated, so a second sidecar is refused before it can race transitions,
+  // claim the turn ledger or overwrite the endpoint. A dead owner is reclaimed,
+  // so a crash does not need a manual cleanup.
+  // 每个 clone home 只跑一个运行时：锁在重放 Journal 之前取得，第二个 sidecar 因此在
+  // 竞态状态转换、声明回合台账或覆盖端点之前就被拒绝。死掉的属主会被回收，崩溃无需手工清理。
+  const instanceLock = await acquireCompanionInstanceLock(paths.dataDirectory);
+  try {
   // Copying is additive and never overwrites a file the owner already has in
   // the new home, so an interrupted upgrade can simply be run again.
   // 复制只做增量、绝不覆盖新目录中已存在的文件，因此升级中断后可以直接重跑。
@@ -803,6 +812,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     // directory after close() resolves is a corrupted journal.
     // 关闭要等待队列：close() 返回后仍在往数据目录写入的消费者，意味着损坏的 Journal。
     close: async () => {
+      try {
       clearInterval(maintenance);
       if (reportTimer !== undefined) clearInterval(reportTimer);
       // A pass waiting for the extraction lock must not hold shutdown: abort
@@ -830,8 +840,18 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       // 最后释放 Journal：上面的队列与记忆治理可能仍在收尾写入，在它们下面关掉数据库
       // 会丢记录或让关停失败。
       assembly.close();
+      } finally {
+        // Release the home last, after the endpoint and the journal. A successor
+        // that starts after this point must see a fully closed runtime.
+        // 最后释放 home，在端点与 Journal 之后。此后启动的继任者必须看到一个完全关闭的运行时。
+        await instanceLock.release();
+      }
     },
   };
+  } catch (error: unknown) {
+    await instanceLock.release();
+    throw error;
+  }
 }
 
 /**
