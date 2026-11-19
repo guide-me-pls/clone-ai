@@ -45,7 +45,7 @@ import { EvidenceVerifier } from "../core/verification.ts";
 import { AuthorityPolicyEngine } from "../authority/policy-engine.ts";
 import type { AuthorityConfig } from "../authority/standing-policy-store.ts";
 import { summarizeAudits, type RunAuditRecord } from "../audit/run-audit.ts";
-import { isTaskRestatement } from "../memory/memory-hygiene.ts";
+import { isTaskRestatement, isUngroundedFailureLesson } from "../memory/memory-hygiene.ts";
 
 export const GATE_SCHEMA_VERSION = 1;
 
@@ -93,7 +93,13 @@ export interface MemoryCase {
   summary: string;
   /** Suggested classification; omitted means an untyped legacy candidate. 建议分类；省略表示无类型的遗留候选。 */
   type?: MemoryType;
-  /** "drop" when the summary restates the task; "keep" when it is durable knowledge. 摘要复述任务时为 drop，属于持久知识时为 keep。 */
+  /** Run outcome; "failed" applies the failure-grounding rule. Run 结局；failed 会应用失败引用规则。 */
+  outcome?: "completed" | "failed";
+  /** Evidence summaries on the run; ids are derived as ev-1, ev-2, … 运行中的 Evidence 摘要；id 推导为 ev-1、ev-2…… */
+  evidence?: string[];
+  /** 1-based indexes of the evidence the candidate cites; omitted means all of it. 候选引用的 Evidence 下标（从 1 开始）；省略表示全部。 */
+  citedEvidence?: number[];
+  /** "drop" when the summary is refused; "keep" when it is durable knowledge. 摘要被拒绝时为 drop，属于持久知识时为 keep。 */
   expected: "drop" | "keep";
   note?: string;
 }
@@ -419,9 +425,17 @@ export function runMemorySuite(cases: readonly MemoryCase[]): { summary: MemoryS
   let durableDropped = 0;
   let correct = 0;
   for (const testCase of cases) {
-    const actual = isTaskRestatement({ summary: testCase.summary, type: testCase.type }, testCase.objective)
-      ? "drop"
-      : "keep";
+    const evidence = (testCase.evidence ?? []).map((summary, index) => ({ id: `ev-${index + 1}`, summary }));
+    const cited = testCase.citedEvidence === undefined
+      ? evidence.map((item) => item.id)
+      : testCase.citedEvidence.map((index) => `ev-${index}`);
+    const refused = isTaskRestatement({ summary: testCase.summary, type: testCase.type }, testCase.objective)
+      || isUngroundedFailureLesson(
+        { type: testCase.type, sourceEvidenceIds: cited },
+        testCase.outcome,
+        evidence,
+      );
+    const actual = refused ? "drop" : "keep";
     const ok = actual === testCase.expected;
     if (ok) correct += 1;
     else if (actual === "keep") restatementsProposed += 1;

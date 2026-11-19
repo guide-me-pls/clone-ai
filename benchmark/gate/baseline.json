@@ -77,6 +77,11 @@
     "memory/short-objective-is-not-containment": "keep",
     "memory/paraphrased-objective": "keep",
     "memory/evidence-restatement": "keep",
-    "memory/conversation-placeholder": "drop"
+    "memory/conversation-placeholder": "drop",
+    "memory/failed-lesson-without-failure-evidence": "drop",
+    "memory/failed-lesson-citing-failure": "keep",
+    "memory/failed-lesson-citing-only-success": "drop",
+    "memory/failed-run-preference-not-a-lesson": "keep",
+    "memory/completed-run-lesson-not-gated": "keep"
   }
 }

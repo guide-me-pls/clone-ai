@@ -117,6 +117,21 @@ function assertMemoryCases(cases: readonly MemoryCase[]): void {
     if (testCase.type !== undefined && !knownTypes.has(testCase.type)) {
       fail(`Memory case ${testCase.id}: unknown candidate type ${String(testCase.type)}.`);
     }
+    if (testCase.outcome !== undefined && testCase.outcome !== "completed" && testCase.outcome !== "failed") {
+      fail(`Memory case ${testCase.id}: outcome must be "completed" or "failed".`);
+    }
+    if (testCase.evidence !== undefined && (!Array.isArray(testCase.evidence)
+      || testCase.evidence.some((summary) => typeof summary !== "string"))) {
+      fail(`Memory case ${testCase.id}: evidence must be an array of strings.`);
+    }
+    if (testCase.citedEvidence !== undefined) {
+      const evidence = testCase.evidence ?? [];
+      if (!Array.isArray(testCase.citedEvidence) || testCase.citedEvidence.some((index) => (
+        !Number.isInteger(index) || index < 1 || index > evidence.length
+      ))) {
+        fail(`Memory case ${testCase.id}: citedEvidence must be 1-based indexes into evidence.`);
+      }
+    }
   }
 }
 

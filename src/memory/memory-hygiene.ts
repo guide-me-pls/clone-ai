@@ -6,7 +6,7 @@
  */
 import { createHash } from "node:crypto";
 
-import type { MemoryCandidate } from "../core/contracts.ts";
+import type { Evidence, MemoryCandidate } from "../core/contracts.ts";
 
 export type MemoryPiiKind = "email" | "phone" | "private_key" | "token" | "payment_card";
 
@@ -74,6 +74,49 @@ export function redactMemoryPii(text: string): { text: string; kinds: MemoryPiiK
     next = next.replace(pattern, rule.replace);
   }
   return { text: next, kinds };
+}
+
+/**
+ * Whether an evidence summary records something that went wrong. The mining
+ * prompt marks these lines; the pipeline refuses a failed run's lesson that
+ * cites none of them.
+ *
+ * 一条 Evidence 摘要是否记录了出错。提炼 Prompt 会标记这些行；流水线拒绝没有引用其中
+ * 任何一条的失败任务教训。
+ */
+const FAILURE_SIGNAL = /\b(?:fail(?:ed|ure|s)?|errors?|exceptions?|timeouts?|timed out|enoent|eacces|denied|refused|not found|missing|regression|broken)\b|失败|报错|异常|超时|被拒绝|拒绝访问|不存在|找不到|未通过|回归|中断|无法|错误[:：]/iu;
+
+export function evidenceRecordsFailure(summary: string): boolean {
+  return FAILURE_SIGNAL.test(summary);
+}
+
+/**
+ * Whether a candidate is a lesson about a failed run that does not cite the
+ * failure it claims to explain.
+ *
+ * The failed-run branch asks the miner for a procedure grounded in what went
+ * wrong. When the run's evidence only shows successful work (a directory
+ * listing, a produced artifact), the model has no cause to cite and instead
+ * restates the work order. A lesson is therefore accepted only when it cites
+ * an evidence item that records a failure; with no such evidence at all, the
+ * run yields no lesson rather than a confident guess.
+ *
+ * 判断候选是否是"声称解释失败、却没有引用失败"的失败任务教训。
+ *
+ * 失败分支要求提炼器基于出错事实给出 procedure。当 Run 的 Evidence 只显示成功的工作
+ * （一次目录列表、一个已产出的工件）时，模型没有可引用的原因，就把工作单重说一遍。因此
+ * 只有当教训引用了一条记录失败的 Evidence 时才接受；完全没有这类 Evidence 时，这个 Run
+ * 不产出教训，而不是产出一个自信的猜测。
+ */
+export function isUngroundedFailureLesson(
+  candidate: Pick<MemoryCandidate, "type" | "sourceEvidenceIds">,
+  outcome: "completed" | "failed" | undefined,
+  evidence: ReadonlyArray<Pick<Evidence, "id" | "summary">>,
+): boolean {
+  if (outcome !== "failed" || candidate.type !== "procedure") return false;
+  const failureIds = new Set(evidence.filter((item) => evidenceRecordsFailure(item.summary)).map((item) => item.id));
+  if (failureIds.size === 0) return true;
+  return !candidate.sourceEvidenceIds.some((id) => failureIds.has(id));
 }
 
 /**

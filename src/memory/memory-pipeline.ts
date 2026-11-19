@@ -2,7 +2,7 @@ import type { Evidence, JournalEvent, MemoryCandidate, NewJournalEvent, Run, Tas
 import type { JournalStore } from "../core/journal.ts";
 import { workspaceExecutionLock, type WorkspaceLockOptions } from "../core/workspace-lock.ts";
 import { readForRun, readTypes } from "../core/journal-types.ts";
-import { isTaskRestatement, redactMemoryPii } from "./memory-hygiene.ts";
+import { isTaskRestatement, isUngroundedFailureLesson, redactMemoryPii } from "./memory-hygiene.ts";
 
 export interface PendingMemoryJob {
   run: Run;
@@ -135,10 +135,17 @@ export class MemoryPipeline {
         // remember, and a miner that echoes the objective has learned nothing.
         // The type guard keeps a typed preference/fact/decision/commitment:
         // the owner may have stated exactly what the task asked for.
+        // A failed run adds a second refusal: a procedure lesson that does not
+        // cite an evidence item recording the failure is a guess about the
+        // task, not a lesson from the run.
         // 只复述任务的候选在进入所有者审核列表前就被拒绝：“我被要求做什么”不是要记住的东西，
         // 复述目标的提炼器什么也没有学到。类型闸门会保留有类型的偏好/事实/决定/承诺：
-        // 所有者可能原样说出了任务要求的事。
-        const dropped = candidates.filter((candidate) => isTaskRestatement(candidate, job.task.objective));
+        // 所有者可能原样说出了任务要求的事。失败 Run 还有第二道拒绝：没有引用记录失败的
+        // Evidence 的 procedure 教训，只是对任务的猜测，不是从 Run 学到的教训。
+        const restated = candidates.filter((candidate) => isTaskRestatement(candidate, job.task.objective));
+        const ungrounded = candidates.filter((candidate) => !restated.includes(candidate)
+          && isUngroundedFailureLesson(candidate, job.outcome, job.evidence));
+        const dropped = [...restated, ...ungrounded];
         const droppedIds = new Set(dropped.map((candidate) => candidate.id));
         const durable = candidates.filter((candidate) => !droppedIds.has(candidate.id));
         const evidence = new Set(job.evidence.map((item) => item.id));
@@ -161,10 +168,12 @@ export class MemoryPipeline {
               // positive stays auditable instead of vanishing behind a count.
               // 被丢弃的文本经 PII 脱敏后写入 Journal，使假阳性可审计，而不是只剩一个计数。
               ...(dropped.length === 0 ? {} : {
-                droppedRestatements: dropped.length,
+                droppedRestatements: restated.length,
+                ...(ungrounded.length === 0 ? {} : { droppedUngroundedFailureLessons: ungrounded.length }),
                 droppedCandidates: dropped.map((candidate) => ({
                   id: candidate.id,
                   summary: redactMemoryPii(candidate.summary).text,
+                  reason: restated.includes(candidate) ? "restatement" : "ungrounded_failure_lesson",
                 })),
               }),
               outcome: job.outcome ?? "completed",

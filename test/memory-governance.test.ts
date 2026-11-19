@@ -86,6 +86,11 @@ test("promote writes the markdown file, the sqlite row, and the journal event", 
   // 正文文件真实存在且可读。
   const file = await import("node:fs/promises").then((fs) => fs.readFile(join(directory, "memory", `${entry.id}.md`), "utf8"));
   assert.match(file, /发布前必须完成风险评审/);
+  // The summary is the first body line; content carries provenance only. The
+  // file used to repeat the same sentence in both fields.
+  // 摘要是正文首行；正文只携带来源。此前两个字段会把同一句话各写一遍。
+  assert.equal(file.split("发布前必须完成风险评审").length - 1, 1);
+  assert.match(file, /Source: evidence:ev-1/);
 });
 
 test("promote refuses a candidate that matches an active memory", async (t) => {

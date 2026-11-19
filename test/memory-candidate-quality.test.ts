@@ -170,6 +170,67 @@ test("the pipeline drops a miner's restatement and keeps a durable statement", a
   assert.match(payload.droppedCandidates[0]!.summary, /候选流程/);
 });
 
+test("a failed run's lesson must cite evidence of the failure", async (t) => {
+  const { journal, run, task, evidence } = await setup(t);
+  const failure: Evidence = {
+    ...evidence,
+    id: "ev-failure",
+    summary: "npm test failed: 2 assertions in test/release.test.ts",
+  };
+  await journal.append({ type: "evidence.recorded", runId: run.id, taskId: task.id, payload: failure });
+  const worker: MemoryWorker = {
+    async extract() {
+      return [
+        // Cites only the successful observation: no cause to support the lesson.
+        // 只引用成功的观察：没有可支撑教训的原因。
+        candidate("c-ungrounded", "下次应先直接读取 README.md，而不是列出目录。", { sourceEvidenceIds: ["ev-1"] }),
+        // A failure line exists, but this candidate cites the successful line.
+        // 失败行存在，但这条候选引用的是成功行。
+        candidate("c-cites-success", DURABLE, { sourceEvidenceIds: ["ev-1"] }),
+        candidate("c-grounded", DURABLE, { sourceEvidenceIds: ["ev-failure"] }),
+        // The rule gates lessons, not a durable preference the owner stated.
+        // 规则只约束教训，不约束所有者声明的持久偏好。
+        candidate("c-preference", "以后所有报告默认使用简体中文。", { type: "preference", sourceEvidenceIds: ["ev-1"] }),
+      ];
+    },
+  };
+  const pipeline = new MemoryPipeline(journal, worker);
+  await pipeline.request(run, task, [evidence, failure], "failed");
+
+  const proposed = await pipeline.processNext();
+  assert.deepEqual(proposed.map((item) => item.id), ["c-grounded", "c-preference"]);
+  const payload = (await journal.list()).find((event) => event.type === "memory.candidate.extracted")?.payload as {
+    count: number;
+    droppedUngroundedFailureLessons: number;
+    droppedCandidates: Array<{ id: string; reason: string }>;
+  };
+  assert.equal(payload.count, 2);
+  assert.equal(payload.droppedUngroundedFailureLessons, 2);
+  assert.deepEqual(payload.droppedCandidates.map((item) => [item.id, item.reason]), [
+    ["c-ungrounded", "ungrounded_failure_lesson"],
+    ["c-cites-success", "ungrounded_failure_lesson"],
+  ]);
+});
+
+test("a failed run with no failing evidence yields no lesson", async (t) => {
+  const { journal, run, task, evidence } = await setup(t);
+  const worker: MemoryWorker = {
+    async extract() {
+      return [candidate("c-guess", "下次应先确认文件存在。", { sourceEvidenceIds: ["ev-1"] })];
+    },
+  };
+  const pipeline = new MemoryPipeline(journal, worker);
+  await pipeline.request(run, task, [evidence], "failed");
+
+  assert.deepEqual(await pipeline.processNext(), []);
+  const payload = (await journal.list()).find((event) => event.type === "memory.candidate.extracted")?.payload as {
+    count: number;
+    droppedUngroundedFailureLessons: number;
+  };
+  assert.equal(payload.count, 0);
+  assert.equal(payload.droppedUngroundedFailureLessons, 1);
+});
+
 test("mining mode all selects the real miner instead of the no-op default", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-candidate-mode-"));
   const previous = {

@@ -1,0 +1,80 @@
+{
+  "case": "recorded-2026-11-19-failed-readme",
+  "runId": "16494863-1fde-4e58-bb3d-45b432fc3270",
+  "evidenceIds": [
+    "faebe5fb-b9a1-4764-a83f-c9de5f55e3c1"
+  ],
+  "command": "node --experimental-strip-types benchmark/memory-failure-lesson.ts --samples 3",
+  "provider": "native",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "samples": 3,
+  "metrics": {
+    "failedKeptLessons": 0,
+    "failedDroppedLessons": 0,
+    "failedKeptPreferences": 3,
+    "completedKeptLessons": 0,
+    "completedKeptPreferences": 3
+  },
+  "results": [
+    {
+      "outcome": "failed",
+      "candidates": [
+        {
+          "type": "preference",
+          "summary": "用户要求以后所有报告默认使用简体中文。",
+          "droppedBy": null
+        }
+      ]
+    },
+    {
+      "outcome": "failed",
+      "candidates": [
+        {
+          "type": "preference",
+          "summary": "用户要求以后所有报告默认使用简体中文。",
+          "droppedBy": null
+        }
+      ]
+    },
+    {
+      "outcome": "failed",
+      "candidates": [
+        {
+          "type": "preference",
+          "summary": "用户要求以后所有报告默认使用简体中文。",
+          "droppedBy": null
+        }
+      ]
+    },
+    {
+      "outcome": "completed",
+      "candidates": [
+        {
+          "type": "preference",
+          "summary": "用户要求以后所有报告默认使用简体中文。",
+          "droppedBy": null
+        }
+      ]
+    },
+    {
+      "outcome": "completed",
+      "candidates": [
+        {
+          "type": "preference",
+          "summary": "用户要求以后所有报告默认使用简体中文。",
+          "droppedBy": null
+        }
+      ]
+    },
+    {
+      "outcome": "completed",
+      "candidates": [
+        {
+          "type": "preference",
+          "summary": "用户偏好以后所有报告默认使用简体中文。",
+          "droppedBy": null
+        }
+      ]
+    }
+  ]
+}

@@ -54,6 +54,27 @@ test("the mining prompt lists evidence as the only input facts", () => {
   assert.match(prompt, /out\/candidates.json/);
 });
 
+test("a failed run marks failing evidence and refuses lessons without one", () => {
+  const job = miningJob();
+  const failed: PendingMemoryJob = {
+    ...job,
+    outcome: "failed",
+    evidence: [
+      { ...job.evidence[0]!, summary: "read_file failed: ENOENT: README.md does not exist." },
+      { ...job.evidence[1]!, summary: "list_directory read /Users/user/.clone" },
+    ],
+  };
+  const prompt = miningPrompt(failed);
+  assert.match(prompt, /ev-1: \[artifact\] \[failure\]/);
+  assert.doesNotMatch(prompt, /ev-2: \[artifact\] \[failure\]/);
+  assert.match(prompt, /The lesson must cite at least one \[failure\] line/);
+  assert.match(prompt, /If no line is marked \[failure\], return \[\]/);
+  assert.match(prompt, /Never restate or paraphrase the task's work order/);
+  // A completed run has no failure branch at all.
+  // 已完成的运行根本没有失败分支。
+  assert.doesNotMatch(miningPrompt(job), /\[failure\]/);
+});
+
 test("a mining worker extracts and validates real candidates", async (t) => {
   const candidates = await mine(t, {
     json: JSON.stringify([

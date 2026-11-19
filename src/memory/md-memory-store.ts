@@ -854,6 +854,12 @@ function hashOptional(value: string | undefined): string | null {
 
 /** Renders an entry as a front-matter markdown file. 把条目渲染成带 front matter 的 Markdown 文件。 */
 export function renderMemoryFile(entry: MemoryEntry): string {
+  // The summary is always the first body line; a content identical to it is
+  // not written twice. A promoted memory's content is its provenance line, so
+  // the file reads summary → source, not summary → summary → source.
+  // 摘要始终是正文首行；与摘要相同的正文不会写第二遍。被提升记忆的正文是来源行，因此
+  // 文件读起来是“摘要 → 来源”，而不是“摘要 → 摘要 → 来源”。
+  const body = entry.content.trim();
   return [
     "---",
     `id: ${entry.id}`,
@@ -869,8 +875,7 @@ export function renderMemoryFile(entry: MemoryEntry): string {
     `accessCount: ${entry.accessCount}`,
     "---",
     entry.summary,
-    "",
-    entry.content,
+    ...(body.length === 0 || body === entry.summary.trim() ? [] : ["", body]),
   ].join("\n");
 }
 
