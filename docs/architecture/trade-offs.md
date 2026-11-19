@@ -725,6 +725,55 @@ named level per block. If the request bubble plus the answer makes each exchange
 too tall, collapse the context steps behind a disclosure rather than shrinking
 the request.
 
+## 2026-11-19 — A video attachment's frame comes from AVFoundation
+
+**Decision.** For a video chosen through the native picker, the shell extracts
+one 1280 px JPEG at 1 s with `AVAssetImageGenerator` on a background queue and
+hands it to the page through `window.CloneNative.onVideoFrame`, keyed by file
+name and size. The page's `videoFrame` uses that frame first;
+it falls back to the existing HTML `<video>` path for drag/drop or paste, when
+native extraction fails, or after a 1.5 s wait. The model still receives one
+JPEG image, and the attachment payload shape is unchanged.
+
+**Alternatives rejected.**
+
+- *Keep the HTML `<video>` path.* WKWebView took 1.07–1.28 s for the same 8 MB,
+  30 s, 1080p MP4 across loadeddata/metadata, seek target, no-seek and `toBlob`
+  variants; the JPEG encode was only 10–19 ms, so media loading and frame decode
+  were the cost. The native extractor took 152 ms first and 13–14 ms warm.
+- *Defer the frame extraction to send.* The same ~1.1 s wait simply moves to the
+  send path; the model still needs the frame.
+- *Decode the frame with WebCodecs in JavaScript.* It would require an MP4
+  demuxer and sample-table handling for a single frame; AVFoundation already
+  owns that pipeline.
+- *Use the native path for drag/drop and clipboard videos too.* Those `File`
+  objects have no path the shell can open; the WebView path remains their
+  fallback.
+- *Lower the frame resolution or JPEG quality.* The encode is 10–19 ms; the
+  resolution is not the bottleneck.
+
+**Evidence.** A Swift/WKWebView harness measured the same 8 MB/30 s/1080p file:
+HTML video 1,065–1,277 ms attach; variants 1,112–1,222 ms; encode 10–19 ms.
+`AVAssetImageGenerator` with `maximumSize` 1280, preferred transform and JPEG
+0.86 measured **152 ms first / 13–14 ms warm**, producing a 1280×720 frame of
+164,786 bytes. The native frame is a 1 s still, like the HTML path's seek
+target.
+
+**What it costs.** Native code and a small JS bridge; the frame can differ
+slightly from WebKit's (rotation is applied by AVFoundation; HDR and unusual
+codecs may fail and fall back). Drag/drop or pasted videos still take the
+WebView path. The JS waits up to 1.5 s for the native frame before falling back,
+so a failed extraction does not block indefinitely. Keys use name/size/mtime;
+two different files with all three equal would share a frame (rare). The frame
+travels through `evaluateJavaScript` as a one-time data URL.
+
+**Reversal condition.** If AVFoundation frames are rotated, tinted, or
+unsupported for common owner videos, keep the native path only for formats it
+handles and fall back for the rest; if the HTML path becomes fast, remove the
+bridge. If the 1 s timestamp is wrong for very short videos, clamp it from the
+asset duration before extraction. If the bridge's key matching proves fragile,
+pass the selected URLs to the page explicitly instead of matching by metadata.
+
 ## 2026-11-19 — Audit usage enrichment is cached and bounded
 
 **Decision.** The audit list caches the Magpie gateway's usage rows for 15 s per

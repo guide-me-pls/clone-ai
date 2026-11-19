@@ -77,7 +77,7 @@ class SlowFileReader {
   }
 }
 
-function harness(delay = 0, { nativeBase64 = true } = {}) {
+function harness(delay = 0, { nativeBase64 = true, nativeVideoFrame }: { nativeBase64?: boolean; nativeVideoFrame?: string } = {}) {
   const counts: Counts = { arrayBuffer: 0, text: 0, reads: [], maxActive: 0 };
   SlowFileReader.delay = delay;
   SlowFileReader.active = 0;
@@ -113,6 +113,7 @@ return { addAttachmentFiles, attachmentsForRequest, prepareAttachment, releaseAt
     FileReader: SlowFileReader,
     performance: { now: () => Date.now() },
     ...(nativeBase64 ? {} : { Uint8Array: NoNativeBase64 }),
+    ...(nativeVideoFrame === undefined ? {} : { window: { CloneNative: { videoFrame: async () => nativeVideoFrame } } }),
   }) as {
     addAttachmentFiles: (files: File[]) => Promise<number>;
     attachmentsForRequest: (items: Array<Record<string, unknown>>) => Promise<{ ok: boolean; attachments?: unknown[]; error?: string }>;
@@ -237,6 +238,16 @@ test("the FileReader fallback encodes when the runtime has no native base64", as
   assert.ok(counts.reads.some((read) => read.mode === "data"), "the fallback must read as a data URL");
   const parsed = parseAttachments(request.attachments);
   assert.equal(parsed.ok, true);
+});
+
+test("a native video frame is used when the shell provides one", async () => {
+  const dataUrl = "data:image/jpeg;base64,AAAA";
+  const { api } = harness(0, { nativeVideoFrame: dataUrl });
+  const file = new File([new Uint8Array(8)], "video.mp4", { type: "video/mp4" });
+  const outcome = await api.prepareAttachment(file);
+  assert.equal(outcome.item?.kind, "image");
+  assert.equal(outcome.item?.data, "AAAA");
+  assert.equal(outcome.item?.previewUrl, dataUrl);
 });
 
 test("a read failure keeps the attachment and returns the file name", async () => {

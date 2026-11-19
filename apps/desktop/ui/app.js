@@ -292,7 +292,30 @@ function looksBinaryText(text) {
   return /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(text);
 }
 
+/**
+ * The native shell extracts a frame with AVFoundation for videos chosen through
+ * its picker; that is ~150 ms instead of the WebView media pipeline's ~1.1 s.
+ * Drag/drop, paste, a missing bridge or a failed extraction fall back to the
+ * HTML video path below.
+ * 原生外壳对通过其选择器选中的视频用 AVFoundation 抽帧，约 150ms，而 WebView 媒体管线约
+ * 1.1s。拖放、粘贴、缺少桥接或抽取失败时，回退到下面的 HTML video 路径。
+ */
+async function nativeVideoFrame(file) {
+  const native = typeof window === "object" ? window.CloneNative : undefined;
+  if (typeof native?.videoFrame !== "function") return undefined;
+  try {
+    const dataUrl = await native.videoFrame(`${file.name}:${file.size}`);
+    return typeof dataUrl === "string" && dataUrl.startsWith("data:image/") ? dataUrl : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function videoFrame(file) {
+  const native = await nativeVideoFrame(file);
+  if (native !== undefined) {
+    return { kind: "image", name: `${file.name}（视频帧）`, mimeType: "image/jpeg", data: native.slice(native.indexOf(",") + 1), previewUrl: native };
+  }
   const url = URL.createObjectURL(file);
   const video = document.createElement("video");
   video.muted = true;

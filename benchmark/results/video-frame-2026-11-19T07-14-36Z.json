@@ -1,0 +1,44 @@
+{
+  "date" : "2026-11-19T07:14:37Z",
+  "kind" : "video-frame-benchmark",
+  "machine" : {
+    "cores" : 18,
+    "os" : "Version 27.0.1 (Build 26A434)",
+    "platform" : "macOS"
+  },
+  "measurements" : [
+    {
+      "height" : 720,
+      "jpegBytes" : 164786,
+      "ms" : 160,
+      "trial" : 0,
+      "width" : 1280
+    },
+    {
+      "height" : 720,
+      "jpegBytes" : 164786,
+      "ms" : 13,
+      "trial" : 1,
+      "width" : 1280
+    },
+    {
+      "height" : 720,
+      "jpegBytes" : 164786,
+      "ms" : 13,
+      "trial" : 2,
+      "width" : 1280
+    }
+  ],
+  "notes" : [
+    "The first trial includes AVFoundation\/asset cold start; later trials reuse the media cache.",
+    "The WKWebView <video> path measured 1,065–1,277 ms for the same file; its JPEG encode was only 10–19 ms."
+  ],
+  "parameters" : {
+    "jpegQuality" : 0.85999999999999999,
+    "maximumSize" : 1280,
+    "timestampSeconds" : 1,
+    "trials" : 3,
+    "video" : "\/Users\/user\/study\/clone-ai\/eval-runs\/2026-11-17-forbidden-city\/verify\/f\/video.mp4"
+  },
+  "provider" : "none"
+}

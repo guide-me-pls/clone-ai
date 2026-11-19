@@ -79,9 +79,16 @@ test("the native desktop app is the only product entry", async () => {
   // after the page is ready so the first click does not pay it.
   // 附件选择器是应用级模态而非 sheet：sheet 动画在文件视图出现前约花 270ms。
   // 页面就绪后预热冷构造，使第一次点击不再支付这份成本。
-  assert.match(macShell, /panel\.begin \{ response in/);
+  assert.match(macShell, /panel\.begin \{/);
   assert.match(macShell, /private func warmAttachmentPanel\(\)/);
   assert.match(macShell, /attachmentPanelWarmed = true/);
+  // A video chosen through the picker is decoded by AVFoundation and handed to
+  // the page; the page falls back to HTML video when the bridge is absent.
+  // 通过选择器选中的视频由 AVFoundation 解码并交给页面；缺少桥接时页面回退到 HTML video。
+  assert.match(macShell, /AVAssetImageGenerator/);
+  assert.match(macShell, /deliverVideoFrames/);
+  assert.match(macShell, /onVideoFrame/);
+  assert.match(appSource, /nativeVideoFrame/);
   assert.match(macShell, /CLONE_AI_DOCUMENT_TOOL/);
   assert.match(buildScript, /document-tool\.swift/);
   assert.match(buildScript, /CloneAIDocumentTool/);

@@ -344,6 +344,65 @@ file keeps every attempt, including the ones that did not work.
   sidebar becomes noisy, group conversations with their tasks; if learned
   folders are noisy, add a forget action and a two-mention threshold."
 
+### 2026-11-19 — Video frames come from AVFoundation, not the WebView media pipeline
+
+- **Goal / hypothesis:** a video was the slowest remaining attachment. The
+  WebView's `<video>` element took ~1.1 s to load and seek an 8 MB/30 s/1080p
+  MP4; the native AVFoundation image generator can read the local file directly
+  and should produce the same 1280 px frame much faster.
+- **Trade-off:** [A video attachment's frame comes from AVFoundation](../architecture/trade-offs.md#2026-11-19--a-video-attachments-frame-comes-from-avfoundation).
+- **Change:** `apps/desktop/macos/main.swift` — imports AVFoundation, adds a
+  concurrent `videoFrameQueue`, extracts a 1280 px JPEG at 1 s (0.1 s fallback)
+  with `AVAssetImageGenerator` for videos chosen through the native picker,
+  and hands it to the page through `window.CloneNative.onVideoFrame` keyed by
+  `name:size`; `window.CloneNative.videoFrame` waits up to 1.5 s. `apps/desktop/ui/app.js`
+  adds `nativeVideoFrame(file)` and tries it before the HTML `<video>` path;
+  drag/drop, paste, a missing bridge or a failed extraction still use the
+  WebView path. `test/attachment-client.test.ts` adds the native-frame case;
+  `test/desktop-shell.test.ts` pins the Swift bridge; `benchmark/video-frame.swift`
+  is the rerunnable native measurement.
+- **Eval:** `node --experimental-strip-types --test test/attachment-client.test.ts`
+  **13/13**; `swiftc -typecheck` on `main.swift` passes; full suite
+  **916/916** at the time of this run; `npm run typecheck` and `npm run gate`
+  pass with the baseline unchanged. Native benchmark on the 8.2 MB, 30 s,
+  1080p fixture: **160 ms first / 13 ms warm**, 1280×720, 164,786 bytes. The
+  WKWebView `<video>` path measured 1,065–1,277 ms for the same file; all
+  load/seek/`toBlob` variants were 1,112–1,222 ms and the JPEG encode only
+  10–19 ms.
+- **Benchmark run:** `swiftc -O -target arm64-apple-macos13.5
+  benchmark/video-frame.swift -framework AppKit -framework AVFoundation -o
+  /tmp/video-frame-bench` then
+  `/tmp/video-frame-bench > benchmark/results/video-frame-2026-11-19T07-14-36Z.json`;
+  no provider or model; parameters: 1 s timestamp, `maximumSize` 1280, JPEG
+  0.86, three trials; machine: Apple M5 Pro, 18 cores, macOS 27.0.1; result
+  path above.
+- **Execution chain:** measured the HTML `<video>` path in a Swift/WKWebView
+  harness across loadeddata/metadata, 1 s/0.1 s/no seek and `toBlob`; all were
+  ~1.1 s, so the media pipeline load—not the encode—was the cost. Measured
+  `AVAssetImageGenerator` on the same file at 160/13/13 ms. Implemented the
+  native bridge and the JS fallback, added the native-frame eval and structural
+  checks, compiled the Swift shell, and ran the focused tests, typecheck and
+  gate. The page may receive the frame before or after `videoFrame` is called;
+  both paths are covered by the frame map and waiter. Drag/drop and pasted
+  videos keep the WebView path because they have no native file URL.
+- **Pros:** the common picker flow for a video drops from ~1.1 s to ~0.16 s
+  cold / ~0.013 s warm while keeping the same 1280×720 JPEG and attachment
+  payload; the fallback preserves every other video source; the bridge is
+  small and the frame key is stable for the selected file.
+- **Cons / next time:** native frames can differ slightly from WebKit's
+  (AVFoundation applies rotation; HDR or unusual codecs may fail and fall back);
+  drag/drop/paste videos still take ~1.1 s; two different videos with the same
+  name and size would share a frame; the 1 s timestamp may not suit very short
+  clips (0.1 s fallback). The frame travels as a one-time data URL through
+  `evaluateJavaScript`. Next time: test a real HDR/rotated phone video and a
+  drag/drop video in the rebuilt app.
+- **Reversal condition:** if AVFoundation frames are rotated, tinted, or
+  unsupported for common owner videos, keep the native path only for formats it
+  handles and fall back for the rest; if the HTML path becomes fast, remove the
+  bridge. If the 1 s timestamp is wrong for very short videos, clamp it from the
+  asset duration before extraction. If the bridge's key matching proves fragile,
+  pass the selected URLs to the page explicitly instead of matching by metadata.
+
 ### 2026-11-19 — The audit view stops waiting on the gateway's usage history
 
 - **Goal / hypothesis:** opening 设置 → 审计与轨迹 felt slow. The audit list joins

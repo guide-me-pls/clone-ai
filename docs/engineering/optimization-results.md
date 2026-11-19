@@ -74,6 +74,23 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   [trade-off: folders are learned](../architecture/trade-offs.md#2026-11-19--folders-are-learned-from-use-not-configured-todays-changes-come-from-the-machine);
   [execution chain](optimizations.md#2026-11-19--a-new-request-stays-visible-a-turn-reads-as-an-exchange-and-todays-work-comes-from-learned-folders).
 
+## 2026-11-19 — A video attachment's frame comes from AVFoundation
+
+- **Claim:** a video chosen through the native picker now gets its 1280×720
+  JPEG frame from `AVAssetImageGenerator` instead of the WebView media pipeline,
+  dropping the frame wait from ~1.1 s to ~0.16 s cold / ~0.013 s warm. Drag/drop,
+  paste and extraction failures still fall back to the HTML `<video>` path.
+- **Evidence:** `benchmark/video-frame.swift` on the 8.2 MB/30 s/1080p fixture:
+  **160 ms first, 13 ms warm**, 164,786-byte JPEG;
+  [`benchmark/results/video-frame-2026-11-19T07-14-36Z.json`](../../benchmark/results/video-frame-2026-11-19T07-14-36Z.json).
+  The WKWebView `<video>` path measured 1,065–1,277 ms for the same file, with
+  all seek/metadata/`toBlob` variants at 1,112–1,222 ms and encode at 10–19 ms.
+  `test/attachment-client.test.ts` **13/13** (including the native-frame case);
+  the Swift shell typechecks; full suite **916/916** at the time of this run;
+  typecheck and gate pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-video-attachments-frame-comes-from-avfoundation),
+  [execution chain](optimizations.md#2026-11-19--video-frames-come-from-avfoundation-not-the-webview-media-pipeline).
+
 ## 2026-11-19 — The audit view renders without waiting for gateway usage
 
 - **Claim:** the audit list caches Magpie usage rows for 15 s and bounds the
