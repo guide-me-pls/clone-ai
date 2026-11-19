@@ -6,6 +6,53 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — A failed trace carries the step's instructions
+
+**Decision.** `FailedTrace.plan` now carries each step's `instructions`, redacted
+`acceptanceCriteria`, `requiredCapabilities`, `scopes` and `subagents` count, read
+from the run's `plan.created` event. The repair lane can reproduce a plan- or
+verification-level failure from the trace alone instead of the working agent
+restating the step in a decision brief.
+
+**Why it won.** The verifier repair's first lane run failed the
+`regression-missing` gate because `FailedTrace.plan` held only
+`id/title/risk/agentId`; the worker could not obtain `plan[0].instructions` and
+stopped without writing a case. The real instructions were in the journal and
+had to be pasted into the decision brief for the retry. A trace that cannot
+reproduce the plan is not the self-contained hand-off its module claims to be.
+
+**Alternatives rejected.**
+
+- *Add only `instructions`.* Acceptance criteria and capabilities are what the
+  regression test asserts against and what the worker needs to choose the
+  production file; carrying them together costs little.
+- *Point the lane at the owner's journal.* The lane runs in an isolated clone
+  home and a worktree; the owner's journal is not its input, and a path into it
+  would break the isolation the lane is built on.
+- *Re-export the trace at lane time from the live journal.* The trace is the
+  evidence of what failed; regenerating it can see a moved-on journal and a
+  different plan.
+- *Keep the reduced plan and require a decision brief.* That is the workaround
+  this replaces; it makes every plan-level repair depend on a human/agent
+  reading the journal.
+
+**What was given up.** Traces grow: the real step instructions are about 1 KB,
+each string is capped by the existing redaction (1,500 characters), and a wide
+plan carries up to eight steps. Redaction and the cap can lose detail the
+worker would otherwise read. The trace remains a copy, not the journal.
+
+**Evidence.** The verifier lane's first run (`8464295d`) failed
+`regression-missing` with "the staged trace's plan[0].instructions is missing";
+the retry succeeded only after the brief pasted journal sequence 1818. The new
+test in `test/failed-traces.test.ts` adds instructions, criteria, capabilities
+and scopes to the fixture and asserts the trace carries them redacted.
+
+**Reversal condition.** If traces become too large to stage or carry, export
+only the steps the failure names, or a sanitized plan plus a plan id the lane
+can read from a copied fixture. If redaction cannot keep up with the added
+fields, drop `scopes` before dropping instructions.
+
+
 ## 2026-11-19 — A first-send failure shows the owner-facing reason, not the raw loop error
 
 **Decision.** The SSE `failed` event carries `errorSummary` and `errorGuidance`

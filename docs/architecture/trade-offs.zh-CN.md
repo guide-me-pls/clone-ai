@@ -5,6 +5,40 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-19 —— 失败轨迹携带步骤 instructions
+
+**决定。** `FailedTrace.plan` 现在从 Run 的 `plan.created` 事件携带每个步骤的 `instructions`、
+脱敏后的 `acceptanceCriteria`、`requiredCapabilities`、`scopes` 与 `subagents` 数量。修复通道
+可以只凭轨迹复现计划层或验证层的失败，而不必让工作 Agent 在决定说明里重述步骤。
+
+**为什么这样更好。** 验证器修复的第一次通道运行在 `regression-missing` 闸门失败，因为
+`FailedTrace.plan` 只有 `id/title/risk/agentId`；worker 拿不到 `plan[0].instructions`，没有写
+用例就停下了。真实指令在 Journal 里，重试时只能把它粘贴进决定说明。无法复现计划的轨迹不是其模块
+自称的自包含交接物。
+
+**被否决的备选方案。**
+
+- *只加 `instructions`。* 验收标准与能力是回归用例断言、worker 选择生产文件所需的内容；一起携带
+  成本很小。
+- *让通道指向所有者的 Journal。* 通道在隔离的 clone home 与 worktree 里运行；所有者 Journal 不是
+  它的输入，指向它的路径会破坏通道赖以成立的隔离。
+- *在通道运行时从实时 Journal 重新导出轨迹。* 轨迹是"当时失败了什么"的证据；重新生成可能看到
+  已变化的 Journal 与不同计划。
+- *保留缩减的 plan，继续要求决定说明。* 这正是本次要替换的权宜之计；它让每个计划层修复都依赖
+  人或 Agent 去读 Journal。
+
+**放弃了什么。** 轨迹变大：真实步骤指令约 1KB，每个字符串受现有脱敏上限（1500 字符）约束，宽
+计划最多八步。脱敏与截断可能丢掉 worker 本来能读到的细节。轨迹仍是副本，不是 Journal。
+
+**证据。** 验证器通道的第一次运行（`8464295d`）以 "the staged trace's
+plan[0].instructions is missing" 失败 `regression-missing`；只有把 journal seq 1818 粘贴进
+说明后重试才成功。`test/failed-traces.test.ts` 的新断言给 fixture 加上 instructions、验收标准、
+能力与 scopes，并断言轨迹带着脱敏后的它们。
+
+**推翻条件。** 如果轨迹大到无法暂存或携带，就只导出失败点名的步骤，或导出脱敏计划加一个通道
+可读的计划 id。如果脱敏跟不上新增字段，先丢 `scopes`，再考虑丢 instructions。
+
+
 ## 2026-11-19 —— 首次发送失败显示所有者可读的原因，而不是原始循环错误
 
 **决定。** SSE `failed` 事件携带 `describeFailureForOwner` 产出的 `errorSummary` 与

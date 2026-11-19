@@ -11,6 +11,17 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-19 —— 失败轨迹带上步骤指令与标准
+
+- **主张：** `FailedTrace.plan` 现在携带每个步骤脱敏后的 instructions、验收标准、所需能力、
+  scopes 与子代理数量，修复通道可以只凭轨迹复现计划层或验证层失败。
+- **证据：** `test/failed-traces.test.ts` 在旧导出形状上红（没有 `instructions`），修复后绿；
+  该文件 **3/3**；`npm test` **946/946**，typecheck 退出 0，gate **PASS**。缺口由验证器通道
+  失败的运行 `8464295d` 记录。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--失败轨迹携带步骤-instructions)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--失败轨迹携带步骤-instructions)。
+
+
 ## 2026-11-19 —— 首次发送的 no_progress 显示摘要与下一步
 
 - **主张：** failed SSE 事件携带 `errorSummary` 与 `errorGuidance`，首次发送失败卡渲染它们并

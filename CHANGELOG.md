@@ -6,6 +6,13 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A failed trace carries the step's instructions
+
+Failed traces now include each step's instructions, acceptance criteria, required capabilities, scopes and subagent count, redacted and capped, so the repair lane can reproduce a plan or verification failure from the trace. The verifier repair's first lane run had failed because the trace held only the step id, title and risk.
+
+失败轨迹现在包含每个步骤的 instructions、验收标准、所需能力、scopes 与子代理数量（已脱敏并截断），修复通道可以只凭轨迹复现计划或验证失败。验证器修复的第一次通道运行正是因为轨迹只有步骤 id、标题与风险而失败。
+
+
 ### A first-send failure shows the reason and next step
 
 A failed turn already said why in the conversation ledger, but a first send with no streamed reply kept its transient error card and skipped the ledger refresh — so the owner saw only the raw loop error ("The agent called get_run_status 5 times…"). The failed SSE event now carries the same owner-facing summary and next step, and the transient card renders them with the raw error in a collapsed 原始错误 detail. It falls back to the old interrupted card when no summary is present.

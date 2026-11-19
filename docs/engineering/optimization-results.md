@@ -15,6 +15,20 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-19 — A failed trace carries its step instructions
+
+- **Claim:** `FailedTrace.plan` now carries each step's redacted instructions,
+  acceptance criteria, required capabilities, scopes and subagent count, so the
+  repair lane can reproduce a plan- or verification-level failure from the trace
+  alone.
+- **Evidence:** `test/failed-traces.test.ts` is red on the old exported shape
+  (no `instructions`) and green after; the file is **3/3**; `npm test`
+  **946/946**, typecheck exit 0, gate **PASS**. The gap was recorded by the
+  verifier lane's failed run `8464295d`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-failed-trace-carries-the-steps-instructions);
+  [execution chain](optimizations.md#2026-11-19--a-failed-trace-carries-the-steps-instructions).
+
+
 ## 2026-11-19 — A first-send no_progress shows the summary and next step
 
 - **Claim:** the failed SSE event carries `errorSummary` and `errorGuidance`, and

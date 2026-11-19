@@ -31,6 +31,47 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — A failed trace carries the step's instructions
+
+- **Goal / hypothesis:** the verifier repair's first lane run failed the
+  `regression-missing` gate because the staged trace's `plan[0].instructions` was
+  absent: `FailedTrace.plan` held only `id/title/risk/agentId`. Carrying the
+  step's instructions, acceptance criteria, capabilities, scopes and subagent
+  count from `plan.created` should let the lane reproduce a plan- or
+  verification-level failure from the trace alone.
+- **Trade-off:** [a failed trace carries the step's instructions](../architecture/trade-offs.md#2026-11-19--a-failed-trace-carries-the-steps-instructions).
+- **Change:** `src/audit/failed-traces.ts` adds `FailedTraceStep` and maps the
+  full `plan.created` step into the trace (instructions and criteria redacted,
+  each capped by the existing 1,500-character redaction; scopes and the
+  subagent count carried). The reduced audit plan remains the fallback when no
+  plan event exists. `test/failed-traces.test.ts` adds the fields to the fixture
+  and asserts they survive redaction.
+- **Eval:** the new assertions are red on the exported shape (no
+  `instructions`) and green after; `test/failed-traces.test.ts` **3/3**;
+  `npm test` **946/946**; `npm run typecheck` exit 0; `npm run gate` **PASS**,
+  baseline unchanged.
+- **Benchmark run:** none — deterministic trace-export contract; no provider,
+  model, dataset, split, seed or scoring parameter.
+- **Execution chain:** the gap was found by the verifier lane's failed run
+  `8464295d` ("the staged trace's plan[0].instructions is missing") and by the
+  retry's decided brief pasting journal sequence 1818. The fix was inline: read
+  the exporter, run-audit plan projection and the lane prompt; wrote the
+  bilingual trade-off; extended the type and mapper; updated the fixture and
+  assertions; reverted the exporter to reproduce the red case; ran the full
+  suite, typecheck and gate.
+- **Pros:** the repair lane no longer depends on a working agent restating the
+  step; the trace is self-contained; the fields are redacted and bounded; the
+  reduced fallback keeps old traces readable.
+- **Cons / next time:** traces grow by up to 1,500 characters per text field and
+  a wide plan carries up to eight steps; the cap can truncate real
+  instructions; scopes are carried without per-field redaction (their resources
+  are already in the evidence).
+- **Reversal condition:** if traces become too large to stage or carry, export
+  only the steps the failure names, or a sanitized plan plus a plan id. If
+  redaction cannot keep up with the added fields, drop `scopes` before dropping
+  instructions.
+
+
 ### 2026-11-19 — A first-send failure shows the owner-facing reason
 
 - **Goal / hypothesis:** the audit found that a first send with no streamed reply
