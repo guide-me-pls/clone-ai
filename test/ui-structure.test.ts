@@ -65,6 +65,48 @@ test("the shell is internally consistent: ids, assets, and strings", async () =>
   assert.deepEqual(untranslated, [], `markup points at missing strings: ${untranslated.join(", ")}`);
 });
 
+test("the main conversation is a pinned row with a fixed name and no hide control", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("function sessionMarkup");
+  const end = app.indexOf("function renderSessions", start);
+  assert.ok(start >= 0 && end > start, "sessionMarkup must exist");
+  const sessionMarkup = runInNewContext(
+    `const state = { selectedId: null };
+     ${app.slice(start, end)};
+     sessionMarkup`,
+    {
+      escape: (value: unknown) => String(value ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
+      plainPreview: (value: unknown) => String(value ?? ""),
+      t: (key: string) => (({
+        "session-group-main": "主对话",
+        "main-conversation-legacy": "此前的对话记录",
+        "session-flag-approval": "需你确认",
+        "session-flag-review": "需你复核",
+      } as Record<string, string>)[key] ?? key),
+      statusMeta: () => ({ label: "已完成", className: "completed", dot: "completed" }),
+    },
+  ) as (session: unknown, options?: unknown) => string;
+
+  // The pinned row names the owner's original thread with the chrome string,
+  // not the thread's churning content title, and it has no hide control.
+  // 固定行用框架文案命名所有者最初的线程，而不是会变化的线程内容标题；它没有隐藏控件。
+  const main = sessionMarkup(
+    { id: "main-agent-conversation", kind: "conversation", title: "旧的标题", preview: "", status: "completed" },
+    { main: true },
+  );
+  assert.match(main, /data-session="main-agent-conversation"/);
+  assert.match(main, />主对话</);
+  assert.match(main, /此前的对话记录/);
+  assert.doesNotMatch(main, /data-delete-session/);
+
+  // Every other conversation keeps its first-request title and its hide control.
+  // 其他对话保留其首个请求标题与隐藏控件。
+  const other = sessionMarkup({ id: "conversation-a", kind: "conversation", title: "整理资料", preview: "完成", status: "completed" });
+  assert.match(other, />整理资料</);
+  assert.match(other, /data-delete-session="conversation-a"/);
+});
+
 test("the invocation audit exposes server search and reversible delete controls", async () => {
   const audit = await read("audit.js");
   // The list is searched on the server, not only in the loaded page.
@@ -629,11 +671,12 @@ test("decisions are confirmed on the task record that owns the run", async () =>
   const app = await read("app.js");
   const css = await read("style.css");
   const index = await read("index.html");
-  // The conversation is neither a decision inbox nor a sidebar row: the task
-  // record owns its approval and its review.
-  // 对话既不是决定收件箱，也不是侧栏行：任务记录拥有自己的确认与复核。
+  // The conversation is not a decision inbox: the task record owns its approval
+  // and its review. The main conversation is a sidebar row now, so the old
+  // "never filtered as a row" assertion is intentionally gone.
+  // 对话不是决定收件箱：任务记录拥有自己的确认与复核。主对话现在是侧栏行，
+  // 原先"绝不作为行过滤"的断言已移除。
   assert.doesNotMatch(app, /data-open-main-conversation/);
-  assert.doesNotMatch(app, /session\.id !== MAIN_CONVERSATION_ID/);
   assert.match(app, /data-approve="\$\{escape\(approval\.runId\)\}"/);
   assert.match(app, /data-review="\$\{escape\(review\.runId\)\}"/);
   assert.match(app, /session\.reviews/);
@@ -663,7 +706,15 @@ test("decisions are confirmed on the task record that owns the run", async () =>
   // a child is. 对话行不再携带种类徽章；嵌套本身说明子行是什么。
   assert.doesNotMatch(app, /class="session-kind"/);
   assert.match(app, /const records = sessions\.filter\(\(session\) => session\.kind !== "conversation"\)/);
-  assert.match(index, /id="open-conversation"/);
+  assert.doesNotMatch(index, /id="open-conversation"/);
+  // The sidebar has one talk entry: 新请求 starts a routed request, and the
+  // main conversation is the pinned first row of the same list. There is no
+  // second navigation button for it.
+  // 侧栏只有一个对话入口：新请求 发起经过路由的请求，主对话是同一列表中固定的第一行。
+  // 它没有第二个导航按钮。
+  assert.doesNotMatch(app, /\$\("open-conversation"\)/);
+  assert.match(app, /const mainConversation = conversations\.find\(\(session\) => session\.id === MAIN_CONVERSATION_ID\)/);
+  assert.match(app, /const otherConversations = conversations\.filter\(\(session\) => session\.id !== MAIN_CONVERSATION_ID\)/);
   // There is no working-directory setting: the page and its script no longer
   // carry the picker, the reveal action or the restart notice.
   // 没有工作目录设置：页面与脚本都不再带有选择器、定位动作或重启提示。

@@ -187,9 +187,11 @@ function createSidebar(source: string) {
     statusMeta: (status: unknown) => ({ label: String(status ?? ""), className: "running", dot: "running" }),
     icon: () => "",
     // The grouping logic is what this sandbox tests; the row markup and the
-    // small labels are stubs so the slice stays one function.
-    // 本沙箱验证分组逻辑；行标记与小标签用桩，切片仍只包含一个函数。
-    sessionMarkup: (session: any, options: any = {}) => `<div class="session-item${options.child ? " is-child" : ""}" data-test-session="${session.id}">${session.title ?? ""}</div>`,
+    // small labels are stubs so the slice stays one function. `main` is kept as
+    // an attribute because the pinned row is the merge this suite guards.
+    // 本沙箱验证分组逻辑；行标记与小标签用桩，切片仍只包含一个函数。`main` 保留为属性，
+    // 因为固定行正是本套件所守护的合并。
+    sessionMarkup: (session: any, options: any = {}) => `<div class="session-item${options.child ? " is-child" : ""}" data-test-session="${session.id}"${options.main ? ' data-main="true"' : ""}>${session.title ?? ""}</div>`,
     sessionTime: (session: any) => Date.parse(session.updatedAt) || 0,
     isZhLocale: () => true,
     taskCountLabel: (count: number) => `${count} 个任务`,
@@ -226,6 +228,8 @@ function createSidebar(source: string) {
       await factory(scope)(sessions);
     },
     state,
+    /** The visible top-level row count the render wrote into 最近. 渲染写入“最近”的顶层行数。 */
+    count: (): string => String(nodes.get("session-count")?.textContent ?? ""),
     /** Everything renderSessions painted into the sidebar this run.
  * 本次运行中 renderSessions 画进侧栏的全部内容。 */
     markup: () => painted.map((node) => String(node.innerHTML ?? "")).join(""),
@@ -275,6 +279,41 @@ test("the same sandbox reaches the hidden group when a session is visible", asyn
     /data-restore-conversation/,
     "the hidden group renders alongside visible sessions, so the sandbox itself is sound",
   );
+});
+
+test("the main conversation is the pinned first row and its tasks nest inside it", async () => {
+  const sidebar = createSidebar(renderSessionsSource);
+  const at = new Date().toISOString();
+  const main = {
+    id: "main-agent-conversation", kind: "conversation", title: "Main Agent 对话",
+    status: "completed", preview: "完成", updatedAt: at, childCount: 1,
+  };
+  const mainTask = {
+    id: "run-main", parentId: "main-agent-conversation", conversationId: "main-agent-conversation",
+    title: "主对话的任务", status: "completed", preview: "完成", updatedAt: at,
+  };
+  const conversation = {
+    id: "conversation-x", kind: "conversation", title: "整理资料",
+    status: "completed", preview: "完成", updatedAt: at,
+  };
+  const sessions = [conversation, main, mainTask];
+  sidebar.state.dashboard.sessions = sessions;
+
+  await sidebar.renderSessions(sessions);
+  const markup = sidebar.markup();
+
+  // The main conversation is one row, marked as the pinned row, and its task is
+  // nested under it rather than placed under a non-row header.
+  // 主对话是一行，带固定行标记；它的任务嵌套在它下面，而不是放在不可点击的标题下。
+  assert.match(markup, /data-test-session="main-agent-conversation" data-main="true"/);
+  assert.match(markup, /data-child-group="main-agent-conversation"/);
+  const occurrences = (id: string) => (markup.match(new RegExp(`data-test-session="${id}"`, "g")) ?? []).length;
+  assert.equal(occurrences("main-agent-conversation"), 1, "the main conversation is one row");
+  assert.equal(occurrences("run-main"), 1, "the main conversation's task is nested once");
+  assert.equal(occurrences("conversation-x"), 1, "another conversation is unaffected");
+  // The main row counts once as a top-level row; its nested task does not.
+  // 主对话作为顶层行只计一次；它嵌套的任务不再单独计数。
+  assert.equal(sidebar.count(), "2", "the count is the two top-level rows, not the nested task");
 });
 
 test("the sidebar nests a conversation's tasks and promotes a waiting one", async () => {

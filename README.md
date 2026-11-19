@@ -562,15 +562,16 @@ relationship automation, broad inbox access, and unconstrained proactive behavio
 The macOS app is the only product surface. Its conversation, settings and audit
 views cover every owner action:
 
-- **对话** — the sidebar lists dispatched tasks only. Type inside a conversation
-  to continue it; "新请求" sends a fresh request through a router that decides
-  whether to reuse a related conversation or start a new Main Agent, and says
-  which it chose. A Main Agent can call `search_history` to recall another
-  task's conversation, with each result tagged by its conversation and time.
-  Approve or reject external actions and results on the task record that needs
-  the decision; waiting tasks are flagged at the top. A task running subtasks
-  does not block starting another; the number of concurrent Main Agents follows
-  measured machine capacity.
+- **对话** — the sidebar lists conversations; the tasks each conversation
+  dispatched nest under it. The main conversation is the pinned first row, not a
+  second button. Type inside a conversation to continue it; "新请求" sends a
+  fresh request through a router that decides whether to reuse a related
+  conversation or start a new Main Agent, and says which it chose. A Main Agent
+  can call `search_history` to recall another task's conversation, with each
+  result tagged by its conversation and time. Approve or reject external actions
+  and results on the task record that needs the decision; waiting tasks are
+  flagged at the top. A task running subtasks does not block starting another;
+  the number of concurrent Main Agents follows measured machine capacity.
 - **设置 → Agent** — model endpoint, gateway, reasoning effort and provider.
 - **设置 → 权限与安全** — per-domain autonomy (`observe` … `act_auto`) and
   owner-written standing policies.

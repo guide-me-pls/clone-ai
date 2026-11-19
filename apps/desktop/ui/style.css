@@ -464,7 +464,6 @@ body { background: var(--canvas); color: var(--text); font-family: Inter, "SF Pr
 .memory-tool-row label { color: #5f6c7e; font-size: 11px; font-weight: 620; }
 .memory-tool-row input[type="text"], .memory-tool-row textarea, .memory-tool-row select { min-width: 0; padding: 7px 8px; border: 1px solid #dce3ed; border-radius: 7px; color: #3f4a59; background: #fff; font: inherit; font-size: 11px; outline: 0; }
 .memory-tool-row input[type="text"] { flex: 1; }
-.memory-tool-row select#config-main-agent-model { flex: 1; min-width: 220px; }
 .memory-tool-row textarea { width: 100%; min-height: 48px; resize: vertical; }
 .memory-tool-row button { padding: 7px 9px; border: 1px solid #cbd8fa; border-radius: 7px; color: #315ac2; background: #f5f8ff; cursor: pointer; font-size: 11px; font-weight: 620; }
 .memory-tool-row button.primary { border-color: #3468f6; color: #fff; background: #3468f6; }
