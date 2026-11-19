@@ -44,7 +44,7 @@ test("the config endpoint reports where the owner's data lives", async (t) => {
   assert.match(body.paths.providersFile, /providers\.json$/);
   assert.equal(body.config.locale, "zh-CN");
   assert.equal(body.ui?.locale, "zh-CN");
-  assert.equal(body.ui?.strings?.["new-session"], "新建任务");
+  assert.equal(body.ui?.strings?.["new-session"], "新请求");
   // A settings payload must never become a place a credential could appear.
   // 设置响应绝不能成为凭据可能出现的地方。
   assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
@@ -319,7 +319,7 @@ test("the owner can change the workspace and locale through the API", async (t) 
   const reread = await (await companionFetch(url, token, "/api/config")).json() as { config: { workspacePath: string; locale: string }; paths: { workspacePath: string } };
   assert.equal(reread.config.workspacePath, "/tmp/another-project");
   assert.equal(reread.config.locale, "en");
-  assert.equal((await (await companionFetch(url, token, "/api/config")).json() as { ui: { strings: Record<string, string> } }).ui.strings["new-session"], "New task");
+  assert.equal((await (await companionFetch(url, token, "/api/config")).json() as { ui: { strings: Record<string, string> } }).ui.strings["new-session"], "New request");
 
   // Saving the path the runtime already uses is not a pending change.
   // 保存 Runtime 已在使用的路径不算待生效变更。
@@ -506,6 +506,24 @@ test("starting the server retires legacy objective-restatement candidates once",
   (journal as { close?: () => void }).close?.();
 
   server = await startCompanionServer({ port: 0, dataDirectory, workspacePath });
+  // The first maintenance pass starts after the endpoint is published, so the
+  // one-time legacy cleanup can still be in flight when startup returns. Wait
+  // for the journaled decision instead of assuming readiness implies it.
+  // 首轮维护在端点发布之后才开始，因此启动返回时一次性旧候选清理可能仍在进行。等待它写入
+  // Journal 的决定，而不是假定"就绪"意味着它已经完成。
+  const cleanupDeadline = Date.now() + 5_000;
+  while (true) {
+    const probe = createJournalStore(dataDirectory);
+    try {
+      const rejected = (await probe.list()).some((event) => event.type === "memory.candidate.rejected"
+        && (event.payload as { candidateId?: string }).candidateId === "c-legacy");
+      if (rejected) break;
+    } finally {
+      (probe as { close?: () => void }).close?.();
+    }
+    assert.ok(Date.now() < cleanupDeadline, "the legacy restatement cleanup did not run");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   const listed = await (await companionFetch(server.url, server.token, "/api/memory/candidates")).json() as { candidates: Array<{ id: string }> };
   assert.deepEqual(listed.candidates.map((item) => item.id), ["c-durable"], "the objective copy must not reach the owner's review list");
 

@@ -6,6 +6,178 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — One new-request action; Clone AI routes to a Main Agent
+
+**Decision.** The desktop exposes one "新请求" action instead of asking the owner
+to choose between a new conversation and a new task. Typing inside a
+conversation stays with that conversation's Main Agent. A new request is routed:
+a explicit continuation cue ("继续", "刚才", "上次", "这个任务", "continue", "that task")
+reuses the selected conversation, or the most recent one when nothing is
+selected; an explicit new-goal cue ("新项目", "另一个任务", "new project") or no
+context starts a new Main Agent; an ambiguous request with a selected
+conversation asks the model for a continue/new decision, and fails open to a new
+Main Agent when the model is unavailable. Every decision is journaled as
+`conversation.routed` with its reason and source, shown in the audit's assembly
+block. A task record names the Main Agent that dispatched it and offers a button
+to open that conversation.
+
+**Alternatives rejected.**
+
+- *Keep separate new-conversation and new-task controls.* That is the current
+  learning cost: the owner must know which concept creates a Main Agent.
+- *Always start a new Main Agent.* Every follow-up would lose the context it
+  refers to and fragment the owner's memory.
+- *Always reuse the previous Main Agent.* One context would grow without bound
+  and unrelated tasks would read each other's history.
+- *Rules only.* Keyword cues handle "继续上次" but not "把这个方案再改一下" versus
+  "另一个项目也这样做"; the router needs semantics for the ambiguous middle.
+- *A model call for every message.* The explicit conversation selection already
+  answers most messages; charging a routing call for them buys nothing.
+
+**Evidence.** The owner's request on 2026-11-19: the new-conversation/new-task
+choice is too much to learn, and Clone AI should decide whether to use a new or
+the previous Main Agent. The plumbing already exists: `conversationId` scopes
+the lock, history and slot (`src/application/run-main-query.ts`), and
+`mainAgentRunConversations` maps a dispatched run back to its conversation, so
+the router and the task-record line need no new storage. The model router fires
+only for an ambiguous new request with a selected conversation.
+
+**What it costs.** An ambiguous new request costs one extra model call (bounded,
+temperature 0, short output), and a misroute is visible in the audit but cannot
+be moved automatically; the owner resends inside the intended conversation.
+Keyword cues are a heuristic and can misfire. Explicitly typing inside a
+conversation bypasses the router entirely, which is the escape hatch.
+
+**Reversal condition.** If misroutes are frequent or the extra call is
+unwelcome, make the router rules-only or restore an explicit "new Main Agent"
+control; if owners want full manual control again, revert the UI action while
+keeping the journaled routing decision and the task-record dispatch source.
+
+## 2026-11-19 — The Agent settings page is a catalog, not a control panel
+
+**Decision.** Settings → Agent shows the Magpie gateway's detected state and
+model picker, then a read-only list of the four built-in workers with the role
+and what each one does. The manual endpoint/API-key form, the local-provider
+registry list, and each worker's provider select and enable switch are removed.
+
+**Alternatives rejected.**
+
+- *Keep the manual endpoint and API key as a fallback.* The gateway probe
+  already discovers the loopback endpoint, and "use this model" persists it
+  before a turn can run (`src/companion-server.ts:1154-1158`). Manual entry
+  duplicated a value the app writes itself, and the owner asked to use Magpie
+  only.
+- *Keep the provider select.* `src/workers/provider-catalog.ts` registers a
+  single provider, `native`; `normalize()` maps any saved id it no longer knows
+  back to `native` (`src/config/worker-settings.ts:154-177`). The live
+  `settings.json` still names `claude-code` for every role, which the runtime
+  never uses — the control showed a choice the runtime does not honor.
+- *Keep the enable switches.* All four defaults are `enabled: true`, and
+  `direct-responder` is `required`. The owner asked for every worker to be on;
+  a switch implies a policy choice the product no longer offers.
+- *Keep the provider list.* `GET /api/agents` synthesizes one row
+  (`src/companion-server.ts:1510`), so it restates the worker catalog with an
+  install state that can never change.
+
+**Evidence.** The provider registry has one entry; every default profile is
+enabled; the live `~/.clone/settings.json` has every role enabled (with stale
+`claude-code` provider ids that normalize to `native`); the endpoint in
+`~/.clone/config.json` was written by the gateway apply path. `app.js` no
+longer renders `config-base-url`, `data-agent-provider`, or `data-agent-toggle`,
+and a UI surface test asserts their absence.
+
+**What was given up.** A non-loopback or custom gateway endpoint can no longer
+be entered from the window (it can still be set through `/api/config` or the
+environment), and a role can no longer be individually turned off.
+
+**Reversal condition.** Restore the matching control if a second execution
+provider is registered, if roles need independent disabling for cost or policy,
+or if Magpie cannot discover an endpoint the owner needs and manual entry
+becomes the only way to point the app at a model gateway.
+
+## 2026-11-19 — Publish readiness before the first maintenance pass
+
+**Decision.** `startCompanionServer` binds its loopback port and publishes
+`companion-endpoint.json` before the first background maintenance pass runs.
+The pass starts immediately after the endpoint is published, fire-and-forget,
+with its failure logged and retried by the existing five-minute interval. The
+window no longer waits for memory extraction, commitment reconciliation,
+opportunity scanning, or any other periodic work before it can connect. Inside
+the pass, lock-independent work runs first — commitment reconciliation, then the
+opportunity scan, the legacy candidate cleanup, the improvement sweep, the
+idle/expiry sweeps and the bad-case report — and the extraction and
+conversation drains run last. `close()` aborts a pass that is only *waiting* for
+the extraction lock, so shutdown still completes while another process holds
+it.
+
+**Alternatives rejected.**
+
+- *Keep awaiting maintenance (status quo).* The pass acquires the
+  cross-process memory-extraction lock, whose `BEGIN IMMEDIATE` retries every
+  50 ms with no deadline (`src/core/workspace-lock.ts:56-64`). One held lock —
+  another sidecar mid-extraction, or a miner waiting on a model — turns
+  "startup is slow" into "startup never finishes"; the daemon is alive but
+  never listens, and the desktop shell stays on 正在连接.
+- *Keep the old order inside the pass.* The opportunity strip and attention
+  list are the maintenance output the owner sees on first paint. Running the
+  scan after the extraction drain leaves them empty for as long as the lock is
+  held — the exact reversal condition this decision must avoid.
+- *Put a timeout around `startMaintenance()`.* The timeout cannot cancel the
+  lock wait; it only abandons the promise while the retry loop keeps running,
+  and the threshold is arbitrary. It also leaves readiness coupled to work the
+  window does not need.
+- *Make lock acquisition time-bound instead.* That changes cross-process
+  serialization semantics for every caller, and a legitimately slow miner would
+  still delay readiness.
+- *Move the whole assembly after `listen`.* Much larger: every request handler
+  needs the journal, config and governance already constructed. The maintenance
+  pass is the only pre-listen step whose duration is unbounded by its inputs.
+- *Leave `close()` waiting on the blocked pass.* Because the pass now starts
+  after readiness, the shell's SIGTERM handler enters a close that may never
+  resolve; the only bound would be the shell's SIGKILL. Aborting the lock wait
+  is the narrow way to keep shutdown graceful.
+
+**Evidence.**
+
+- Live: the launchd job `ai.clone.companion` ran PID 80762 from 2026-11-18
+  17:53:26 until 2026-11-19 09:45 (15 h 51 m) with no listening socket
+  (`lsof -nP -p 80762 -iTCP -sTCP:LISTEN` printed no line for it) and no
+  `~/.clone/companion-endpoint.json`; the desktop window was showing
+  "正在连接常驻运行时". The same log holds repeated
+  `Scheduled dispatch failed; its outcome needs review — database is locked`
+  entries, consistent with lock contention.
+- Deterministic reproduction: an isolated copy of the real clone home with the
+  eight `memory.candidate.extracted` / `memory.candidate.proposed` rows deleted
+  (so eight `memory.candidate.requested` are pending) and a holder process
+  holding `BEGIN IMMEDIATE` on
+  `<home>/memory-extraction-lock/.clone/workspace-execution.sqlite3`. The
+  sidecar printed no `CLONE_AI_READY` within 15 s; with the lock free the same
+  home reached ready in 246 ms. Mechanism: `await startMaintenance()` sat
+  before `server.listen` and `persistCompanionEndpoint`
+  (`src/companion-server.ts:605` vs `:681` and `:694`), and `processJob` takes
+  the extraction lock (`src/memory/memory-pipeline.ts:176`).
+- Independent review of the first version of this change (readiness moved, old
+  pass order, no abort) verified two gaps with probes on a temp home with the
+  lock held: `/api/opportunities` returned **0** cards until the lock was
+  released, and `close()` was still pending after 2 s. Both are now pinned in
+  `test/companion-startup-readiness.test.ts`: the deadline card is present
+  while the lock is held, and close returns in under 2 s without releasing it.
+
+**What it costs.** The abort covers a pass that is *waiting* for the extraction
+lock, not one already inside a miner call; a shutdown during a long call still
+waits for that call (the shell bounds it with SIGKILL). An approve, review, or
+scheduled run that calls `processNext` while the first drain holds the lock
+waits for the current extraction, just as it could during any periodic pass;
+this change makes the largest drain overlap the first requests. The scan is
+ordered before the drain so the first paint is not affected.
+
+**Reversal condition.** Reverse this if a request served before the first pass
+completes starts returning observably stale state the owner can see on first
+paint — for example unsettled commitments or a missing opportunity card — and
+the fix is not to have that specific route await `startMaintenance()`. Also
+reverse if lock acquisition becomes bounded and measurements show the first
+pass is fast enough that waiting for it buys visible freshness at startup.
+
 ## 2026-11-18 — A direct answer is the evidence for a direct_response step
 
 **Decision.** A single-agent step whose `requiredCapabilities` include

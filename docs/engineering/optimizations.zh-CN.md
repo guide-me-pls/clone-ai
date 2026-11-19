@@ -26,6 +26,97 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— Agent 设置展示 Worker，而不是接线
+
+- **目标 / 假设：** Agent 页暴露了一些已不再变化的控件：自动发现网关旁边的手填端点/API Key
+  表单、只有一行的 Provider 列表，以及在唯一 Provider 为 `native`、所有角色默认启用时仍
+  存在的逐角色 Provider 下拉与启用开关。把它们换成只读的 Worker 目录，页面应当描述"运行
+  什么"，而不是要求所有者配置。
+- **取舍：** [Agent 设置页是目录，不是控制面板](../architecture/trade-offs.zh-CN.md#2026-11-19--agent-设置页是目录不是控制面板)。
+- **变更：** `apps/desktop/ui/app.js`——移除端点表单及其保存/清除处理器、本机 Provider
+  列表与安装/权限控件，以及角色的 Provider 下拉与开关；保留的 Worker 行展示角色、描述与
+  用途。`src/desktop/ui-locale.ts`——把分区改名为 Worker，新增 `workers-enabled`，删除只
+  服务于已删控件的键，并去掉网关说明里过时的 Pi 措辞。`apps/desktop/ui/components.css`——
+  删除端点、Provider 路径与角色下拉的规则。`test/ui-locale.test.ts`——断言被删控件不再
+  出现，且 Worker 目录仍会渲染。
+- **Eval：** `node --experimental-strip-types --test test/ui-locale.test.ts`。变更前新测试
+  因 `config-base-url`（表单仍被渲染）失败；变更后通过。`npm test` **848/848**，
+  `npm run typecheck` 退出码 0，`npm run gate` **PASS**。浏览器预览 Agent 面板：0 个输入框、
+  1 个下拉（网关模型选择）、0 个 Provider/启用控件、4 行 Worker。
+- **执行链路：** 一个工作 Agent（本会话），在检出中直接编辑；没有子 Agent 或 benchmark。
+  页面结构从 `app.js` 读取；Provider 与角色默认值对照 `src/workers/provider-catalog.ts`、
+  `src/config/worker-settings.ts` 与线上 `~/.clone/settings.json` 核实。工作期间另一个会话
+  在同一检出中写入无关的路由/审计改动；双方都改了 `app.js` 与 `ui-locale.ts`，但区域不重叠；
+  为让测试通过，两处过时的 `new-session` 断言已与该会话的"新请求"改名对齐。本次变更没有
+  重试或失败。
+- **优点：** 变更局限在界面；双语表保持对称；测试固定的是已删控件的缺席，而不是截图。
+- **缺点 / 下次：** 测试是文本断言，只能证明接线已移除，不能证明渲染出的行好看；布局仍需
+  浏览器过一遍。后端的 `PATCH /api/settings/agents` 与 `/api/config` 端点字段仍为旧客户端
+  保留，留下少量死接口。
+- **推翻条件：** 如果注册了第二个执行 Provider、角色需要因成本或策略独立禁用，或 Magpie
+  无法发现所有者需要的端点而手填成为指向模型网关的唯一方式，就恢复对应控件。
+
+### 2026-11-19 —— 先发布就绪端点，再跑首轮维护
+
+- **目标 / 假设：** 桌面窗口等待 `companion-endpoint.json`，而 Daemon 只有在绑定端口后才会
+  写出它。首轮维护此前运行在这一步之前，并会获取跨进程的记忆提炼锁，而该锁的获取没有截止
+  时间。把首轮维护改到端点发布之后，慢或被阻塞的维护就不能再把窗口留在"正在连接"。
+- **取舍：** [先发布就绪端点，再跑首轮维护](../architecture/trade-offs.zh-CN.md#2026-11-19--先发布就绪端点再跑首轮维护)。
+- **变更：** `src/companion-server.ts`——从监听前路径移除 `await startMaintenance()`；
+  首轮维护改为在 `persistCompanionEndpoint` 之后以 fire-and-forget 方式启动，失败经
+  `noteMaintenanceFailure` 记录，与五分钟定时器共用。维护轮本身与定时器不变。
+  `test/companion-config-api.test.ts` 改为等待一次性旧候选清理，而不是假定它在
+  `startCompanionServer` 返回前完成。新增测试：`test/companion-startup-readiness.test.ts`。
+- **Eval：** `node --experimental-strip-types --test
+  test/companion-startup-readiness.test.ts`——变更前在 4.04 秒失败，信息为
+  `startCompanionServer did not publish readiness while the extraction lock was
+  held`（测试允许 4 秒）；最终两条测试分别为 **62.7 毫秒** 与 **18.9 毫秒**，均通过。
+  完整测试 **848/848**（同一检出还带有其他会话的改动），`npm run typecheck` 退出码 0，
+  `npm run gate` **PASS**。
+  测量脚本：复制真实 clone home，删除 `extracted` 与 `proposed` 行，留下八条
+  `memory.candidate.requested` 待处理，并由另一个进程对
+  `<home>/memory-extraction-lock/.clone/workspace-execution.sqlite3` 持有
+  `BEGIN IMMEDIATE`。`node /tmp/clone-startup-measure.mjs
+  /tmp/clone-home-hang-tJjQVr 15000`——变更前 15 秒内没有 `CLONE_AI_READY`；变更后两次
+  运行分别为 **178 毫秒** 与 **170 毫秒**。锁空闲的对照：变更前 **246 毫秒**，与变更后
+  接近。数据来自 `~/.clone` 的副本（8 条请求，1.2 MB Journal）。锁仍被持有时用浏览器
+  打开该隔离服务器：`#startup-screen` 与 `.app-shell` 都进入 `ready`；最初 15 个 API
+  调用从 70 毫秒开始，最后一个在 282 毫秒结束，全部 HTTP 200——没有任何请求处理器等待
+  维护轮完成。
+- **Benchmark run：** 无——确定性测试加本地启动测量；没有 Provider、数据集或评分参数。
+- **执行链路：** 先观察现场症状（launchd 任务 `ai.clone.companion` 的 PID 80762 从
+  2026-11-18 17:53:26 存活到 2026-11-19 09:45，没有监听套接字也没有端点文件；桌面窗口停在
+  "正在连接"）。阅读 `apps/desktop/macos/main.swift`（附着循环与重试）、
+  `src/companion-server.ts`（监听前的顺序）、`src/core/workspace-lock.ts`（无上限的
+  `BEGIN IMMEDIATE` 重试）与 `src/memory/memory-pipeline.ts`（`processJob` 获取该锁）。
+  先写取舍条目，再写回归测试并看着它在未改动的代码上失败。把维护轮移到
+  `persistCompanionEndpoint` 之后，测试转绿，更新旧候选清理测试，运行定向测试、当时的完整
+  测试、typecheck 与 gate。随后运行三视角独立审查（正确性、eval 有效性、文档；3 个 Agent、
+  234 次工具调用、138,869 子 Agent token、11.3 分钟）。它发现两个真实缺口：机会扫描排在提炼
+  排空之后（探针：持锁时 0 张卡片），以及 `close()` 卡在锁等待上（探针：2 秒后仍未返回）。
+  随后加入扫描先于排空、可中止的锁等待、钉住两者的第二条测试，为提炼标记断言固定
+  `CLONE_AI_MEMORY_MINING=off`，并在启动拒绝路径上清理就绪定时器。复查：两条测试通过、
+  typecheck 0、gate PASS；最终完整测试 **848/848**（同一检出还带有其他会话的改动）。
+  失败与重试：第一次复现只删了 `memory.candidate.extracted`，但
+  `processedRuns` 会把没有提炼标记的提案视为已处理，服务器 202 毫秒就启动；同时删除
+  `memory.candidate.proposed` 后才产生待处理任务与 15 秒挂起。变更后旧候选清理测试失败，
+  直到它等待后台维护轮完成——这正是测试现在写明的顺序。审查的两个主要发现要求第二轮实现。
+  工作本身没有调用 Provider 或模型；成本：无。端到端约 35 分钟，其中审查约 11 分钟。
+- **优点：** 窗口不再依赖无上限的后台工作；提炼锁被持有时，机会与注意力面仍然是最新的；
+  关停保持优雅，因为锁等待可中止；先红后绿的测试钉住了确切故障；发布前的审查回路抓住了两个
+  二阶缺陷。最终完整测试 **848/848**。
+- **缺点 / 下次：** 中止覆盖的是锁等待，而不是已经持有锁的提炼调用，因此长调用期间的关停
+  仍会等它（外壳用 SIGKILL 兜底）。在首轮排空持有锁时，确认、复核或定时任务里调用
+  `processNext` 会等待当前提炼，就像任何周期性维护轮期间一样。没有重新启动真实 App 做端到端
+  计时。本机上观察到同一 home 上有两个 sidecar（App 拉起的开发 sidecar 与 launchd Daemon）；
+  正是这种竞争让锁场景真实存在，但多写者配置本身未改。下次应先跑对抗性审查，再跑完整测试，
+  让记录只保留一个最终状态。
+- **推翻条件：** 如果首轮维护完成前提供的请求开始返回首屏可见的陈旧状态，且修复方式不是让
+  该路由等待 `startMaintenance()`，就应推翻就绪移动；若锁获取变得有界，且测量显示首轮维护
+  足够快、等待它能换来首屏可见的新鲜度，同样应当推翻。若机会扫描开始依赖提炼结果（当前不
+  依赖），或开始与排空重复工作，应推翻扫描先于排空的顺序。若关停中止的维护轮留下下次启动
+  无法重建的派生状态，应推翻中止（当前待处理任务仍写入 Journal 并会被重新入队）。
+
 ### 2026-11-18 —— 列表是任务，决定在任务内，审计说明组装
 
 - **目标 / 假设：** 对话按任务划分之后，侧栏仍列出对话，确认仍汇集在主线索，审计只显示工具与

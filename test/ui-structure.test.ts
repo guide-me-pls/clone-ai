@@ -180,7 +180,7 @@ test("populated conversations stay vertical and empty-state flex requires no mes
     sessionHasContent: (session: { kind?: string; turns?: unknown[]; messages: unknown[] } | null) => session !== null
       && (session.kind === "conversation" ? (session.turns || []).length > 0 : session.messages.length > 0),
     recalledMemoryMarkup: () => "", planMarkup: () => "", agentsMarkup: () => "",
-    decisionDock: () => "", evidenceMarkup: () => "", approvalMarkup: () => "", reviewMarkup: () => "", traceMarkup: () => "",
+    decisionDock: () => "", dispatchSourceMarkup: () => "", evidenceMarkup: () => "", approvalMarkup: () => "", reviewMarkup: () => "", traceMarkup: () => "",
     verificationMarkup: () => "",
     restoreDisclosureScrolls: () => {}, requestAnimationFrame: () => {}, updateScrollBottom: () => {},
   });
@@ -605,4 +605,36 @@ test("the audit explains how each Main Agent turn was assembled", async () => {
   assert.match(audit, /turn\.runs/);
   assert.match(audit, /au-assembly-runs/);
   assert.match(auditCss, /\.au-assembly/);
+});
+
+test("a new request is routed, and a task record names its dispatcher", async () => {
+  const app = await read("app.js");
+  const css = await read("style.css");
+  // The owner does not choose a new conversation versus a new task: a
+  // new-request send asks the router which Main Agent handles it.
+  // 所有者不选择新建对话还是新建任务：新请求发送时由路由器决定哪个 Main Agent 处理。
+  assert.match(app, /\/api\/main-agent\/route/);
+  assert.match(app, /state\.routing/);
+  assert.match(app, /state\.routeContext/);
+  assert.match(app, /welcome-routing/);
+  assert.match(app, /function dispatchSourceMarkup\(session\)/);
+  assert.match(app, /\$\{dispatchSourceMarkup\(session\)\}/);
+  assert.match(app, /data-open-conversation/);
+  assert.match(css, /\.dispatch-source/);
+
+  const start = app.indexOf("function dispatchSourceMarkup");
+  const end = app.indexOf("function renderSession", start);
+  assert.ok(start >= 0 && end > start, "dispatchSourceMarkup must exist");
+  const dispatchSourceMarkup = runInNewContext(
+    `const MAIN_CONVERSATION_ID = "main-agent-conversation"; ${app.slice(start, end)}; dispatchSourceMarkup`,
+    { escape: (value: unknown) => String(value ?? "") },
+  ) as (session: unknown) => string;
+  const markup = dispatchSourceMarkup({ id: "run-1", dispatchedBy: "conversation-abc" });
+  assert.match(markup, /派发者/);
+  assert.match(markup, /data-open-conversation="conversation-abc"/);
+  assert.match(dispatchSourceMarkup({ id: "run-2", dispatchedBy: "main-agent-conversation" }), /主对话的 Main Agent/);
+  // A conversation view has no dispatcher line, and a run with no dispatcher has none either.
+  // 对话视图没有派发者行；没有派发者的 Run 也没有。
+  assert.equal(dispatchSourceMarkup({ id: "conversation-a", kind: "conversation", dispatchedBy: "conversation-a" }), "");
+  assert.equal(dispatchSourceMarkup({ id: "run-3" }), "");
 });

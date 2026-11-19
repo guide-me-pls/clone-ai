@@ -85,6 +85,10 @@ button { color: inherit; }
 .session-group-needs { color: #915a05; font-weight: 760; }
 .approval-step { margin: 1px 0 5px; color: #8a6a2f; font-size: 12px; }
 .approval-card-action { border-width: 2px; }
+.dispatch-source { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 0 12px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: 12px; }
+.dispatch-source-open { min-width: 0; overflow: hidden; padding: 0; border: 0; color: var(--accent); background: transparent; font: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.dispatch-source-open:hover { text-decoration: underline; }
+.welcome-routing { margin-top: 8px !important; color: var(--muted); font-size: 12.5px; }
 .session-meta { overflow: hidden; margin-top: 2px; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .empty-sessions { padding: 11px 10px; color: var(--muted); font-size: 13px; }
 .sidebar-owner { display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 14px 9px 5px; border-top: 1px solid var(--line); }

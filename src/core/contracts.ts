@@ -274,6 +274,9 @@ export interface MemoryCandidate {
 
 export type JournalEventType =
   | "trigger.received"
+  // Why a new request was sent to a new Main Agent or an existing conversation.
+  // 一个新请求为何被发送给新的 Main Agent 或已有对话。
+  | "conversation.routed"
   | "task.created"
   | "run.created"
   | "run.status_changed"

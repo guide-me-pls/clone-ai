@@ -11,6 +11,27 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-19 —— 就绪不再等待首轮维护
+
+- **主张：** 伴随服务器先发布回环端点并回答 `/api/health`，再运行首轮后台维护。被持有的
+  记忆提炼锁——另一个 sidecar 正在提炼，或提炼器正在等模型——不再让 Daemon 活着却不可见、
+  桌面窗口停在"正在连接"。在八条待提炼请求且锁被持有时，sidecar 现在约 170 毫秒就绪，
+  而不是在 15 秒测量脚本超时内始终不就绪；锁空闲的对照为 246 毫秒。维护轮内部，机会扫描
+  先于提炼排空，因此所有者首屏看到的到期卡片在锁被持有时仍然最新；`close()` 会中止仅在
+  等待锁的维护轮，关停保持优雅，而不是挂起到 SIGKILL。
+- **证据：** `test/companion-startup-readiness.test.ts` 钉住三种行为：持锁时就绪、持锁时
+  `/api/opportunities` 已含到期卡片、以及不释放锁时 `close()` 在 2 秒内返回。第一条在变更前
+  为红（4.04 秒时失败，信息为 `startCompanionServer did not publish readiness while the
+  extraction lock was held`），变更后为绿；扫描与关停两条由独立审查的探针在变更第一版上
+  验证为红（释放前 `0` 张卡片；close 在 2 秒后仍未返回）。最终隔离运行：**62.7 毫秒** /
+  **18.9 毫秒**，均通过。对线上 home 副本的启动测量，
+  `node /tmp/clone-startup-measure.mjs /tmp/clone-home-hang-tJjQVr 15000`：变更前 15 秒内
+  没有 `CLONE_AI_READY`，变更后 **178 毫秒** / **170 毫秒**。完整测试 **848/848**，
+  `npm run typecheck` 退出码 0，`npm run gate` **PASS**。现场症状：launchd PID 80762
+  存活 15 小时 51 分，却没有监听套接字与端点文件；窗口停在"正在连接"。
+- **位置：** [取舍：先发布就绪端点，再跑首轮维护](../architecture/trade-offs.zh-CN.md#2026-11-19--先发布就绪端点再跑首轮维护)、
+  [执行链路](optimizations.zh-CN.md#2026-11-19--先发布就绪端点再跑首轮维护)。
+
 ## 2026-11-18 —— 决定属于任务记录，审计显示组装
 
 - **主张：** 侧栏只列派发的任务；等待中的任务被提升到"需要你的确认"并带明确的

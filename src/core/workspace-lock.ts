@@ -13,6 +13,17 @@ const localQueues = new Map<string, Promise<void>>();
 const LOCK_RETRY_MS = 50;
 const MALFORMED_LOCK_STALE_MS = 60_000;
 
+export interface WorkspaceLockOptions {
+  /**
+   * Aborts only the wait for the lock, never an operation that already holds
+   * it. Shutdown uses this so a background pass queued behind another process's
+   * lock can unwind instead of blocking the process until SIGKILL.
+   * 只中止对锁的等待，不中止已经持有锁的操作。关停用它来让排在别的进程锁后面的后台轮
+   * 解除等待，而不是把进程阻塞到 SIGKILL。
+   */
+  signal?: AbortSignal;
+}
+
 /**
  * Serializes work per Workspace. SQLite's exclusive writer lease is released
  * by the OS on process death, avoiding races when multiple processes recover
@@ -21,7 +32,7 @@ const MALFORMED_LOCK_STALE_MS = 60_000;
  * 过期 PID 锁时的竞争；进程内队列避免阻塞事件循环。
  */
 export class WorkspaceExecutionLock {
-  async run<T>(workspacePath: string, operation: () => Promise<T>): Promise<T> {
+  async run<T>(workspacePath: string, operation: () => Promise<T>, options: WorkspaceLockOptions = {}): Promise<T> {
     const workspace = resolve(workspacePath);
     const previous = localQueues.get(workspace) ?? Promise.resolve();
     let releaseLocal!: () => void;
@@ -31,7 +42,8 @@ export class WorkspaceExecutionLock {
     await previous;
     let releaseExternal: (() => Promise<void>) | undefined;
     try {
-      releaseExternal = await acquireExternalLock(workspace);
+      releaseExternal = await acquireExternalLock(workspace, options.signal);
+      options.signal?.throwIfAborted();
       return await operation();
     } finally {
       try {
@@ -47,13 +59,15 @@ export class WorkspaceExecutionLock {
 /** One queue is shared by separately-created runtimes. 独立创建的 Runtime 共用一条队列。 */
 export const workspaceExecutionLock = new WorkspaceExecutionLock();
 
-async function acquireExternalLock(workspace: string): Promise<() => Promise<void>> {
+async function acquireExternalLock(workspace: string, signal?: AbortSignal): Promise<() => Promise<void>> {
   const directory = join(workspace, CLONE_DIRECTORY_NAME);
   await mkdir(directory, { recursive: true });
+  signal?.throwIfAborted();
   const db = new DatabaseSync(join(directory, "workspace-execution.sqlite3"));
   try {
     db.exec("PRAGMA busy_timeout=0");
     while (true) {
+      signal?.throwIfAborted();
       try {
         db.exec("BEGIN IMMEDIATE");
         break;
@@ -62,7 +76,7 @@ async function acquireExternalLock(workspace: string): Promise<() => Promise<voi
         await delay(LOCK_RETRY_MS);
       }
     }
-    await waitForLegacyLock(join(directory, "workspace-execution.lock"));
+    await waitForLegacyLock(join(directory, "workspace-execution.lock"), signal);
     return async () => {
       try { db.exec("ROLLBACK"); } finally { db.close(); }
     };
@@ -73,8 +87,9 @@ async function acquireExternalLock(workspace: string): Promise<() => Promise<voi
   }
 }
 
-async function waitForLegacyLock(path: string): Promise<void> {
+async function waitForLegacyLock(path: string, signal?: AbortSignal): Promise<void> {
   while (true) {
+    signal?.throwIfAborted();
     let source: string;
     try {
       source = await readFile(path, "utf8");
