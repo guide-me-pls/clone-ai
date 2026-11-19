@@ -6,6 +6,171 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — Reasoning effort is whatever the gateway declares, not a fixed seven
+
+**Decision.** The per-turn `effort` field and `PATCH /api/config`'s
+`mainAgentEffort` accept any non-empty reasoning-effort name (trimmed, at most
+64 characters) instead of only the seven values in `EFFORT_LEVELS`. The
+gateway's per-model `reasoning_levels` is the authority for what a model
+accepts; the known list stays as the picker's fallback when the gateway
+declares nothing and as the self-review proposal filter. `effortChoices()` is
+deleted: its "narrow to levels we understand" rule was the rejected design.
+
+**Why it won.** The composer and Settings pickers already list exactly what the
+gateway declares (`reasoningLevelsFor`), and the gateway declares more than the
+known list: `openai/gpt-6.1-terra` declares
+`none, low, medium, high, xhigh, max, ultra`. The server rejected `none` and
+`ultra` with HTTP 400 at `src/companion-server.ts:144` / `:1131`, so the owner
+could pick a level the model advertises and get a refusal. The composer
+picker's own trade-off already treats the provider as the authority for the
+model id ("the picker accepts any non-empty model id; the provider remains the
+authority"); effort now follows the same rule.
+
+**Alternatives rejected.**
+
+- *Narrow the picker to `effortChoices()`.* It drops `none`/`ultra` for models
+  that declare them — the opposite of what a picker driven by the gateway is
+  for — and makes the app's list the arbiter of an external service's
+  vocabulary.
+- *Extend `EFFORT_LEVELS` with `none` and `ultra`.* It hard-codes today's
+  gateway names; the next level a provider adds breaks it again.
+- *Ask the gateway inside the request path.* A network call per turn, and a
+  down gateway would turn a valid level into a 400 — the same mismatch in a
+  worse place.
+
+**What was given up.** A hand-edited `config.json` or `CLONE_AI_MAIN_EFFORT`
+can now carry a level no model declares; the gateway is lenient (every probed
+level returned 200) and may ignore it silently. The turn ledger still records
+the effort, so the audit shows what was asked for.
+`test/companion-config-api.test.ts`'s "rejects an unknown effort" assertion is
+replaced by the opposite contract.
+
+**Evidence.** Live gateway (`curl 127.0.0.1:3425/v1/models`): eleven models
+declare 3–7 levels each, including `none` and `ultra` (both on terra);
+`reasoning_effort` set to `off`/`ultra`/`medium`/`xhigh`/`minimal` across three
+models returned 200 every time, so no provider-level rejection exists to catch.
+Before the change `POST /api/main-agent/stream` with `effort: "ultra"` returned
+400 `effort must be one of off, minimal, low, medium, high, xhigh, max`; after
+it reaches the provider body as `reasoning_effort: "ultra"`.
+
+**Reversal condition.** If a provider starts failing an unknown effort in a way
+the owner cannot see, validate against that provider's declared levels, queried
+once per turn and cached, rather than restoring a fixed list.
+
+## 2026-11-19 — 新请求 is the only creation entry; the main conversation is a pinned row
+
+**Decision.** The sidebar's 对话 button beside 新请求 is removed. 新请求 stays the
+only creation action and keeps the router. The main conversation becomes a pinned
+first row of the conversation list — labeled 主对话 from the existing
+`session-group-main` string, without a hide control — and the tasks its turns
+dispatched nest under it like every other conversation's children.
+`buildDashboard` emits the main conversation as a `kind: "conversation"` row once
+it has a turn, a dispatched task, or legacy history on disk, so an empty home has
+exactly one talk entry; `renderSessions` pins the row above 今天/更早. A hidden
+main conversation stays hidden and offers the existing restore control. Deleting
+the main conversation from the UI is refused.
+
+**Why it won.** The two stacked controls read as the same action. 新请求 opens a
+blank conversation surface; 对话 opens the main conversation, and `renderSession`
+renders the same welcome surface when the thread has no visible turn log
+(`apps/desktop/ui/app.js:2377`, `welcomeMarkup` at 1777). The owner's 2026-11-19
+report is that the difference needs explanation. The runtime already claims one
+top-level row kind — a conversation (the 2026-11-19 "The sidebar's top level is
+the conversation" entry) — and the main conversation was its only exception,
+carried by a dedicated control that duplicated the list's navigation.
+
+**Alternatives rejected.**
+
+- *Keep 对话 and drop 新请求.* A message typed in the main thread continues its
+  history; a fresh goal would no longer reach the router that starts a new Main
+  Agent (added in `fabd3c1`). The capability would be lost, not merged.
+- *One 对话 button with a 新请求 action inside the conversation top bar.* Both
+  capabilities survive, but creation moves into the content and remains a second
+  control that is less discoverable than a row in the list.
+- *Keep 新请求 and add a 主对话 history link on the welcome surface.* The second
+  sidebar control disappears, but the main thread becomes reachable only through
+  新请求 → link (two clicks) and has no row where every other thread lives. The
+  owner opens the welcome to start work, not to navigate.
+- *Make the existing 主对话 group header clickable.* The header exists only when
+  the main conversation dispatched tasks; a main thread with only direct answers
+  would have no entry.
+- *Always show a 主对话 row, even on an empty home.* It would open the same
+  welcome surface as 新请求, recreating the duplication this merge removes.
+- *Sort the main row by recency like every other thread.* It is the purest one-row
+  shape, but the owner's original thread then falls under 更早 and, on a busy
+  home, toward the bottom of the list; the fixed entry is lost. Pinning keeps the
+  entry stable while the row stays a row.
+- *A split or dropdown control.* The owner must still know which half to press;
+  the two labels remain.
+
+**What it costs.** On a home where the main conversation has content, one more
+pinned row and +1 in the 最近 count; the fixed label hides the thread's topic, so
+the preview has to carry it; the main conversation can no longer be hidden from
+the UI (its × is omitted and `deleteSession` refuses it); its children are capped
+together with the row; and a startup with no saved selection may now open the main
+conversation because it is part of `sessions`. The row's preview comes from the
+turn ledger, so a legacy clone home whose main history predates the ledger shows
+此前的对话记录 rather than a preview until the thread is opened. Clicking the row
+while a new request is being typed still drops that text, exactly as clicking any
+conversation row from the welcome already does; that draft path is a separate
+change.
+
+**Reversal condition.** If owners report that the pinned row reads as an action
+again, or that a blank request state must be reachable without a row, restore a
+separate 对话 entry — never a button and a row for the same thread at once.
+
+## 2026-11-19 — A failed run's lesson must cite the failure
+
+**Decision.** A memory of type `procedure` mined from a failed run is accepted
+only when at least one of its cited evidence items records a failure (an error,
+a failed test, a missing file, a denied or timed-out call, a regression). The
+mining prompt marks those evidence lines `[failure]` and says that no marked
+line means no lesson. Every mined summary, failed or not, is also told not to
+restate or paraphrase the parent task. The rule is enforced in the pipeline, not
+only in the prompt: a lesson that cites only successful observations is dropped
+and journaled with its reason.
+
+**Why it won.** Run `16494863…` failed because `README.md` did not exist. Its
+only recorded evidence was a successful `list_directory` of `/Users/user/.clone`;
+the miner still wrote "下次应先直接读取当前工作区根目录的 README.md，而不是列出
+/Users/user/.clone…" as a procedure citing that listing, and it became
+`mem-81aab49b-a11`. Re-running the exact inputs against the same prompt on
+2026-11-19 produced a task-restating procedure in **2/2 fresh samples**, in two
+different wordings; the stored memory is a third. The same prompt on the same
+inputs as a *completed* run returned only the durable preference (2/2), so the
+defect is the failed-run branch, not the prompt as a whole. The prompt already
+said "if the evidence shows no clear cause, return []"; 3/3 outputs ignored it,
+which is why a deterministic backstop is needed.
+
+**Alternatives rejected.**
+
+- *Rely on the existing prompt instruction.* It was present in all three bad
+  outputs; the model treated the work order as the cause.
+- *Add a paraphrase-similarity rule to `restatesTaskObjective`.* The recorded
+  candidate covers 0.54 of its terms from the objective; the deliberately kept
+  `paraphrased-objective` gate case covers 0.74. Any threshold that catches the
+  first also drops the second, and the gate keeps paraphrases on purpose. The
+  evidence rule tests a fact about the run, not a wording guess.
+- *Record failed tool calls as evidence so a lesson can cite the real `ENOENT`.*
+  That is the better long-term source, but a failed observation could satisfy a
+  promised observation at verification. Deferred until evidence carries an
+  outcome the verifier cannot count as success.
+- *Mine only completed runs.* It loses the lessons the failed outcome exists to
+  capture.
+- *Auto-archive the existing memory.* It was owner-approved; archiving is the
+  owner's decision, so the fix only prevents new ones.
+
+**What it costs.** A failed run whose cause exists only in tool errors or the
+verification verdict (no evidence line records it) now yields no lesson. That is
+a deliberate false negative: a missing memory is cheaper than a confident wrong
+one. Existing memories are not touched.
+
+**Reversal condition.** When failed tool results or verification failures are
+recorded as citable evidence with a distinct kind that verification cannot count
+as a successful observation, relax the citation requirement and let lessons
+cite them. If a benchmark shows the rule drops more useful lessons than it
+prevents, revisit the citation requirement rather than loosening it silently.
+
 ## 2026-11-19 — The internal base is the machine root, not a folder
 
 **Decision.** When neither `workspacePath` nor `CLONE_AI_WORKSPACE` is given,
@@ -67,6 +232,159 @@ global setting.
 **Supersedes:** the internal-base half of
 [2026-11-19 — There is no configured working directory; a write names its
 targets](#2026-11-19--there-is-no-configured-working-directory-a-write-names-its-targets).
+
+## 2026-11-19 — Model and effort are chosen in the composer per conversation
+
+**Decision.** The composer gains two pickers next to the send box — model and
+reasoning effort — and the choice travels with the turn: `POST
+/api/main-agent/stream` and `/api/main-agent/query` accept an optional `model`
+and `effort`, which override the persisted `config.json` value for that one
+turn. The desktop remembers the choice per conversation in localStorage. Turns
+without an explicit pick (the main conversation, a routed continuation, WhatsApp
+and scheduled turns) use the configured default model (`mainAgentModel`, set by
+the Magpie gateway's own 使用此模型 action or the environment) and send no
+`reasoning_effort`, so the provider default applies. The Settings page no longer
+shows model or effort controls: the owner asked for one place to choose, and the
+composer is that place; the gateway card on the Agent page still binds the
+default endpoint model. The effort list comes from the gateway's declared
+`reasoningLevels` for the selected model, with the known level list as the
+fallback when the gateway declares none. Wiring the override exposed that the
+Main Agent read `mainAgentEffort` and recorded it in the turn ledger but never
+put `reasoning_effort` in the provider request; the request now carries it, so
+the existing setting (and the new picker) actually changes the reasoning budget
+instead of only the audit row.
+
+**Why it won.** Effort is a property of the request, not of the installation: a
+quick lookup should not force the same reasoning budget as a refactor. With the
+choice only in Settings, changing it for one task silently changes WhatsApp and
+scheduled work too. The owner named Claude Code desktop as the reference, where
+the model/effort picker sits in the composer and a choice belongs to the
+session; this change mirrors that placement. After seeing the first version,
+the owner asked to remove the Settings model/effort rows entirely: the
+composer's empty option said "follow Settings", which pointed at a value hidden
+in another dialog, and two control surfaces made it unclear which one wins. The
+owner's request and screenshots are the evidence for the placement; the
+follow-up is the evidence for removing the duplicate; the code path
+(`readMainAgentEffortPreference` reads only env/config once per turn) is the
+evidence that no per-turn override existed.
+
+**Alternatives rejected.**
+
+- *Keep the Settings rows as defaults (the first version).* The owner rejected
+  it after using it: "follow Settings" referred to a value in another dialog,
+  and two places looked authoritative. Removed at the owner's request; the
+  default model is still set where the gateway is bound, and the effort default
+  stays in config/environment.
+- *Make the composer pickers write `config.json`.* One conversation's cheap-model
+  choice would silently change every other surface, and the composer and the
+  Settings page would compete over the same value with no visible winner.
+- *Persist the choice on the server now, keyed by conversation.* It needs a new
+  preference store, a read API and a migration for one desktop interaction;
+  localStorage already holds per-conversation UI state (selected session, child
+  groups), and no other surface needs the choice yet.
+- *Guess the effort levels instead of asking the gateway.* Rejected already in
+  `src/workers/effort.ts`: the gateway reports what each model accepts, so the
+  picker lists only declared levels and otherwise falls back to the known set.
+- *Keep a second copy in Settings labeled "default".* That was the first
+  version; the owner asked for a single place. The composer's empty option now
+  means the configured default model and the provider-default effort, and the
+  note says the pick is saved with the conversation.
+
+**What was given up.** The per-conversation choice lives in the desktop's
+localStorage: clearing site data or opening the same data directory in another
+client reverts to the configured default, and WhatsApp/scheduled turns never see
+it. The desktop has no control for the default effort of turns without a
+composer: it comes from `CLONE_AI_MAIN_EFFORT` or a self-review action that
+writes `mainAgentEffort`. The default model remains settable through the gateway
+apply action; without it, it comes from the environment. A conversation can
+change models mid-thread; history carries over, so the new model sees the old
+transcript (the turn ledger records `modelId` and `effort` per turn, so the
+audit can explain it). The picker accepts any non-empty model id; the provider
+remains the authority and reports an unknown id as a failed turn.
+
+**Evidence.** `test/companion-main-agent.test.ts` adds a turn that carries
+`model: "composer-model"` and `effort: "high"` and asserts the OpenAI-compatible
+request body the fake provider receives contains that model and
+`reasoning_effort: "high"`; a second turn without overrides still receives the
+configured default model and no `reasoning_effort`.
+`test/companion-config-api.test.ts` rejects an unknown effort with HTTP 400
+before any model call. (That assertion was replaced on 2026-11-19 by
+"Reasoning effort is whatever the gateway declares, not a fixed seven" above:
+the gateway declares per-model levels outside the built-in set, and the
+provider is the authority.) Before the change the stream endpoint had no
+`model` or
+`effort` field, so neither assertion could pass; the provider body also had no
+`reasoning_effort` field at all, which is how the recorded-but-unsent effort was
+found. There is no failed run trace for that class — the turn completes, just at
+the provider's default — so the repair lane had nothing to replay; the wiring
+change is pinned by the provider-body test.
+
+**Reversal condition.** If WhatsApp or scheduled turns must share the same
+per-conversation choice, move the store to the server keyed by conversation id
+and have the desktop read it back. If owners expect a composer change to become
+the default, make the composer write `config.json` and remove the
+per-conversation store. If owners need a visible default effort for turns
+without a composer without editing the environment, add a compact "set as
+default" action to the composer (or restore a single default control in
+Settings) rather than two copies. If the gateway's `reasoningLevels` proves
+unreliable for a provider, keep the fallback list and label the picker as
+advisory.
+
+## 2026-11-19 — A failed run carries its reason, and the Main Agent can read it
+
+**Decision.** When a run fails, the `run.status_changed` payload carries a
+`reason`: the policy decision's reason on a denial, the verification summary on
+a failed verification or a rejected review, and the existing execution message
+on a worker failure. Replay therefore sets `run.failureReason` for every
+failure, not only worker errors. `dispatch_task` returns `failureReason`,
+`runStatusInfo` prints a `Failure:` line for a failed run, and the work update
+and opportunity read `run.failureReason` instead of only `execution.failed` or
+the status payload. Reasons are capped (500 characters) with the full event
+still in the journal.
+
+**Why it won.** In the 2026-11-19 incident, two `dispatch_task` runs
+(`2c8b917a`, `09499a28`) failed on a policy denial. `dispatch_task` returned only
+`failed`, `get_run_status` printed no reason, and the Main Agent re-dispatched
+the same objective 6.6 s later. The verification failure of `fa36a720` was
+journaled with a precise summary, but `run.status_changed` had only
+`{status:"failed"}`; the work update was empty and the opportunity card said
+"没有记录到具体原因". The execution-failure path already passes a message into
+the status (`runtime.ts:568`), which is the model to follow.
+
+**Alternatives rejected.**
+
+- *Return the full journal or policy event to the model.* Too much context; the
+  actionable sentence is enough.
+- *Add a new `get_run_failure` tool.* One more tool and one more round; the
+  model already reads the run status.
+- *Surface the reason only to the owner, not the model.* The duplicate dispatch
+  was model-driven; the model needs it.
+- *Change the policy to allow the write.* The denial is correct; the defect is
+  that it was silent.
+- *Make the owner open the audit.* The conversation should know why the work it
+  dispatched failed.
+- *Store the reason only in `verification.completed`.* That event already
+  exists; the readers use the run record, the work update and the opportunity,
+  all of which key off the status transition.
+
+**What was given up.** Reasons are prose in the journal and can be long or
+technical; they are capped, and the full verification event remains. A policy
+reason may name a path; the plan already carries the scope and redaction
+applies. The owner may see a technical sentence instead of a friendly generic;
+that is better than silence.
+
+**Evidence.** Journal seq 1794/1795 and 1808/1809 (denied; the status payload
+carries only the status), 2433/2434 (verification failed; the status payload
+carries only the status), `work-updates.jsonl` line 14 (empty summary), and the
+opportunity at seq 2436 ("没有记录到具体原因"). The audit findings record the
+same evidence. The repair lane must produce a red-first case: a policy-denied
+run and a verification-failed run both expose their reason in the run record,
+`runStatusInfo` and the dispatch result.
+
+**Reversal condition.** If reasons make the journal unwieldy or leak data,
+store a truncated summary plus a pointer to the event, or a structured
+category/scope. If readers need machine-readable causes, add fields instead of
+prose.
 
 ## 2026-11-19 — The no-progress guard counts each call across the turn, not adjacent batches
 
@@ -308,6 +626,11 @@ root, not a folder](#2026-11-19--the-internal-base-is-the-machine-root-not-a-fol
 replaces the clone-home default with `/`.
 
 ## 2026-11-19 — The sidebar's top level is the conversation; tasks nest inside it
+
+**Superseded (main conversation navigation).** [2026-11-19 — 新请求 is the only
+creation entry; the main conversation is a pinned row](#2026-11-19--新请求-is-the-only-creation-entry-the-main-conversation-is-a-pinned-row)
+replaces the "stays the fixed navigation entry, never a row" clause; the rest of
+this entry stands.
 
 **Decision.** The sidebar exposes one top-level kind per section. A conversation
 row is the thread; the Runs its turns dispatched are collapsible children

@@ -15,6 +15,46 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-19 — A declared effort level reaches the provider instead of a 400
+
+- **Claim:** a level the gateway declares for a model is no longer refused by
+  clone-ai's own validation. `openai/gpt-6.1-terra` declares
+  `none, low, medium, high, xhigh, max, ultra`; `ultra` previously returned
+  HTTP 400 from `POST /api/main-agent/stream` and `PATCH /api/config`, so the
+  composer and Settings pickers offered a choice the server rejected. After the
+  change the name is trimmed, bounded at 64 characters, and forwarded as
+  `reasoning_effort`; only a value that is not a name (a non-string, empty, or
+  over-long) is refused.
+- **Evidence:** live gateway `curl 127.0.0.1:3425/v1/models` shows eleven
+  models declaring 3–7 levels each; `reasoning_effort` set to
+  `off`/`ultra`/`medium`/`xhigh`/`minimal` across three models returned 200
+  every time. `test/companion-main-agent.test.ts` asserts the fake provider
+  receives `reasoning_effort: "ultra"`; `test/companion-config-api.test.ts`
+  stores and clears `ultra` through `PATCH /api/config` and still refuses `42`.
+  `npm test` **934/934**, `npm run typecheck` exit 0, `npm run gate` PASS,
+  baseline unchanged.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--reasoning-effort-is-whatever-the-gateway-declares-not-a-fixed-seven);
+  [execution chain](optimizations.md#2026-11-19--the-effort-picker-and-the-server-disagree-on-level-names-the-lane-could-not-start-so-the-owner-approved-a-patch).
+
+## 2026-11-19 — A failed run's lesson must cite the failure
+
+- **Claim:** a procedure mined from a failed run is accepted only when it cites
+  evidence that records the failure. The recorded memory `mem-81aab49b-a11` —
+  a task restatement citing a successful directory listing — is refused, while
+  the task's durable preference ("以后所有报告默认使用简体中文") is kept on
+  **2/3** failed-run samples and **3/3** completed-run samples. A memory file
+  no longer repeats its summary as the first line of its content.
+- **Evidence:** `npm run gate` **PASS**, memory **31/31** with five new cases;
+  the first full `npm test` was **930/931** (the one failure was a new
+  English-only comment, fixed); typecheck exit 0. Real model, 3 samples per
+  outcome on the recorded run: before, **3/3** failed-run samples (the stored
+  memory plus two probes) produced a task-restating procedure; after, **0 kept
+  lessons** in both outcomes, with the durable preference kept **3/3** on the
+  completed outcome and **2/3** on the failed one —
+  `benchmark/results/memory-failure-lesson-2026-11-19T09-11-25-790Z.json`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-failed-runs-lesson-must-cite-the-failure);
+  [execution chain](optimizations.md#2026-11-19--a-failed-runs-lesson-must-cite-the-failure).
+
 ## 2026-11-19 — The internal base is the machine root
 
 - **Claim:** the runtime's internal base is `/` when no explicit

@@ -31,6 +31,120 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — The effort picker and the server disagree on level names; the lane could not start, so the owner approved a patch
+
+- **Goal / hypothesis:** the composer and Settings pickers list the levels the
+  Magpie gateway declares for the selected model (`reasoningLevelsFor`,
+  `apps/desktop/ui/app.js:1528`), but `PATCH /api/config` and the turn body
+  accept only the seven names in `src/workers/effort.ts:14`. A model that
+  declares `none`/`ultra` (here `openai/gpt-6.1-terra`,
+  `reasoning_levels = [none, low, medium, high, xhigh, max, ultra]`) is offered
+  those levels and then rejected with HTTP 400 at
+  `src/companion-server.ts:144` / `:1131`; `off`/`minimal` are accepted but
+  declared by no model. `effortChoices()` was written to narrow the declared
+  list and has no caller.
+- **Trade-off:** [reasoning effort is whatever the gateway declares, not a fixed seven](../architecture/trade-offs.md#2026-11-19--reasoning-effort-is-whatever-the-gateway-declares-not-a-fixed-seven).
+- **Change:** the turn body and `PATCH /api/config` accept any non-empty effort
+  name (trimmed, `MAX_EFFORT_LENGTH` = 64) instead of the seven fallback values.
+  `src/workers/effort.ts` gains `normalizeEffort` and drops the unused
+  `effortChoices`; `src/companion-server.ts` (`parseTurnModelAndEffort`, the
+  config `PATCH`), `src/config/clone-config.ts`, `src/main-agent/model-preferences.ts`,
+  `src/application/run-main-query.ts` and `src/main-agent/native-runtime.ts`
+  carry `string` instead of the `EffortLevel` union; `src/audit/self-review.ts`
+  keeps `isEffortLevel` as the conservative proposal filter. The picker is
+  unchanged: it already lists the gateway's declared levels.
+- **Eval:** `node --experimental-strip-types --test
+  test/companion-config-api.test.ts test/companion-main-agent.test.ts`.
+  Before: the streaming endpoint returned 400 `effort must be one of …` for
+  `ultra`, and `PATCH /api/config` refused the same name. After: `PATCH` stores
+  `ultra` and clears it, a non-string is still 400, and the fake provider
+  receives `reasoning_effort: "ultra"` for a turn whose model declares it.
+  `npm test` **934/934**, `npm run typecheck` exit 0, `npm run gate` PASS,
+  baseline unchanged.
+- **Execution chain:** verified the rejection paths by reading
+  `parseTurnModelAndEffort` and the two route handlers; queried the live gateway
+  (`curl 127.0.0.1:3425/v1/models`) for every model's declared levels; probed
+  the gateway with `reasoning_effort` set to `off`/`ultra`/`medium`/`xhigh`/
+  `minimal` across three models — all returned **200**, so no provider-level
+  failure exists to reproduce either. Ran `npm run traces -- export` (25 traces
+  written) and `npm run repair -- --dry-run --max-traces 5`; the lane would
+  consume the first five by run id (`09499a28`, `0973bca9`, `16494863`,
+  `2c8b917a`, `32158dc2`), all unrelated (working-directory lookups, Forbidden
+  City, "执行失败" follow-ups). No trace mentions effort. The 400 is raised
+  before any run is accepted, so `recordMainAgentTurnInterrupted` finds no
+  started record (`src/main-agent/turn-audit.ts:542`) and the UI's interruption
+  POST is a no-op; traces are built from run audits, not the turn ledger, so
+  the failure leaves nothing the lane can read. With the lane unable to start,
+  the owner approved an out-of-band patch (the 2026-11-17 precedent), recorded
+  here.
+- **Pros:** the lane's own gate said "no trace" instead of letting a repair run
+  loose on five unrelated failures, which is the outcome the gate exists for.
+  The patch follows the existing model-id contract instead of inventing a new
+  level list.
+- **Cons / next time:** the lane has no input class for a failure rejected at
+  the HTTP edge before a run exists, so a real defect cannot be repaired by the
+  loop at all. This is the same gap recorded on 2026-11-17 ("the lane's input
+  selector needs a 'verification accepted without a result' class"). The patch
+  was hand-written, so this entry carries no evidence about whether the loop
+  works; a future change should give the lane that input class instead of
+  repeating the exception.
+- **Reversal condition:** copied from the trade-off — if a provider starts
+  failing an unknown effort in a way the owner cannot see, validate against
+  that provider's declared levels (queried once per turn and cached) rather
+  than restoring a fixed list.
+
+### 2026-11-19 — The sidebar has one talk entry; the main conversation is a pinned row
+
+- **Goal / hypothesis:** the owner read 新请求 and 对话 as the same action. Remove
+  the duplicate control while keeping both capabilities: a routed new request,
+  and one-click access to the main thread's history.
+- **Trade-off:** [新请求 is the only creation entry; the main conversation is a pinned row](../architecture/trade-offs.md#2026-11-19--新请求-is-the-only-creation-entry-the-main-conversation-is-a-pinned-row).
+- **Change:** the 对话 button, its handler and its locale key are gone.
+  `buildDashboard` emits the main conversation as a `kind: "conversation"` row
+  once it has a turn, a dispatched task, or legacy history on disk, and
+  `capSessionRows` keeps it outside the 40-root window. `renderSessions` pins that
+  row above 今天/更早; `sessionMarkup` gives it the fixed 主对话 label, the
+  legacy-preview hint and no hide control; `deleteSession` refuses it. Files:
+  `apps/desktop/ui/index.html`, `apps/desktop/ui/app.js`,
+  `src/desktop/ui-locale.ts`, `src/companion-server.ts`,
+  `src/main-agent/conversation-history.ts`.
+- **Eval:** `node --experimental-strip-types --test test/ui-structure.test.ts
+  test/ui-locale.test.ts test/regression/ui-sidebar-hidden-restore.test.ts
+  test/companion-control-plane.test.ts test/companion-config-api.test.ts`.
+  Before: `index.html` declared `#open-conversation`, `sessionMarkup` had no main
+  form, the dashboard excluded `main-agent-conversation` and the hidden-restore
+  sandbox had no main row. After: 5 files pass, including "the main conversation
+  is a pinned row…", "the pinned main conversation survives the sidebar row cap",
+  "an empty main conversation is not a row" and the legacy-only dashboard row.
+  `npm test` 934/934, `npm run typecheck` exit 0, `npm run gate` PASS, baseline
+  unchanged. Visual check: a temporary companion on a seeded home rendered 新请求
+  + pinned 主对话 + today's conversation, clicking 主对话 opened it, and an empty
+  home rendered only 新请求 with 最近 0.
+- **Benchmark run:** none; the eval is deterministic tests plus a browser check.
+- **Execution chain:** inline scouting of both handlers and the dashboard builder;
+  one Workflow design pass (3 proposals + 3 judges, 6 agents, ~930k subagent
+  tokens, ~16 min); inline implementation; a second pass after the judges flagged
+  the empty-row duplication (presence rule, legacy hint, cap test); final
+  typecheck/test/gate. Failures: the first always-emit version recreated the
+  duplicate on an empty home and was corrected; one dashboard test expectation
+  was corrected to the presence rule; a concurrent session in the shared working
+  tree briefly made `test/ui-structure.test.ts` red on unrelated config ids
+  (resolved by that session, not touched here).
+- **Pros:** the judge panel caught the empty-row duplication and the cap risk
+  before the user saw them; the sandbox drives the real `renderSessions`, so the
+  eval is behavioral rather than source-shape; both the populated and empty homes
+  were checked in a browser.
+- **Cons / next time:** three max-effort proposal agents cost ~16 minutes for a
+  small design space; lower effort would have been enough. The shared working tree
+  was edited concurrently, so full-suite runs were noisy and files had to be
+  re-read. Clicking a row while a new request is typed still drops the text; that
+  pre-existing draft path is left for a separate change.
+- **Result entry:** none — the gain is structural and owner-directed, not a
+  measured improvement.
+- **Reversal condition:** if owners report that the pinned row reads as an action
+  again, or that a blank request state must be reachable without a row, restore a
+  separate 对话 entry — never a button and a row for the same thread at once.
+
 ### 2026-11-19 — The internal base is the machine root, not a folder
 
 - **Goal / hypothesis:** a task's tools, relative paths and verification should
@@ -76,6 +190,148 @@ file keeps every attempt, including the ones that did not work.
   derives a workspace-local checkpoint path; the factory path is the only
   production one.
 - **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-19 — A failed run's lesson must cite the failure
+
+- **Goal / hypothesis:** the owner's library held one memory mined from run
+  `16494863…`: "下次应先直接读取…README.md，而不是列出 /Users/user/.clone…", a
+  procedure that restated the work order and cited a successful directory
+  listing. Marking failure evidence in the prompt and refusing a failed-run
+  procedure that cites none should remove that memory without losing the
+  durable preference embedded in the same task ("以后所有报告默认使用简体中文").
+- **Trade-off:** [a failed run's lesson must cite the failure](../architecture/trade-offs.md#2026-11-19--a-failed-runs-lesson-must-cite-the-failure).
+- **Change:** `src/memory/memory-hygiene.ts` adds `evidenceRecordsFailure` and
+  `isUngroundedFailureLesson`; `src/memory/memory-pipeline.ts` refuses an
+  ungrounded failed-run procedure and journals
+  `droppedUngroundedFailureLessons` with a per-candidate `reason`;
+  `src/memory/agent-memory-worker.ts` marks failing evidence `[failure]` and
+  rewrites the failed-run rules. The same change stops the memory file from
+  repeating its summary: `src/memory/md-memory-store.ts` omits content equal to
+  the summary, and `MemoryGovernance.promote` stores only the provenance line
+  as content. The gate's `MemoryCase` gained `outcome`, `evidence`, and
+  `citedEvidence`; five cases and a regenerated baseline pin the rule.
+  `benchmark/memory-failure-lesson.ts` and `npm run bench:memory-lesson` make
+  the model eval reproducible.
+- **Eval:**
+  - `node --experimental-strip-types --test test/agent-memory-worker.test.ts test/memory-candidate-quality.test.ts test/memory-governance.test.ts test/md-memory-store.test.ts` — **60/60**.
+  - `npm run gate` — **PASS**, memory **31/31** (five new cases; baseline diff is exactly those five entries).
+  - `npm run typecheck` — exit 0.
+  - `npm test` — **930/931** at the first full run; the one failure was a
+    new English-only comment and is fixed. Later runs report **926/931** with
+    five desktop-shell failures caused by the owner's uncommitted
+    `id="open-conversation"` removal in `apps/desktop/ui/index.html`; no memory
+    test is involved and no file in this change overlaps those assertions.
+- **Benchmark run:**
+  - Command: `npm run bench:memory-lesson -- --samples 3`; provider `native`,
+    model `deepseek/deepseek-v4.1-flash`; no effort parameter and no
+    temperature set (provider default); `maxCandidates` 3.
+  - Inputs: run `16494863-1fde-4e58-bb3d-45b432fc3270`, evidence
+    `faebe5fb-b9a1-4764-a83f-c9de5f55e3c1` ("list_directory read
+    /Users/user/.clone"), objective as recorded; each outcome sampled 3 times.
+  - Result: `benchmark/results/memory-failure-lesson-2026-11-19T09-11-25-790Z.json`.
+  - Before/after: before, the stored memory plus **2/2** fresh probes of the
+    failed outcome produced a task-restating procedure (three distinct
+    wordings); completed-outcome probes produced none, and the preference
+    appeared in the probes. After, both outcomes yielded **0 kept lessons**;
+    the completed outcome kept the preference **3/3**, the failed outcome
+    **2/3** (one sample returned no candidate).
+- **Execution chain:** read the memory pipeline, prompt, gate, store, and
+  governance; queried the journal for run `16494863…`; probed the current
+  prompt twice on the failed outcome and twice on the completed outcome;
+  implemented the rule and prompt; ran typecheck, four targeted suites, the
+  gate, and the full suite; iterated the prompt wording twice (the first
+  wording suppressed the preference, the second restored it); added the
+  benchmark script and ran 6 model calls. The endpoint does not return usage in
+  this path, so the run's token cost was not metered.
+- **Pros:** the rule is a fact about the run (does the cited evidence record a
+  failure?), not a similarity guess; the gate pins both directions; the
+  benchmark uses the exact recorded inputs, so the before/after is reviewable.
+- **Cons / next time:** the first prompt wording over-corrected and returned
+  `[]` for completed runs too; the fix was to name the *work order* instead of
+  the parent task and to say an embedded preference is not an implied detail.
+  On a failed run the embedded preference is still kept less consistently
+  (2/3) than on a completed run (3/3). A failed run whose cause exists only in
+  tool errors still yields no lesson (documented cost). Next time, start with
+  the exact recorded job as the probe before writing the prompt.
+- **Reversal condition:** when failed tool results or verification failures
+  become citable evidence with a kind verification cannot count as success,
+  relax the citation requirement. If a benchmark shows more useful lessons
+  dropped than wrong ones prevented, revisit the rule.
+
+### 2026-11-19 — Model and effort are chosen in the composer, per conversation
+
+- **Goal / hypothesis:** the owner asked why reasoning effort lives only in
+  Settings while Claude Code desktop puts the model and effort next to the send
+  box. Moving the choice into the composer, scoped to the conversation and with
+  Settings kept as the default for surfaces without a composer, should make
+  effort a property of the request. Wiring it exposed a second defect: the Main
+  Agent read `mainAgentEffort` and recorded it in the turn ledger but never put
+  `reasoning_effort` in the provider request, so the setting did nothing.
+- **Trade-off:** [model and effort are chosen in the composer per conversation](../architecture/trade-offs.md#2026-11-19--model-and-effort-are-chosen-in-the-composer-per-conversation).
+- **Change:** `src/main-agent/native-runtime.ts` accepts per-turn `model` and
+  `effort` overrides and sends `reasoning_effort` in the Main Agent request
+  (`nativeChatModel` → `chat`); `src/application/run-main-query.ts` threads the
+  options; `src/companion-server.ts` parses and validates `model`/`effort` on
+  `/api/main-agent/stream` and `/api/main-agent/query` (unknown effort → HTTP
+  400 before any model call). The composer adds two pickers
+  (`apps/desktop/ui/index.html`, `app.js`, `components.css`) backed by
+  per-conversation localStorage; the Settings model/effort rows were removed
+  after the owner's follow-up, so the composer is the only picker and an empty
+  choice means the configured default model / the provider-default effort. The
+  effort list now reads the gateway's `reasoningLevels` for the chosen model —
+  the old code read `state.gateway`, which was never assigned, so it had always
+  shown the fallback list. The observation-sources note and empty state now say
+  what a source reads and that it cannot act.
+- **Eval:** `node --experimental-strip-types --test
+  test/companion-main-agent.test.ts` **7/7**; the new case asserts the fake
+  provider receives `model: "composer-model"` and `reasoning_effort: "high"`,
+  then receives `settings-model` with no `reasoning_effort` on a turn without
+  overrides. `test/companion-config-api.test.ts` **22/22** adds the HTTP 400 case
+  for an unknown effort; `test/ui-structure.test.ts` **26/26**. Browser check
+  against a temporary companion server in dev mode: a picker change persisted,
+  reload restored it, switching models narrowed effort to the gateway's declared
+  levels and cleared an invalid level, and a stubbed submit captured
+  `{model, effort}` in the stream body and wrote the conversation key. Full
+  `npm test` **926/926**; `npm run typecheck` exit 0; `npm run gate` **PASS**,
+  baseline unchanged.
+- **Benchmark run:** none — deterministic contract and DOM evals; no provider,
+  dataset, split, seed or scoring parameter. No result entry: this is a new
+  interaction and contract, not a measured performance gain.
+- **Execution chain:** inline in this session. Read the settings, composer,
+  router, runtime, connector and gateway paths; wrote the bilingual trade-off
+  first; changed the runtime and API; added the two tests; built the UI and
+  locale strings; ran typecheck and the targeted suites; started a temporary
+  companion server on port 4319 (`CLONE_AI_DEV_MODE=1`) and drove the page with
+  Chrome DevTools (picker change, reload, invalid-level reset, stubbed submit);
+  fixed a selection-reset bug the DOM check found; stopped the server. The
+  owner then asked to remove the Settings rows; the markup, the settings render
+  and save functions, their listeners and the dead locale keys were removed and
+  the targeted suites rerun. No Workers, benchmark run or repair lane — the
+  effort bug has no failed trace (the turn completes at the provider's default),
+  and the fix is pinned by the provider-body test.
+- **Pros:** the choice sits where the request is written; per-conversation scope
+  leaves WhatsApp and scheduled work alone; the gateway's declared levels now
+  drive the picker; the effort setting finally reaches the provider.
+- **Cons / next time:** the per-conversation store is localStorage only, so
+  another client falls back to the configured default. The new-request picker is
+  sticky (it keeps the last explicit choice) while the note says the choice is
+  saved with the conversation. The desktop no longer exposes a default effort
+  for turns without a composer; it comes from `CLONE_AI_MAIN_EFFORT` or a
+  self-review action, and the default model is still bound through the Agent
+  page's gateway card. The model id is not validated against the catalog
+  server-side; the provider remains the authority. The structural tests could
+  not catch the select-reset bug the browser check found; a DOM-level picker
+  test would catch that class earlier.
+- **Reversal condition:** if WhatsApp or scheduled turns must share the same
+  per-conversation choice, move the store to the server keyed by conversation id
+  and have the desktop read it back. If owners expect a composer change to
+  become the default, make the composer write `config.json` and remove the
+  per-conversation store. If owners need a visible default effort for turns
+  without a composer without editing the environment, add a compact "set as
+  default" action to the composer (or restore a single default control in
+  Settings) rather than two copies. If the gateway's `reasoningLevels` proves
+  unreliable for a provider, keep the fallback list and label the picker as
+  advisory.
 
 ### 2026-11-19 — The no-progress guard counts each call across the turn
 
