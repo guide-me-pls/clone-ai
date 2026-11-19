@@ -6,6 +6,76 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — One runtime per clone home: dev mode takes the LaunchAgent down, a second sidecar refuses to start
+
+**Decision.** `npm run desktop:dev` boots the `ai.clone.companion` job out of the
+user's GUI domain for the dev session and bootstraps the same plist back when
+the driver exits. Independently, `startCompanionServer` takes a directory lock
+(`companion-runtime.lock`) inside the clone home before it hydrates the journal
+and refuses to start while another live process owns it, naming the owner's pid.
+
+**Why it won.** The dev driver's only exclusion was `pkill` on
+`src/desktop-sidecar.ts`. launchd's `KeepAlive` restarts that job in
+milliseconds — the unified log shows `service inactive: ai.clone.companion` at
+16:37:11, 16:55:47, 17:38:55 and 17:41:50 on 2026-11-19, each immediately
+followed by a new instance — so the dev app's own sidecar always became a second
+writer on the owner's home. At 17:44 `ps` showed the launchd daemon (pid 46832)
+and the dev sidecar (pid 53933) both alive; `companion-endpoint.json` named
+53933 and `main-agent-turn-owner.json` was claimed by it too. When the dev
+sidecar closed, `clearCompanionEndpointIfOwned` deleted that file although 46832
+was still serving. A packaged window then read no endpoint, waited 120 × 0.5 s,
+and showed the reported card, "launchd 没有在 60 秒内发布端点" — the screenshot
+was taken at 17:38 after the same fight, and the daemon republished at 17:38:55
+when the dev supervisor's `pkill` made launchd restart it. A deterministic
+reproduction (two servers on one temporary home) repeats the sequence: A
+publishes `:64237`, B overwrites with `:64239`, B `close()` removes the file,
+and A still answers `/api/health` with 200.
+
+**Alternatives rejected.**
+
+- *Keep `pkill` as the exclusion.* launchd restarts the killed job before the
+  dev app has finished launching; the two-writer state is then guaranteed, not
+  accidental. This is the mechanism that produced the report.
+- *Accept two sidecars and republish the endpoint on a heartbeat.* It addresses
+  the symptom only: two schedulers, two turn-owner claims and two journal
+  writers remain — the condition behind the 2026-11-18 raced
+  `failed -> verifying` transition.
+- *Give the dev driver its own clone home.* UI work has to see the owner's real
+  conversations, tasks and memory; an empty home hides the state being
+  developed and reintroduces the "tasks vanished" confusion the preview-home
+  removal already fixed.
+- *Wait for the lock instead of refusing.* A second daemon that blocks would
+  start later behind the app's back and claim the turn ledger mid-session.
+  Refusing is visible at once in the window's stderr and the daemon log.
+- *Pause only the dev sidecar's writes.* Partial exclusion still leaves two
+  processes serving `/api/*`; the window could attach to the wrong one.
+
+**What was given up.** While `desktop:dev` runs, the resident twin is unloaded,
+so a packaged launch during that time starts a private runtime (the LaunchAgent
+is absent from launchd's domain). If the driver is SIGKILLed, the job stays
+unloaded until login or a reinstall; the plist stays on disk, so login restores
+it and `node scripts/install-daemon.mjs` restores it sooner. A second manual
+sidecar on a live home now exits with an error instead of starting — deliberate,
+and the error names the owning pid.
+
+**Evidence.** `ps` showed 46832 (launchd) and 53933 (child of the dev app) both
+running; `companion-endpoint.json` named `http://127.0.0.1:63042` pid 53933 while
+46832 answered health; `main-agent-turn-owner.json` named 53933. The launchd log
+(`log show --predicate 'eventMessage CONTAINS "service inactive: ai.clone.companion"'`)
+lists the restarts. The two-server reproduction and the red regression test are
+`test/companion-singleton.test.ts`. The repair lane could not take this defect:
+its trigger is a failed Run trace, and this failure happens before any run
+exists (the same gap recorded for the 2026-11-19 effort fix); the owner approved
+the direct patch.
+
+**Reversal condition.** If launchd gains a supported "pause KeepAlive without
+unloading" or the app can hand the job to the dev driver without bootout,
+replace the bootout. If a legitimate workflow needs two sidecars on one home
+(for example a read-only companion), give that process a separate home or a
+read-only mode; do not remove the lock. If the lock ever blocks a test or tool
+that intentionally shares a home, that path must be given its own home, not an
+exception in the daemon.
+
 ## 2026-11-19 — Reasoning effort is whatever the gateway declares, not a fixed seven
 
 **Decision.** The per-turn `effort` field and `PATCH /api/config`'s
@@ -330,6 +400,60 @@ Settings) rather than two copies. If the gateway's `reasoningLevels` proves
 unreliable for a provider, keep the fallback list and label the picker as
 advisory.
 
+## 2026-11-19 — A failed turn stays visible in the sidebar while its child run is active
+
+**Decision.** A conversation row's status gives a failed or interrupted latest
+turn precedence over a non-waiting active child; waiting children still win.
+The preview shows the turn's failure and, when a child is still active, appends
+"N 个任务仍在执行". A completed or running turn with an active child still reads
+running. The child row keeps its own status.
+
+**Why it won.** The 2026-11-19 no-progress stop marks the turn failed while the
+run it spawned continues by design. `conversationStatus` checked active children
+before the latest turn's failure, so the sidebar read running for the whole run —
+eleven minutes in the incident — and the owner saw the failure only after
+opening the conversation. `conversationPreview` did the same with
+"N 个任务正在执行". The status slot is the one place the owner scans; a running
+child does not mean the conversation's last turn answered.
+
+**Alternatives rejected.**
+
+- *Keep running precedence and add a separate failure badge.* The row already
+  has one status slot; a second signal must be learned and the preview would
+  still say running.
+- *Mark the child row failed.* The child is running; that would lie about the
+  child.
+- *Wait until the child finishes to show the turn failure.* That is the masking
+  this fixes.
+- *Move failed turns into 需要你的确认.* That section is for owner decisions;
+  a failed turn is not a decision, and the status plus preview is where the
+  owner already looks.
+- *Give a failed child the same precedence.* A failed child among active
+  siblings is a different case; this entry is about the conversation's own last
+  turn.
+- *Require the failed turn to be newer than the child's last update.* The
+  incident's run updates after the turn fails (running → verifying), which would
+  re-hide the failure; the conversation's last turn is the fact that matters.
+
+**What was given up.** A conversation whose latest turn failed but whose child
+is still working no longer reads 运行中; an owner scanning for active work sees
+需要处理 and the preview's "N 个任务仍在执行". The row's status is no longer a
+pure aggregate of its children; it includes the conversation's own last turn.
+
+**Evidence.** The audit reproduced the old order in `conversationStatus`
+(active child → running, before the latest-turn failure) and in
+`conversationPreview` (active count before the turn). The incident's turn
+completed at 06:14:21 (failed under the new guard) while its run stayed active
+until 06:25:46. The new test appends a failed turn and a queued child under the
+same conversation and asserts status `failed` and a preview containing the
+failure plus "1 个任务仍在执行"; a waiting child still yields `waiting_approval`,
+and a completed turn with an active child still yields `running`.
+
+**Reversal condition.** If owners expect the row to read running whenever a
+child is active, require the failure to be newer than the child's last update or
+add a separate failure badge. If the combined preview is confusing, show the
+failure only in the conversation pane.
+
 ## 2026-11-19 — A failed run carries its reason, and the Main Agent can read it
 
 **Decision.** When a run fails, the `run.status_changed` payload carries a
@@ -650,6 +774,13 @@ a peer kind, 任务对话 and 个人对话 are retired. `buildSession` no longer
 a missing trigger `conversationId` to the main conversation: a send from a
 conversation-less task record is routed as a new request, not silently into the
 main thread.
+
+**Superseded clause (2026-11-19, later the same day).** The aggregate order
+above is now waiting > latest-turn failure > running > recent failure >
+completed: a failed or interrupted latest turn outranks a non-waiting active
+child, and the preview shows the failure plus the active count. See the entry at
+the top of this file. A completed/running turn with an active child still reads
+running, and a waiting child still wins.
 
 This supersedes the "no conversation rows" clause of the 2026-11-18 "The task
 record is the unit" entry — its reversal condition anticipated owners wanting to

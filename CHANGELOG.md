@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A failed turn stays visible in the sidebar while its task runs
+
+The conversation row now gives a failed or interrupted latest turn precedence over a running child: the row reads 需要处理 and its preview shows the failure plus "N 个任务仍在执行". A waiting decision still wins, and a completed turn with an active child still reads 运行中. The child row keeps its own status.
+
+对话行现在让失败或被中断的最新回合优先于运行中的子任务：行显示需要处理，预览显示失败并追加“N 个任务仍在执行”。等待中的决定仍然优先；完成回合带活跃子任务仍显示运行中。子行保留自己的状态。
+
 ### A failed run says why it failed
 
 The Kernel now records a policy denial's reason, or the verification summary (capped at 500 characters) on a failed verification or rejected review, in the run's status. `run.failureReason` therefore covers every failure; `get_run_status` prints `Failure:`, `dispatch_task` returns `failureReason`, and the work update and opportunity card read it instead of "没有记录到具体原因". Worker failures keep their existing message.

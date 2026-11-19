@@ -333,6 +333,47 @@ file keeps every attempt, including the ones that did not work.
   unreliable for a provider, keep the fallback list and label the picker as
   advisory.
 
+### 2026-11-19 — A failed turn is not hidden by its running child
+
+- **Goal / hypothesis:** the audit found `conversationStatus` returned `running`
+  as soon as any child was active, before checking the latest turn's failure,
+  and `conversationPreview` did the same with "N 个任务正在执行". A no-progress
+  stop marks the turn failed while its run keeps working, so the sidebar hid the
+  failure for the run's lifetime. Giving the failed/interrupted latest turn
+  precedence over non-waiting active children, and showing the failure plus the
+  active count, should make the failure visible without misreporting the child.
+- **Trade-off:** [a failed turn stays visible in the sidebar while its child run is active](../architecture/trade-offs.md#2026-11-19--a-failed-turn-stays-visible-in-the-sidebar-while-its-child-run-is-active).
+- **Change:** `src/companion-server.ts` — `conversationStatus` checks a failed or
+  interrupted latest turn before the active-child branch (waiting children still
+  win); `conversationPreview` returns the turn's failure and appends
+  "N 个任务仍在执行" when a child is active. The child row keeps its own status.
+  `test/companion-control-plane.test.ts` adds a failed turn plus a queued child
+  and a completed turn plus a queued child.
+- **Eval:** the new case is **red on the old order** (the row reads running and
+  the preview says one task is executing) and green after;
+  `test/companion-control-plane.test.ts` **28/28**; `npm test` **941/941**;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline unchanged.
+- **Benchmark run:** none — deterministic sidebar read-model contract; no
+  provider, model, dataset, split, seed or scoring parameter.
+- **Execution chain:** the finding came from the 41-agent audit (39 min, 3.35M
+  subagent tokens). The fix was inline: read `conversationStatus`/
+  `conversationPreview` and the dashboard tests, wrote the bilingual trade-off,
+  edited the two functions, added the two-conversation test, swapped
+  `companion-server.ts` back to HEAD to reproduce the red case, restored it,
+  then ran the full suite, typecheck and gate. No separate workers or retries.
+- **Pros:** the failure is visible in the one status slot the owner scans; the
+  preview says both facts instead of choosing one; waiting decisions still
+  outrank a failure; a completed/running turn with an active child still reads
+  running; the child row is untouched.
+- **Cons / next time:** the row status is no longer a pure aggregate of its
+  children; an owner scanning for active work sees 需要处理 and must read the
+  preview for "N 个任务仍在执行". A failed child among active siblings remains a
+  separate, unchanged case.
+- **Reversal condition:** if owners expect the row to read running whenever a
+  child is active, require the failure to be newer than the child's last update
+  or add a separate failure badge. If the combined preview is confusing, show
+  the failure only in the conversation pane.
+
 ### 2026-11-19 — A failed run's reason reaches the model and the owner
 
 - **Goal / hypothesis:** the audit found the reason missing at four surfaces: a

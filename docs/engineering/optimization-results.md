@@ -68,6 +68,19 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--the-internal-base-is-the-machine-root-not-a-folder);
   [execution chain](optimizations.md#2026-11-19--the-internal-base-is-the-machine-root-not-a-folder).
 
+## 2026-11-19 — A failed turn stays visible beside its running child
+
+- **Claim:** a conversation whose latest turn failed or was interrupted no longer
+  reads 运行中 because a child run is active. The row reads 需要处理 and its
+  preview shows the turn's failure plus "N 个任务仍在执行"; a waiting child still
+  yields its waiting status, and a completed/running turn with an active child
+  still reads running.
+- **Evidence:** the new `test/companion-control-plane.test.ts` case is red on the
+  old order (row running, preview "1 个任务正在执行") and green after; the file is
+  **28/28**, `npm test` **941/941**, typecheck exit 0, gate **PASS**.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-failed-turn-stays-visible-in-the-sidebar-while-its-child-run-is-active);
+  [execution chain](optimizations.md#2026-11-19--a-failed-turn-is-not-hidden-by-its-running-child).
+
 ## 2026-11-19 — A failed run says why it failed
 
 - **Claim:** a policy denial now records its reason, and a failed verification

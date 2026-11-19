@@ -540,6 +540,62 @@ test("a conversation row owns its dispatched runs and aggregates their status", 
   }
 });
 
+test("a failed latest turn stays visible while its child run is active", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const assembly = await createRuntimeAssembly({ dataDirectory });
+  try {
+    const at = new Date().toISOString();
+    const step = {
+      id: "read", title: "读取", instructions: "只读读取资料", risk: "read_only" as const,
+      acceptanceCriteria: ["读取完成"], agentId: "context-researcher",
+      requiredCapabilities: ["research", "filesystem_read"],
+    };
+    await appendMainAgentTurnRecord(dataDirectory, {
+      id: "turn-failed",
+      text: "整理资料",
+      status: "failed",
+      startedAt: at,
+      completedAt: at,
+      error: "The agent called get_run_status 5 times with the same arguments and the same result in this turn; the turn was stopped because it was making no progress.",
+      conversationId: "conversation-failed",
+    });
+    const failed = await assembly.runtime.acceptTrigger({
+      kind: "query", summary: "派发一", payload: { source: "main-agent", conversationId: "conversation-failed" },
+    });
+    // Leave the run queued: it is an active child, not a finished one.
+    // 让 Run 保持排队：它是活跃子任务，而不是已完成的。
+    await assembly.runtime.attachPlan(failed.run.id, { summary: "派发一", steps: [step] });
+
+    await appendMainAgentTurnRecord(dataDirectory, {
+      id: "turn-completed",
+      text: "写周报",
+      status: "completed",
+      startedAt: at,
+      completedAt: at,
+      reply: "已写完。",
+      conversationId: "conversation-running",
+    });
+    const running = await assembly.runtime.acceptTrigger({
+      kind: "query", summary: "派发二", payload: { source: "main-agent", conversationId: "conversation-running" },
+    });
+    await assembly.runtime.attachPlan(running.run.id, { summary: "派发二", steps: [step] });
+
+    const dashboard = await (await companionFetch(url, token, "/api/dashboard")).json() as {
+      sessions: Array<{ id: string; status: string; preview: string }>;
+    };
+    const failedRow = dashboard.sessions.find((session) => session.id === "conversation-failed");
+    assert.equal(failedRow?.status, "failed", "a failed turn outranks its active child");
+    assert.match(failedRow?.preview ?? "", /已停止以免空转/);
+    assert.match(failedRow?.preview ?? "", /1 个任务仍在执行/);
+
+    const runningRow = dashboard.sessions.find((session) => session.id === "conversation-running");
+    assert.equal(runningRow?.status, "running", "a completed turn with an active child still reads running");
+    assert.match(runningRow?.preview ?? "", /1 个任务正在执行/);
+  } finally {
+    assembly.close();
+  }
+});
+
 test("a paused run is offered for phone approval and the request is journaled", async (t) => {
   const { url, token, dataDirectory } = await companion(t);
   const assembly = await createRuntimeAssembly({ dataDirectory });
