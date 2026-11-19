@@ -180,6 +180,41 @@
 - **推翻条件：** 见三条取舍条目；共同的推翻条件是"侧栏太吵时把对话与任务收进可折叠行；
   学到的文件夹太吵时增加忘记操作并要求点名两次"。
 
+### 2026-11-19 —— 审计视图不再等待网关的用量历史
+
+- **目标 / 假设：** 打开 设置 → 审计与轨迹 感觉慢。审计列表把可选的 Magpie 用量联到每个
+  Run 上；如果这次网关拉取是冷的或很慢，整个审计请求就会等待记录本身并不需要的数据。短暂
+  缓存用量行，并给可选等待设上限，使审计仅凭 Journal 就能渲染。
+- **取舍：** [审计用量补充有缓存与上限](../architecture/trade-offs.zh-CN.md#2026-11-19--审计用量补充有缓存与上限)。
+- **变更：** `src/integrations/magpie-usage.ts`——网关行按端点/limit 缓存 15 秒，可选超时
+  从 2 秒降到 1 秒，失败或过慢的拉取以同样的 TTL 缓存空行，`resetGatewayUsageCache()` 是
+  测试接缝。`test/magpie-usage.test.ts` 新增四个用例（缓存复用、过期、悬挂网关、失败缓存
+  为空）；`benchmark/audit-usage.ts` 是可重跑测量。API 形状、审计记录与 UI 契约不变。
+- **Eval：** `node --experimental-strip-types --test test/magpie-usage.test.ts` **4/4**；
+  既有 `test/audit.test.ts` 与其余套件通过；`npm run typecheck` 与 `npm run gate` 通过且
+  基线未变。变更前线上 `/api/audit`：第一次 2,290ms、第二次 404ms、第三次 62ms（181KB、
+  27 个 Run）。仅网关用量请求测得 429/57/21ms，返回 499,369 字节。加缓存后直接拉取测得
+  **第一次 438ms / 第二次 0ms**；审计投影本身约 60ms，因此热的审计打开约 60ms，冷的也有界
+  在 1.5 秒左右，而不是 2.3 秒。
+- **Benchmark run：** `node --experimental-strip-types benchmark/audit-usage.ts >
+  benchmark/results/audit-usage-2026-11-19T06-46-17Z.json`；无 Provider/模型；参数：
+  `limit=500`、`cacheTtlMs=15000`、`timeoutMs=1000`；机器：Apple M5 Pro、18 核、
+  macOS 27.0.0、Node 26.8.1；结果路径如上。该 benchmark 只测网关拉取，不测完整审计投影。
+- **执行链路：** 只读测量线上 companion（`/api/audit` 2,290/404/62ms；`/api/audit/turns`
+  9ms/158KB；`/api/invocations` 2.6ms/83KB），检查 `loadAudits`，发现可选的
+  `fetchGatewayRows()` 在请求路径上，2 秒超时且每次都解析 499KB。加入 TTL 缓存与有界等待，
+  写了四个用例的 eval 与 benchmark，验证直接拉取与全量套件。网关在本机；没有花 Provider
+  token。
+- **优点：** 审计现在以 Journal 渲染，把用量当作补充；重复打开约 60ms；慢网关被限制在 1 秒
+  而不是 2 秒；缓存只在一个小模块里，有测试接缝，没有契约变更。
+- **缺点 / 下次：** 用量可能陈旧最多 15 秒，网关故障时该 TTL 内没有用量（记录、判定与轨迹
+  不受影响）。1 秒超时可能漏掉本会在 1–2 秒内返回的网关响应。499KB 载荷仍每个 TTL 拉取一次；
+  降低 limit 或按窗口过滤会减少它，但网关对应的 API 未测量。下次：先测所有者多久打开一次
+  审计，再决定是否值得单独的用量端点。
+- **推翻条件：** 如果所有者需要秒级的用量新鲜度，降低 TTL 或增加显式刷新。如果网关始终很快，
+  保留更短的超时；如果 1 秒经常漏掉真实用量，提高它或改为异步拉取。如果另一个客户端写入远多
+  于现在的网关行，降低 limit 或按审计窗口过滤，而不是缓存更大的载荷。
+
 ### 2026-11-19 —— 附件面板约 110ms 出现，不再播放 sheet 动画
 
 - **目标 / 假设：** 客户端附件优化落地后，所有者的"点击上传很慢"仍没有归因。分别测量打包

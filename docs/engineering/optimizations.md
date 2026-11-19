@@ -265,6 +265,57 @@ file keeps every attempt, including the ones that did not work.
   sidebar becomes noisy, group conversations with their tasks; if learned
   folders are noisy, add a forget action and a two-mention threshold."
 
+### 2026-11-19 — The audit view stops waiting on the gateway's usage history
+
+- **Goal / hypothesis:** opening 设置 → 审计与轨迹 felt slow. The audit list joins
+  optional Magpie usage onto every run; if that gateway fetch is cold or slow,
+  the whole audit request waits for data the records do not need. Cache the
+  usage rows briefly and bound the optional wait so the audit renders on the
+  journal alone.
+- **Trade-off:** [Audit usage enrichment is cached and bounded](../architecture/trade-offs.md#2026-11-19--audit-usage-enrichment-is-cached-and-bounded).
+- **Change:** `src/integrations/magpie-usage.ts` — the gateway rows are cached
+  for 15 s per endpoint/limit, the optional timeout drops from 2 s to 1 s, a
+  failed or slow fetch caches an empty row set for the same TTL, and
+  `resetGatewayUsageCache()` is a test seam. `test/magpie-usage.test.ts` adds
+  four cases (cache reuse, expiry, hanging gateway, failure cached empty);
+  `benchmark/audit-usage.ts` is the rerunnable measurement. No API shape, audit
+  record or UI contract changes.
+- **Eval:** `node --experimental-strip-types --test test/magpie-usage.test.ts`
+  **4/4**; the existing `test/audit.test.ts` and the rest of the suite pass;
+  `npm run typecheck` and `npm run gate` pass with the baseline unchanged. Live
+  `/api/audit` before the change: 2,290 ms first, 404 ms second, 62 ms third
+  (181 KB, 27 runs). The gateway's usage request alone measured 429/57/21 ms and
+  returns 499,369 bytes. With the cache, the direct fetch measured
+  **438 ms first / 0 ms second**; the audit projection itself is about 60 ms, so
+  a warm audit open is ~60 ms and a cold one is bounded near 1.5 s instead of
+  2.3 s.
+- **Benchmark run:** `node --experimental-strip-types benchmark/audit-usage.ts >
+  benchmark/results/audit-usage-2026-11-19T06-46-17Z.json`; no provider or
+  model; parameters: `limit=500`, `cacheTtlMs=15000`, `timeoutMs=1000`; machine:
+  Apple M5 Pro, 18 cores, macOS 27.0.0, Node 26.8.1; result path above. The
+  benchmark measures the gateway fetch, not the full audit projection.
+- **Execution chain:** measured the live companion read-only (`/api/audit`
+  2,290/404/62 ms; `/api/audit/turns` 9 ms/158 KB; `/api/invocations` 2.6 ms/
+  83 KB), inspected `loadAudits`, and found the optional `fetchGatewayRows()`
+  on the request path with a 2 s timeout and a 499 KB parse each time. Added the
+  TTL cache and bounded wait, wrote the four-case eval and the benchmark, and
+  verified the direct fetch and the full suite. The gateway is local; no
+  provider tokens were spent.
+- **Pros:** the audit now renders on the journal and treats usage as enrichment;
+  repeated opens are ~60 ms; a slow gateway is capped at 1 s instead of 2 s; the
+  cache is a single small module with a test seam and no contract change.
+- **Cons / next time:** usage can be up to 15 s stale, and a gateway outage shows
+  no usage for that TTL (records, verdicts and traces are unaffected). A 1 s
+  timeout may drop usage on a gateway that would answer in 1–2 s. The 499 KB
+  payload is still fetched per TTL; a limit/window filter would reduce it, but
+  the gateway's API for that was not measured. Next time: measure how often the
+  owner opens the audit view before investing in a separate usage endpoint.
+- **Reversal condition:** if owners need second-level usage freshness, lower the
+  TTL or add an explicit refresh. If the gateway is consistently fast, keep a
+  shorter timeout; if 1 s omits real usage too often, raise it or fetch usage
+  asynchronously. If another client writes far more gateway rows, lower the
+  limit or filter by the audit window instead of caching a larger payload.
+
 ### 2026-11-19 — The attachment panel appears in ~110 ms, not a sheet animation
 
 - **Goal / hypothesis:** after the client attachment work landed, the owner's

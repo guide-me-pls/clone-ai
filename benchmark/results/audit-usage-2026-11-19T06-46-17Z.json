@@ -1,0 +1,24 @@
+{
+  "kind": "audit-usage-benchmark",
+  "date": "2026-11-19T06:46:18.493Z",
+  "provider": "none",
+  "machine": {
+    "platform": "darwin",
+    "node": "v26.8.1"
+  },
+  "parameters": {
+    "limit": 500,
+    "cacheTtlMs": 15000,
+    "timeoutMs": 1000
+  },
+  "metrics": {
+    "firstMs": 438,
+    "secondMs": 0,
+    "rows": 500,
+    "cachedRows": 500
+  },
+  "notes": [
+    "This measures the gateway usage fetch, not the full /api/audit projection (~60 ms on the live journal).",
+    "The gateway is optional; without it the first call returns an empty row set and the cache keeps repeats fast."
+  ]
+}

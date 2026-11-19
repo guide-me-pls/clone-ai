@@ -637,6 +637,50 @@ named level per block. If the request bubble plus the answer makes each exchange
 too tall, collapse the context steps behind a disclosure rather than shrinking
 the request.
 
+## 2026-11-19 — Audit usage enrichment is cached and bounded
+
+**Decision.** The audit list caches the Magpie gateway's usage rows for 15 s per
+endpoint/limit and, on a miss, waits at most 1 s for the optional enrichment
+instead of 2 s. A failed or slow gateway caches an empty row set for the same
+15 s instead of making every audit request wait; the audit still renders all
+run records without usage.
+
+**Alternatives rejected.**
+
+- *Keep the 2 s timeout and no cache.* The live `/api/audit` endpoint measured
+  2,290 ms on the first call, 404 ms on the second and 62 ms on the third; the
+  gateway's `/v1/magpie/usage/requests?limit=500` returns 499 KB and measured
+  429/57/21 ms, so every audit open re-fetched and re-parsed it on the request
+  path. Opening 设置 → 审计与轨迹 could wait over two seconds for optional data.
+- *Fetch usage only when the owner explicitly refreshes.* The first audit open
+  would still block; it would also need a new UI contract and a second payload
+  shape.
+- *Drop gateway usage entirely.* It is the only token, cost and HTTP-error
+  source for black-box workers; the audit's error samples come from it.
+- *Cache until the journal changes.* The gateway usage changes independently of
+  the journal (other clients use the same gateway), so a journal-triggered
+  invalidation would serve stale rows indefinitely; a short TTL is bounded.
+
+**Evidence.** Live audit list: 181 KB, 27 runs; `/api/audit` first/second/third
+calls 2,290/404/62 ms. Gateway usage: 499,369 bytes; first/second/third calls
+429/57/21 ms. The audit projection itself is about 60 ms; the gateway fetch and
+its 499 KB parse were the dominant request cost. Unit tests cover the cache
+(repeated calls fetch once), expiry and the bounded timeout with a hanging fake
+fetch.
+
+**What it costs.** Usage columns can be up to 15 s stale; during a gateway
+outage or a slow response the audit shows no usage until the next TTL. The
+audit remains complete without it; run records, verdicts, errors and traces are
+journal-backed and unaffected. A 1 s timeout may omit usage on a gateway that
+would have answered between 1 and 2 s.
+
+**Reversal condition.** If owners need second-level usage freshness, lower the
+TTL or add an explicit refresh action instead of extending the request path. If
+the gateway is consistently fast, keep a shorter timeout; if 1 s omits real
+usage too often, raise it or fetch usage asynchronously through a separate
+endpoint. If another client starts writing far more gateway rows, lower the
+limit or filter by the audit window rather than caching a larger payload.
+
 ## 2026-11-19 — The attachment panel opens without the sheet animation
 
 **Decision.** The native attachment picker uses `NSOpenPanel.begin` (an
