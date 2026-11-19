@@ -21,6 +21,8 @@ import { join } from "node:path";
 import { createRuntimeAssembly } from "../../src/core/runtime-factory.ts";
 import { RunQueueConsumer } from "../../src/application/run-queue.ts";
 import { StaticAgentRegistry } from "../../src/workers/static-worker-registry.ts";
+import { StandingPolicyStore } from "../../src/authority/standing-policy-store.ts";
+import { createJournalStore } from "../../src/core/sqlite-journal.ts";
 import type { ExecutionAssignment, ExecutionEvent, RuntimeAdapter, RuntimeCapabilities } from "../../src/core/contracts.ts";
 
 const [dataDirectory, workspacePath] = process.argv.slice(2);
@@ -48,6 +50,23 @@ class SlowWorker implements RuntimeAdapter {
     await writeFile(join(input.workspacePath ?? process.cwd(), "child-finished.md"), "never written in this test\n", "utf8");
     yield { type: "completed", summary: "unreachable in this test" };
   }
+}
+
+// The owner's standing permission for this folder: a write now carries a scope
+// and the policy engine checks it. 所有者对这个文件夹的常设授权：写入现在携带 Scope，
+// 由权限引擎判定。
+const seedJournal = createJournalStore(dataDirectory);
+try {
+  const authority = new StandingPolicyStore(dataDirectory, seedJournal);
+  await authority.load();
+  await authority.setDomainLevel("files", "act_auto");
+  await authority.addPolicy({
+    label: "Chaos workspace",
+    scopes: [{ domain: "files", resource: workspacePath, access: "write" }],
+    maxAutonomy: "act_auto",
+  }, new Date());
+} finally {
+  (seedJournal as { close?: () => void }).close?.();
 }
 
 const assembly = await createRuntimeAssembly({ dataDirectory, workspacePath });

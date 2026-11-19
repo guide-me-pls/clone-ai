@@ -24,7 +24,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
 import type { ExecutionAssignment, ExecutionEvent, ModelUsage, RuntimeAdapter, RuntimeCapabilities } from "../core/contracts.ts";
 import type { FailureReport } from "../core/failure-analysis.ts";
@@ -138,19 +138,20 @@ export function decideTool(input: {
       }
       return { allowed: true };
     }
-    // Write implies read (the same rule `accessCovers` states for scopes), never
-    // the reverse: a read grant must not authorize a write.
-    // 写蕴含读（与 `accessCovers` 对 Scope 的规则一致），绝不可反过来：读授权不得授权写。
+    // A write is allowed only inside a write root the step was granted; the
+    // workspace is not added implicitly.
+    // 写入只落在步骤获得的写入根内；工作区不会被隐式加入。
     const roots = input.grants.writeRoots.map((grantRoot) => realTarget(resolve(root, grantRoot)));
     const inside = roots.some((grantRoot) => containsPath(grantRoot, target, { caseSensitive: isCaseSensitive(target) }));
     if (!inside) return { allowed: false, reason: `The path ${target} is outside the step's granted write roots.` };
     // A repository's `.git` is the commit mechanism; a write there can alter or
-    // add commits in the checkout a repair is supposed to leave untouched. It is
-    // never a legitimate edit target for a worker, wherever the workspace is.
-    // 仓库的 `.git` 是提交机制；写入它可以改动或新增检出中的提交，而修复本应不碰那个检出。
-    // 无论工作区在哪里，它都不是 Worker 的合法编辑目标。
-    if (target === join(root, ".git") || target.startsWith(join(root, ".git") + "/")) {
-      return { allowed: false, reason: `The path ${target} is inside the repository's .git directory, which a worker may not write.` };
+    // add commits in a checkout the step is supposed to leave untouched. The
+    // guard follows every granted write root, not only the workspace, because
+    // writes are no longer anchored to one folder.
+    // 仓库的 `.git` 是提交机制；写入它可以改动或新增检出中的提交，而步骤本应不碰那个检出。
+    // 写入不再锚定一个文件夹，因此保护跟随每个授权的写入根，而不只是工作区。
+    if (target.split(sep).includes(".git")) {
+      return { allowed: false, reason: `The path ${target} is inside a repository's .git directory, which a worker may not write.` };
     }
   }
   return { allowed: true };
@@ -229,7 +230,16 @@ export class NativeAgentWorker implements RuntimeAdapter {
    */
   async *execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
     const workspace = resolve(input.workspacePath ?? process.cwd());
-    const grants = resolveGrants(input.step.scopes, { workspace });
+    const grants = resolveGrants(input.step.scopes, {
+      workspace,
+      // The isolated copy is the Kernel's sandbox, not the owner's tree, so it
+      // is the one workspace that is writable without a plan scope. The same
+      // holds for an assembly whose workspace is itself a sandbox (a repair
+      // worktree); the live owner tree never carries this flag.
+      // 隔离副本是 Kernel 的沙箱，不是所有者的树，因此它是唯一无需计划 Scope 即可写的工作区。
+      // 组装自身的工作区是沙箱时（修复 worktree）同理；所有者的活树绝不带此标记。
+      ...(input.workspaceIsolation === undefined && input.workspaceWritable !== true ? {} : { includeWorkspace: true }),
+    });
     // A step's declared risk caps what it may be offered: a read_only step has
     // no business holding a write tool, even though its workspace is writable.
     // A work order may narrow that further: a read-only order inside a writable
@@ -535,8 +545,8 @@ export function buildInstructions(input: ExecutionAssignment, dropped: readonly 
   const lines = [
     input.workOrder?.objective ?? input.step.instructions,
     "",
-    ...(input.workspacePath === undefined ? [] : [`Your workspace is ${input.workspacePath}. Writes go there unless this step granted another write root.`]),
-    "You may call only the tools provided. Reads may reach any readable location on this computer except protected locations. A write outside the workspace or a granted write root is refused.",
+    ...(input.workspacePath === undefined ? [] : [`Your workspace is ${input.workspacePath}. Relative paths resolve there; it is not a write permission by itself.`]),
+    "You may call only the tools provided. Reads may reach any readable location on this computer except protected locations. A write is refused unless the path is inside a write root granted to this step.",
     "If the objective names a project or directory, read that path. If it cannot be found or read, do not review this workspace in its place: say that the named project could not be read and stop.",
     "If an input declared with required: true is missing or unreadable at the end of the step, stop and report it. A path mentioned only in prose is not a required input. Do not invent file contents.",
   ];

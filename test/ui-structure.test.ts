@@ -607,6 +607,17 @@ test("the audit explains how each Main Agent turn was assembled", async () => {
   assert.match(auditCss, /\.au-assembly/);
 });
 
+test("the audit shows the write scopes a step was checked against", async () => {
+  const audit = await read("audit.js");
+  const auditCss = await read("audit.css");
+  // "Every write has a permission check" is only inspectable if the audit
+  // names the scope, not just how many there are.
+  // 只有当审计点名 Scope，而不只是数量时，"每个写入都有权限校验"才是可检查的。
+  assert.match(audit, /au-scopes/);
+  assert.match(audit, /s\.resource/);
+  assert.match(auditCss, /\.au-scopes/);
+});
+
 test("a new request is routed, and a task record names its dispatcher", async () => {
   const app = await read("app.js");
   const css = await read("style.css");

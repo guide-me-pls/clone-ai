@@ -52,6 +52,7 @@ import {
 import { extractFileExpectations } from "./verification.ts";
 import { CLONE_DIRECTORY_NAME } from "../config/clone-home.ts";
 import { parseScope } from "../authority/scope.ts";
+import { ensureWriteScopes } from "../authority/write-scopes.ts";
 
 const ORPHANED_PLANNING_THRESHOLD_MS = 15 * 60 * 1000;
 
@@ -79,6 +80,13 @@ export interface CloneRuntimeOptions {
   failureCatalog?: OutcomeCatalog;
   /** Workspace supervised by this Runtime. 工作本次 Runtime 监督的 Workspace。 */
   workspacePath?: string;
+  /**
+   * The workspace is a sandbox this Runtime owns (a repair worktree), so it is
+   * writable without a plan scope. Must never be set for the owner's live tree.
+   * 工作区是本 Runtime 拥有的沙箱（修复 worktree），因此无需计划 Scope 即可写。绝不用于
+   * 所有者的活树。
+   */
+  workspaceWritable?: boolean;
   /** Optional durable checkpoint store; a JSON store is created when omitted. 可选的持久检查点 Store。 */
   workspaceCheckpointStore?: WorkspaceCheckpointStore;
   /** Optional directory used by the default checkpoint store. 默认检查点目录。 */
@@ -171,6 +179,7 @@ export class CloneRuntime {
   readonly #memorySource?: WorkerMemorySource;
   readonly #failureCatalog: OutcomeCatalog;
   readonly #workspacePath?: string;
+  readonly #workspaceWritable: boolean;
   readonly #capacityGate: CapacityGate;
   readonly #workspaceCheckpoints?: WorkspaceCheckpointStore;
   readonly #isolatedWorkspaceRoot: string;
@@ -190,6 +199,7 @@ export class CloneRuntime {
     this.#knownAgentIds = options.knownAgentIds;
     this.#capacityGate = options.capacityGate ?? new CapacityGate();
     this.#workspacePath = options.workspacePath === undefined ? undefined : resolve(options.workspacePath);
+    this.#workspaceWritable = options.workspaceWritable === true && this.#workspacePath !== undefined;
     this.#workspaceCheckpoints = this.#workspacePath === undefined
       ? undefined
       : options.workspaceCheckpointStore
@@ -429,9 +439,21 @@ export class CloneRuntime {
     if (run.status !== "planning") {
       throw new Error(`A plan can only be attached while planning; run is ${run.status}.`);
     }
-    assertPlanIsExecutable(input.steps, this.#knownAgentIds?.());
+    // A write step must name a write scope. When it names none, the workspace
+    // is proposed as an explicit scope and still goes through the policy
+    // engine; it is not an implicit permission.
+    // 写入步骤必须点名一个写 Scope。没有点名时，把工作区作为显式 Scope 提出，它仍要经过
+    // 权限引擎；它不是隐式权限。
+    const task = this.requireTask(run.taskId);
+    const steps = this.#workspaceWritable
+      ? input.steps
+      : ensureWriteScopes(input.steps, {
+        ...(this.#workspacePath === undefined ? {} : { workspacePath: this.#workspacePath }),
+        requestText: `${task.title}\n${task.objective}`,
+      });
+    assertPlanIsExecutable(steps, this.#knownAgentIds?.());
 
-    const plan: WorkPlan = { ...input, id: randomUUID(), runId, createdAt: new Date().toISOString() };
+    const plan: WorkPlan = { ...input, steps, id: randomUUID(), runId, createdAt: new Date().toISOString() };
     await this.recordIfStatus([
       { type: "plan.created", taskId: run.taskId, runId, payload: plan },
       { type: "run.status_changed", taskId: run.taskId, runId, payload: { status: "queued" } },
@@ -1170,9 +1192,10 @@ export class CloneRuntime {
     });
   }
 
-  private assignmentWorkspaceFields(workspace: { path?: string; isolation?: IsolatedWorkspace }): Pick<ExecutionAssignment, "workspacePath" | "workspaceIsolation"> {
+  private assignmentWorkspaceFields(workspace: { path?: string; isolation?: IsolatedWorkspace }): Pick<ExecutionAssignment, "workspacePath" | "workspaceIsolation" | "workspaceWritable"> {
     return {
       ...(workspace.path === undefined ? {} : { workspacePath: workspace.path }),
+      ...(this.#workspaceWritable && workspace.isolation === undefined ? { workspaceWritable: true as const } : {}),
       ...(workspace.isolation === undefined
         ? {}
         : { workspaceIsolation: { kind: workspace.isolation.kind, ownerPath: workspace.isolation.ownerPath } }),

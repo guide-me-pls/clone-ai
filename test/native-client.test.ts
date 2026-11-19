@@ -244,7 +244,7 @@ test("the system prompt names the offered tools and the boundary", () => {
   const prompt = systemPrompt("do it", tools);
   assert.match(prompt, /read_file, list_directory, write_file/);
   assert.match(prompt, /Reads may reach any readable location/);
-  assert.match(prompt, /write outside the workspace .* is refused/);
+  assert.match(prompt, /write is refused unless the path is inside a write root granted/);
   // A summary without a successful write is a failure, so the loop cannot end
   // on a claim of work that never reached the workspace.
   // 没有成功写入的总结就是失败，因此循环不能以“声称做了但其实没落盘”结束。

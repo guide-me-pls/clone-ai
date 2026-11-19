@@ -124,6 +124,13 @@ export interface RuntimeAssemblyOptions extends ClonePathOptions {
    * 必须声明它，否则点名其 Agent 的每个计划都会被拒。
    */
   knownAgentIds?: () => Set<string>;
+  /**
+   * The workspace is a sandbox this assembly owns (the repair lane's worktree),
+   * so writes there need no plan scope. Never set for the owner's live tree.
+   * 工作区是本次组装拥有的沙箱（修复通道的 worktree），因此那里的写入无需计划 Scope。
+   * 绝不用于所有者的活树。
+   */
+  workspaceWritable?: boolean;
 }
 
 export async function createRuntimeAssembly(options: RuntimeAssemblyOptions = {}): Promise<RuntimeAssembly> {
@@ -227,6 +234,7 @@ export async function createRuntimeAssembly(options: RuntimeAssemblyOptions = {}
       // candidates. 召回只来自受治理的 Store：只有已提升的记忆，绝不包含原始候选。
       memorySource: new GovernedMemorySource(paths.dataDirectory, 4, journal),
       workspacePath: paths.workspacePath,
+      ...(options.workspaceWritable === true ? { workspaceWritable: true } : {}),
       workspaceCheckpointStore: new JsonWorkspaceCheckpointStore(paths.checkpointsDirectory),
       workspaceCheckpointDirectory: join(paths.dataDirectory, "checkpoints"),
       isolatedWorkspaceRoot: paths.isolatedWorkspacesDirectory,

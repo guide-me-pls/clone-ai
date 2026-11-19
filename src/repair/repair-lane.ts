@@ -216,6 +216,9 @@ export async function runRepairLane(options: RepairLaneOptions): Promise<RepairR
     assembly = await createRuntimeAssembly({
       dataDirectory,
       workspacePath: worktree.path,
+      // The worktree is the lane's own sandbox, not the owner's live tree.
+      // 该 worktree 是通道自己的沙箱，不是所有者的活树。
+      workspaceWritable: true,
       evidenceKinds: [...ALLOWED_EVIDENCE],
       ...(options.registry === undefined
         ? {}

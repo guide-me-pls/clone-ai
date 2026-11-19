@@ -59,6 +59,25 @@ test("a read outside the workspace needs no scope, while a write still does", as
   assert.equal(decideTool({ risk: "write", grants: granted, workspace, path: join(outside, "new.txt") }).allowed, true);
 });
 
+test("the workspace is not a write root unless the Kernel owns the tree", async (t) => {
+  const { workspace, outside } = await scratch(t);
+  const plain = resolveGrants([], { workspace });
+  assert.deepEqual(plain.writeRoots, [], "the live workspace must not be granted implicitly");
+  assert.equal(decideTool({ risk: "write", grants: plain, workspace, path: "inside.txt" }).allowed, false);
+
+  // The isolated sandbox copy is the one workspace the Kernel may grant.
+  // 隔离沙箱副本是 Kernel 唯一可以直接授权的工作区。
+  const owned = resolveGrants([], { workspace, includeWorkspace: true });
+  assert.equal(decideTool({ risk: "write", grants: owned, workspace, path: "inside.txt" }).allowed, true);
+
+  const scoped = resolveGrants([{ domain: "files", resource: workspace, access: "write" }], { workspace });
+  assert.equal(decideTool({ risk: "write", grants: scoped, workspace, path: "inside.txt" }).allowed, true);
+  assert.equal(decideTool({ risk: "write", grants: scoped, workspace, path: ".git/config" }).allowed, false);
+
+  const external = resolveGrants([{ domain: "files", resource: outside, access: "write" }], { workspace });
+  assert.equal(decideTool({ risk: "write", grants: external, workspace, path: join(outside, ".git/config") }).allowed, false);
+});
+
 test("a read at a protected location is refused even without a workspace boundary", async (t) => {
   const { workspace } = await scratch(t);
   const home = await mkdtemp(join(tmpdir(), "clone-gate-home-read-"));

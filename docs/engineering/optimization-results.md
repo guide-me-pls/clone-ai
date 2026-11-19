@@ -15,22 +15,30 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
-## 2026-11-19 — Workers can read the whole machine; writes stay scoped
+## 2026-11-19 — Workers read the whole machine; every write carries a scope
 
 - **Claim:** a worker may read any readable location on the local computer
-  except protected locations, while writes remain limited to the workspace and
-  the Kernel-granted write roots; a project named outside the current folder is
-  read instead of answered with "outside the workspace".
-- **Evidence:** `test/path-gate.test.ts` (an outside read is allowed, the same
-  write is refused, a granted write root admits it, `~/.ssh` is refused),
-  `test/native-worker-tools.test.ts` (an unscoped read outside the workspace),
-  `test/native-agent-worker.test.ts` and `test/mcp.test.ts` (a read path is not
-  confined; writes still are), `test/companion-main-agent.test.ts` (the prompt
-  names the machine as the readable surface), and `read_file`'s device refusal
-  in `test/native-worker-tools.test.ts`; full suite **862/862** and
-  `npm run typecheck` pass.
-- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--the-machine-is-the-workspace-reads-are-not-confined),
-  [execution chain](optimizations.md#2026-11-19--the-machine-is-the-workspace-for-reads).
+  except protected locations; no folder, including the workspace, is writable
+  by default — every write step carries an explicit `files` write scope that
+  the policy engine checks (`observe` denies, `prepare`/`act_with_approval`
+  ask the owner, `act_auto` allows). A project named outside the current folder
+  is read instead of answered with "outside the workspace".
+- **Evidence:** `test/path-gate.test.ts` (an outside read is allowed, a write
+  needs a granted root, the live workspace is not a root, the isolated copy is,
+  `~/.ssh` is refused, `.git` is refused under any root),
+  `test/native-worker-tools.test.ts` (an unscoped read outside the workspace,
+  and a device refusal), `test/native-agent-worker.test.ts` and
+  `test/mcp.test.ts` (a read path is not confined; writes still are),
+  `test/companion-main-agent.test.ts` (the prompt names the machine as the
+  readable surface and no default write folder), `test/write-scopes.test.ts`
+  **9/9** (workspace fallback, named targets, write-cue extraction, observe/approve transition), and
+  `test/golden-path.test.ts` with an `act_auto` policy; full suite **873/873**
+  (852/852 without the port-conflicting WhatsApp file, 21/21 on a free port),
+  `npm run typecheck` and `npm run gate` pass.
+- **Where:** [read trade-off](../architecture/trade-offs.md#2026-11-19--the-machine-is-the-workspace-reads-are-not-confined),
+  [write trade-off](../architecture/trade-offs.md#2026-11-19--writes-have-no-workspace-either-every-write-carries-a-scope),
+  [read chain](optimizations.md#2026-11-19--the-machine-is-the-workspace-for-reads),
+  [write chain](optimizations.md#2026-11-19--writes-are-scoped-per-step-not-by-workspace).
 
 ## 2026-11-19 — A Main Agent can recall another task's context on demand
 

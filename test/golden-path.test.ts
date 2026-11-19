@@ -48,6 +48,7 @@ import { MemoryPipeline } from "../src/memory/memory-pipeline.ts";
 import { MdMemoryStore } from "../src/memory/md-memory-store.ts";
 import { GovernedMemorySource } from "../src/memory/md-memory-store.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
+import { StandingPolicyStore } from "../src/authority/standing-policy-store.ts";
 
 /** The owner's words, as they would appear in the session file. 所有者的话，会话文件里的样子。 */
 const OWNER_WORDS = "记住我每周五要写周报，并帮我准备";
@@ -120,6 +121,24 @@ async function seededHome(t: TestContext): Promise<{
     type: "message", id: "e1", parentId: null, timestamp: new Date().toISOString(),
     message: { role: "user", content: [{ type: "text", text: OWNER_WORDS }] },
   })}\n`, "utf8");
+  // The owner's standing permission for this folder. A write now carries a
+  // scope and is judged by the policy engine; without this the golden path
+  // would be correctly denied under the default observe-only files domain.
+  // 所有者对这个文件夹的常设授权。写入现在携带 Scope 并由权限引擎判定；没有它，黄金路径
+  // 会在默认的 files 只观察档位下被正确拒绝。
+  const seedJournal = createJournalStore(dataDirectory);
+  try {
+    const authority = new StandingPolicyStore(dataDirectory, seedJournal);
+    await authority.load();
+    await authority.setDomainLevel("files", "act_auto");
+    await authority.addPolicy({
+      label: "Golden path workspace",
+      scopes: [{ domain: "files", resource: workspacePath, access: "write" }],
+      maxAutonomy: "act_auto",
+    }, new Date());
+  } finally {
+    (seedJournal as { close?: () => void }).close?.();
+  }
   return { dataDirectory, workspacePath, onClose: (close) => closers.push(close) };
 }
 
