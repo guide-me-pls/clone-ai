@@ -75,16 +75,25 @@ export function extractFileExpectations(step: PlanStep): FileExpectation[] {
     // A period inside a filename is not a sentence boundary.
     // 文件名中的点不是句子边界。
     for (const sentence of assertion.split(/\n|(?<=[。！？；])|(?<=[.!?;])(?=\s|$)/)) {
+      const absolute = /(?:^|[\s(（`"'])(\/(?:[A-Za-z0-9._\\-]+(?:[ \t]+[A-Za-z0-9._\\-]+)*\/)*[A-Za-z0-9._\\-]*(?:[ \t]+[A-Za-z0-9._\\-]+)*?\.[A-Za-z0-9]{1,8})(?=[\s)）`"',.，。;；:：]|$)/g;
       const quoted = /[`"']([^`"'\s]+)[`"']/g;
       const bare = /(?:^|[\s(（])([A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8})(?=[\s)）,.，。;；:：]|$)/g;
-      for (const pattern of [quoted, bare]) {
+      // Reserve complete paths even when excluded, so a suffix cannot become a separate promise.
+      // 即使完整路径被排除，也要占用其范围，避免后缀被误认为单独的文件承诺。
+      const occupied: Array<[number, number]> = [];
+      for (const pattern of [absolute, quoted, bare]) {
         for (const match of sentence.matchAll(pattern)) {
           const candidate = match[1];
-          if (candidate === undefined || candidate.startsWith("..")) continue;
-          if (!/^[A-Za-z0-9._/\\-]+\.[A-Za-z0-9]{1,8}$/.test(candidate)) continue;
+          if (candidate === undefined) continue;
           const candidateStart = match.index + match[0].indexOf(candidate);
+          const candidateEnd = candidateStart + candidate.length;
+          if (occupied.some(([start, end]) => candidateStart < end && candidateEnd > start)) continue;
+          occupied.push([candidateStart, candidateEnd]);
+          if (candidate.startsWith("..")) continue;
+          if (!/^[A-Za-z0-9._/\\ -]+\.[A-Za-z0-9]{1,8}$/.test(candidate)) continue;
           const prefix = sentence.slice(0, candidateStart).replace(/[`"']$/, "");
           const suffix = sentence.slice(match.index + match[0].length);
+          if (/(?:目录|文件夹|\bdirectory|\bfolder)\s*[:：]?\s*$/i.test(prefix)) continue;
           if (/[A-Za-z_$][\w.$]*\s*\($/.test(prefix) || /^\s*\(/.test(suffix)) continue;
           // A file the sentence says not to claim is not a deliverable; reading
           // it as one punishes the plan for being honest.
