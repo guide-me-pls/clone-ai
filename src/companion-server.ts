@@ -294,7 +294,7 @@ async function recordWorkUpdate(
   const title = (typeof rawTitle === "string" ? rawTitle : steps[0]?.title) ?? "未命名任务";
   const evidenceCount = events.filter((event) => event.type === "evidence.recorded").length;
   const failure = events.find((event) => event.type === "execution.failed");
-  const reason = failure === undefined ? undefined : String(asRecord(failure.payload).message ?? "");
+  const reason = failure === undefined ? run.failureReason : String(asRecord(failure.payload).message ?? "");
   const summary = status === "completed"
     ? `完成 ${steps.length || 1} 个步骤`
     : reason !== undefined && reason.length > 0

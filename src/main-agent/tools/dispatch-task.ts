@@ -119,6 +119,7 @@ export function dispatchTaskTool(options: DispatchTaskOptions): PlainKernelTool 
               accepted: true,
               runId: result.runId,
               status: result.status,
+              ...(result.status === "failed" && result.failureReason !== undefined ? { failureReason: result.failureReason } : {}),
               ...(result.blocked === undefined ? {} : { blocked: result.blocked }),
               ...(result.routing === undefined ? {} : { routing: result.routing }),
               subagentsCompleted: result.subagentsCompleted,

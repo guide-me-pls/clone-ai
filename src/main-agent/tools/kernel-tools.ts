@@ -274,6 +274,7 @@ export async function runStatusInfo(runtime: CloneRuntime, runId: string): Promi
     `Task: ${run.taskId}`,
     ...(run.planId === undefined ? [] : [`Plan: ${run.planId}`]),
     ...(run.activeStepId === undefined ? [] : [`Active step: ${run.activeStepId}`]),
+    ...(run.status === "failed" && run.failureReason !== undefined ? [`Failure: ${run.failureReason}`] : []),
     `Subagents: ${completed}/${subagents.length} completed`,
     ...stepProgressLines(runtime, runId),
     ...(live ? ["Snapshot only — this run advances on its own; calling this again does not change it."] : []),

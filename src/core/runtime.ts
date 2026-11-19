@@ -539,7 +539,7 @@ export class CloneRuntime {
       await this.record({ type: "policy.decided", taskId: task.id, runId: run.id, payload: { stepId: step.id, decision } });
 
       if (decision.outcome === "denied") {
-        await this.changeStatus(run.id, "failed", step.id);
+        await this.changeStatus(run.id, "failed", step.id, decision.reason);
         return { run: this.requireRun(run.id), status: "failed" };
       }
       if (decision.outcome === "approval_required") {
@@ -590,7 +590,7 @@ export class CloneRuntime {
     const evidence = this.#state.evidenceByRun[run.id] ?? [];
     await this.recordBatch([
       { type: "verification.completed", taskId: task.id, runId: run.id, payload: verification },
-      { type: "run.status_changed", taskId: task.id, runId: run.id, payload: { status } },
+      { type: "run.status_changed", taskId: task.id, runId: run.id, payload: { status, ...(status === "failed" ? { reason: verification.summary.slice(0, 500) } : {}) } },
       ...(status === "completed" || status === "failed" ? [this.#memory.requestEvent(run, task, evidence, status)] : []),
     ]);
     if (status === "completed" || status === "failed") this.#memory.enqueue(this.requireRun(run.id), task, evidence, status);
@@ -638,7 +638,7 @@ export class CloneRuntime {
     const evidence = this.#state.evidenceByRun[runId] ?? [];
     await this.recordBatch([
       { type: "verification.completed", taskId: run.taskId, runId, payload: verification },
-      { type: "run.status_changed", taskId: run.taskId, runId, payload: { status } },
+      { type: "run.status_changed", taskId: run.taskId, runId, payload: { status, ...(status === "failed" ? { reason: verification.summary.slice(0, 500) } : {}) } },
       ...[this.#memory.requestEvent(run, task, evidence, status)],
     ]);
     this.#memory.enqueue(this.requireRun(runId), task, evidence, status);

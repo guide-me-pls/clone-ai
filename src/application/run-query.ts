@@ -26,6 +26,7 @@ export interface QueryRunResult {
   runId: string;
   status: DispatchResult["status"] | "blocked" | "cancelled";
   activeStepId?: string;
+  failureReason?: string;
   subagentsCompleted: number;
   memoryCandidatesProposed: number;
   /** Present when routing refused rather than substituting a worker. 路由拒绝而非替换 Worker 时存在。 */
@@ -486,6 +487,7 @@ function toQueryResult(runtime: CloneRuntime, result: DispatchResult, memoryCand
     runId: result.run.id,
     status: result.status,
     activeStepId: result.run.activeStepId,
+    ...(result.status === "failed" && result.run.failureReason !== undefined ? { failureReason: result.run.failureReason } : {}),
     subagentsCompleted: runtime.getSubagentsForRun(result.run.id).filter((subagent) => subagent.status === "completed").length,
     memoryCandidatesProposed,
   };
