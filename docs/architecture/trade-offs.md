@@ -6,6 +6,503 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-18 — A direct answer is the evidence for a direct_response step
+
+**Decision.** A single-agent step whose `requiredCapabilities` include
+`direct_response` must be able to complete on the worker's final answer. The
+native worker records exactly one `observation` evidence row for that answer — a
+bounded summary and a step-scoped locator such as `answer:<stepId>` —
+immediately before pushing `completed`, gated on `produced.size === 0` so a real
+read is not duplicated. The evidence gate for every other step stays untouched,
+and the Kernel must not synthesize evidence the executor did not produce. The
+change came from the gated repair lane (AGENTS rule 4); the working agent
+applied the lane's patch and functionally verified it, and did not hand-write
+the logic.
+
+**Alternatives rejected.**
+
+- *Exempt every single-agent step from the evidence assertion.* A
+  `context-researcher` read step that answers in prose would pass without
+  reading anything; b1e04b18 is the case that must still fail.
+- *Synthesize the observation in the Kernel.* Evidence would no longer be the
+  executor's claim; the journal invariant that a worker cannot mark its own work
+  done without a produced row would be a comment.
+- *Leave the gap open.* A direct answer would keep failing after the model has
+  already answered, which is the status quo that put this on the list.
+
+**Evidence.**
+
+- Run `b1e04b18` (2026-11-18) is an answer-only single-agent step: one model
+  call, zero `agent.tool_started`, zero `evidence.recorded`, then
+  `execution.completed` and `execution.failed` with `Agent context-researcher
+  completed step read-readme without evidence.` The direct-response variant is
+  latent — no `direct_response` plan exists after the native switch — but the
+  same gate is reached by any answer-only step.
+- A deterministic current-code reproduction (`53074cf2`, isolated home) uses a
+  `NativeAgentWorker` whose fake client returns only `收到`: the run fails with
+  `Agent direct-responder completed step direct-response without evidence.` The
+  trace is `/tmp/clone-ai-repair-trace-home2/failed-traces/53074cf2-….json`.
+- The repair lane was run with that trace and the decision brief above. The
+  first attempt stopped at the red-eval gate because phase 1 read the trace and
+  wrote no test (`I couldn't write a reliable regression test without inspecting
+  the executor's API within the prescribed tool-call limit`); the lane also
+  ran every existing regression file, so it reported "not-red" instead of
+  "no test". The phase-1 prompt was widened to name `src/core/runtime.ts` and
+  `src/workers/native-agent-worker.ts`, allow the first write within eight tool
+  calls, and the red/green checks were scoped to this repair's new file.
+- The second attempt produced a correct 3-line worker change but failed the
+  full suite on `bilingual-documentation` (an English-only source comment); the
+  fix-phase prompt now requires the English and Chinese lines together. The
+  third attempt succeeded: phase-1 Run `566b1603` was red on
+  `test/regression/direct-response-evidence.test.ts`, fix Run `1d811b94`
+  produced the observation row, the regression case was green, the full suite
+  was **760/760**, and typecheck exited 0. Branch
+  `rsi/auto-fix-20261118T1044`, commit `76aec5d`; the working agent applied
+  the patch to the shared tree and re-ran **832/832**, typecheck 0 and
+  `npm run gate` **PASS**.
+
+**What it costs.** A direct answer now reaches `waiting_review` instead of
+failing, so the owner must accept the answer; the observation row is the
+worker's own text (bounded to 8,000 characters), not an independent artifact.
+The case is a new file under `test/regression/`, and the lane still owns the
+patch: the working agent applied it and checked functional correctness only.
+
+**Reversal condition.** If `direct_response` steps are shown to be unreachable
+in production, delete the observation row rather than keeping dead evidence. If
+owners routinely reject direct answers because the observation row is not an
+independent artifact, require a tool result or move the answer to the
+conversation path instead of the evidence gate.
+
+## 2026-11-18 — A read-only request gets observation evidence, not an artifact
+
+**Decision.** The fallback planner distinguishes a read-only or analysis request
+from a delivery request. A read-only task gets one read-only executor step (the
+context researcher when enabled) and no artifact contract; a research or review
+work order inside a mixed plan requires `observation` evidence. An explicit
+read-only constraint outranks a bare artifact noun: only a positive write verb
+or a named output target makes the request a delivery. A delivery request keeps
+the `artifact` contract. A work order may only require evidence its own risk can
+produce: a `read_only` order may require `observation` or `tool_result`, never
+`artifact`, `receipt` or `test`, and the Kernel rejects such a plan when it is
+attached instead of discovering the contradiction after the worker has finished.
+A Kernel-rejected plan fails its Run rather than leaving it in `planning`. The
+worker is told the required contract (id, kind, locator requirement and
+description) and that a read records observation evidence while a write records
+artifact evidence. Evidence recording now keeps artifact rows when the 20-row
+cap is applied and lets a write upgrade a path that was already read; the worker
+also filters its tools by the work order's risk, not only the parent step's.
+
+**Alternatives rejected.**
+
+- *Let the verifier accept observation evidence for an `artifact` contract.* The
+  contract would stop meaning "a durable file exists"; every delivery would pass
+  on prose, and the owner would stop having a file to review.
+- *Tell the worker to write the artifact even though the objective forbids
+  writing.* The tool gate checks grants, not prose: the worker would either
+  disobey the owner or still fail, and verification matches only kind plus a
+  non-empty locator, so any file would satisfy the contract. The contradiction
+  belongs to the layer that emitted both the contract and the prohibition.
+- *Leave the worker to fail and ask the owner to retry.* This is the status quo
+  that produced the three failed runs below: each worker had already finished
+  the requested read and answer before verification rejected it for a file the
+  owner had explicitly forbidden.
+- *Remove artifact contracts altogether.* A genuine delivery request — a draft,
+  report, model or code change — still needs a durable file, otherwise the
+  direct responder's text becomes the "deliverable" again.
+
+**Evidence.**
+
+- Journal `~/.clone/journal.sqlite3`, 2026-11-18: runs `663b45b5`, `c03c7cea`
+  and `cd74804b` all carry a fallback plan with a `draft` work order whose
+  required contract is `local-draft` (`kind: "artifact"`,
+  `locatorRequired: true`), while the objective says "不要修改任何文件" or
+  "不要修改任何文件或运行产生副作用的操作". `evidence.recorded` contains only
+  `observation` rows (one README read in `c03c7cea`/`cd74804b`; 20 of 33 tool
+  calls in `663b45b5`), and `subagent.verified` fails with
+  `Missing required artifact evidence: local-draft.` The same three requests
+  reproduce deterministically with
+  `node --experimental-strip-types --input-type=module -e "import {buildFallbackPlan} from './src/planning/fallback-planner.ts'; …"`
+  before this change: every read-only query yields `draft/local-draft` with
+  `kind: "artifact"`.
+- The cause is in the fallback classifier: `项目`, `代码` and `文件` were
+  delivery terms, there was no read-only marker, and `needsDelivery` was also
+  true whenever `needsResearch` was true (`src/planning/fallback-planner.ts`).
+  A request to review a project's code therefore became a request to write a
+  file.
+- The research and review contracts had the same mismatch even without an
+  explicit read-only instruction: `context-note` and `review-note` were
+  `kind: "artifact"`, while the native worker only records `observation` for a
+  read (`src/workers/native-agent-worker.ts`, `agentTool`).
+- The native worker never received `expectedArtifacts`; `buildInstructions`
+  sent only the objective, workspace, boundary rules and acceptance criteria.
+  A worker could therefore finish legitimately without knowing the Kernel would
+  require a locator-bearing artifact.
+- The evidence cap and the first-kind-wins map are part of the same failure
+  surface: a worker that reads a path and later writes it keeps `observation`
+  for that path, and a write after more than 20 reads can be dropped by
+  `slice(0, 20)` before verification.
+- The five "Required input missing" failures and the one "12-round limit"
+  failure from earlier on 2026-11-18 are not evidence for this decision: they
+  predate `fb496e5` (only a work order's declared required inputs can fail a
+  step) and `e694a4d` (only an absence-shaped read marks an input missing), and
+  `bba7896` (no default round cap). The "README is outside the workspace"
+  failure is addressed by the working-tree file-tool `resolve` change, not by
+  this entry. The missing-input regression file is a `.js` test, which
+  `npm test` did not collect; the script now includes
+  `test/regression/*.test.js`, so the eval guards the suite.
+
+**What it costs.**
+
+- A read-only request no longer produces a file. A request that does want a
+  report or draft must say where to write it (or use a delivery verb); the
+  fallback's heuristics can still misclassify an edge case, and the Kernel
+  rejection is the backstop rather than a model judgment.
+- A main-agent plan that pairs `read_only` with an artifact contract now fails
+  at attach time. That is earlier and clearer than a failed run, but it is still
+  a planning error the Main Agent must correct.
+- The read-only worker is actually restricted to read tools; a work order that
+  was previously read-only in name but write-capable through its step can no
+  longer write. Any legitimate such work order must raise its own risk.
+- `observation` contracts are weaker than a file: they prove a read happened,
+  not that the requested analysis is complete. The owner review remains the
+  check for content.
+
+**Reversal condition.** If real journals show read-only or analysis requests
+routinely needed a file the owner wanted, add an explicit write target to the
+classifier instead of restoring a blanket artifact. If more than a fifth of
+read-only requests are misclassified in practice, replace the heuristic with the
+LLM planner or a model-based intent classifier. If owners repeatedly reject
+review results because no file exists, add a separate "write the review to a
+file" follow-up plan rather than making every read-only task an artifact task.
+
+## 2026-11-18 — The task record is the unit: no conversation rows, decisions on the task
+
+**Decision.** The sidebar lists only dispatched task runs. Main Agent
+conversations — the owner's main thread and the per-task conversations
+introduced earlier today — are not list rows: the main thread opens from a
+navigation control, and a task's conversation is where a message sent from that
+task record goes. Approvals and reviews render and are decided inside the task
+record that owns the run; the main conversation no longer aggregates decision
+cards. A waiting task is pinned in its own "需要你的确认" sidebar section, carries
+an explicit `需你确认` / `需你复核` badge, and its decision dock names the step and
+asks for the decision.
+
+**Alternatives rejected.**
+
+- *Keep conversations as rows and hide only the main one.* The per-task
+  conversations would still read as chats in a task list, and the owner
+  explicitly asked for dispatched tasks only.
+- *Keep decisions centralized and strengthen the pointer.* The pointer sends the
+  owner away from the run they are reviewing; with the conversation no longer
+  listed, the destination is not even in the sidebar.
+- *A second "conversations" list beside the task list.* Two navigation surfaces
+  for one chat is more to keep current, not less.
+
+**Evidence.** The owner's request on 2026-11-18, after the per-task
+conversations shipped: only dispatched tasks in the list, and each subtask's
+confirmation in its own record. The prior decision ("Approvals live in the main
+conversation", commit `b810879`) was made when one thread was the only context
+and the conversation was listed; that premise no longer holds. `buildSession`
+already returns the run's own approval (`waiting_approval` + `activeStepId`) and
+its verification, so the task record has the data;
+`/api/runs/:id/approve|reject|review` already accepts any run id.
+`test/ui-structure.test.ts` pins the old pointer and is rewritten.
+
+**What it costs.** Decisions can be spread across tasks; the owner must open the
+waiting task instead of one inbox. The dashboard still counts waiting approvals
+across runs, but there is no single card list. Conversations are not browsable
+from the list: the main thread has a nav control, and a task's thread is reached
+by sending from its record. The old conversation delete/restore path remains in
+the API but is no longer exposed.
+
+**Reversal condition.** If owners lose the conversation thread or want to switch
+among several conversations, add a compact, separate conversation section —
+never mixed into the task rows. If decisions in task records are missed, add a
+global decision inbox that deep-links into each task; do not move the cards back
+to a central thread.
+
+## 2026-11-18 — The audit explains how every Main Agent turn was assembled
+
+**Decision.** Each turn record in 审计 → 主 Agent 回合 shows an assembly block: the
+conversation, the history window (messages and completed turns, compactions), the
+model and effort, the prompt materials (charter version, briefing present or
+absent, instruction sources and warnings, the tool table), and the runs the turn
+dispatched with their plan steps and statuses. The history counts and
+instruction sources are journaled with the turn; run titles, steps and statuses
+are projected from the existing task, run and plan events.
+
+**Alternatives rejected.**
+
+- *Show only the prompt hash and the snapshot locator.* The owner cannot see the
+  assembly without opening a content-addressed file; the question was "how was
+  this task assembled", not "where is the file".
+- *Paste the full system prompt into the audit.* It is large, largely unchanged
+  between turns, and the snapshot remains the source of truth.
+- *Show only the tools the model called.* The tool list is what it did; the
+  assembly is what it was given before it decided.
+
+**Evidence.** `/api/audit/turns` already projects input, reply, tool calls,
+compactions and prompt-snapshot hashes (`src/audit/turn-audit.ts`), and the audit
+UI shows the tools plus a `prompt <hash>` chip. It drops the snapshot's
+`instructionSources`, never records the history window, and shows only a count of
+spawned runs — the three pieces the owner asked for are exactly the missing
+ones. `buildHistory` already knows the history it assembled; `task.created`,
+`run.created`, `plan.created` and `run.status_changed` already carry titles,
+steps and statuses.
+
+**What it costs.** Two fields on `main_agent.turn_started` (`historyMessages`,
+`historyTurns`), and the projection joins run events by id. A turn whose snapshot
+failed shows no materials; a legacy turn without the fields shows "未记录". The
+block is collapsed by default so the turn list stays readable.
+
+**Reversal condition.** If the assembly block duplicates the prompt-snapshot
+detail page, keep only model, tools and dispatch in the summary and link to the
+snapshot; if the journal or projection cost becomes material, derive the counts
+from the snapshot or a separate assembly event.
+
+## 2026-11-18 — A finished task is not a memory; candidates must state durable knowledge
+
+**Decision.** Task-run memory mining no longer proposes a candidate by copying the
+parent task's objective. `MemoryPipeline`'s default worker extracts nothing:
+without a configured miner, a completed task produces zero candidates and its
+`memory.candidate.extracted` event records `count: 0`. With
+`CLONE_AI_MEMORY_MINING=all`, the model miner still runs. Independently of which
+worker produced them, `MemoryPipeline.processJob` drops any **untyped or
+`procedure`** candidate whose summary is its task objective. The comparison runs
+NFKC, a locale-independent lowercase, invisible-character removal, token-aware
+punctuation folding, and procedure-label stripping at either end (`候选流程`,
+`流程`, `candidate procedure`, `procedure`). A typed preference, fact, decision
+or commitment is kept even when it equals the objective, because the owner may
+have stated exactly what the task asked for. The extraction event records
+`droppedRestatements` and the PII-redacted dropped summaries when any were
+dropped. A one-time governance pass rejects pending candidates
+that match the same rule against the task recorded for their run, with a
+journaled reason. Conversation mining gets its own pipeline and worker instead
+of borrowing the task pipeline's.
+
+**Alternatives rejected.**
+
+- *Keep the deterministic worker and hide or demote its candidates in the UI.*
+  The summary is still a work order, not knowledge; hiding it changes where the
+  noise appears, not what it is. The live journal shows the list was 7/7
+  restatements (below).
+- *Copy evidence summaries instead of the objective.* Evidence is a worker's
+  claim about what it did, not an owner statement or a standing fact, and it is
+  less controlled than the objective. It would still be a run log with a
+  different wording.
+- *Fix only the mining prompt.* Prompts are advisory; the shipped placeholder is
+  proof a producer can ignore them, and a model can echo the objective too. The
+  refusal has to be structural.
+- *Remove the candidate list and require hand-authored memories.* The owner still
+  needs a review surface for genuine mined memories; the list stays, only its
+  input becomes honest.
+- *Restore conversation mining in this change.* `ConversationMemoryPipeline.record()`
+  currently has no production caller — it was lost when the native loop replaced
+  Pi. Restoring it would add a model call per qualifying turn and is a separate
+  repair-lane bug. This change gives the conversation path its own worker so a
+  later repair cannot silently reuse the task worker, but does not re-enable it.
+
+**Evidence.**
+
+- Live journal `~/.clone/journal.sqlite3` on 2026-11-18 (the query is in the
+  optimization log): 8 `memory.candidate.requested`, 8
+  `memory.candidate.extracted` (all `count: 1`), 8 `memory.candidate.proposed`.
+  The owner had rejected 2; the one-time cleanup rejected the other 6 with the
+  reason above, leaving 0 pending. All 8 summaries are `候选流程：` followed by
+  the exact task objective — for example
+  `候选流程：只读审查 knowledge-base 项目的 RAG 实现，优先复用已有审查结果并给出可验证的优化建议。`,
+  which is identical to that run's `task.created.objective`. None names a
+  preference, decision, procedure, or project fact the objective did not
+  already contain. This is the list in the owner's screenshot.
+- The producer is `DeterministicMemoryWorker.extract` in
+  `src/memory/memory-pipeline.ts`, selected by `createRuntimeAssembly` whenever
+  `CLONE_AI_MEMORY_MINING !== "all"` (`src/core/runtime-factory.ts`);
+  `runMaintenance` drains every request (`src/companion-server.ts`) and the
+  desktop candidate list renders every pending one (`apps/desktop/ui/app.js`).
+- `test/golden-path.test.ts` asserted the behavior ("a verified run produces
+  exactly one candidate") and promoted the restatement, which is why the
+  placeholder survived.
+
+**What it costs.**
+
+- Without a miner, task-run mining is silent: a reusable procedure visible only
+  in a finished task's evidence is not captured. Durable learning then depends on
+  conversation mining (currently unwired), owner-authored memories, or
+  `CLONE_AI_MEMORY_MINING=all`. A task-specific lesson is lost until the owner
+  turns on the model miner.
+- The gate is exact-match only, deliberately. A model that paraphrases the
+  objective, or restates evidence, is not dropped. That is a false negative,
+  accepted because a looser similarity rule would drop legitimate memories that
+  begin with the task's words; the owner still reviews every candidate. The two
+  false negatives are pinned in `benchmark/gate/memory-cases.json`.
+- The type guard keeps a typed preference/fact/decision/commitment that copies
+  the objective. That is deliberate — a first-person statement is exactly the
+  case where the objective and the memory can be the same text — but it means a
+  model can bypass the drop by labelling a work-order copy `fact`.
+- The one-time cleanup auto-rejects pending candidates the owner has not
+  decided. They can re-author any they wanted. It is limited to candidates whose
+  run has a `task.created` objective and whose summary matches it exactly;
+  conversation candidates and orphans are left alone.
+- Enabling `=all` later does not revisit runs that completed while no miner was
+  configured: their extraction marker records zero candidates. Old work orders
+  are not reinterpreted.
+- `ImprovementService` lesson suggestions are a different proposal surface. They
+  are built from failure signatures and are not `memory.candidate.proposed`, so
+  this gate does not cover them.
+- The one-time cleanup runs in the companion server's first maintenance tick. A
+  CLI-only home keeps legacy pending candidates until a desktop daemon opens it.
+- A run trace keeps the proposal event and its rejection event: the audit shows
+  what was proposed and what the owner or policy decided. Only current surfaces
+  — the review list, attention, and the dashboard's memory field — hide decided
+  candidates.
+
+**Reversal condition.** If measured journals show task-run candidates the owner
+promotes (say more than 20% of mined tasks), the silent default is too strong:
+give task mining a cheap miner by default, or mine only evidence that names a
+standing rule. If the gate drops a legitimate memory in real use, narrow it to
+the legacy `候选流程：` template only. If typed objective copies become common,
+widen the automatic drop (or add a measured similarity layer) without
+loosening the exact rule. Delete the legacy cleanup once no journal contains a
+pending `候选流程：` proposal and one release has passed.
+
+**Superseded by this entry:** the task-mining half of
+[2026-11-05 — Supersedes: conversation mining defaults to a cheap local filter](#2026-11-05--supersedes-conversation-mining-defaults-to-a-cheap-local-filter).
+
+## 2026-11-18 — A read-only request is a step, and tools use the turn's workspace
+
+**Decision.** The fallback planner treats an explicit read-only request, and a
+research request with no deliverable, as one read-only step executed by
+`context-researcher` (or `direct-responder` when it is disabled), with no
+subagent work orders and no required artifact. Generic container nouns (项目,
+代码, 文件, 页面) are not delivery terms; a named output target or a delivery
+verb still wins, and a no-write clause is removed before delivery matching. The
+Main Agent's Kernel tools (`dispatch_task` and the runtime behind
+`propose_work_plan`) receive the turn's workspace path, so a dispatched run
+executes in the owner's workspace instead of `process.cwd()`; `execution.started`
+records that workspace for the audit.
+
+**Alternatives rejected.**
+
+- *Keep the draft work order and make its artifact optional.* The plan would
+  still tell a worker to "deliver a local draft" for a request that forbade
+  writes; an optional artifact only hides the contradiction, and a read-only
+  worker still cannot produce a required one.
+- *Treat every no-write phrase as read-only without looking for delivery verbs.*
+  "写一份报告，不要修改现有文件" would lose its report. The delivery verb or a
+  named output target wins; only the no-write clause is removed.
+- *Let the Main Agent retry with a read-only plan after the failure.* It did,
+  and that retry succeeded, but the first failed run and its review noise are
+  the defect; a retry is not a planner fix.
+- *Leave the tool runtimes on `process.cwd()`.* The live run `b1e04b18` read
+  `/Users/user/work/knowledge_base/README.md` while its worker's workspace was
+  `/Users/user/study/clone-ai` (the checkout), so the worker reported the file
+  as "outside the workspace". The prompt named the right workspace; the tool did
+  not receive it.
+
+**Evidence.** Runs `c03c7cea` and `cd74804b` were planned as a `prepare` step
+with a `draft` subagent requiring `local-draft`; `subagent.verified` failed with
+"Missing required artifact evidence: local-draft". Run `b1e04b18` had a
+read-only plan but failed because `dispatch_task`'s runtime fell back to the
+checkout. After both fixes, the live check on a knowledge-base workspace
+(`CLONE_AI_LIVE_WORKSPACE=/Users/user/work/knowledge_base`, native /
+`openai/gpt-6.1-terra`) produced **one** run (`99504e85`): a single
+`read-only-lookup` step with `agentId: context-researcher`, `delegated: false`,
+`risk: read_only`; it read the absolute README, recorded the observation, wrote
+the three-sentence answer as `execution.completed`, and reached
+`waiting_review`. `test/fallback-planner.test.ts` and `test/main-agent.test.ts`
+pin the planner shape and the tool-runtime workspace; typecheck passes.
+
+**What it costs.** The intent check is lexical: a request that mentions only a
+read-only marker but secretly needs a file must name an output target, or the
+worker will ask instead of writing. The tool runtimes now take one more optional
+argument; callers that omit it keep the old `process.cwd()` behavior.
+
+**Reversal condition.** If the owner wants a single preparation role for
+read-only work, keep the step but make its artifact optional; never require a
+write from a read-only capability set. If per-step `files` scopes become the
+normal way to reach a project outside the workspace, the read-only step can use
+them and the workspace fallback becomes unnecessary.
+
+## 2026-11-18 — One measured worker budget per clone home, not per assembly
+
+**Decision.** Worker capacity becomes one process-wide `CapacityGate` per resolved
+clone home (`paths.dataDirectory`), not one per `RuntimeAssembly`.
+`createRuntimeAssembly` acquires the gate for its home from a module-level
+registry keyed by that directory; the daemon, the Query workflow, the Main
+Agent's per-call kernel sessions and the repair lane all draw from the same
+instance. The registry reference-counts: each assembly holds one reference,
+`assembly.close()` releases it, and the entry is deleted when the last reference
+goes, so the many temporary homes a test suite creates do not accumulate. The
+owner's `maxConcurrentWorkers` pin stays per home and is still re-read:
+`refreshCapacityPin()` on any assembly writes the shared pin holder, and the gate
+samples it on every acquire, so an owner settings change reaches every assembly
+of that home without a restart. Each assembly still exposes its `capacityGate`,
+now the shared instance, whose public `active`/`waiting` counts therefore
+describe the whole home.
+
+**Alternatives rejected.**
+
+- *Keep one gate per assembly (the status quo).* `runQuery` builds an assembly
+  per query (`src/application/run-query.ts`), the Main Agent's `withKernel`
+  builds one per tool call and `native-runtime.ts` one per turn
+  (`src/main-agent/tools/kernel-tools.ts`,
+  `src/main-agent/native-runtime.ts`), and the daemon one at boot
+  (`src/companion-server.ts`). Two concurrent Main Agent turns therefore each
+  dispatch up to the machine's full worker budget: the Main Agent cap bounds
+  model turns but not total worker load, which contradicts the owner's request
+  that concurrency follow the machine. The previous entry in this file recorded
+  exactly this gap ("sharing one worker gate across concurrent queries is a
+  separate change"); this closes it.
+- *A machine-wide singleton in the process.* The Main Agent's own pool is
+  deliberately per clone home so a benchmark or a second `CLONE_AI_DATA_DIR`
+  gets its own pool. Worker capacity must scope the same way, or the owner's
+  daemon and a benchmark run contend for slots.
+- *Key the registry on the workspace path.* The measured budget is about the
+  machine, and one clone home routinely serves several workspaces (the daemon's
+  configured workspace, a repair worktree, a query's injected path); keying on
+  workspace would recreate the per-caller gate under another name. The clone
+  home is also the address the Main Agent slot pool already uses.
+- *Thread the daemon's gate into every caller through a new option.* `run-query`,
+  `kernel-tools`, `native-runtime` and the repair lane would each have to pass
+  it, and a caller that forgets silently returns to per-assembly behavior with
+  no test catching it. A registry keyed by the home makes sharing the default.
+- *A cross-process gate now.* Worker dispatch happens mostly inside one daemon
+  process, and the multiplication observed here happens between assemblies in
+  that process. `src/main-agent/main-agent-slots.ts` is the existing
+  cross-process pool; restructuring worker capacity the same way is larger and
+  has no failing measurement behind it yet.
+- *No reference count — delete the entry on any `close()`.* Closing the Main
+  Agent's short-lived per-call session would wipe a gate the daemon still uses,
+  splitting the budget mid-run; hence the count, not a boolean.
+
+**Evidence.** Before the change, `createRuntimeAssembly` constructs its own
+`new CapacityGate(...)` (`src/core/runtime-factory.ts`), so the gate's lifetime
+is the assembly's and every call site above gets a separate limit. The
+deterministic eval `test/runtime-capacity-sharing.test.ts` assembles two
+runtimes over one temporary home concurrently and asserts: both report the same
+gate object; with `maxConcurrentWorkers: 1` a second acquisition through the
+other assembly waits until the first releases; a config update followed by
+`refreshCapacityPin()` on one assembly changes the limit the other samples; and
+once both close, a later assembly for the same home gets a fresh gate, proving
+the registry does not leak entries per temporary home.
+
+**What it costs.** One map entry per open clone home, released at close. Closing
+an assembly is now load-bearing for that cleanup; a caller that never closes
+(e.g. `createKernelRuntime`) keeps its home's entry for the process lifetime,
+which is one entry per home, not per call. `runtime.capacity()` now includes
+activity from other assemblies of the same home — that is the intent, but a
+per-assembly reading becomes a shared one. The gate remains per process: a CLI
+process and the daemon still measure separately, so the total across processes
+can exceed one budget.
+
+**Reversal condition.** If a cross-process worker pool lands, delete the
+registry and use that pool. If holding one budget per home starves ordinary
+work — a single query's dispatch waiting minutes behind another query's wave —
+raise the measured formula instead of unscoping the budget. If the reference
+count proves error-prone (entries that never leave, or a gate deleted while a
+live assembly uses it), replace the map with an explicit budget object created
+at daemon boot and passed down.
+
 ## 2026-11-18 — The Main Agent knows its workspace, and a review carries the answer
 
 **Decision.** The companion passes the running workspace into every Main Agent
@@ -16,9 +513,18 @@ replaced by whatever the workspace contains. A worker's instructions repeat the
 same rule for the step's workspace. A single-agent step journals its final
 answer as `execution.completed`; the task record and the review card render that
 answer. A workspace saved in Settings returns `restartRequired`, and the
-settings pane marks the saved path as pending until the app restarts.
+settings pane marks the saved path as pending until the app restarts. Worker
+file tools resolve a path with `resolve`, exactly as the gate does, so an
+absolute path inside the workspace or a granted read root reaches the file the
+gate approved.
 
 **Alternatives rejected.**
+
+- *Leave the file tools on `join(workspace, path)` while the gate uses
+  `resolve`.* The two disagreed for absolute paths: the gate approved
+  `/ws/README.md`, the tool opened `/ws/ws/README.md`. Live run `b1e04b18`
+  failed with "the README is outside the workspace" for a file at the root of
+  the workspace because of that doubled prefix.
 
 - *Keep `process.cwd()` as the Main Agent's workspace.* That is the defect:
   the prompt snapshot for turn `4c0ae6ca` has `instructionSources: ["AGENTS.md"]`
@@ -49,21 +555,38 @@ and no `execution.completed` or `subagent.completed` event. The Main Agent's
 prompt snapshot `a063d154…` names `AGENTS.md` from the clone-ai checkout as its
 only instruction source. `~/.clone/config.json` says
 `workspacePath: /Users/user/Documents/Clone AI`; the RAG project is at
-`/Users/user/work/knowledge_base`.
+`/Users/user/work/knowledge_base`. After the `resolve` fix, live run
+`496d2061` read `/Users/user/work/knowledge_base/README.md` through an absolute
+`read_file` call (`isError: false`), journaled `execution.completed` with the
+three-sentence answer, and reached `waiting_review`; the owner accepted it, and
+the task record shows the answer above the acceptance line.
 
 **What it costs.** The prompt grows by a short workspace paragraph. Every
 single-agent step adds one journal event carrying the redacted answer, bounded
 by the model's output. The review card repeats an answer that also appears in
 the task record: one is the decision surface, the other is what remains after
 the decision. The settings change remains a restart, now stated instead of
-silently ignored.
+silently ignored. The `resolve` change grants no new trust: it removes a
+disagreement between the gate and the tool, and relative paths behave exactly
+as before.
+
+**Live check.** The wiring and the prompt text are pinned by deterministic
+tests; a live check against the configured model confirms the behavior for one
+phrasing. Using `openai/gpt-6.1-terra` at `http://127.0.0.1:3425` and a fresh
+temp workspace, the original request ("看一下knowledge-base这个项目…") first
+produced an honest reply asking for the path but also dispatched one run that
+failed (no false review). After adding the line "You have no filesystem tool of
+your own: you cannot search the disk", the same request asked for the path or a
+workspace switch and dispatched nothing (`newRuns: []`). This is one model and
+one phrasing, not a benchmark; a wider prompt-compliance run is still missing.
 
 **Reversal condition.** If the runtime learns to switch workspaces live, drop
 the restart notice and apply the path to the running assembly. If the owner
 decides cross-project lookup is required, add an owner-authorized `files` scope
 and a discovery tool (the rejected alternative above) rather than widening the
 workspace silently; then the "outside the workspace" rule becomes an
-instruction to use that tool.
+instruction to use that tool. If absolute paths must be refused instead, refuse
+them in `decideTool` as well; never let the gate and the tool disagree.
 
 ## 2026-11-18 — The main pane is a dispatch log, not a chat transcript
 
@@ -122,16 +645,17 @@ ledger records that id, the model's history is rebuilt only from turns of the
 same conversation, and the prompt lock is per conversation: a second prompt in
 the same conversation is still refused, while prompts in different
 conversations run concurrently. A cross-process slot pool caps how many Main
-Agent turns run at once. In auto mode the cap is sampled on every acquisition:
-half the CPU cores (two when the machine has room); halved when the 1-minute
-load is at or above half the cores; bounded by free memory at 512 MB per turn
-after a 1 GB reserve; and never above eight. Load or memory pressure can reduce
-it to one. The owner may pin `maxConcurrentMainAgents`; a pin is capped at the
-core count. A turn above the cap waits for a slot (abortable) instead of being
-refused. The cap is per clone home, not machine-wide: a benchmark or a second
-`CLONE_AI_DATA_DIR` gets its own pool. In the desktop, "新建任务" starts a new
-conversation, and the sidebar lists conversations alongside the task runs they
-spawned.
+Agent turns run at once. In auto mode the cap is sampled on every acquisition
+from CPU and load: half the CPU cores (two when the machine has room), halved
+when the 1-minute load is at or above half the cores, never above eight, and
+reducible to one under load. Memory is deliberately not a bound: macOS reports
+only free pages, so a memory term serialized every task on the primary
+platform, and worker memory is gated where workers actually run. The owner may
+pin `maxConcurrentMainAgents`; a pin is capped at the core count. A turn above
+the cap waits for a slot (abortable) instead of being refused. The cap is per
+clone home, not machine-wide: a benchmark or a second `CLONE_AI_DATA_DIR` gets
+its own pool. In the desktop, "新建任务" starts a new conversation, and the
+sidebar lists conversations alongside the task runs they spawned.
 
 **Alternatives rejected.**
 
@@ -157,7 +681,10 @@ ledger row with no conversation filter, so separate tasks share one transcript.
 The parity study already lists "concurrent Main Agent prompt → 409/queue" as
 gap D11 (`docs/study/claude-code-parity.md`). The worker gate
 (`src/core/capacity.ts`) is the existing precedent for a measured limit with an
-owner pin.
+owner pin. A live sample on the 18-core / 24 GB verification host reported
+456 MB free (macOS counts only free pages) and produced a limit of 1 with a
+memory term; with the memory bound removed the same machine admits its CPU
+budget, which is what makes the feature usable on the primary platform.
 
 **What it costs.** Concurrent turns spend provider tokens in parallel and share
 the provider's rate limit; a turn made to wait shows no progress until it
@@ -344,7 +871,8 @@ server returns `evidence` and the trace already exists; the UI stops hiding it.
   and the verification. The trace opens by default only while the run is still
   waiting for the owner; a finished run keeps it collapsed but one click away.
 
-**Evidence.** Run `91b685cf` (the knowledge-base RAG review) has 9
+**Evidence.** Run `91b685cf` (a RAG review that later evidence showed had read
+the Clone AI workspace, not the project it named) has 9
 `evidence.recorded` events, 9 `agent.tool_*` calls and a
 `verification.completed` with `needsReview: true`, yet its task record showed
 only the plan, the evidence count and a collapsed trace. Runs `709e9ab5`,
@@ -3177,6 +3705,10 @@ memory never learned, an extra call is a few cents.
 **What was given up.** Turns without a signal are never mined, so a fact stated
 plainly but without any of the matched patterns ("杭州今天下雨" followed later by
 a request) can be missed. `all` is the escape hatch.
+
+**Superseded (task mining).** The default deterministic worker is retired by
+[2026-11-18 — A finished task is not a memory](#2026-11-18--a-finished-task-is-not-a-memory-candidates-must-state-durable-knowledge);
+only `=all` selects the model miner.
 
 **Reversal condition.** If the filter's miss rate is visible in practice, widen
 the signal list or make `all` the default.

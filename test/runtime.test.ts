@@ -19,7 +19,25 @@ test("a supervisor coordinates child agents, resumes after approval, and preserv
 
   const journalPath = join(directory, "journal.jsonl");
   const journal = new JsonlJournalStore(journalPath);
-  const memory = new MemoryPipeline(journal);
+  // The default pipeline proposes nothing without a miner: a completed run's
+  // objective is a work order, not a memory. This test supplies the miner so
+  // the lifecycle below still proves that only a mined candidate is produced.
+  // 没有提炼器时默认流水线不提出候选：已完成 Run 的目标是工作单，不是记忆。本测试
+  // 提供提炼器，使下面的生命周期仍然证明只有被提炼的候选才会产生。
+  const memory = new MemoryPipeline(journal, {
+    async extract(job) {
+      return [{
+        id: "runtime-candidate",
+        runId: job.run.id,
+        sourceEvidenceIds: job.evidence.map((item) => item.id),
+        summary: "发送议程前先取得所有者批准，并保留送达回执。",
+        confidence: "medium",
+        status: "proposed",
+        createdAt: new Date().toISOString(),
+        type: "procedure",
+      }];
+    },
+  });
   const runtime = new CloneRuntime({ journal, policy: new DefaultPolicyEngine(), verifier: new EvidenceVerifier(), memory });
 
   const { run } = await runtime.acceptTrigger({
@@ -406,7 +424,7 @@ function workOrder(
       description: "A durable artifact for this work order.",
       required: true,
     }],
-    risk: "read_only",
+    risk: "reversible_write",
     budget: {
       maxDurationMs: 60_000,
       maxModelCalls: 10,

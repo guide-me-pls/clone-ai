@@ -57,6 +57,39 @@ test("draining marks each batch extracted and is idempotent", async (t) => {
   assert.ok(miner !== undefined);
 });
 
+test("conversation mining has its own worker and does not reuse the task pipeline's", async (t) => {
+  const { journal } = await setup(t);
+  const recorder = new ConversationMemoryPipeline(journal, new MemoryPipeline(journal));
+  await recorder.record({
+    session: "s2.jsonl",
+    objective: "我以后周五不加班",
+    turns: [{ at: "2026-11-01T00:00:00Z", speaker: "user", text: "我以后周五不加班" }],
+  });
+  const recorded = (await journal.list()).find((event) => event.type === "evidence.recorded")?.payload as { id?: string } | undefined;
+  assert.equal(typeof recorded?.id, "string");
+
+  // The task pipeline's default worker is a no-op; the conversation pipeline
+  // still proposes because it carries its own worker. A refactor that makes the
+  // conversation path borrow the task worker turns this case red.
+  // 任务流水线的默认 Worker 不提炼；对话流水线因为自带 Worker 仍然提出候选。让对话路径
+  // 借用任务 Worker 的重构会让本用例变红。
+  const miner = new ConversationMemoryWorker({
+    miner: {
+      complete: async () => JSON.stringify([{
+        type: "preference",
+        summary: "我以后周五不加班",
+        confidence: "high",
+        sourceEvidenceIds: [recorded!.id!],
+      }]),
+    },
+  });
+  const completing = new ConversationMemoryPipeline(journal, new MemoryPipeline(journal, miner));
+  const drained = await completing.processDue();
+  assert.equal(drained.length, 1);
+  assert.equal(drained[0]?.summary, "我以后周五不加班");
+  assert.equal(drained[0]?.type, "preference");
+});
+
 test("the conversation prompt asks for durable owner statements and keeps the citation rules", () => {
   const prompt = conversationPrompt({
     run: { id: "r", taskId: "t", status: "completed", createdAt: "", updatedAt: "" },

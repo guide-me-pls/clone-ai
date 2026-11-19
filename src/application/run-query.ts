@@ -221,7 +221,17 @@ async function runQueryWithin(
   // 每个步骤的执行者连同原因一起写入 Journal：只有当所有者能看到每个 Worker 为何拿到
   // 它那一步时，多 Agent 计划才是可审计的。
   await recorder.recordStepAssignments(run.id, routedPlan.assignments);
-  await runtime.attachPlan(run.id, routedPlan.plan);
+  try {
+    await runtime.attachPlan(run.id, routedPlan.plan);
+  } catch (error: unknown) {
+    // A plan the Kernel rejects must close its Run: the queue only claims
+    // `queued` work, so a Run left in `planning` would freeze forever. The
+    // planner-error path above closes its Run for the same reason.
+    // Kernel 拒绝的计划必须关闭它的 Run：队列只领取 `queued` 工作，留在 `planning` 的
+    // Run 会永远冻结。上面的 Planner 错误路径也出于同样理由关闭 Run。
+    await runtime.failRun(run.id, `planning failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
+  }
 
   const registry = options.agents ?? await createConfiguredAgentRegistry(agents, {
     dataDirectory,

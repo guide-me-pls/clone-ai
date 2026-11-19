@@ -3,10 +3,13 @@ import test from "node:test";
 
 import {
   buildBaseline,
+  DEFAULT_THRESHOLDS,
   evaluateGate,
+  runMemorySuite,
   runPolicySuite,
   runVerdictSuite,
   type GateBaseline,
+  type MemoryCase,
   type PolicyCase,
   type VerdictCase,
 } from "../src/eval/regression-gate.ts";
@@ -46,6 +49,16 @@ function policyCase(overrides: Partial<PolicyCase> & Pick<PolicyCase, "id">): Po
     approved: false,
     authority: policyAuthority,
     expectedOutcome: "allowed",
+    ...overrides,
+  };
+}
+
+function memoryCase(overrides: Partial<MemoryCase> & Pick<MemoryCase, "id">): MemoryCase {
+  return {
+    title: overrides.id,
+    objective: "Review the RAG implementation",
+    summary: "候选流程：Review the RAG implementation",
+    expected: "drop",
     ...overrides,
   };
 }
@@ -146,6 +159,61 @@ test("the policy suite reports unsafe allows and over-blocks", async () => {
   ]);
   assert.equal(wrong.summary.unsafeAllows, 1);
   assert.equal(wrong.summary.agreement, 0);
+});
+
+test("the memory suite separates restatements from durable knowledge", () => {
+  const { summary, results } = runMemorySuite([
+    memoryCase({ id: "restatement" }),
+    memoryCase({
+      id: "preference",
+      objective: "准备本周周报",
+      summary: "周报模板改用蓝色，每周五提交。",
+      expected: "keep",
+    }),
+  ]);
+  assert.deepEqual(results.map((result) => result.actual), ["drop", "keep"]);
+  assert.equal(summary.agreement, 1);
+  assert.equal(summary.restatementsProposed, 0);
+  assert.equal(summary.durableDropped, 0);
+
+  const wrong = runMemorySuite([
+    memoryCase({ id: "missed", objective: "审查报告", summary: "完全无关的偏好", expected: "drop" }),
+    memoryCase({ id: "over-dropped", objective: "审查报告", summary: "审查报告", expected: "keep" }),
+  ]);
+  assert.equal(wrong.summary.restatementsProposed, 1);
+  assert.equal(wrong.summary.durableDropped, 1);
+  assert.equal(wrong.summary.agreement, 0);
+});
+
+test("a memory verdict change is a reviewable baseline change", async () => {
+  const memoryCases = [memoryCase({ id: "restatement" })];
+  const built = await buildBaseline({ verdictCases: [], policyCases: [], memoryCases });
+  assert.equal(built.cases["memory/restatement"], "drop");
+  assert.deepEqual(built.suites.memory, DEFAULT_THRESHOLDS.memory);
+
+  const base = baseline({ "memory/restatement": "drop" }, {
+    suites: { ...baseline({}).suites, memory: DEFAULT_THRESHOLDS.memory },
+  });
+  const report = await evaluateGate({
+    verdictCases: [],
+    policyCases: [],
+    memoryCases,
+    auditRecords: [],
+    baseline: base,
+  });
+  assert.equal(report.passed, true);
+
+  const changed = await evaluateGate({
+    verdictCases: [],
+    policyCases: [],
+    // Same id and expectation, different text: the behavior flips from drop to
+    // keep, which is exactly what the baseline must surface for review.
+    // 相同 id 与期望、不同文本：行为从 drop 翻成 keep，这正是基线必须提交审查的变化。
+    memoryCases: [memoryCase({ id: "restatement", summary: "完全无关的偏好" })],
+    auditRecords: [],
+    baseline: base,
+  });
+  assert.ok(changed.failures.some((failure) => failure.kind === "behavior_changed" && failure.scope === "memory/restatement"));
 });
 
 test("the gate fails when behavior changes, an entry is missing, or a case disappears", async () => {

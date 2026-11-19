@@ -1,10 +1,11 @@
 /**
  * The deterministic regression gate.
  *
- * The gate re-runs the harness's *judgment* layers — evidence verification and
- * authority policy — against a held-out fixture set, and calibrates the audit
- * projection against owner labels. It never calls a model: a CI gate that needs
- * a provider is a gate that is skipped on the day it matters.
+ * The gate re-runs the harness's *judgment* layers — evidence verification,
+ * authority policy, and memory-candidate quality — against a held-out fixture
+ * set, and calibrates the audit projection against owner labels. It never calls
+ * a model: a CI gate that needs a provider is a gate that is skipped on the day
+ * it matters.
  *
  * Two rules make it a gate rather than a test suite:
  *
@@ -20,9 +21,9 @@
  *
  * 确定性回归门禁。
  *
- * 门禁会针对 held-out 夹具重新运行 harness 的“判断”层——证据验证与权限策略——并用
- * 所有者标注校准审计投影。它从不调用模型：需要 Provider 的 CI 门禁，总会在最关键的那天
- * 被跳过。
+ * 门禁会针对 held-out 夹具重新运行 harness 的“判断”层——证据验证、权限策略与记忆候选
+ * 质量——并用所有者标注校准审计投影。它从不调用模型：需要 Provider 的 CI 门禁，总会在
+ * 最关键的那天被跳过。
  *
  * 两条规则使它成为门禁而不是普通测试集：
  *
@@ -38,12 +39,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Evidence, PlanStep, Run, Task, WorkPlan } from "../core/contracts.ts";
+import type { Evidence, MemoryType, PlanStep, Run, Task, WorkPlan } from "../core/contracts.ts";
 import type { PolicyDecision } from "../core/contracts.ts";
 import { EvidenceVerifier } from "../core/verification.ts";
 import { AuthorityPolicyEngine } from "../authority/policy-engine.ts";
 import type { AuthorityConfig } from "../authority/standing-policy-store.ts";
 import { summarizeAudits, type RunAuditRecord } from "../audit/run-audit.ts";
+import { isTaskRestatement } from "../memory/memory-hygiene.ts";
 
 export const GATE_SCHEMA_VERSION = 1;
 
@@ -79,10 +81,27 @@ export interface PolicyCase {
   note?: string;
 }
 
+/**
+ * A candidate-quality case: would the pipeline refuse this summary as a
+ * restatement of its task, or keep it as durable knowledge?
+ * 候选质量用例：流水线会把这条摘要当作任务复述而拒绝，还是作为持久知识保留？
+ */
+export interface MemoryCase {
+  id: string;
+  title: string;
+  objective: string;
+  summary: string;
+  /** Suggested classification; omitted means an untyped legacy candidate. 建议分类；省略表示无类型的遗留候选。 */
+  type?: MemoryType;
+  /** "drop" when the summary restates the task; "keep" when it is durable knowledge. 摘要复述任务时为 drop，属于持久知识时为 keep。 */
+  expected: "drop" | "keep";
+  note?: string;
+}
+
 export type VerdictOutcome = "pass" | "fail" | "review";
 
 export interface CaseResult {
-  suite: "verdict" | "policy";
+  suite: "verdict" | "policy" | "memory";
   id: string;
   actual: string;
   expected: string;
@@ -117,6 +136,15 @@ export interface AuditGateSummary {
   falseFail: number;
 }
 
+export interface MemorySummary {
+  cases: number;
+  agreement: number | null;
+  /** Restatements the current rule would let through. 当前规则会放过的重述。 */
+  restatementsProposed: number;
+  /** Durable statements the current rule would refuse. 当前规则会拒绝的持久陈述。 */
+  durableDropped: number;
+}
+
 export interface VerdictThresholds {
   minCases: number;
   minAgreement: number;
@@ -135,6 +163,13 @@ export interface AuditThresholds {
   maxFalsePass: number;
 }
 
+export interface MemoryThresholds {
+  minCases: number;
+  minAgreement: number;
+  maxRestatementsProposed: number;
+  maxDurableDropped: number;
+}
+
 export interface GateBaseline {
   schemaVersion: number;
   /** sha256 of the audit dataset, so the held-out records cannot change silently. 审计数据集的 sha256，使 held-out 记录无法悄悄变化。 */
@@ -143,6 +178,7 @@ export interface GateBaseline {
     verdict?: VerdictThresholds;
     policy?: PolicyThresholds;
     audit?: AuditThresholds;
+    memory?: MemoryThresholds;
   };
   /** `<suite>/<id>` -> the behavior recorded when the baseline was written. `<suite>/<id>` -> 写基线时记录的行为。 */
   cases: Record<string, string>;
@@ -171,8 +207,10 @@ export interface GateReport {
   verdict: VerdictSummary;
   policy: PolicySummary;
   audit: AuditGateSummary;
+  memory: MemorySummary;
   verdictResults: CaseResult[];
   policyResults: CaseResult[];
+  memoryResults: CaseResult[];
   changes: CaseChange[];
   failures: GateFailure[];
   passed: boolean;
@@ -182,6 +220,7 @@ export const DEFAULT_THRESHOLDS: Required<GateBaseline["suites"]> = {
   verdict: { minCases: 1, minAgreement: 1, maxFalsePass: 0 },
   policy: { minCases: 1, minAgreement: 1, maxUnsafeAllows: 0 },
   audit: { minLabeled: 1, minAgreement: 1, maxFalsePass: 0 },
+  memory: { minCases: 1, minAgreement: 1, maxRestatementsProposed: 0, maxDurableDropped: 0 },
 };
 
 /**
@@ -365,6 +404,42 @@ export async function runPolicySuite(
 }
 
 /**
+ * Runs every memory case through the production restatement rule, including its
+ * type guard. This is the boundary that decides whether a mined candidate is
+ * durable knowledge or the task objective said twice; the fixtures pin both
+ * directions so a later loosening or tightening is a reviewed baseline change,
+ * not a silent drift.
+ * 用生产环境的复述规则（含类型闸门）运行每个记忆用例。这条边界决定一条提炼候选是持久知识、
+ * 还是把任务目标说了两遍；夹具钉住两个方向，使日后放宽或收紧成为可审查的基线变化，而不是
+ * 静默漂移。
+ */
+export function runMemorySuite(cases: readonly MemoryCase[]): { summary: MemorySummary; results: CaseResult[] } {
+  const results: CaseResult[] = [];
+  let restatementsProposed = 0;
+  let durableDropped = 0;
+  let correct = 0;
+  for (const testCase of cases) {
+    const actual = isTaskRestatement({ summary: testCase.summary, type: testCase.type }, testCase.objective)
+      ? "drop"
+      : "keep";
+    const ok = actual === testCase.expected;
+    if (ok) correct += 1;
+    else if (actual === "keep") restatementsProposed += 1;
+    else durableDropped += 1;
+    results.push({ suite: "memory", id: testCase.id, actual, expected: testCase.expected, correct: ok });
+  }
+  return {
+    summary: {
+      cases: cases.length,
+      agreement: cases.length === 0 ? null : correct / cases.length,
+      restatementsProposed,
+      durableDropped,
+    },
+    results,
+  };
+}
+
+/**
  * Calibrates the audit projection against owner labels. The records are what a
  * `npm run audit:export` produces; the owner's verdict is the ground truth.
  * 用所有者标注校准审计投影。记录正是 `npm run audit:export` 的产物；所有者判定是真值。
@@ -393,6 +468,8 @@ export function hashAuditDataset(raw: string): string {
 export async function evaluateGate(input: {
   verdictCases: readonly VerdictCase[];
   policyCases: readonly PolicyCase[];
+  /** Omitted by callers that predate the memory suite; when present its cases are checked. 早于记忆套件的调用方会省略；提供时其用例会被检查。 */
+  memoryCases?: readonly MemoryCase[];
   auditRecords: readonly RunAuditRecord[];
   auditDatasetHash?: string;
   baseline: GateBaseline;
@@ -403,6 +480,7 @@ export async function evaluateGate(input: {
     ...(input.workspaceRoot === undefined ? {} : { workspaceRoot: input.workspaceRoot }),
   });
   const policy = await runPolicySuite(input.policyCases, input.home === undefined ? {} : { home: input.home });
+  const memory = runMemorySuite(input.memoryCases ?? []);
   const audit = runAuditSuite(input.auditRecords);
 
   const failures: GateFailure[] = [];
@@ -410,7 +488,8 @@ export async function evaluateGate(input: {
 
   checkCases("verdict", verdict.results, input.baseline, failures, changes);
   checkCases("policy", policy.results, input.baseline, failures, changes);
-  checkStaleCases(input.baseline, verdict.results, policy.results, failures);
+  if (input.memoryCases !== undefined) checkCases("memory", memory.results, input.baseline, failures, changes);
+  checkStaleCases(input.baseline, verdict.results, policy.results, memory.results, failures);
 
   if (input.baseline.auditDatasetHash !== undefined && input.auditDatasetHash !== undefined
     && input.baseline.auditDatasetHash !== input.auditDatasetHash) {
@@ -424,6 +503,7 @@ export async function evaluateGate(input: {
   const verdictThresholds = input.baseline.suites.verdict ?? DEFAULT_THRESHOLDS.verdict;
   const policyThresholds = input.baseline.suites.policy ?? DEFAULT_THRESHOLDS.policy;
   const auditThresholds = input.baseline.suites.audit ?? DEFAULT_THRESHOLDS.audit;
+  const memoryThresholds = input.baseline.suites.memory ?? DEFAULT_THRESHOLDS.memory;
 
   threshold(failures, "verdict", "cases", verdict.summary.cases >= verdictThresholds.minCases,
     `${verdict.summary.cases} cases, at least ${verdictThresholds.minCases} required.`);
@@ -446,12 +526,26 @@ export async function evaluateGate(input: {
   threshold(failures, "audit", "falsePass", audit.falsePass <= auditThresholds.maxFalsePass,
     `${audit.falsePass} false passes, at most ${auditThresholds.maxFalsePass} allowed.`);
 
+  if (input.memoryCases !== undefined) {
+    threshold(failures, "memory", "cases", memory.summary.cases >= memoryThresholds.minCases,
+      `${memory.summary.cases} cases, at least ${memoryThresholds.minCases} required.`);
+    threshold(failures, "memory", "agreement", ratioAtLeast(memory.summary.agreement, memoryThresholds.minAgreement),
+      `agreement ${formatRatio(memory.summary.agreement)}, at least ${formatRatio(memoryThresholds.minAgreement)} required.`);
+    threshold(failures, "memory", "restatementsProposed",
+      memory.summary.restatementsProposed <= memoryThresholds.maxRestatementsProposed,
+      `${memory.summary.restatementsProposed} restatements proposed, at most ${memoryThresholds.maxRestatementsProposed} allowed.`);
+    threshold(failures, "memory", "durableDropped", memory.summary.durableDropped <= memoryThresholds.maxDurableDropped,
+      `${memory.summary.durableDropped} durable statements dropped, at most ${memoryThresholds.maxDurableDropped} allowed.`);
+  }
+
   return {
     verdict: verdict.summary,
     policy: policy.summary,
     audit,
+    memory: memory.summary,
     verdictResults: verdict.results,
     policyResults: policy.results,
+    memoryResults: memory.results,
     changes,
     failures,
     passed: failures.length === 0,
@@ -467,6 +561,7 @@ export async function evaluateGate(input: {
 export async function buildBaseline(input: {
   verdictCases: readonly VerdictCase[];
   policyCases: readonly PolicyCase[];
+  memoryCases?: readonly MemoryCase[];
   auditDatasetHash?: string;
   previous?: GateBaseline;
   workspaceRoot?: string;
@@ -476,9 +571,11 @@ export async function buildBaseline(input: {
     ...(input.workspaceRoot === undefined ? {} : { workspaceRoot: input.workspaceRoot }),
   });
   const policy = await runPolicySuite(input.policyCases, input.home === undefined ? {} : { home: input.home });
+  const memory = input.memoryCases === undefined ? undefined : runMemorySuite(input.memoryCases);
   const cases: Record<string, string> = {};
   for (const result of verdict.results) cases[`verdict/${result.id}`] = result.actual;
   for (const result of policy.results) cases[`policy/${result.id}`] = result.actual;
+  for (const result of memory?.results ?? []) cases[`memory/${result.id}`] = result.actual;
   return {
     schemaVersion: GATE_SCHEMA_VERSION,
     ...(input.auditDatasetHash === undefined ? {} : { auditDatasetHash: input.auditDatasetHash }),
@@ -486,13 +583,14 @@ export async function buildBaseline(input: {
       verdict: input.previous?.suites.verdict ?? DEFAULT_THRESHOLDS.verdict,
       policy: input.previous?.suites.policy ?? DEFAULT_THRESHOLDS.policy,
       audit: input.previous?.suites.audit ?? DEFAULT_THRESHOLDS.audit,
+      ...(memory === undefined ? {} : { memory: input.previous?.suites.memory ?? DEFAULT_THRESHOLDS.memory }),
     },
     cases,
   };
 }
 
 function checkCases(
-  suite: "verdict" | "policy",
+  suite: "verdict" | "policy" | "memory",
   results: readonly CaseResult[],
   baseline: GateBaseline,
   failures: GateFailure[],
@@ -524,9 +622,10 @@ function checkStaleCases(
   baseline: GateBaseline,
   verdict: readonly CaseResult[],
   policy: readonly CaseResult[],
+  memory: readonly CaseResult[],
   failures: GateFailure[],
 ): void {
-  const live = new Set([...verdict, ...policy].map((result) => `${result.suite}/${result.id}`));
+  const live = new Set([...verdict, ...policy, ...memory].map((result) => `${result.suite}/${result.id}`));
   for (const key of Object.keys(baseline.cases)) {
     if (live.has(key)) continue;
     failures.push({

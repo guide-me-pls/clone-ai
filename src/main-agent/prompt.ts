@@ -11,6 +11,8 @@
  * 主 Agent 在所有入口都必须被告知完全相同的内容：charter、执行者列表、情境简报，以及
  * 与本回合匹配的已审核记忆。把这段组装放在这里，运行时变化就不会悄悄改变 Agent 的指令。
  */
+import { resolve } from "node:path";
+
 import { createJournalStore } from "../core/sqlite-journal.ts";
 import { compileBriefing } from "./situation-briefing.ts";
 import { pushRelevantMemories } from "./memory-push.ts";
@@ -73,6 +75,15 @@ export function memorySynthesisEnabled(environment: NodeJS.ProcessEnv = process.
   return value === "1" || value === "on" || value === "true";
 }
 
+export function workspaceGuidance(workspacePath: string): string {
+  return [
+    `Current workspace: ${workspacePath}`,
+    "Workers can only read and write inside this workspace, plus any scope the Kernel grants. A project outside it is invisible to them.",
+    "You have no filesystem tool of your own: you cannot search the disk. Do not dispatch a step to locate a project in the workspace; ask the owner for its path or for a workspace switch instead.",
+    "If the owner names a project that is not inside this workspace, say so and ask for its path or for a workspace switch; never dispatch a task that assumes the project is in this workspace, and never present workspace files as that project's code.",
+  ].join("\n");
+}
+
 export interface CompiledMainAgentPrompt {
   charter: string;
   charterVersion: number;
@@ -91,8 +102,10 @@ export async function compileMainAgentPrompt(options: {
   environment?: NodeJS.ProcessEnv;
 }): Promise<CompiledMainAgentPrompt> {
   const cwd = options.cwd ?? process.cwd();
+  const workspacePath = resolve(cwd);
+  const workspace = workspaceGuidance(workspacePath);
   const journal = createJournalStore(options.dataDirectory);
-  let systemPrompt = MAIN_AGENT_CHARTER;
+  let systemPrompt = `${MAIN_AGENT_CHARTER}\n\n${workspace}`;
   let briefing: string | undefined;
   let briefingError: string | undefined;
   // Project instructions are independent of the journal and the briefing: a
@@ -104,7 +117,7 @@ export async function compileMainAgentPrompt(options: {
   let instructionsError: string | undefined;
   try {
     instructions = await loadProjectInstructions({
-      workspacePath: cwd,
+      workspacePath,
       ...(options.environment === undefined ? {} : { environment: options.environment }),
     });
     if (instructions.text.length === 0) instructions = undefined;
@@ -115,7 +128,7 @@ export async function compileMainAgentPrompt(options: {
     const compiled = await compileBriefing({
       journal,
       dataDirectory: options.dataDirectory,
-      workspacePath: cwd,
+      workspacePath,
     });
     const { describeExecutors } = await import("./tools/kernel-tools.ts");
     const executors = await describeExecutors(options.dataDirectory);
@@ -131,6 +144,7 @@ export async function compileMainAgentPrompt(options: {
       });
     systemPrompt = [
       MAIN_AGENT_CHARTER,
+      workspace,
       ...(instructions === undefined ? [] : [instructions.text]),
       executors.text,
       compiled.text,
@@ -144,7 +158,7 @@ export async function compileMainAgentPrompt(options: {
     // 规则），并如实说明。
     const reason = error instanceof Error ? error.message : String(error);
     briefingError = reason;
-    systemPrompt = [MAIN_AGENT_CHARTER, ...(instructions === undefined ? [] : [instructions.text])].join("\n\n");
+    systemPrompt = [MAIN_AGENT_CHARTER, workspace, ...(instructions === undefined ? [] : [instructions.text])].join("\n\n");
     systemPrompt += `\n\nSituation briefing unavailable: ${reason}`;
   } finally {
     // The briefing is a one-shot read; holding the journal open for the life of

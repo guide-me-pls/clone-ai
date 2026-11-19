@@ -77,6 +77,14 @@ button { color: inherit; }
 .status-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; }
 .session-copy { min-width: 0; }
 .session-title { display: block; overflow: hidden; color: var(--text); font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
+.session-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.session-title-row .session-title { min-width: 0; flex: 1 1 auto; }
+.session-flag { flex: 0 0 auto; padding: 1px 6px; border: 1px solid #e0b269; border-radius: 999px; color: #915a05; background: #fffaf0; font-size: 10px; font-weight: 760; letter-spacing: .02em; white-space: nowrap; }
+.session-flag-review { border-color: #d3b4e0; color: #6b3a86; }
+.session-item.is-attention { border-color: #e6c690; background: #fff9ec; }
+.session-group-needs { color: #915a05; font-weight: 760; }
+.approval-step { margin: 1px 0 5px; color: #8a6a2f; font-size: 12px; }
+.approval-card-action { border-width: 2px; }
 .session-meta { overflow: hidden; margin-top: 2px; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .empty-sessions { padding: 11px 10px; color: var(--muted); font-size: 13px; }
 .sidebar-owner { display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 14px 9px 5px; border-top: 1px solid var(--line); }
@@ -136,6 +144,15 @@ button { color: inherit; }
 .evidence { display: inline-flex; align-items: center; gap: 6px; margin: 11px 0 0 41px; padding: 7px 10px; border: 1px solid #365c3d; border-radius: 999px; color: #b7eabe; background: #17251a; font-size: 11px; }
 .evidence svg { width: 13px; height: 13px; }
 .approval-card { margin: -8px 0 25px 41px; padding: 15px; border: 1px solid #8d6a2b; border-radius: 12px; background: #302516; box-shadow: var(--shadow); }
+/* A pending decision stays at the top while the log scrolls under it. The
+   negative top and matching padding cover the pane's own top padding, so no
+   log row shows through the strip above the card. 待决定项在日志滚动时固定在顶部；
+   负 top 与对应内边距盖住面板自身的顶部留白，卡片上方不会漏出日志行。 */
+.decision-dock { position: sticky; top: -34px; z-index: 6; margin-bottom: 18px; padding: 42px 0 8px; background: var(--canvas); }
+.decision-dock .approval-card { margin-top: 0; margin-bottom: 0; }
+.review-result { max-height: 260px; margin: 9px 0 0; padding: 9px 11px; overflow: auto; border: 1px solid rgba(141,106,43,.22); border-radius: 8px; background: rgba(0,0,0,.16); font-size: 12px; line-height: 1.55; }
+.review-result b { display: block; margin-bottom: 4px; color: var(--warning); font-size: 11px; letter-spacing: .04em; }
+.review-result .md-heading, .review-result .md-list-line { margin: 0; }
 .approval-kicker { color: var(--warning); font-size: 11px; font-weight: 760; letter-spacing: .06em; text-transform: uppercase; }
 .approval-card h2 { margin: 5px 0 4px; font-size: 15px; letter-spacing: -.02em; }
 .approval-card p { max-width: 590px; margin: 0; color: #d3c5a7; font-size: 13px; }

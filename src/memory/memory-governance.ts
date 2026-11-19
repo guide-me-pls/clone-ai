@@ -13,14 +13,14 @@
  * Journal 因此始终是审计真相：谁在什么时候、基于什么理由做了决定。提炼候选的 Worker
  * 只有提案权；提升权在本服务中由所有者或常设规则行使。
  */
-import type { Evidence, MemoryCandidate, NewJournalEvent } from "../core/contracts.ts";
+import type { Evidence, MemoryCandidate, NewJournalEvent, Task } from "../core/contracts.ts";
 import type { JournalStore } from "../core/journal.ts";
 import { MdMemoryStore, type MemoryEntry } from "./md-memory-store.ts";
 import type { MemoryVersion } from "./memory-versions.ts";
 import type { MemoryType } from "../core/contracts.ts";
 import { workspaceExecutionLock } from "../core/workspace-lock.ts";
 import { readForRun, readTypes } from "../core/journal-types.ts";
-import { memoryFingerprint, redactMemoryPii } from "./memory-hygiene.ts";
+import { isTaskRestatement, memoryFingerprint, redactMemoryPii } from "./memory-hygiene.ts";
 
 /**
  * Default lifetime of a mined memory and the idle window after which any active
@@ -148,6 +148,70 @@ export class MemoryGovernance {
           decidedAt: new Date().toISOString(),
         },
       });
+    });
+  }
+
+  /**
+   * Rejects pending candidates that only restate the task they came from.
+   *
+   * This is the one-time repair for candidates the retired deterministic miner
+   * wrote before the pipeline stopped proposing objective copies. It is a policy
+   * decision, not an owner decision, so each rejection is journaled with the
+   * reason; a candidate whose run has no task marker, or whose task event is
+   * missing, is left alone rather than guessed at.
+   *
+   * 拒绝那些只是在复述来源任务的待确认候选。
+   *
+   * 这是对已退役的确定性提炼器在流水线停止提出目标复制之前写下的候选所做的一次性修复。
+   * 这是策略决定而非所有者决定，因此每次拒绝都记录理由；其 Run 没有任务标记、或任务事件
+   * 缺失的候选会被保留，而不是靠猜测处理。
+   */
+  async rejectRestatedCandidates(
+    reason = "The candidate restated its task objective; a finished task is not durable memory.",
+  ): Promise<string[]> {
+    return this.withLock(async () => {
+      await this.recoverUnlocked();
+      await this.#journal.reload?.();
+      const pending = pendingFromEvents(await readTypes(this.#journal, MEMORY_DECISION_TYPES));
+      if (pending.length === 0) return [];
+
+      // Only the task objective can answer whether a summary restates its task,
+      // and both markers live outside the candidate event. They are read by
+      // type once instead of scanning every run's history.
+      // 只有任务目标能回答摘要是否在复述任务，而两个标记都在候选事件之外。按类型读一次，
+      // 而不是扫描每个 Run 的历史。
+      const markers = await readTypes(this.#journal, ["run.created", "task.created"]);
+      const taskIdByRun = new Map<string, string>();
+      for (const event of markers) {
+        if (event.type !== "run.created" || event.runId === undefined) continue;
+        const taskId = (event.payload as { taskId?: unknown } | null)?.taskId;
+        if (typeof taskId === "string") taskIdByRun.set(event.runId, taskId);
+      }
+      const objectiveByTask = new Map<string, string>();
+      for (const event of markers) {
+        if (event.type !== "task.created" || event.taskId === undefined) continue;
+        const objective = (event.payload as Task | null)?.objective;
+        if (typeof objective === "string") objectiveByTask.set(event.taskId, objective);
+      }
+
+      const restated = pending.filter((candidate) => {
+        const taskId = taskIdByRun.get(candidate.runId);
+        const objective = taskId === undefined ? undefined : objectiveByTask.get(taskId);
+        return objective !== undefined && isTaskRestatement(candidate, objective);
+      });
+      if (restated.length === 0) return [];
+
+      const decidedAt = new Date().toISOString();
+      const events: NewJournalEvent[] = restated.map((candidate) => ({
+        type: "memory.candidate.rejected",
+        payload: { candidateId: candidate.id, reason, decidedAt },
+      }));
+      if (this.#journal.appendBatch !== undefined) {
+        await this.#journal.appendBatch(events);
+      } else {
+        for (const event of events) await this.#journal.append(event);
+      }
+      return restated.map((candidate) => candidate.id);
     });
   }
 

@@ -221,10 +221,16 @@ export class NativeAgentWorker implements RuntimeAdapter {
     const grants = resolveGrants(input.step.scopes, { workspace });
     // A step's declared risk caps what it may be offered: a read_only step has
     // no business holding a write tool, even though its workspace is writable.
+    // A work order may narrow that further: a read-only order inside a writable
+    // preparation step must not inherit the step's write tools, or the order's
+    // risk would be a label with no enforcement.
     // 步骤声明的风险等级决定它能拿到什么工具：read_only 步骤不该持有写工具，即使工作区可写。
+    // 工作单还可以进一步收窄：可写准备步骤里的只读工单不得继承步骤的写工具，否则工单的风险
+    // 等级就只是一个没有执行力的标签。
+    const effectiveRisk = input.workOrder?.risk ?? input.step.risk;
     const stepAllows = (risk: NativeToolRisk): boolean => {
-      if (input.step.risk === "read_only") return risk === "read";
-      if (input.step.risk === "reversible_write") return risk === "read" || risk === "write";
+      if (effectiveRisk === "read_only") return risk === "read";
+      if (effectiveRisk === "reversible_write") return risk === "read" || risk === "write";
       return true;
     };
     // The repair lane's evidence home (`.rsi/traces`) sits inside the workspace
@@ -379,7 +385,19 @@ export class NativeAgentWorker implements RuntimeAdapter {
           return;
         }
         if (result.reply.length > 0) push({ type: "message_delta", text: result.reply });
-        for (const item of [...produced.values()].slice(0, 20)) push({ type: "evidence", evidence: item });
+        // Required artifacts must survive the observation cap: a worker that
+        // explores many files before writing would otherwise have its one
+        // artifact row dropped, and verification would fail after the write.
+        // 必需产物必须活过观察上限：先探索很多文件再写入的 Worker，其唯一的产物行会被丢掉，
+        // 验证会在写入之后仍然失败。
+        const evidence = [...produced.values()];
+        for (const item of [
+          ...evidence.filter((entry) => entry.kind === "artifact"),
+          ...evidence.filter((entry) => entry.kind !== "artifact"),
+        ].slice(0, 20)) push({ type: "evidence", evidence: item });
+        if (input.workOrder === undefined && produced.size === 0 && input.step.requiredCapabilities?.includes("direct_response") && result.reply.trim().length > 0) {
+          push({ type: "evidence", evidence: { kind: "observation", summary: result.reply.slice(0, 8_000), locator: `answer:${input.step.id}` } });
+        }
         push({ type: "completed", summary: result.reply.trim().length > 0 ? result.reply : "The native worker finished without a final message.", usage });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -434,13 +452,20 @@ function agentTool(
         // A later successful read or write proves that an earlier absence no
         // longer applies. Only an input still missing when the step ends fails.
         // 后续成功读取或写入证明先前的缺失已不再适用。只有步骤结束时仍缺失的输入才会导致失败。
-        if (path !== undefined) missingInputs.delete(path);
-        if (path !== undefined && !produced.has(path)) {
-          produced.set(path, {
-            kind: tool.risk === "write" ? "artifact" : "observation",
-            summary: tool.risk === "write" ? `${tool.name} wrote ${path}` : `${tool.name} read ${path}`,
-            locator: path,
-          });
+        if (path !== undefined) missingInputs.delete(normalizePath(path));
+        if (path !== undefined) {
+          const kind = tool.risk === "write" ? "artifact" : "observation";
+          const existing = produced.get(path);
+          // A write to a path that was already read is still an artifact. The
+          // first kind must not hide the write the verifier is looking for.
+          // 已读过的路径再写入仍然是产物。先到的 kind 不能掩盖验证器要找的写入。
+          if (existing === undefined || (kind === "artifact" && existing.kind !== "artifact")) {
+            produced.set(path, {
+              kind,
+              summary: tool.risk === "write" ? `${tool.name} wrote ${path}` : `${tool.name} read ${path}`,
+              locator: path,
+            });
+          }
         }
       }
       if (outcome.isError === true && tool.risk === "read" && tool.pathOf !== undefined) {
@@ -452,7 +477,7 @@ function agentTool(
         // 只有"不存在"才算"必需输入缺失"。其他原因的读取失败（单次窗口过大、瞬时错误）是模型可以
         // 处理的观察；当成缺失会中止一次输入明明存在于磁盘上的运行。
         const absent = /(ENOENT|no such file|does not exist|not found|cannot find)/i.test(outcome.output);
-        if (absent && failedPath !== undefined && namedInputs.has(normalizePath(failedPath))) missingInputs.add(failedPath);
+        if (absent && failedPath !== undefined && namedInputs.has(normalizePath(failedPath))) missingInputs.add(normalizePath(failedPath));
       }
       return {
         content: outcome.output,
@@ -499,9 +524,29 @@ export function buildInstructions(input: ExecutionAssignment, dropped: readonly 
   const lines = [
     input.workOrder?.objective ?? input.step.instructions,
     "",
+    ...(input.workspacePath === undefined ? [] : [`Your workspace is ${input.workspacePath}.`]),
     "You may call only the tools provided. Any path outside the workspace or the granted scopes is refused.",
+    "If the objective names a project or directory that is not inside this workspace, do not review this workspace in its place: say that it is outside the workspace and stop.",
     "If an input declared with required: true is missing or unreadable at the end of the step, stop and report it. A path mentioned only in prose is not a required input. Do not invent file contents.",
   ];
+  // The contract is what the Kernel will verify; a worker that has not seen it
+  // can finish legitimately and still fail after all the work is done. A
+  // read-only order therefore states observation evidence, and a delivery order
+  // states the artifact file it must write.
+  // 合同就是 Kernel 将要验证的内容；看不到它的 Worker 可以合法地结束，却在做完所有工作之后
+  // 仍然失败。只读工单因此声明观察证据，交付工单则声明它必须写入的产物文件。
+  const requiredArtifacts = input.workOrder?.expectedArtifacts.filter((artifact) => artifact.required) ?? [];
+  if (requiredArtifacts.length > 0) {
+    lines.push(
+      "",
+      "Required evidence contract (the Kernel checks this after you stop):",
+      ...requiredArtifacts.map((artifact) => (
+        `- ${artifact.id} [${artifact.kind}${artifact.locatorRequired ? ", durable locator required" : ""}]: ${artifact.description}`
+      )),
+      "Reading a file records observation evidence with the path as its locator; writing a file records artifact evidence. A text summary alone does not satisfy a required contract.",
+      "If the objective forbids writing but a required contract needs a durable locator, report the conflict and stop; do not write against the owner's instruction.",
+    );
+  }
   const memory = input.memoryContext;
   if (memory !== undefined && memory.items.length > 0) {
     // The Kernel curated this packet; the worker must treat it as background

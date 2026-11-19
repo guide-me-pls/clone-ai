@@ -30,6 +30,63 @@ test("complex external work uses a dependent review and a separate approval step
   assert.equal(plan.steps[1]?.risk, "external_side_effect");
 });
 
+test("an explicit read-only request is one read-only step, not a draft artifact", () => {
+  // This request used to contain "项目", land in DELIVERY_TERMS, and become a
+  // draft work order whose required artifact a read-only worker cannot produce.
+  // 这个请求以前因为含"项目"落入 DELIVERY_TERMS，变成 draft 工作单；只读 Worker 产不出
+  // 它要求的工件，Run 以 Missing required artifact 失败。
+  const plan = buildFallbackPlan("只读取工作区根目录的 README.md，用三句话说明这个项目是什么；不要修改任何文件。");
+  assert.equal(plan.steps.length, 1);
+  const step = plan.steps[0]!;
+  assert.equal(step.risk, "read_only");
+  assert.equal(step.agentId, "context-researcher");
+  assert.equal(step.subagents, undefined, "a read-only request must not create an artifact-bearing work order");
+  assert.match(step.instructions ?? "", /README\.md/);
+});
+
+test("a read-only code review also stays one read-only step", () => {
+  const plan = buildFallbackPlan("只读审查这个项目的代码，指出检索链路的优化空间，不要修改文件。");
+  assert.equal(plan.steps[0]?.agentId, "context-researcher");
+  assert.equal(plan.steps[0]?.risk, "read_only");
+  assert.equal(plan.steps[0]?.subagents, undefined);
+});
+
+test("a no-write phrase containing 写 does not turn a read-only request into delivery", () => {
+  const plan = buildFallbackPlan("只读取 README.md，不要写任何文件，用三句话说明项目。");
+  assert.equal(plan.steps[0]?.risk, "read_only");
+  assert.equal(plan.steps[0]?.subagents, undefined);
+});
+
+test("a named output target still wins over a no-write constraint", () => {
+  // "不要修改现有文件" constrains the existing tree, not the requested report.
+  // "不要修改现有文件"约束的是已有文件，而不是被请求的报告。
+  const plan = buildFallbackPlan("不要修改现有文件，但把报告写到 out/report.md。");
+  assert.ok((plan.steps[0]?.subagents ?? []).some((order) => order.id === "draft"));
+});
+
+test("a report verb inside a read-only request does not become a report artifact", () => {
+  // "如无法读取则如实报告" contains 报告 as a verb. A bare artifact noun must
+  // not outrank the request's explicit read-only constraint.
+  // "如无法读取则如实报告"里的"报告"是动词。裸的产物名词不得压过请求里显式的只读约束。
+  const plan = buildFallbackPlan("仅读取当前工作区根目录的 README.md，基于其内容用中文三句话说明项目是什么；不要读取其他文件，也不要修改任何文件。如文件不存在或无法读取则如实报告。");
+  const step = plan.steps[0];
+  assert.equal(step?.id, "read-only-lookup");
+  assert.equal(step?.risk, "read_only");
+  assert.equal(step?.subagents, undefined);
+});
+
+test("an analysis request with no deliverable is read-only without a marker", () => {
+  // "看一下这个项目有什么优化空间" asks for an answer, not a file, even
+  // though it names a project and contains no 只读/不要修改 phrase.
+  // "看一下这个项目有什么优化空间"要的是回答，不是文件——即使它点名了项目，也没有
+  // 只读/不要修改之类的措辞。
+  const plan = buildFallbackPlan("看一下 knowledge-base 这个项目，看一下 RAG 代码有什么优化的空间");
+  const step = plan.steps[0];
+  assert.equal(step?.id, "read-only-lookup");
+  assert.equal(step?.risk, "read_only");
+  assert.equal(step?.subagents, undefined);
+});
+
 test("the draft order carries the owner's request, because the worker sees only the objective", () => {
   // The worker reads `workOrder.objective` and nothing else of the request
   // (`buildInstructions` prefers it). A generic objective is why a concrete

@@ -11,7 +11,7 @@
  * 因此在所有者显式开启之前，默认运行时仍使用沙箱化的 CLI Worker。
  */
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { NativeAgentWorker, type NativeToolSpec } from "./native-agent-worker.ts";
 import { OpenAiCompatibleClient } from "./openai-compatible-client.ts";
@@ -83,7 +83,17 @@ export type WriteFileMode = "overwrite" | "refuse-existing";
  */
 export function fileTools(options: { writeFileMode?: WriteFileMode } = {}): NativeToolSpec[] {
   const writeFileMode = options.writeFileMode ?? "overwrite";
-  const resolveInWorkspace = (workspace: string, path: string): string => join(workspace, path);
+  // Resolve, not join. The gate (`decideTool`) already resolves a path against
+  // the workspace and the granted read roots; `join` kept the workspace prefix
+  // on an absolute path, so a plan that named `/ws/README.md` was checked as
+  // allowed and then read `/ws/ws/README.md`. A relative path is unchanged; an
+  // absolute path inside the workspace (or a granted root) now reaches the file
+  // the gate approved.
+  // 用 resolve 而不是 join。闸门（`decideTool`）本来就按工作区与已授权的读取根解析路径；
+  // `join` 会把工作区前缀加到绝对路径上，于是计划里的 `/ws/README.md` 被判定为允许，实际
+  // 读的却是 `/ws/ws/README.md`。相对路径不变；工作区内（或授权根内）的绝对路径现在能读到
+  // 闸门批准的那个文件。
+  const resolveInWorkspace = (workspace: string, path: string): string => resolve(workspace, path);
   return [
     {
       name: "read_file",

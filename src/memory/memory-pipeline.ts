@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
-
 import type { Evidence, JournalEvent, MemoryCandidate, NewJournalEvent, Run, Task } from "../core/contracts.ts";
 import type { JournalStore } from "../core/journal.ts";
 import { workspaceExecutionLock } from "../core/workspace-lock.ts";
 import { readForRun, readTypes } from "../core/journal-types.ts";
+import { isTaskRestatement, redactMemoryPii } from "./memory-hygiene.ts";
 
 export interface PendingMemoryJob {
   run: Run;
@@ -37,7 +36,7 @@ export class MemoryPipeline {
   readonly #lockPath?: string;
   #pending: PendingMemoryJob[] = [];
 
-  constructor(journal: JournalStore, worker: MemoryWorker = new DeterministicMemoryWorker(), options: { lockPath?: string } = {}) {
+  constructor(journal: JournalStore, worker: MemoryWorker = new NoMiningWorker(), options: { lockPath?: string } = {}) {
     this.#journal = journal;
     this.#worker = worker;
     this.#lockPath = options.lockPath;
@@ -131,19 +130,48 @@ export class MemoryPipeline {
         await this.#journal.reload?.();
         if (processedRuns(await readForRun(this.#journal, job.run.id)).has(`${job.run.id}:${job.outcome ?? "completed"}`)) return [];
         const candidates = await this.#worker.extract(job);
+        // A candidate that only repeats the task is refused before it can reach
+        // the owner's review list: "what I was asked to do" is not something to
+        // remember, and a miner that echoes the objective has learned nothing.
+        // The type guard keeps a typed preference/fact/decision/commitment:
+        // the owner may have stated exactly what the task asked for.
+        // 只复述任务的候选在进入所有者审核列表前就被拒绝：“我被要求做什么”不是要记住的东西，
+        // 复述目标的提炼器什么也没有学到。类型闸门会保留有类型的偏好/事实/决定/承诺：
+        // 所有者可能原样说出了任务要求的事。
+        const dropped = candidates.filter((candidate) => isTaskRestatement(candidate, job.task.objective));
+        const droppedIds = new Set(dropped.map((candidate) => candidate.id));
+        const durable = candidates.filter((candidate) => !droppedIds.has(candidate.id));
         const evidence = new Set(job.evidence.map((item) => item.id));
-        if (candidates.some((candidate) => candidate.runId !== job.run.id || candidate.sourceEvidenceIds.length === 0
+        if (durable.some((candidate) => candidate.runId !== job.run.id || candidate.sourceEvidenceIds.length === 0
           || candidate.sourceEvidenceIds.some((id) => !evidence.has(id)))) {
           throw new Error("A memory candidate cites evidence outside its source run.");
         }
         if (this.#journal.appendBatch === undefined) throw new Error("The journal cannot atomically publish memory candidates.");
         await this.#journal.appendBatch([
-          ...candidates.map((candidate): NewJournalEvent => ({
+          ...durable.map((candidate): NewJournalEvent => ({
             type: "memory.candidate.proposed", runId: job.run.id, taskId: job.task.id, payload: candidate,
           })),
-          { type: "memory.candidate.extracted", runId: job.run.id, taskId: job.task.id, payload: { count: candidates.length, outcome: job.outcome ?? "completed" } },
+          {
+            type: "memory.candidate.extracted",
+            runId: job.run.id,
+            taskId: job.task.id,
+            payload: {
+              count: durable.length,
+              // The dropped text is journaled with PII redacted so a false
+              // positive stays auditable instead of vanishing behind a count.
+              // 被丢弃的文本经 PII 脱敏后写入 Journal，使假阳性可审计，而不是只剩一个计数。
+              ...(dropped.length === 0 ? {} : {
+                droppedRestatements: dropped.length,
+                droppedCandidates: dropped.map((candidate) => ({
+                  id: candidate.id,
+                  summary: redactMemoryPii(candidate.summary).text,
+                })),
+              }),
+              outcome: job.outcome ?? "completed",
+            },
+          },
         ]);
-        return candidates;
+        return durable;
       };
       return this.#lockPath === undefined ? await process() : await workspaceExecutionLock.run(this.#lockPath, process);
     } catch (error) {
@@ -180,25 +208,25 @@ function processedRuns(events: readonly JournalEvent[]): Set<string> {
   return keys;
 }
 
-export class DeterministicMemoryWorker implements MemoryWorker {
-  async extract(job: PendingMemoryJob): Promise<MemoryCandidate[]> {
-    // Without a model there is no lesson to extract from a failure.
-    // 没有模型就无法从失败中提炼教训。
-    if (job.evidence.length === 0 || job.outcome === "failed") {
-      return [];
-    }
-
-    return [
-      {
-        id: randomUUID(),
-        runId: job.run.id,
-        sourceEvidenceIds: job.evidence.map((item) => item.id),
-        summary: `候选流程：${job.task.objective}`,
-        confidence: "low",
-        status: "proposed",
-        createdAt: new Date().toISOString(),
-      },
-    ];
+/**
+ * The pipeline's default worker: without a model there is no lesson to extract
+ * from a finished task, so it proposes nothing.
+ *
+ * The previous default copied the task objective into a "procedure" candidate.
+ * That turned every completed run into a review item whose text was the work
+ * order said twice; every candidate in the owner's journal was that copy. A
+ * miner is selected explicitly by `CLONE_AI_MEMORY_MINING=all`, and a missing
+ * miner is not an error for a finished task.
+ *
+ * 流水线的默认 Worker：没有模型时，已完成任务里没有教训可提炼，因此它不提出任何候选。
+ *
+ * 上一版默认实现把任务目标复制成“流程”候选，使每个已完成的 Run 都变成一个审核项，而内容
+ * 只是把工作单再说一遍；所有者 Journal 里的每一条候选都是这种复制。提炼器由
+ * `CLONE_AI_MEMORY_MINING=all` 显式选择，缺少提炼器对已完成任务不是错误。
+ */
+class NoMiningWorker implements MemoryWorker {
+  async extract(): Promise<MemoryCandidate[]> {
+    return [];
   }
 }
 

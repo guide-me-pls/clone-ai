@@ -724,6 +724,11 @@ export class CloneRuntime {
     return this.#capacityGate.snapshot();
   }
 
+  /** The workspace this Runtime supervises, when one was supplied. 本 Runtime 监督的工作区（提供时）。 */
+  get workspacePath(): string | undefined {
+    return this.#workspacePath;
+  }
+
   private async executeSingleAgent(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry }): Promise<void> {
     const release = await this.#capacityGate.acquire();
     try {
@@ -782,6 +787,7 @@ export class CloneRuntime {
           // 证据类型，校验每一条已记录的 Evidence。
           authorizedEvidenceKinds: [...executionAuthorization],
           memoryItemIds: memoryContext?.items.map((item) => item.id) ?? [],
+          ...(workspace.path === undefined ? {} : { workspacePath: workspace.path }),
           ...isolationAudit(workspace),
         },
       });
@@ -789,6 +795,18 @@ export class CloneRuntime {
       if (completion === undefined) {
         throw new Error(`Agent ${agentId} ended without an explicit completion event.`);
       }
+      // A step's answer is part of its record, not a transient delta. The
+      // subagent path kept its summary in `subagent.completed`; a single-agent
+      // step dropped it, so a review could show criteria and evidence but never
+      // the result it was asking the owner to accept.
+      // 步骤的回答属于它的记录，不是瞬时增量。subagent 路径把摘要留在 `subagent.completed`；
+      // 单 Agent 步骤把它丢掉，于是复核只能显示标准与证据，却显示不了它请所有者接受的结果。
+      await this.record({
+        type: "execution.completed",
+        taskId: input.task.id,
+        runId: input.run.id,
+        payload: { stepId: input.step.id, agentId, summary: redactAuditText(completion) },
+      });
       if (!this.stepHasCompletedEvidence(input.run.id, input.step)) {
         throw new Error(`Agent ${agentId} completed step ${input.step.id} without evidence.`);
       }
@@ -1979,6 +1997,21 @@ function assertSubagentOrders(
     }
     if (!order.expectedArtifacts.some((artifact) => artifact.required)) {
       throw new Error(`Subagent work order ${order.id} must require at least one artifact.`);
+    }
+    // A read-only work order cannot produce artifact, receipt or test evidence:
+    // its tools are read-only, so the only contract it can satisfy is a read
+    // observation. Rejecting the plan here names the contradiction before a
+    // worker runs; otherwise verification fails after the work is done.
+    // 只读工单产不出 artifact、receipt 或 test 证据：它的工具只有读，能满足的合同只有
+    // 读取观察。在这里拒绝计划，能在 Worker 启动前指出矛盾；否则验证会在工作完成之后失败。
+    const unproducible = order.expectedArtifacts.find((artifact) => (
+      artifact.required && (artifact.kind === "artifact" || artifact.kind === "receipt" || artifact.kind === "test")
+    ));
+    if (order.risk === "read_only" && unproducible !== undefined) {
+      throw new Error(
+        `Subagent work order ${order.id} is read_only but requires ${unproducible.kind} evidence (${unproducible.id}). `
+        + `A read-only worker can only record observation or tool_result evidence; raise the work order's risk to "reversible_write" if it must write, or change the contract kind.`,
+      );
     }
     assertBudget(order);
     if (

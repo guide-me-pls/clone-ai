@@ -105,6 +105,11 @@ test("a read-only step's instructions say what was refused", async (t) => {
   assert.match(text, /Read the note/);
   assert.match(text, /Acceptance criteria/);
   assert.match(text, /too broad/);
+  // The worker must know where it is, and must not answer about a project it
+  // cannot see by reviewing whatever this workspace contains.
+  // Worker 必须知道自己在哪里，也不能用这个工作区里的内容冒充它看不到的项目。
+  assert.ok(text.includes(`Your workspace is ${directory}.`), "the workspace path must reach the worker");
+  assert.match(text, /do not review this workspace in its place/);
 });
 
 test("a realpath-mismatched workspace still admits paths inside it, and refuses escapes", async (t) => {

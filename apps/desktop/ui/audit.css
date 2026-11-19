@@ -181,3 +181,14 @@ body.empty-conversation .welcome { padding-bottom: 0; }
 .au-dispatch b { color: var(--text, #20242c); }
 .au-dispatch span { color: var(--subtle, #5c6675); overflow-wrap: anywhere; }
 .au-dispatch small { grid-column: 2 / -1; color: var(--muted, #8791a1); font-size: 11.5px; }
+
+/* Task assembly: what the model was given before it dispatched. 任务组装：模型在派发之前拿到了什么。 */
+.au-assembly { margin: 8px 0 10px; border: 1px solid var(--line, #e3e7ee); border-radius: 10px; background: var(--surface-soft, #f7f8fa); }
+.au-assembly summary { cursor: pointer; padding: 8px 11px; color: var(--subtle, #5c6675); font-size: 12px; font-weight: 640; }
+.au-assembly-grid { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 4px 10px; margin: 0; padding: 0 11px 8px; font-size: 12px; }
+.au-assembly-grid dt { color: var(--muted, #8791a1); }
+.au-assembly-grid dd { margin: 0; color: var(--text, #20242c); overflow-wrap: anywhere; }
+.au-assembly-warn { color: #a43e45; }
+.au-assembly-runs { list-style: none; margin: 0; padding: 0 11px 10px; display: grid; gap: 4px; font-size: 12px; }
+.au-assembly-runs li { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.au-assembly-runs small { color: var(--muted, #8791a1); }

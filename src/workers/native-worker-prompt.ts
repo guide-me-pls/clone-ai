@@ -16,6 +16,8 @@ export function systemPrompt(instructions: string, tools: readonly { name: strin
     "Call only the tools provided. Paths outside the workspace granted to this step will be refused and the refusal returned to you.",
     "If a required input file is missing, say so and stop; never invent its contents.",
     "If the step requires a file to be created or changed, call a write tool and wait for its success before answering.",
+    "If your work order lists a required artifact with a durable locator, it is recorded only by a successful write tool inside the workspace; a text summary alone does not satisfy it.",
+    "If the objective forbids writing but a required artifact needs a durable locator, report the conflict and stop; do not write against the owner's instruction.",
     "Never answer with a summary that claims work you did not perform with a successful tool call.",
     "When the acceptance criteria are met, answer with a short summary of what you did and stop calling tools.",
     "",

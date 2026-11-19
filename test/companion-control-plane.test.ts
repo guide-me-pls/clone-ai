@@ -13,6 +13,8 @@ import { createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
 import { companionFetch } from "./helpers/companion-api.ts";
 import { beginInvocation, invocationLedgerPath } from "../src/audit/invocation-ledger.ts";
+import { appendMainAgentTurnRecord } from "../src/main-agent/turn-audit.ts";
+import { createJournalStore } from "../src/core/sqlite-journal.ts";
 
 async function companion(t: TestContext): Promise<{ url: string; token: string; dataDirectory: string }> {
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-control-"));
@@ -284,9 +286,23 @@ test("the owner can review unverified criteria through the authenticated API", a
   }
 
   const session = await companionFetch(url, token, `/api/sessions/${runId}`);
-  const view = await session.json() as { status: string; verification: { unverifiedCriteria: string[] } };
+  const view = await session.json() as {
+    status: string;
+    verification: { unverifiedCriteria: string[] };
+    reviews?: Array<{ runId: string; title: string; verification: { unverifiedCriteria: string[] } }>;
+  };
   assert.equal(view.status, "waiting_review");
   assert.ok(view.verification.unverifiedCriteria.some((item) => item.includes("内容准确")));
+  // The task record owns the review card and its run id. 任务记录拥有复核卡与它的 Run id。
+  assert.equal(view.reviews?.length, 1);
+  assert.equal(view.reviews?.[0]?.runId, runId);
+  assert.ok(view.reviews?.[0]?.verification.unverifiedCriteria.some((item) => item.includes("内容准确")));
+  const conversation = await (await companionFetch(url, token, "/api/sessions/main-agent-conversation")).json() as {
+    approvals: unknown[];
+    reviews?: unknown[];
+  };
+  assert.deepEqual(conversation.approvals, []);
+  assert.deepEqual(conversation.reviews ?? [], []);
   const path = `/api/runs/${runId}/review`;
   assert.equal((await fetch(`${url}${path}`, { method: "POST" })).status, 401);
   const invalid = await companionFetch(url, token, path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision: "auto" }) });
@@ -311,6 +327,40 @@ test("a second Main Agent query is 409 while the session lock is held", async (t
   });
   assert.equal(response.status, 409);
   assert.match((await response.json() as { error: string }).error, /already answering/);
+});
+
+test("a prompt in another conversation is not blocked by the main conversation lock", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const path = mainAgentLockPath(dataDirectory);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${process.pid}\n`, "utf8");
+  // An unreachable endpoint keeps the test offline while proving the request
+  // passed the lock: it fails at the model call, not with the busy 409.
+  // 不可达端点让测试保持离线，同时证明请求越过了锁：它失败在模型调用，而不是忙碌的 409。
+  await writeFile(join(dataDirectory, "config.json"), JSON.stringify({
+    version: 1,
+    mainAgentBaseUrl: "http://127.0.0.1:9",
+    mainAgentModel: "test-model",
+  }), "utf8");
+
+  const response = await companionFetch(url, token, "/api/main-agent/query", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "hello there", conversationId: "conversation-other" }),
+  });
+  assert.notEqual(response.status, 409);
+  const body = await response.json() as { error?: string };
+  assert.doesNotMatch(body.error ?? "", /already answering/);
+});
+
+test("a conversation id that could escape a path is refused", async (t) => {
+  const { url, token } = await companion(t);
+  const response = await companionFetch(url, token, "/api/main-agent/query", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "hello there", conversationId: "../outside" }),
+  });
+  assert.equal(response.status, 400);
 });
 
 test("the sidebar shows tasks, not one session per conversational turn", async (t) => {
@@ -399,14 +449,14 @@ test("a derived task belongs to the conversation, and hiding the chat hides it t
     })}\n`, "utf8");
 
     const before = await (await companionFetch(url, token, "/api/dashboard")).json() as {
-      sessions: Array<{ id: string; parentId?: string; childCount?: number; kind?: string }>;
+      sessions: Array<{ id: string; conversationId?: string; kind?: string }>;
       deletedConversations: unknown[];
     };
-    const chat = before.sessions.find((session) => session.kind === "conversation");
-    assert.ok(chat, "the conversation is the parent");
-    assert.equal(chat.childCount, 1);
+    // Conversations are not rows; the run names the conversation that spawned it.
+    // 对话不是列表行；Run 携带派生它的对话。
+    assert.equal(before.sessions.some((session) => session.kind === "conversation"), false);
     const child = before.sessions.find((session) => session.id === run.id);
-    assert.equal(child?.parentId, chat.id, "the run is a task of the conversation, not a sibling chat");
+    assert.equal(child?.conversationId, "main-agent-conversation", "the run is a task of the conversation that spawned it");
     assert.deepEqual(before.deletedConversations, []);
 
     const hidden = await companionFetch(url, token, "/api/sessions/main-agent-conversation", { method: "DELETE" });
@@ -496,4 +546,223 @@ test("an approval names the step it was issued for, and a mismatch is refused", 
   });
   assert.equal(wrong.status, 409);
   assert.match((await wrong.json() as { error: string }).error, /issued for step/);
+});
+
+test("each task has its own conversation and its own history", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const at = new Date().toISOString();
+  await appendMainAgentTurnRecord(dataDirectory, {
+    id: "turn-a",
+    text: "整理资料",
+    status: "completed",
+    startedAt: at,
+    completedAt: at,
+    reply: "已整理。",
+    conversationId: "conversation-a",
+  });
+  await appendMainAgentTurnRecord(dataDirectory, {
+    id: "turn-b",
+    text: "写周报",
+    status: "completed",
+    startedAt: at,
+    completedAt: at,
+    reply: "已写完。",
+    conversationId: "conversation-b",
+  });
+
+  const dashboardResponse = await companionFetch(url, token, "/api/dashboard");
+  assert.equal(dashboardResponse.status, 200);
+  const dashboard = await dashboardResponse.json() as { sessions: Array<{ id: string; kind?: string }> };
+  // The sidebar lists dispatched tasks, never conversations. 侧栏只列派发的任务，绝不列对话。
+  assert.equal(dashboard.sessions.filter((session) => session.kind === "conversation").length, 0);
+
+  const viewResponse = await companionFetch(url, token, "/api/sessions/conversation-a");
+  assert.equal(viewResponse.status, 200);
+  const view = await viewResponse.json() as {
+    id: string;
+    kind?: string;
+    messages: Array<{ role: string; text: string }>;
+    turns?: Array<{ kind: string; input: string; reply?: string; status: string }>;
+  };
+  assert.equal(view.id, "conversation-a");
+  assert.equal(view.kind, "conversation");
+  assert.ok(view.messages.some((message) => message.role === "person" && message.text === "整理资料"));
+  assert.ok(view.messages.some((message) => message.role === "clone" && message.text === "已整理。"));
+  // The other task's turn is not part of this transcript. 另一个任务的回合不属于这份转录。
+  assert.ok(!view.messages.some((message) => message.text.includes("写周报")));
+
+  const otherView = await (await companionFetch(url, token, "/api/sessions/conversation-b")).json() as {
+    messages: Array<{ text: string }>;
+  };
+  assert.ok(otherView.messages.some((message) => message.text === "写周报"));
+  assert.ok(!otherView.messages.some((message) => message.text.includes("整理资料")));
+  // The dispatch log is scoped the same way: one turn for this conversation.
+  // 派发日志同样按对话限定：这个对话只有一个回合。
+  assert.deepEqual(view.turns?.map((turn) => turn.input), ["整理资料"]);
+  assert.equal(view.turns?.[0]?.reply, "已整理。");
+  assert.equal(view.turns?.[0]?.status, "completed");
+  assert.ok(view.turns?.every((turn) => !turn.input.includes("写周报")));
+});
+
+test("the conversation log is bounded and counts the turns it omitted", async (t) => {
+  // The pane shows the newest turns; returning the whole history made one
+  // session poll grow without bound.
+  // 面板显示最近的回合；返回全部历史会让一次会话轮询无界增长。
+  const { url, token, dataDirectory } = await companion(t);
+  const at = new Date().toISOString();
+  for (let index = 0; index < 61; index += 1) {
+    await appendMainAgentTurnRecord(dataDirectory, {
+      id: `turn-${index}`,
+      text: `第 ${index} 轮`,
+      status: "completed",
+      startedAt: at,
+      completedAt: at,
+      reply: `回复 ${index}`,
+      conversationId: "conversation-cap",
+    });
+  }
+  const response = await companionFetch(url, token, "/api/sessions/conversation-cap");
+  assert.equal(response.status, 200);
+  const view = await response.json() as { turns?: Array<{ input: string }>; turnsOmitted?: number };
+  assert.equal(view.turns?.length, 60);
+  assert.equal(view.turnsOmitted, 1);
+  assert.equal(view.turns?.[0]?.input, "第 1 轮");
+  assert.equal(view.turns?.[59]?.input, "第 60 轮");
+});
+
+test("a spawned run that is no longer visible is reported as hidden, not as a dead link", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const at = new Date().toISOString();
+  await appendMainAgentTurnRecord(dataDirectory, {
+    id: "turn-spawn",
+    text: "派发一个任务",
+    status: "completed",
+    startedAt: at,
+    completedAt: at,
+    reply: "已派发。",
+    conversationId: "conversation-spawn",
+  });
+  const journal = createJournalStore(dataDirectory);
+  try {
+    await journal.append({
+      type: "main_agent.turn_started",
+      payload: { schemaVersion: 1, turnId: "turn-spawn", conversationId: "conversation-spawn", source: "companion", input: "派发一个任务", startedAt: at },
+    });
+    await journal.append({
+      type: "main_agent.turn_completed",
+      payload: { schemaVersion: 1, turnId: "turn-spawn", conversationId: "conversation-spawn", status: "completed", reply: "已派发。", startedAt: at, completedAt: at, spawnedRunIds: ["run-missing"] },
+    });
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
+  const response = await companionFetch(url, token, "/api/sessions/conversation-spawn");
+  assert.equal(response.status, 200);
+  const view = await response.json() as { turns?: Array<{ spawnedRuns: Array<{ id: string; hidden?: boolean }> }> };
+  assert.deepEqual(view.turns?.[0]?.spawnedRuns, [{ id: "run-missing", hidden: true }]);
+});
+
+test("the main conversation does not absorb another task's turns", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const taskAt = new Date(Date.now() - 60_000).toISOString();
+  const mainAt = new Date().toISOString();
+  await appendMainAgentTurnRecord(dataDirectory, {
+    id: "task-secret-turn",
+    text: "任务A的秘密",
+    status: "completed",
+    startedAt: taskAt,
+    completedAt: taskAt,
+    reply: "任务A完成",
+    conversationId: "conversation-a",
+  });
+  await appendMainAgentTurnRecord(dataDirectory, {
+    id: "main-turn",
+    text: "主对话的问题",
+    status: "completed",
+    startedAt: mainAt,
+    completedAt: mainAt,
+    reply: "主对话的回答",
+  });
+
+  const mainView = await (await companionFetch(url, token, "/api/sessions/main-agent-conversation")).json() as {
+    messages: Array<{ text: string }>;
+  };
+  const mainTexts = mainView.messages.map((message) => message.text);
+  assert.ok(mainTexts.includes("主对话的问题"));
+  assert.ok(mainTexts.includes("主对话的回答"));
+  assert.ok(!mainTexts.some((text) => text.includes("任务A")), "another task's turn must not enter the main thread");
+
+  const taskView = await (await companionFetch(url, token, "/api/sessions/conversation-a")).json() as {
+    messages: Array<{ text: string }>;
+  };
+  assert.ok(taskView.messages.some((message) => message.text === "任务A的秘密"));
+  assert.ok(!taskView.messages.some((message) => message.text.includes("主对话的问题")));
+});
+
+test("a paused task record carries its own approval and step", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const assembly = await createRuntimeAssembly({ dataDirectory });
+  let runId: string;
+  try {
+    const { run } = await assembly.runtime.acceptTrigger({ kind: "query", summary: "发送周报", payload: {} });
+    runId = run.id;
+    await assembly.runtime.attachPlan(runId, {
+      summary: "发送周报",
+      steps: [{ id: "send", title: "发送", instructions: "发送到外部", risk: "external_side_effect", acceptanceCriteria: ["receipt"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+    });
+    assert.equal((await assembly.runtime.execute(runId, new StaticAgentRegistry([]))).status, "waiting_approval");
+  } finally {
+    assembly.close();
+  }
+
+  const view = await (await companionFetch(url, token, `/api/sessions/${runId}`)).json() as {
+    status: string;
+    approvals: Array<{ runId: string; stepId: string; title?: string; description: string }>;
+  };
+  assert.equal(view.status, "waiting_approval");
+  assert.equal(view.approvals.length, 1, "the task record owns the decision");
+  assert.equal(view.approvals[0]!.runId, runId);
+  assert.equal(view.approvals[0]!.stepId, "send");
+  assert.match(String(view.approvals[0]!.title), /发送/);
+  assert.match(view.approvals[0]!.description, /外部/);
+
+  // The conversation is not a decision inbox. 对话不是决定收件箱。
+  const conversation = await (await companionFetch(url, token, "/api/sessions/main-agent-conversation")).json() as {
+    approvals: unknown[];
+    reviews?: unknown[];
+  };
+  assert.deepEqual(conversation.approvals, []);
+  assert.deepEqual(conversation.reviews ?? [], []);
+});
+
+test("a hidden conversation does not accept a new turn", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const at = new Date().toISOString();
+  await appendMainAgentTurnRecord(dataDirectory, {
+    id: "hidden-turn",
+    text: "隐藏前的问题",
+    status: "completed",
+    startedAt: at,
+    completedAt: at,
+    reply: "隐藏前的回答",
+    conversationId: "conversation-hidden",
+  });
+  const deleted = await companionFetch(url, token, "/api/sessions/conversation-hidden", { method: "DELETE" });
+  assert.equal(deleted.status, 204);
+  const response = await companionFetch(url, token, "/api/main-agent/query", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "隐藏后的问题", conversationId: "conversation-hidden" }),
+  });
+  assert.equal(response.status, 409);
+  assert.match((await response.json() as { error: string }).error, /hidden/i);
+});
+
+test("a bare run id is refused as a conversation id", async (t) => {
+  const { url, token } = await companion(t);
+  const response = await companionFetch(url, token, "/api/main-agent/query", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "hello", conversationId: "3f7c2c26-1f6b-4c3e-9f4d-2a1b3c4d5e6f" }),
+  });
+  assert.equal(response.status, 400);
 });

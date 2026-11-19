@@ -77,11 +77,13 @@ export async function listRegressionTests(workspace: string): Promise<string[]> 
 export async function verifyRegressionRed(input: {
   workspace: string;
   run?: CommandRunner;
+  /** Files to run; defaults to every file under test/regression/. 要运行的文件；缺省为 test/regression/ 下的全部文件。 */
+  files?: readonly string[];
   /** Command used to run the tests; defaults to node --test. 运行测试的命令；默认 node --test。 */
   command?: (files: readonly string[]) => readonly string[];
 }): Promise<RedCheckResult> {
   const run = input.run;
-  const tests = await listRegressionTests(input.workspace);
+  const tests = input.files ?? await listRegressionTests(input.workspace);
   if (tests.length === 0) {
     return { red: false, tests, detail: "phase 1 produced no files under test/regression/" };
   }
@@ -193,10 +195,12 @@ export interface GreenCheckResult {
 export async function verifyRegressionGreen(input: {
   workspace: string;
   run?: CommandRunner;
+  /** Files to run; defaults to every file under test/regression/. 要运行的文件；缺省为 test/regression/ 下的全部文件。 */
+  files?: readonly string[];
   /** Command used to run the tests; defaults to node --test. 运行测试的命令；默认 node --test。 */
   command?: (files: readonly string[]) => readonly string[];
 }): Promise<GreenCheckResult> {
-  const tests = await listRegressionTests(input.workspace);
+  const tests = input.files ?? await listRegressionTests(input.workspace);
   if (tests.length === 0) {
     return { green: false, tests, detail: "no regression files exist under test/regression/ to re-run" };
   }

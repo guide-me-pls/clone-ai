@@ -5,9 +5,9 @@
  * conversation, and from there: the commitment is recorded with proof the
  * owner actually said it, survives a restart, turns into an opportunity when
  * Friday approaches, becomes a run when accepted, is executed by a worker that
- * writes a real file, is verified against that file, produces a memory
- * candidate, and comes back as recall the following week. Kill the owner's
- * process mid-run and no step runs twice.
+ * writes a real file, is verified against that file, is mined by a configured
+ * miner into a durable memory candidate, and comes back as recall the following
+ * week. Kill the owner's process mid-run and no step runs twice.
  *
  * The test seeds a trusted, confirmed state via recordOwnerState. The Main
  * Agent tool cannot currently perform that confirmation on its own. The rest
@@ -20,8 +20,8 @@
  *
  * "记住我每周五要写周报，并帮我准备"——所有者在对话里说一次，之后：承诺带着"他确实
  * 说过"的证据被记录、挺过重启、在周五临近时变成机会、被接受后成为 Run、由真正写文件的
- * Worker 执行、对着那个文件被验证、产生记忆候选、并在下一周作为召回回到对话。中途杀掉
- * 持有者的进程，没有任何一步会执行两次。
+ * Worker 执行、对着那个文件被验证、由配置的提炼器提炼出持久记忆候选、并在下一周作为召回
+ * 回到对话。中途杀掉持有者的进程，没有任何一步会执行两次。
  *
  * 测试通过 recordOwnerState 注入可信且已确认的状态；Main Agent 工具目前不能自行确认。
  * 其余使用 Daemon 维护循环的同一个 OpportunityService、Main Agent 工具的同一个 proposePlanToKernel、
@@ -44,6 +44,7 @@ import { PersonalStateStore } from "../src/state/personal-state-store.ts";
 import { reconcileCommitments } from "../src/state/commitment-reconciler.ts";
 import { RunQueueConsumer } from "../src/application/run-queue.ts";
 import { MemoryGovernance } from "../src/memory/memory-governance.ts";
+import { MemoryPipeline } from "../src/memory/memory-pipeline.ts";
 import { MdMemoryStore } from "../src/memory/md-memory-store.ts";
 import { GovernedMemorySource } from "../src/memory/md-memory-store.ts";
 import { StaticAgentRegistry } from "../src/workers/static-worker-registry.ts";
@@ -230,11 +231,31 @@ test("the golden path: a stated commitment becomes verified work and remembered 
   const claim = events.filter((event) => event.type === "run.status_changed" && event.payload);
   assert.ok(claim.length > 0);
 
-  // ── 8. The completed run becomes a memory candidate; the owner promotes it.
-  //        已完成的 Run 变成记忆候选；所有者批准它。
-  await assembly.memory.rebuild();
-  const candidates = await assembly.memory.processNext();
-  assert.equal(candidates.length, 1, "a verified run produces exactly one candidate");
+  // ── 8. The completed run is mined; the owner promotes the mined preference.
+  //        A candidate is not the task objective copied back: without a miner
+  //        the pipeline would propose nothing, so this test supplies a scripted
+  //        miner that finds the durable statement in what the owner said.
+  //        已完成的 Run 被提炼；所有者提升提炼出的偏好。候选不是把任务目标抄回来：
+  //        没有提炼器时流水线不提出任何候选，因此本测试提供一个脚本化提炼器，
+  //        由它找出所有者说过的那条持久陈述。
+  const mining = new MemoryPipeline(assembly.journal, {
+    async extract(job) {
+      return [{
+        id: "candidate-golden",
+        runId: job.run.id,
+        sourceEvidenceIds: job.evidence.map((item) => item.id),
+        summary: "我每周五要写周报，并希望分身提前准备。",
+        confidence: "high",
+        status: "proposed",
+        createdAt: new Date().toISOString(),
+        type: "preference",
+        sensitivity: "private",
+      }];
+    },
+  });
+  await mining.rebuild();
+  const candidates = await mining.processNext();
+  assert.equal(candidates.length, 1, "a miner that finds a durable statement produces one candidate");
 
   const governance = new MemoryGovernance({
     journal: assembly.journal,

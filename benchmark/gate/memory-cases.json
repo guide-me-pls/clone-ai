@@ -1,0 +1,215 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "legacy-objective-restatement",
+      "title": "The retired deterministic miner's candidate",
+      "objective": "只读审查 knowledge-base 项目的 RAG 实现，优先复用已有审查结果并给出可验证的优化建议。",
+      "summary": "候选流程：只读审查 knowledge-base 项目的 RAG 实现，优先复用已有审查结果并给出可验证的优化建议。",
+      "expected": "drop",
+      "note": "The exact shape the owner's live journal contained; the label must not hide the copy."
+    },
+    {
+      "id": "exact-objective",
+      "title": "A candidate that is the objective verbatim",
+      "objective": "为本周五的周报准备 weekly-report.md",
+      "summary": "为本周五的周报准备 weekly-report.md",
+      "expected": "drop",
+      "note": "An untyped candidate is the legacy shape; even with no template, a work order is not durable knowledge."
+    },
+    {
+      "id": "english-candidate-procedure",
+      "title": "The English procedure template",
+      "objective": "Review the RAG implementation",
+      "summary": "Candidate procedure: Review the RAG implementation.",
+      "expected": "drop",
+      "note": "The template is stripped before the folded comparison."
+    },
+    {
+      "id": "punctuation-and-spacing-variant",
+      "title": "The same sentence with different punctuation and spacing",
+      "objective": "只读审查 knowledge-base 项目的 RAG 实现，优先复用已有审查结果并给出可验证的优化建议。",
+      "summary": "只读审查　knowledge-base 项目 的 RAG 实现 优先复用已有审查结果并给出可验证的优化建议",
+      "expected": "drop",
+      "note": "Full-width spaces, a missing comma and a missing full stop do not make it new."
+    },
+    {
+      "id": "fullwidth-english-label",
+      "title": "A full-width English procedure label",
+      "objective": "Review the RAG implementation",
+      "summary": "Ｃａｎｄｉｄａｔｅ ｐｒｏｃｅｄｕｒｅ：Review the RAG implementation",
+      "expected": "drop",
+      "note": "NFKC runs before label matching."
+    },
+    {
+      "id": "markdown-label",
+      "title": "A label wrapped in markdown bold",
+      "objective": "审查报告",
+      "summary": "**候选流程：** 审查报告",
+      "expected": "drop",
+      "note": "Leading decoration is trimmed before the label."
+    },
+    {
+      "id": "bullet-label",
+      "title": "A label behind a list bullet",
+      "objective": "审查报告",
+      "summary": "- 流程：审查报告",
+      "expected": "drop",
+      "note": "List decoration is trimmed before the label."
+    },
+    {
+      "id": "stacked-labels",
+      "title": "Two labels stacked on the same candidate",
+      "objective": "审查报告",
+      "summary": "候选流程：流程：审查报告",
+      "expected": "drop",
+      "note": "Labels are peeled in a bounded loop."
+    },
+    {
+      "id": "connector-label",
+      "title": "The CJK connector 是 before the separator",
+      "objective": "审查报告",
+      "summary": "候选流程是：审查报告",
+      "expected": "drop",
+      "note": "是/为 are allowed between the label and its separator."
+    },
+    {
+      "id": "suffix-wrapper",
+      "title": "The label trailing the objective",
+      "objective": "审查报告",
+      "summary": "审查报告（流程）",
+      "expected": "drop",
+      "note": "A separator-bounded trailing label is stripped."
+    },
+    {
+      "id": "vs16-decoration",
+      "title": "An emoji variation selector after the objective",
+      "objective": "审查报告",
+      "summary": "审查报告✅️",
+      "expected": "drop",
+      "note": "Emoji and variation selectors fold away."
+    },
+    {
+      "id": "zwsp-decoration",
+      "title": "A zero-width space inside the objective",
+      "objective": "审查报告",
+      "summary": "审查​报告",
+      "expected": "drop",
+      "note": "Format characters are removed before comparison."
+    },
+    {
+      "id": "turkish-dotted-i",
+      "title": "A locale-sensitive dotted I",
+      "objective": "file review",
+      "summary": "FİLE review",
+      "expected": "drop",
+      "note": "U+0130 is mapped before lowercasing, so the result does not depend on the host locale."
+    },
+    {
+      "id": "token-symbols-c",
+      "title": "C is not C++",
+      "objective": "学习 C++",
+      "summary": "学习 C",
+      "expected": "keep",
+      "note": "Token-internal + is preserved, so a different language/tool is not a restatement."
+    },
+    {
+      "id": "version-decimal",
+      "title": "v12 is not v1.2",
+      "objective": "升级到 v1.2",
+      "summary": "升级到 v12",
+      "expected": "keep",
+      "note": "Token-internal . is preserved."
+    },
+    {
+      "id": "procedure-type-copy",
+      "title": "A procedure typed as the objective copy",
+      "objective": "我以后周五不加班",
+      "summary": "我以后周五不加班",
+      "type": "procedure",
+      "expected": "drop",
+      "note": "A procedure that equals its task objective is still refused."
+    },
+    {
+      "id": "preference-type-copy",
+      "title": "A preference typed as the owner's own statement",
+      "objective": "我以后周五不加班",
+      "summary": "我以后周五不加班",
+      "type": "preference",
+      "expected": "keep",
+      "note": "The owner may state exactly what the task asked; a typed preference stays for review."
+    },
+    {
+      "id": "emoji-before-label",
+      "title": "An emoji decoration before the label",
+      "objective": "审查报告",
+      "summary": "✅ 候选流程：审查报告",
+      "expected": "drop",
+      "note": "Emoji are decoration around the label, not part of it."
+    },
+    {
+      "id": "flow-prefix-not-label",
+      "title": "A word that begins with 流程 but is not the label",
+      "objective": "先跑测试再发布。",
+      "summary": "流程优化：先跑测试再发布。",
+      "expected": "keep",
+      "note": "流程优化 is one word; the label must end at a boundary."
+    },
+    {
+      "id": "label-prefix-not-boundary",
+      "title": "A word that merely begins with a label",
+      "objective": "改进后先跑测试",
+      "summary": "候选流程改进后先跑测试",
+      "expected": "keep",
+      "note": "The label must end at a boundary; 候选流程改进 is a longer word, not a label plus text."
+    },
+    {
+      "id": "standing-preference",
+      "title": "A standing preference the owner would want remembered",
+      "objective": "准备本周周报",
+      "summary": "周报模板改用蓝色，每周五提交。",
+      "expected": "keep",
+      "note": "It mentions 周报 but states a durable rule the objective does not contain."
+    },
+    {
+      "id": "failure-lesson",
+      "title": "A lesson mined from a failed run",
+      "objective": "修复发布脚本",
+      "summary": "发布前先跑完整测试；这次跳过测试导致了一次回归。",
+      "expected": "keep",
+      "note": "A reusable procedure, not a restatement of the repair task."
+    },
+    {
+      "id": "short-objective-is-not-containment",
+      "title": "A short objective must not swallow a longer memory",
+      "objective": "周报",
+      "summary": "周报模板用蓝色",
+      "expected": "keep",
+      "note": "Containment against a two-character objective would drop almost every related memory."
+    },
+    {
+      "id": "paraphrased-objective",
+      "title": "A paraphrase of the objective",
+      "objective": "只读审查 knowledge-base 项目的 RAG 实现，优先复用已有审查结果并给出可验证的优化建议。",
+      "summary": "对该项目的 RAG 实现做只读审查，并先复用已有审查结果。",
+      "expected": "keep",
+      "note": "Known false negative: the exact-match rule deliberately keeps a paraphrase. If a later rule tightens and drops it, this baseline change forces review."
+    },
+    {
+      "id": "evidence-restatement",
+      "title": "A restatement of what the worker did",
+      "objective": "Read README.md and summarize the project in three sentences.",
+      "summary": "README.md was read and summarized.",
+      "expected": "keep",
+      "note": "Known false negative: the rule does not judge evidence text, only the task objective. The owner still reviews the candidate."
+    },
+    {
+      "id": "conversation-placeholder",
+      "title": "The conversation job's placeholder objective",
+      "objective": "Conversation with the owner",
+      "summary": "Conversation with the owner",
+      "expected": "drop",
+      "note": "Conversation mining uses this fixed objective; echoing it is not a memory either."
+    }
+  ]
+}

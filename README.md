@@ -19,7 +19,7 @@ Deployment: [Mac app](apps/desktop/README.md) · [WhatsApp phone channel](docs/u
 - Acceptance criteria that cannot be checked automatically enter `waiting_review` for the owner to inspect and accept or reject in the desktop conversation or under 审计与评估 → 运行记录.
 - Scheduled occurrences live in `schedules.sqlite3`; an existing `schedules.json` is imported once and retained as a backup. Interrupted occurrences with unknown effects require review rather than automatic retry.
 - Memory and audit data remain in local Markdown/SQLite without application-layer encryption or complete erasure. Hiding a session or archiving memory is not deletion; remote model requests can send context to the model provider.
-- Memory mining runs after a completed task through the same configured endpoint and costs one model call; a failed extraction stays pending instead of being treated as an empty result.
+- Task-run memory mining proposes nothing unless `CLONE_AI_MEMORY_MINING=all` selects the model miner: a finished task's objective is a work order, not a memory, and the extraction marker records `count: 0`. With a miner, it runs through the configured endpoint and costs one model call; a failed extraction stays pending instead of being treated as an empty result.
 - Cancellation fences later journal writes and asks the worker to stop, but process termination is best effort, not proof that an unisolated process made no external changes.
 - Interrupted or failed work is not automatically replayed when an external step was involved, because an unchanged workspace cannot prove that no external action happened.
 - Optional SMTP daily reports use a durable delivery record; unknown outcomes require checking the mailbox before a retry or dismissal. SMTP acceptance is not proof of delivery. Remote SMTP requires TLS; credentials in `reporting.json` are still stored in plaintext.
@@ -562,8 +562,12 @@ relationship automation, broad inbox access, and unconstrained proactive behavio
 The macOS app is the only product surface. Its conversation, settings and audit
 views cover every owner action:
 
-- **对话** — ask, approve or reject an external action, and accept or reject a
-  result that needs review.
+- **对话** — each task is its own Main Agent conversation with its own context;
+  the sidebar lists dispatched tasks only, and the 对话 control opens the main
+  thread. Approve or reject an external action, and accept or reject a result,
+  on the task record that needs the decision; waiting tasks are flagged at the
+  top. A task running subtasks does not block starting another; the number of
+  concurrent Main Agents follows measured machine capacity.
 - **设置 → Agent** — model endpoint, gateway, reasoning effort and provider.
 - **设置 → 权限与安全** — per-domain autonomy (`observe` … `act_auto`) and
   owner-written standing policies.
@@ -571,9 +575,10 @@ views cover every owner action:
   owner-data export that writes a timestamped archive outside the clone home.
 - **设置 → 上下文** — compactions and full-history search.
 - **设置 → 手机通道** — WhatsApp binding and the public webhook tunnel.
-- **设置 → 审计与评估** — runs, Main Agent turns, Agent invocations, the bad-case
-  log, self-check rounds, improvement suggestions, and cancellation of an active
-  run.
+- **设置 → 审计与评估** — runs, Main Agent turns (including how each turn
+  assembled its task: conversation, history window, prompt materials, tools and
+  dispatched runs), Agent invocations, the bad-case log, self-check rounds,
+  improvement suggestions, and cancellation of an active run.
 
 The most important capability is not "run". It is the ability to inspect why the
 twin thinks something matters, what it is allowed to do, and what evidence proves

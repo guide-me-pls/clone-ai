@@ -46,11 +46,14 @@ import {
 } from "./turn-audit.ts";
 import { recordUsage, type UsageRecord } from "../observability/usage.ts";
 import { parseUsage } from "../workers/openai-compatible-client.ts";
+import { createJournalStore } from "../core/sqlite-journal.ts";
+import { mainAgentRunConversations } from "./run-triggers.ts";
 import { redactMemoryPii } from "../memory/memory-hygiene.ts";
 import { tokenize } from "../memory/md-memory-store.ts";
 import { readMainAgentEffortPreference } from "./model-preferences.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
+import { conversationIdOf, MAIN_AGENT_DEFAULT_CONVERSATION_ID } from "./conversation.ts";
 
 export interface NativeMainAgentEndpoint {
   baseUrl: string;
@@ -59,10 +62,25 @@ export interface NativeMainAgentEndpoint {
   timeoutMs?: number;
 }
 
+/**
+ * How many completed turns the model's history carries by default. The desktop
+ * log shows this number beside the context assembly, so both sides name the
+ * same window.
+ * 模型历史默认携带多少个已完成回合。桌面日志在上下文组装旁显示这个数字，使两边指向同一个
+ * 窗口。
+ */
+export const MAIN_AGENT_HISTORY_TURNS = 24;
+
 export interface NativeMainAgentOptions {
   dataDirectory: string;
   text: string;
   source: MainAgentTurnSource;
+  /**
+   * The task this turn belongs to. The model sees only this conversation's
+   * history; omitted means the owner's main conversation.
+   * 本回合所属的任务。模型只看到这个对话的历史；缺省表示所有者的主对话。
+   */
+  conversationId?: string;
   turnId?: string;
   onDelta?: (delta: string) => void;
   onMetadata?: (metadata: { modelId: string; provider: string; effort?: string }) => void;
@@ -243,7 +261,8 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
     query: options.text,
     ...(options.environment === undefined ? {} : { environment: options.environment }),
   });
-  const tools = nativeTools(options.dataDirectory, options.signal);
+  const conversationId = conversationIdOf(options.conversationId);
+  const tools = nativeTools(options.dataDirectory, conversationId, options.cwd, options.signal);
   // Skills and MCP are opt-in per turn: without roots or servers the tool table
   // and prompt are exactly what they were before.
   // 技能与 MCP 是按回合显式开启的：没有根目录或服务器时，工具表与 Prompt 与之前完全相同。
@@ -277,16 +296,31 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
     modelId: endpoint.model,
     provider: "native",
     ...(effort === undefined ? {} : { effort }),
-  }, { turnId });
+  }, { turnId, conversationId });
+  const history = await buildHistory(options.dataDirectory, turnId, {
+    turns: options.historyTurns ?? MAIN_AGENT_HISTORY_TURNS,
+    conversationId,
+    // Token-aware compaction owns the budget. A character cap here would drop
+    // history before the loop could measure it, which is why production never
+    // crossed the token threshold; `historyChars` remains an explicit override.
+    // 预算归 token 感知压缩所有。在这里设字符上限会在循环测量之前丢掉历史，这正是生产路径
+    // 从未越过 token 阈值的原因；`historyChars` 仍是显式覆盖。
+    chars: options.historyChars ?? 0,
+  });
   const turn = await beginMainAgentTurn({
     dataDirectory: options.dataDirectory,
     text: options.ledgerText ?? options.text,
     source: options.source,
+    conversationId,
     turnId,
     modelId: endpoint.model,
     provider: "native",
     ...(effort === undefined ? {} : { effort }),
     ...(snapshot === undefined ? {} : { promptMaterialHash: snapshot.materialHash }),
+    // The audit shows the window this turn actually saw, not the configured
+    // maximum. 审计显示本回合实际看到的窗口，而不是配置的上限。
+    historyMessages: history.messages.length,
+    historyTurns: history.historyTurns,
   });
   options.onMetadata?.({
     modelId: endpoint.model,
@@ -295,15 +329,6 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
   });
 
   const before = new Set((await currentRuns(options.dataDirectory)).map((run) => run.id));
-  const history = await buildHistory(options.dataDirectory, turnId, {
-    turns: options.historyTurns ?? 24,
-    // Token-aware compaction owns the budget. A character cap here would drop
-    // history before the loop could measure it, which is why production never
-    // crossed the token threshold; `historyChars` remains an explicit override.
-    // 预算归 token 感知压缩所有。在这里设字符上限会在循环测量之前丢掉历史，这正是生产路径
-    // 从未越过 token 阈值的原因；`historyChars` 仍是显式覆盖。
-    chars: options.historyChars ?? 0,
-  });
   const images = options.images ?? [];
   const documents = options.documents ?? [];
   const currentText = documents.length > 0
@@ -328,7 +353,7 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
 ${listing}`;
   const messages: AgentMessage[] = [
     { role: "system", content: systemPrompt },
-    ...history,
+    ...history.messages,
     userMessage,
   ];
   const startedAt = Date.now();
@@ -442,8 +467,14 @@ ${listing}`;
       : {}),
   };
   await recordUsage(options.dataDirectory, usageRecord).catch(() => undefined);
+  // Only runs whose trigger names this conversation are this turn's spawn. A
+  // before/after diff alone attributes a concurrent conversation's dispatch to
+  // whichever turn happens to finish second.
+  // 只有 Trigger 点名本对话的 Run 才是本回合派发的。仅按前后差集会把它并发对话的派发归给
+  // 恰好后结束的那个回合。
+  const spawned = await conversationRunIds(options.dataDirectory, conversationId).catch(() => undefined);
   const newRuns = (await currentRuns(options.dataDirectory).catch(() => []))
-    .filter((run) => !before.has(run.id))
+    .filter((run) => !before.has(run.id) && spawned !== undefined && spawned.has(run.id))
     .map((run) => ({ id: run.id, status: run.status, planId: run.planId }));
   const turnStatus = error === undefined
     ? "completed"
@@ -729,14 +760,22 @@ async function chat(
  * 旧版 search_history 读 Pi 会话文件；原生对话记录是回合台账，因此本运行时只替换
  * 这一个工具为台账检索。
  */
-function nativeTools(dataDirectory: string, signal?: AbortSignal): PlainKernelTool[] {
-  return [...kernelToolDefinitions({ dataDirectory }), dispatchTaskTool({ dataDirectory, ...(signal === undefined ? {} : { signal }) })].map((tool) => tool.name === "search_history"
+function nativeTools(dataDirectory: string, conversationId: string, workspacePath?: string, signal?: AbortSignal): PlainKernelTool[] {
+  return [
+    ...kernelToolDefinitions({ dataDirectory, conversationId, ...(workspacePath === undefined ? {} : { workspacePath }) }),
+    dispatchTaskTool({
+      dataDirectory,
+      conversationId,
+      ...(workspacePath === undefined ? {} : { workspacePath }),
+      ...(signal === undefined ? {} : { signal }),
+    }),
+  ].map((tool) => tool.name === "search_history"
     ? {
       ...tool,
       execute: async (_toolCallId: string, params: Record<string, unknown>) => ({
         content: [{
           type: "text",
-          text: await searchLedger(dataDirectory, String(params.query ?? ""), Number(params.limit ?? 6)),
+          text: await searchLedger(dataDirectory, String(params.query ?? ""), Number(params.limit ?? 6), conversationId),
         }],
         details: {},
       }),
@@ -744,11 +783,12 @@ function nativeTools(dataDirectory: string, signal?: AbortSignal): PlainKernelTo
     : tool);
 }
 
-async function searchLedger(dataDirectory: string, query: string, limit: number): Promise<string> {
+async function searchLedger(dataDirectory: string, query: string, limit: number, conversationId: string): Promise<string> {
   const terms = tokenize(query);
   if (terms.length === 0) return "No search terms were provided.";
   const records = (await readMainAgentTurnRecords(dataDirectory))
-    .filter((record) => record.status === "completed");
+    // A task reads its own past, not another task's. 任务只读自己的过去，不读别的任务。
+    .filter((record) => record.status === "completed" && conversationIdOf(record.conversationId) === conversationId);
   const scored: Array<{ at: string; score: number; excerpt: string }> = [];
   for (const record of records) {
     const haystack = `${record.text}\n${record.reply ?? ""}`.toLocaleLowerCase();
@@ -769,10 +809,16 @@ async function searchLedger(dataDirectory: string, query: string, limit: number)
 async function buildHistory(
   dataDirectory: string,
   excludeTurnId: string,
-  options: { turns: number; chars: number },
-): Promise<AgentMessage[]> {
+  options: { turns: number; chars: number; conversationId: string },
+): Promise<{ messages: AgentMessage[]; historyTurns: number }> {
   const records = (await readMainAgentTurnRecords(dataDirectory))
     .filter((record) => record.id !== excludeTurnId && record.status === "completed" && (record.reply ?? "").trim().length > 0)
+    // A task's model context is its own conversation. Rows written before the
+    // ledger carried a conversation id belong to the main conversation, so an
+    // upgraded clone home keeps its history.
+    // 任务的模型上下文就是它自己的对话。台账携带对话 id 之前写入的行属于主对话，因此升级后的
+    // clone home 仍保有其历史。
+    .filter((record) => conversationIdOf(record.conversationId) === options.conversationId)
     .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt))
     .slice(-Math.max(1, options.turns));
   // No per-record cap here either: a 15k-character turn truncated to 4k made
@@ -791,7 +837,7 @@ async function buildHistory(
   // could never be crossed and compaction never ran in production.
   // 按 token 压缩的调用方必须看到完整历史：这个字符预算过去先截断，使循环的 token 阈值永远
   // 无法触发，压缩在生产路径上从不执行。
-  if (options.chars === 0 || total <= budget) return flattenPairs(pairs);
+  if (options.chars === 0 || total <= budget) return { messages: flattenPairs(pairs), historyTurns: records.length };
 
   // Keep the newest pairs verbatim within two thirds of the budget; summarise
   // the rest into a bounded system note. The full text stays in the ledger.
@@ -819,7 +865,7 @@ async function buildHistory(
     });
   }
   messages.push(...flattenPairs(keep));
-  return messages;
+  return { messages, historyTurns: records.length };
 }
 
 function flattenPairs(pairs: ReadonlyArray<{ user: string; assistant: string }>): AgentMessage[] {
@@ -838,6 +884,21 @@ function trim(text: string, limit: number): string {
 async function currentRuns(dataDirectory: string): Promise<Run[]> {
   const { runtime, close } = await createKernelRuntimeSession(dataDirectory);
   try { return runtime.listRuns(); } finally { close(); }
+}
+
+/** Run ids whose trigger names this conversation. 其 Trigger 点名本对话的 Run id。 */
+async function conversationRunIds(dataDirectory: string, conversationId: string): Promise<Set<string>> {
+  const journal = createJournalStore(dataDirectory);
+  try {
+    const events = await journal.list();
+    return new Set(
+      [...mainAgentRunConversations(events)]
+        .filter(([, owner]) => owner === conversationId)
+        .map(([runId]) => runId),
+    );
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
 }
 
 function toolText(result: unknown): string {

@@ -108,6 +108,20 @@ export function wrapUntrustedWhatsApp(text: string): string {
 }
 
 /**
+ * One WhatsApp chat is one conversation, so a phone message neither blocks the
+ * desktop's main thread nor mixes its history with another chat. WhatsApp's
+ * sender id is a phone number; keeping only its digits makes the same chat map
+ * to the same conversation whether the number arrives formatted or raw.
+ * 一个 WhatsApp 聊天就是一个对话：手机消息既不阻塞桌面主线索，也不与另一个聊天的历史混合。
+ * WhatsApp 的发送者 id 是电话号码；只保留数字，使同一个聊天无论号码是否带格式都映射到同一个
+ * 对话。
+ */
+export function whatsappConversationId(from: string): string {
+  const digits = String(from ?? "").replace(/\D/g, "");
+  return digits.length === 0 ? "whatsapp:unknown" : `whatsapp:${digits}`;
+}
+
+/**
  * Per-sender sliding-window limit. A hijacked number or a burst of retries must
  * not become an unbounded stream of model turns.
  * 按号码的滑动窗口限流。被盗用的号码或重试风暴不能变成无限制的模型回合。
@@ -290,7 +304,13 @@ export interface WhatsAppTextSender {
 }
 
 export interface MainAgentRemote {
-  ask(text: string, turnId: string): Promise<string>;
+  /**
+   * Asks the local Main Agent. `conversationId` scopes the task: a WhatsApp
+   * chat must not interleave with the desktop thread or another chat.
+   * 询问本地 Main Agent。`conversationId` 划定任务：一个 WhatsApp 聊天不得与桌面线索或
+   * 另一个聊天交错。
+   */
+  ask(text: string, turnId: string, conversationId?: string): Promise<string>;
 }
 
 /** A retryable Main Agent transport state, distinct from a completed failure. 可重试的 Main Agent 传输状态，区别于终态失败。 */
@@ -558,6 +578,7 @@ export class WhatsAppBridge {
         const reply = await this.#mainAgent.ask(
           message.unreliable ? wrapUntrustedWhatsApp(message.text) : message.text,
           `whatsapp:${message.id}`,
+          whatsappConversationId(message.from),
         );
         const visible = reply.trim().length > 0
           ? reply
@@ -747,7 +768,7 @@ export class LocalMainAgentRemote implements MainAgentRemote {
     this.#fetch = fetchImpl;
   }
 
-  async ask(text: string, turnId: string): Promise<string> {
+  async ask(text: string, turnId: string, conversationId?: string): Promise<string> {
     const endpoint = await readCompanionEndpoint(this.#dataDirectory);
     if (endpoint === undefined) {
       throw new MainAgentRetryableError("Clone AI Desktop 当前离线，找不到本地 Runtime。");
@@ -766,7 +787,11 @@ export class LocalMainAgentRemote implements MainAgentRemote {
           "x-clone-caller": "whatsapp",
           "x-clone-caller-session": turnId,
         },
-        body: JSON.stringify({ text, turnId }),
+        body: JSON.stringify({
+          text,
+          turnId,
+          ...(conversationId === undefined ? {} : { conversationId }),
+        }),
         signal: AbortSignal.timeout(15 * 60_000),
       });
     } catch (error: unknown) {

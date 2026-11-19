@@ -31,6 +31,537 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-18 — The list is tasks, decisions are per task, and the audit shows the assembly
+
+- **Goal / hypothesis:** after conversations became per-task, the sidebar still
+  listed conversations, approvals were still aggregated in the main thread, and
+  the audit showed tools and a prompt hash but not how the task was assembled.
+  Make the dispatched task the unit: no conversation rows, decisions on the task
+  record, an unmistakable waiting state, and a per-turn assembly block.
+- **Trade-off:** [the task record is the unit](../architecture/trade-offs.md#2026-11-18--the-task-record-is-the-unit-no-conversation-rows-decisions-on-the-task),
+  [the audit explains the assembly](../architecture/trade-offs.md#2026-11-18--the-audit-explains-how-every-main-agent-turn-was-assembled).
+- **Change:** server: the dashboard's `sessions` are task runs only, each with
+  the `conversationId` that spawned it; `buildSession` returns the step
+  title/description for a waiting approval and the run's own `reviews` with the
+  worker's result; the conversation view returns no approvals or reviews; the
+  prompt snapshot journals instruction source paths, warnings and the briefing
+  flag; turn start journals the history message/turn counts; the audit projects
+  the dispatched runs (title, steps, last status) from task/run/plan events. UI:
+  a flat task sidebar with a "需要你的确认" section and per-row
+  `需你确认`/`需你复核` flags; a 对话 navigation control opens the main thread;
+  decision cards render on the task record with the step and "不会自动继续";
+  `audit.js` renders a collapsed "任务组装" block (conversation, history window,
+  model, materials, tools, dispatched runs); locale and CSS updated.
+- **Eval:** `test/ui-structure.test.ts` **15/15** (task-record decisions, no
+  pointer, attention section and flags, nav control, assembly block),
+  `test/companion-control-plane.test.ts` **22/22** (no conversation rows, the
+  task record owns its approval and review, the main view has neither),
+  `test/main-agent-turn-audit.test.ts` **13/13** (history counts, run projection,
+  instruction sources and briefing), `test/companion-config-api.test.ts`
+  **21/21**. Full suite **831/831**, `npm run typecheck` and `npm run gate` pass.
+  Browser on the preview home: the sidebar showed only the paused task in
+  "需要你的确认 · 1" with a `需你确认` flag; its record showed "需要你确认后才能继续 /
+  步骤：发送" plus approve/reject; a new task dispatched a run through a stub
+  model, and 审计 → 主 Agent 回合 showed "任务组装 · 1 个 Run · 材料 ebbfb873 …
+  charter v2 · 情境简报 · AGENTS.md · 工具表 11 个 … 派发的任务 整理本周资料 失败
+  起草".
+- **Benchmark run:** none — deterministic tests and a browser check with a local
+  stub model; no provider, dataset or scoring parameters.
+- **Execution chain:** read the sidebar, decision and audit code; wrote the two
+  trade-offs; changed the dashboard and run view; moved the decision cards; added
+  the sidebar attention treatment and the 对话 control; journaled history counts
+  and instruction summaries; projected runs from run events; rendered the
+  assembly block; rewrote the stale UI and dashboard tests; ran targeted tests,
+  the full suite, typecheck and gate; checked the real UI with a paused run and a
+  tool-calling stub. The checkout also carried concurrent sessions' changes
+  (shared worker gate, dispatch-log pane, read-only work orders); the full suite
+  includes them.
+- **Pros:** the list answers "what work exists"; decisions sit where the work is;
+  a waiting task cannot be missed; the audit answers "how was this built" without
+  pasting the prompt.
+- **Cons / next time:** conversations are reachable only from the 对话 control or
+  by sending from a task record; decisions are spread over tasks, and the
+  dashboard only counts them. The assembly block lengthens the turn card; it is
+  collapsed by default. Legacy turns show "未记录" for history and materials.
+  The prompt-snapshot event now carries source paths and warnings (small, not
+  the full prompt).
+- **Reversal condition:** see both trade-off entries.
+
+### 2026-11-18 — Direct-answer evidence gap: the repair lane produced the fix after three attempts
+
+- **Goal / hypothesis:** a single-agent `direct_response` step should complete
+  on the worker's final answer by recording one observation evidence row for it
+  (gated on `produced.size === 0`), without weakening the evidence gate for any
+  other step. Expected: a regression test that is red before the worker change
+  and green after, then a reviewable patch from the repair lane.
+- **Trade-off:** [2026-11-18 — A direct answer is the evidence for a direct_response step](../architecture/trade-offs.md#2026-11-18--a-direct-answer-is-the-evidence-for-a-direct_response-step).
+- **Change:** the lane's patch adds three lines to
+  `src/workers/native-agent-worker.ts`: for a single-agent `direct_response`
+  step with no produced evidence and a non-empty reply, push one `observation`
+  row (`summary` bounded to 8,000 characters, `locator: answer:<stepId>`)
+  immediately before `completed`. The lane also added
+  `test/regression/direct-response-evidence.test.ts`. The working agent applied
+  the lane's patch to the shared tree and did not hand-write the logic. Lane
+  harness changes made during the retries: phase 1 now names
+  `src/core/runtime.ts` and `src/workers/native-agent-worker.ts`, allows the
+  first write within eight tool calls, and the red/green checks run only this
+  repair's new file; the fix phase requires English and Chinese comment lines
+  together; `newRegressionTests` no longer presents every existing regression
+  file as this repair's.
+- **Eval:** the deterministic trace `53074cf2` (isolated home
+  `/tmp/clone-ai-repair-trace-home2`) reproduces the failure with a
+  `NativeAgentWorker` whose fake client returns only `收到`; the run fails with
+  `Agent direct-responder completed step direct-response without evidence.`
+  Attempt 1 (phase-1 Run `5954e0be`) wrote no test and the lane refused with
+  `the new regression cases pass without a fix; refusing to continue (not a
+  reproduction)`. Attempt 2 produced the correct 3-line change but failed the
+  full suite on `bilingual-documentation` (English-only comment). Attempt 3:
+  phase-1 Run `566b1603` was red on
+  `test/regression/direct-response-evidence.test.ts`; fix Run `1d811b94`
+  produced the observation row; the regression case was green; the lane's full
+  suite was **760/760** and typecheck 0. Branch `rsi/auto-fix-20261118T1044`,
+  commit `76aec5d`. In the shared tree the applied patch was functionally
+  checked: the new case is red with the fix reverted and green with it, then
+  **832/832**, `npm run typecheck` 0 and `npm run gate` **PASS**.
+- **Benchmark run:** none — deterministic trace, lane and tests; no provider,
+  dataset or scoring parameters. Attempt 1's phase-1 worker made 3 model calls /
+  7,266 tokens in 20.8 s.
+- **Execution chain:** built the isolated home, reproduced the answer-only
+  failure with a scripted native worker, exported the trace, and ran the gated
+  lane with the decision brief. Attempt 1 stopped at the red-eval gate because
+  the worker wrote no test; the lane's fallback also ran every existing
+  regression file. Widened the phase-1 prompt/budget and scoped the red/green
+  checks. Attempt 2 produced a correct change but an English-only comment;
+  added the bilingual-comment requirement. Attempt 3 fixed. The working agent
+  applied the patch, verified red-before/green-after, and re-ran the full suite,
+  typecheck and gate.
+- **Pros:** the fix came from the lane, not a hand-written patch; the lane's
+  gates rejected a vacuous reproduction and a style failure; the final change is
+  three lines plus one regression test.
+- **Cons / next time:** three attempts were needed; the first two were lane
+  prompt/budget problems, not product problems. Phase 1 still runs all existing
+  regression files when `newRegressionTests` cannot identify its own file, and
+  the lane's report is written after the fact. The direct-answer observation is
+  the worker's own text, not an independent artifact.
+- **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-18 — A read-only request is answered instead of failing for a missing artifact
+
+- **Goal / hypothesis:** three worker runs (`663b45b5`, `c03c7cea`,
+  `cd74804b`) finished the requested read and answer, then failed verification
+  with `Missing required artifact evidence: local-draft` because the fallback
+  planner treated a read-only request as delivery and attached a
+  locator-required `artifact` contract to an objective that forbade writing.
+  Expected: a read-only request gets a read-only step, research/review orders
+  require observation evidence, and an unsatisfiable contract is rejected when
+  the plan is attached rather than after the worker is done.
+- **Trade-off:** [2026-11-18 — A read-only request gets observation evidence, not an artifact](../architecture/trade-offs.md#2026-11-18--a-read-only-request-gets-observation-evidence-not-an-artifact).
+- **Change:** `src/planning/fallback-planner.ts` separates positive write verbs
+  from bare artifact nouns and treats an explicit no-write constraint as
+  authoritative unless a named output target is present; a read-only request is
+  one `read-only-lookup` step with no artifact contract, and research/review
+  orders require `observation`. `src/core/runtime.ts` rejects a `read_only`
+  work order that requires `artifact`, `receipt` or `test`; `runQuery` closes a
+  Run whose plan the Kernel rejects instead of leaving it in `planning`.
+  `src/workers/native-agent-worker.ts` discloses the required contract in
+  `buildInstructions`, filters tools by the work order's risk, records a write
+  as an artifact even when the path was read first, and keeps artifact rows
+  under the 20-row evidence cap; it also normalizes the missing-input key.
+  `src/workers/native-worker-prompt.ts` states the artifact/conflict rules.
+  `src/planning/llm-planner.ts` and the main-agent `propose_work_plan`
+  description state the read-only contract rule. `package.json` now collects
+  `test/regression/*.test.js`.
+- **Eval:** before the change, the three exact journal prompts reproduced
+  `prepare/reversible_write` with `draft/local-draft` (`kind: "artifact"`,
+  `locatorRequired: true`); the journal showed only `observation` rows and
+  `subagent.verified` failed with `Missing required artifact evidence:
+  local-draft`. After the change the same prompts return one
+  `read-only-lookup` step (`risk: read_only`, no artifact contract), while
+  "帮我写一封给客户的项目更新邮件草稿" and the supplier workflow keep their
+  `artifact`/`observation` contracts. Commands:
+  `node --experimental-strip-types --test test/fallback-planner.test.ts
+  test/worker-evidence-contract.test.ts` (**18/18**), then `npm test`
+  (**831/831**, including the newly collected regression `.js`),
+  `npm run typecheck` (exit 0), `npm run gate` (**PASS**, verdict/policy/audit/
+  memory 100 %). The new tests pin: read-only+artifact rejected; observation
+  accepted; read records observation with its path; read-then-write upgrades to
+  artifact; a read-only order gets no write tool inside a writable step; the
+  contract reaches the worker; a Kernel-rejected plan fails its Run.
+- **Benchmark run:** none — deterministic test-only eval; no model or provider
+  call.
+- **Execution chain:** six independent investigators (artifact contract,
+  worker instructions, direct-answer evidence, already-fixed classes, orphan
+  recovery, planner path), each followed by an adversarial verifier, ran as one
+  workflow (12 agents, ~1.55 M subagent tokens, 927 tool calls, ~24.6 min,
+  zero agent errors). Their verdicts corrected two assumptions: `e694a4d` was
+  not the declared-input fix (`fb496e5` was), and `报告` inside "如实报告"
+  still made a read-only request look like delivery. Implementation happened
+  inline while four other sessions edited the same checkout; the first test run
+  was blocked by a transient invalid regex in `memory-hygiene.ts`, and two
+  fixture suites (`runtime`, `work-order`) had to be made contract-valid. A
+  second full run after reconciliation: **831/831**, gate **PASS**.
+- **Pros:** the verifier found the noun/verb edge case and the plan-freeze
+  risk before they shipped; the fix is at the layer that created the
+  contradiction, and the worker now knows the contract it must satisfy.
+- **Cons / next time:** the planner remains a heuristic; five sessions sharing
+  one checkout caused avoidable churn and stale line numbers. Two latent paths
+  are documented but not fixed here: a `direct_response` step that only answers
+  still has no evidence row (no such run occurred after the native switch;
+  rule 4 says the repair lane should own that worker change), and an
+  interrupted native run still fails without a replay-safety guarantee even
+  when its checkpoint proves no workspace change (checkpoint arbitration is
+  unreachable on the in-process path).
+- **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-18 — A finished task's objective stops becoming a memory candidate
+
+- **Goal / hypothesis:** every completed run used to propose
+  `候选流程：<objective>`, so the owner's review list was the work order said
+  twice. A candidate should be durable knowledge; without a model there is
+  nothing to extract, and with a model a structural gate should refuse a copy.
+  Expected: the default list is empty unless a miner finds a durable statement,
+  and any miner's exact objective copy is dropped before review.
+- **Trade-off:** [2026-11-18 — A finished task is not a memory; candidates must state durable knowledge](../architecture/trade-offs.md#2026-11-18--a-finished-task-is-not-a-memory-candidates-must-state-durable-knowledge).
+- **Change:** `MemoryPipeline`'s default `NoMiningWorker` returns no candidates;
+  `processJob` drops untyped or `procedure` objective restatements (NFKC,
+  locale-independent case, invisible characters, token-aware folding, procedure
+  labels at either end) and journals `droppedRestatements` with PII-redacted
+  dropped summaries; a typed preference/fact/decision/commitment equal to the
+  objective stays for review; `hasDurableMemoryText` refuses punctuation/emoji
+  only summaries; `MemoryGovernance.rejectRestatedCandidates()` performs the
+  one-time cleanup from the companion server's first maintenance tick;
+  `runtime-factory` gives conversation mining its own pipeline and
+  `ConversationMemoryWorker`; the dashboard memory field, the desktop hint and
+  the docs stop presenting decided copies; `benchmark/gate` gains a memory suite
+  with 26 cases.
+- **Eval:** `node --experimental-strip-types --test
+  test/memory-candidate-quality.test.ts` — before the change the helper did not
+  exist and the default pipeline proposed the objective copy; after **8/8**
+  (default zero; restatement dropped and durable kept; a typed preference equal
+  to the objective kept; `=all` selects the real miner; legacy cleanup rejects
+  once). The detector's cases cover full-width and markdown/bullet labels,
+  stacked labels, the 是 connector, suffix wrappers, VS16/ZWSP, Turkish dotted
+  I, token symbols (C vs C++, v12 vs v1.2), and the two deliberate false
+  negatives. `test/golden-path.test.ts` **2/2** and `test/runtime.test.ts`
+  **5/5** with scripted miners, keeping their propose/promote/recall and
+  event-order assertions; `test/conversation-memory.test.ts` **5/5** with its
+  own worker; the new companion cleanup case passes and checks
+  `/api/memory/candidates`, `/api/dashboard` and `/api/attention`. `npm run gate`:
+  before verdict/policy/audit **13/14/4**, after **13/14/4 + memory 26/26**,
+  100 % agreement, `baseline unchanged` after regeneration. `npm run typecheck`
+  exit 0. Full `npm test`: **831/831**. Live journal
+  `~/.clone/journal.sqlite3`: 8 requested / 8 extracted (all `count: 1`) /
+  8 proposed, all `候选流程：` plus the exact objective; 2 owner-rejected, 6
+  policy-rejected by the cleanup, **0 pending**
+  (`select type, count(*) from journal_events where type like 'memory.candidate.%' group by type;`).
+- **Benchmark run:** none — deterministic test-only eval; no model or provider
+  call.
+- **Execution chain:** read the pipeline/worker/governance/runtime/UI paths;
+  measured the live journal; launched a 3-reader audit plus 2 adversarial
+  reviewers (one workflow); wrote the trade-off and a failing eval before
+  implementing; added the helper, the no-op worker, the pipeline gate, the
+  governance cleanup, the conversation wiring, the dashboard filter, the gate
+  suite and 26 fixtures; regenerated the baseline and reviewed its diff; updated
+  README, the execution-flow, initial-runtime and RSI docs in both languages.
+  One workflow, 3 audit readers and 2 adversarial reviewers; one reviewer
+  overran and was stopped before returning, so its product-semantics questions
+  are covered by the trade-off's alternatives and reversal conditions instead.
+  No product model calls; wall clock about 50 minutes. Failures: the first gate
+  test simulated a behavior change by changing the expected value instead of the
+  text (fixed); golden-path and runtime failed 1-vs-0 until given scripted
+  miners; the first detector over-folded sentence periods and token symbols
+  (fixed, then pinned); the live journal gained an eighth proposal while the
+  work was in progress, so the final count is 8, not the 7 first measured.
+- **Pros:** the refusal is structural rather than prompt-only; the live journal
+  gives a before/after with 0 pending; the gate pins both directions and records
+  the known paraphrase/evidence false negatives; every new surface test uses the
+  real API.
+- **Cons / next time:** exact-match keeps paraphrases (measured and pinned, not
+  solved); a model can label a work-order copy as `fact` and pass the type guard;
+  enabling `=all` does not backfill old runs; conversation learning is still
+  unwired and needs the repair lane; the cleanup only runs in the companion
+  server.
+- **Reversal condition:** if measured journals show task-run candidates the
+  owner promotes (more than 20 % of mined tasks), give task mining a cheap
+  default miner; if the gate drops a legitimate memory, narrow it to the legacy
+  `候选流程：` template; delete the cleanup once no pending `候选流程：` proposal
+  remains and one release has passed.
+
+### 2026-11-18 — Worker capacity becomes one budget per clone home
+
+- **Goal / hypothesis:** the Main Agent cap bounds model turns but not worker
+  load: `runQuery` builds a `RuntimeAssembly` (and its `CapacityGate`) per
+  query, the Main Agent builds one per tool call and per turn, and the daemon
+  one at boot, so K concurrent Main Agent turns can each dispatch up to the
+  machine's full worker budget. Keying one gate by `paths.dataDirectory` should
+  make every assembly of a home draw from one measured limit, while the owner's
+  `maxConcurrentWorkers` pin still applies and still updates without a restart.
+- **Trade-off:** [2026-11-18 — One measured worker budget per clone home, not per assembly](../architecture/trade-offs.md#2026-11-18--one-measured-worker-budget-per-clone-home-not-per-assembly).
+- **Change:** `src/core/runtime-factory.ts` gains a module-level registry
+  `sharedCapacityByHome`: `acquireSharedCapacity` returns the entry for the
+  resolved `paths.dataDirectory` (gate + shared pin holder + refresh chain),
+  reference-counted per assembly; `releaseSharedCapacity` deletes it at zero.
+  `createRuntimeAssembly` now resolves the gate from that entry, reads
+  `maxConcurrentWorkers` into the shared pin holder, and makes
+  `refreshCapacityPin()` serialized per entry so the last requested refresh
+  wins. `assembly.close()` is now idempotent and releases the reference. The
+  gate's existing public `active`/`waiting` getters are read through each
+  assembly, so the test observes usage through the second assembly without any
+  new runtime API (an added `capacityUsage()` accessor was written, then
+  reverted to keep the change inside `runtime-factory.ts`).
+- **Eval:** `node --experimental-strip-types --test test/runtime-capacity-sharing.test.ts`
+  — 5 cases, all deterministic, no provider: (1) two assemblies created
+  concurrently over one home report the same gate and, pinned to 1, the second
+  acquire waits for the first release; (2) a config update plus
+  `refreshCapacityPin()` on one assembly changes the limit the other reports;
+  (3) `createKernelRuntimeSession` (the Main Agent's per-call assembly) draws
+  from the daemon's gate; (4) closing one assembly (and closing it twice) keeps
+  the shared gate alive, the last close retires it; (5) twelve temporary homes
+  leave no gate behind. **Before:** with `src/core/runtime-factory.ts` restored
+  from `HEAD` (the file was unmodified in the checkout), cases 1–4 fail
+  (`both assemblies must draw from one gate`; pin propagation; the kernel
+  session's active count; the retirement check) and case 5 passes trivially —
+  the old per-assembly gate has nothing to leak. **After:** 5/5 pass. Full
+  suite **798/798**, `npm run typecheck` clean, `npm run gate` PASS (13/14/5
+  cases, 100 % agreement, baseline unchanged).
+- **Benchmark run:** none — deterministic wiring eval; no provider, model,
+  dataset or scoring parameters involved.
+- **Execution chain:** read `runtime-factory.ts`, `capacity.ts`,
+  `application/run-query.ts`, `core/runtime.ts`, the daemon's assembly site,
+  `kernel-tools.ts`, `native-runtime.ts` and the repair lane to enumerate every
+  assembly creation; confirmed `runtime-factory.ts` had no in-flight changes
+  from the other session (git status); wrote the trade-off entry (EN + zh-CN);
+  implemented the registry and refcount; added `capacityUsage()`; wrote the
+  eval; ran it green, then re-ran against the pre-change factory to record the
+  before result and restored the file byte-for-byte (`cmp` verified); ran
+  typecheck, the full suite in the background and the gate. No model calls were
+  made; the whole chain is local CPU.
+- **Pros:** sharing is now the default, so a caller added later cannot silently
+  reintroduce a per-call gate; the pin remains per home and per acquisition;
+  the refcount keeps short-lived Main Agent sessions from destroying the
+  daemon's gate; the eval is cheap and directly names the concurrency claim.
+- **Cons / next time:** before the change the full suite already passed, which
+  is why the eval needed an explicit before-run against `HEAD` rather than
+  trusting red tests; the two-query oversubscription was never measured on a
+  live run (the trade-off's evidence is the code path, not an incident). A
+  live check — two tasks dispatching at once and reading the gate's active
+  count — would make the worker-load claim measured rather than inferred.
+- **Reversal condition:** see the trade-off entry.
+
+### 2026-11-18 — A conversation's main pane becomes a dispatch log
+
+- **Goal / hypothesis:** every new task dispatches its work as Kernel runs that
+  the sidebar already lists, so the chat transcript in the main pane repeats a
+  one-line summary while the two facts needed to judge a turn — the context the
+  model was given and the work it dispatched — live only in the audit tab.
+  Render one log entry per Main Agent turn (context, dispatch, result) instead
+  of chat bubbles; keep the task-record view and the decision cards unchanged.
+- **Trade-off:** [2026-11-18 — The main pane is a dispatch log, not a chat transcript](../architecture/trade-offs.md#2026-11-18--the-main-pane-is-a-dispatch-log-not-a-chat-transcript).
+- **Change:** `src/audit/turn-audit.ts` projects `conversationId`,
+  `compactions`, the prompt snapshot and the tool events onto each turn, keys
+  the projection by `turnAuditKey(conversationId, turnId)` (a turn id is only
+  unique per conversation), keeps a terminal record when a retry reuses its id,
+  and searches the new fields; `src/main-agent/turn-audit.ts` and
+  `src/main-agent/prompt-snapshot.ts` write `conversationId` into every
+  tool/compaction/snapshot event so the join is unambiguous;
+  `src/main-agent/native-runtime.ts` exports `MAIN_AGENT_HISTORY_TURNS` so the
+  log names the same history window the model sees; `src/companion-server.ts`
+  builds `SessionView.turns` from the turn ledger enriched by the journal,
+  folds legacy Pi history into history rows only when a turn's ledger row
+  reproduces them, resolves spawned run titles and statuses (marking hidden
+  runs instead of linking them), carries a work update's run status and the
+  owner-facing failure summary, bounds the log to the newest 60 turns and
+  20k-char fields, and exposes `turnsOmitted`; `apps/desktop/ui/app.js`
+  renders `turnLogMarkup` for conversations, turns the live pending card into a
+  log entry, links spawned runs, labels a cancelled update as cancelled,
+  reports the latest compaction instead of a summed total, shows the localized
+  failure summary with its next step, and gives the empty conversation the
+  welcome alone;
+  `apps/desktop/ui/components.css` styles the log and stacks the empty state.
+- **Eval:** `node --experimental-strip-types --test
+  test/main-agent-turn-audit.test.ts test/ui-structure.test.ts
+  test/companion-control-plane.test.ts test/prompt-snapshot.test.ts` —
+  **58/58**: projection of conversation id, compactions, snapshot, tool joins
+  and spawned runs; search by conversation id, material hash and tool name; a
+  conversation renders the log and no chat bubble; a task record still renders
+  its messages; the live echo is a plain-preview title; the log is bounded and
+  counts omitted turns; a hidden spawned run is reported as hidden; the session
+  view exposes the conversation's turns. **Before:** the new assertions fail on
+  the missing fields and the log markup; **after:** pass. Full suite `npm test`
+  **834/834**, `npm run typecheck`, `npm run gate` (13/14/5 cases, 100 %
+  agreement, baseline unchanged) pass.
+- **Benchmark run:** none — deterministic UI/audit eval; no provider, model,
+  dataset or scoring parameters involved.
+- **Execution chain:** read the desktop shell, session builder, turn audit,
+  prompt snapshot and run-trigger modules; wrote the trade-off entry; extended
+  the projection and view; wrote the log view and styles; ran the targeted
+  tests (one red on the removed local-echo assertion, fixed) and the full
+  suite; ran an adversarial review workflow (four lenses, every finding
+  re-verified against the code) which found and confirmed fourteen defects
+  across projection, session view, UI and docs. The first batch — turn ids
+  keyed per conversation, a reused id erasing a terminal record, a running turn
+  claiming no tools, cancelled updates labelled success, summed compaction
+  totals, search missing the prompt snapshot, and two documentation gaps — was
+  fixed and re-tested. The second batch — time-window-only legacy dedupe
+  dropping an answer a native turn did not reproduce, an unbounded session
+  payload, hidden spawned runs rendered as dead links, a failed turn shown as
+  a raw ledger error without the owner-facing next step, the "direct answer"
+  claim on failed turns, and the empty conversation's date divider laid out
+  beside the welcome — was fixed with new tests for the log bound and the
+  hidden run, then re-run. Verified in the in-app Browser on an isolated
+  preview home — two turns rendered as log entries with model, prompt
+  material, history count and reply, and no chat bubble. About 50 minutes
+  wall-clock in one working session; no model calls (cost: none) except the
+  review subagents. Concurrent work in the same checkout (task conversations,
+  decision dock, WhatsApp, capacity) changed `renderSession` under the change;
+  the test mocks were updated to match.
+- **Pros:** the main pane now states cause and effect for each turn, the audit
+  projection is reused (one shape for the desktop log and the audit tab), and a
+  turn the journal never recorded says so instead of inventing a clean run.
+- **Cons / next time:** the log is denser than chat for a short back-and-forth
+  reply, and legacy history rows cannot show tool calls because the Pi session
+  files never recorded them. The next time this is touched, run the usability
+  check with a real conversation rather than a mock model.
+- **Reversal condition:** see the trade-off entry.
+
+### 2026-11-18 — A read-only request is one step, and its run uses the turn's workspace
+
+- **Goal / hypothesis:** an explicit read-only request ("只读取 README.md… 不要修改任何文件")
+  must become one read-only step, not a draft work order whose required artifact a
+  read-only worker cannot produce; and a `dispatch_task` run must execute in the
+  workspace the prompt named, not the daemon's checkout.
+- **Trade-off:** [A read-only request is a step, and tools use the turn's workspace](../architecture/trade-offs.md#2026-11-18--a-read-only-request-is-a-step-and-tools-use-the-turns-workspace).
+- **Change:** `src/planning/fallback-planner.ts` (read-only/analysis-only branch
+  → one `read-only-lookup` step with `context-researcher`; generic containers no
+  longer delivery terms; no-write clause stripped before delivery matching),
+  `src/main-agent/native-runtime.ts` (`nativeTools` receives `options.cwd`),
+  `src/main-agent/tools/kernel-tools.ts` (`KernelToolsOptions.workspacePath`;
+  `createKernelRuntime`/`createKernelRuntimeSession` take it; `withKernel` passes
+  it), `src/core/runtime.ts` (`workspacePath` getter; `execution.started`
+  records the workspace for single-agent steps).
+- **Eval:** `node --experimental-strip-types --test test/fallback-planner.test.ts`
+  **10/10** (an explicit read-only request and a read-only code review are one
+  read-only step; a named output target still gets a draft; a no-write phrase
+  containing 写 does not become delivery); `test/main-agent.test.ts` **37/37**
+  (including the new `createKernelRuntimeSession(data, workspace)` case);
+  `native-runtime`/`dispatch-task`/`native-main-agent` **37/37**. Before:
+  `c03c7cea` and `cd74804b` were a `prepare` step with a `draft` subagent and
+  `local-draft` required, and failed with "Missing required artifact evidence";
+  `b1e04b18` was planned read-only but its worker saw
+  `/Users/user/study/clone-ai` and reported the README "outside the workspace".
+  After, the live check on `/Users/user/work/knowledge_base` (native /
+  `openai/gpt-6.1-terra`, `http://127.0.0.1:3425`, the same request) produced
+  **one** run (`99504e85`): a single `read-only-lookup` step (`delegated: false`,
+  `risk: read_only`) that read the absolute README, recorded the observation,
+  wrote the three-sentence answer as `execution.completed`, and reached
+  `waiting_review`. No failed draft run. Full `npm test` **829/829**,
+  `npm run typecheck` and `npm run gate` pass.
+- **Benchmark run:** none — a live acceptance check, not a benchmark; the model,
+  endpoint, workspace, request and result are recorded in the Eval above.
+- **Execution chain:** the earlier live verification (`496d2061`) exposed the
+  `join`/`resolve` bug; this check exposed the tool-runtime workspace fallback
+  (`dispatch_task` built its runtime with `process.cwd()`). Traced the call
+  chain `nativeTools` → `dispatchTaskTool` → `runQuery` and
+  `withKernel` → `createKernelRuntimeSession` → `createRuntimeAssembly`,
+  added the optional workspace to both, then wrote the deterministic tests and
+  repeated the live check. The other session's concurrent planner edits
+  (generic containers removed, analysis-only branch) were integrated rather than
+  duplicated. `npm run typecheck` passes.
+- **Pros:** the failing first attempt and its review noise disappear; the plan
+  shape now matches the request; the audit can show which workspace a step ran
+  in.
+- **Cons / next time:** the intent check is lexical; a request that says only a
+  read-only marker but needs an output must name the output. The workspace was
+  added to tool runtimes one call site at a time; a caller that forgets it still
+  falls back to `process.cwd()`, which is the exact failure this fixes. The
+  `NoMiningWorker` test failure in the shared checkout belongs to the other
+  session's memory change, not this one.
+- **Reversal condition:** copied from the trade-off entry.
+
+### 2026-11-18 — The Main Agent reads its workspace, and a review carries the answer
+
+- **Goal / hypothesis:** a request about a project outside the configured
+  workspace must not be answered by reading the daemon's checkout, and it must
+  not come back as a review with only criteria and evidence. Pass the running
+  workspace into the main-agent prompt, tell the worker not to substitute the
+  workspace for a named project, and journal a single-agent step's answer so the
+  review card can show it.
+- **Trade-off:** [The Main Agent knows its workspace, and a review carries the answer](../architecture/trade-offs.md#2026-11-18--the-main-agent-knows-its-workspace-and-a-review-carries-the-answer).
+- **Change:** `src/companion-server.ts` (both main-agent handlers pass
+  `workspacePath`; `execution.completed` trace label; `runResultByRun`;
+  `buildConversation` and `mainConversationReviews` carry the answer; PATCH
+  returns `restartRequired`), `src/application/run-main-query.ts` (the turn gets
+  `cwd = workspacePath`), `src/main-agent/prompt.ts` (workspace guidance),
+  `src/workers/native-agent-worker.ts` (workspace and no-substitution lines),
+  `src/core/runtime.ts` and `contracts.ts` (`execution.completed`),
+  `src/workers/native-worker-factory.ts` (file tools resolve instead of join, so
+  an absolute path inside the workspace or a granted root reaches the file the
+  gate approved), `apps/desktop/ui/app.js` (review result, sticky decision dock,
+  restart notice), `src/desktop/ui-locale.ts` (two strings), `style.css`.
+- **Eval:** `node --experimental-strip-types --test
+  test/companion-main-agent.test.ts` — the live prompt snapshot for turn
+  `4c0ae6ca` (`a063d154…`) had `instructionSources: ["AGENTS.md"]` loaded from
+  `/Users/user/study/clone-ai` and no workspace line; after the change the new
+  case captures a system prompt containing the configured workspace's
+  `AGENTS.md` marker and `Current workspace: <workspace>`, and not the
+  checkout's rules. `test/run-query-routing.test.ts` — the live run `062716a9`
+  has zero `execution.completed` events; after the change the new case finds one
+  whose summary is the scripted worker's answer. `test/main-conversation-approvals.test.ts`
+  — reviews carry `result`, and subagent summaries are joined only when no
+  step-level answer exists. `test/companion-config-api.test.ts` —
+  `restartRequired: true` for a different path, absent for the running path.
+  `test/ui-structure.test.ts` and `test/native-agent-worker.test.ts` pass;
+  `test/native-worker-tools.test.ts` **6/6** pins both the absolute path inside
+  the workspace and a granted read root outside it. `npm run typecheck` exit 0;
+  `npm run gate` PASS (agreement 100%, baseline unchanged); full `npm test` **791/791**. An earlier full run reported
+  **790/791**: the one failure was `test/whatsapp-bridge.test.ts`
+  `EADDRINUSE 127.0.0.1:4318`, held by another session's `companion-dev`; it
+  passed once that server stopped, so the failure was environmental, not this
+  change. After the other session's in-flight memory and planner changes
+  settled, the full suite is **829/829**; this change's tests all pass. Live check:
+  `CLONE_AI_NATIVE_MODEL=openai/gpt-6.1-terra
+  CLONE_AI_NATIVE_BASE_URL=http://127.0.0.1:3425 node --experimental-strip-types
+  scripts/live-workspace-check.mjs` (fresh temp workspace, the original
+  request). First turn (before the "no filesystem tool" line): honest reply
+  asking for the path, but one dispatched run failed (`f1a556f3`, no false
+  review). Second turn (after): the same request asked for the path or a switch
+  and dispatched nothing (`newRuns: []`).
+  Live app verification: `npm run desktop:dev` with
+  `CLONE_AI_WORKSPACE=/Users/user/work/knowledge_base`. The first bounded
+  request ("只读取工作区根目录的 README.md…") produced run `b1e04b18`, which
+  failed because `join` turned the plan's absolute path into a doubled path;
+  after the `resolve` fix, run `496d2061` read
+  `/Users/user/work/knowledge_base/README.md` (`isError: false`), journaled
+  `execution.completed` with a three-sentence answer, reached `waiting_review`
+  at 09:50:25, and was accepted by the owner at 09:50:39. The task record shows
+  the answer above the acceptance line; `runResultByRun` over the live journal
+  returns the same answer for that run.
+- **Benchmark run:** none — this is a live acceptance check, not a benchmark;
+  the model, endpoint, workspace and result are recorded in the Eval above. No
+  dataset, scoring parameters or result file apply.
+- **Execution chain:** read the live journal (`~/.clone/journal.sqlite3`) and
+  the prompt snapshot for turn `4c0ae6ca`, matched the nine evidence locators to
+  `/Users/user/Documents/Clone AI`, traced the missing completion through
+  `consumeExecutionEvents` → `executeSingleAgentUnlocked`, then wrote the
+  trade-off, the code and the tests. Two concurrent editor sessions were
+  writing `companion-server.ts` and `app.js`; each edit re-read the file before
+  applying. No retries or failed tests other than the external port conflict.
+- **Pros:** every claim is tied to a run id or a test; the workspace boundary is
+  stated to both the planner and the worker; the review has content.
+- **Cons / next time:** the fix was hand-written, not produced by the repair
+  lane: the run was accepted, so it has no failed trace and `npm run traces --
+  list` cannot offer it to the lane. The lane's input selector needs a
+  "verification accepted without a result" class. The UI dock is verified
+  structurally, not clicked in the desktop app; the app must restart to load the
+  new client and the new workspace setting. The live check covers one model and
+  one phrasing; broader prompt-compliance is not benchmarked. A separate
+  failure was observed twice: the Main Agent's first `dispatch_task` for the
+  read-only request was planned as a draft work order with an artifact contract
+  and failed ("Subagent draft did not satisfy its artifact contract"). Its
+  `propose_work_plan` retry succeeded. That planner/routing issue is not fixed
+  here.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-18 — Each task gets its own Main Agent, sized by the machine
 
 - **Goal / hypothesis:** one global prompt lock and one shared transcript made
@@ -39,54 +570,87 @@ file keeps every attempt, including the ones that did not work.
   per-conversation locks plus a cross-process slot pool measured from the
   machine, and let "新建任务" create a real conversation.
 - **Trade-off:** [Each task runs its own Main Agent, sized by the machine](../architecture/trade-offs.md#2026-11-18--each-task-runs-its-own-main-agent-sized-by-the-machine).
-- **Change:** `src/main-agent/conversation.ts` (default id and request
-  validation), `main-agent-capacity.ts` (deterministic CPU/load/memory formula
-  and the `maxConcurrentMainAgents` pin), `main-agent-slots.ts` (numbered
-  cross-process slot files, stale-owner reclaim, abortable wait),
-  `prompt-lock.ts` (per-conversation hashed lock files; the default path is
-  preserved), `run-main-query.ts` (lock → slot → turn), `turn-audit.ts`
-  (conversationId on started, completed and interrupted rows and journal
-  events), `native-runtime.ts` (history and `search_history` scoped to the
-  conversation; tools receive the id), `dispatch-task.ts` and `kernel-tools.ts`
-  (run triggers carry the conversation id), `work-updates.ts` (updates carry
-  it), `companion-server.ts` (stream/query/interruption accept `conversationId`;
-  the dashboard groups conversations; session GET/DELETE/restore resolve
-  conversation ids from the ledger; a task view includes the owner's ledger
-  messages), `clone-config.ts` (the pin), `apps/desktop/ui/app.js` (new-task
-  mints an id, sends it and selects the conversation; sidebar and topbar
-  labels).
+- **Change:** `src/main-agent/conversation.ts` (default id, namespace prefixes and
+  request validation), `file-lock.ts` (directory locks: atomic `mkdir`, owner
+  token, steal-mutex reclamation, grace for a lock caught mid-creation),
+  `main-agent-capacity.ts` (deterministic CPU/load formula and the
+  `maxConcurrentMainAgents` pin; memory is not a bound because macOS reports
+  only free pages and workers own the memory gate), `main-agent-slots.ts`
+  (numbered slot directories allocated under a short pool mutex, live-count
+  admission so a shrinking limit really stops admitting, stale-owner reclaim,
+  abortable wait and a wait callback), `prompt-lock.ts` (per-conversation hashed
+  lock directories; the default path is preserved), `run-main-query.ts` (lock →
+  slot → turn; queued callback), `turn-audit.ts` (conversationId on started,
+  completed and interrupted rows and journal events; status precedence so a late
+  interruption cannot erase a reply; only a started turn can be interrupted;
+  serialized journal appends), `native-runtime.ts` (history and
+  `search_history` scoped to the conversation; tools receive the id; spawned
+  runs attributed by trigger, not by a global before/after diff),
+  `dispatch-task.ts` and `kernel-tools.ts` (run triggers carry the conversation
+  id; history tools accept it), `run-triggers.ts` (run → conversation map
+  shared by the daemon and the turn loop), `work-updates.ts` (updates carry the
+  id), `companion-server.ts` (stream/query/interruption accept `conversationId`;
+  an in-flight reservation closes the queued-turn idempotency window; a queued
+  turn emits SSE; hidden conversations reject sends and hide their later runs;
+  the dashboard groups conversations without merging them; session
+  GET/DELETE/restore resolve ids from the ledger; the main projection is
+  conversation-scoped; approvals ignore hidden runs; the pin can be cleared
+  with 0), `conversation-history.ts` (optional conversation filter for
+  `readConversation`, `searchHistory`, `describeHistory` and `ownerStated`),
+  `whatsapp-bridge.ts` (one conversation per WhatsApp chat),
+  `clone-config.ts` (the pin), `apps/desktop/ui/app.js` (new-task mints an id,
+  sends it and selects the conversation; streams are tracked per conversation
+  so a second task can start while the first runs; queued events update the
+  pending card; send-from-a-task routes to its parent conversation; sidebar and
+  topbar labels).
 - **Eval:** `node --experimental-strip-types --test test/main-agent-capacity.test.ts
-  test/main-agent-slots.test.ts test/prompt-lock.test.ts
-  test/native-main-agent.test.ts test/companion-control-plane.test.ts` — the
-  conversation-isolation cases cannot exist before the change: `buildHistory`
-  reads every completed row and `withMainAgentLock` refuses the second prompt
-  (`test/prompt-lock.test.ts`). After: **3/3**, **4/4**, **4/4**, **8/8**,
-  **18/18**. Full suite **772/772**, `npm run typecheck` pass, `npm run gate`
-  PASS (`verdict 13 cases · agreement 100%`, `policy 14 · 100%`, `audit 5 ·
-  100%`, baseline unchanged). Browser check on the isolated companion at
-  `localhost:4321`: the sidebar listed `conversation-verify-a` and
-  `conversation-verify-b` separately; each opened only its own two messages;
-  "新建任务" sent `{conversationId: "conversation-4a0c…", text, turnId}` and the
-  failed turn became its own sidebar entry titled from the owner's text.
-- **Benchmark run:** none — deterministic tests and a browser check; no
-  provider, model, dataset or scoring parameters were involved (the browser
-  failure path deliberately did not call a provider).
+  test/main-agent-slots.test.ts test/main-agent-slots-cross-process.test.ts
+  test/prompt-lock.test.ts test/native-main-agent.test.ts
+  test/run-triggers.test.ts` — **21/21**, including a real two-process slot test
+  and conversation-isolation cases that cannot exist before the change:
+  `buildHistory` reads every completed row and `withMainAgentLock` refuses the
+  second prompt (`test/prompt-lock.test.ts`). `test/companion-control-plane.test.ts`
+  **22/22** (separate histories; the main conversation does not absorb a task;
+  same-titled failed conversations stay separate; a hidden conversation rejects
+  a send; a bare run id is refused as a conversation);
+  `test/companion-config-api.test.ts` **20/20** (the pin can be set and cleared).
+  Full suite **791/791**, `npm run typecheck` pass, `npm run gate` PASS
+  (`verdict 13 cases · agreement 100%`, `policy 14 · 100%`, `audit 5 · 100%`,
+  baseline unchanged). Browser check on a fresh companion with a local
+  SSE stub: two tasks were started 350 ms apart; both completed and appeared as
+  separate conversations; the second stayed selected when the first finished;
+  each task's view contained only its own turn; the main conversation contained
+  neither, and its sidebar title stayed its own.
+- **Benchmark run:** none — deterministic tests and a browser check; the browser
+  used a local stub model, not a provider, and no scoring parameters apply.
 - **Execution chain:** read the lock, ledger, history, dashboard, tool and UI
-  paths; wrote the trade-off entries; implemented three modules and wired them
-  through the turn path, dispatch triggers, work updates, server and UI; added
-  five test files/cases; ran the targeted tests, the full suite, typecheck and
-  gate; inspected the desktop in the preview with an isolated clone home. An
-  independent three-lens design review (concurrency, context, product) ran in
-  parallel and its findings were reconciled before the final run. No model
+  paths; wrote the trade-off entries; implemented a file-per-slot first cut, then
+  ran an independent three-lens design review (concurrency, context, product) in
+  parallel with the implementation. The review found: an empty-owner creation
+  window, unconditional unlink on release/reclaim, admission that ignored slots
+  above a shrunken limit, cross-turn run attribution, phantom interruption rows,
+  a macOS `freemem()` bound that serialized everything, an unscoped main
+  transcript, a single global UI stream, and an invisible capacity wait. The
+  first cut was replaced (directory locks with a steal mutex and owner tokens;
+  live-count admission; trigger-based attribution; started-only interruptions
+  with status precedence; CPU/load-only capacity; scoped history; per-conversation
+  UI streams; queued SSE; in-flight reservation; deletion and config fixes),
+  then the targeted tests, full suite, typecheck and gate were rerun. No model
   tokens were spent by the implementation; the review agents read code only.
-- **Pros:** one task no longer blocks another, and each transcript is the
-  task's own; the capacity bound is cross-process and testable; old homes keep
-  working because unscoped rows belong to the main conversation.
-- **Cons / next time:** a session GET scans the ledger on every request to
-  decide conversation-versus-run, and each dispatched run still samples its own
-  worker capacity — a process-wide worker gate is a separate change. The
-  new-task flow was verified with a deliberately aborted stream, not a live
-  model reply.
+- **Pros:** one task no longer blocks another, each transcript is the task's own,
+  and the desktop can actually run two tasks at once; the capacity bound is
+  cross-process and testable; old homes keep working because unscoped rows belong
+  to the main conversation.
+- **Cons / next time:** the conversation lock is taken before the slot, so a
+  second prompt in the same task during a capacity wait gets a 409 rather than
+  waiting; the cap is per clone home, not machine-wide; a turn that no caller
+  aborts can hold a slot until it ends; each dispatched run still samples its own
+  worker capacity, so the worker gate is not shared across concurrent turns; a
+  session GET scans the ledger to decide conversation-versus-run; the dashboard
+  truncates to 40 rows, so a selection outside that slice can fall back to main.
+  The first implementation was shipped to review before the creation-window and
+  projection bugs were found; a two-process test should have been written with
+  the first cut, not after the review.
 - **Reversal condition:** copied from the trade-off entry.
 
 ### 2026-11-18 — The verification record stops repeating itself

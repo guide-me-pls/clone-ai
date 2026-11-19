@@ -13,6 +13,7 @@ import {
   type RunningCompanionServer,
 } from "../src/companion-server.ts";
 import { createJournalStore } from "../src/core/sqlite-journal.ts";
+import { beginMainAgentTurn, finishMainAgentTurn, appendMainAgentTurnRecord } from "../src/main-agent/turn-audit.ts";
 import { companionFetch } from "./helpers/companion-api.ts";
 
 async function companion(t: TestContext): Promise<{ url: string; token: string; dataDirectory: string }> {
@@ -135,6 +136,16 @@ test("server mode accepts the UI token header and a fixed public webhook", async
 
 test("an interrupted Main Agent turn is persisted and survives a restart", async (t) => {
   const { url, token, dataDirectory } = await companion(t);
+  // A turn that started is what an interruption may close; a request rejected
+  // before it started records nothing.
+  // 中断可以关闭的是已经开始的回合；在开始之前被拒绝的请求不记录任何东西。
+  await appendMainAgentTurnRecord(dataDirectory, {
+    id: "interrupted-turn-1",
+    text: "整理今天需要推进的事情",
+    status: "started",
+    startedAt: new Date().toISOString(),
+    ownerPid: process.pid,
+  });
   const response = await companionFetch(url, token, "/api/main-agent/interruptions", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -182,17 +193,20 @@ test("a completed remote turn is returned without invoking the model again", asy
 test("a terminal turn is not overwritten by a later interruption report", async (t) => {
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-api-turn-terminal-"));
   t.after(async () => rm(dataDirectory, { recursive: true, force: true }));
-  await recordMainAgentClientInterruption(dataDirectory, {
-    turnId: "same-turn",
+  const turn = await beginMainAgentTurn({
+    dataDirectory,
     text: "第一条",
-    error: "连接中断",
+    source: "cli",
+    turnId: "same-turn",
   });
+  await finishMainAgentTurn(turn, { status: "completed", reply: "答案" });
   const second = await recordMainAgentClientInterruption(dataDirectory, {
     turnId: "same-turn",
     text: "第二条",
     error: "再次中断",
   });
-  assert.equal(second.text, "第一条");
+  assert.equal(second?.status, "completed");
+  assert.equal(second?.reply, "答案");
   assert.equal((await readMainAgentTurnRecords(dataDirectory)).length, 1);
 });
 
@@ -228,7 +242,8 @@ test("a persisted Main Agent session is still visible after reopening", async (t
 
   const dashboard = await companionFetch(url, token, "/api/dashboard");
   const dashboardBody = await dashboard.json() as { sessions: Array<{ id: string; title: string }> };
-  assert.ok(dashboardBody.sessions.some((session) => session.id === "main-agent-conversation"));
+  // The conversation is not a sidebar row; its view must still reopen. 对话不是侧栏行，但它的视图仍能重新打开。
+  assert.equal(dashboardBody.sessions.some((session) => session.id === "main-agent-conversation"), false);
 
   const conversation = await companionFetch(url, token, "/api/sessions/main-agent-conversation");
   const conversationBody = await conversation.json() as {
@@ -292,14 +307,29 @@ test("the owner can change the workspace and locale through the API", async (t) 
     body: JSON.stringify({ workspacePath: "/tmp/another-project", locale: "en" }),
   });
   assert.equal(updated.status, 200);
-  assert.equal((await updated.json() as { config: { locale: string } }).config.locale, "en");
+  const updatedBody = await updated.json() as { config: { locale: string }; restartRequired?: boolean };
+  assert.equal(updatedBody.config.locale, "en");
+  // The runtime captured its workspace at boot; a different saved path cannot
+  // be active until the app restarts, and the response must say so.
+  // Runtime 在启动时固定了工作区；保存另一个路径在重启前无法生效，响应必须说明这一点。
+  assert.equal(updatedBody.restartRequired, true);
 
   // The change is durable, not just echoed back.
   // 变更是持久的，而不只是被回显。
-  const reread = await (await companionFetch(url, token, "/api/config")).json() as { config: { workspacePath: string; locale: string } };
+  const reread = await (await companionFetch(url, token, "/api/config")).json() as { config: { workspacePath: string; locale: string }; paths: { workspacePath: string } };
   assert.equal(reread.config.workspacePath, "/tmp/another-project");
   assert.equal(reread.config.locale, "en");
   assert.equal((await (await companionFetch(url, token, "/api/config")).json() as { ui: { strings: Record<string, string> } }).ui.strings["new-session"], "New task");
+
+  // Saving the path the runtime already uses is not a pending change.
+  // 保存 Runtime 已在使用的路径不算待生效变更。
+  const same = await companionFetch(url, token, "/api/config", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ workspacePath: reread.paths.workspacePath }),
+  });
+  assert.equal(same.status, 200);
+  assert.equal((await same.json() as { restartRequired?: boolean }).restartRequired, undefined);
 
   const empty = await companionFetch(url, token, "/api/config", {
     method: "PATCH",
@@ -434,6 +464,72 @@ test("memory candidates can be listed and promoted through the API", async (t) =
   assert.equal(after.candidates.length, 0);
 });
 
+test("starting the server retires legacy objective-restatement candidates once", async (t) => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-api-memory-cleanup-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "clone-api-memory-cleanup-ws-"));
+  let server: RunningCompanionServer | undefined;
+  t.after(async () => {
+    await server?.close();
+    await rm(dataDirectory, { recursive: true, force: true });
+    await rm(workspacePath, { recursive: true, force: true });
+  });
+  const objective = "只读审查 knowledge-base 项目的 RAG 实现，优先复用已有审查结果并给出可验证的优化建议。";
+  const createdAt = new Date().toISOString();
+  const journal = createJournalStore(dataDirectory);
+  await journal.append({
+    type: "task.created",
+    taskId: "task-legacy",
+    payload: { id: "task-legacy", triggerId: "trigger-legacy", title: "Review", objective, acceptanceCriteria: [], createdAt },
+  });
+  await journal.append({
+    type: "run.created",
+    runId: "run-legacy",
+    taskId: "task-legacy",
+    payload: { id: "run-legacy", taskId: "task-legacy", status: "completed", createdAt, updatedAt: createdAt },
+  });
+  await journal.append({
+    type: "memory.candidate.proposed",
+    runId: "run-legacy",
+    payload: {
+      id: "c-legacy", runId: "run-legacy", sourceEvidenceIds: ["ev-1"], summary: `候选流程：${objective}`,
+      confidence: "low", status: "proposed", createdAt,
+    },
+  });
+  await journal.append({
+    type: "memory.candidate.proposed",
+    runId: "run-legacy",
+    payload: {
+      id: "c-durable", runId: "run-legacy", sourceEvidenceIds: ["ev-1"], summary: "发布前先跑完整测试；这次跳过测试导致了一次回归。",
+      confidence: "high", status: "proposed", createdAt, type: "procedure",
+    },
+  });
+  (journal as { close?: () => void }).close?.();
+
+  server = await startCompanionServer({ port: 0, dataDirectory, workspacePath });
+  const listed = await (await companionFetch(server.url, server.token, "/api/memory/candidates")).json() as { candidates: Array<{ id: string }> };
+  assert.deepEqual(listed.candidates.map((item) => item.id), ["c-durable"], "the objective copy must not reach the owner's review list");
+
+  // The dashboard and attention list are separate read surfaces; neither may
+  // keep presenting a rejected work-order copy as current.
+  // Dashboard 与注意力列表是独立的读取面；两者都不得把被拒绝的工作单复制继续当作当前候选。
+  const dashboard = await (await companionFetch(server.url, server.token, "/api/dashboard")).json() as { memories?: Array<{ summary: string }> };
+  assert.equal((dashboard.memories ?? []).some((memory) => memory.summary.includes("候选流程")), false);
+  const attention = await (await companionFetch(server.url, server.token, "/api/attention")).json() as {
+    items: Array<{ title?: string; detail?: string }>;
+  };
+  assert.equal(attention.items.some((item) => `${item.title ?? ""}${item.detail ?? ""}`.includes("候选流程")), false);
+
+  // The decision is journaled, not merely hidden from the API.
+  // 该决定写入 Journal，而不仅仅是从 API 隐藏。
+  const reopened = createJournalStore(dataDirectory);
+  try {
+    const rejected = (await reopened.list()).filter((event) => event.type === "memory.candidate.rejected");
+    assert.deepEqual(rejected.map((event) => (event.payload as { candidateId?: string }).candidateId), ["c-legacy"]);
+  } finally {
+    (reopened as { close?: () => void }).close?.();
+  }
+});
+
 test("connector declarations round-trip through the API and reject credential values", async (t) => {
   const { url, token } = await companion(t);
 
@@ -498,4 +594,29 @@ test("a one-character main-agent request is not rejected as too short", () => {
   assert.equal(normalizeMainAgentRequestText("  ?  "), "?");
   assert.equal(normalizeMainAgentRequestText(" \n\t "), "");
   assert.equal(normalizeMainAgentRequestText(undefined), "");
+});
+
+test("the Main Agent and worker concurrency pins can be set and cleared", async (t) => {
+  const { url, token } = await companion(t);
+  const set = await companionFetch(url, token, "/api/config", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ maxConcurrentMainAgents: 2, maxConcurrentWorkers: 3 }),
+  });
+  assert.equal(set.status, 200);
+  const setConfig = (await set.json() as { config: { maxConcurrentMainAgents?: number; maxConcurrentWorkers?: number } }).config;
+  assert.equal(setConfig.maxConcurrentMainAgents, 2);
+  assert.equal(setConfig.maxConcurrentWorkers, 3);
+
+  // 0 means auto, and a lone 0 is a valid update that clears the pin.
+  // 0 表示自动；单独一个 0 是合法的更新，会清除固定值。
+  const clear = await companionFetch(url, token, "/api/config", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ maxConcurrentMainAgents: 0 }),
+  });
+  assert.equal(clear.status, 200);
+  const cleared = (await clear.json() as { config: Record<string, unknown> }).config;
+  assert.equal("maxConcurrentMainAgents" in cleared, false);
+  assert.equal(cleared.maxConcurrentWorkers, 3);
 });

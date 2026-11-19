@@ -86,6 +86,12 @@ export interface MainAgentPromptSnapshot {
   toolsHash: string;
   materialHash: string;
   toolNames: string[];
+  /** Instruction files that contributed, by path. 贡献了内容的指令文件路径。 */
+  instructionSources: string[];
+  /** Instruction-loader warnings, if any. 指令加载器警告（如有）。 */
+  instructionWarnings: string[];
+  /** Whether a situation briefing was part of the materials. 情境简报是否属于材料。 */
+  hasBriefing: boolean;
   modelId?: string;
   provider?: string;
   effort?: string;
@@ -97,6 +103,12 @@ export interface MainAgentPromptSnapshot {
 export interface PromptSnapshotEvent extends MainAgentPromptSnapshot {
   /** Correlates the snapshot with the desktop turn ledger, when there is one. 有桌面回合账本时，用它把快照与回合对应起来。 */
   turnId?: string;
+  /**
+   * The conversation the turn belongs to. A turn id is only unique per
+   * conversation, so the correlation needs both.
+   * 回合所属的对话。回合 id 只在对话内唯一，因此对应关系需要两者。
+   */
+  conversationId?: string;
 }
 
 /**
@@ -158,6 +170,9 @@ export async function capturePromptSnapshot(
     toolsHash: hashCanonical(materials.tools),
     materialHash,
     toolNames: materials.tools.map((tool) => tool.name),
+    instructionSources: (materials.instructionSources ?? []).map((source) => source.path),
+    instructionWarnings: materials.instructionWarnings ?? [],
+    hasBriefing: (materials.briefing ?? "").trim().length > 0,
     ...(materials.modelId === undefined ? {} : { modelId: materials.modelId }),
     ...(materials.provider === undefined ? {} : { provider: materials.provider }),
     ...(materials.effort === undefined ? {} : { effort: materials.effort }),
@@ -175,13 +190,14 @@ export async function capturePromptSnapshot(
 export async function recordPromptSnapshot(
   dataDirectory: string,
   materials: MainAgentPromptMaterials,
-  options: { turnId?: string } = {},
+  options: { turnId?: string; conversationId?: string } = {},
 ): Promise<PromptSnapshotEvent | undefined> {
   try {
     const snapshot = await capturePromptSnapshot(dataDirectory, materials);
     const event: PromptSnapshotEvent = {
       ...snapshot,
       ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
+      ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
     };
     const journal = createJournalStore(dataDirectory);
     try {

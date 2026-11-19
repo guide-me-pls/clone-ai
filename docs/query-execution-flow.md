@@ -91,12 +91,14 @@ The verifier is intentionally an initial layer: it checks evidence contracts,
 not yet the contents of a file, a real test suite, or a third-party connector
 state. Those are the next production verifiers.
 
-### 9. A completed Run proposes memory asynchronously
+### 9. A completed Run requests memory extraction asynchronously
 
-Completion queues a memory-extraction request. The worker creates proposed
-candidates with evidence provenance; it never writes personal memory directly.
-The desktop companion can synchronize candidates into the inspectable local
-memory store, where the owner can edit or archive them.
+Completion queues a memory-extraction request. When a miner is configured, the
+worker creates proposed candidates with evidence provenance; without one it
+proposes nothing, because a finished task's objective is a work order, not a
+memory. It never writes personal memory directly. The desktop companion can
+synchronize candidates into the inspectable local memory store, where the owner
+can edit or archive them.
 
 ## State machine
 

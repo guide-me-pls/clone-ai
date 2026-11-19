@@ -289,6 +289,12 @@ export type JournalEventType =
   | "execution.started"
   | "execution.failed"
   | "execution.progress"
+  // The single-agent step's own final answer. Without it the run kept only the
+  // evidence it touched, and the review card asked the owner to decide about a
+  // result that was stored nowhere.
+  // 单 Agent 步骤自己的最终回答。没有它，Run 只留下碰过的证据，复核卡会让所有者对一个
+  // 没有存到任何地方的结果做决定。
+  | "execution.completed"
   // Why a single-agent step ended the run. Without it a failed run only said "failed".
   // 单 Agent 步骤为何让 Run 失败。没有它，失败的 Run 只会说一句 "failed"。
   | "execution.failed"

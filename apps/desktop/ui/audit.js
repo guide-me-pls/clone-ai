@@ -460,9 +460,55 @@
   }
 
   /** Main Agent turns: input, reply, tools, model usage. 主 Agent 回合：输入、回复、工具、模型用量。 */
+  function assemblyBlock(turn) {
+    // "How was this task assembled" is not one field: it is the conversation,
+    // the history window, the prompt materials, the offered tools and the runs
+    // the turn dispatched. This block is the answer in one place.
+    // "这个任务怎么组装的"不是一个字段：它是对话、历史窗口、提示词材料、工具表与本回合派发的
+    // Run。这个块把这些放在一处。
+    const snapshot = turn.snapshot;
+    const conversation = turn.conversationId === "main-agent-conversation"
+      ? "主对话"
+      : turn.conversationId;
+    const history = turn.historyMessages === undefined && turn.historyTurns === undefined
+      ? "未记录"
+      : `${num(turn.historyMessages ?? 0)} 条消息 · ${num(turn.historyTurns ?? 0)} 个已完成回合`;
+    const compactions = turn.compactions.length ? ` · ${num(turn.compactions.length)} 次压缩` : "";
+    const model = [turn.modelId ?? snapshot?.modelId, turn.provider ?? snapshot?.provider, turn.effort ?? snapshot?.effort]
+      .filter((value) => typeof value === "string" && value.length > 0).join(" · ") || "默认模型";
+    const materials = snapshot
+      ? [
+          `charter v${snapshot.charterVersion}`,
+          snapshot.hasBriefing ? "情境简报" : "无简报",
+          ...snapshot.instructionSources,
+        ].join(" · ")
+      : "未记录（提示词快照捕获失败）";
+    const warnings = snapshot?.instructionWarnings?.length
+      ? `<dd class="au-assembly-warn">${esc(snapshot.instructionWarnings.join("；"))}</dd>`
+      : "";
+    const tools = snapshot?.toolNames?.length
+      ? `<dd>${num(snapshot.toolNames.length)} 个：${esc(snapshot.toolNames.join("、"))}</dd>`
+      : "<dd>未记录</dd>";
+    const runs = turn.runs ?? [];
+    const runRows = runs.length
+      ? `<ul class="au-assembly-runs">${runs.map((run) => `<li><code>${esc(run.id.slice(0, 8))}</code> <b>${esc(run.title ?? run.id)}</b>${run.status ? statusBadge(run.status) : ""}${run.steps?.length ? `<small>${esc(run.steps.join(" → "))}</small>` : ""}</li>`).join("")}</ul>`
+      : "本轮未派发任务";
+    const material = snapshot?.materialHash ? ` · 材料 ${snapshot.materialHash.slice(0, 8)}` : "";
+    return `<details class="au-assembly"><summary>任务组装 · ${num(runs.length)} 个 Run${material}</summary>
+      <dl class="au-assembly-grid">
+        <dt>对话</dt><dd>${esc(conversation)}</dd>
+        <dt>历史窗口</dt><dd>${esc(history + compactions)}</dd>
+        <dt>模型</dt><dd>${esc(model)}</dd>
+        <dt>提示词材料</dt><dd>${esc(materials)}</dd>
+        ${warnings}
+        <dt>工具表</dt>${tools}
+      </dl>
+      <p class="au-note">派发的任务</p>${runRows}
+    </details>`;
+  }
   function turnsView() {
     const turns = state.turns ?? [];
-    const toolbar = `<div class="au-toolbar"><input type="search" data-au-turn-query placeholder="搜索输入、回复、工具、来源、模型" value="${esc(state.turnQuery)}" aria-label="搜索主 Agent 回合" /><span class="au-count-note">显示 ${num(turns.length)} / 共 ${num(state.turnTotal)} 条</span></div>`;
+    const toolbar = `<div class="au-toolbar"><input type="search" data-au-turn-query placeholder="搜索输入、回复、工具、模型、对话、Run、组装" value="${esc(state.turnQuery)}" aria-label="搜索主 Agent 回合" /><span class="au-count-note">显示 ${num(turns.length)} / 共 ${num(state.turnTotal)} 条</span></div>`;
     if (!turns.length) {
       return `${toolbar}<p class="au-empty">${state.turnQuery.trim() ? "没有符合条件的回合记录。" : "还没有主 Agent 回合记录。CLI、桌面或 WhatsApp 的每一次对话都会出现在这里。"}</p>`;
     }
@@ -476,6 +522,7 @@
       return `<section class="au-card au-turn">
         <div class="au-turn-head"><b>${esc(turn.input.replace(/\s+/g, " ").slice(0, 140) || "（无输入）")}</b>${badge(label, tone)}
           <small>${esc(turn.source)} · ${esc(turn.modelId ?? "默认模型")}${turn.effort ? ` · ${esc(turn.effort)}` : ""} · ${stamp(turn.startedAt)}${turn.durationMs !== undefined ? ` · ${ms(turn.durationMs)}` : ""}</small></div>
+        ${assemblyBlock(turn)}
         <div class="au-turn-body"><p class="au-note">输入</p><pre>${esc(turn.input)}</pre>
           ${turn.reply ? `<p class="au-note">回复</p><pre>${esc(turn.reply)}</pre>` : ""}
           ${turn.error ? `<div class="au-callout au-callout-bad"><b>错误</b><pre>${esc(turn.error)}</pre></div>` : ""}</div>

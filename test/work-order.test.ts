@@ -263,7 +263,7 @@ class FlakyResumeAdapter implements RuntimeAdapter {
     yield {
       type: "evidence",
       evidence: {
-        kind: "artifact",
+        kind: "observation",
         summary: "Recovered research result.",
         locator: `pi-session://${sessionId}`,
       },
@@ -290,20 +290,24 @@ async function createRuntime(directory: string): Promise<{ runtime: CloneRuntime
 function workOrder(
   overrides: Partial<SubagentWorkOrder> & Pick<SubagentWorkOrder, "id">,
 ): SubagentWorkOrder {
+  const risk = overrides.risk ?? "read_only";
   return {
     role: "researcher",
     title: `Work ${overrides.id}`,
     objective: "Produce bounded research evidence.",
     inputs: [{ name: "request", description: "The parent request.", required: true }],
     requiredCapabilities: ["research", "filesystem_read"],
+    // A read-only order is satisfied by observation evidence; an external or
+    // writable order still needs a durable artifact.
+    // 只读工单由观察证据满足；外部或可写工单仍需要持久产物。
     expectedArtifacts: [{
       id: `${overrides.id}-artifact`,
-      kind: "artifact",
+      kind: risk === "read_only" ? "observation" : "artifact",
       description: "A durable research artifact.",
       required: true,
     }],
     acceptanceCriteria: ["Evidence is reviewable"],
-    risk: "read_only",
+    risk,
     budget: {
       maxDurationMs: 60_000,
       maxModelCalls: 5,
