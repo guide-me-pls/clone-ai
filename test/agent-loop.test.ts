@@ -480,6 +480,43 @@ test("an answer cut off by the output limit is a failure, not a completed turn",
   assert.match(result.error ?? "", /cut off/);
 });
 
+test("a content_filter finish reason fails the turn instead of completing it", async () => {
+  // A filtered response is a stop, not an answer; the loop used to keep it as
+  // the completed reply because only length/max_tokens were read.
+  // 被过滤的回答是停止而不是回答；循环过去只读 length/max_tokens，因此把它当成了完成的回复。
+  const model: AgentModel = {
+    async complete() {
+      return { content: "Blocked answer", toolCalls: [], finishReason: "content_filter" };
+    },
+  };
+  const result = await runAgentLoop({ model, tools: [], messages: [userMessage("hi")] });
+  assert.equal(result.terminalReason, "model_error");
+  assert.match(result.error ?? "", /content_filter|stopped without completing/);
+  assert.equal(result.reply, "Blocked answer");
+});
+
+test("an unknown finish reason fails the turn", async () => {
+  const model: AgentModel = {
+    async complete() {
+      return { content: "partial", toolCalls: [], finishReason: "safety" };
+    },
+  };
+  const result = await runAgentLoop({ model, tools: [], messages: [userMessage("hi")] });
+  assert.equal(result.terminalReason, "model_error");
+  assert.match(result.error ?? "", /safety/);
+});
+
+test("a normal stop finish reason still completes", async () => {
+  const model: AgentModel = {
+    async complete() {
+      return { content: "done", toolCalls: [], finishReason: "stop" };
+    },
+  };
+  const result = await runAgentLoop({ model, tools: [], messages: [userMessage("hi")] });
+  assert.equal(result.terminalReason, "completed");
+  assert.equal(result.reply, "done");
+});
+
 test("the token estimate is calibrated against the provider, not a fixed ratio", async () => {
   // Measured on this machine: the same Chinese text costs 265 tokens on
   // kimi-k3.1-pro and 346 on gpt-6.1-terra, and code costs 2.0-2.6 characters

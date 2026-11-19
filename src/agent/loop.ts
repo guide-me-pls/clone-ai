@@ -115,6 +115,16 @@ const REPEAT_WARN_AT = 3;
 const REPEAT_STOP_AT = 5;
 
 /**
+ * Finish reasons that mean the model stopped normally. Anything else a provider
+ * reports is a stop, not an answer: content filtering, safety, or a
+ * provider-specific guard. Naming it keeps the caller from presenting a
+ * stopped turn as complete.
+ * 表示模型正常结束的 finish reason。Provider 报告的其它值都是停止而不是回答：内容过滤、
+ * 安全策略或 Provider 专属守卫。点名它，调用方就不会把停止的回合当作完成。
+ */
+const NORMAL_FINISH_REASONS = new Set(["stop", "end_turn", "stop_sequence", "completed"]);
+
+/**
  * The name a provider will accept, derived from the tool's own name.
  *
  * Tools are named for humans (`Skill(release-notes)`, `docs.search`), but a
@@ -380,9 +390,21 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       // `finish_reason` 是 Provider 说明回答被截断的方式。读取它，才能区分"模型说完了"与
       // "模型在句子中间用完输出 token"；调用方把后者报为失败，使被截断的回答永远不会被当作完成。
       const truncated = response.finishReason === "length" || response.finishReason === "max_tokens";
+      // A provider can stop for a reason that is not an answer: content
+      // filtering, safety, or a provider-specific guard. Presenting that as a
+      // completed turn hides the stop from the owner; name it instead.
+      // Provider 可能因非回答的原因停止：内容过滤、安全策略或 Provider 专属守卫。把它当作
+      // 完成的回合会向所有者隐藏这次停止；点名它。
+      const stopped = !truncated
+        && response.finishReason !== undefined
+        && !NORMAL_FINISH_REASONS.has(response.finishReason);
       stop(
-        truncated ? "model_error" : reply.trim().length === 0 ? "empty_response" : "completed",
-        truncated ? `The model's answer was cut off (finish_reason: ${response.finishReason}).` : undefined,
+        truncated || stopped ? "model_error" : reply.trim().length === 0 ? "empty_response" : "completed",
+        truncated
+          ? `The model's answer was cut off (finish_reason: ${response.finishReason}).`
+          : stopped
+            ? `The model stopped without completing an answer (finish_reason: ${response.finishReason}).`
+            : undefined,
       );
       break;
     }

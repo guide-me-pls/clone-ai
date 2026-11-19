@@ -5,6 +5,39 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-19 —— Provider 的停止是失败，不是完成的回答
+
+**决定。** Agent 循环把任何已定义、且不在 `stop/end_turn/stop_sequence/completed` 里的
+`finish_reason` 当作 `model_error`：`length`/`max_tokens` 保留截断消息，而 `content_filter`、
+安全策略或 Provider 专属停止得到“模型没有完成回答就停下了（finish_reason: …）”。
+`describeFailureForOwner` 把被拦截/停止的回答映射成中文摘要与下一步。
+
+**为什么这样更好。** 审计发现一个没有工具调用、`finish_reason: content_filter` 的助手消息被记成
+完成的回合；所有者把被拦截或不完整的回答当成了模型的回答。Magpie 的重复停止现在由本机无进展
+守卫先手；剩下的 Provider 停止正是 finish reason 点名的东西。
+
+**被否决的备选方案。**
+
+- *已知失败值的黑名单。* 会漏掉 Provider 专属停止；白名单默认失败，观察到新的正常值再加进去。
+- *检测停止提示文本。* Magpie 的提示以普通正文、`finish_reason: stop` 到达；文本匹配是 Provider
+  专属且脆弱的。本机守卫才是那种情况的防线。
+- *新增 `provider_stop` 终止原因。* 只会给 Worker 与主 Agent 的映射多一个分支，行为没有区别；
+  `model_error` 加消息里的 finish reason 与展示映射就够了。
+- *只改 UI 映射。* 回合仍会被记成完成。
+
+**放弃了什么。** 使用四种之外专有正常 finish 值的 Provider 会被报为失败；观察到时把它加进集合。
+不完整内容仍留在 reply 里，但回合失败，因此不会被当作完整回答。以 `finish_reason: stop` 送达的
+停止提示仍无法区分；本机守卫处理重复的那一类。
+
+**证据。** 审计记录了 content_filter 被当成完成的案例。新的循环测试：`content_filter` 在旧代码上
+红（completed）、新代码上绿（`model_error`）；未知的 `safety` 值失败；`stop` 仍然完成。
+failure-display 测试断言中文摘要与下一步。`npm test` **951/951**，typecheck 退出 0，gate
+**PASS**。
+
+**推翻条件。** 如果某个 Provider 的正常完成原因被拒绝，就把该值加进正常集合，而不是放行所有未知
+值。如果 Provider 以 `stop` 送达停止提示，就在 Provider 适配器里处理。
+
+
 ## 2026-11-19 —— 回答就是章节本身；"结果"标签栏退场
 
 **决定。** 回合的回答从章节左缘开始。52px 的标签栏原本用来在同一轴上分隔 上下文 / 派发 /

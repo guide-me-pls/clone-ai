@@ -15,6 +15,21 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-19 — A provider-blocked answer is reported as a failure
+
+- **Claim:** a response with `content_filter` or another defined finish reason
+  outside `stop/end_turn/stop_sequence/completed` is no longer stored as a
+  completed answer; the turn fails with the finish reason and the owner sees a
+  Chinese summary and next step. `length`/`max_tokens` keep the truncation
+  failure, and a normal `stop` still completes.
+- **Evidence:** the loop cases are red on the old code (content_filter and an
+  unknown value both complete) and green after; the display test is red on the
+  old mapping. `test/agent-loop.test.ts` **31/31**, `test/failure-display.test.ts`
+  **2/2**, `npm test` **951/951**, typecheck exit 0, gate **PASS**.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-provider-stop-is-a-failure-not-a-completed-answer);
+  [execution chain](optimizations.md#2026-11-19--a-provider-stop-is-a-failure-not-a-completed-answer).
+
+
 ## 2026-11-19 — A failed trace carries its step instructions
 
 - **Claim:** `FailedTrace.plan` now carries each step's redacted instructions,
