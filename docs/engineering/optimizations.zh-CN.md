@@ -128,15 +128,17 @@
   什么"，而不是要求所有者配置。
 - **取舍：** [Agent 设置页是目录，不是控制面板](../architecture/trade-offs.zh-CN.md#2026-11-19--agent-设置页是目录不是控制面板)。
 - **变更：** `apps/desktop/ui/app.js`——移除端点表单及其保存/清除处理器、本机 Provider
-  列表与安装/权限控件，以及角色的 Provider 下拉与开关；保留的 Worker 行展示角色、描述与
-  用途。`src/desktop/ui-locale.ts`——把分区改名为 Worker，新增 `workers-enabled`，删除只
-  服务于已删控件的键，并去掉网关说明里过时的 Pi 措辞。`apps/desktop/ui/components.css`——
-  删除端点、Provider 路径与角色下拉的规则。`test/ui-locale.test.ts`——断言被删控件不再
-  出现，且 Worker 目录仍会渲染。
+  列表与安装/权限控件、角色的 Provider 下拉与开关，以及网关卡片的模型数量、版本与 API
+  路径徽章；保留的 Worker 行展示角色、描述与用途。`src/desktop/ui-locale.ts`——把分区改名
+  为 Worker，新增 `workers-enabled`，删除只服务于已删控件的键，并去掉网关说明里过时的 Pi
+  措辞。`apps/desktop/ui/components.css`——删除端点、Provider 路径、角色下拉与
+  gateway-details 的规则。`test/ui-locale.test.ts`——断言被删控件与网关徽章不再出现，且
+  Worker 目录仍会渲染。
 - **Eval：** `node --experimental-strip-types --test test/ui-locale.test.ts`。变更前新测试
-  因 `config-base-url`（表单仍被渲染）失败；变更后通过。`npm test` **848/848**，
-  `npm run typecheck` 退出码 0，`npm run gate` **PASS**。浏览器预览 Agent 面板：0 个输入框、
-  1 个下拉（网关模型选择）、0 个 Provider/启用控件、4 行 Worker。
+  因 `config-base-url`（表单仍被渲染）失败；变更后通过，包括 `gateway-details`/`gatewayApis`
+  已消失的断言。`npm test` **848/848**，`npm run typecheck` 退出码 0，`npm run gate`
+  **PASS**。浏览器预览 Agent 面板：0 个输入框、1 个下拉（网关模型选择）、0 个 Provider/
+  启用控件、4 行 Worker，且没有诊断徽章行。
 - **执行链路：** 一个工作 Agent（本会话），在检出中直接编辑；没有子 Agent 或 benchmark。
   页面结构从 `app.js` 读取；Provider 与角色默认值对照 `src/workers/provider-catalog.ts`、
   `src/config/worker-settings.ts` 与线上 `~/.clone/settings.json` 核实。工作期间另一个会话

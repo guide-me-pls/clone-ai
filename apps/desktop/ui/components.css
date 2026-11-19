@@ -685,7 +685,6 @@ textarea:focus-visible {
 .gateway-summary__copy { min-width: 0; }
 .gateway-summary__copy strong { display: block; font-size: 14px; font-weight: 700; }
 .gateway-summary__copy code { display: block; overflow: hidden; margin-top: 4px; color: var(--muted); font: 10.5px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.gateway-details { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
 .gateway-controls { display: grid; gap: 8px; }
 
 .gateway-controls__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }

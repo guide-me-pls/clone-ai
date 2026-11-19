@@ -448,7 +448,6 @@ function renderAgentPage() {
     state.gatewayLoading && gateway === undefined ? "neutral" : gatewayState.tone,
     { dot: true },
   );
-  const gatewayApis = (gateway?.apis || []).filter((api) => ["/v1/responses", "/v1/messages", "/v1/chat/completions"].includes(api)).slice(0, 3);
   const exposedModels = (gateway?.models || []).filter((model) => model.compatible !== false);
   const selectedModel = selectedGatewayModel(mainAgentModel, exposedModels);
   const modelSelect = exposedModels.length
@@ -473,7 +472,7 @@ function renderAgentPage() {
     tone: gateway?.running ? "accent" : "warning",
     className: "agent-gateway",
     actions: gatewayBadge,
-    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><div class="gateway-details">${gateway?.running ? ui.badge(`${exposedModels.length} ${t("gateway-models-usable")}`, exposedModels.length ? "neutral" : "warning") : ""}${gateway?.version ? ui.badge(`v${gateway.version}`, "neutral") : ""}${gatewayApis.map((api) => ui.badge(api, "neutral")).join("")}</div><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
+    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
   });
   const agentRows = settings.agents.map((agent) => {
     const description = agent.role === "external" ? t("external-unavailable") : agent.description;

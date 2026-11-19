@@ -106,6 +106,9 @@ keeping the journaled routing decision and the task-record dispatch source.
 model picker, then a read-only list of the four built-in workers with the role
 and what each one does. The manual endpoint/API-key form, the local-provider
 registry list, and each worker's provider select and enable switch are removed.
+The gateway card also drops its model-count, version and API-path badges; the
+model picker already names what the gateway serves, and the status badge says
+whether it is online.
 
 **Alternatives rejected.**
 
@@ -130,17 +133,21 @@ registry list, and each worker's provider select and enable switch are removed.
 enabled; the live `~/.clone/settings.json` has every role enabled (with stale
 `claude-code` provider ids that normalize to `native`); the endpoint in
 `~/.clone/config.json` was written by the gateway apply path. `app.js` no
-longer renders `config-base-url`, `data-agent-provider`, or `data-agent-toggle`,
-and a UI surface test asserts their absence.
+longer renders `config-base-url`, `data-agent-provider`, `data-agent-toggle`,
+`gateway-details` or the API badges, and a UI surface test asserts their
+absence.
 
 **What was given up.** A non-loopback or custom gateway endpoint can no longer
 be entered from the window (it can still be set through `/api/config` or the
-environment), and a role can no longer be individually turned off.
+environment), a role can no longer be individually turned off, and the
+gateway's version and supported API surfaces are no longer visible at a glance.
 
 **Reversal condition.** Restore the matching control if a second execution
 provider is registered, if roles need independent disabling for cost or policy,
 or if Magpie cannot discover an endpoint the owner needs and manual entry
-becomes the only way to point the app at a model gateway.
+becomes the only way to point the app at a model gateway. Also restore the
+badges (or put them behind a disclosure) if diagnosing an API compatibility
+problem requires seeing the version and surfaces inside the app.
 
 ## 2026-11-19 — Publish readiness before the first maintenance pass
 

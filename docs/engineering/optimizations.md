@@ -187,20 +187,23 @@ file keeps every attempt, including the ones that did not work.
 - **Trade-off:** [The Agent settings page is a catalog, not a control
   panel](../architecture/trade-offs.md#2026-11-19--the-agent-settings-page-is-a-catalog-not-a-control-panel).
 - **Change:** `apps/desktop/ui/app.js` — removed the endpoint form and its
-  save/clear handlers, the local-provider list and install/access controls, and
-  the role provider select/switch; the remaining worker rows show role,
-  description and purpose. `src/desktop/ui-locale.ts` — retitled the section to
+  save/clear handlers, the local-provider list and install/access controls, the
+  role provider select/switch, and the gateway card's model-count, version and
+  API-path badges; the remaining worker rows show role, description and
+  purpose. `src/desktop/ui-locale.ts` — retitled the section to
   Workers, added `workers-enabled`, removed the keys that only served the
   deleted controls, and dropped stale Pi wording from the gateway note.
-  `apps/desktop/ui/components.css` — removed the endpoint, provider-path and
-  role-select rules. `test/ui-locale.test.ts` — asserts the removed controls
-  stay absent and the worker catalog renders.
+  `apps/desktop/ui/components.css` — removed the endpoint, provider-path,
+  role-select and gateway-details rules. `test/ui-locale.test.ts` — asserts the
+  removed controls and gateway badges stay absent and the worker catalog
+  renders.
 - **Eval:** `node --experimental-strip-types --test test/ui-locale.test.ts`.
   Before the change the new test fails on `config-base-url` (the form is still
-  rendered); after the change it passes. `npm test` **848/848**, `npm run
+  rendered); after the change it passes, including the assertion that
+  `gateway-details`/`gatewayApis` are gone. `npm test` **848/848**, `npm run
   typecheck` exit 0, `npm run gate` **PASS**. Browser preview of the agents
   panel: 0 inputs, 1 select (the gateway model picker), 0 provider/enable
-  controls, and 4 worker rows.
+  controls, 4 worker rows, and no diagnostic badge row.
 - **Execution chain:** one working agent (this session), direct edits in the
   checkout; no subagents or benchmark runs. The page structure was read from
   `app.js`; the provider and role defaults were verified against
