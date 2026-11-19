@@ -210,6 +210,9 @@ test("the golden path: a stated commitment becomes verified work and remembered 
       title: "写出本周周报",
       instructions: "把本周的周报写入 weekly-report.md。",
       risk: "reversible_write",
+      // The step names its write target; there is no implicit workspace grant.
+      // 步骤点名写入目标；没有隐式的工作区授权。
+      scopes: [{ domain: "files", resource: workspacePath, access: "write" }],
       acceptanceCriteria: [`文件 weekly-report.md 存在，包含："本周进展"`],
       agentId: "draft-maker",
       requiredCapabilities: ["drafting", "filesystem_write"],

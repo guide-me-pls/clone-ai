@@ -30,10 +30,16 @@ function step(scopes: Scope[] | undefined, risk: PlanStep["risk"] = "reversible_
 }
 const ctx = { run: {} as never, task: {} as never };
 
-test("a step without scopes keeps the risk-based default", async () => {
+test("a write without scopes is denied; other risks keep the risk-based default", async () => {
   const f = await fixture();
   try {
-    assert.equal(f.engine.evaluate({ ...ctx, step: step(undefined), approved: false }).outcome, "allowed");
+    // There is no default folder: a write that names nowhere has nothing the
+    // owner could approve.
+    // 没有默认文件夹：没有点名目标的写入没有任何可供所有者批准的东西。
+    const write = f.engine.evaluate({ ...ctx, step: step(undefined), approved: false });
+    assert.equal(write.outcome, "denied");
+    assert.match(write.reason, /names no write scope/);
+    assert.equal(f.engine.evaluate({ ...ctx, step: step(undefined, "read_only"), approved: false }).outcome, "allowed");
     assert.equal(f.engine.evaluate({ ...ctx, step: step(undefined, "irreversible"), approved: false }).outcome, "approval_required");
   } finally { await f.cleanup(); }
 });

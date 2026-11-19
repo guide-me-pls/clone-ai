@@ -987,19 +987,7 @@ function renderSituation(situation, config) {
     ? rows.join("")
     : `<div class="memory-empty">还没有记录任何目标、承诺或观察。分身只会依据你确认过的内容行动。</div>`;
   const paths = config.paths || {};
-  $("config-paths").innerHTML = `<h4>本地数据</h4><p>数据目录：${escape(paths.dataDirectory || "-")}</p><p>项目运行目录：${escape(paths.workspaceRuntimeDirectory || "-")}</p><p>Provider 配置：${escape(paths.providersFile || "-")}</p><p>记忆：${escape(paths.memoryDirectory || "-")}</p><span class="settings-value">仅本机</span>`;
-  const workspacePath = config.config?.workspacePath || paths.workspacePath || "";
-  const workspace = $("config-workspace");
-  if (workspace) {
-    // The runtime reads the workspace at boot, so a saved path that differs
-    // from the running one is pending, not active. The label says which.
-    // Runtime 在启动时读取工作区，因此与运行路径不同的已保存路径只是待生效，并未生效。标签写明。
-    const pendingRestart = workspacePath.length > 0
-      && typeof paths.workspacePath === "string"
-      && workspacePath !== paths.workspacePath;
-    workspace.textContent = `${workspacePath || t("workspace-unset")}${pendingRestart ? ` · ${t("workspace-restart-pending")}` : ""}`;
-    workspace.title = workspacePath;
-  }
+  $("config-paths").innerHTML = `<h4>本地数据</h4><p>数据目录：${escape(paths.dataDirectory || "-")}</p><p>Provider 配置：${escape(paths.providersFile || "-")}</p><p>记忆：${escape(paths.memoryDirectory || "-")}</p><span class="settings-value">仅本机</span>`;
   renderModelOptions();
   renderMainAgentEffort();
   renderAgentPage();
@@ -1286,38 +1274,6 @@ function chooseNativeDirectory(purpose, onChoose) {
       window.CloneNative.onDirectoryCancelled = undefined;
     };
     window.CloneNative.chooseDirectory(purpose);
-    return;
-  }
-  announce(t("directory-native-only"), true);
-}
-
-async function chooseWorkspace() {
-  chooseNativeDirectory("workspace", async (workspacePath) => {
-    try {
-      const saved = await api("/api/config", {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ workspacePath }),
-      });
-      await refresh({ preserveScroll: true });
-      // The running runtime keeps the workspace it booted with. Saying "saved"
-      // alone made the owner believe the next turn would use the new folder.
-      // 运行中的 Runtime 仍用启动时的工作区。只说"已保存"会让所有者以为下一回合就会用新目录。
-      announce(t(saved.restartRequired ? "workspace-saved-restart" : "workspace-saved"));
-    } catch (error) {
-      announce(error.message, true);
-    }
-  });
-}
-
-function revealWorkspace() {
-  const path = state.config?.config?.workspacePath || state.config?.paths?.workspacePath || "";
-  if (!path) {
-    announce(t("workspace-unset"), true);
-    return;
-  }
-  if (window.CloneNative?.revealInFinder) {
-    window.CloneNative.revealInFinder(path);
     return;
   }
   announce(t("directory-native-only"), true);
@@ -1959,7 +1915,7 @@ function logBasisMarkup(entry, conversationId) {
   // 命中另一个任务。
   const preview = plainPreview(entry.input || "").slice(0, 24);
   const audit = entry.journaled
-    ? `<button class="log-basis-open" type="button" data-open-turn-audit="${escape(entry.id)}" data-open-turn-conversation="${escape(conversationId || "")}" aria-label="查看审计：${escape(preview || "本回合")}">查看审计 ›</button>`
+    ? `<button class="log-basis-open" type="button" data-open-turn-audit="${escape(entry.id)}" data-open-turn-conversation="${escape(conversationId || "")}" aria-label="查看审计：${escape(preview || "本回合")} · ${escape(time(entry.startedAt))}">查看审计 ›</button>`
     : "";
   return `<div class="log-basis"><b>依据</b><span>${escape(facts.join(" · "))}</span>${audit}</div>`;
 }
@@ -2808,7 +2764,7 @@ $("session-list").addEventListener("toggle", (event) => {
   else state.openChildGroups.delete(details.dataset.childGroup);
   localStorage.setItem("clone-ai:child-groups", JSON.stringify([...state.openChildGroups]));
 }, true);
-$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const turnAudit = event.target.closest("[data-open-turn-audit]"); if (turnAudit) { openSettings(); selectSettingsSection("audit"); window.CloneAudit?.showTurns?.(turnAudit.dataset.openTurnAudit || ""); return; } const logRun = event.target.closest("[data-log-run]"); if (logRun) { void selectSession(logRun.dataset.logRun); return; } const agentRun = event.target.closest("[data-open-agent-run]"); if (agentRun) { state.agentFocus = { runId: agentRun.dataset.openAgentRun, agentId: agentRun.dataset.agentId }; void selectSession(agentRun.dataset.openAgentRun); return; } const openConversation = event.target.closest("[data-open-conversation]"); if (openConversation) { void selectSession(openConversation.dataset.openConversation, { scrollToBottom: true }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const tableExport = event.target.closest("[data-export-table]"); if (tableExport) { exportMarkdownTable(tableExport.dataset.exportCsv || ""); return; } const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
+$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const turnAudit = event.target.closest("[data-open-turn-audit]"); if (turnAudit) { openSettings(); selectSettingsSection("audit"); window.CloneAudit?.showTurns?.(turnAudit.dataset.openTurnAudit || "", turnAudit.dataset.openTurnConversation || ""); return; } const logRun = event.target.closest("[data-log-run]"); if (logRun) { void selectSession(logRun.dataset.logRun); return; } const agentRun = event.target.closest("[data-open-agent-run]"); if (agentRun) { state.agentFocus = { runId: agentRun.dataset.openAgentRun, agentId: agentRun.dataset.agentId }; void selectSession(agentRun.dataset.openAgentRun); return; } const openConversation = event.target.closest("[data-open-conversation]"); if (openConversation) { void selectSession(openConversation.dataset.openConversation, { scrollToBottom: true }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const tableExport = event.target.closest("[data-export-table]"); if (tableExport) { exportMarkdownTable(tableExport.dataset.exportCsv || ""); return; } const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
 document.querySelector(".settings-nav")?.addEventListener("keydown", (event) => {
@@ -2829,7 +2785,6 @@ document.querySelector(".settings-content")?.addEventListener("scroll", (event) 
   state.settingsScroll = state.settingsScroll || new Map();
   state.settingsScroll.set(state.settingsSection, content.scrollTop);
 }, { passive: true });
-$("config-workspace-choose").addEventListener("click", () => void chooseWorkspace());
 $("authority-root").addEventListener("change", (event) => {
   const select = event.target.closest("[data-authority-domain]");
   if (select) void setAuthorityDomain(select.dataset.authorityDomain, select.value);
@@ -2845,7 +2800,6 @@ $("authority-root").addEventListener("submit", (event) => {
 });
 $("data-export-choose").addEventListener("click", () => void exportOwnerDataFromDesktop());
 $("data-export-reveal").addEventListener("click", revealExport);
-$("config-workspace-reveal").addEventListener("click", revealWorkspace);
 $("config-main-agent-model-save").addEventListener("click", () => void saveMainAgentModel());
 $("config-main-agent-effort-save").addEventListener("click", () => void saveMainAgentEffort());
 $("config-locale")?.addEventListener("change", () => void saveLocale());

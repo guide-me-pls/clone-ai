@@ -439,16 +439,15 @@ export class CloneRuntime {
     if (run.status !== "planning") {
       throw new Error(`A plan can only be attached while planning; run is ${run.status}.`);
     }
-    // A write step must name a write scope. When it names none, the workspace
-    // is proposed as an explicit scope and still goes through the policy
-    // engine; it is not an implicit permission.
-    // 写入步骤必须点名一个写 Scope。没有点名时，把工作区作为显式 Scope 提出，它仍要经过
-    // 权限引擎；它不是隐式权限。
+    // A write step must name a write scope. There is no default folder: a step
+    // that names no target keeps no write scope, and the authority policy
+    // denies it instead of the Kernel inventing a workspace grant.
+    // 写入步骤必须点名一个写 Scope。没有默认文件夹：没有点名目标的步骤不携带写 Scope，
+    // 由权限策略拒绝它，而不是让 Kernel 发明一个工作区授权。
     const task = this.requireTask(run.taskId);
     const steps = this.#workspaceWritable
       ? input.steps
       : ensureWriteScopes(input.steps, {
-        ...(this.#workspacePath === undefined ? {} : { workspacePath: this.#workspacePath }),
         requestText: `${task.title}\n${task.objective}`,
       });
     assertPlanIsExecutable(steps, this.#knownAgentIds?.());

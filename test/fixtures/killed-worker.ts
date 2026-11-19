@@ -83,6 +83,9 @@ try {
       title: "写出结果文件",
       instructions: "把结果写入 outcome.md。",
       risk: "reversible_write",
+      // The step names its write target; there is no implicit workspace grant.
+      // 步骤点名写入目标；没有隐式的工作区授权。
+      scopes: [{ domain: "files", resource: workspacePath, access: "write" }],
       acceptanceCriteria: ["形成一份可核对的交付物"],
       agentId: "draft-maker",
       requiredCapabilities: ["drafting", "filesystem_write"],

@@ -742,7 +742,10 @@ textarea:focus-visible {
 .gateway-summary { display: flex; gap: 13px; align-items: center; min-width: 0; }
 .gateway-summary__copy { min-width: 0; }
 .gateway-summary__copy strong { display: block; font-size: 14px; font-weight: 700; }
-.gateway-summary__copy code { display: block; overflow: hidden; margin-top: 4px; color: var(--muted); font: 10.5px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+/* The connection state and its explanation are one sentence, not a row and a
+ * detached footnote; the removed endpoint line used to make the gap look intentional.
+ * 连接状态与说明是一句话，不是一行加一条游离的脚注；被移除的端点行曾让这段空隙看起来是故意的。 */
+.gateway-summary__copy .agent-role-note { margin-top: 3px; }
 .gateway-controls { display: grid; gap: 8px; }
 
 .gateway-controls__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
