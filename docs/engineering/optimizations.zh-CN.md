@@ -26,6 +26,39 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— 内部基准是机器根目录，而不是某个文件夹
+
+- **目标 / 假设：** 任务里的工具、相对路径与验证应当从整台机器出发，而不是从 `~/.clone`
+  或某个配置的文件夹出发。所有者在一次验证运行列出 `/Users/qihoo/.clone` 而不是被问到的
+  机器之后，纠正了此前的内部基准选择。
+- **取舍：** [内部基准是机器根目录](../architecture/trade-offs.zh-CN.md#2026-11-19--内部基准是机器根目录而不是某个文件夹)。
+- **变更：** `resolveClonePaths` 把 `workspacePath` 默认设为 `/`；companion server 不再回退
+  到 clone home。`CloneRuntime` 接受 `workspaceLockFile`，`WorkspaceExecutionLock` 接受精确的
+  `lockFile`，因此组装会传入
+  `<clone home>/workspace-runtime/workspace-execution.sqlite3`，根工作区永远不会创建
+  `/.clone`。即使根目录是 `/`，`verifiedWorkspacePath` 仍拒绝任何策略都无法打开的位置。
+  涉及 `src/config/clone-home.ts`、`src/companion-server.ts`、
+  `src/core/workspace-lock.ts`、`src/core/runtime.ts`、`src/core/runtime-factory.ts`、
+  `src/core/verified-workspace-path.ts`。
+- **Eval：** `test/clone-home.test.ts` 钉住 `/` 默认值、`CLONE_AI_WORKSPACE`/显式覆盖，以及
+  clone home 下的 `workspaceLockFile`；`test/workspace-lock-abort.test.ts` 钉住显式锁文件，
+  并断言不会出现 `workspace/.clone`。变更前：测试期望进程 `cwd`，锁从工作区推导。变更后：
+  `npm test` **927/927**、`npm run typecheck` 退出码 0、`npm run gate` **PASS**，基线未变。
+- **Benchmark run：** 无——确定性的路径解析契约；没有 Provider、模型、数据集、切分、种子或
+  评分参数。
+- **执行链路：** 阅读 `clone-home.ts`、`companion-server.ts`、运行时工厂/锁/验证器与既有取舍；
+  发现运行时锁仍写入 `<workspace>/.clone`（线上 `~/.clone/.clone` 目录即为证据）；先写取舍
+  条目；改默认值并接上精确锁文件；给验证器加受保护路径拒绝；依次跑 typecheck、目标工作区测试
+  （34/34）、全量测试（927/927）与 gate（PASS）。一次干扰：另一个会话在编辑 `src`，dev 监视器
+  在早先的验证运行中重启了 sidecar；代码路径本身是稳定的。
+- **优点：** 所有者陈述的契约与运行时实现现在一致；锁不再依赖工作区，`/` 不会创建
+  `/.clone`；验证器的整机读取面保留了受保护路径拒绝。
+- **代价 / 下次：** 计划里的相对路径现在从 `/` 解析，这不常见；计划与 Prompt 应优先使用绝对
+  目标。验证器仍会读取 locator 来核对证据；受保护检查缩小了但未消除这次读取。直接构造
+  `CloneRuntime` 且不传 checkpoint store 时仍会推导工作区内的 checkpoint 路径；Factory 路径
+  是唯一的生产路径。
+- **推翻条件：** 复制自取舍条目。
+
 ### 2026-11-19 —— 无进展守卫按整回合统计每个调用
 
 - **目标 / 假设：** 事故后的审计在相邻批次守卫（43a34cc）上复现了两种等待形状：两个结果不变的

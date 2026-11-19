@@ -15,6 +15,19 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-19 — The internal base is the machine root
+
+- **Claim:** the runtime's internal base is `/` when no explicit
+  `CLONE_AI_WORKSPACE` is set; a task's relative paths and the verifier start
+  from the machine, and the execution lock stays under the clone home instead of
+  creating `/.clone`.
+- **Evidence:** `test/clone-home.test.ts` pins the `/` default, the explicit and
+  environment overrides, and `workspaceLockFile` under the clone home;
+  `test/workspace-lock-abort.test.ts` uses an explicit lock file and asserts no
+  `workspace/.clone`. `npm test` **927/927**, typecheck exit 0, gate **PASS**.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--the-internal-base-is-the-machine-root-not-a-folder);
+  [execution chain](optimizations.md#2026-11-19--the-internal-base-is-the-machine-root-not-a-folder).
+
 ## 2026-11-19 — Alternating and masked polls stop as no progress
 
 - **Claim:** the shared loop now counts each executed call's identity across the

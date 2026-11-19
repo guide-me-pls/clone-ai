@@ -31,6 +31,52 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — The internal base is the machine root, not a folder
+
+- **Goal / hypothesis:** a task's tools, relative paths and verification should
+  start from the whole machine, not from `~/.clone` or a configured folder. The
+  owner corrected the previous internal-base choice after a verification run
+  listed `/Users/qihoo/.clone` instead of the machine it was asked about.
+- **Trade-off:** [the internal base is the machine root](../architecture/trade-offs.md#2026-11-19--the-internal-base-is-the-machine-root-not-a-folder).
+- **Change:** `resolveClonePaths` defaults `workspacePath` to `/`; the companion
+  server no longer falls back to the clone home. `CloneRuntime` takes
+  `workspaceLockFile` and `WorkspaceExecutionLock` accepts an exact `lockFile`,
+  so the assembly passes
+  `<clone home>/workspace-runtime/workspace-execution.sqlite3` and a root
+  workspace never creates `/.clone`. `verifiedWorkspacePath` refuses the
+  locations no policy may open even under the root. Files:
+  `src/config/clone-home.ts`, `src/companion-server.ts`,
+  `src/core/workspace-lock.ts`, `src/core/runtime.ts`,
+  `src/core/runtime-factory.ts`, `src/core/verified-workspace-path.ts`.
+- **Eval:** `test/clone-home.test.ts` pins the `/` default, the
+  `CLONE_AI_WORKSPACE`/explicit override and `workspaceLockFile` under the
+  clone home; `test/workspace-lock-abort.test.ts` pins an explicit lock file
+  and asserts no `workspace/.clone`. Before: the test expected the process
+  `cwd` and the lock was derived from the workspace. After: `npm test`
+  **927/927**, `npm run typecheck` exit 0, `npm run gate` **PASS**, baseline
+  unchanged.
+- **Benchmark run:** none — a deterministic path-resolution contract; no
+  provider, model, dataset, split, seed or scoring parameter.
+- **Execution chain:** read `clone-home.ts`, `companion-server.ts`, the runtime
+  factory/lock/verifier and the existing trade-off; found the runtime lock still
+  wrote `<workspace>/.clone` (the live `~/.clone/.clone` directory proved it);
+  wrote the trade-off entry first; changed the default and wired the exact lock
+  file; added the verifier's forbidden-path guard; ran typecheck, the targeted
+  workspace tests (34/34), the full suite (927/927) and the gate (PASS). One
+  interruption: the dev watcher restarted the sidecar during the earlier
+  verification runs because another session was editing `src`; the code path
+  itself was stable.
+- **Pros:** the owner's stated contract and the runtime implementation now
+  agree; the lock no longer depends on the workspace, so `/` cannot create
+  `/.clone`; the verifier's whole-machine surface keeps the protected-path deny.
+- **Cons / next time:** relative paths in plans now resolve from `/`, which is
+  unusual; plans and prompts should prefer absolute targets. The verifier still
+  reads a locator to check evidence; the forbidden check narrows but does not
+  remove that read. A direct `CloneRuntime` without a checkpoint store still
+  derives a workspace-local checkpoint path; the factory path is the only
+  production one.
+- **Reversal condition:** copied from the trade-off entry.
+
 ### 2026-11-19 — The no-progress guard counts each call across the turn
 
 - **Goal / hypothesis:** the post-incident audit reproduced two waiting shapes

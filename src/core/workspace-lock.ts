@@ -1,5 +1,5 @@
 import { mkdir, readFile, stat, unlink } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { CLONE_DIRECTORY_NAME } from "../config/clone-home.ts";
@@ -14,6 +14,14 @@ const LOCK_RETRY_MS = 50;
 const MALFORMED_LOCK_STALE_MS = 60_000;
 
 export interface WorkspaceLockOptions {
+  /**
+   * Exact lock database. Defaults to `<workspace>/.clone/workspace-execution.sqlite3`.
+   * The Runtime passes the clone home's lock file so a machine-root workspace
+   * never becomes a write location.
+   * 精确的锁数据库。默认 `<workspace>/.clone/workspace-execution.sqlite3`。Runtime 传入
+   * clone home 的锁文件，使机器根目录永远不会成为写入位置。
+   */
+  lockFile?: string;
   /**
    * Aborts only the wait for the lock, never an operation that already holds
    * it. Shutdown uses this so a background pass queued behind another process's
@@ -33,14 +41,16 @@ export interface WorkspaceLockOptions {
  */
 export class WorkspaceExecutionLock {
   async run<T>(workspacePath: string, operation: () => Promise<T>, options: WorkspaceLockOptions = {}): Promise<T> {
-    const workspace = resolve(workspacePath);
-    const previous = localQueues.get(workspace) ?? Promise.resolve();
+    const lockFile = options.lockFile === undefined
+      ? join(resolve(workspacePath), CLONE_DIRECTORY_NAME, "workspace-execution.sqlite3")
+      : resolve(options.lockFile);
+    const previous = localQueues.get(lockFile) ?? Promise.resolve();
     let releaseLocal!: () => void;
     const current = new Promise<void>((resolveRelease) => { releaseLocal = resolveRelease; });
-    localQueues.set(workspace, current);
+    localQueues.set(lockFile, current);
     const releaseQueue = (): void => {
       releaseLocal();
-      if (localQueues.get(workspace) === current) localQueues.delete(workspace);
+      if (localQueues.get(lockFile) === current) localQueues.delete(lockFile);
     };
 
     // Waiting for an in-process holder must honour the signal too: an aborted
@@ -51,7 +61,7 @@ export class WorkspaceExecutionLock {
     await waitForPrevious(previous, options.signal, releaseQueue);
     let releaseExternal: (() => Promise<void>) | undefined;
     try {
-      releaseExternal = await acquireExternalLock(workspace, options.signal);
+      releaseExternal = await acquireExternalLock(lockFile, options.signal);
       options.signal?.throwIfAborted();
       return await operation();
     } finally {
@@ -95,11 +105,11 @@ async function waitForPrevious(previous: Promise<void>, signal: AbortSignal | un
   }
 }
 
-async function acquireExternalLock(workspace: string, signal?: AbortSignal): Promise<() => Promise<void>> {
-  const directory = join(workspace, CLONE_DIRECTORY_NAME);
+async function acquireExternalLock(lockFile: string, signal?: AbortSignal): Promise<() => Promise<void>> {
+  const directory = dirname(lockFile);
   await mkdir(directory, { recursive: true });
   signal?.throwIfAborted();
-  const db = new DatabaseSync(join(directory, "workspace-execution.sqlite3"));
+  const db = new DatabaseSync(lockFile);
   try {
     db.exec("PRAGMA busy_timeout=0");
     while (true) {

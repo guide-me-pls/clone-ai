@@ -11,6 +11,16 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-19 —— 内部基准是机器根目录
+
+- **主张：** 未显式设置 `CLONE_AI_WORKSPACE` 时，运行时的内部基准是 `/`；任务的相对路径与
+  验证器从整台机器出发，执行锁留在 clone home 下，而不是创建 `/.clone`。
+- **证据：** `test/clone-home.test.ts` 钉住 `/` 默认值、显式与环境覆盖，以及 clone home 下的
+  `workspaceLockFile`；`test/workspace-lock-abort.test.ts` 使用显式锁文件并断言没有
+  `workspace/.clone`。`npm test` **927/927**、typecheck 退出 0、gate **PASS**。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--内部基准是机器根目录而不是某个文件夹)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--内部基准是机器根目录而不是某个文件夹)。
+
 ## 2026-11-19 —— 交替轮询与被掩护的轮询都以无进展停止
 
 - **主张：** 共享循环现在按整回合统计每个已执行调用的身份。两个相同的 `get_run_status` 轮询

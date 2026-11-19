@@ -6,6 +6,68 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — The internal base is the machine root, not a folder
+
+**Decision.** When neither `workspacePath` nor `CLONE_AI_WORKSPACE` is given,
+`resolveClonePaths` defaults the internal base to `/` — the machine root — and
+the companion server uses the same fallback instead of the clone home. The
+runtime's execution lock stops deriving its database from the workspace:
+`CloneRuntime` receives `workspaceLockFile`
+(`<clone home>/workspace-runtime/workspace-execution.sqlite3`) and passes it to
+`WorkspaceExecutionLock`, so a root workspace never tries to create `/.clone`.
+The verifier's default root therefore becomes `/`; `verifiedWorkspacePath` still
+refuses the locations no policy may open (keys, browser profiles, the journal,
+tokens, policies). The clone home remains the owner's data directory, not a
+default working folder.
+
+**Why it won.** The owner corrected the previous entry directly: "工作区默认就是
+/，是整个机器，而不是某个文件夹". The verification run on 2026-11-19
+(`16494863…`) showed the worker listing `/Users/qihoo/.clone` and reading
+`/Users/qihoo/.clone/README.md`; that is the hidden-folder confinement the owner
+rejected. A folder is neither a default nor a permission.
+
+**Alternatives rejected.**
+- *Keep the clone home as the base.* It confined relative paths and the
+  verifier to a hidden data directory; the owner explicitly rejected a folder.
+- *Use the process cwd.* The base would depend on how the app was launched,
+  which is the configured-folder problem under another name.
+- *Keep the execution lock under `<workspace>/.clone`.* With `/` it would try
+  `/.clone` and fail; the lock belongs to the runtime, so it lives under the
+  clone home.
+- *Narrow the verifier below the base.* The verifier's roots are the internal
+  base and the step's declared write scopes. With `/` as the base that is the
+  machine; narrowing it would leave a valid read outside `~/.clone`
+  unverifiable — the failure this change fixes. The forbidden-location check
+  remains, so protected files are not read by the verifier.
+
+**What it costs.**
+- Relative paths in plans resolve from `/`; plans should use absolute targets.
+  A root-level `AGENTS.md` or `CLAUDE.md` would be picked up if one existed.
+- The verifier reads a locator to check evidence, so a fabricated locator can
+  make it read any non-forbidden file the process can read. The content is not
+  returned, but the read happens. If that is unacceptable, restrict the
+  verifier's roots per step without changing the base.
+- A `CloneRuntime` constructed directly with `/` and no checkpoint store would
+  derive `/.clone/workspace-checkpoints`; the factory always passes the
+  clone-home store, so production never does.
+
+**Evidence.** The owner's statement; the 2026-11-19 run read `~/.clone`;
+`~/.clone/.clone/workspace-execution.sqlite3` exists, proving the runtime lock
+still used the workspace; `test/clone-home.test.ts` pins the `/` default, the
+`CLONE_AI_WORKSPACE` override and `workspaceLockFile` under the clone home;
+`test/workspace-lock-abort.test.ts` pins an explicit lock file.
+
+**Reversal condition.** If a relative path or project-instruction lookup from
+`/` selects a wrong file, or a fabricated evidence locator reads a protected
+path, restore a non-permission base (the clone home) while keeping reads
+machine-wide, or add a protected-path deny to the verifier. If the owner later
+names a per-task folder, make it a learned or per-request folder, never a
+global setting.
+
+**Supersedes:** the internal-base half of
+[2026-11-19 — There is no configured working directory; a write names its
+targets](#2026-11-19--there-is-no-configured-working-directory-a-write-names-its-targets).
+
 ## 2026-11-19 — The no-progress guard counts each call across the turn, not adjacent batches
 
 **Decision.** The shared agent loop now counts, per turn, the identity of every
@@ -240,6 +302,10 @@ tests without an owner-chosen folder, add a learned or per-request folder (the
 folder the request names, not a global setting), or a per-step working
 directory. If verification of scoped writes proves insufficient, widen the
 verifier to the step's scopes for diff and test contracts too.
+
+**Superseded (internal base).** [2026-11-19 — The internal base is the machine
+root, not a folder](#2026-11-19--the-internal-base-is-the-machine-root-not-a-folder)
+replaces the clone-home default with `/`.
 
 ## 2026-11-19 — The sidebar's top level is the conversation; tasks nest inside it
 

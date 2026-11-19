@@ -41,7 +41,7 @@ import {
   type WorkspaceChange,
   type WorkspaceCheckpointStore,
 } from "./workspace-evidence.ts";
-import { workspaceExecutionLock } from "./workspace-lock.ts";
+import { workspaceExecutionLock, type WorkspaceLockOptions } from "./workspace-lock.ts";
 import {
   applyIsolatedArtifacts,
   looksLikeRelativeFile,
@@ -80,6 +80,14 @@ export interface CloneRuntimeOptions {
   failureCatalog?: OutcomeCatalog;
   /** Workspace supervised by this Runtime. 工作本次 Runtime 监督的 Workspace。 */
   workspacePath?: string;
+  /**
+   * Exact execution-lock database. Omitted, the lock lives under
+   * `<workspace>/.clone`; the assembly passes the clone home's runtime lock so
+   * a machine-root workspace never becomes a write location.
+   * 精确的执行锁数据库。省略时锁在 `<workspace>/.clone` 下；组装会传入 clone home 的
+   * 运行时锁，使机器根目录永远不会成为写入位置。
+   */
+  workspaceLockFile?: string;
   /**
    * The workspace is a sandbox this Runtime owns (a repair worktree), so it is
    * writable without a plan scope. Must never be set for the owner's live tree.
@@ -179,6 +187,7 @@ export class CloneRuntime {
   readonly #memorySource?: WorkerMemorySource;
   readonly #failureCatalog: OutcomeCatalog;
   readonly #workspacePath?: string;
+  readonly #workspaceLockFile?: string;
   readonly #workspaceWritable: boolean;
   readonly #capacityGate: CapacityGate;
   readonly #workspaceCheckpoints?: WorkspaceCheckpointStore;
@@ -199,6 +208,7 @@ export class CloneRuntime {
     this.#knownAgentIds = options.knownAgentIds;
     this.#capacityGate = options.capacityGate ?? new CapacityGate();
     this.#workspacePath = options.workspacePath === undefined ? undefined : resolve(options.workspacePath);
+    this.#workspaceLockFile = options.workspaceLockFile === undefined ? undefined : resolve(options.workspaceLockFile);
     this.#workspaceWritable = options.workspaceWritable === true && this.#workspacePath !== undefined;
     this.#workspaceCheckpoints = this.#workspacePath === undefined
       ? undefined
@@ -750,13 +760,17 @@ export class CloneRuntime {
     return this.#workspacePath;
   }
 
+  #lockOptions(): WorkspaceLockOptions {
+    return this.#workspaceLockFile === undefined ? {} : { lockFile: this.#workspaceLockFile };
+  }
+
   private async executeSingleAgent(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry }): Promise<void> {
     const release = await this.#capacityGate.acquire();
     try {
       if (this.#workspacePath === undefined) {
         return await this.executeSingleAgentUnlocked(input);
       }
-      return await workspaceExecutionLock.run(this.#workspacePath, () => this.executeSingleAgentUnlocked(input));
+      return await workspaceExecutionLock.run(this.#workspacePath, () => this.executeSingleAgentUnlocked(input), this.#lockOptions());
     } finally {
       release();
     }
@@ -870,7 +884,7 @@ export class CloneRuntime {
       if (this.#workspacePath === undefined) {
         return await this.dispatchSubagentUnlocked(input);
       }
-      return await workspaceExecutionLock.run(this.#workspacePath, () => this.dispatchSubagentUnlocked(input));
+      return await workspaceExecutionLock.run(this.#workspacePath, () => this.dispatchSubagentUnlocked(input), this.#lockOptions());
     } finally {
       release();
     }
