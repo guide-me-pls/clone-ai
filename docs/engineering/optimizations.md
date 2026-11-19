@@ -31,6 +31,48 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — A provider stop is a failure, not a completed answer
+
+- **Goal / hypothesis:** the audit found that only `length`/`max_tokens` were
+  read from `finish_reason`; a response with `content_filter` or a
+  provider-specific stop and no tool calls was stored as a completed answer.
+  Treating any defined finish reason outside the normal set as a failure, and
+  mapping the stop to a Chinese summary, should stop presenting a blocked or
+  stopped answer as complete.
+- **Trade-off:** [a provider stop is a failure, not a completed answer](../architecture/trade-offs.md#2026-11-19--a-provider-stop-is-a-failure-not-a-completed-answer).
+- **Change:** `src/agent/loop.ts` adds the `NORMAL_FINISH_REASONS` set and ends a
+  no-tool-call response as `model_error` when its finish reason is outside it
+  (the truncation message stays for `length`/`max_tokens`);
+  `src/core/failure-display.ts` maps a blocked/stopped answer to a Chinese
+  summary and next step. Tests: `test/agent-loop.test.ts` for content_filter,
+  an unknown `safety` value, and a normal `stop`; `test/failure-display.test.ts`
+  for the summary.
+- **Eval:** the content_filter and unknown cases are red on the old loop (both
+  completed) and green after; the display test is red on the old mapping
+  (generic "Worker 执行失败") and green. `test/agent-loop.test.ts` **31/31**
+  (with the display file **2/2**); `npm test` **951/951**; typecheck exit 0;
+  gate **PASS**, baseline unchanged.
+- **Benchmark run:** none — deterministic loop/display contract; no provider,
+  model, dataset, split, seed or scoring parameter.
+- **Execution chain:** the finding came from the 41-agent audit. The fix was
+  inline: read the loop's finish-reason branch and the failure display; wrote the
+  bilingual trade-off; added the whitelist, the stopped message and the display
+  branch; added three loop tests and two display tests; reverted the two
+  production files to reproduce red; restored and ran the full suite, typecheck
+  and gate.
+- **Pros:** a blocked/stopped answer is never presented as complete; the reason
+  names the finish value; the owner gets a Chinese summary and next step; a
+  normal stop is unchanged; partial text stays available in the reply for
+  diagnosis.
+- **Cons / next time:** a proprietary normal finish value outside the set would
+  be reported as failed; stop notices delivered with `finish_reason: stop` are
+  still indistinguishable, and only the local guard covers that case.
+- **Reversal condition:** if a provider's normal completion reason is rejected,
+  add that value to the normal set rather than allowing all unknown values. If
+  providers deliver stop notices with `stop`, handle them in the provider
+  adapter.
+
+
 ### 2026-11-19 — A failed trace carries the step's instructions
 
 - **Goal / hypothesis:** the verifier repair's first lane run failed the

@@ -11,6 +11,19 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-19 —— 被提供方拦截的回答报为失败
+
+- **主张：** 带 `content_filter` 或另一个已定义、且不在
+  `stop/end_turn/stop_sequence/completed` 里的 finish reason 的回答，不再被记成完成；回合以
+  该 finish reason 失败，所有者看到中文摘要与下一步。`length`/`max_tokens` 保留截断失败，
+  正常 `stop` 仍然完成。
+- **证据：** 循环用例在旧代码上红（content_filter 与未知值都完成），修复后绿；展示测试在旧映射
+  上红。`test/agent-loop.test.ts` **31/31**，`test/failure-display.test.ts` **2/2**，
+  `npm test` **951/951**，typecheck 退出 0，gate **PASS**。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--provider-的停止是失败不是完成的回答)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--provider-的停止是失败不是完成的回答)。
+
+
 ## 2026-11-19 —— 失败轨迹带上步骤指令与标准
 
 - **主张：** `FailedTrace.plan` 现在携带每个步骤脱敏后的 instructions、验收标准、所需能力、

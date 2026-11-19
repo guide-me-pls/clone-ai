@@ -6,6 +6,50 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — A provider stop is a failure, not a completed answer
+
+**Decision.** The agent loop treats any defined `finish_reason` outside
+`stop/end_turn/stop_sequence/completed` as `model_error`: `length` /
+`max_tokens` keep the truncation message, while `content_filter`, safety or a
+provider-specific stop gets "the model stopped without completing an answer
+(finish_reason: …)". `describeFailureForOwner` maps a blocked/stopped answer to
+a Chinese summary and next step.
+
+**Why it won.** The audit found a no-tool-call assistant message with
+`finish_reason: content_filter` (and provider-specific stops) recorded as a
+completed turn; the owner saw a blocked or partial answer as the model's
+answer. Magpie's repetition stop is now preempted by the local no-progress
+guard; the remaining provider stops are exactly what the finish reason names.
+
+**Alternatives rejected.**
+
+- *A blocklist of known failure values.* It misses provider-specific stops; a
+  whitelist fails closed and a new normal value can be added when observed.
+- *Detect stop-notice text.* The Magpie notice arrives as ordinary content with
+  `finish_reason: stop`; text matching is provider-specific and brittle. The
+  local guard is the defense for that case.
+- *Add a new `provider_stop` terminal reason.* It would add a reason to the
+  worker and Main Agent mappings for no behavioral difference; `model_error`
+  with the finish reason in the message and the display mapping is enough.
+- *Only change the UI mapping.* The turn would still be stored as completed.
+
+**What was given up.** A provider that uses a proprietary normal finish value
+outside the four is reported as failed; add it to the set when observed. The
+partial content stays in the reply but the turn fails, so it is not presented as
+a complete answer. A stop notice delivered with `finish_reason: stop` remains
+indistinguishable; the local guard handles the repetition case.
+
+**Evidence.** The audit recorded the content_filter case as completed. The new
+loop tests: `content_filter` is red on the old code (completed) and green
+(`model_error`), an unknown `safety` value fails, and `stop` still completes.
+The failure-display test asserts the Chinese summary and next step. `npm test`
+**951/951**, typecheck exit 0, gate **PASS**.
+
+**Reversal condition.** If a provider's normal completion reason is rejected,
+add that value to the normal set rather than allowing all unknown values. If
+providers deliver stop notices with `stop`, handle them in the provider adapter.
+
+
 ## 2026-11-19 — The answer is the section; the 结果 gutter is retired
 
 **Decision.** A turn's answer starts at the section's left edge. The 52 px

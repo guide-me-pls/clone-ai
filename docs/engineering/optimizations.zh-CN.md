@@ -26,6 +26,34 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— Provider 的停止是失败，不是完成的回答
+
+- **目标 / 假设：** 审计发现循环只读取 `finish_reason` 的 `length`/`max_tokens`；带
+  `content_filter` 或 Provider 专属停止、且没有工具调用的回答会被记成完成。把任何已定义、且不在
+  正常集合里的 finish reason 当作失败，并把停止映射成中文摘要，应能避免把被拦截或停止的回答
+  当作完整回答。
+- **取舍：** [Provider 的停止是失败，不是完成的回答](../architecture/trade-offs.zh-CN.md#2026-11-19--provider-的停止是失败不是完成的回答)。
+- **变更：** `src/agent/loop.ts` 增加 `NORMAL_FINISH_REASONS`，没有工具调用的回答若 finish
+  reason 不在集合里就以 `model_error` 结束（`length`/`max_tokens` 保留截断消息）；
+  `src/core/failure-display.ts` 把被拦截/停止的回答映射成中文摘要与下一步。测试：
+  `test/agent-loop.test.ts` 覆盖 content_filter、未知 `safety` 值与正常 `stop`；
+  `test/failure-display.test.ts` 覆盖摘要。
+- **Eval：** content_filter 与未知值在旧循环上红（都完成），修复后绿；展示测试在旧映射上红
+  （通用“Worker 执行失败”），修复后绿。`test/agent-loop.test.ts` **31/31**（加展示文件
+  **2/2**）；`npm test` **951/951**；typecheck 退出 0；gate **PASS**，baseline 不变。
+- **Benchmark run：** 无——确定性的循环/展示契约；不涉及 Provider、模型、数据集、切分、种子或
+  评分参数。
+- **执行链路：** 发现来自 41 个代理的审计。修复在本会话内联完成：阅读循环的 finish-reason
+  分支与失败展示；写双语取舍；加白名单、停止消息与展示分支；新增三个循环测试与两个展示测试；
+  把两个生产文件换回 HEAD 复现红色；恢复后跑完整测试、typecheck 与 gate。
+- **优点：** 被拦截/停止的回答永远不会被当作完成；原因点名 finish 值；所有者得到中文摘要与
+  下一步；正常停止不变；不完整文本仍留在 reply 里供诊断。
+- **缺点 / 下次：** 集合外的专有正常 finish 值会被报为失败；以 `finish_reason: stop` 送达的
+  停止提示仍无法区分，只有本机守卫覆盖那种情况。
+- **推翻条件：** 如果某个 Provider 的正常完成原因被拒绝，就把该值加进正常集合，而不是放行所有
+  未知值。如果 Provider 以 `stop` 送达停止提示，就在 Provider 适配器里处理。
+
+
 ### 2026-11-19 —— 失败轨迹携带步骤 instructions
 
 - **目标 / 假设：** 验证器修复的第一次通道运行在 `regression-missing` 闸门失败，因为暂存轨迹的

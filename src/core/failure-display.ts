@@ -90,6 +90,13 @@ export function describeFailureForOwner(
       permissionBlocked: false,
     };
   }
+  if (/content_filter|content filter|safety|provider blocked|stopped without completing an answer/i.test(text)) {
+    return {
+      summary: "提供方拦截或中止了这次回答。",
+      guidance: "调整提问内容或换一种说法后重试；这次没有生成完整回答。",
+      permissionBlocked: false,
+    };
+  }
   if (text.length === 0) {
     return {
       summary: "这次任务没有完成，但没有记录到具体原因。",
