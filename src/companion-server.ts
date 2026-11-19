@@ -349,9 +349,18 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   // cannot disagree about where the owner's data lives.
   // 由唯一的解析器决定所有持久化路径，使 Daemon 与 Main Agent 不会对
   // "所有者数据在哪里" 产生分歧。
-  const paths = resolveClonePaths({
+  // There is no configured working directory. The internal base is an explicit
+  // override (option or CLONE_AI_WORKSPACE) or the clone home; it is used for
+  // relative paths and verification, not as a write permission.
+  // 没有配置的工作目录。内部基准是显式覆盖（选项或 CLONE_AI_WORKSPACE），否则是
+  // clone home；它用于相对路径与验证，不是写权限。
+  const basePaths = resolveClonePaths({
     ...(options.dataDirectory === undefined ? {} : { dataDirectory: options.dataDirectory }),
-    ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+  });
+  const paths = resolveClonePaths({
+    dataDirectory: basePaths.dataDirectory,
+    workspacePath: options.workspacePath
+      ?? (process.env.CLONE_AI_WORKSPACE?.trim() || basePaths.dataDirectory),
   });
   await prepareCloneHome(paths);
   // Copying is additive and never overwrites a file the owner already has in
@@ -952,12 +961,10 @@ async function handleRequest(
       ui: { locale: config.locale, strings: uiStrings(config.locale) },
       paths: {
         dataDirectory: context.paths.dataDirectory,
-        workspacePath: context.paths.workspacePath,
         configFile: context.paths.configFile,
         providersFile: context.paths.providersFile,
         memoryDirectory: join(context.dataDirectory, "memory"),
         outcomesDirectory: context.paths.outcomesDirectory,
-        workspaceRuntimeDirectory: context.paths.workspaceRuntimeDirectory,
       },
     });
     return;
@@ -1031,7 +1038,6 @@ async function handleRequest(
     const current = await context.config.get();
     const piModels = await listMainAgentModels().catch(() => []);
     sendJson(response, 200, {
-      workspacePath: current.workspacePath,
       mainAgentModel: current.mainAgentModel,
       mainAgentEffort: current.mainAgentEffort,
       effortLevels: EFFORT_LEVELS,
@@ -1042,10 +1048,14 @@ async function handleRequest(
 
   if (request.method === "PATCH" && url.pathname === "/api/config") {
     const body = await readJsonBody(request);
-    const update: { workspacePath?: string; locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined; mainAgentBaseUrl?: string; mainAgentApiKey?: string; maxConcurrentWorkers?: number; maxConcurrentMainAgents?: number } = {};
-    if (typeof body.workspacePath === "string" && body.workspacePath.trim().length > 0) {
-      update.workspacePath = body.workspacePath.trim();
+    // The setting is gone, not hidden. An old client that still sends it gets
+    // an explicit refusal instead of a silent no-op.
+    // 这个设置已被移除，而不是被隐藏。仍然发送它的旧客户端会得到明确拒绝，而不是静默无效。
+    if ("workspacePath" in body) {
+      sendJson(response, 400, { error: "The working-directory setting was removed; a step names its own write targets." });
+      return;
     }
+    const update: { locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined; mainAgentBaseUrl?: string; mainAgentApiKey?: string; maxConcurrentWorkers?: number; maxConcurrentMainAgents?: number } = {};
     if (body.locale === "zh-CN" || body.locale === "en") update.locale = body.locale;
     if ("mainAgentModel" in body) {
       if (typeof body.mainAgentModel !== "string") {
@@ -1103,24 +1113,16 @@ async function handleRequest(
       }
     }
     if (Object.keys(update).length === 0) {
-      sendJson(response, 400, { error: "Provide a workspacePath, locale, mainAgentModel, mainAgentEffort, mainAgentBaseUrl, mainAgentApiKey, maxConcurrentWorkers, or maxConcurrentMainAgents to change." });
+      sendJson(response, 400, { error: "Provide a locale, mainAgentModel, mainAgentEffort, mainAgentBaseUrl, mainAgentApiKey, maxConcurrentWorkers, or maxConcurrentMainAgents to change." });
       return;
     }
     const config = await context.config.update(update);
-    // The runtime captured its workspace at boot: the assembly, the queue
-    // consumer and the scheduler all hold that path. Saving a different one is
-    // durable but cannot take effect here, so say so instead of letting the
-    // settings page imply a switch that did not happen.
-    // Runtime 在启动时固定了工作区：Assembly、队列消费者与调度器都持有那个路径。保存另一个
-    // 路径会持久化，但无法在这里生效；明确说出来，而不是让设置页暗示一次并未发生的切换。
-    const restartRequired = update.workspacePath !== undefined
-      && resolve(update.workspacePath) !== resolve(context.paths.workspacePath);
     // The pin is re-read on every dispatch, so this refresh is belt-and-braces;
     // it also makes an auto-mode change visible immediately in capacity reads.
     // 每次派发都会重新读取固定值，因此这里刷新只是双保险；它也自动模式的变化立即体现在
     // 容量读取中。
     await context.refreshCapacityPin().catch(() => undefined);
-    sendJson(response, 200, { config: publicConfig(config), ...(restartRequired ? { restartRequired: true } : {}) });
+    sendJson(response, 200, { config: publicConfig(config) });
     return;
   }
 

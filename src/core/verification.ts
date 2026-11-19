@@ -3,7 +3,7 @@ import { isAbsolute, resolve } from "node:path";
 
 import type { Evidence, PlanStep, Verifier, VerificationResult } from "./contracts.ts";
 import { DiffFileVerifier, TestCommandVerifier } from "./verifier-plugins.ts";
-import { verifiedWorkspacePath } from "./verified-workspace-path.ts";
+import { verifiedPathInRoots } from "./verified-workspace-path.ts";
 
 /**
  * What an acceptance criterion can be checked against on this machine.
@@ -178,8 +178,9 @@ export class EvidenceVerifier implements Verifier {
         unverified.push(...step.acceptanceCriteria.map((criterion) => `${step.title}: ${criterion}`));
         continue;
       }
+      const roots = this.#rootsForStep(step);
       for (const expectation of expectations) {
-        const problem = await this.checkFile(expectation, stepEvidence);
+        const problem = await this.checkFile(expectation, stepEvidence, roots);
         if (problem !== undefined) failures.push(`${step.title}: ${problem}`);
       }
       for (const criterion of step.acceptanceCriteria) {
@@ -197,7 +198,7 @@ export class EvidenceVerifier implements Verifier {
       // summary made the record show the same long text twice.
       // 标准本身有独立字段；在摘要里再重复一遍会让记录把同一段长文本显示两次。
       summary: passed
-        ? `Verified ${input.plan.steps.length} step(s) against the workspace.`
+        ? `Verified ${input.plan.steps.length} step(s) against the authorized roots.`
         : needsReview
           ? `Automatic checks passed; ${unverified.length} of ${reviewableCriteria(input.plan).length} acceptance criteria still need the owner's review.`
           : `Verification failed. ${failures.join("; ")}.`,
@@ -207,13 +208,31 @@ export class EvidenceVerifier implements Verifier {
   }
 
   /**
+   * The roots this step may be verified against: the internal base, plus every
+   * files write scope the step declared. A scope is where the owner allowed
+   * this step to write, so it is also where the verifier may read.
+   * 该步骤可用于验证的根：内部基准，加上步骤声明的每个 files 写 Scope。Scope 是所有者
+   * 允许该步骤写入的位置，因此也是验证器可以读取的位置。
+   */
+  #rootsForStep(step: PlanStep): Array<string | undefined> {
+    const scopes = (step.scopes ?? [])
+      .filter((scope) => scope.domain === "files" && scope.access !== "read")
+      .map((scope) => scope.resource);
+    return [this.#workspacePath, ...scopes];
+  }
+
+  /**
    * Resolves the promised path and reads it. A locator recorded by the agent is
    * preferred, because the agent knows where it actually wrote; the plan's path
-   * is the fallback and is resolved inside the workspace.
+   * is resolved inside one of the authorized roots.
    * 解析承诺的路径并读取。优先使用 Agent 记录的 locator，因为 Agent 知道自己真正写到
-   * 了哪里；计划里的路径作为兜底，并在 Workspace 内解析。
+   * 了哪里；计划里的路径在任一授权根内解析。
    */
-  private async checkFile(expectation: FileExpectation, evidence: Evidence[]): Promise<string | undefined> {
+  private async checkFile(
+    expectation: FileExpectation,
+    evidence: Evidence[],
+    roots: readonly (string | undefined)[],
+  ): Promise<string | undefined> {
     const candidates: string[] = [];
     for (const item of evidence) {
       const locator = item.locator;
@@ -222,17 +241,20 @@ export class EvidenceVerifier implements Verifier {
     }
     if (isAbsolute(expectation.path)) {
       candidates.push(expectation.path);
-    } else if (this.#workspacePath !== undefined) {
-      candidates.push(resolve(this.#workspacePath, expectation.path));
+    } else {
+      for (const root of roots) {
+        if (root === undefined) continue;
+        candidates.push(resolve(root, expectation.path));
+      }
     }
     if (candidates.length === 0) {
-      return `"${expectation.path}" could not be located (no workspace configured and no evidence locator)`;
+      return `"${expectation.path}" could not be located (no authorized root and no evidence locator)`;
     }
 
     for (const candidate of candidates) {
       let contents: string;
       try {
-        const safe = await verifiedWorkspacePath(candidate, this.#workspacePath);
+        const safe = await verifiedPathInRoots(candidate, roots);
         if (safe === undefined) continue;
         const info = await stat(safe);
         if (!info.isFile()) continue;

@@ -39,7 +39,7 @@
     "verdict/negated-path-is-not-a-deliverable": "review",
     "verdict/tests-named-as-deliverable-needs-no-test-evidence": "review",
     "policy/local-read-allowed": "allowed",
-    "policy/local-write-allowed": "allowed",
+    "policy/local-write-without-scope-denied": "denied",
     "policy/external-needs-approval": "approval_required",
     "policy/external-approved": "allowed",
     "policy/irreversible-needs-approval": "approval_required",

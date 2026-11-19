@@ -35,7 +35,7 @@ test("the config endpoint reports where the owner's data lives", async (t) => {
   const response = await companionFetch(url, token, "/api/config");
   assert.equal(response.status, 200);
   const body = await response.json() as {
-    config: { workspacePath: string; locale: string };
+    config: { locale: string };
     ui?: { locale: string; strings?: Record<string, string> };
     paths: Record<string, string>;
   };
@@ -43,6 +43,11 @@ test("the config endpoint reports where the owner's data lives", async (t) => {
   assert.equal(body.paths.dataDirectory, dataDirectory);
   assert.match(body.paths.providersFile, /providers\.json$/);
   assert.equal(body.config.locale, "zh-CN");
+  // There is no working-directory setting: neither the config nor the public
+  // paths payload exposes one.
+  // 没有工作目录设置：配置与公开路径载荷都不暴露它。
+  assert.equal("workspacePath" in body.config, false);
+  assert.equal("workspacePath" in body.paths, false);
   assert.equal(body.ui?.locale, "zh-CN");
   assert.equal(body.ui?.strings?.["new-session"], "新请求");
   // A settings payload must never become a place a credential could appear.
@@ -298,38 +303,37 @@ test("the gateway inventory is loopback-only and carries no credentials", async 
   assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
 });
 
-test("the owner can change the workspace and locale through the API", async (t) => {
+test("the owner can change the locale, but there is no workspace setting", async (t) => {
   const { url, token } = await companion(t);
+
+  const removed = await companionFetch(url, token, "/api/config", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ workspacePath: "/tmp/another-project" }),
+  });
+  assert.equal(removed.status, 400);
+  assert.match((await removed.json() as { error: string }).error, /working-directory setting was removed/);
 
   const updated = await companionFetch(url, token, "/api/config", {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ workspacePath: "/tmp/another-project", locale: "en" }),
+    body: JSON.stringify({ locale: "en" }),
   });
   assert.equal(updated.status, 200);
   const updatedBody = await updated.json() as { config: { locale: string }; restartRequired?: boolean };
   assert.equal(updatedBody.config.locale, "en");
-  // The runtime captured its workspace at boot; a different saved path cannot
-  // be active until the app restarts, and the response must say so.
-  // Runtime 在启动时固定了工作区；保存另一个路径在重启前无法生效，响应必须说明这一点。
-  assert.equal(updatedBody.restartRequired, true);
+  assert.equal(updatedBody.restartRequired, undefined);
 
   // The change is durable, not just echoed back.
   // 变更是持久的，而不只是被回显。
-  const reread = await (await companionFetch(url, token, "/api/config")).json() as { config: { workspacePath: string; locale: string }; paths: { workspacePath: string } };
-  assert.equal(reread.config.workspacePath, "/tmp/another-project");
+  const reread = await (await companionFetch(url, token, "/api/config")).json() as {
+    config: { locale: string };
+    paths: Record<string, string>;
+  };
   assert.equal(reread.config.locale, "en");
+  assert.equal("workspacePath" in reread.config, false);
+  assert.equal("workspacePath" in reread.paths, false);
   assert.equal((await (await companionFetch(url, token, "/api/config")).json() as { ui: { strings: Record<string, string> } }).ui.strings["new-session"], "New request");
-
-  // Saving the path the runtime already uses is not a pending change.
-  // 保存 Runtime 已在使用的路径不算待生效变更。
-  const same = await companionFetch(url, token, "/api/config", {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ workspacePath: reread.paths.workspacePath }),
-  });
-  assert.equal(same.status, 200);
-  assert.equal((await same.json() as { restartRequired?: boolean }).restartRequired, undefined);
 
   const empty = await companionFetch(url, token, "/api/config", {
     method: "PATCH",

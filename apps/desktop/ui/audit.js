@@ -87,8 +87,17 @@
     if (q) params.set("q", q);
     const data = await api(`/api/audit/turns?${params}`);
     if (seq !== turnSeq) return false;
-    state.turns = (data.turns ?? []).filter((turn) => filter === null
-      || (turn.turnId === filter.turnId && (filter.conversationId === undefined || turn.conversationId === filter.conversationId)));
+    const turns = data.turns ?? [];
+    const byTurn = filter === null ? turns : turns.filter((turn) => turn.turnId === filter.turnId);
+    // Prefer the exact conversation, but do not turn a conversation-id mismatch
+    // into an empty landing: a session id and a journal conversation id can
+    // differ for a channel, while the turn id is still unique enough to land.
+    // 优先精确对话，但不要把对话 id 不一致变成空落点：某个通道的会话 id 与 Journal 对话 id
+    // 可能不同，而回合 id 仍足以落到该回合。
+    const narrowed = filter?.conversationId === undefined
+      ? byTurn
+      : byTurn.filter((turn) => turn.conversationId === filter.conversationId);
+    state.turns = filter === null ? turns : (narrowed.length > 0 ? narrowed : byTurn);
     state.turnTotal = filter ? state.turns.length : (typeof data.total === "number" ? data.total : state.turns.length);
     state.turnError = null;
     return true;
@@ -712,12 +721,15 @@
     const pick = (selector) => t.closest(selector);
     let el;
     if ((el = pick("[data-au-view]"))) {
-      state.view = el.dataset.auView;
+      const view = el.dataset.auView;
       // Choosing the tab is a request for the turn list, not for the one turn a
       // 依据 link landed on.
       // 点标签是要求看回合列表，而不是"依据"链接落到的单个回合。
-      if (state.view === "turns") state.turnFilter = null;
+      const clearedFilter = view === "turns" && state.turnFilter !== null;
+      state.view = view;
+      if (view === "turns") state.turnFilter = null;
       render();
+      if (clearedFilter) await refreshTurns();
       return;
     }
     if (pick("[data-au-turn-clear]")) { state.turnFilter = null; state.turnQuery = ""; render(); await refreshTurns(); return; }

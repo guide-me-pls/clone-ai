@@ -38,23 +38,48 @@ export interface AuthorityPolicyOptions {
   config: () => AuthorityConfig;
   now?: () => Date;
   home?: string;
+  /**
+   * The repair lane's isolated worktree. It is a sandbox the Kernel created and
+   * owns, not the owner's machine, so an unscoped write there is not the
+   * implicit folder permission the owner removed. Owner-facing runtime
+   * assemblies never set this.
+   * 修复通道的隔离 worktree。它是由 Kernel 创建并拥有的沙箱，不是所有者的机器，因此那里
+   * 的无 Scope 写入不是所有者移除的那种隐式文件夹权限。面向所有者的运行时组装从不设置它。
+   */
+  writableSandbox?: boolean;
 }
 
 export class AuthorityPolicyEngine implements PolicyEngine {
   readonly #config: () => AuthorityConfig;
   readonly #now: () => Date;
   readonly #home: string | undefined;
+  readonly #writableSandbox: boolean;
   readonly #base = new DefaultPolicyEngine();
 
   constructor(options: AuthorityPolicyOptions) {
     this.#config = options.config;
     this.#now = options.now ?? (() => new Date());
     this.#home = options.home;
+    this.#writableSandbox = options.writableSandbox === true;
   }
 
   evaluate(input: Parameters<PolicyEngine["evaluate"]>[0]): PolicyDecision {
     const scopes = input.step.scopes ?? [];
     const base = this.#base.evaluate({ ...input, approved: false });
+    // A step that writes files in place must name where. Without any write
+    // scope the engine has nothing to judge, and falling through to the
+    // risk-based default would allow it — the exact implicit permission the
+    // owner removed when the working-directory setting went away.
+    // 原地写文件的步骤必须点名写到哪里。没有任何写 Scope 时引擎没有可判定的东西，
+    // 落到基于风险的默认会直接放行——正是所有者移除工作目录设置时去掉的那种隐式权限。
+    if (input.step.risk === "reversible_write"
+      && !scopes.some((scope) => scope.access !== "read")
+      && !this.#writableSandbox) {
+      return {
+        outcome: "denied",
+        reason: "The step can write but names no write scope; name the exact target, or use a step that only reads.",
+      };
+    }
     if (scopes.length === 0) return this.#base.evaluate(input);
 
     const config = this.#config();

@@ -248,12 +248,12 @@ test("a realistic image attachment is accepted instead of failing on the body ca
   assert.equal(response.status, 200, "a realistic image must not hit the request-body cap");
 });
 
-test("the Main Agent reads its project instructions from the configured workspace", async (t) => {
-  // The daemon's cwd is the checkout it was started from. A request about a
-  // project in another folder must not be answered with this repository's
-  // AGENTS.md, and the prompt must say where the worker boundary is.
-  // Daemon 的 cwd 是它被启动时所在的检出。关于另一个文件夹里项目的问题，绝不能用本仓库的
-  // AGENTS.md 来回答；Prompt 还必须说明 Worker 的边界在哪里。
+test("the Main Agent reads its project instructions from the internal base", async (t) => {
+  // The daemon's cwd is the checkout it was started from. The internal base
+  // locates project rules, but it is not named in the prompt: there is no
+  // configured working directory.
+  // Daemon 的 cwd 是它被启动时所在的检出。内部基准用于定位项目规则，但它不在 Prompt
+  // 里点名：没有配置的工作目录。
   const captured: Array<Record<string, unknown>> = [];
   const modelServer = createServer((request, response) => {
     if (request.url !== "/v1/chat/completions") { response.writeHead(404); response.end(); return; }
@@ -298,9 +298,9 @@ test("the Main Agent reads its project instructions from the configured workspac
   const messages = (captured[0]?.messages ?? []) as Array<{ role: string; content?: string }>;
   const system = messages.find((message) => message.role === "system")?.content ?? "";
   assert.match(system, /WORKSPACE_MARKER_ONLY_IN_THE_CONFIGURED_FOLDER/);
-  assert.ok(system.includes(`Current workspace: ${workspaceDirectory}`), "the prompt must name the configured workspace");
-  assert.match(system, /This computer is the readable surface/);
+  assert.match(system, /This computer is the workspace/);
   assert.match(system, /no filesystem tool of your own/);
+  assert.doesNotMatch(system, /Current workspace:/, "the prompt must not name a configured folder");
   assert.doesNotMatch(system, /rules for changing Clone AI/, "the daemon's cwd must not supply the project rules");
 });
 

@@ -4,7 +4,6 @@ import type { ClonePaths } from "./clone-home.ts";
 
 export interface CloneConfig {
   version: 1;
-  workspacePath: string;
   locale: "zh-CN" | "en";
   /**
    * Model id for the Main Agent, as the OpenAI-compatible endpoint names it.
@@ -52,22 +51,20 @@ export interface CloneConfig {
 
 export class CloneConfigStore {
   readonly #paths: ClonePaths;
-  readonly #defaultWorkspace: string;
   #writes: Promise<void> = Promise.resolve();
 
   constructor(paths: ClonePaths) {
     this.#paths = paths;
-    this.#defaultWorkspace = paths.workspacePath;
   }
 
   async get(): Promise<CloneConfig> {
     const value = await readJsonFile<Partial<CloneConfig>>(this.#paths.configFile);
-    return normalizeConfig(value, this.#defaultWorkspace);
+    return normalizeConfig(value);
   }
 
-  async update(update: Partial<Pick<CloneConfig, "workspacePath" | "locale" | "mainAgentModel" | "mainAgentEffort" | "mainAgentBaseUrl" | "mainAgentApiKey" | "maxConcurrentWorkers" | "maxConcurrentMainAgents">>): Promise<CloneConfig> {
+  async update(update: Partial<Pick<CloneConfig, "locale" | "mainAgentModel" | "mainAgentEffort" | "mainAgentBaseUrl" | "mainAgentApiKey" | "maxConcurrentWorkers" | "maxConcurrentMainAgents">>): Promise<CloneConfig> {
     const current = await this.get();
-    const next = normalizeConfig({ ...current, ...update }, this.#defaultWorkspace);
+    const next = normalizeConfig({ ...current, ...update });
     const write = this.#writes.then(() => writeJsonAtomic(this.#paths.configFile, next));
     this.#writes = write.then(() => undefined, () => undefined);
     await write;
@@ -75,15 +72,12 @@ export class CloneConfigStore {
   }
 }
 
-function normalizeConfig(value: Partial<CloneConfig> | undefined, defaultWorkspace: string): CloneConfig {
+function normalizeConfig(value: Partial<CloneConfig> | undefined): CloneConfig {
   const mainAgentModel = nonEmpty(value?.mainAgentModel);
   const mainAgentBaseUrl = nonEmpty(value?.mainAgentBaseUrl)?.replace(/\/+$/, "");
   const mainAgentApiKey = nonEmpty(value?.mainAgentApiKey);
   return {
     version: 1,
-    workspacePath: typeof value?.workspacePath === "string" && value.workspacePath.trim().length > 0
-      ? value.workspacePath
-      : defaultWorkspace,
     locale: value?.locale === "en" ? "en" : "zh-CN",
     ...(mainAgentModel === undefined ? {} : { mainAgentModel }),
     ...(mainAgentBaseUrl === undefined ? {} : { mainAgentBaseUrl }),

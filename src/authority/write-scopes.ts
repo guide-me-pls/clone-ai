@@ -1,20 +1,20 @@
 /**
  * A plan names intent, not a writable folder.
  *
- * The workspace is where a new deliverable usually lands, not a permission.
- * Every step that can write must carry a `files` write scope, and the policy
+ * There is no fixed working directory. Every step that can write must carry a
+ * `files` write scope for the exact targets it will touch, and the policy
  * engine judges that scope like any other: `observe` denies it, `prepare` and
  * `act_with_approval` ask the owner, and only an `act_auto` standing policy
- * allows it without a prompt. When a step names no target of its own, the
- * workspace is proposed as an explicit scope; the planner never grants it
- * silently.
+ * allows it without a prompt. When a step names no target of its own, this
+ * module adds nothing: the Kernel does not invent a folder, and the authority
+ * policy denies a write that named no target.
  *
  * 计划表达的是意图，而不是一个可写文件夹。
  *
- * 工作区通常是新产出的落点，但不是权限。每个可能写入的步骤都必须携带 `files` 写 Scope，
+ * 没有固定的工作目录。每个可能写入的步骤都必须为它实际触碰的目标携带 `files` 写 Scope，
  * 由权限引擎像其他 Scope 一样判定：`observe` 拒绝，`prepare` 与 `act_with_approval`
- * 询问所有者，只有 `act_auto` 常设策略才无需询问。步骤没有点名目标时，把工作区作为显式
- * Scope 提出；Planner 从不悄悄授予它。
+ * 询问所有者，只有 `act_auto` 常设策略才无需询问。步骤没有点名目标时，本模块不添加任何
+ * Scope：Kernel 不凭空发明文件夹，权限引擎会拒绝没有点名目标的写入。
  */
 import { isAbsolute } from "node:path";
 
@@ -22,8 +22,6 @@ import type { PlanStep } from "../core/contracts.ts";
 import { expandHome, type Scope } from "./scope.ts";
 
 export interface WriteScopeDefaults {
-  /** The folder relative paths resolve against and the fallback write target. 相对路径的基准，也是缺省写入目标。 */
-  workspacePath?: string;
   /** The owner's request or plan summary, scanned for explicitly named targets. 所有者的请求或计划摘要，用于查找显式目标。 */
   requestText?: string;
 }
@@ -93,11 +91,13 @@ function withWriteScope(step: PlanStep, defaults: WriteScopeDefaults): PlanStep 
   if (scopes.some((scope) => scope.domain === "files" && scope.access !== "read")) return step;
 
   const named = declaredWriteTargets([step.title, step.instructions, defaults.requestText ?? ""].join("\n"));
-  const targets = named.length > 0
-    ? named
-    : defaults.workspacePath === undefined ? [] : [defaults.workspacePath];
-  if (targets.length === 0) return step;
+  // No target named means no scope. A default folder here is exactly the
+  // implicit permission the owner removed; the policy engine will deny the
+  // step instead of a folder being invented for it.
+  // 没有点名目标就没有 Scope。在这里给一个默认文件夹，正是所有者移除的那种隐式权限；
+  // 权限引擎会拒绝该步骤，而不是替它发明一个文件夹。
+  if (named.length === 0) return step;
 
-  const additions: Scope[] = targets.map((resource) => ({ domain: "files", resource, access: "write" }));
+  const additions: Scope[] = named.map((resource) => ({ domain: "files", resource, access: "write" }));
   return { ...step, scopes: [...scopes, ...additions] };
 }

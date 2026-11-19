@@ -8,7 +8,12 @@ export const LEGACY_CLONE_DIRECTORY_NAME = ".clone-ai";
 export interface ClonePaths {
   /** User-owned global data directory. 用户拥有的全局数据目录。 */
   dataDirectory: string;
-  /** Workspace controlled by the current desktop/runtime session. 当前桌面 Runtime 控制的项目目录。 */
+  /**
+   * The internal base for relative paths, project-instruction lookup and the
+   * verifier's default root. It is not an owner setting and not a permission;
+   * writes name their own targets. 相对路径、项目指令查找与验证器默认根的内部基准。
+   * 它不是所有者设置，也不是权限；写入自己点名目标。
+   */
   workspacePath: string;
   configFile: string;
   agentsFile: string;
@@ -22,6 +27,13 @@ export interface ClonePaths {
   outcomesDirectory: string;
   checkpointsDirectory: string;
   sessionsDirectory: string;
+  /**
+   * Runtime coordination for in-place work. It lives in the clone home, not in
+   * a project folder: there is no fixed working directory whose `.clone`
+   * directory could own it.
+   * 原地工作的运行时协调数据。它在 clone home 里，而不是项目文件夹里：没有固定工作目录，
+   * 也就没有它的 `.clone` 目录可以存放这些数据。
+   */
   workspaceRuntimeDirectory: string;
   workspaceLockFile: string;
   /**
@@ -56,7 +68,10 @@ export function resolveClonePaths(options: ClonePathOptions = {}): ClonePaths {
       ?? join(home, CLONE_DIRECTORY_NAME),
   );
   const workspacePath = resolve(options.workspacePath ?? env.CLONE_AI_WORKSPACE ?? cwd);
-  const workspaceRuntimeDirectory = join(workspacePath, CLONE_DIRECTORY_NAME);
+  // Runtime state belongs to the clone home. There is no fixed working
+  // directory, so a project folder cannot be the owner of the execution lock.
+  // 运行时状态属于 clone home。没有固定工作目录，因此项目文件夹不能成为执行锁的持有者。
+  const workspaceRuntimeDirectory = join(dataDirectory, "workspace-runtime");
 
   return {
     dataDirectory,

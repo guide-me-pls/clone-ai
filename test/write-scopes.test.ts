@@ -12,11 +12,11 @@ import { createJournalStore } from "../src/core/sqlite-journal.ts";
 
 /**
  * Writes have no workspace permission. A write step must name where it writes;
- * when it names nothing, the workspace is proposed as an explicit scope, and
- * the policy engine still decides. These cases are the difference between an
- * implicit root and a checked grant.
- * 写入没有工作区权限。写入步骤必须点名写入位置；没有点名时，工作区作为显式 Scope 提出，
- * 仍由权限引擎判定。这些用例区分"隐式根"与"受检授权"。
+ * when it names nothing, no scope is added and the authority policy denies the
+ * step. These cases are the difference between an implicit root and a checked
+ * grant.
+ * 写入没有工作区权限。写入步骤必须点名写入位置；没有点名时不添加任何 Scope，权限策略
+ * 会拒绝该步骤。这些用例区分"隐式根"与"受检授权"。
  */
 function step(overrides: Partial<PlanStep> = {}): PlanStep {
   return {
@@ -31,15 +31,15 @@ function step(overrides: Partial<PlanStep> = {}): PlanStep {
   };
 }
 
-test("a write step with no target gets the workspace as an explicit scope", () => {
-  const [scoped] = ensureWriteScopes([step()], { workspacePath: "/Users/owner/project" });
-  assert.deepEqual(scoped?.scopes, [{ domain: "files", resource: "/Users/owner/project", access: "write" }]);
+test("a write step with no target gets no scope", () => {
+  const [scoped] = ensureWriteScopes([step()], {});
+  assert.equal(scoped?.scopes, undefined);
 });
 
-test("an absolute target in the instructions wins over the workspace", () => {
+test("an absolute target in the instructions becomes its own scope", () => {
   const [scoped] = ensureWriteScopes(
     [step({ instructions: "Write the quarterly report to /tmp/reports/q1.md." })],
-    { workspacePath: "/Users/owner/project" },
+    {},
   );
   assert.deepEqual(scoped?.scopes, [{ domain: "files", resource: "/tmp/reports/q1.md", access: "write" }]);
 });
@@ -48,7 +48,7 @@ test("a ~/ target is expanded, de-duplicated, and URLs are not paths", () => {
   const target = join(homedir(), "notes", "a.md");
   const [scoped] = ensureWriteScopes(
     [step({ instructions: `Save to ~/notes/a.md and ~/notes/a.md; see https://example.com/docs.` })],
-    { workspacePath: "/ws" },
+    {},
   );
   assert.deepEqual(scoped?.scopes, [{ domain: "files", resource: target, access: "write" }]);
 });
@@ -57,21 +57,21 @@ test("an existing write scope is kept exactly as declared", () => {
   const declared = { domain: "files" as const, resource: "/srv/output", access: "write" as const };
   const [scoped] = ensureWriteScopes(
     [step({ scopes: [declared] })],
-    { workspacePath: "/Users/owner/project" },
+    {},
   );
   assert.deepEqual(scoped?.scopes, [declared]);
 });
 
-test("a files read scope does not satisfy the write requirement", () => {
+test("a files read scope is not a write scope and is not widened", () => {
   const read = { domain: "files" as const, resource: "/Users/owner/project", access: "read" as const };
-  const [scoped] = ensureWriteScopes([step({ scopes: [read] })], { workspacePath: "/Users/owner/project" });
-  assert.deepEqual(scoped?.scopes, [read, { domain: "files", resource: "/Users/owner/project", access: "write" }]);
+  const [scoped] = ensureWriteScopes([step({ scopes: [read] })], {});
+  assert.deepEqual(scoped?.scopes, [read]);
 });
 
 test("read-only and external steps are left alone", () => {
-  const readOnly = ensureWriteScopes([step({ risk: "read_only" })], { workspacePath: "/ws" })[0];
+  const readOnly = ensureWriteScopes([step({ risk: "read_only" })], {})[0];
   assert.equal(readOnly?.scopes, undefined);
-  const external = ensureWriteScopes([step({ risk: "external_side_effect" })], { workspacePath: "/ws" })[0];
+  const external = ensureWriteScopes([step({ risk: "external_side_effect" })], {})[0];
   assert.equal(external?.scopes, undefined);
 });
 
@@ -88,7 +88,7 @@ test("a path before the write cue is not a write target", () => {
   assert.deepEqual(declaredWriteTargets("把结果写到 /tmp/report.md"), ["/tmp/report.md"]);
 });
 
-test("the proposed workspace scope is still denied while files are observe-only", async () => {
+test("a no-target write is denied, while a named target follows the approval ladder", async () => {
   const home = await mkdtemp(join(tmpdir(), "clone-write-scopes-"));
   const workspace = join(home, "project");
   await mkdir(workspace, { recursive: true });
@@ -99,15 +99,20 @@ test("the proposed workspace scope is still denied while files are observe-only"
     const store = new StandingPolicyStore(data, journal);
     await store.load();
     const engine = new AuthorityPolicyEngine({ config: () => store.snapshot(), home });
-    const [scoped] = ensureWriteScopes([step()], { workspacePath: workspace });
-    assert.ok(scoped?.scopes !== undefined);
-    const denied = engine.evaluate({ run: {} as never, task: {} as never, step: scoped, approved: true });
-    assert.equal(denied.outcome, "denied", "observe-only files must deny even an approved write");
+
+    const [unscoped] = ensureWriteScopes([step()], {});
+    assert.equal(unscoped?.scopes, undefined);
+    const denied = engine.evaluate({ run: {} as never, task: {} as never, step: unscoped!, approved: true });
+    assert.equal(denied.outcome, "denied", "a write that names no target has nothing the owner can approve");
+    assert.match(denied.reason, /names no write scope/);
+
+    const [scoped] = ensureWriteScopes([step({ instructions: "Write /tmp/reports/q1.md." })], {});
+    assert.deepEqual(scoped?.scopes, [{ domain: "files", resource: "/tmp/reports/q1.md", access: "write" }]);
 
     await store.setDomainLevel("files", "act_with_approval");
-    const needsApproval = engine.evaluate({ run: {} as never, task: {} as never, step: scoped, approved: false });
+    const needsApproval = engine.evaluate({ run: {} as never, task: {} as never, step: scoped!, approved: false });
     assert.equal(needsApproval.outcome, "approval_required");
-    const approved = engine.evaluate({ run: {} as never, task: {} as never, step: scoped, approved: true });
+    const approved = engine.evaluate({ run: {} as never, task: {} as never, step: scoped!, approved: true });
     assert.equal(approved.outcome, "allowed");
   } finally {
     (journal as { close?: () => void }).close?.();

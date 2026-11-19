@@ -16,18 +16,19 @@
       "expectedOutcome": "allowed"
     },
     {
-      "id": "local-write-allowed",
-      "title": "A reversible local write needs no approval",
+      "id": "local-write-without-scope-denied",
+      "title": "A local write that names no target is denied",
       "step": {
         "id": "write",
-        "title": "Write inside the workspace",
-        "instructions": "Write a file inside the workspace.",
+        "title": "Write a file",
+        "instructions": "Write a file.",
         "risk": "reversible_write",
         "acceptanceCriteria": []
       },
       "approved": false,
       "authority": { "version": 1, "domains": {}, "policies": [] },
-      "expectedOutcome": "allowed"
+      "expectedOutcome": "denied",
+      "note": "There is no default working directory; a write must name its exact target as a scope."
     },
     {
       "id": "external-needs-approval",

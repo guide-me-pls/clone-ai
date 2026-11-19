@@ -48,7 +48,7 @@ export const MAIN_AGENT_CHARTER = [
   "or needs an executor. A one-step direct_response proposal is rejected by the Kernel.",
   "Authority is per domain and set only by the owner. Reads need no scope. Call get_authority before proposing a step that writes,",
   "declare the exact files write scope for every target, and never ask a worker to exceed it: the Kernel denies protected locations",
-  "and anything the owner has not allowed, and no approval can open a protected location. No folder, including the workspace, is writable without a scope.",
+  "and anything the owner has not allowed, and no approval can open a protected location. No folder is writable without a scope; if a step names no target, the Kernel will not invent one.",
   "You cannot execute work yourself, cannot approve anything, and cannot mark work complete — workers and the Kernel do that.",
   "When a worker is not installed, tell the owner to use the desktop installation control. You cannot authorize installation.",
   "Steps that touch external systems must carry risk external_side_effect or irreversible so the Kernel can gate them.",
@@ -67,7 +67,7 @@ export const MAIN_AGENT_CHARTER = [
  * 上面那份 charter 的语义版本。含义变化时递增；哈希已经能捕捉措辞修改，而版本号
  * 才是人比较两个基线时真正会读的东西。
  */
-export const MAIN_AGENT_CHARTER_VERSION = 6;
+export const MAIN_AGENT_CHARTER_VERSION = 7;
 
 /**
  * Whether synthesized recall is on. Off by default: it costs one model call on
@@ -81,13 +81,13 @@ export function memorySynthesisEnabled(environment: NodeJS.ProcessEnv = process.
   return value === "1" || value === "on" || value === "true";
 }
 
-export function workspaceGuidance(workspacePath: string): string {
+export function machineGuidance(): string {
   return [
-    `Current workspace: ${workspacePath}`,
-    "This computer is the readable surface: workers can read any readable location on it except protected locations (credentials, browser profiles, and Clone AI's own audit trail), and a read needs no scope.",
-    "No folder is writable by default. A step that writes declares a files write scope for every target; the Kernel checks it against the owner's authority and may require approval. If a write step names no target, the Kernel proposes the workspace as an explicit scope; the owner's authority still checks it. The workspace is where new work usually lands, not a permission.",
-    "You have no filesystem tool of your own. When the owner names a project without a path, dispatch a read-only step to locate and read it on this computer, or ask the owner for the path; never present this workspace's files as that project's code.",
-    "If the named project cannot be found or read, say so and stop rather than reviewing this workspace in its place.",
+    "This computer is the workspace. There is no fixed working directory.",
+    "Reads may reach any readable location on this computer except protected locations (credentials, browser profiles, and Clone AI's own audit trail); a read needs no scope.",
+    "No folder is writable by default. A step that writes must declare a files write scope for every exact target; the Kernel checks it against the owner's authority and may require approval. If a step names no target, the Kernel does not invent a folder and the policy denies it.",
+    "You have no filesystem tool of your own. When the owner names a project without a path, dispatch a read-only step to locate and read it on this computer, or ask the owner for the path; never present the internal base folder's files as that project's code.",
+    "If the named project cannot be found or read, say so and stop.",
   ].join("\n");
 }
 
@@ -129,10 +129,13 @@ export async function compileMainAgentPrompt(options: {
 }): Promise<CompiledMainAgentPrompt> {
   const cwd = options.cwd ?? process.cwd();
   const workspacePath = resolve(cwd);
-  const workspace = workspaceGuidance(workspacePath);
+  // The internal base still locates project instructions and briefings; it is
+  // not named in the prompt and is not a permission.
+  // 内部基准仍用于定位项目指令与简报；它不在 Prompt 里点名，也不是权限。
+  const machine = machineGuidance();
   const conversation = conversationGuidance(options.conversationId ?? MAIN_AGENT_DEFAULT_CONVERSATION_ID);
   const journal = createJournalStore(options.dataDirectory);
-  let systemPrompt = `${MAIN_AGENT_CHARTER}\n\n${workspace}\n\n${conversation}`;
+  let systemPrompt = `${MAIN_AGENT_CHARTER}\n\n${machine}\n\n${conversation}`;
   let briefing: string | undefined;
   let briefingError: string | undefined;
   // Project instructions are independent of the journal and the briefing: a
@@ -172,7 +175,7 @@ export async function compileMainAgentPrompt(options: {
       });
     systemPrompt = [
       MAIN_AGENT_CHARTER,
-      workspace,
+      machine,
       conversation,
       ...(instructions === undefined ? [] : [instructions.text]),
       executors.text,
@@ -187,7 +190,7 @@ export async function compileMainAgentPrompt(options: {
     // 规则），并如实说明。
     const reason = error instanceof Error ? error.message : String(error);
     briefingError = reason;
-    systemPrompt = [MAIN_AGENT_CHARTER, workspace, conversation, ...(instructions === undefined ? [] : [instructions.text])].join("\n\n");
+    systemPrompt = [MAIN_AGENT_CHARTER, machine, conversation, ...(instructions === undefined ? [] : [instructions.text])].join("\n\n");
     systemPrompt += `\n\nSituation briefing unavailable: ${reason}`;
   } finally {
     // The briefing is a one-shot read; holding the journal open for the life of

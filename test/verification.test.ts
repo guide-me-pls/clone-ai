@@ -241,6 +241,33 @@ test("file verification cannot read outside the authorized workspace or through 
   }
 });
 
+test("a write step's declared scope is a verification root outside the workspace", async (t) => {
+  const root = await tempDir(t, "clone-ai-scoped-write-");
+  const workspace = join(root, "workspace");
+  const project = join(root, "project");
+  await mkdir(workspace);
+  await mkdir(project);
+  const file = join(project, "out.md");
+  await writeFile(file, "done\n", "utf8");
+  const step: PlanStep = {
+    id: "write", title: "Write", risk: "reversible_write",
+    instructions: `Write \`${file}\``,
+    acceptanceCriteria: [`File ${file} exists`],
+    scopes: [{ domain: "files", resource: project, access: "write" }],
+  };
+  const evidence: Evidence[] = [{ id: "ev", runId: "run-1", stepId: "write", kind: "observation", summary: "wrote it", createdAt: new Date().toISOString() }];
+  const scoped = await new EvidenceVerifier({ workspacePath: workspace }).verify({ run: run(), plan: planFor([step]), evidence });
+  assert.equal(scoped.passed, true, scoped.summary);
+
+  // Without the scope the same path is still outside every authorized root.
+  // 没有 Scope 时，同一路径仍在所有授权根之外。
+  const unscoped = await new EvidenceVerifier({ workspacePath: workspace }).verify({
+    run: run(), plan: planFor([{ ...step, scopes: undefined }]), evidence,
+  });
+  assert.equal(unscoped.passed, false);
+  assert.match(unscoped.summary, /does not exist on disk/);
+});
+
 test("the Kernel does not mark an external step completed when the adapter only produced an artifact", async (t) => {
   const directory = await tempDir(t, "clone-ai-ext-");
   const journal = new JsonlJournalStore(join(directory, "journal.jsonl"));

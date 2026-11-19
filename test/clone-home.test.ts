@@ -32,9 +32,11 @@ test("the owner's home is the default, and CLONE_HOME overrides it", async (t) =
   });
   assert.equal(fromHome.dataDirectory, join(home, CLONE_DIRECTORY_NAME));
   assert.equal(fromHome.workspacePath, workspace);
-  // Project-scoped state stays with the project.
-  // 项目级状态留在项目里。
-  assert.equal(fromHome.workspaceRuntimeDirectory, join(workspace, CLONE_DIRECTORY_NAME));
+  // Runtime state lives with the owner's data, not with a project folder:
+  // there is no fixed working directory whose `.clone` could own it.
+  // 运行时状态与所有者数据放在一起，而不是项目文件夹里：没有固定工作目录，
+  // 也就没有它的 `.clone` 可以存放这些数据。
+  assert.equal(fromHome.workspaceRuntimeDirectory, join(fromHome.dataDirectory, "workspace-runtime"));
 
   const explicit = await tempDirectory(t, "clone-explicit-");
   const overridden = resolveClonePaths({
@@ -119,10 +121,12 @@ test("config writes are atomic and leave no partial file behind", async (t) => {
   const store = new CloneConfigStore(paths);
 
   const initial = await store.get();
-  assert.equal(initial.workspacePath, workspace);
+  assert.equal(initial.locale, "zh-CN");
+  // The working-directory setting is gone from the persisted config.
+  // 持久化配置里不再有工作目录设置。
+  assert.equal("workspacePath" in initial, false);
 
-  const updated = await store.update({ workspacePath: "/somewhere/else", locale: "en" });
-  assert.equal(updated.workspacePath, "/somewhere/else");
+  const updated = await store.update({ locale: "en" });
   assert.equal(updated.locale, "en");
   assert.equal(updated.mainAgentModel, undefined);
 

@@ -263,7 +263,7 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   assert.match(html, /产物/);
   assert.match(html, /data-open-turn-audit="turn-1"/);
   assert.match(html, /data-open-turn-conversation="chat"/);
-  assert.match(html, /aria-label="查看审计：整理资料"/);
+  assert.match(html, /aria-label="查看审计：整理资料 · 17:13"/);
   assert.doesNotMatch(html, /log-step-label">上下文/);
   assert.doesNotMatch(html, /log-step-label">派发/);
   assert.doesNotMatch(html, /工具表/);
@@ -294,6 +294,8 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   // 依据行是回到过程的路径：对话不点名工具，因此审计必须精确落在本回合。定位键是
   // 回合 id 加对话，而不是请求文本：长请求会撑爆 GET 头部上限，Journal 存储的请求已脱敏。
   assert.match(app, /data-open-turn-audit/);
+  assert.match(app, /data-open-turn-conversation/);
+  assert.match(app, /turnAudit\.dataset\.openTurnConversation/);
   assert.match(app, /CloneAudit\?\.showTurns/);
   const audit = await read("audit.js");
   assert.match(audit, /async function showTurns\(turnId, conversationId\)/);
@@ -662,15 +664,16 @@ test("decisions are confirmed on the task record that owns the run", async () =>
   assert.doesNotMatch(app, /class="session-kind"/);
   assert.match(app, /const records = sessions\.filter\(\(session\) => session\.kind !== "conversation"\)/);
   assert.match(index, /id="open-conversation"/);
+  // There is no working-directory setting: the page and its script no longer
+  // carry the picker, the reveal action or the restart notice.
+  // 没有工作目录设置：页面与脚本都不再带有选择器、定位动作或重启提示。
+  assert.doesNotMatch(index, /config-workspace|data-i18n="working-directory"/);
+  assert.doesNotMatch(app, /chooseWorkspace|revealWorkspace|workspace-saved/);
   assert.match(css, /\.session-flag/);
   assert.match(css, /\.session-item\.is-attention/);
   const auditCss = await read("audit.css");
   assert.match(auditCss, /\.session-item\.is-child/);
   assert.match(auditCss, /\.session-children/);
-  // A saved workspace that differs from the running one says it needs a restart.
-  // 已保存但不同于运行中的工作区会标明需要重启。
-  assert.match(app, /workspace-saved-restart/);
-  assert.match(app, /workspace-restart-pending/);
 
   const approvalStart = app.indexOf("function approvalMarkup(session)");
   const approvalEnd = app.indexOf("function reviewMarkup", approvalStart);
@@ -978,6 +981,42 @@ test("the audit turn card keeps the tool calls the conversation dropped", async 
   assert.match(html, /已整理。/);
 });
 
+test("the audit landing asks for the turn id and keeps only that turn", async () => {
+  const audit = await read("audit.js");
+  const start = audit.indexOf("async function loadTurns()");
+  const end = audit.indexOf("async function refreshTurns", start);
+  assert.ok(start >= 0 && end > start, "loadTurns must exist");
+  const state = {
+    turns: [], turnTotal: 0, turnError: "stale", turnQuery: "",
+    turnFilter: { turnId: "turn-1", conversationId: "conversation-a" },
+  };
+  const urls: string[] = [];
+  const loadTurns = runInNewContext(`${audit.slice(start, end)}; loadTurns`, {
+    state,
+    turnSeq: 0,
+    URLSearchParams,
+    api: async (url: string) => {
+      urls.push(url);
+      return {
+        turns: [
+          { turnId: "turn-1", conversationId: "conversation-a" },
+          { turnId: "turn-1", conversationId: "conversation-b" },
+          { turnId: "turn-2", conversationId: "conversation-a" },
+        ],
+        total: 3,
+      };
+    },
+  }) as () => Promise<boolean>;
+  assert.equal(await loadTurns(), true);
+  // The request carries the short turn id, not a request that could overflow the
+  // GET header limit; the landing keeps the matching conversation only.
+  // 请求携带短回合 id，而不是可能撑爆 GET 头部上限的请求；落点只保留匹配的对话。
+  assert.match(urls.at(-1) ?? "", /q=turn-1/);
+  assert.deepEqual(state.turns, [{ turnId: "turn-1", conversationId: "conversation-a" }]);
+  assert.equal(state.turnTotal, 1);
+  assert.equal(state.turnError, null);
+});
+
 test("the audit shows the write scopes a step was checked against", async () => {
   const audit = await read("audit.js");
   const auditCss = await read("audit.css");
@@ -1007,7 +1046,7 @@ test("an audit turn reads as a right-hand request and a left-hand answer", async
   assert.match(auditCss, /\.au-turns\s*\{[^}]*display:\s*grid/);
 });
 
-test("a new request is routed, and a task record names its dispatcher", async () => {
+test("a new request is routed, and a task record names its conversation", async () => {
   const app = await read("app.js");
   const css = await read("style.css");
   // The owner does not choose a new conversation versus a new task: a

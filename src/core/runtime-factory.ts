@@ -221,7 +221,12 @@ export async function createRuntimeAssembly(options: RuntimeAssemblyOptions = {}
     runtime = new CloneRuntime({
       capacityGate,
       journal,
-      policy: new AuthorityPolicyEngine({ config: () => authority.snapshot() }),
+      policy: new AuthorityPolicyEngine({
+        config: () => authority.snapshot(),
+        // The repair lane's worktree is a sandbox, not the owner's machine.
+        // 修复通道的 worktree 是沙箱，不是所有者的机器。
+        ...(options.workspaceWritable === true ? { writableSandbox: true } : {}),
+      }),
       verifier: evidenceKinds === undefined
         ? createDefaultVerifier({ workspacePath: paths.workspacePath })
         // Only the plugins a narrowed evidence set can satisfy: the test plugin
