@@ -235,6 +235,24 @@ test("a disabled worker cannot be selected even when it is the best match", asyn
   assert.equal(result.blocked?.code, "REQUESTED_AGENT_DISABLED");
 });
 
+test("a single-agent step records its final answer, not only its evidence", async (t) => {
+  const dataDirectory = await home(t);
+  const result = await runQuery(dataDirectory, "请让 evidence-reviewer 复核这份材料", {}, undefined, {
+    agents: createScriptedAgentRegistry(),
+    workspacePath: dataDirectory,
+  });
+  const events = await journalEvents(dataDirectory);
+  const completed = events.find((event) => event.type === "execution.completed" && event.runId === result.runId);
+  assert.ok(completed, "the step's answer must be journaled");
+  const payload = completed.payload as { stepId?: string; summary?: string };
+  assert.equal(typeof payload.stepId, "string");
+  assert.match(payload.summary ?? "", /evidence-reviewer completed step/);
+  // The answer is a separate record from the evidence; without it the review
+  // card could only list what the worker touched.
+  // 回答是与证据分开的一条记录；没有它，复核卡只能列出 Worker 碰过什么。
+  assert.ok(events.some((event) => event.type === "evidence.recorded" && event.runId === result.runId));
+});
+
 test("a caller that stops waiting aborts the run it started", async (t) => {
   // runQuery accepted no signal, so a stopped desktop turn or a cancelled
   // dispatch_task left the run executing.

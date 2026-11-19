@@ -16,6 +16,12 @@
       "minLabeled": 4,
       "minAgreement": 1,
       "maxFalsePass": 0
+    },
+    "memory": {
+      "minCases": 26,
+      "minAgreement": 1,
+      "maxRestatementsProposed": 0,
+      "maxDurableDropped": 0
     }
   },
   "cases": {
@@ -45,6 +51,32 @@
     "policy/approval-does-not-open-protected": "denied",
     "policy/shell-exec-observe-denied": "denied",
     "policy/shell-exec-act-auto-allowed": "allowed",
-    "policy/unenforced-domain-denied": "denied"
+    "policy/unenforced-domain-denied": "denied",
+    "memory/legacy-objective-restatement": "drop",
+    "memory/exact-objective": "drop",
+    "memory/english-candidate-procedure": "drop",
+    "memory/punctuation-and-spacing-variant": "drop",
+    "memory/fullwidth-english-label": "drop",
+    "memory/markdown-label": "drop",
+    "memory/bullet-label": "drop",
+    "memory/stacked-labels": "drop",
+    "memory/connector-label": "drop",
+    "memory/suffix-wrapper": "drop",
+    "memory/vs16-decoration": "drop",
+    "memory/zwsp-decoration": "drop",
+    "memory/turkish-dotted-i": "drop",
+    "memory/token-symbols-c": "keep",
+    "memory/version-decimal": "keep",
+    "memory/procedure-type-copy": "drop",
+    "memory/preference-type-copy": "keep",
+    "memory/emoji-before-label": "drop",
+    "memory/flow-prefix-not-label": "keep",
+    "memory/label-prefix-not-boundary": "keep",
+    "memory/standing-preference": "keep",
+    "memory/failure-lesson": "keep",
+    "memory/short-objective-is-not-containment": "keep",
+    "memory/paraphrased-objective": "keep",
+    "memory/evidence-restatement": "keep",
+    "memory/conversation-placeholder": "drop"
   }
 }

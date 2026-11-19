@@ -103,7 +103,8 @@ Honest limits, stated so the thresholds are not mistaken for proof:
 Single-run lessons over-fit one incident. Clustering uses the existing
 `FailureReport.signature` (volatile details already stripped) plus category:
 
-- 1 failure: only a low-confidence, expiring candidate (current behaviour).
+- 1 failure: a low-confidence, expiring candidate only when a miner runs;
+  without one the run's extraction request records zero candidates.
 - 3 or more failures with the same signature across different runs: propose a
   higher-confidence lesson, or an L1 catalog entry, citing all the evidence ids.
 
@@ -189,11 +190,14 @@ Phase 1 (read-only attribution) is now implemented, together with three pieces
 the analysis depends on:
 
 - **Conversation mining** (`src/memory/conversation-memory-worker.ts`,
-  `conversation-memory-pipeline.ts`). Each owner turn journals a
-  `memory.conversation.requested` event plus the owner's text as evidence; the
-  maintenance loop drains them oldest-first into ordinary review candidates.
-  Assistant text is never cited. Opt-in via `CLONE_AI_MEMORY_MINING=1`, like
-  task mining, because it costs a model call per turn.
+  `conversation-memory-pipeline.ts`). Each owner turn the pipeline receives
+  journals a `memory.conversation.requested` event plus the owner's text as
+  evidence; the maintenance loop drains them oldest-first into ordinary review
+  candidates. Assistant text is never cited. It has its own worker and pipeline.
+  The native loop currently does not call `record()`, so this path is not yet fed
+  in production; restoring that call is a repair-lane task. Mining costs a model
+  call per turn, so it runs only for turns carrying a durable-statement signal
+  under `filtered`, and every turn under `all`.
 - **Memory push** (`src/main-agent/memory-push.ts`). Reviewed memories matching
   the owner's message are compiled into the Main Agent's system prompt for that
   turn (same boundary as worker dispatch: summaries only, bounded, secrets
@@ -266,9 +270,10 @@ OpenAI-compatible gateway: the worker listed the empty workspace, wrote
   memory (`findConflicts`) and drops restatements from the recalled set
   (`dedupeContext`). Token overlap does not catch changed values; the trade-off
   log records that limit.
-- **Conversation learning on by default** — `CLONE_AI_MEMORY_MINING`: unset =
-  mine turns carrying a durable-statement signal, `off` = silence both paths,
-  `all` = every turn.
+- **Conversation learning on by default** — `CLONE_AI_MEMORY_MINING`: unset
+  (`filtered`) mines conversation turns carrying a durable-statement signal
+  (once `record()` is wired) and leaves task mining silent; `off` silences both
+  paths; `all` mines every task and conversation turn.
 - **Connectors** — calendar (ICS file or https URL) and email (IMAP, read-only),
   both reporting why they cannot run instead of appearing empty.
 - **Chat attachments** — images validated by signature, passed to the session

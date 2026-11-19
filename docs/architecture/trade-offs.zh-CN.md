@@ -5,6 +5,350 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-18 —— 直接回答就是 direct_response 步骤的证据
+
+**决定。** 当单 Agent 步骤的 `requiredCapabilities` 含 `direct_response` 时，它必须能凭
+Worker 的最终回答完成。原生 Worker 在推送 `completed` 之前，为这个回答记录恰好一条
+`observation` 证据——有界摘要加步骤内 locator，例如 `answer:<stepId>`——并以
+`produced.size === 0` 为条件，避免真实读取被重复记录。其他步骤的证据闸门不变，Kernel
+不得伪造执行者没有产出的证据。该变更由带闸门的修复通道产出（AGENTS 第 4 条）；工作 Agent
+只应用通道的补丁并做功能正确性检查，没有手写逻辑。
+
+**被否决的备选方案。**
+
+- *对所有单 Agent 步骤豁免证据断言。* 一个只回答文字的 `context-researcher` 读取步骤会在
+  什么都没读的情况下通过；b1e04b18 正是必须继续失败的例子。
+- *在 Kernel 侧合成观察证据。* 证据将不再是执行者的声明；"Worker 不能在没有产出证据行的
+  情况下宣告自己完成"的 Journal 不变量就只剩一句注释。
+- *保留缺口。* 直接回答会在模型已经回答之后继续失败，这正把它放进清单的现状。
+
+**证据。**
+
+- Run `b1e04b18`（2026-11-18）是一个只作答的单 Agent 步骤：一次模型调用、零次
+  `agent.tool_started`、零条 `evidence.recorded`，随后 `execution.completed` 与
+  `execution.failed`，原因 `Agent context-researcher completed step read-readme without
+  evidence.`。direct-response 变体是潜在的——原生切换后没有出现过 `direct_response`
+  计划——但任何只作答步骤都会触达同一道闸门。
+- 当前代码的确定性复现（`53074cf2`，隔离 home）使用一个 fake client 只返回"收到"的
+  `NativeAgentWorker`：Run 以 `Agent direct-responder completed step direct-response
+  without evidence.` 失败。轨迹位于
+  `/tmp/clone-ai-repair-trace-home2/failed-traces/53074cf2-….json`。
+- 用该轨迹和上面的决定说明运行修复通道。第一次在红色 eval 闸门停止：第一阶段读完轨迹后
+  没有写测试（`I couldn't write a reliable regression test without inspecting the
+  executor's API within the prescribed tool-call limit`）；通道还运行了所有既有回归文件，
+  于是报"not-red"而不是"没有写测试"。随后把第一阶段提示词放宽为点名
+  `src/core/runtime.ts` 与 `src/workers/native-agent-worker.ts`，允许前八次工具调用内
+  首次写入，并让红/绿检查只跑本次修复新建的文件。
+- 第二次产出了正确的 3 行 Worker 改动，但完整套件在 `bilingual-documentation` 失败
+  （源码注释只有英文）；于是修复阶段提示词要求英文与中文两行同时写。第三次成功：第一阶段
+  Run `566b1603` 在 `test/regression/direct-response-evidence.test.ts` 上为红，修复 Run
+  `1d811b94` 产出了观察证据行，回归用例转绿，完整套件 **760/760**，typecheck 退出 0。
+  分支 `rsi/auto-fix-20261118T1044`，提交 `76aec5d`；工作 Agent 把补丁应用到共享树，
+  复跑 **832/832**、typecheck 0、`npm run gate` **PASS**。
+
+**代价。** 直接回答现在会进入 `waiting_review` 而不是失败，因此所有者必须接受这个回答；
+观察行是 Worker 自己的文字（上限 8,000 字符），不是独立产物。用例是 `test/regression/`
+下的新文件；补丁仍归通道所有，工作 Agent 只应用并检查功能正确性。
+
+**推翻条件。** 如果证明 `direct_response` 步骤在生产中不可达，就删除观察行，而不是留下
+死证据。如果所有者反复因为观察行不是独立产物而拒绝直接回答，就要求 Tool Result，或把回答
+移到对话路径，而不是扩大证据闸门。
+
+## 2026-11-18 —— 只读请求得到观察证据，而不是产物
+
+**决定。** 回退规划器把只读或分析请求与交付请求区分开。只读任务得到**一个只读执行步骤**
+（启用时是上下文研究员），没有产物合同；混合计划中的研究或复核工单要求 `observation`
+证据。显式只读约束优先于裸的产物名词：只有正向写入动词或点名输出目标才把请求判为交付。
+交付请求仍保留 `artifact` 合同。工作单只能要求其风险等级能够产出的证据：`read_only` 工单
+可以要求 `observation` 或 `tool_result`，绝不能要求 `artifact`、`receipt` 或 `test`；
+Kernel 在挂载计划时就拒绝这种组合，而不是等 Worker 做完之后才发现矛盾。被 Kernel 拒绝的
+计划会关闭它的 Run，而不是把它留在 `planning`。Worker 会被告知必需合同（id、kind、
+是否需要 locator、描述），以及读取产生观察证据、写入产生产物证据。证据记录在二十条上限下
+优先保留产物行，并允许写入把已读过的路径升级为产物；Worker 也按工作单自己的风险过滤工具，
+而不只是按父步骤的风险。
+
+**被否决的备选方案。**
+
+- *让验证器接受产物合同上的观察证据。* 合同将不再意味着"存在一个可复核的文件"；所有交付
+  都能凭一段文字通过，所有者不再有文件可看。
+- *让 Worker 无视目标里的禁止写入去生产产物。* 工具闸门检查授权而不是文字：Worker 要么违抗
+  所有者，要么仍然失败；而验证只比较 kind 与非空 locator，任何文件都能满足合同。矛盾属于
+  同时发出合同与禁令的那一层。
+- *让 Worker 失败，再请所有者重试。* 这是现状：下面三次失败里，Worker 都已完成被要求的读取
+  与回答，验证才因一个所有者明确禁止的文件而拒绝它。
+- *完全移除产物合同。* 真正的交付请求——草稿、报告、模型或代码改动——仍需要一个持久文件，
+  否则直接回答器的文字又会变成"交付物"。
+
+**证据。**
+
+- Journal `~/.clone/journal.sqlite3`，2026-11-18：Run `663b45b5`、`c03c7cea`、`cd74804b`
+  都带有回退计划中的 `draft` 工单，其必需合同是 `local-draft`（`kind: "artifact"`、
+  `locatorRequired: true`），而目标里写着"不要修改任何文件"或"不要修改任何文件或运行产生
+  副作用的操作"。`evidence.recorded` 只有 `observation` 行（`c03c7cea`/`cd74804b` 是一次
+  README 读取；`663b45b5` 是 33 次工具调用中的 20 条），`subagent.verified` 以
+  `Missing required artifact evidence: local-draft.` 失败。同样的三段请求在本变更前可用
+  `node --experimental-strip-types --input-type=module -e "import {buildFallbackPlan} from './src/planning/fallback-planner.ts'; …"`
+  稳定复现：每个只读查询都得到 `draft/local-draft`（`kind: "artifact"`）。
+- 原因在回退分类器：`项目`、`代码`、`文件`、`页面`曾是交付词，没有只读标记，而且
+  `needsResearch` 为真时 `needsDelivery` 也为真（`src/planning/fallback-planner.ts`）。
+  于是"审查这个项目的代码"变成了"写一个文件"。只去掉这些词还不够：只读目标里的
+  "如实报告"含 `报告` 名词，仍会把只读请求判成交付；本变更把正向写入动词与裸产物名词
+  分开，只读约束存在时裸名词不再算交付。
+- 即使没有显式只读指令，研究与复核合同也有同样的错配：`context-note` 与 `review-note` 是
+  `kind: "artifact"`，而原生 Worker 的读取只记录 `observation`
+  （`src/workers/native-agent-worker.ts` 的 `agentTool`）。
+- 原生 Worker 从未收到 `expectedArtifacts`；`buildInstructions` 只发送目标、工作区、边界规则
+  与验收标准。因此 Worker 可以合法地结束时完全不知道 Kernel 会要求一个带 locator 的产物。
+- 证据上限与"先到先得"的映射也是同一片故障面：先读后写同一路径仍保留 `observation`；
+  超过 20 次读取之后的写入会在验证前被 `slice(0, 20)` 丢掉。
+- 2026-11-18 早些时候的五次"Required input missing"和一次"12-round limit"不是本决定的证据：
+  它们分别早于 `fb496e5`（只有工作单声明的必需输入才会让步骤失败）与 `e694a4d`
+  （只有"不存在"形态的读取才标记输入缺失），以及 `bba7896`（移除默认轮次上限）。
+  "README 在工作区之外"的失败由工作区文件工具的 `resolve` 变更解决，也不属于本条。缺失输入
+  回归测试是 `.js` 文件，而 `npm test` 之前没有收集它；脚本现在包含
+  `test/regression/*.test.js`，因此该 eval 会守住测试套件。
+
+**代价。**
+
+- 只读请求不再产出文件。确实需要报告或草稿的请求必须写明写到哪里（或使用交付动词）；回退
+  启发式仍可能误判边缘情况，Kernel 的拒绝是兜底，而不是模型判断。
+- 主 Agent 若把 `read_only` 与产物合同放在一起，现在会在挂载计划时失败。这比一次失败的 Run
+  更早、更清楚，但它仍是主 Agent 必须纠正的规划错误。
+- 只读 Worker 现在真的只有读工具；此前"名义只读、但通过父步骤获得写工具"的工单不能再写。
+  任何合法的此类工单必须提高自己的风险等级。
+- `observation` 合同比文件弱：它证明发生过读取，不证明被要求的分析已经完成。内容仍由所有者
+  复核把关。
+
+**推翻条件。** 如果真实 Journal 显示只读或分析请求经常需要所有者想要的文件，就在分类器里
+增加明确的写入目标，而不是恢复无条件的产物合同。如果实践中超过五分之一的只读请求被误判，
+就把启发式换成 LLM Planner 或基于模型的意图分类器。如果所有者反复因为没有文件而驳回复核
+结果，就增加一个单独的"把复核写到文件"后续计划，而不是把每个只读任务都变成产物任务。
+
+## 2026-11-18 —— 以任务记录为单位：列表不留对话行，确认在任务内完成
+
+**决定。** 侧栏只列出已派发的任务 Run。Main Agent 对话——所有者的主线索与今天引入的按任务
+对话——都不是列表行：主线索通过导航控件打开，任务的对话是"从该任务记录发送"后进入的地方。
+确认与复核在拥有该 Run 的任务记录内渲染并决定；主对话不再汇集决定卡。等待中的任务固定在
+"需要你的确认"侧栏分区，带明确的 `需你确认` / `需你复核` 标签，其决定栏写明步骤并要求决定。
+
+**被否决的备选方案。**
+
+- *保留对话行，只隐藏主对话。* 按任务对话在任务列表里仍读作聊天，而所有者明确要求只留派发的
+  任务。
+- *保留集中决定，只把指针做得更醒目。* 指针把所有者从正在复核的 Run 带走；对话不再列入侧栏后，
+  指针的目标甚至不在列表里。
+- *在任务列表旁再加一个"对话"列表。* 一个聊天对应两套导航面，需要维护的更多，而不是更少。
+
+**证据。** 2026-11-18 所有者的要求：列表只留派发任务，每个子任务的确认在自己的记录里。此前的
+决定（"确认集中在主对话"，提交 `b810879`）是在只有一条线索、对话仍在列表里的前提下做出的；
+这个前提已不成立。`buildSession` 已经返回该 Run 自己的确认（`waiting_approval` +
+`activeStepId`）与验证结果，任务记录已有数据；`/api/runs/:id/approve|reject|review` 本来就
+接受任意 Run id。`test/ui-structure.test.ts` 固定了旧的指针行为，已改写。
+
+**代价。** 决定会分散在各个任务里；所有者必须打开等待中的任务，而不是看一个收件箱。仪表盘仍
+统计所有 Run 的等待确认数，但不再有一份集中的卡片列表。对话无法从列表浏览：主线索有导航控件，
+任务的线索通过从它的记录发送而进入。旧的对话删除/恢复路径仍在 API 中，但不再暴露。
+
+**推翻条件。** 如果所有者找不到对话线索，或需要在多个对话间切换，增加一个紧凑且独立的对话分区
+——绝不再混进任务行。如果任务记录里的决定被漏掉，增加一个能深链到每个任务的全局决定收件箱；
+不要把卡片搬回某个中心线索。
+
+## 2026-11-18 —— 审计说明每一次 Main Agent 回合是怎么组装任务的
+
+**决定。** 审计 → 主 Agent 回合中的每条记录显示一个组装块：对话、历史窗口（消息数与已完成回合数、
+压缩次数）、模型与强度、提示词材料（charter 版本、简报有无、指令来源与警告、工具表），以及本
+回合派发的 Run 及其计划步骤与状态。历史计数与指令来源随回合写入 Journal；Run 的标题、步骤与
+状态从已有的 Task/Run/Plan 事件投影。
+
+**被否决的备选方案。**
+
+- *只显示提示词哈希与快照定位符。* 所有者必须打开一个内容寻址文件才能看到组装；问题问的是
+  "这个任务是怎么组装的"，不是"文件在哪"。
+- *把完整系统提示词贴进审计。* 它很大、回合之间基本不变，快照仍是真相来源。
+- *只显示模型调用过的工具。* 工具表是它做了什么；组装是它在决定之前拿到了什么。
+
+**证据。** `/api/audit/turns` 已经投影输入、回复、工具调用、压缩与提示词快照哈希
+（`src/audit/turn-audit.ts`），审计界面显示工具清单与 `prompt <hash>` 标签。它丢掉了快照里的
+`instructionSources`，从不记录历史窗口，而且只显示派发 Run 的数量——所有者要的三块恰好就是
+缺失的三块。`buildHistory` 已经知道它组装出的历史；`task.created`、`run.created`、
+`plan.created` 与 `run.status_changed` 已经携带标题、步骤与状态。
+
+**代价。** `main_agent.turn_started` 增加两个字段（`historyMessages`、`historyTurns`），投影
+按 id 关联 Run 事件。快照失败的回合没有材料可显示；没有这些字段的旧回合显示"未记录"。组装块
+默认折叠，使回合列表保持可读。
+
+**推翻条件。** 如果组装块与提示词快照详情页重复，摘要只保留模型、工具与派发并链接到快照；如果
+Journal 或投影成本变得可观，从快照或单独的组装事件推导计数。
+
+## 2026-11-18 —— 已完成的任务不是记忆；候选必须陈述持久知识
+
+**决定。** 任务提炼不再通过复制父任务目标来提出候选。`MemoryPipeline` 的默认 Worker 不提炼
+任何内容：未配置提炼器时，已完成任务产生零条候选，其 `memory.candidate.extracted` 事件记录
+`count: 0`。设置 `CLONE_AI_MEMORY_MINING=all` 时，模型提炼器仍会运行。无论候选由哪个 Worker
+产生，`MemoryPipeline.processJob` 都会丢弃“摘要等于其任务目标”的**无类型或 `procedure`**
+候选。比较会做 NFKC、与区域设置无关的小写、不可见字符移除、按词保留符号的标点折叠，并去掉
+两端的过程标签（`候选流程`、`流程`、`candidate procedure`、`procedure`）。有类型的偏好、
+事实、决定或承诺即使等于目标也会保留，因为所有者可能原样说出了任务要求的事。提取事件在确有
+丢弃时记录 `droppedRestatements` 与经 PII 脱敏的被丢弃摘要。一次性的治理扫描会把符合同一规则的
+待确认候选按 Journal 中该 Run 的任务目标拒绝，并记录理由。对话提炼拥有自己的流水线与 Worker，
+不再借用任务流水线的 Worker。
+
+**被否决的备选方案。**
+
+- *保留确定性 Worker，只在界面上隐藏或降级它的候选。* 摘要仍然是工作单，不是知识；隐藏只改变
+  噪声出现的位置。线上 Journal 显示该列表 7/7 都是重述（见下）。
+- *改为复制 Evidence 摘要而不是目标。* Evidence 是 Worker 关于“自己做了什么”的声明，不是所有者
+  陈述或常设事实，而且比目标更不可控。那仍然只是换一种措辞的运行日志。
+- *只修改提炼 Prompt。* Prompt 只是建议；已上线的占位实现证明生产者可以无视它，模型也可能复述
+  目标。拒绝必须在结构上执行。
+- *删除候选列表，只允许手写记忆。* 所有者仍需要审核真实提炼结果的界面；列表保留，只让输入变诚实。
+- *在本次变更中恢复对话提炼。* `ConversationMemoryPipeline.record()` 目前没有生产调用方——它在
+  原生循环取代 Pi 时丢失。恢复它会为每个符合条件回合增加一次模型调用，且属于独立的修复通道
+  Bug。本次只给对话路径自己的 Worker，避免日后修复时静默复用任务 Worker，但不重新启用它。
+
+**证据。**
+
+- 2026-11-18 的线上 Journal `~/.clone/journal.sqlite3`（查询见优化日志）：8 条
+  `memory.candidate.requested`、8 条 `memory.candidate.extracted`（全部 `count: 1`）、
+  8 条 `memory.candidate.proposed`。所有者已拒绝 2 条；一次性清理按上述理由拒绝了其余 6 条，
+  剩 0 条待确认。8 条摘要全部是 `候选流程：` 加上完全一致的任务目标——例如
+  `候选流程：只读审查 knowledge-base 项目的 RAG 实现，优先复用已有审查结果并给出可验证的优化建议。`，
+  与该 Run 的 `task.created.objective` 一字不差。没有任何一条给出目标之外的新偏好、决定、
+  流程或项目事实。这正是所有者截图里的列表。
+- 生产者是 `src/memory/memory-pipeline.ts` 的 `DeterministicMemoryWorker.extract`：只要
+  `CLONE_AI_MEMORY_MINING !== "all"`，`createRuntimeAssembly` 就选中它
+  （`src/core/runtime-factory.ts`）；`runMaintenance` 会排空每个请求
+  （`src/companion-server.ts`），桌面候选列表渲染每一条待确认候选
+  （`apps/desktop/ui/app.js`）。
+- `test/golden-path.test.ts` 曾断言该行为（“一个已验证的 Run 恰好产生一条候选”）并把它提升，
+  这正是这个占位实现得以存活的原因。
+
+**代价。**
+
+- 没有提炼器时，任务提炼是静默的：只出现在已完成任务 Evidence 里的可复用流程不会被捕获。
+  持久学习只能依赖对话提炼（目前未接线）、所有者手写记忆，或
+  `CLONE_AI_MEMORY_MINING=all`。在所有者开启模型提炼器之前，任务特定的教训会丢失。
+- 该闸门刻意只做精确匹配。模型若改写目标、或复述 Evidence，不会被丢弃。这是一个假阴性，
+  接受它是因为更宽松的相似度规则会丢弃“以任务措辞开头”的合法记忆；所有者仍会逐条审核候选。
+  两个假阴性都钉在 `benchmark/gate/memory-cases.json` 中。
+- 类型闸门会保留复制目标的有类型偏好/事实/决定/承诺。这是有意的——第一人称陈述正是目标与
+  记忆可能同文的情形——但也意味着模型可以把工作单复制标成 `fact` 来绕过丢弃。
+- 一次性清理会自动拒绝所有者尚未决定的候选。想要的话可以重新手写。清理只针对“其 Run 有
+  `task.created` 目标、且摘要与目标完全一致”的候选；对话候选与孤儿候选不动。
+- 之后再开启 `=all` 不会重新解释“未配置提炼器时已完成”的 Run：它们的提取标记记录为零候选。
+  旧工作单不会被重新解释。
+- `ImprovementService` 的教训建议是另一种提案面。它们由失败签名构建，不是
+  `memory.candidate.proposed`，因此本闸门不覆盖它们。
+- 一次性清理在 Companion Server 的第一次维护 tick 运行。只有 CLI 的 home 会保留遗留的待确认
+  候选，直到某个桌面 Daemon 打开它。
+- Run 轨迹保留提案事件及其拒绝事件：审计展示曾提出什么、所有者或策略决定了什么。只有当前面
+  ——审核列表、注意力列表与 Dashboard 的记忆字段——隐藏已决定的候选。
+
+**推翻条件。** 若实测 Journal 显示所有者会提升任务提炼候选（例如超过 20% 的已提炼任务），
+说明静默默认过强：默认给任务提炼一个廉价提炼器，或只提炼点名常设规则的 Evidence。若该闸门
+在真实使用中丢弃了合法记忆，把它收窄到只匹配旧的 `候选流程：` 模板。若有类型的目标准确复制
+变得常见，在不放宽精确规则的前提下扩大自动丢弃（或增加一层经过测量的相似度检查）。等不再有
+任何 Journal 含有待确认的 `候选流程：` 提案、且经过一个发布周期后，删除这段遗留清理。
+
+**本条目取代：**[2026-11-05 —— 取代上一条：对话提炼默认走廉价本地过滤](#2026-11-05--取代上一条对话提炼默认走廉价本地过滤)中的任务提炼部分。
+
+## 2026-11-18 —— 只读请求是一个步骤，工具使用本回合的工作区
+
+**决定。** Fallback Planner 把显式只读请求，以及没有交付物的研究请求，规划成**一个**由
+`context-researcher`（它被关闭时用 `direct-responder`）执行的只读步骤，不生成 subagent
+工作单，也不要求工件。泛化容器词（项目、代码、文件、页面）不再算交付词；点名输出目标或
+交付动词仍然优先，且在匹配交付词之前先去掉禁止写入的分句。Main Agent 的 Kernel 工具
+（`dispatch_task` 与 `propose_work_plan` 背后的 Runtime）拿到本回合的工作区路径，因此派发的
+Run 在所有者的工作区里执行，而不是 `process.cwd()`；`execution.started` 记录该工作区以便审计。
+
+**被否决的备选方案。**
+
+- *保留 draft 工作单，只把工件改成可选。* 计划仍会要求 Worker 在一个明确禁止写入的请求里
+  "交付本地草稿"；可选工件只是掩盖矛盾，而只读 Worker 依然产不出必需工件。
+- *把所有禁止写入的短语都当成只读，不再看交付动词。* "写一份报告，不要修改现有文件"会丢掉
+  报告。交付动词或点名输出目标优先；只去掉禁止写入的分句。
+- *让 Main Agent 在失败后用只读计划重试。* 它确实这样做了，重试也成功了，但第一次失败的
+  Run 与复核噪音正是缺陷；重试不是规划器的修复。
+- *让工具 Runtime 继续用 `process.cwd()`。* live Run `b1e04b18` 要读
+  `/Users/qihoo/work/knowledge_base/README.md`，而它的 Worker 工作区是
+  `/Users/qihoo/study/clone-ai`（检出），于是 Worker 报告文件"位于工作区之外"。Prompt 说的是
+  正确的工作区，工具没有拿到它。
+
+**依据。** Run `c03c7cea` 与 `cd74804b` 都被规划成带 `draft` subagent 的 `prepare` 步骤，
+要求 `local-draft`；`subagent.verified` 以 "Missing required artifact evidence: local-draft"
+失败。Run `b1e04b18` 的计划本身已是只读，却因为 `dispatch_task` 的 Runtime 退回检出而失败。
+两处修复之后，在 knowledge-base 工作区上的 live 检查
+（`CLONE_AI_LIVE_WORKSPACE=/Users/qihoo/work/knowledge_base`，native /
+`360/openai/gpt-6.1-terra`）只产生**一个** Run（`99504e85`）：单个 `read-only-lookup`
+步骤，`agentId: context-researcher`、`delegated: false`、`risk: read_only`；它读到绝对路径的
+README、记录 observation、把三句概述写成 `execution.completed`，并进入 `waiting_review`。
+`test/fallback-planner.test.ts` 与 `test/main-agent.test.ts` 固定规划器形状与工具 Runtime 的
+工作区；typecheck 通过。
+
+**放弃了什么。** 意图判断基于词面：只提到只读标记、实际还需要文件的请求必须点名输出目标，
+否则 Worker 会先询问而不是写入。工具 Runtime 多了一个可选参数；省略它的调用方仍沿用
+`process.cwd()` 的旧行为。
+
+**推翻条件。** 如果所有者希望只读工作仍由一个 preparation 角色承担，保留该步骤但把工件改为
+可选；绝不能让只读能力集承担写入。如果工作区之外的 `files` Scope 成为常规路径，只读步骤可以
+使用它，工作区回退就不再必要。
+
+## 2026-11-18 —— 每个 clone home 一份实测 Worker 预算，而不是每个组装一份
+
+**决定。** Worker 容量变为每个 clone home（`paths.dataDirectory`）在进程内共享一份
+`CapacityGate`，而不是每个 `RuntimeAssembly` 各一份。`createRuntimeAssembly` 从按该目录
+索引的模块级注册表取得本 home 的闸门；Daemon、Query 工作流、Main Agent 逐次调用的 Kernel
+会话与修复通道都从同一个实例取用。注册表带引用计数：每个组装持有一个引用，`assembly.close()`
+释放它，最后一个引用消失时删除该条目，因此测试套件创建的大量临时 home 不会累积条目。所有者的
+`maxConcurrentWorkers` 固定值仍按 home 生效且仍会被重新读取：任一组装调用
+`refreshCapacityPin()` 都写入共享的固定值槽，闸门在每次获取时重新采样，因此所有者改设置后，
+该 home 的每个组装无需重启即可生效。每个组装仍暴露自己的 `capacityGate`——现在是共享实例，
+其公开的 `active`/`waiting` 计数因此描述整个 home。
+
+**被否决的备选方案。**
+
+- *保留每个组装一份闸门（现状）。* `runQuery` 每次查询构建一个组装
+  （`src/application/run-query.ts`），Main Agent 的 `withKernel` 每次工具调用构建一个、
+  `native-runtime.ts` 每个回合再构建一个（`src/main-agent/tools/kernel-tools.ts`、
+  `src/main-agent/native-runtime.ts`），Daemon 在启动时构建一个
+  （`src/companion-server.ts`）。因此两个并发的 Main Agent 回合会各自派发到机器的完整
+  Worker 预算：Main Agent 上限约束的是模型回合，不是 Worker 总负载，这与所有者"并发跟随
+  机器"的要求相悖。本文件上一条记录写的正是这个缺口（"把 Worker 闸门在并发查询间共享是
+  另一项变更"）；这次把它补上。
+- *进程内整机单例。* Main Agent 自己的槽位池刻意按 clone home 划分，使评测或第二个
+  `CLONE_AI_DATA_DIR` 各有自己的池。Worker 容量必须按同一粒度划分，否则所有者的 Daemon
+  会与评测运行争抢槽位。
+- *按工作区路径索引注册表。* 实测预算针对的是机器，而一个 clone home 通常服务多个工作区
+  （Daemon 配置的工作区、修复 worktree、查询注入的路径）；按工作区索引只会换个名字重建
+  按调用方划分的闸门。clone home 也正是 Main Agent 槽位池已经使用的地址。
+- *通过新选项把 Daemon 的闸门逐层传下去。* `run-query`、`kernel-tools`、`native-runtime`
+  与修复通道都得传递它，漏掉一处的调用方会悄悄退回按组装划分，且没有测试能发现。按 home
+  索引的注册表让共享成为默认。
+- *现在就做跨进程闸门。* Worker 派发主要发生在一个 Daemon 进程内，这里观察到的倍增就发生在
+  该进程内的多个组装之间。`src/main-agent/main-agent-slots.ts` 是现成的跨进程槽位池；把
+  Worker 容量改造成同样结构更大，且背后还没有失败的实测。
+- *不做引用计数——任一 `close()` 即删除条目。* Main Agent 逐次调用的短命会话一旦关闭，就会
+  抹掉 Daemon 仍在使用的闸门，在 Run 中途把预算劈成两半；因此要计数，而不是布尔标记。
+
+**依据。** 变更前，`createRuntimeAssembly` 在内部构造自己的 `new CapacityGate(...)`
+（`src/core/runtime-factory.ts`），闸门生命周期等于组装的生命周期，上面每个调用点各得一份
+独立上限。确定性 eval `test/runtime-capacity-sharing.test.ts` 在一个临时 home 上并发组装两个
+Runtime，断言：两者报告同一个闸门对象；固定为 `maxConcurrentWorkers: 1` 时，通过另一个组装
+发起的第二次获取会等到第一次释放；在一侧更新配置并调用 `refreshCapacityPin()` 后，另一侧采样
+到的上限随之改变；两者都关闭后，同一 home 的新组装拿到全新的闸门，证明注册表不按临时 home
+泄漏条目。
+
+**代价。** 每个打开的 clone home 一个映射条目，关闭时释放。关闭组装现在对清理是关键的；
+永不关闭的调用方（例如 `createKernelRuntime`）会让该 home 的条目存活到进程结束——这是每个
+home 一条，不是每次调用一条。`runtime.capacity()` 现在包含同一 home 其他组装的活动——这正是
+意图，但逐组装的读数变成了共享读数。闸门仍是进程级的：CLI 进程与 Daemon 仍各自测量，跨进程
+总量仍可能超过一份预算。
+
+**推翻条件。** 如果落地了跨进程 Worker 池，删除注册表并改用那个池。如果每个 home 一份预算
+饿死了普通工作——单次查询的派发在另一个查询的波次后面等上几分钟——提高实测公式，而不是取消
+按 home 的共享。如果引用计数被证明易错（条目永不离开，或闸门在仍有存活组装使用时被删除），
+用 Daemon 启动时创建并向下传递的显式预算对象替换这个映射。
+
 ## 2026-11-18 —— 主 Agent 知道自己的工作区，复核带着答案
 
 **决定。** Companion 把运行中的工作区传入每个 Main Agent 回合，因此项目指令、情境简报与
@@ -12,9 +356,14 @@
 所有者在工作区之外点名的项目必须如实报告，不能用工作区里的文件顶替。Worker 的指令对
 步骤自己的工作区重复同一条规则。单 Agent 步骤把最终回答记为 `execution.completed`；任务
 记录与复核卡都渲染这条回答。设置里保存工作区后返回 `restartRequired`，设置页把已保存的
-路径标为"重启后生效"。
+路径标为"重启后生效"。Worker 的文件工具用 `resolve` 解析路径，与闸门完全一致；因此工作区
+内或授权读取根内的绝对路径能读到闸门批准的那个文件。
 
 **被否决的备选方案。**
+
+- *文件工具继续用 `join(workspace, path)`，而闸门用 `resolve`。* 两者对绝对路径的判断不一致：
+  闸门批准 `/ws/README.md`，工具打开的却是 `/ws/ws/README.md`。live Run `b1e04b18` 因此把
+  工作区根目录的 README 判成"位于当前工作区之外"并失败。
 
 - *继续用 `process.cwd()` 作为 Main Agent 的工作区。* 这正是缺陷本身：回合 `4c0ae6ca`
   的提示词快照里 `instructionSources: ["AGENTS.md"]` 来自 `/Users/qihoo/study/clone-ai`，
@@ -35,16 +384,28 @@
 Clone AI 工作区——却没有 `execution.completed` 或 `subagent.completed` 事件。Main Agent 的
 提示词快照 `a063d154…` 把 clone-ai 检出里的 `AGENTS.md` 记为唯一的指令来源。
 `~/.clone/config.json` 的 `workspacePath` 是 `/Users/qihoo/Documents/Clone AI`；RAG 项目在
-`/Users/qihoo/work/knowledge_base`。
+`/Users/qihoo/work/knowledge_base`。修复 `resolve` 之后，live Run `496d2061` 用绝对路径
+`read_file` 读到了 `/Users/qihoo/work/knowledge_base/README.md`（`isError: false`），把三句
+概述写入 `execution.completed`，进入 `waiting_review`；所有者接受后，任务记录在"已接受"之前
+显示了这条回答。
 
 **放弃了什么。** Prompt 增加了一小段工作区说明。每个单 Agent 步骤多一条 Journal 事件，携带
 脱敏后的回答，长度受模型输出约束。复核卡重复了任务记录里也会出现的答案：一个是决定面，
 另一个是决定之后留下的记录。设置里的工作区变更仍然需要重启，只是现在会明确说出来，而不是
-静默忽略。
+静默忽略。`resolve` 的变更没有增加任何信任：它消除了闸门与工具之间的分歧，相对路径的行为
+完全不变。
+
+**实测。** 接线与 Prompt 文本由确定性测试固定；对配置模型的 live 检查确认了一种措辞下的
+行为。使用 `360/openai/gpt-6.1-terra`（`http://127.0.0.1:3425`）与全新的临时工作区，原始
+请求（"看一下knowledge-base这个项目……"）第一次如实回答了需要路径，但仍派发了一个失败的
+Run（没有产生假审查）。在 Prompt 中加入"你没有自己的文件系统工具：无法搜索磁盘"之后，
+同一请求改为询问路径或工作区切换，且没有派发任何 Run（`newRuns: []`）。这只是一个模型与
+一种措辞，不是 benchmark；更广的 Prompt 遵从性测试仍然缺失。
 
 **推翻条件。** 如果 Runtime 能在线切换工作区，就去掉重启提示，并把路径应用到运行中的组装。
 如果所有者决定必须支持跨项目查找，就新增所有者授权的 `files` Scope 与发现工具（上面被否决的
-备选方案），而不是悄悄扩大工作区；那时"工作区之外"的规则应改为"使用那个工具"。
+备选方案），而不是悄悄扩大工作区；那时"工作区之外"的规则应改为"使用那个工具"。如果反过来
+必须拒绝绝对路径，就同时在 `decideTool` 里拒绝；绝不能让闸门与工具给出不同判断。
 
 ## 2026-11-18 —— 主界面是派发日志，而不是聊天记录
 
@@ -84,12 +445,12 @@ query、本回合如何组装上下文（Provider、模型与强度；提示词�
 **决定。** 每个 Main Agent 回合属于一个对话（任务）id。回合台账记录该 id，模型的上下文
 只从同一对话的回合重建，提示词锁也按对话划分：同一对话的第二个提示仍被拒绝，不同对话的
 提示则可以并发。跨进程的槽位池限制同时运行的 Main Agent 回合数。自动模式下，每次获取
-槽位都重新采样：CPU 核数的一半（机器有余量时给两个）；当 1 分钟负载达到核数的一半时再减半；
-扣除 1 GB 保留内存后按每回合 512 MB 折算空闲内存；上限不超过八个。负载或内存压力可把上限
-降到一。所有者可用 `maxConcurrentMainAgents` 固定上限，固定值不超过核数。超过上限的回合
-等待槽位（可被中止），而不是被拒绝。上限按 clone home 划分，不是整机全局：评测运行或另一个
-`CLONE_AI_DATA_DIR` 各有自己的槽位池。桌面端"新建任务"会开启一个新对话，侧栏同时列出对话与
-它们派生出的任务 Run。
+槽位都重新采样，依据 CPU 与负载：CPU 核数的一半（机器有余量时给两个）；当 1 分钟负载达到核数
+的一半时再减半；上限不超过八个；负载高时可降到一。内存刻意不作为上限：macOS 只报告空闲页，
+带内存项会把主平台上的每个任务串行化，而吃内存的 Worker 有自己的闸门。所有者可用
+`maxConcurrentMainAgents` 固定上限，固定值不超过核数。超过上限的回合等待槽位（可被中止），
+而不是被拒绝。上限按 clone home 划分，不是整机全局：评测运行或另一个 `CLONE_AI_DATA_DIR`
+各有自己的槽位池。桌面端"新建任务"会开启一个新对话，侧栏同时列出对话与它们派生出的任务 Run。
 
 **被否决的备选方案。**
 
@@ -108,7 +469,9 @@ query、本回合如何组装上下文（Provider、模型与强度；提示词�
 `buildHistory`（`src/main-agent/native-runtime.ts`）读取台账中每个已完成回合、没有对话
 过滤，因此不同任务共享同一份转录。对照研究已经把"并发 Main Agent 提示 → 409/排队"列为
 差距 D11（`docs/study/claude-code-parity.md`）。Worker 闸门（`src/core/capacity.ts`）
-已经是"实测上限 + 所有者固定值"的先例。
+已经是"实测上限 + 所有者固定值"的先例。在 18 核 / 24 GB 的验证主机上实时采样报告空闲内存
+456 MB（macOS 只计空闲页），带内存项时上限为 1；移除内存约束后，同一台机器按其 CPU 预算
+接纳回合，这正是让该功能在主平台上可用的原因。
 
 **代价。** 并发回合会并行消耗 Provider token 并争用同一份速率限制；被要求等待的回合在开始
 之前没有任何进度，桌面端 3 分钟停滞上限仍适用于极长的等待。没有任何调用方中止的回合会一直
@@ -244,7 +607,8 @@ HTML 原本就会按请求重新注入令牌。
 - *所有 Run 默认展开 100 多行轨迹。* 那会把执行计划与核验挤下去。轨迹只在 Run 仍等待所有者
   时默认展开；已结束的 Run 保持折叠，但一次点击即可看见。
 
-**依据。** Run `91b685cf`（knowledge-base RAG 审查）有 9 条 `evidence.recorded`、9 次
+**依据。** Run `91b685cf`（这次 RAG 审查后来被证实读的是 Clone AI 工作区，而不是它点名的
+项目）有 9 条 `evidence.recorded`、9 次
 `agent.tool_*` 调用，以及一条 `needsReview: true` 的 `verification.completed`，但它的任务
 记录只显示了计划、证据计数和折叠的轨迹。Run `709e9ab5`、`4ce0db3d`、`18569eb4` 各有两条
 `verification.completed`——系统的与所有者的；此前只渲染第一条，且只渲染到所有者做决定为止。
@@ -2233,6 +2597,10 @@ Journal 追加一条 `main_agent.prompt_snapshot` 事件，携带各项哈希、
 
 **放弃了什么。** 没有信号的回合永不被提炼，因此一条陈述得很直白却不含任何匹配模式的记忆可能被漏掉。
 `all` 是逃生门。
+
+**已被取代（任务提炼）。** 默认的确定性 Worker 由
+[2026-11-18 —— 已完成的任务不是记忆](#2026-11-18--已完成的任务不是记忆候选必须陈述持久知识) 退役；
+只有 `=all` 才启用模型提炼器。
 
 **可推翻条件。** 若实践中发现过滤器的漏检明显，就扩充信号列表，或把 `all` 设为默认。
 

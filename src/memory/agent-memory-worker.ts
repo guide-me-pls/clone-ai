@@ -25,6 +25,7 @@ import { randomUUID } from "node:crypto";
 import type { Evidence, MemoryCandidate, MemorySensitivity, MemoryType } from "../core/contracts.ts";
 import { readNativeMainAgentEndpoint, readPersistedMainAgentEndpoint } from "../main-agent/native-runtime.ts";
 import type { MemoryWorker, PendingMemoryJob } from "./memory-pipeline.ts";
+import { hasDurableMemoryText } from "./memory-hygiene.ts";
 
 export interface AgentMemoryWorkerOptions {
   /** Injected completion; defaults to the configured native endpoint. 注入的补全；默认使用已配置的原生端点。 */
@@ -155,6 +156,10 @@ export function validateCandidates(source: string, job: PendingMemoryJob, maxCan
     const confidence = record.confidence;
     if (!isMemoryType(type) || !isConfidence(confidence)) continue;
     if (summary.length < 3 || summary.length > 300) continue;
+    // Punctuation, emoji and spacing alone are not a memory, however long the
+    // raw string is. The same fold the restatement gate uses decides content.
+    // 只有标点、emoji 与空白不构成记忆，无论原始字符串多长。与复述闸门相同的折叠决定内容。
+    if (!hasDurableMemoryText(summary)) continue;
     const evidenceIds = Array.isArray(record.sourceEvidenceIds)
       ? record.sourceEvidenceIds.filter((id): id is string => typeof id === "string" && knownEvidence.has(id))
       : [];

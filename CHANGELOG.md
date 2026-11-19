@@ -6,6 +6,66 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Task records own the decision; the audit shows the assembly
+
+The sidebar now lists only dispatched tasks. A waiting task is promoted into its own "需要你的确认" section with an explicit flag, and its approval/review card — with the step and the accept/reject buttons — is decided on the task record itself; the main conversation no longer aggregates decisions, and the 对话 control opens the main thread. Every Main Agent turn in 审计 now has a collapsed "任务组装" block: the conversation, the history window, the model, the prompt materials (charter version, briefing, instruction files, tool table) and the runs the turn dispatched with their steps and status.
+
+侧栏现在只列出已派发的任务。等待中的任务被提升到独立的"需要你的确认"分区并带明确标签；它的确认/复核卡——含步骤与接受/拒绝按钮——直接在任务记录上决定，主对话不再汇集决定，"对话"控件负责打开主线索。审计中的每个主 Agent 回合新增折叠的"任务组装"块：对话、历史窗口、模型、提示词材料（charter 版本、简报、指令文件、工具表）以及本回合派发的 Run 及其步骤与状态。
+
+### A finished task is not a memory
+
+Task-run memory mining no longer turns every completed task's objective into a candidate. Without a configured miner a completed task proposes nothing and its extraction marker records `count: 0`; with `CLONE_AI_MEMORY_MINING=all` the model miner still runs. Any miner's untyped or `procedure` candidate that only restates its task objective is dropped at the pipeline boundary (`droppedRestatements`, with the PII-redacted dropped text journaled for audit); a typed preference, fact, decision or commitment equal to the objective stays for review, because the owner may have stated exactly that. A one-time governed pass rejected the six pending legacy copies in the live home, leaving zero. The review list, attention list and dashboard show only undecided candidates. The live journal had 8 proposals and all 8 were `候选流程：` plus the exact objective. Conversation mining now has its own worker instead of borrowing the task pipeline's; the native loop still does not feed it (a repair-lane task).
+
+任务提炼不再把每个已完成任务的目标变成候选。未配置提炼器时，已完成任务不提出候选，提取标记记录 `count: 0`；设置 `CLONE_AI_MEMORY_MINING=all` 时模型提炼器仍会运行。任何提炼器提出的、只是复述任务目标的无类型或 `procedure` 候选现在会在流水线边界被丢弃（`droppedRestatements`，被丢弃文本经 PII 脱敏后写入 Journal 供审计）；等于目标的有类型偏好、事实、决定或承诺留给审核，因为所有者可能原样说出了这件事。一次性治理扫描已拒绝线上 home 中 6 条待确认的遗留复制，剩下零条。审核列表、注意力列表与 Dashboard 只显示未决定的候选。线上 Journal 有 8 条提案，8 条都是 `候选流程：` 加完全一致的目标。对话提炼现在拥有自己的 Worker，不再借用任务流水线；原生循环仍未喂给它（属于修复通道任务）。
+
+### A direct answer is recorded as evidence
+
+A one-step direct response no longer fails after the worker has answered. When a single-agent `direct_response` step produced no tool evidence and the reply is non-empty, the native worker records one observation row for the answer (bounded summary, locator `answer:<stepId>`) immediately before completing; real tool evidence is preserved, and every other step still requires evidence. The fix came from the gated repair lane (commit `76aec5d`) and ships with `test/regression/direct-response-evidence.test.ts`, which is red without the change and green with it.
+
+单步直接回答不再在 Worker 已作答之后失败。单 Agent 的 `direct_response` 步骤没有产出工具证据且回答非空时，原生 Worker 会在完成之前为回答记录一条观察证据（有界摘要，locator 为 `answer:<stepId>`）；真实工具证据保持不变，其他步骤仍然要求证据。该修复由带闸门的修复通道产出（提交 `76aec5d`），并带有 `test/regression/direct-response-evidence.test.ts`：变更前为红，变更后为绿。
+
+### A read-only request is answered, not failed for a missing artifact
+
+A request that only reads — "只读取 README 并说明", "只读审查这个项目的代码", or "看一下这个项目有什么优化空间" — is now planned as one read-only executor step instead of a draft work order whose required artifact the objective forbids. Research and review work orders inside a mixed plan require observation evidence, never a file. The Kernel rejects a `read_only` work order that requires `artifact`, `receipt` or `test` when the plan is attached, and a rejected plan closes its Run instead of leaving it in `planning`. The worker is told the contract it must satisfy; a read records observation evidence with its path, a write records artifact evidence even when the path was read first, and artifact rows survive the 20-row evidence cap. A read-only order no longer inherits write tools from a writable preparation step. The missing-input regression test is now collected by `npm test`.
+
+只读请求——"只读取 README 并说明"、"只读审查这个项目的代码"，或"看一下这个项目有什么优化空间"——现在被规划为一个只读执行步骤，而不是一份目标明确禁止的草稿工单。混合计划中的研究与复核工单要求观察证据，绝不要文件。Kernel 在挂载计划时拒绝要求 `artifact`、`receipt` 或 `test` 的 `read_only` 工单；被拒绝的计划会关闭它的 Run，而不是留在 `planning`。Worker 会被告知必须满足的合同；读取记录带路径的观察证据，写入记录产物证据（即使该路径先被读过），产物行也能活过 20 条证据上限。只读工单不再从可写准备步骤继承写工具。缺失输入的回归测试现在由 `npm test` 收集。
+
+### Concurrent tasks share one worker budget
+
+Worker capacity is now measured once per clone home instead of once per dispatch path. The daemon, every query, and each Main Agent tool call or turn draw from the same limit, so two tasks running at once can no longer each start up to the machine's full number of workers. The owner's `maxConcurrentWorkers` setting still applies and still takes effect without a restart; the limit is released when the last user of that home closes.
+
+Worker 容量现在按 clone home 测量一次，而不是每条派发路径各测一次。守护进程、每次查询，以及主 Agent 的每次工具调用或回合都从同一上限取用，因此两个同时运行的任务不再能各自拉起机器允许的全部 Worker。所有者的 `maxConcurrentWorkers` 设置仍然生效，且无需重启即可应用；该 home 的最后一个使用者关闭后，上限随之释放。
+
+### The main pane is a dispatch log
+
+A conversation's main pane now shows one log entry per Main Agent turn instead of chat bubbles: the query, the context the model was given (provider/model/effort, prompt-material hashes, the tool table, deterministic compactions, how many completed turns the history carried), the work the turn dispatched (every tool call with its input summary and duration, and the runs it spawned with titles and statuses), and the result. Approval and review cards and the task-record view are unchanged; the searchable global log stays in Settings → Audit. A turn the journal never recorded says so instead of rendering as a clean run, and legacy Pi history appears as compact history rows.
+
+对话的主界面现在按 Main Agent 回合显示日志条目，而不是聊天气泡：query、模型拿到的上下文（Provider/模型/强度、提示词材料哈希、工具表、确定性压缩、历史携带的已完成回合数）、本回合派发的工作（每次工具调用及其输入摘要与耗时，以及派生的 Run 及标题与状态）与结果。确认与复核卡片、任务记录视图不变；可搜索的全局日志仍在 设置 → 审计。Journal 没有记录的回合会如实说明，而不是显示成一次干净的运行；旧 Pi 历史以紧凑的历史行呈现。
+
+### A read-only request runs once, in the right workspace
+
+An explicit read-only request now becomes one read-only step instead of a draft work order: the fallback planner no longer treats generic containers such as 项目, 代码 or 文件 as delivery terms, and it removes a no-write clause before matching delivery verbs. `dispatch_task`'s run now executes in the workspace the prompt named instead of the daemon's checkout, and the execution trace records that workspace.
+
+显式只读请求现在变成一个只读步骤，而不是 draft 工作单：fallback planner 不再把项目、代码、文件这类泛化容器词当成交付词，并在匹配交付动词前去掉禁止写入的分句。`dispatch_task` 的 Run 现在在 Prompt 点名的工作区里执行，而不是守护进程所在的检出；执行轨迹会记录该工作区。
+
+### Worker file tools read the paths the plan names
+
+A worker's `read_file`, `list_directory`, `write_file` and `edit_file` now resolve a path against the workspace with `resolve` instead of `join`, so an absolute path inside the workspace or a granted read root reaches the file the gate approved. A plan that named `/workspace/README.md` used to pass the gate and then read `/workspace/workspace/README.md`, failing the step with "outside the workspace".
+
+Worker 的 `read_file`、`list_directory`、`write_file` 与 `edit_file` 现在用 `resolve` 而不是 `join` 解析路径，因此工作区内或已授权读取根内的绝对路径能读到闸门批准的文件。计划里写 `/workspace/README.md` 时，闸门此前判定允许，工具却去读 `/workspace/workspace/README.md`，步骤因此以“位于工作区之外”失败。
+
+### A review shows what the worker actually concluded
+
+A single-agent step's final answer is now stored in the journal (`execution.completed`) and rendered in the task record and the review card, instead of leaving the owner with only acceptance criteria and an evidence count. The review card is docked at the top of the pane, so a pending decision stays visible while a long conversation scrolls.
+
+单 Agent 步骤的最终回答现在写入 Journal（`execution.completed`），并显示在任务记录与复核卡里，不再让所有者只看到验收标准与证据计数。复核卡固定在面板顶部，长对话滚动时待决定的事项仍然可见。
+
+### The Main Agent reads the configured workspace
+
+The Main Agent's project instructions, situation briefing and invocation ledger now come from the workspace configured in Settings, not from the folder the daemon was started in. The prompt names that workspace and says workers see only inside it: a project outside it must be reported, not replaced by the workspace's files. Saving a different workspace says the app must be restarted instead of implying the switch already took effect.
+
+主 Agent 的项目指令、情境简报与调用台账现在都来自设置里配置的工作区，而不是守护进程启动时所在的目录。Prompt 写明该工作区，并说明 Worker 只能看到其中内容：工作区之外的项目必须如实报告，不能用工作区里的文件顶替。保存不同的工作区时会明确提示需要重启 App，而不再暗示切换已经生效。
+
 ### A path mentioned only in prose no longer fails a worker step
 
 The native worker now fails a step for a missing required input only when the work order declares that input with `required: true`. A path in the objective, instructions or acceptance criteria is context, not a requirement, and a path that is later read or written during the run no longer counts as missing. Declared required inputs that stay missing still fail. The fix came from the repair lane (commit `fb496e5b`) and ships with a two-direction regression test.
@@ -20,9 +80,9 @@ The execution plan no longer labels every non-read step `需确认`, which read 
 
 ### Each task runs its own Main Agent
 
-A new task in the desktop is now its own Main Agent conversation: it carries its own history, and a task whose subtasks are still executing no longer blocks another task from starting. Concurrent Main Agent turns are capped by a cross-process pool measured from the machine — half the CPU cores (two when the machine has room), reduced under load and memory pressure, ceiling eight; `maxConcurrentMainAgents` pins the limit. Two prompts for the same task still return 409. Older ledger rows and runs, which carry no conversation id, stay under the main conversation. WhatsApp now keeps one conversation per chat.
+A new task in the desktop is now its own Main Agent conversation: it carries its own history, and a task whose subtasks are still executing no longer blocks another task from starting. Concurrent Main Agent turns are capped by a cross-process pool measured from the machine's CPU and load — half the CPU cores (two when the machine has room), reduced under load, ceiling eight; `maxConcurrentMainAgents` pins the limit. Two prompts for the same task still return 409. Older ledger rows and runs, which carry no conversation id, stay under the main conversation. WhatsApp now keeps one conversation per chat.
 
-桌面端新建任务现在是一个独立的 Main Agent 对话：拥有自己的历史；一个任务的子任务仍在执行，也不会阻止另一个任务开始。并发 Main Agent 回合由跨进程槽位池按机器实测限制——CPU 核数的一半（机器有余量时给两个），负载与内存紧张时下调，上限八个；`maxConcurrentMainAgents` 可固定上限。同一任务的两个提示仍返回 409。没有对话 id 的旧台账行与 Run 仍归在主对话下。WhatsApp 现在按聊天各保留一个对话。
+桌面端新建任务现在是一个独立的 Main Agent 对话：拥有自己的历史；一个任务的子任务仍在执行，也不会阻止另一个任务开始。并发 Main Agent 回合由跨进程槽位池按机器 CPU 与负载实测限制——CPU 核数的一半（机器有余量时给两个），负载紧张时下调，上限八个；`maxConcurrentMainAgents` 可固定上限。同一任务的两个提示仍返回 409。没有对话 id 的旧台账行与 Run 仍归在主对话下。WhatsApp 现在按聊天各保留一个对话。
 
 ### The verification record stops repeating itself
 

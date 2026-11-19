@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import type { CloneRuntime } from "../src/core/runtime.ts";
@@ -63,6 +63,24 @@ async function tempKernel(t: TestContext): Promise<{ directory: string; runtime:
   });
   return { directory, runtime };
 }
+
+test("the Main Agent's kernel tools use the turn's workspace, not the process cwd", async (t) => {
+  // dispatch_task and propose_work_plan build their own Kernel runtime. Without
+  // the workspace they silently fell back to process.cwd(), so a worker read
+  // the checkout while the prompt named the owner's project.
+  // dispatch_task 与 propose_work_plan 会自建 Kernel Runtime。没有工作区时它们静默退回
+  // process.cwd()，于是 Prompt 说的是所有者的项目，Worker 读的却是检出。
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-kernel-workspace-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "clone-ai-kernel-ws-"));
+  const { runtime, close } = await createKernelRuntimeSession(dataDirectory, workspacePath);
+  t.after(async () => {
+    close();
+    await rm(dataDirectory, { recursive: true, force: true });
+    await rm(workspacePath, { recursive: true, force: true });
+  });
+  assert.equal(runtime.workspacePath, resolve(workspacePath));
+  assert.notEqual(runtime.workspacePath, resolve(process.cwd()));
+});
 
 test("installing without the owner's confirmation on record is refused before npm", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-install-gate-"));

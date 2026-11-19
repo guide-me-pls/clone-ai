@@ -28,6 +28,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import { tokenize } from "../memory/md-memory-store.ts";
+import { conversationIdOf, MAIN_AGENT_DEFAULT_CONVERSATION_ID } from "./conversation.ts";
 
 export interface HistoryExcerpt {
   /** Session file the excerpt came from. 摘录所属的会话文件。 */
@@ -105,11 +106,11 @@ export function mainAgentSessionDirectory(dataDirectory: string): string {
 export async function searchHistory(
   dataDirectory: string,
   query: string,
-  options: { limit?: number } = {},
+  options: { limit?: number; conversationId?: string } = {},
 ): Promise<HistoryExcerpt[]> {
   const terms = tokenize(query);
   if (terms.length === 0) return [];
-  const { entries, outOfContext } = await loadEntries(dataDirectory);
+  const { entries, outOfContext } = await loadEntries(dataDirectory, options.conversationId);
 
   const scored: HistoryExcerpt[] = [];
   for (const entry of entries) {
@@ -156,8 +157,12 @@ export interface ConversationMessage {
  * 对话页就是这段对话，而不是每条消息一个 Run。Run 是任务，打招呼不是。读取 Main Agent
  * 自己的会话文件，界面上才能保持一条线程，而任务在旁边来来去去。
  */
-export async function readConversation(dataDirectory: string, limit = 200): Promise<ConversationMessage[]> {
-  const { entries } = await loadEntries(dataDirectory);
+export async function readConversation(
+  dataDirectory: string,
+  limit = 200,
+  conversationId?: string,
+): Promise<ConversationMessage[]> {
+  const { entries } = await loadEntries(dataDirectory, conversationId);
   return entries
     .filter((entry) => entry.type === "message" && (entry.speaker === "user" || entry.speaker === "assistant") && entry.visibleText.trim().length > 0)
     .sort((left, right) => left.at.localeCompare(right.at))
@@ -166,8 +171,11 @@ export async function readConversation(dataDirectory: string, limit = 200): Prom
 }
 
 /** The shape of the history: how much exists, how much the model can still see. 历史的形状：有多少、模型还能看见多少。 */
-export async function describeHistory(dataDirectory: string): Promise<HistoryDescription> {
-  const { entries, outOfContext, compactions, sessions } = await loadEntries(dataDirectory);
+export async function describeHistory(
+  dataDirectory: string,
+  options: { conversationId?: string } = {},
+): Promise<HistoryDescription> {
+  const { entries, outOfContext, compactions, sessions } = await loadEntries(dataDirectory, options.conversationId);
   return {
     sessions,
     totalEntries: entries.length,
@@ -197,14 +205,18 @@ export async function describeHistory(dataDirectory: string): Promise<HistoryDes
  * 比对忽略所有空白字符，因此引文能在 Agent 重新断行的句子里存活；但无法挺过改写，
  * 而这正是本意。
  */
-export async function ownerStated(dataDirectory: string, quote: string): Promise<boolean> {
+export async function ownerStated(
+  dataDirectory: string,
+  quote: string,
+  options: { conversationId?: string } = {},
+): Promise<boolean> {
   const needle = quote.replace(/\s+/g, "");
   // A quote too short to identify anything would match by accident; refusing
   // it forces the agent to quote a real span of the owner's words.
   // 太短的引文什么都识别不了，只会意外命中；拒绝它迫使 Agent 引用所有者话语中
   // 真实的一段。
   if (needle.length < 6) return false;
-  const { entries } = await loadEntries(dataDirectory);
+  const { entries } = await loadEntries(dataDirectory, options.conversationId);
   return entries.some(
     (entry) => entry.speaker === "user" && entry.text.replace(/\s+/g, "").includes(needle),
   );
@@ -218,15 +230,20 @@ interface LoadedHistory {
   sessions: string[];
 }
 
-async function loadEntries(dataDirectory: string): Promise<LoadedHistory> {
+async function loadEntries(dataDirectory: string, conversationId?: string): Promise<LoadedHistory> {
+  // Legacy Pi session files have no conversation id: they are the main
+  // conversation's record and must not appear in a task's transcript.
+  // 旧 Pi 会话文件没有对话 id：它们是主对话的记录，不得出现在任务的转录中。
+  const includeLegacy = conversationId === undefined || conversationId === MAIN_AGENT_DEFAULT_CONVERSATION_ID;
   const directory = mainAgentSessionDirectory(dataDirectory);
-  let names: string[];
-  try {
-    names = (await readdir(directory)).filter((name) => name.endsWith(".jsonl"));
-  } catch {
-    // No conversation yet is not an error; it is a twin that has not been
-    // spoken to. 还没有对话不是错误，只是一个还没被说过话的分身。
-    return { entries: [], outOfContext: new Set(), compactions: [], sessions: [] };
+  let names: string[] = [];
+  if (includeLegacy) {
+    try {
+      names = (await readdir(directory)).filter((name) => name.endsWith(".jsonl"));
+    } catch {
+      // No conversation yet is not an error; it is a twin that has not been
+      // spoken to. 还没有对话不是错误，只是一个还没被说过话的分身。
+    }
   }
 
   const withTimes: Array<{ name: string; mtimeMs: number }> = [];
@@ -312,7 +329,7 @@ async function loadEntries(dataDirectory: string): Promise<LoadedHistory> {
   }
 
   compactions.sort((left, right) => left.at.localeCompare(right.at));
-  const ledgerEntries = await loadLedgerEntries(dataDirectory);
+  const ledgerEntries = await loadLedgerEntries(dataDirectory, conversationId);
   return {
     entries: [...entries, ...ledgerEntries],
     outOfContext,
@@ -331,13 +348,15 @@ async function loadEntries(dataDirectory: string): Promise<LoadedHistory> {
  * 原生主 Agent 的对话记录是回合台账，而不是会话文件。每个完成的回合变成一条 user
  * 与一条 assistant 条目，使检索与对话视图无需第二条代码路径就能看到原生回合。
  */
-async function loadLedgerEntries(dataDirectory: string): Promise<ParsedEntry[]> {
+async function loadLedgerEntries(dataDirectory: string, conversationId?: string): Promise<ParsedEntry[]> {
   const { readMainAgentTurnRecords } = await import("./turn-audit.ts");
   const records = await readMainAgentTurnRecords(dataDirectory).catch(() => []);
+  const wanted = conversationId === undefined ? undefined : conversationIdOf(conversationId);
   const entries: ParsedEntry[] = [];
   let index = 0;
   for (const record of records) {
     if (record.status !== "completed") continue;
+    if (wanted !== undefined && conversationIdOf(record.conversationId) !== wanted) continue;
     const session = "main-agent-turns";
     entries.push({
       session,

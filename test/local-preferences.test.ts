@@ -31,7 +31,11 @@ test("local Memory is automatically deduplicated by candidate id and remains edi
       id: "memory-1",
       runId: "run-1",
       sourceEvidenceIds: ["evidence-1"],
-      summary: "候选流程：先核对上下文，再准备可复核交付物。",
+      // A durable preference, not the retired "候选流程：" objective copy: this
+      // fixture models what the pipeline is willing to propose now.
+      // 一条持久偏好，而不是已退役的“候选流程：”目标复制：本夹具模拟流水线现在愿意
+      // 提出的内容。
+      summary: "先核对上下文，再准备可复核交付物。",
       confidence: "low" as const,
       status: "proposed" as const,
       createdAt: "2026-07-26T00:00:00.000Z",

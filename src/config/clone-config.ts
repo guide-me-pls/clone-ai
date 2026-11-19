@@ -41,6 +41,13 @@ export interface CloneConfig {
    * 所有者固定的并发 Worker 上限。省略或 0 表示自动：Kernel 每次派发时测量 CPU 与空闲内存。
    */
   maxConcurrentWorkers?: number;
+  /**
+   * Owner-pinned ceiling on concurrent Main Agent turns. Omitted or 0 means
+   * auto: each turn acquires a slot sampled from CPU, load and free memory.
+   * 所有者固定的并发 Main Agent 回合上限。省略或 0 表示自动：每个回合获取一个按 CPU、
+   * 负载与空闲内存采样的槽位。
+   */
+  maxConcurrentMainAgents?: number;
 }
 
 export class CloneConfigStore {
@@ -58,7 +65,7 @@ export class CloneConfigStore {
     return normalizeConfig(value, this.#defaultWorkspace);
   }
 
-  async update(update: Partial<Pick<CloneConfig, "workspacePath" | "locale" | "mainAgentModel" | "mainAgentEffort" | "mainAgentBaseUrl" | "mainAgentApiKey" | "maxConcurrentWorkers">>): Promise<CloneConfig> {
+  async update(update: Partial<Pick<CloneConfig, "workspacePath" | "locale" | "mainAgentModel" | "mainAgentEffort" | "mainAgentBaseUrl" | "mainAgentApiKey" | "maxConcurrentWorkers" | "maxConcurrentMainAgents">>): Promise<CloneConfig> {
     const current = await this.get();
     const next = normalizeConfig({ ...current, ...update }, this.#defaultWorkspace);
     const write = this.#writes.then(() => writeJsonAtomic(this.#paths.configFile, next));
@@ -84,6 +91,9 @@ function normalizeConfig(value: Partial<CloneConfig> | undefined, defaultWorkspa
     ...(isEffortLevel(value?.mainAgentEffort) ? { mainAgentEffort: value.mainAgentEffort } : {}),
     ...(typeof value?.maxConcurrentWorkers === "number" && Number.isFinite(value.maxConcurrentWorkers) && value.maxConcurrentWorkers > 0
       ? { maxConcurrentWorkers: Math.trunc(value.maxConcurrentWorkers) }
+      : {}),
+    ...(typeof value?.maxConcurrentMainAgents === "number" && Number.isFinite(value.maxConcurrentMainAgents) && value.maxConcurrentMainAgents > 0
+      ? { maxConcurrentMainAgents: Math.trunc(value.maxConcurrentMainAgents) }
       : {}),
   };
 }

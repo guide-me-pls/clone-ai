@@ -38,6 +38,7 @@ import {
   hashAuditDataset,
   type GateBaseline,
   type GateReport,
+  type MemoryCase,
   type PolicyCase,
   type VerdictCase,
 } from "../src/eval/regression-gate.ts";
@@ -58,7 +59,7 @@ function fail(message: string): never {
   process.exit(2);
 }
 
-async function readCases(file: string): Promise<{ verdict?: VerdictCase[]; policy?: PolicyCase[] }> {
+async function readCases(file: string): Promise<{ verdict?: VerdictCase[]; policy?: PolicyCase[]; memory?: MemoryCase[] }> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(file, "utf8"));
@@ -67,7 +68,7 @@ async function readCases(file: string): Promise<{ verdict?: VerdictCase[]; polic
   }
   const cases = (parsed as { cases?: unknown }).cases;
   if (!Array.isArray(cases)) fail(`${file}: "cases" must be an array.`);
-  return { verdict: cases as VerdictCase[], policy: cases as PolicyCase[] };
+  return { verdict: cases as VerdictCase[], policy: cases as PolicyCase[], memory: cases as MemoryCase[] };
 }
 
 function assertVerdictCases(cases: readonly VerdictCase[]): void {
@@ -96,6 +97,25 @@ function assertPolicyCases(cases: readonly PolicyCase[]): void {
     }
     if (testCase.step === undefined || testCase.authority === undefined) {
       fail(`Policy case ${testCase.id}: step and authority are required.`);
+    }
+  }
+}
+
+function assertMemoryCases(cases: readonly MemoryCase[]): void {
+  const knownTypes = new Set(["fact", "preference", "procedure", "decision", "commitment"]);
+  const seen = new Set<string>();
+  for (const testCase of cases) {
+    if (typeof testCase.id !== "string" || testCase.id.length === 0) fail("A memory case has no id.");
+    if (seen.has(testCase.id)) fail(`Duplicate memory case id: ${testCase.id}`);
+    seen.add(testCase.id);
+    if (testCase.expected !== "drop" && testCase.expected !== "keep") {
+      fail(`Memory case ${testCase.id}: expected must be "drop" or "keep".`);
+    }
+    if (typeof testCase.summary !== "string" || typeof testCase.objective !== "string") {
+      fail(`Memory case ${testCase.id}: summary and objective must be strings.`);
+    }
+    if (testCase.type !== undefined && !knownTypes.has(testCase.type)) {
+      fail(`Memory case ${testCase.id}: unknown candidate type ${String(testCase.type)}.`);
     }
   }
 }
@@ -141,6 +161,10 @@ function printReport(report: GateReport): void {
     + ` · agreement ${percent(report.audit.agreement)} · falsePass ${report.audit.falsePass}`
     + ` · falseFail ${report.audit.falseFail}`,
   );
+  console.log(
+    `  memory   ${String(report.memory.cases).padStart(3)} cases · agreement ${percent(report.memory.agreement)}`
+    + ` · restatementsProposed ${report.memory.restatementsProposed} · durableDropped ${report.memory.durableDropped}`,
+  );
   console.log(`  baseline ${report.changes.length === 0 ? "unchanged" : `${report.changes.length} changed`}`);
   if (report.changes.length > 0) {
     for (const change of report.changes) {
@@ -159,12 +183,16 @@ function printReport(report: GateReport): void {
 
 const verdictFile = join(fixturesDirectory, "verdict-cases.json");
 const policyFile = join(fixturesDirectory, "policy-cases.json");
+const memoryFile = join(fixturesDirectory, "memory-cases.json");
 const { verdict: rawVerdictCases } = await readCases(verdictFile);
 const { policy: rawPolicyCases } = await readCases(policyFile);
+const { memory: rawMemoryCases } = await readCases(memoryFile);
 const verdictCases = rawVerdictCases ?? [];
 const policyCases = rawPolicyCases ?? [];
+const memoryCases = rawMemoryCases ?? [];
 assertVerdictCases(verdictCases);
 assertPolicyCases(policyCases);
+assertMemoryCases(memoryCases);
 
 const auditPath = flagValue("--audit") ?? join(fixturesDirectory, "audit-cases.jsonl");
 const auditSource = await readFile(auditPath, "utf8").catch(() => fail(`Cannot read audit dataset: ${auditPath}`));
@@ -176,6 +204,7 @@ if (process.argv.includes("--write-baseline")) {
   const next = await buildBaseline({
     verdictCases,
     policyCases,
+    memoryCases,
     auditDatasetHash,
     ...(baseline === undefined ? {} : { previous: baseline }),
   });
@@ -192,6 +221,7 @@ if (baseline === undefined) {
 const report = await evaluateGate({
   verdictCases,
   policyCases,
+  memoryCases,
   auditRecords,
   auditDatasetHash,
   baseline,

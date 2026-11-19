@@ -11,6 +11,149 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-18 —— 决定属于任务记录，审计显示组装
+
+- **主张：** 侧栏只列派发的任务；等待中的任务被提升到"需要你的确认"并带明确的
+  `需你确认`/`需你复核` 标签；确认与复核卡——含步骤与按钮——直接在任务记录上决定；审计中的
+  每个主 Agent 回合显示对话、历史窗口、提示词材料、工具表与派发的 Run。
+- **证据：** `test/ui-structure.test.ts` **15/15**、`test/companion-control-plane.test.ts`
+  **22/22**、`test/main-agent-turn-audit.test.ts` **13/13**、
+  `test/companion-config-api.test.ts` **21/21**；全量 **831/831**，`npm run typecheck`
+  与 `npm run gate` 通过。浏览器：一个暂停的 Run 只出现在"需要你的确认 · 1"并带
+  `需你确认`；其记录显示"需要你确认后才能继续 / 步骤：发送"与确认/拒绝；一个新任务经桩模型
+  派发了 Run，审计 → 主 Agent 回合显示 "任务组装 · 1 个 Run · 材料 ebbfb873 … charter v2 ·
+  情境简报 · AGENTS.md · 工具表 11 个 … 整理本周资料 失败 起草"。
+- **记录位置：** [取舍：以任务记录为单位](../architecture/trade-offs.zh-CN.md#2026-11-18--以任务记录为单位列表不留对话行确认在任务内完成)、
+  [取舍：审计说明组装](../architecture/trade-offs.zh-CN.md#2026-11-18--审计说明每一次-main-agent-回合是怎么组装任务的)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--列表是任务决定在任务内审计说明组装)。
+
+## 2026-11-18 —— 直接回答为 direct_response 步骤提供证据
+
+- **主张：** 单 Agent 的 `direct_response` 步骤不再在 Worker 已作答之后失败。原生 Worker 为
+  最终回答记录恰好一条 `observation` 证据（有界摘要、`locator: answer:<stepId>`），并以
+  `produced.size === 0` 为条件，避免真实读取被重复记录；其他步骤保留自己的证据闸门，Kernel
+  不合成证据。
+- **证据：** 确定性轨迹 `53074cf2` 复现失败
+  （`Agent direct-responder completed step direct-response without evidence.`）。修复通道
+  第三次尝试：第一阶段 Run `566b1603` 在
+  `test/regression/direct-response-evidence.test.ts` 上为红；修复 Run `1d811b94` 让用例
+  转绿；通道内完整套件 **760/760**、typecheck 0。分支 `rsi/auto-fix-20261118T1044`，
+  提交 `76aec5d`。应用到共享树：回退修复时新用例为红，恢复后为绿；全量 **832/832**、
+  `npm run typecheck` 0、`npm run gate` **PASS**。前两次通道尝试（没有写测试；注释只有
+  英文）记录在优化日志，不写进成果文件。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--直接回答就是-direct_response-步骤的证据)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--直接回答证据缺口修复通道经过三次尝试产出了补丁)。
+
+## 2026-11-18 —— 只读请求得到回答，而不是因缺少产物而失败
+
+- **主张：** 只读或分析请求被规划为一个只读步骤、以观察证据交付，而不是一份要求目标
+  明确禁止的文件的草稿。混合计划中的研究与复核工单也要求观察证据。不可满足的合同在挂载
+  计划时被拒绝，被拒绝的计划会关闭它的 Run，而不是冻结在 `planning`。Worker 会被告知
+  必需合同；证据记录不再让先前的读取掩盖写入，也不会在观察上限下丢掉写入。
+- **证据：** 三段 Journal 原文（`663b45b5`、`c03c7cea`、`cd74804b`）在变更前复现为
+  `prepare/reversible_write` + `draft/local-draft`（`kind: artifact`、
+  `locatorRequired: true`），Journal 只有 `observation` 行，验证以
+  `Missing required artifact evidence: local-draft` 失败；变更后同样原文得到单个
+  `read-only-lookup` 步骤，没有产物合同。确定性 eval：
+  `node --experimental-strip-types --test test/fallback-planner.test.ts
+  test/worker-evidence-contract.test.ts` **18/18**；全量 **831/831**；
+  `npm run typecheck` 退出 0；`npm run gate` **PASS**（verdict/policy/audit/memory
+  100%）。未在桌面 App 中实测：变更后没有再派发真实任务。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--只读请求得到观察证据而不是产物)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--只读请求得到回答而不是因缺少产物而失败)。
+
+## 2026-11-18 —— 已完成任务不再把目标提为记忆
+
+- **主张：** 未配置提炼器时，任务提炼不提出候选；任何提炼器提出的、只是复述任务目标的
+  无类型或 `procedure` 候选都会在所有者审核列表之前被丢弃，等于目标的有类型偏好等留给审核。
+  一次性治理扫描拒绝了线上 home 中待确认的遗留复制，剩下零条；审核列表、注意力列表与
+  Dashboard 不再把已决定的复制当作当前候选。
+- **证据：** 线上 Journal `~/.clone/journal.sqlite3`：8 条 requested / 8 条 extracted
+  （全部 `count: 1`）/ 8 条 proposed，每条摘要都是 `候选流程：` 加完全一致的任务目标；
+  2 条由所有者拒绝、6 条由清理拒绝，**0 条待确认**。`test/memory-candidate-quality.test.ts`
+  **8/8**（默认为零、闸门丢弃/保留、等于目标的有类型偏好保留、`=all` 选中真实提炼器、
+  清理只执行一次）；`test/golden-path.test.ts` **2/2**；`test/runtime.test.ts` **5/5**；
+  `npm run gate` **13/14/4 + memory 26/26**，100% 一致，基线已重新生成；
+  `npm run typecheck` 退出 0。完整 `npm test`：**831/831**。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--已完成的任务不是记忆候选必须陈述持久知识)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--已完成任务的目标不再变成记忆候选)。
+
+## 2026-11-18 —— 并发 Main Agent 回合共享一份 Worker 预算
+
+- **主张：** Worker 容量现在是每个 clone home 一份实测 `CapacityGate`，由该 home 上的每个
+  组装共享——Daemon、每次 Query 工作流、主 Agent 逐次调用的 Kernel 会话与修复通道——因此两个
+  并发 Main Agent 回合同时派发时，不会超过一份实测 Worker 预算。所有者的
+  `maxConcurrentWorkers` 固定值仍然生效，且通过任一组装刷新后无需重启即可到达全部组装。
+  注册表带引用计数，因此测试中的临时 home 不会累积条目。
+- **证据：** `test/runtime-capacity-sharing.test.ts`——5 个确定性用例（固定为 1 时共享闸门
+  且一次获取排队；固定值跨组装传播；Kernel 会话从 Daemon 的闸门取用；最后一个关闭后退休，
+  重复关闭只释放一次；十二个临时 home 不留残余）。对 `HEAD` 的逐组装工厂运行时，用例 1–4
+  失败；加上本变更后 5/5 通过。全量 **798/798**、`npm run typecheck`、`npm run gate` 通过。
+  未经 live 验证：超订本身从未在两个同时派发的任务上实测。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--每个-clone-home-一份实测-worker-预算而不是每个组装一份)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--worker-容量变成每个-clone-home-一份预算)。
+
+## 2026-11-18 —— 主界面读起来是一份派发日志
+
+- **主张：** 对话的主界面按 Main Agent 回合渲染日志条目——query、组装出的上下文（Provider/
+  模型/强度、提示词材料与工具表、历史窗口、压缩）、本回合派发的工作（工具调用与派生 Run）与
+  结果——而不是聊天气泡；任务记录视图与决定卡片不变。
+- **证据：** `test/main-agent-turn-audit.test.ts`（投影与搜索）、
+  `test/ui-structure.test.ts`（日志与消息、实时回显、隐藏与失败回合）、
+  `test/companion-control-plane.test.ts`（会话视图回合、日志边界、隐藏的派生 Run）与
+  `test/prompt-snapshot.test.ts` 通过——**58/58**；全量 **834/834**、
+  `npm run typecheck`、`npm run gate` 通过。隔离的预览 home 上的浏览器检查：两个回合都渲染成
+  日志条目，带 `native/verify-model`、`charter v2`、`工具 11 个`、
+  `此前 1 轮已完成对话` 与回复，没有一个聊天气泡。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--主界面是派发日志而不是聊天记录)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--对话的主界面变成派发日志)。
+
+## 2026-11-18 —— 只读请求只跑一次，且在工作区里跑
+
+- **主张：** 显式只读请求（或没有交付物的研究请求）变成一个由 `context-researcher` 执行的
+  只读步骤，没有 draft 工作单，也没有必需工件；`dispatch_task` 的 Run 在本回合的工作区里
+  执行，而不是守护进程所在的检出；`execution.started` 记录该工作区。
+- **证据：** `test/fallback-planner.test.ts` **10/10**（只读请求与只读代码审查都是一个步骤；
+  点名输出目标仍得到 draft；含"写"的禁止写入短语不会变成交付）；`test/main-agent.test.ts`
+  **37/37**（含工具 Runtime 工作区用例）；`test/native-main-agent.test.ts` 与
+  `test/dispatch-task.test.ts` 通过。变更前：Run `c03c7cea`/`cd74804b` 以
+  "Missing required artifact evidence: local-draft" 失败；Run `b1e04b18` 在
+  `/Users/qihoo/study/clone-ai` 里执行，把 knowledge-base 的 README 报成工作区之外。
+  变更后：在 `/Users/qihoo/work/knowledge_base` 上的 live 检查（native /
+  `360/openai/gpt-6.1-terra`）只产生**一个** Run（`99504e85`），单个
+  `read-only-lookup` 步骤（`delegated: false`、`risk: read_only`），读到了绝对路径的
+  README、记录 observation、把三句概述写成 `execution.completed`，进入 `waiting_review`。
+  全量 `npm test` **829/829**；`npm run typecheck` 与 `npm run gate` 通过。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--只读请求是一个步骤工具使用本回合的工作区)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--只读请求是一个步骤run-使用本回合的工作区)。
+
+## 2026-11-18 —— 复核显示 Worker 的回答，Prompt 知道工作区
+
+- **主张：** 主 Agent 的 Prompt 现在从设置里配置的工作区加载项目指令，并写明该工作区；规划者
+  与 Worker 都被告知，工作区之外点名的项目必须如实报告，不能用工作区里的文件顶替。单 Agent
+  步骤的最终回答会写入 Journal，并显示在任务记录与固定在面板顶部的复核卡里。Worker 的文件
+  工具与闸门一样用 `resolve` 解析路径，因此工作区内或授权读取根内的绝对路径能读到闸门批准的
+  文件。保存不同的工作区时会提示需要重启 App。
+- **证据：** `test/companion-main-agent.test.ts` **6/6**（新用例捕获到配置工作区的
+  `AGENTS.md` 标记与 `Current workspace: …`，且不含检出里的规则）；
+  `test/run-query-routing.test.ts` **11/11**（新用例找到摘要为 Worker 回答的
+  `execution.completed`）；`test/main-conversation-approvals.test.ts` **5/5**；
+  `test/companion-config-api.test.ts` **19/19**（不同路径时重启提示为 true，运行中的路径没有
+  该字段）；`test/ui-structure.test.ts` **14/14**；`test/native-agent-worker.test.ts`
+  **15/15**；`test/native-worker-tools.test.ts` **6/6**（工作区内的绝对路径与工作区外的
+  授权读取根）；`npm run typecheck` 退出 0；`npm run gate` PASS，基线未变。变更前的 live 数据：
+  Run `062716a9` 没有完成事件，提示词快照 `a063d154…` 读的是 clone-ai 检出的 `AGENTS.md`。
+  live 检查（native / `360/openai/gpt-6.1-terra`，全新的临时工作区）：原始请求改为询问路径
+  或切换工作区，且没有派发任何 Run（`newRuns: []`）；没有"没有文件系统工具"这一行时它仍
+  派发了一个失败的 Run，说明该行是必要的。真实 App 验证：Run `b1e04b18` 因 `join` 把绝对路径
+  拼成双前缀而失败；修复 `resolve` 后，Run `496d2061` 读到了 knowledge-base 的 `README.md`
+  （`isError: false`），记录了三句 `execution.completed`，进入 `waiting_review`，任务记录在
+  "已接受"之前显示了这条回答。全量 `npm test` 在共享检出的并发变更稳定后是 **829/829**
+  （更早一次运行撞上另一个会话的 dev server 占用 4318 端口造成的 `EADDRINUSE`；该服务
+  停止后通过）。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--主-agent-知道自己的工作区复核带着答案)、
+  [执行链路](optimizations.zh-CN.md#2026-11-18--主-agent-读取自己的工作区复核带着回答)。
+
 ## 2026-11-18 —— 只在文字中提到的路径不再让 Worker 步骤失败
 
 - **主张：** Native Worker 只有在工作单以 `required: true` 声明某输入时，才因该输入缺失而判步骤失败；仅仅出现在目标、指令或验收标准里的路径只是上下文，运行期间后来被读取或写入的路径也不再算缺失。已声明且仍然缺失的必需输入仍会失败。
@@ -21,14 +164,17 @@
 ## 2026-11-18 —— 任务作为独立的 Main Agent 运行，并发由机器约束
 
 - **主张：** 每个任务都是自己的 Main Agent 对话，拥有自己的历史；一个任务在执行子任务，不再
-  阻止另一个任务；并发 Main Agent 回合由跨进程槽位池按 CPU、负载与内存采样限制，
-  `maxConcurrentMainAgents` 是所有者的固定值。
-- **证据：** `test/main-agent-capacity.test.ts` **3/3**、`test/main-agent-slots.test.ts`
-  **4/4**、`test/prompt-lock.test.ts` **4/4**、`test/native-main-agent.test.ts` **8/8**
-  （含对话隔离）、`test/companion-control-plane.test.ts` **18/18**（含"另一个对话的提示不被
-  主对话锁阻塞"与"每个任务有自己的对话与历史"）；全量 **772/772**，`npm run typecheck` 与
-  `npm run gate` 通过。隔离 companion 的浏览器检查：两个示例对话各自只显示自己的消息；新建
-  任务发送自己的 `conversationId`，并在侧栏产生自己的条目。
+  阻止另一个任务；并发 Main Agent 回合由跨进程槽位池按 CPU 与负载采样限制，
+  `maxConcurrentMainAgents` 是所有者的固定值；桌面端可以在第一个任务仍在流式输出时开始第二个。
+- **证据：** 功能测试 **21/21**（`test/main-agent-capacity.test.ts` 3/3、
+  `test/main-agent-slots.test.ts` 5/5、真实的双进程槽位测试 1/1、
+  `test/prompt-lock.test.ts` 4/4、`test/native-main-agent.test.ts` 7/7（含对话隔离）、
+  `test/run-triggers.test.ts` 1/1）；`test/companion-control-plane.test.ts` **22/22**
+  （各自独立的历史、主对话不吸收任务、同名失败对话保持独立、隐藏对话拒绝发送、裸 Run id 被
+  拒绝为对话 id）；`test/companion-config-api.test.ts` **20/20**（固定值可设置与清除）；
+  全量 **791/791**，`npm run typecheck` 与 `npm run gate` 通过。在全新的 companion 与本地
+  SSE 桩模型上做浏览器检查：两个任务相隔 350 ms 启动，都作为独立对话完成；第一个完成时第二个
+  仍是选中项；每个视图只含自己的回合；主对话两者都不含。
 - **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-18--每个任务有自己的-main-agent并发由机器实测决定)、
   [执行链路](optimizations.zh-CN.md#2026-11-18--每个任务有自己的-main-agent并发由机器实测决定)。
 

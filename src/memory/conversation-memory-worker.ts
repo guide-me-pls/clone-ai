@@ -104,6 +104,9 @@ export async function recordConversationRequest(input: {
       type: "memory.conversation.requested" as const,
       runId: input.runId,
       payload: {
+        // Prompt context for a human reader; the restatement gate uses the
+        // CONVERSATION_OBJECTIVE sentinel, never the owner's words.
+        // 供人阅读的 Prompt 上下文；复述闸门使用 CONVERSATION_OBJECTIVE 哨兵，绝不使用所有者原文。
         taskObjective: input.objective,
         sourceEvidenceIds: evidence.map((item) => item.id),
         source: "conversation",
@@ -146,6 +149,23 @@ export class ConversationMemoryWorker implements MemoryWorker {
   }
 }
 
+/**
+ * The fixed objective of a conversation job.
+ *
+ * It is a sentinel, not the owner's text. The restatement gate compares a
+ * candidate against this value, because the owner's own words are exactly what
+ * a conversation memory should preserve; comparing against the recorded
+ * `taskObjective` would drop a verbatim statement as a "restatement". One
+ * constant keeps the prompt and the job builder from drifting apart.
+ *
+ * 对话任务的固定目标。
+ *
+ * 它是哨兵值，不是所有者原文。复述闸门拿这个值做比较，因为所有者自己的话正是对话记忆应当
+ * 保留的内容；若改为比较记录下来的 `taskObjective`，一句原话就会被当成“复述”丢弃。一个
+ * 常量使 Prompt 与任务构建器不会各自漂移。
+ */
+export const CONVERSATION_OBJECTIVE = "Conversation with the owner";
+
 /** The conversation prompt: durable statements only, in the owner's own words. 对话 Prompt：只提炼持久陈述，并保留所有者的原话。 */
 export function conversationPrompt(job: PendingMemoryJob): string {
   return [
@@ -154,7 +174,7 @@ export function conversationPrompt(job: PendingMemoryJob): string {
     "Ignore greetings, questions about the system, one-off tasks, and anything the assistant said.",
     "Never invent; if nothing qualifies, return [].",
     "",
-    miningPrompt({ ...job, task: { ...job.task, objective: "Conversation with the owner" } }),
+    miningPrompt({ ...job, task: { ...job.task, objective: CONVERSATION_OBJECTIVE } }),
   ].join("\n");
 }
 
@@ -177,7 +197,7 @@ export function conversationJobsFromEvents(events: readonly JournalEvent[]): Pen
       .map((event) => event.payload as Evidence);
     if (recorded.length === 0) continue;
     const createdAt = recorded[0]?.createdAt ?? request.occurredAt;
-    const objective = "Conversation with the owner";
+    const objective = CONVERSATION_OBJECTIVE;
     const job: PendingMemoryJob = {
       run: { id: request.runId, taskId: `${request.runId}:task`, status: "completed", createdAt, updatedAt: createdAt },
       task: { id: `${request.runId}:task`, triggerId: "conversation", title: "Conversation", objective, acceptanceCriteria: [], createdAt },

@@ -235,3 +235,53 @@ test("image attachments become OpenAI-style data URLs", async (t) => {
   assert.ok(parts.some((part) => part.type === "text" && part.text === "What color is this image?"));
   assert.ok(parts.some((part) => part.type === "image_url" && part.image_url?.url === "data:image/png;base64,AAAA"));
 });
+
+test("each conversation sees only its own history and records its id", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-native-conversations-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const startedAt = new Date(Date.now() - 120_000).toISOString();
+  await appendMainAgentTurnRecord(directory, {
+    id: "turn-a",
+    text: "Remember the blue template.",
+    status: "completed",
+    startedAt,
+    completedAt: startedAt,
+    reply: "Noted blue.",
+    conversationId: "conversation-a",
+  });
+  await appendMainAgentTurnRecord(directory, {
+    id: "turn-b",
+    text: "Remember the red template.",
+    status: "completed",
+    startedAt,
+    completedAt: startedAt,
+    reply: "Noted red.",
+    conversationId: "conversation-b",
+  });
+  let body: { messages: Array<{ role: string; content?: string }> } | undefined;
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    body = JSON.parse(String(init.body)) as { messages: Array<{ role: string; content?: string }> };
+    return sseResponse([
+      { choices: [{ delta: { content: "Red." } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ]);
+  }) as unknown as typeof fetch;
+  const result = await runNativeMainAgentTurn({
+    dataDirectory: directory,
+    text: "Which template?",
+    source: "cli",
+    conversationId: "conversation-b",
+    endpoint: { baseUrl: "http://gateway", model: "m" },
+    fetchImpl,
+  });
+  assert.equal(result.reply, "Red.");
+  const messages = body?.messages ?? [];
+  // The other task's history is not this task's context. 另一个任务的历史不是本任务的上下文。
+  assert.ok(messages.some((message) => message.role === "user" && String(message.content).includes("red template")));
+  assert.ok(!messages.some((message) => String(message.content ?? "").includes("blue template")));
+
+  const completed = (await readMainAgentTurnRecords(directory)).find((record) => record.text === "Which template?");
+  assert.equal(completed?.status, "completed");
+  assert.equal(completed?.conversationId, "conversation-b");
+});

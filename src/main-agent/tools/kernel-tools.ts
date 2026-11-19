@@ -31,6 +31,21 @@ import { CloneConfigStore } from "../../config/clone-config.ts";
 export interface KernelToolsOptions {
   dataDirectory: string;
   /**
+   * The workspace this turn belongs to. A tool that starts or validates a Run
+   * must use the same workspace as the daemon; without it the tool's runtime
+   * fell back to process.cwd() and a worker read the checkout instead of the
+   * owner's project.
+   * 本回合所属的工作区。启动或校验 Run 的工具必须使用与守护进程相同的工作区；没有它，
+   * 工具的 Runtime 会退回 process.cwd()，Worker 读的就是检出而不是所有者的项目。
+   */
+  workspacePath?: string;
+  /**
+   * The conversation these tools belong to. A run proposed from a task is
+   * recorded under that task, so the sidebar and its deletion stay coherent.
+   * 这些工具所属的对话。由任务提案的 Run 记录在该任务下，侧栏与其删除因此保持一致。
+   */
+  conversationId?: string;
+  /**
    * Called once for every tool as it is registered, so prompt provenance hashes
    * the table the model actually received instead of a hand-maintained copy.
    * 每个工具注册时调用一次，使提示词溯源哈希的是模型真正收到的工具表，
@@ -53,13 +68,16 @@ export interface PlanProposalResult {
  * behind the same seam. 与 Query 工作流相同方式构建 Kernel Runtime；Journal 后端
  * （默认 SQLite，CLONE_AI_JOURNAL=jsonl 切回纯文件）位于同一 seam 之后。
  */
-export async function createKernelRuntime(dataDirectory: string): Promise<CloneRuntime> {
+export async function createKernelRuntime(
+  dataDirectory: string,
+  workspacePath?: string,
+): Promise<CloneRuntime> {
   // The Main Agent must see exactly the Kernel the daemon and the Query
   // workflow see; a second assembly here would let its view of runs, memory,
   // and recovery drift from the authority it is supposed to be proposing to.
   // Main Agent 必须看到与 Daemon、Query 工作流完全相同的 Kernel；在这里另建一套组装，
   // 会让它对 Run、记忆和恢复的视图偏离它本应提案的那个权威。
-  const { runtime } = await createRuntimeAssembly({ dataDirectory });
+  const { runtime } = await createRuntimeAssembly({ dataDirectory, ...(workspacePath === undefined ? {} : { workspacePath }) });
   return runtime;
 }
 
@@ -79,8 +97,9 @@ export async function createKernelRuntime(dataDirectory: string): Promise<CloneR
  */
 export async function createKernelRuntimeSession(
   dataDirectory: string,
+  workspacePath?: string,
 ): Promise<{ runtime: CloneRuntime; close: () => void }> {
-  const { runtime, close } = await createRuntimeAssembly({ dataDirectory });
+  const { runtime, close } = await createRuntimeAssembly({ dataDirectory, ...(workspacePath === undefined ? {} : { workspacePath }) });
   return { runtime, close };
 }
 
@@ -103,7 +122,7 @@ function isConversationalProposal(steps: unknown): boolean {
  */
 export async function proposePlanToKernel(
   runtime: CloneRuntime,
-  input: { summary: string; steps: unknown; servesCommitmentId?: string },
+  input: { summary: string; steps: unknown; servesCommitmentId?: string; conversationId?: string },
 ): Promise<PlanProposalResult> {
   // A conversation is answered, not executed. A one-step direct_response plan
   // still became a Run, a sidebar session and a real worker launch — for "hello".
@@ -120,7 +139,10 @@ export async function proposePlanToKernel(
   const { run } = await runtime.acceptTrigger({
     kind: "query",
     summary: input.summary,
-    payload: { source: "main-agent" },
+    payload: {
+      source: "main-agent",
+      ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
+    },
   });
   try {
     const plan = await runtime.attachPlan(run.id, {
@@ -294,9 +316,10 @@ export type OwnerStateInput =
 export async function recordOwnerState(
   dataDirectory: string,
   input: OwnerStateInput,
+  conversationId?: string,
 ): Promise<{ recorded: true; kind: string; id: string; title: string } | { recorded: false; reason: string }> {
   const { ownerStated } = await import("../conversation-history.ts");
-  if (!(await ownerStated(dataDirectory, input.ownerSaid))) {
+  if (!(await ownerStated(dataDirectory, input.ownerSaid, conversationId === undefined ? {} : { conversationId }))) {
     return {
       recorded: false,
       reason:
@@ -467,7 +490,7 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
   // 运行，因此在五回合前获批的记忆仍能在它变得相关的那一回合到达模型。
 
   const withKernel = async <T>(operation: (runtime: CloneRuntime) => Promise<T>): Promise<T> => {
-    const { runtime, close } = await createKernelRuntimeSession(options.dataDirectory);
+    const { runtime, close } = await createKernelRuntimeSession(options.dataDirectory, options.workspacePath);
     try { return await operation(runtime); } finally { close(); }
   };
 
@@ -480,6 +503,7 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
       + "Invalid proposals return a rejection with feedback so you can fix and re-propose. "
       + "Each step needs id, title, instructions, risk (read_only | reversible_write | external_side_effect | irreversible), "
       + "acceptanceCriteria (string[]), and either agentId+requiredCapabilities or a subagents group. "
+      + "A read_only subagent may only require observation or tool_result evidence; artifact and receipt contracts need a write-capable or external step. "
       + "A step that must touch anything outside the workspace declares scopes: "
       + "[{domain: files|shell|network, resource, access: read|write|exec}] (files: absolute path; network: host). "
       + "Call get_authority first to see what the owner has allowed; scopes that are protected or not allowed are denied by the Kernel.",
@@ -501,6 +525,7 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
         summary: params.summary,
         steps: params.steps,
         ...(typeof params.servesCommitmentId === "string" ? { servesCommitmentId: params.servesCommitmentId } : {}),
+        ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
       }));
       // A rejection carries the valid executors, so the next attempt can be right.
       // 被拒绝时附上合法执行者，使下一次尝试能够正确。
@@ -659,9 +684,15 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
     }),
     execute: async (_toolCallId, params) => {
       const limit = Math.max(1, Math.min(20, Math.trunc(params.limit ?? 6)));
-      const excerpts = await searchHistory(options.dataDirectory, params.query, { limit });
+      // A task searches its own past; the conversation id defaults to the main
+      // thread when a caller did not scope the turn.
+      // 任务检索自己的过去；调用方未给回合划定作用域时，对话 id 默认为主线索。
+      const excerpts = await searchHistory(options.dataDirectory, params.query, {
+        limit,
+        ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
+      });
       if (excerpts.length === 0) {
-        const shape = await describeHistory(options.dataDirectory);
+        const shape = await describeHistory(options.dataDirectory, options.conversationId === undefined ? {} : { conversationId: options.conversationId });
         // Saying how much history was searched turns "not found" into
         // information: nothing to search is a different answer from searched
         // and absent.

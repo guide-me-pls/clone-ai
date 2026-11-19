@@ -22,6 +22,12 @@ import { Type } from "typebox";
 export interface DispatchTaskOptions {
   dataDirectory: string;
   /**
+   * The conversation that asked for this work. The run's trigger carries it,
+   * so the sidebar can show the task under the conversation that spawned it.
+   * 请求这项工作的对话。Run 的 Trigger 携带它，侧栏因此能把任务归到派生它的对话下。
+   */
+  conversationId?: string;
+  /**
    * The turn's abort signal. A stopped turn must stop the work it dispatched;
    * without this the run outlived the reply.
    * 本回合的 abort 信号。停止的回合必须停掉它派发的工作；没有它，Run 会比回复活得更久。
@@ -97,6 +103,7 @@ export function dispatchTaskTool(options: DispatchTaskOptions): PlainKernelTool 
             payload: {
               source: "main-agent",
               acceptanceCriteria: validated.task.acceptanceCriteria,
+              ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
             },
           },
           settings ?? { agents: defaultWorkerProfiles() },

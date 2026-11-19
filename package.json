@@ -21,7 +21,7 @@
     "bench:images": "node --experimental-strip-types benchmark/native-main-images.ts",
     "bench:memory": "node --experimental-strip-types benchmark/long-memory-eval.ts",
     "gate": "node --experimental-strip-types benchmark/gate.ts",
-    "test": "node --experimental-strip-types --test test/*.test.ts test/regression/*.test.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts test/regression/*.test.ts test/regression/*.test.js",
     "selfcheck:push": "node scripts/selfcheck-push.mjs",
     "typecheck": "tsc --noEmit",
     "traces": "node --experimental-strip-types scripts/traces.mjs",

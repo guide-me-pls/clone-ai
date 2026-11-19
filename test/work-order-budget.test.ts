@@ -43,7 +43,7 @@ function order(budget: Partial<SubagentWorkOrder["budget"]>): SubagentWorkOrder 
     id: "work", role: "researcher", title: "work", objective: "do it",
     inputs: [], requiredCapabilities: ["research"],
     expectedArtifacts: [{ id: "note", kind: "artifact", description: "out/note.md", required: true }],
-    acceptanceCriteria: ["a note exists"], risk: "read_only",
+    acceptanceCriteria: ["a note exists"], risk: "reversible_write",
     budget: { maxDurationMs: 10_000, maxAttempts: 1, ...budget },
   };
 }
@@ -53,7 +53,7 @@ async function run(t: TestContext, budget: Partial<SubagentWorkOrder["budget"]>,
   const { run: created } = await runtime.acceptTrigger({ kind: "query", summary: "work", payload: {} });
   await runtime.attachPlan(created.id, {
     summary: "work",
-    steps: [{ id: "s1", title: "work", instructions: "do it", risk: "read_only", acceptanceCriteria: ["done"], subagents: [order(budget)] }],
+    steps: [{ id: "s1", title: "work", instructions: "do it", risk: "reversible_write", acceptanceCriteria: ["done"], subagents: [order(budget)] }],
   });
   return runtime.execute(created.id, new StaticAgentRegistry([new ReportingAdapter(() => events)]));
 }

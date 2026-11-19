@@ -15,6 +15,192 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-18 — Task records own the decision, and the audit shows the assembly
+
+- **Claim:** the sidebar lists dispatched tasks only; a waiting task is promoted
+  into "需要你的确认" with an explicit `需你确认`/`需你复核` flag; approval and review
+  cards — with the step and the buttons — are decided on the task record itself;
+  and every Main Agent turn in the audit shows the conversation, history window,
+  prompt materials, tool table and dispatched runs.
+- **Evidence:** `test/ui-structure.test.ts` **15/15**,
+  `test/companion-control-plane.test.ts` **22/22**,
+  `test/main-agent-turn-audit.test.ts` **13/13**,
+  `test/companion-config-api.test.ts` **21/21**; full suite **831/831**,
+  `npm run typecheck` and `npm run gate` pass. Browser: a paused run appeared
+  only under "需要你的确认 · 1" with `需你确认`; its record showed
+  "需要你确认后才能继续 / 步骤：发送" and approve/reject; a new task dispatched a
+  run through a stub model, and 审计 → 主 Agent 回合 showed
+  "任务组装 · 1 个 Run · 材料 ebbfb873 … charter v2 · 情境简报 · AGENTS.md ·
+  工具表 11 个 … 整理本周资料 失败 起草".
+- **Where:** [trade-off: task record as the unit](../architecture/trade-offs.md#2026-11-18--the-task-record-is-the-unit-no-conversation-rows-decisions-on-the-task),
+  [trade-off: audit assembly](../architecture/trade-offs.md#2026-11-18--the-audit-explains-how-every-main-agent-turn-was-assembled),
+  [execution chain](optimizations.md#2026-11-18--the-list-is-tasks-decisions-are-per-task-and-the-audit-shows-the-assembly).
+
+## 2026-11-18 — A direct answer supplies evidence for a direct_response step
+
+- **Claim:** a single-agent `direct_response` step no longer fails after the
+  worker has answered. The native worker records exactly one `observation`
+  evidence row for the final answer (bounded summary, `locator:
+  answer:<stepId>`), gated on `produced.size === 0` so a real read is not
+  duplicated; every other step keeps its evidence gate, and the Kernel does not
+  synthesize evidence.
+- **Evidence:** deterministic trace `53074cf2` reproduces the failure
+  (`Agent direct-responder completed step direct-response without evidence.`).
+  Repair-lane attempt 3: phase-1 Run `566b1603` was red on
+  `test/regression/direct-response-evidence.test.ts`; fix Run `1d811b94` made
+  the case green; the lane's full suite **760/760**, typecheck 0. Branch
+  `rsi/auto-fix-20261118T1044`, commit `76aec5d`. Applied to the shared tree:
+  the new case is red with the fix reverted and green with it; full suite
+  **832/832**, `npm run typecheck` 0, `npm run gate` **PASS**. The two earlier
+  lane attempts (no test written; English-only comment) are in the optimization
+  log, not in this results file.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-direct-answer-is-the-evidence-for-a-direct_response-step),
+  [execution chain](optimizations.md#2026-11-18--direct-answer-evidence-gap-the-repair-lane-produced-the-fix-after-three-attempts).
+
+## 2026-11-18 — A read-only request is answered instead of failing for a missing artifact
+
+- **Claim:** a read-only or analysis request is planned as one read-only step
+  with observation evidence, not as a draft that requires a file the objective
+  forbids. Research and review orders in a mixed plan also require observation.
+  An unsatisfiable contract is rejected when the plan is attached, and a
+  rejected plan closes its Run instead of freezing in `planning`. The worker is
+  told the required contract, and evidence recording no longer hides a write
+  behind an earlier read or drops it under the observation cap.
+- **Evidence:** the three journal prompts (`663b45b5`, `c03c7cea`, `cd74804b`)
+  reproduce `prepare/reversible_write` + `draft/local-draft` (`kind: artifact`,
+  `locatorRequired: true`) before the change; the journal shows only
+  `observation` rows and verification fails with `Missing required artifact
+  evidence: local-draft`. After the change the same prompts return one
+  `read-only-lookup` step with no artifact contract. Deterministic eval:
+  `node --experimental-strip-types --test test/fallback-planner.test.ts
+  test/worker-evidence-contract.test.ts` **18/18**; full suite **831/831**;
+  `npm run typecheck` exit 0; `npm run gate` **PASS** (verdict/policy/audit/
+  memory 100 %). Not verified live in the desktop app: no new task was
+  dispatched after the change.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-read-only-request-gets-observation-evidence-not-an-artifact),
+  [execution chain](optimizations.md#2026-11-18--a-read-only-request-is-answered-instead-of-failing-for-a-missing-artifact).
+
+## 2026-11-18 — Concurrent Main Agent turns share one worker budget
+
+- **Claim:** worker capacity is now one measured `CapacityGate` per clone home,
+  shared by every assembly built over that home — the daemon, each Query
+  workflow, the Main Agent's per-call kernel sessions and the repair lane — so
+  two concurrent Main Agent turns dispatching at once cannot exceed one measured
+  worker budget. The owner's `maxConcurrentWorkers` pin still applies and a
+  refresh through any assembly reaches all of them without a restart. The
+  registry is reference-counted, so temporary homes in tests do not accumulate.
+- **Evidence:** `test/runtime-capacity-sharing.test.ts` — 5 deterministic
+  cases (shared gate and one waiting acquire at pin 1; pin propagation across
+  assemblies; the kernel session drawing from the daemon's gate; retirement
+  after the last close with a double close releasing once; twelve temporary
+  homes leaving nothing behind). Against `HEAD`'s per-assembly factory, cases
+  1–4 fail; with the change, 5/5 pass. Full suite **798/798**, `npm run
+  typecheck`, `npm run gate` pass. Not verified live: the oversubscription
+  itself was never measured on two simultaneous dispatching tasks.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--one-measured-worker-budget-per-clone-home-not-per-assembly),
+  [execution chain](optimizations.md#2026-11-18--worker-capacity-becomes-one-budget-per-clone-home).
+
+## 2026-11-18 — A finished task no longer proposes its objective as a memory
+
+- **Claim:** task-run memory mining proposes nothing without a configured
+  miner, and any miner's untyped or `procedure` candidate that only restates
+  its task objective is dropped before the owner's review list; a typed
+  preference/fact/decision/commitment equal to the objective stays for review.
+  A one-time governance pass rejected the pending legacy copies in the live
+  home, leaving zero; the review list, attention list and dashboard no longer
+  present decided copies as current.
+- **Evidence:** live journal `~/.clone/journal.sqlite3`: 8 requested / 8
+  extracted (all `count: 1`) / 8 proposed, every summary `候选流程：` plus the
+  exact task objective; 2 owner-rejected and 6 rejected by the cleanup, **0
+  pending**. `test/memory-candidate-quality.test.ts` **8/8** (default zero,
+  gate drops/keeps, a typed preference equal to the objective kept, `=all`
+  selects the real miner, cleanup once); `test/golden-path.test.ts` **2/2**;
+  `test/runtime.test.ts` **5/5**; `npm run gate` **13/14/4 + memory 26/26** at
+  100 % agreement with the baseline regenerated; `npm run typecheck` exit 0.
+  Full `npm test`: **831/831**.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-finished-task-is-not-a-memory-candidates-must-state-durable-knowledge),
+  [execution chain](optimizations.md#2026-11-18--a-finished-tasks-objective-stops-becoming-a-memory-candidate).
+
+## 2026-11-18 — The main pane reads as a dispatch log
+
+- **Claim:** a conversation's main pane renders one log entry per Main Agent
+  turn — the query, the context it assembled (provider/model/effort, prompt
+  material and tool table, history window, compactions), the work it dispatched
+  (tool calls and spawned runs), and the result — instead of chat bubbles; the
+  task-record view and decision cards are unchanged.
+- **Evidence:** `test/main-agent-turn-audit.test.ts` (projection and search),
+  `test/ui-structure.test.ts` (log vs. messages, live echo, hidden and failed
+  runs), `test/companion-control-plane.test.ts` (session view turns, bounded log,
+  hidden spawned run) and `test/prompt-snapshot.test.ts` pass — **58/58**;
+  full suite **834/834**, `npm run typecheck`, `npm run gate` pass. Browser on
+  an isolated preview home: two turns rendered as log entries with
+  `native/verify-model`, `charter v2`, `工具 11 个`, `此前 1 轮已完成对话` and
+  the reply, with zero chat bubbles.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--the-main-pane-is-a-dispatch-log-not-a-chat-transcript),
+  [execution chain](optimizations.md#2026-11-18--a-conversations-main-pane-becomes-a-dispatch-log).
+
+## 2026-11-18 — A read-only request runs once, in the right workspace
+
+- **Claim:** an explicit read-only request (or a research request with no
+  deliverable) becomes one read-only step executed by `context-researcher`, with
+  no draft work order and no required artifact; a `dispatch_task` run executes
+  in the turn's workspace, not the daemon's checkout; `execution.started`
+  records that workspace.
+- **Evidence:** `test/fallback-planner.test.ts` **10/10** (read-only request and
+  read-only code review are one step; a named output target still gets a draft;
+  a no-write phrase containing 写 does not become delivery);
+  `test/main-agent.test.ts` **37/37** (including the tool-runtime workspace
+  case); `test/native-main-agent.test.ts` and `test/dispatch-task.test.ts` pass.
+  Before: runs `c03c7cea`/`cd74804b` failed with "Missing required artifact
+  evidence: local-draft"; run `b1e04b18` ran in `/Users/qihoo/study/clone-ai` and
+  reported the knowledge-base README as outside the workspace. After: the live
+  check on `/Users/qihoo/work/knowledge_base` (native /
+  `360/openai/gpt-6.1-terra`) produced **one** run (`99504e85`) with a single
+  `read-only-lookup` step (`delegated: false`, `risk: read_only`), which read the
+  absolute README, recorded the observation, wrote the three-sentence answer as
+  `execution.completed`, and reached `waiting_review`. Full `npm test`
+  **829/829**; `npm run typecheck` and `npm run gate` pass.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--a-read-only-request-is-a-step-and-tools-use-the-turns-workspace),
+  [execution chain](optimizations.md#2026-11-18--a-read-only-request-is-one-step-and-its-run-uses-the-turns-workspace).
+
+## 2026-11-18 — A review shows the worker's answer, and the prompt knows the workspace
+
+- **Claim:** the Main Agent's prompt now loads project instructions from the
+  workspace configured in Settings and names that workspace; both the planner
+  and the worker are told that a project outside it must be reported instead of
+  reviewed from the workspace's files. A single-agent step's final answer is
+  journaled and shown in the task record and in a review card docked at the top
+  of the pane. Worker file tools resolve a path with `resolve`, like the gate,
+  so an absolute path inside the workspace (or a granted read root) reaches the
+  file the gate approved. Saving a different workspace says it needs an app
+  restart.
+- **Evidence:** `test/companion-main-agent.test.ts` **6/6** (the new case
+  captures the configured workspace's `AGENTS.md` marker and
+  `Current workspace: …`, and not the checkout's rules);
+  `test/run-query-routing.test.ts` **11/11** (the new case finds an
+  `execution.completed` whose summary is the worker's answer);
+  `test/main-conversation-approvals.test.ts` **5/5**;
+  `test/companion-config-api.test.ts` **19/19** (the restart notice is true for a
+  different path and absent for the running one); `test/ui-structure.test.ts` **14/14**; `test/native-agent-worker.test.ts`
+  **15/15**; `test/native-worker-tools.test.ts` **6/6** (an absolute path inside
+  the workspace and a granted read root outside it); `npm run typecheck` exit 0;
+  `npm run gate` PASS with the baseline unchanged. Before-data from the live
+  journal: run `062716a9` had no completion event, and prompt snapshot
+  `a063d154…` read the clone-ai checkout's `AGENTS.md`. Live check with native /
+  `360/openai/gpt-6.1-terra` on a fresh temp workspace: the original request
+  asked for the path or a workspace switch and dispatched nothing
+  (`newRuns: []`); without the "no filesystem tool" line it still dispatched one
+  run that failed, so that line is load-bearing. Real-app verification: run
+  `b1e04b18` failed because `join` doubled the absolute path; after the
+  `resolve` fix, run `496d2061` read the knowledge-base `README.md`
+  (`isError: false`), recorded a three-sentence `execution.completed`, reached
+  `waiting_review`, and the task record shows that answer above the acceptance
+  line. Full `npm test` **829/829** after the shared checkout's concurrent changes
+  settled (an earlier run hit an unrelated `EADDRINUSE` on port 4318 held by
+  another session's dev server; it passed once that server stopped).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--the-main-agent-knows-its-workspace-and-a-review-carries-the-answer),
+  [execution chain](optimizations.md#2026-11-18--the-main-agent-reads-its-workspace-and-a-review-carries-the-answer).
+
 ## 2026-11-18 — A path mentioned only in prose no longer fails a worker step
 
 - **Claim:** the native worker fails a step for a missing required input only when the work order declares that input with `required: true`; a path that merely appears in the objective, instructions or acceptance criteria is context, and a path that is later read or written no longer counts as missing. Declared required inputs that are still missing still fail.
@@ -26,17 +212,22 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
 - **Claim:** each task is its own Main Agent conversation with its own history;
   a task executing subtasks no longer blocks another task; concurrent Main
-  Agent turns are bounded by a cross-process pool sampled from CPU, load and
-  memory, with `maxConcurrentMainAgents` as the owner's pin.
-- **Evidence:** `test/main-agent-capacity.test.ts` **3/3**,
-  `test/main-agent-slots.test.ts` **4/4**, `test/prompt-lock.test.ts` **4/4**,
-  `test/native-main-agent.test.ts` **8/8** (including conversation isolation),
-  `test/companion-control-plane.test.ts` **18/18** (including "a prompt in
-  another conversation is not blocked by the main conversation lock" and "each
-  task has its own conversation and its own history"); full suite **772/772**,
-  `npm run typecheck` and `npm run gate` pass. Browser on an isolated
-  companion: two sample conversations each showed only their own messages, and
-  新建任务 sent its own `conversationId` and produced its own sidebar entry.
+  Agent turns are bounded by a cross-process pool sampled from CPU and load,
+  with `maxConcurrentMainAgents` as the owner's pin; the desktop can start a
+  second task while the first still streams.
+- **Evidence:** feature tests **21/21** (`test/main-agent-capacity.test.ts`
+  3/3, `test/main-agent-slots.test.ts` 5/5, a real two-process slot test 1/1,
+  `test/prompt-lock.test.ts` 4/4, `test/native-main-agent.test.ts` 7/7 with
+  conversation isolation, `test/run-triggers.test.ts` 1/1);
+  `test/companion-control-plane.test.ts` **22/22** (separate histories, the main
+  conversation does not absorb a task, same-titled failed conversations stay
+  separate, a hidden conversation rejects a send, a bare run id is refused);
+  `test/companion-config-api.test.ts` **20/20** (the pin can be set and cleared);
+  full suite **791/791**, `npm run typecheck` and `npm run gate` pass. Browser on
+  a fresh companion with a local SSE stub: two tasks started 350 ms apart both
+  completed as separate conversations, the second stayed selected when the
+  first finished, each view held only its own turn, and the main conversation
+  held neither.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-18--each-task-runs-its-own-main-agent-sized-by-the-machine),
   [execution chain](optimizations.md#2026-11-18--each-task-gets-its-own-main-agent-sized-by-the-machine).
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -105,7 +105,10 @@ test("a client disconnect cancels the native turn", async (t) => {
     else process.env.CLONE_AI_NATIVE_MODEL = saved.model;
     if (saved.base === undefined) delete process.env.CLONE_AI_NATIVE_BASE_URL;
     else process.env.CLONE_AI_NATIVE_BASE_URL = saved.base;
-    await rm(dataDirectory, { recursive: true, force: true });
+    // The aborted turn's audit append may land just after the server closes;
+    // retry the directory removal rather than racing that last write.
+    // 被中止回合的审计追加可能在 Server 关闭后才落盘；重试删除目录，而不是与最后一笔写入竞速。
+    await rm(dataDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
   });
 
   const controller = new AbortController();
@@ -243,6 +246,62 @@ test("a realistic image attachment is accepted instead of failing on the body ca
     body: JSON.stringify({ text: "what is this", attachments: [{ mimeType: "image/png", data: png }] }),
   });
   assert.equal(response.status, 200, "a realistic image must not hit the request-body cap");
+});
+
+test("the Main Agent reads its project instructions from the configured workspace", async (t) => {
+  // The daemon's cwd is the checkout it was started from. A request about a
+  // project in another folder must not be answered with this repository's
+  // AGENTS.md, and the prompt must say where the worker boundary is.
+  // Daemon 的 cwd 是它被启动时所在的检出。关于另一个文件夹里项目的问题，绝不能用本仓库的
+  // AGENTS.md 来回答；Prompt 还必须说明 Worker 的边界在哪里。
+  const captured: Array<Record<string, unknown>> = [];
+  const modelServer = createServer((request, response) => {
+    if (request.url !== "/v1/chat/completions") { response.writeHead(404); response.end(); return; }
+    let body = "";
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      captured.push(JSON.parse(body) as Record<string, unknown>);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\n\n`);
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`);
+      response.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise<void>((resolve) => modelServer.listen(0, "127.0.0.1", resolve));
+  const address = modelServer.address();
+  if (address === null || typeof address === "string") throw new Error("The fake model did not bind a port.");
+  const saved = { model: process.env.CLONE_AI_NATIVE_MODEL, base: process.env.CLONE_AI_NATIVE_BASE_URL };
+  process.env.CLONE_AI_NATIVE_MODEL = "test-model";
+  process.env.CLONE_AI_NATIVE_BASE_URL = `http://127.0.0.1:${address.port}`;
+  const workspaceDirectory = await mkdtemp(join(tmpdir(), "clone-ai-workspace-rules-"));
+  await writeFile(join(workspaceDirectory, "AGENTS.md"), "# Workspace rules\n\nWORKSPACE_MARKER_ONLY_IN_THE_CONFIGURED_FOLDER\n");
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-companion-workspace-"));
+  const server = await startCompanionServer({ port: 0, dataDirectory, workspacePath: workspaceDirectory });
+  t.after(async () => {
+    await server.close();
+    modelServer.closeAllConnections?.();
+    await new Promise<void>((resolve) => modelServer.close(() => resolve()));
+    if (saved.model === undefined) delete process.env.CLONE_AI_NATIVE_MODEL;
+    else process.env.CLONE_AI_NATIVE_MODEL = saved.model;
+    if (saved.base === undefined) delete process.env.CLONE_AI_NATIVE_BASE_URL;
+    else process.env.CLONE_AI_NATIVE_BASE_URL = saved.base;
+    await rm(workspaceDirectory, { recursive: true, force: true });
+    await rm(dataDirectory, { recursive: true, force: true });
+  });
+
+  const response = await companionFetch(server.url, server.token, "/api/main-agent/query", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "What does this workspace do?" }),
+  });
+  assert.equal(response.status, 200);
+  const messages = (captured[0]?.messages ?? []) as Array<{ role: string; content?: string }>;
+  const system = messages.find((message) => message.role === "system")?.content ?? "";
+  assert.match(system, /WORKSPACE_MARKER_ONLY_IN_THE_CONFIGURED_FOLDER/);
+  assert.ok(system.includes(`Current workspace: ${workspaceDirectory}`), "the prompt must name the configured workspace");
+  assert.match(system, /not inside this workspace/);
+  assert.match(system, /cannot search the disk/);
+  assert.doesNotMatch(system, /rules for changing Clone AI/, "the daemon's cwd must not supply the project rules");
 });
 
 test("shutdown completes while an SSE stream is still open", async (t) => {

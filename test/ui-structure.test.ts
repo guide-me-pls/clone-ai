@@ -174,8 +174,13 @@ test("populated conversations stay vertical and empty-state flex requires no mes
     welcomeMarkup: () => "welcome",
     day: () => "today",
     messageMarkup: () => '<div class="message"></div>',
+    turnLogMarkup: (session: { turns?: unknown[] }) => (session.turns || []).length > 0 ? '<div class="turn-log"></div>' : "",
+    // A conversation's content is its turns; a task record's is its messages.
+    // 对话的内容是回合；任务记录的内容是消息。
+    sessionHasContent: (session: { kind?: string; turns?: unknown[]; messages: unknown[] } | null) => session !== null
+      && (session.kind === "conversation" ? (session.turns || []).length > 0 : session.messages.length > 0),
     recalledMemoryMarkup: () => "", planMarkup: () => "", agentsMarkup: () => "",
-    evidenceMarkup: () => "", approvalMarkup: () => "", reviewMarkup: () => "", traceMarkup: () => "",
+    decisionDock: () => "", evidenceMarkup: () => "", approvalMarkup: () => "", reviewMarkup: () => "", traceMarkup: () => "",
     verificationMarkup: () => "",
     restoreDisclosureScrolls: () => {}, requestAnimationFrame: () => {}, updateScrollBottom: () => {},
   });
@@ -186,6 +191,19 @@ test("populated conversations stay vertical and empty-state flex requires no mes
   renderSession({ id: "test", updatedAt: "today", messages: [{ text: "one" }, { text: "two" }] });
   assert.equal(empty, false);
   assert.equal((content.innerHTML.match(/class="message"/g) || []).length, 2);
+  // A conversation with turns is populated by its log, not by chat messages.
+  // 有回合的对话由日志支撑内容，而不是聊天消息。
+  renderSession({ id: "chat", kind: "conversation", updatedAt: "today", messages: [], turns: [{ id: "t1" }] });
+  assert.equal(empty, false);
+  assert.match(content.innerHTML, /turn-log/);
+  assert.doesNotMatch(content.innerHTML, /class="message"/);
+  // An empty conversation shows the welcome alone: the day divider beside it
+  // was laid out as a second flex column.
+  // 空对话只显示欢迎语：旁边的日期分隔线会被排成第二个 flex 列。
+  renderSession({ id: "chat", kind: "conversation", updatedAt: "today", messages: [], turns: [] });
+  assert.equal(empty, true);
+  assert.match(content.innerHTML, /welcome/);
+  assert.doesNotMatch(content.innerHTML, /day-divider/);
 
   const css = (await read("style.css")) + (await read("audit.css")) + (await read("memory.css")) + (await read("components.css"));
   const rules = [...css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)];
@@ -195,6 +213,113 @@ test("populated conversations stay vertical and empty-state flex requires no mes
   assert.match(css, /\.conversation-inner\s*\{[^}]*display:\s*block/);
   assert.match(css, /\.message\s*\{[^}]*display:\s*block[^}]*width:\s*100%/);
   assert.match(css, /\.message\.person\s*\{[^}]*width:\s*100%/);
+});
+
+test("a conversation renders one dispatch log entry per turn, not chat bubbles", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("const LOG_STATUS = {");
+  const end = app.indexOf("function displayAgentTitle", start);
+  assert.ok(start >= 0 && end > start, "turnLogMarkup must exist");
+  const markup = runInNewContext(`${app.slice(start, end)}; turnLogMarkup`, {
+    escape: (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]!)),
+    richText: (value: unknown) => String(value ?? ""),
+    plainPreview: (value: unknown) => String(value ?? ""),
+    time: () => "17:13",
+    welcomeMarkup: () => "welcome",
+  }) as (session: unknown) => string;
+  assert.equal(markup({ id: "chat", kind: "conversation", messages: [], turns: [] }), "");
+
+  const html = markup({
+    id: "chat",
+    kind: "conversation",
+    messages: [{ id: "work-1", role: "clone", text: "任务「整理资料」已完成。", occurredAt: "2026-11-18T09:00:00.000Z", tone: "success" }],
+    turns: [{
+      id: "turn-1", kind: "turn", input: "整理资料", status: "completed",
+      startedAt: "2026-11-18T08:59:00.000Z", durationMs: 4200,
+      modelId: "claude-sonnet-5-5", provider: "native", effort: "high", journaled: true,
+      snapshot: {
+        schemaVersion: 1, charterVersion: 3, charterHash: "charter", briefingHash: "briefing",
+        promptHash: "prompt", toolsHash: "tools", materialHash: "0123456789abcdef",
+        toolNames: ["dispatch_task", "read_file"], locator: "prompt-snapshots/0123456789abcdef.json",
+        capturedAt: "2026-11-18T08:59:00.000Z",
+      },
+      compactions: [{ at: "2026-11-18T08:59:30.000Z", estimatedTokens: 90_000, compactAt: 80_000, droppedMessages: 12, keptMessages: 3, summary: "前面的对话压成一段摘要。" }],
+      toolCalls: [{ toolCallId: "call-1", name: "dispatch_task", inputSummary: '{"objective":"整理资料"}', isError: false, durationMs: 3000 }],
+      spawnedRuns: [{ id: "run-12345678", title: "整理资料", status: "completed" }],
+      priorTurns: 2, priorTurnsOmitted: 0,
+      reply: "已整理。",
+    }],
+  });
+  // The three facts a turn is judged by are present, in order.
+  // 判断一个回合所需的三件事实都在，且按顺序。
+  assert.match(html, /上下文/);
+  assert.match(html, /派发/);
+  assert.match(html, /结果/);
+  assert.match(html, /native\/claude-sonnet-5-5 · high/);
+  assert.match(html, /charter v3 · 工具 2 个/);
+  assert.match(html, /此前 2 轮已完成对话/);
+  assert.match(html, /丢弃 12 条 \/ 保留 3 条/);
+  assert.match(html, /dispatch_task/);
+  assert.match(html, /data-log-run="run-12345678"/);
+  assert.match(html, /已整理。/);
+  // Work updates join the same log, and no chat bubble survives.
+  // 工作更新进入同一份日志，不再有聊天气泡。
+  assert.match(html, /任务更新/);
+  assert.match(html, /任务「整理资料」已完成。/);
+  assert.doesNotMatch(html, /class="message/);
+  assert.match(html, /class="turn-log"/);
+
+  // A turn the journal never recorded says so instead of inventing a clean run.
+  // Journal 没有记录的回合如实说明，而不是编造一次干净的运行。
+  const bare = markup({
+    id: "chat", kind: "conversation", messages: [],
+    turns: [{ id: "t", kind: "turn", input: "q", status: "completed", startedAt: "2026-11-18T08:00:00.000Z", journaled: false, compactions: [], toolCalls: [], spawnedRuns: [], priorTurns: 0, priorTurnsOmitted: 0, reply: "好。" }],
+  });
+  assert.match(bare, /没有 Journal 记录/);
+  assert.match(bare, /好。/);
+
+  // A cancelled update is not a success: the badge follows the run's status.
+  // 已取消的更新不是成功：标签跟随 Run 的状态。
+  const cancelled = markup({
+    id: "chat", kind: "conversation", turns: [],
+    messages: [{ id: "work-2", role: "clone", text: "任务「整理」已取消。", occurredAt: "2026-11-18T09:10:00.000Z", workStatus: "cancelled" }],
+  });
+  assert.match(cancelled, /log-badge--mute/);
+  assert.match(cancelled, /已取消/);
+  assert.doesNotMatch(cancelled, /log-badge--ok/);
+
+  // A hidden run stays evidence of the dispatch without becoming a dead button.
+  // 隐藏的 Run 仍是派发的证据，但不会变成失效按钮。
+  const hidden = markup({
+    id: "chat", kind: "conversation", messages: [],
+    turns: [{ id: "t2", kind: "turn", input: "派发", status: "completed", startedAt: "2026-11-18T10:00:00.000Z", journaled: true, compactions: [], toolCalls: [], spawnedRuns: [{ id: "run-hidden", hidden: true }], priorTurns: 0, priorTurnsOmitted: 0, reply: "已派发。" }],
+  });
+  assert.match(hidden, /任务已隐藏/);
+  assert.doesNotMatch(hidden, /data-log-run="run-hidden"/);
+
+  // A failed turn says why and what to do, and does not claim a direct answer.
+  // 失败的回合说明原因与下一步，不会声称自己直接回答。
+  const failed = markup({
+    id: "chat", kind: "conversation", messages: [],
+    turns: [{
+      id: "t3", kind: "turn", input: "查一下", status: "failed", startedAt: "2026-11-18T10:01:00.000Z",
+      journaled: true, compactions: [], toolCalls: [], spawnedRuns: [], priorTurns: 0, priorTurnsOmitted: 0,
+      error: "model_error", errorSummary: "模型没有返回结果。", errorGuidance: "检查 Provider 与网络后重试。",
+    }],
+  });
+  assert.match(failed, /模型没有返回结果。/);
+  assert.match(failed, /下一步：检查 Provider 与网络后重试。/);
+  assert.match(failed, /原始错误/);
+  assert.match(failed, /本轮在调用工具前就结束了。/);
+  assert.doesNotMatch(failed, /本轮直接回答/);
+
+  // Older turns are counted, not silently dropped.
+  // 更早的回合会被计数，而不是悄悄丢掉。
+  const omitted = markup({
+    id: "chat", kind: "conversation", messages: [], turnsOmitted: 12,
+    turns: [{ id: "t4", kind: "turn", input: "最近一轮", status: "completed", startedAt: "2026-11-18T10:02:00.000Z", journaled: true, compactions: [], toolCalls: [], spawnedRuns: [], priorTurns: 0, priorTurnsOmitted: 0, reply: "好。" }],
+  });
+  assert.match(omitted, /更早的 12 个回合/);
 });
 
 test("a finished task record keeps its verification, evidence and artifacts", async () => {
@@ -260,10 +385,42 @@ test("a finished task record keeps its verification, evidence and artifacts", as
   assert.match(evidence, /src\/main\.js/);
   assert.match(evidence, /README\.md/);
   assert.match(evidence, /data-disclosure="evidence" open/);
-  // A run still waiting for the owner opens its trace; a finished one stays collapsed.
-  // 仍等待所有者的 Run 展开轨迹；已结束的保持折叠。
+  // The record opens its trace in both states; the owner's own collapse still wins.
+  // 两种状态下记录都展开轨迹；所有者自己做过的折叠仍然有效。
   assert.match(markup.traceMarkup({ ...session, status: "waiting_review" }), /data-disclosure="trace" open/);
-  assert.doesNotMatch(markup.traceMarkup(session), /data-disclosure="trace" open/);
+  assert.match(markup.traceMarkup(session), /data-disclosure="trace" open/);
+});
+
+test("a plan step names its risk instead of promising a confirmation", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("function planMarkup(session)");
+  const end = app.indexOf("function agentsMarkup", start);
+  assert.ok(start >= 0 && end > start, "planMarkup must exist");
+  const planMarkup = runInNewContext(`${app.slice(start, end)}; planMarkup`, {
+    escape: (value: unknown) => String(value ?? ""),
+    icon: () => "",
+    disclosureOpen: () => false,
+  });
+  const session = {
+    id: "run-1",
+    status: "failed",
+    plan: {
+      summary: "review",
+      steps: [
+        { id: "s1", title: "read", risk: "read_only", delegated: false },
+        { id: "s2", title: "write", risk: "reversible_write", delegated: false },
+        { id: "s3", title: "deploy", risk: "external_side_effect", delegated: false },
+      ],
+    },
+  };
+  const markup = planMarkup(session);
+  // "需确认" read as a pending approval, but a reversible write is allowed by
+  // policy without one; the label now names the risk class.
+  // “需确认”会被读成待审批，但可回滚写入由策略直接放行；标签现在只说明风险类别。
+  assert.match(markup, /直接处理/);
+  assert.match(markup, /本地写入/);
+  assert.match(markup, /外部动作/);
+  assert.doesNotMatch(markup, /需确认/);
 });
 
 test("invocation rows keep selection and deletion as sibling controls", async () => {
@@ -287,42 +444,81 @@ test("invocation rows keep selection and deletion as sibling controls", async ()
   assert.match(audit, /querySelectorAll\("\[data-au-invocation\]"\)/);
 });
 
-test("approvals are confirmed in the main conversation and child tasks collapse", async () => {
+test("decisions are confirmed on the task record that owns the run", async () => {
   const app = await read("app.js");
-  const auditCss = await read("audit.css");
-  // The main conversation owns the decision; a child record only points there.
-  // 主对话拥有决定权；子任务记录只提供入口。
-  assert.match(app, /session\.id !== MAIN_CONVERSATION_ID/);
+  const css = await read("style.css");
+  const index = await read("index.html");
+  // The conversation is neither a decision inbox nor a sidebar row: the task
+  // record owns its approval and its review.
+  // 对话既不是决定收件箱，也不是侧栏行：任务记录拥有自己的确认与复核。
+  assert.doesNotMatch(app, /data-open-main-conversation/);
+  assert.doesNotMatch(app, /session\.id !== MAIN_CONVERSATION_ID/);
   assert.match(app, /data-approve="\$\{escape\(approval\.runId\)\}"/);
-  assert.match(app, /data-open-main-conversation/);
   assert.match(app, /data-review="\$\{escape\(review\.runId\)\}"/);
   assert.match(app, /session\.reviews/);
-  // Derived tasks are grouped under their conversation in a collapsible block.
-  // 派生任务折叠在其所属对话之下。
-  assert.match(app, /data-child-group/);
-  assert.match(app, /childGroupSummary/);
-  assert.match(auditCss, /\.session-children/);
-  // Approvals and reviews can be pending together; the conversation's single
-  // status pill then reads `waiting_approval`, and the review card must still
-  // render with its own accept/reject pair.
-  // 确认与复核可能同时等待；此时对话唯一的状态标签是 `waiting_approval`，复核卡仍须带
-  // 自己的接受/拒绝按钮出现。
-  const start = app.indexOf("function reviewMarkup(session)");
-  const end = app.indexOf("function verificationMarkup", start);
-  assert.ok(start >= 0 && end > start, "reviewMarkup must render the review list");
-  const reviewMarkup = runInNewContext(
-    `const MAIN_CONVERSATION_ID = "main-agent-conversation"; ${app.slice(start, end)}; reviewMarkup`,
+  // A pending decision is docked at the top of the pane, not left after the log.
+  // 等待中的决定固定在面板顶部，而不是留在日志末尾。
+  assert.match(app, /function decisionDock\(session\)/);
+  assert.match(app, /\$\{decisionDock\(session\)\}/);
+  // The sidebar lists dispatched tasks only; a waiting task is promoted into its
+  // own section and flagged in the row.
+  // 侧栏只列派发的任务；等待中的任务被提升到独立分区，并在行内标记。
+  assert.match(app, /session\.kind !== "conversation"/);
+  assert.doesNotMatch(app, /data-child-group/);
+  assert.match(app, /session-group-needs/);
+  assert.match(app, /session-flag-approval/);
+  assert.match(app, /session-flag-review/);
+  assert.match(app, /needs-you/);
+  assert.match(index, /id="open-conversation"/);
+  assert.match(css, /\.session-flag/);
+  assert.match(css, /\.session-item\.is-attention/);
+  // A saved workspace that differs from the running one says it needs a restart.
+  // 已保存但不同于运行中的工作区会标明需要重启。
+  assert.match(app, /workspace-saved-restart/);
+  assert.match(app, /workspace-restart-pending/);
+
+  const approvalStart = app.indexOf("function approvalMarkup(session)");
+  const approvalEnd = app.indexOf("function reviewMarkup", approvalStart);
+  assert.ok(approvalStart >= 0 && approvalEnd > approvalStart, "approvalMarkup must exist");
+  const approvalMarkup = runInNewContext(
+    `${app.slice(approvalStart, approvalEnd)}; approvalMarkup`,
     { escape: (value: unknown) => String(value ?? "") },
   ) as (session: unknown) => string;
-  const markup = reviewMarkup({
-    id: "main-agent-conversation",
+  const approval = approvalMarkup({
+    id: "run-approval",
     status: "waiting_approval",
-    title: "Clone AI",
-    approvals: [{ runId: "run-approval", title: "Publish the report" }],
-    reviews: [{ runId: "run-review", title: "Review the report", verification: { summary: "A browser check is pending.", unverifiedCriteria: ["The page shows the detail."] } }],
+    title: "Publish the report",
+    approvals: [{ runId: "run-approval", stepId: "send", title: "发送", description: "这一步会影响外部系统；确认后才会继续。" }],
+  });
+  assert.match(approval, /data-approve="run-approval"/);
+  assert.match(approval, /需要你确认后才能继续/);
+  assert.match(approval, /步骤：发送/);
+  assert.match(approval, /确认后才会继续/);
+
+  const reviewStart = app.indexOf("function reviewMarkup(session)");
+  const reviewEnd = app.indexOf("function verificationMarkup", reviewStart);
+  assert.ok(reviewStart >= 0 && reviewEnd > reviewStart, "reviewMarkup must render the review list");
+  const reviewMarkup = runInNewContext(
+    `${app.slice(reviewStart, reviewEnd)}; reviewMarkup`,
+    { escape: (value: unknown) => String(value ?? ""), richText: (value: unknown) => String(value ?? "") },
+  ) as (session: unknown) => string;
+  const markup = reviewMarkup({
+    id: "run-review",
+    status: "waiting_review",
+    title: "Review the report",
+    reviews: [{ runId: "run-review", title: "Review the report", result: "The review found three gaps.", verification: { summary: "A browser check is pending.", unverifiedCriteria: ["The page shows the detail."] } }],
   });
   assert.match(markup, /data-review="run-review"/);
   assert.match(markup, /The page shows the detail\./);
+  // The card must show the worker's answer, not only the criteria the Kernel
+  // could not verify. 卡片必须显示 Worker 的回答，而不只是 Kernel 无法验证的标准。
+  assert.match(markup, /The review found three gaps\./);
+  assert.match(markup, /review-result/);
+  // A waiting review without a stored verification still offers the decision.
+  // 等待复核但没有存储的核验记录时，仍提供决定按钮。
+  const fallback = reviewMarkup({ id: "run-review-2", status: "waiting_review", title: "No verification", reviews: [] });
+  assert.match(fallback, /data-review="run-review-2"/);
+  assert.match(fallback, /等待你的复核/);
 });
 
 test("a finished run keeps its verification, evidence and trace on the task", async () => {
@@ -342,8 +538,7 @@ test("a finished run keeps its verification, evidence and trace on the task", as
   assert.match(app, /session\.evidence/);
   assert.match(app, /EVIDENCE_KIND\[item\.kind\]/);
   assert.match(app, /\$\{evidenceMarkup\(session\)\}/);
-  assert.match(app, /disclosureOpen\(session, "trace", fallback\)/);
-  assert.match(app, /session\.status === "waiting_review" \|\| session\.status === "waiting_approval"/);
+  assert.match(app, /disclosureOpen\(session, "trace", true\)/);
   assert.match(css, /\.verification-card\s*\{/);
   assert.match(css, /\.evidence-list\s*\{/);
 });
@@ -351,15 +546,17 @@ test("a finished run keeps its verification, evidence and trace on the task", as
 test("the owner's message renders markdown like the agent's", async () => {
   const app = await read("app.js");
   const css = await read("components.css");
-  // A pasted task brief used to appear as literal #, ** and backticks in the
-  // owner's bubble while the agent's reply rendered. Both roles now share the
-  // escaping renderer, including the local echo.
-  // 粘贴的任务说明过去会在所有者气泡里原样显示 #、** 与反引号，而 Agent 回复正常渲染。
-  // 现在两种角色共用同一个先转义的渲染器，本地回显也一样。
+  // The conversation log keeps the owner's query on one line (it is the entry
+  // title), so it is plain-previewed; the task-record bubble and the agent's
+  // reply share the escaping renderer. A pasted task brief therefore never
+  // shows raw markdown in the record view.
+  // 对话日志把所有者 query 保持为单行标题（即条目标题），因此用纯文本预览；任务记录气泡
+  // 与 Agent 回复共用先转义的渲染器。粘贴的任务说明在记录视图里不会显示字面 Markdown。
   assert.match(app, /const body = richText\(text\);/);
-  assert.match(app, /richText\(query \|\| "（已发送附件）"\)/);
+  assert.match(app, /escape\(plainPreview\(query \|\| "（已发送附件）"\)\)/);
   assert.match(css, /\.message-copy \.md-heading/);
   assert.match(css, /\.message-copy \.md-list-line/);
+  assert.match(css, /\.log-reply \.md-heading/);
 });
 
 test("every function the UI calls is defined", async () => {
@@ -392,3 +589,20 @@ test("every function the UI calls is defined", async () => {
   assert.deepEqual(missing, [], `app.js calls functions it never defines: ${missing.join(", ")}`);
 });
 
+
+test("the audit explains how each Main Agent turn was assembled", async () => {
+  const audit = await read("audit.js");
+  const auditCss = await read("audit.css");
+  // The audit answers "how was this task assembled": conversation, history
+  // window, prompt materials, tool table and dispatched runs in one block.
+  // 审计回答"这个任务怎么组装的"：对话、历史窗口、提示词材料、工具表与派发的 Run 放在
+  // 同一个块里。
+  assert.match(audit, /function assemblyBlock\(turn\)/);
+  assert.match(audit, /\$\{assemblyBlock\(turn\)\}/);
+  assert.match(audit, /任务组装/);
+  assert.match(audit, /historyMessages/);
+  assert.match(audit, /instructionSources/);
+  assert.match(audit, /turn\.runs/);
+  assert.match(audit, /au-assembly-runs/);
+  assert.match(auditCss, /\.au-assembly/);
+});

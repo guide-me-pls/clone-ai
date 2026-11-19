@@ -26,6 +26,12 @@ export interface WorkUpdate {
   summary: string;
   at: string;
   evidenceCount: number;
+  /**
+   * The conversation whose task finished. Updates written before scoping omit
+   * it and belong to the main conversation.
+   * 完成任务的所属对话。划分之前写入的更新省略它，属于主对话。
+   */
+  conversationId?: string;
 }
 
 export async function appendWorkUpdate(dataDirectory: string, update: WorkUpdate): Promise<void> {
@@ -56,6 +62,7 @@ export async function readWorkUpdates(dataDirectory: string, limit = 50): Promis
         summary: typeof value.summary === "string" ? value.summary : "",
         at: value.at,
         evidenceCount: typeof value.evidenceCount === "number" ? value.evidenceCount : 0,
+        ...(typeof value.conversationId === "string" ? { conversationId: value.conversationId } : {}),
       });
     } catch {
       continue;

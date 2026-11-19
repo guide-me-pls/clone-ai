@@ -110,6 +110,22 @@ test("invalid types, empty summaries, and unknown classes never become candidate
   assert.deepEqual(candidates, []);
 });
 
+test("punctuation-only and emoji-only summaries never become candidates", async (t) => {
+  const candidates = await mine(t, {
+    json: JSON.stringify([
+      { type: "fact", summary: "。。。", confidence: "high", sourceEvidenceIds: ["ev-1"] },
+      { type: "fact", summary: "...", confidence: "high", sourceEvidenceIds: ["ev-1"] },
+      { type: "fact", summary: "🎉🎉", confidence: "high", sourceEvidenceIds: ["ev-1"] },
+      { type: "fact", summary: "周报模板用蓝色", confidence: "high", sourceEvidenceIds: ["ev-1"] },
+    ]),
+  });
+
+  // The raw length check alone accepted the first three; the folded content
+  // check keeps only a statement a reader can use.
+  // 仅检查原始长度的旧规则会接受前三条；折叠内容检查只保留读者能使用的陈述。
+  assert.deepEqual(candidates.map((candidate) => candidate.summary), ["周报模板用蓝色"]);
+});
+
 test("markdown-fenced JSON is parsed", async (t) => {
   const candidates = await mine(t, {
     json: "```json\n[{\"type\":\"decision\",\"summary\":\"决定：采用黑盒边界\",\"confidence\":\"medium\",\"sourceEvidenceIds\":[\"ev-1\"]}]\n```\n",

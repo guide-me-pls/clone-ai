@@ -5,6 +5,8 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { fileTools } from "../src/workers/native-worker-factory.ts";
+import { resolveGrants } from "../src/authority/path-gateway.ts";
+import { decideTool } from "../src/workers/native-agent-worker.ts";
 
 /**
  * The file tools, tested for the failure that destroyed a file on 2026-11-11:
@@ -18,6 +20,37 @@ async function workspace(t: TestContext): Promise<string> {
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }
+
+test("an absolute path inside the workspace reads the file the gate allowed", async (t) => {
+  const directory = await workspace(t);
+  await writeFile(join(directory, "README.md"), "# Workspace readme\n\nABS_READ_OK\n", "utf8");
+  const read = fileTools().find((tool) => tool.name === "read_file")!;
+  // The planner names paths as absolute when the prompt gives it the workspace
+  // path. The gate resolves them against the workspace; the tool must open the
+  // same file instead of prefixing the workspace a second time.
+  // 工作区路径进入 Prompt 后，规划器会用绝对路径。闸门按工作区解析它；工具必须打开同一个
+  // 文件，而不是再拼一次工作区前缀。
+  const target = join(directory, "README.md");
+  const result = await read.run({ name: "read_file", input: { path: target } }, { workspace: directory });
+  assert.notEqual(result.isError, true);
+  assert.match(result.output, /ABS_READ_OK/);
+});
+
+test("a granted read root outside the workspace is readable through its absolute path", async (t) => {
+  const directory = await workspace(t);
+  const outside = await mkdtemp(join(tmpdir(), "clone-tools-outside-"));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await writeFile(join(outside, "note.md"), "OUTSIDE_READ_OK\n", "utf8");
+  const target = join(outside, "note.md");
+  const grants = resolveGrants([{ domain: "files", resource: outside, access: "read" }] as never, {
+    workspace: directory,
+  });
+  assert.equal(decideTool({ risk: "read", grants, workspace: directory, path: target }).allowed, true);
+  const read = fileTools().find((tool) => tool.name === "read_file")!;
+  const result = await read.run({ name: "read_file", input: { path: target } }, { workspace: directory });
+  assert.notEqual(result.isError, true);
+  assert.match(result.output, /OUTSIDE_READ_OK/);
+});
 
 test("a long file is read in named windows with an explicit total", async (t) => {
   const directory = await workspace(t);

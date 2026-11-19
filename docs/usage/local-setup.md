@@ -112,6 +112,21 @@ To pin a ceiling yourself, set `maxConcurrentWorkers` in `config.json`. `0` or
 unset means auto. The pin is capped at the core count, and it is re-read on
 every dispatch, so a change applies without a restart.
 
+### Main Agent concurrency
+
+Each task is its own Main Agent conversation, with its own transcript. A task
+that is executing subtasks does not stop another task from starting. The number
+of Main Agent turns running at once is measured from the machine on every
+acquisition from CPU and load: half the CPU cores (two when the machine has
+room), halved when the 1-minute load is at or above half the cores, never above
+eight, and reducible to one under load. Memory is not a bound here — worker
+memory is gated where workers run. A turn above the limit waits for a slot; two
+prompts for the same task still collide and return 409.
+
+To pin a ceiling yourself, set `maxConcurrentMainAgents` in `config.json`. `0`
+or unset means auto; the pin is capped at the core count and applies to the next
+turn without a restart.
+
 ## 7. Where your data lives
 
 | Item | Location |

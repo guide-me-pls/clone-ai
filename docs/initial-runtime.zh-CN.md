@@ -9,7 +9,7 @@
   -> 本地 Clone AI daemon
       -> 触发 -> Task + 持久化 Run -> 计划
       -> 权限策略 -> 子 Agent 工作单 -> Evidence
-      -> 独立验证 -> 记忆候选
+      -> 独立验证 -> 记忆提取请求
 ```
 
 ## 当前已经具备的能力
@@ -24,7 +24,7 @@
 | 监督边界 | 子 Agent 无法修改父任务状态、绕过策略、提交记忆或关闭 Run；它们只能提交进度、Evidence、失败和显式完成信号。 |
 | 重启恢复 | 子 Agent 的派发、进度、Evidence、完成和失败都会进入 Journal。恢复后的 Run 会跳过已经完成且有 Evidence 的工作单。 |
 | 验证 | Runtime 会独立检查每个计划步骤是否拥有可观察的 Evidence，只有通过后才能完成 Run。 |
-| 记忆管道 | 已验证 Run 异步请求记忆提取；Worker 只能提出候选，不能直接写入长期个人记忆。 |
+| 记忆管道 | 已验证 Run 异步请求记忆提取；配置了提炼器时由它提出候选，未配置时只记录零候选（任务目标是工作单，不是记忆）。它不能直接写入长期个人记忆。 |
 
 ## 运行演示
 
@@ -42,7 +42,8 @@ npm run demo
 1. Supervisor 创建三个子 Agent 工作单：调研和草稿并行，审查必须等待两者的 Evidence。
 2. 每个子 Agent 返回 Evidence。Supervisor 记录完整生命周期，但不接受 Agent 的自我声明作为最终完成。
 3. 父 Run 在模拟的外部副作用之前停在审批处。
-4. 精确审批后，外部执行器运行；Runtime 验证全部 Evidence，并排入一条记忆候选。
+4. 精确审批后，外部执行器运行；Runtime 验证全部 Evidence，并排入一条记忆提取请求（只有配置了
+   提炼器时才会出现候选）。
 
 默认 Journal 位于 `.clone-ai/journal.jsonl`。设置 `CLONE_AI_DATA_DIR` 可使用其他本地目录。
 

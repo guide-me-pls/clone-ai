@@ -27,6 +27,7 @@ import { createJournalStore } from "../core/sqlite-journal.ts";
 import { redactMemoryPii } from "../memory/memory-hygiene.ts";
 import { logJson } from "../observability/json-log.ts";
 import type { UsageRecord } from "../observability/usage.ts";
+import { conversationIdOf, MAIN_AGENT_DEFAULT_CONVERSATION_ID } from "./conversation.ts";
 
 export type MainAgentTurnSource = "cli" | "main-cli" | "companion" | "server" | "whatsapp" | "unknown";
 
@@ -35,6 +36,12 @@ export interface MainAgentTurnRecord {
   text: string;
   status: "started" | "completed" | "failed" | "interrupted";
   startedAt: string;
+  /**
+   * The task this turn belongs to. Rows written before scoping omit it and
+   * belong to the main conversation.
+   * 本回合所属的任务。划分之前写入的行省略它，属于主对话。
+   */
+  conversationId?: string;
   ownerPid?: number;
   completedAt?: string;
   reply?: string;
@@ -64,6 +71,8 @@ export interface MainAgentTurnContext {
   turnId: string;
   source: MainAgentTurnSource;
   dataDirectory: string;
+  /** The conversation whose history this turn extends. 本回合扩展其历史的对话。 */
+  conversationId: string;
   text: string;
   startedAt: string;
   toolCalls: MainAgentToolCall[];
@@ -99,27 +108,55 @@ export async function readMainAgentTurnRecords(dataDirectory: string): Promise<M
       if (typeof record.id !== "string" || typeof record.text !== "string") continue;
       if (record.status !== "started" && record.status !== "completed" && record.status !== "failed" && record.status !== "interrupted") continue;
       if (typeof record.startedAt !== "string") continue;
-      byId.set(record.id, {
+      const parsed: MainAgentTurnRecord = {
         id: record.id,
         text: record.text,
         status: record.status,
         startedAt: record.startedAt,
+        ...(typeof record.conversationId === "string" ? { conversationId: record.conversationId } : {}),
         ...(typeof record.ownerPid === "number" ? { ownerPid: record.ownerPid } : {}),
         ...(typeof record.completedAt === "string" ? { completedAt: record.completedAt } : {}),
         ...(typeof record.reply === "string" ? { reply: record.reply } : {}),
         ...(typeof record.error === "string" ? { error: record.error } : {}),
-      });
+      };
+      // A completed row outranks a late interruption or failure, in either
+      // append order: a client that gave up after the answer must not erase it.
+      // The key includes the conversation, so a turn id reused in another task
+      // stays two independent turns.
+      // 已完成行优先于迟到的中断或失败，无论追加顺序如何：在答案之后放弃的客户端不能抹掉它。
+      // 键包含对话，因此在另一个任务中复用的回合 id 仍是两个独立的回合。
+      const key = `${conversationIdOf(parsed.conversationId)}\u0000${parsed.id}`;
+      const current = byId.get(key);
+      if (current === undefined || statusRank(parsed.status) >= statusRank(current.status)) byId.set(key, parsed);
     } catch {
+      // A torn or interleaved write must be visible, not silently dropped:
+      // losing a line loses a turn from the transcript and the sidebar.
+      // 被截断或交错的写入必须可见，而不是被静默丢弃：丢一行就丢掉转录与侧栏中的一个回合。
+      logJson("warn", "main_agent turn ledger line skipped", { line: trimmed.slice(0, 200) });
       continue;
     }
   }
   return [...byId.values()];
 }
 
-export async function appendMainAgentTurnRecord(dataDirectory: string, record: MainAgentTurnRecord): Promise<void> {
-  await mkdir(dataDirectory, { recursive: true });
-  await appendFile(mainAgentTurnFile(dataDirectory), `${JSON.stringify(record)}\n`, "utf8");
+function statusRank(status: MainAgentTurnRecord["status"]): number {
+  return status === "completed" ? 3 : status === "failed" ? 2 : status === "interrupted" ? 1 : 0;
 }
+
+export async function appendMainAgentTurnRecord(dataDirectory: string, record: MainAgentTurnRecord): Promise<void> {
+  const append = async (): Promise<void> => {
+    await mkdir(dataDirectory, { recursive: true });
+    await appendFile(mainAgentTurnFile(dataDirectory), `${JSON.stringify(record)}\n`, "utf8");
+  };
+  // Turns in one process append through one queue: concurrent conversations
+  // would otherwise write 20k-character rows to the same file at once.
+  // 同一进程内的回合经一条队列追加：否则并发对话会同时向同一文件写入两万字符的行。
+  const next = ledgerWriteQueue.then(append, append);
+  ledgerWriteQueue = next.then(() => undefined, () => undefined);
+  await next;
+}
+
+let ledgerWriteQueue: Promise<void> = Promise.resolve();
 
 /**
  * Opens a turn: journals the input before the model sees it, and writes the
@@ -131,14 +168,23 @@ export async function beginMainAgentTurn(input: {
   dataDirectory: string;
   text: string;
   source: MainAgentTurnSource;
+  conversationId?: string;
   turnId?: string;
   sessionFile?: string;
   modelId?: string;
   provider?: string;
   effort?: string;
   promptMaterialHash?: string;
+  /**
+   * The conversation window this turn's model was given, for the audit. It is
+   * recorded before the model call so a failed turn still shows what it saw.
+   * 本回合模型拿到的对话窗口，供审计使用。它在模型调用之前记录，失败的回合因此仍显示它看到了什么。
+   */
+  historyMessages?: number;
+  historyTurns?: number;
 }): Promise<MainAgentTurnContext> {
   const turnId = input.turnId ?? randomUUID();
+  const conversationId = conversationIdOf(input.conversationId);
   const startedAt = new Date().toISOString();
   let journal: JournalStore | undefined;
   try {
@@ -154,6 +200,7 @@ export async function beginMainAgentTurn(input: {
     turnId,
     source: input.source,
     dataDirectory: input.dataDirectory,
+    conversationId,
     text: input.text,
     startedAt,
     toolCalls: [],
@@ -167,6 +214,7 @@ export async function beginMainAgentTurn(input: {
       schemaVersion: 1,
       turnId,
       source: input.source,
+      conversationId,
       input: capped.text,
       ...(capped.truncated ? { inputTruncated: true } : {}),
       startedAt,
@@ -175,6 +223,8 @@ export async function beginMainAgentTurn(input: {
       ...(input.provider === undefined ? {} : { provider: input.provider }),
       ...(input.effort === undefined ? {} : { effort: input.effort }),
       ...(input.promptMaterialHash === undefined ? {} : { promptMaterialHash: input.promptMaterialHash }),
+      ...(input.historyMessages === undefined ? {} : { historyMessages: input.historyMessages }),
+      ...(input.historyTurns === undefined ? {} : { historyTurns: input.historyTurns }),
     },
   }));
   await context.pending;
@@ -183,6 +233,7 @@ export async function beginMainAgentTurn(input: {
     text: input.text,
     status: "started",
     startedAt,
+    conversationId,
     ownerPid: process.pid,
   }).catch((error: unknown) => {
     logJson("warn", "main_agent turn ledger append failed", {
@@ -227,6 +278,7 @@ export function observeMainAgentSession(
         type: "agent.tool_started",
         payload: {
           turnId: context.turnId,
+          conversationId: context.conversationId,
           toolCallId,
           tool: event.toolName,
           ...(summary.text.length === 0 ? {} : { inputSummary: summary.text }),
@@ -255,6 +307,7 @@ export function observeMainAgentSession(
         type: "agent.tool_completed",
         payload: {
           turnId: context.turnId,
+          conversationId: context.conversationId,
           toolCallId,
           tool: event.toolName,
           isError,
@@ -295,6 +348,7 @@ export async function recordContextCompaction(
     type: "main_agent.context_compacted",
     payload: {
       turnId: turn.turnId,
+      conversationId: turn.conversationId,
       estimatedTokens: compaction.estimatedTokens,
       compactAt: compaction.compactAt,
       droppedMessages: compaction.droppedMessages,
@@ -325,6 +379,7 @@ export async function recordNativeToolStarted(
     type: "agent.tool_started",
     payload: {
       turnId: context.turnId,
+      conversationId: context.conversationId,
       toolCallId: input.toolCallId,
       tool: input.tool,
       ...(input.inputSummary === undefined ? {} : { inputSummary: input.inputSummary }),
@@ -354,6 +409,7 @@ export async function recordNativeToolCompleted(
     type: "agent.tool_completed",
     payload: {
       turnId: context.turnId,
+      conversationId: context.conversationId,
       toolCallId: input.toolCallId,
       tool: input.tool,
       isError: input.isError,
@@ -390,6 +446,7 @@ export async function finishMainAgentTurn(
       schemaVersion: 1,
       turnId: context.turnId,
       source: context.source,
+      conversationId: context.conversationId,
       status: input.status,
       startedAt: context.startedAt,
       completedAt,
@@ -407,6 +464,7 @@ export async function finishMainAgentTurn(
     text: context.text,
     status: input.status === "completed" ? "completed" : input.status === "interrupted" ? "interrupted" : "failed",
     startedAt: context.startedAt,
+    conversationId: context.conversationId,
     ownerPid: process.pid,
     completedAt,
     ...(input.reply === undefined ? {} : { reply: input.reply }),
@@ -422,25 +480,30 @@ export async function finishMainAgentTurn(
 
 /**
  * Marks a turn interrupted from outside the owning process (a channel timeout,
- * a client that gave up). Refuses to overwrite a terminal ledger row.
- * 从拥有进程之外把回合标记为中断（通道超时、客户端放弃）。不会覆盖已终态的台账行。
+ * a client that gave up). Only a turn that actually started can be interrupted:
+ * a request rejected before `beginMainAgentTurn` — a busy 409 or an aborted
+ * capacity wait — must not invent a conversation row. Never overwrites a
+ * terminal ledger row.
+ * 从拥有进程之外把回合标记为中断（通道超时、客户端放弃）。只有真正开始过的回合才能被中断：
+ * 在 `beginMainAgentTurn` 之前就被拒绝的请求——忙碌的 409 或中止的容量等待——不得凭空
+ * 造出一条对话行。绝不覆盖已终态的台账行。
  */
 export async function recordMainAgentTurnInterrupted(
   dataDirectory: string,
-  input: { turnId: string; text: string; error: string; startedAt?: string },
-): Promise<MainAgentTurnRecord> {
+  input: { turnId: string; text: string; error: string; startedAt?: string; conversationId?: string },
+): Promise<MainAgentTurnRecord | undefined> {
   const records = await readMainAgentTurnRecords(dataDirectory);
-  const existing = records.find((record) => record.id === input.turnId);
-  if (existing?.status === "completed" || existing?.status === "failed" || existing?.status === "interrupted") {
+  const existing = records.find((record) => record.id === input.turnId
+    && (input.conversationId === undefined || conversationIdOf(record.conversationId) === conversationIdOf(input.conversationId)));
+  if (existing === undefined) return undefined;
+  if (existing.status === "completed" || existing.status === "failed" || existing.status === "interrupted") {
     return existing;
   }
-  // A client-supplied start time is only usable when it parses; a garbled value
-  // would poison every newest-first sort that reads this turn.
-  // 客户端提供的开始时间只有在可解析时才可用；乱码值会破坏所有读取该回合的"新的在前"排序。
-  const requested = typeof input.startedAt === "string" && Number.isFinite(Date.parse(input.startedAt))
-    ? input.startedAt
-    : undefined;
-  const startedAt = existing?.startedAt ?? requested ?? new Date().toISOString();
+  // The ledger's own start is authoritative; a client-supplied time would let
+  // a late interruption reorder history.
+  // 台账自己的开始时间才是权威；客户端提供的时间会让迟到的中断重排历史。
+  const startedAt = existing.startedAt;
+  const conversationId = conversationIdOf(existing.conversationId ?? input.conversationId);
   const completedAt = new Date().toISOString();
   const capped = redactAndCap(input.error, 4_000);
   let journal: JournalStore | undefined;
@@ -453,6 +516,7 @@ export async function recordMainAgentTurnInterrupted(
         turnId: input.turnId,
         source: "unknown",
         status: "interrupted",
+        conversationId,
         startedAt,
         completedAt,
         error: capped.text,
@@ -471,17 +535,36 @@ export async function recordMainAgentTurnInterrupted(
     text: input.text,
     status: "interrupted",
     startedAt,
+    conversationId,
     completedAt,
     error: input.error.slice(0, 2_000),
-    ...(existing?.ownerPid === undefined ? {} : { ownerPid: existing.ownerPid }),
+    ...(existing.ownerPid === undefined ? {} : { ownerPid: existing.ownerPid }),
   };
   await appendMainAgentTurnRecord(dataDirectory, record);
-  return record;
+  // The owning turn may have completed between the read above and this append;
+  // the reader's status precedence keeps the completed row, and returning it
+  // here keeps the caller's view consistent with the ledger.
+  // 拥有回合可能在上面的读取与这次追加之间完成；读者的状态优先级会保留已完成行，这里返回它，
+  // 使调用方的视图与台账一致。
+  return (await readMainAgentTurnRecords(dataDirectory))
+    .find((value) => value.id === input.turnId && conversationIdOf(value.conversationId) === conversationId) ?? record;
 }
+
+/**
+ * Serializes turn-audit journal appends in this process. Each turn opens its own
+ * SQLite handle; `DatabaseSync`'s busy wait blocks the event loop when two
+ * handles write at once, which concurrent conversations make routine.
+ * 在本进程内串行化回合审计的 Journal 追加。每个回合打开自己的 SQLite 句柄；两个句柄同时
+ * 写入时，`DatabaseSync` 的忙等待会阻塞事件循环，而并发对话会让这成为常态。
+ */
+let journalWriteQueue: Promise<void> = Promise.resolve();
 
 function appendSafely(journal: JournalStore | undefined, turnId: string, event: NewJournalEvent): Promise<void> {
   if (journal === undefined) return Promise.resolve();
-  return journal.append(event).then(() => undefined).catch((error: unknown) => {
+  const append = (): Promise<void> => journal.append(event).then(() => undefined);
+  const next = journalWriteQueue.then(append, append);
+  journalWriteQueue = next.then(() => undefined, () => undefined);
+  return next.catch((error: unknown) => {
     logJson("warn", "main_agent turn audit append failed", {
       type: event.type,
       turnId,

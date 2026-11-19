@@ -12,6 +12,8 @@
  */
 import type { Run } from "../core/contracts.ts";
 import { attachmentManifest, type DocumentAttachment } from "../main-agent/attachments.ts";
+import { conversationIdOf } from "../main-agent/conversation.ts";
+import { withMainAgentSlot } from "../main-agent/main-agent-slots.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { runNativeMainAgentTurn, type NativeToolEvent } from "../main-agent/native-runtime.ts";
 import { beginInvocation, type InvocationCaller, type InvocationSurface } from "../audit/invocation-ledger.ts";
@@ -61,6 +63,18 @@ export interface MainAgentQueryOptions {
   signal?: AbortSignal;
   /** Progress for each tool call, for a live timeline. 每次工具调用的进度，用于实时时间线。 */
   onToolEvent?: (event: NativeToolEvent) => void;
+  /**
+   * Called when the turn is waiting for a capacity slot. A streamed surface can
+   * open its response and show the wait instead of looking frozen.
+   * 回合等待容量槽位时调用。流式界面可以打开响应并显示等待状态，而不是看起来卡死。
+   */
+  onQueued?: (info: { limit: number }) => void;
+  /**
+   * The task this turn belongs to. Omitted means the owner's main conversation;
+   * different ids carry different histories and do not block each other.
+   * 本回合所属的任务。缺省表示所有者的主对话；不同 id 携带不同历史，互不阻塞。
+   */
+  conversationId?: string;
 }
 
 export async function runMainAgentQuery(
@@ -89,20 +103,45 @@ export async function runMainAgentQuery(
     ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
     ...(options.auditHome === undefined ? {} : { auditHome: options.auditHome }),
   });
+  const conversationId = conversationIdOf(options.conversationId);
   try {
-    const result = await withMainAgentLock(dataDirectory, () => runNativeMainAgentTurn({
+    // The conversation lock fails fast on a collision inside one task; the
+    // slot pool queues across tasks, because a busy machine is not a mistake
+    // the caller can fix. Lock first so a duplicate prompt never waits for a
+    // slot it could not use.
+    // 对话锁在同一任务内碰撞时立即失败；槽位池在不同任务间排队，因为机器忙不是调用方能
+    // 修正的错误。先拿锁，使重复的 prompt 不会去等一个它用不上的槽位。
+    const result = await withMainAgentLock(dataDirectory, () => withMainAgentSlot(
       dataDirectory,
-      text,
-      ledgerText: auditedPrompt,
-      source: options.source ?? "companion",
-      ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
-      ...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
-      ...(options.images === undefined ? {} : { images: options.images }),
-      ...(options.documents === undefined ? {} : { documents: options.documents }),
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-      ...(options.onToolEvent === undefined ? {} : { onToolEvent: options.onToolEvent }),
-      onMetadata: (metadata) => audit.note(metadata),
-    }));
+      () => runNativeMainAgentTurn({
+        dataDirectory,
+        text,
+        ledgerText: auditedPrompt,
+        source: options.source ?? "companion",
+        conversationId,
+        // The workspace is what the Main Agent's project instructions, its
+        // briefing and its sense of "what can a worker see" are built from.
+        // Omitting it used the daemon's process.cwd(): a request about a
+        // project in ~/work was answered while reading this repository's rules.
+        // 工作区决定了 Main Agent 的项目指令、简报，以及"Worker 能看到什么"。
+        // 省略它就等于用守护进程的 process.cwd()：一个关于 ~/work 项目的问题，
+        // 回答时读的却是本仓库的规则。
+        ...(options.workspacePath === undefined ? {} : { cwd: options.workspacePath }),
+        ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
+        ...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
+        ...(options.images === undefined ? {} : { images: options.images }),
+        ...(options.documents === undefined ? {} : { documents: options.documents }),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.onToolEvent === undefined ? {} : { onToolEvent: options.onToolEvent }),
+        onMetadata: (metadata) => audit.note(metadata),
+      }),
+      {
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.onQueued === undefined
+          ? {}
+          : { onWait: (snapshot: { limit: number }) => options.onQueued?.({ limit: snapshot.limit }) }),
+      },
+    ), conversationId);
     if (result.error === undefined) {
       await audit.complete(result);
     } else {

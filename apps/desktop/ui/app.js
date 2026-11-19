@@ -7,6 +7,18 @@ const state = {
   dashboard: null,
   selectedId: localStorage.getItem("clone-ai:selected-session"),
   composingNew: false,
+  // A task whose first message has not been sent yet. Minting it at send time
+  // would give a retry a second conversation; minting it on "new task" lets a
+  // failed send keep the same task id.
+  // 尚未发送第一条消息的任务。到发送时才生成会让重试产生第二个对话；在"新建任务"时生成，
+  // 失败的发送就能保住同一个任务 id。
+  newConversationId: null,
+  // Live turns keyed by conversation. One task streaming must not lock the
+  // composer for another task, and a completion may only change the selection
+  // of the conversation it belongs to.
+  // 按对话记录正在运行的回合。一个任务的流不应锁住另一个任务的输入框；回合完成也只能改变
+  // 它所属对话的选择状态。
+  streams: new Map(),
   streaming: false,
   sessionEpoch: 0,
   refreshTimer: null,
@@ -324,80 +336,69 @@ const statusMeta = (status) => {
   return { label: t("status-running"), className: "running", dot: "running" };
 };
 function announce(message, error = false) { const node = $("notice"); node.textContent = message; node.className = `notice visible${error ? " error" : ""}`; clearTimeout(node.timer); node.timer = setTimeout(() => node.className = "notice", 3200); }
+function mintConversationId() {
+  // A readable prefix keeps a task id distinguishable from a run UUID in logs;
+  // the server decides conversation-versus-run from the ledger, not from the name.
+  // 可读的前缀让任务 id 在日志里能与 Run UUID 区分；服务端靠台账而不是名字判断它是对话还是 Run。
+  const suffix = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `conversation-${suffix}`;
+}
 function sessionMarkup(session) {
   const status = statusMeta(session.status);
-  const child = session.parentId !== undefined;
   const metaText = plainPreview(session.preview) || status.label;
-  // The relation is shown, not implied: a task of the chat says so, and the chat
-  // says how many tasks it owns. Deleting the chat takes them with it.
-  // 关系要明示：属于对话的任务会标出来，对话则说明自己有几个任务。删除对话会一并带走它们。
-  const relation = child ? "子任务 · " : session.childCount ? `${session.childCount} 个子任务 · ` : "";
-  return `<div class="session-item${child ? " is-child" : ""}${session.kind === "conversation" ? " is-conversation" : ""}"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title">${escape(plainPreview(session.title))}</span><span class="session-meta">${escape(relation + metaText)}</span></span></button><button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="${child ? "隐藏这条子任务" : session.kind === "conversation" ? "隐藏对话及其子任务" : "隐藏会话"}">×</button></div>`;
-}
-function childGroupSummary(children) {
-  const active = children.filter((child) => ["planning", "queued", "running", "verifying"].includes(child.status)).length;
-  const waiting = children.filter((child) => ["waiting_approval", "waiting_review"].includes(child.status)).length;
-  const failed = children.filter((child) => ["failed", "cancelled"].includes(child.status)).length;
-  const parts = [];
-  if (active) parts.push(`${active} 进行中`);
-  if (waiting) parts.push(`${waiting} 待确认`);
-  if (failed) parts.push(`${failed} 需处理`);
-  return parts.length ? parts.join(" · ") : "全部已完成";
+  // Waiting for the owner is a state, not a footnote: a task that needs a
+  // decision says so in the row, not only in its preview text.
+  // 等待所有者是一种状态，不是脚注：需要决定的任务在行内明说，而不只写在预览里。
+  const flag = session.status === "waiting_approval"
+    ? `<span class="session-flag session-flag-approval">${escape(t("session-flag-approval"))}</span>`
+    : session.status === "waiting_review"
+      ? `<span class="session-flag session-flag-review">${escape(t("session-flag-review"))}</span>`
+      : "";
+  const needs = session.status === "waiting_approval" || session.status === "waiting_review";
+  return `<div class="session-item${needs ? " is-attention" : ""}"><button class="session" type="button" data-session="${escape(session.id)}" aria-current="${String(session.id === state.selectedId)}"><span class="status-dot ${status.dot}"></span><span class="session-copy"><span class="session-title-row"><span class="session-title">${escape(plainPreview(session.title))}</span>${flag}</span><span class="session-meta">${escape(metaText)}</span></span></button><button class="session-delete" type="button" data-delete-session="${escape(session.id)}" aria-label="隐藏这条任务">×</button></div>`;
 }
 function renderSessions(rawSessions) {
-  // A derived task sits under the conversation that spawned it, inside a
-  // collapsed group. The conversation row stays the control surface; expanding
-  // shows what is actually running. 派生任务归在其所属对话之下，放在折叠组里。对话行
-  // 是操作面；展开后才看到真正在跑什么。
-  const ids = new Set(rawSessions.map((session) => session.id));
-  const childrenOf = new Map();
-  for (const session of rawSessions) {
-    if (session.parentId === undefined || !ids.has(session.parentId)) continue;
-    const list = childrenOf.get(session.parentId) || [];
-    list.push(session);
-    childrenOf.set(session.parentId, list);
-  }
-  const blocks = [];
-  for (const session of rawSessions) {
-    if (session.parentId !== undefined && ids.has(session.parentId)) continue;
-    const children = childrenOf.get(session.id) || [];
-    const time = Math.max(
-      Date.parse(session.updatedAt) || 0,
-      ...children.map((child) => Date.parse(child.updatedAt) || 0),
-    );
-    blocks.push({ session, children, time });
-  }
+  // The list is the dispatched tasks. Main Agent conversations are not rows:
+  // the main thread opens from the 对话 control, and a task's thread is where a
+  // message from its record goes. A task waiting for the owner gets its own
+  // section at the top, because a decision on page two is a decision missed.
+  // 列表是已派发的任务。Main Agent 对话不是列表行：主线索从"对话"控件打开，任务的线索是从
+  // 它的记录发送后进入的地方。等待所有者的任务有独立顶部分区，因为埋在下方的决定等于漏掉的
+  // 决定。
+  const blocks = rawSessions
+    .filter((session) => session.kind !== "conversation")
+    .map((session) => ({ session, time: Date.parse(session.updatedAt) || 0 }))
+    .sort((left, right) => right.time - left.time);
   const signature = JSON.stringify([
     state.selectedId,
     blocks.map((block) => [
       block.session.id, block.session.title, block.session.preview, block.session.status,
-      block.session.updatedAt, block.session.parentId, block.session.childCount,
-      block.children.map((child) => [child.id, child.title, child.preview, child.status, child.updatedAt]),
+      block.session.updatedAt, block.session.kind,
     ]),
     state.dashboard?.deletedConversations,
-    [...state.openChildGroups],
   ]);
   if (state.signatures.sessions === signature) return;
   state.signatures.sessions = signature;
-  const total = blocks.reduce((sum, block) => sum + 1 + block.children.length, 0);
+  const total = blocks.length;
   $("session-count").textContent = String(total);
   // An empty visible list is not an empty sidebar: a hidden conversation still
   // needs its restore control, so the shortcut only applies when nothing is
   // hidden either. 可见列表为空不等于侧栏为空：隐藏的对话仍需要恢复入口，
   // 因此只有确实没有隐藏内容时才走空状态。
   if (!total && !(state.dashboard?.deletedConversations || []).length) { $("session-list").innerHTML = `<div class="empty-sessions">${t("empty-sessions").replace("\n", "<br/>")}</div>`; return; }
+  const needsOwner = (session) => session.status === "waiting_approval" || session.status === "waiting_review";
+  const waiting = blocks.filter((block) => needsOwner(block.session));
+  const rest = blocks.filter((block) => !needsOwner(block.session));
   const todayKey = new Date().toDateString();
-  const today = blocks.filter((block) => new Date(block.time).toDateString() === todayKey);
-  const earlier = blocks.filter((block) => new Date(block.time).toDateString() !== todayKey);
-  const blockMarkup = (block) => {
-    const parent = sessionMarkup(block.session);
-    if (!block.children.length) return parent;
-    const open = state.openChildGroups.has(block.session.id) ? " open" : "";
-    return `${parent}<details class="session-children" data-child-group="${escape(block.session.id)}"${open}><summary><span>${block.children.length} 个子任务</span><small>${escape(childGroupSummary(block.children))}</small></summary>${block.children.map((child) => sessionMarkup(child)).join("")}</details>`;
-  };
+  const today = rest.filter((block) => new Date(block.time).toDateString() === todayKey);
+  const earlier = rest.filter((block) => new Date(block.time).toDateString() !== todayKey);
+  const blockMarkup = (block) => sessionMarkup(block.session);
+  const waitingBlock = waiting.length
+    ? `<div class="session-group session-group-needs">${escape(t("needs-you"))} · ${waiting.length}</div>${waiting.map(blockMarkup).join("")}`
+    : "";
   const hidden = (state.dashboard?.deletedConversations || []).map((entry) => `<div class="session-item is-hidden-conversation"><span class="session-copy"><span class="session-title">${escape(entry.title)}${entry.childCount ? ` · ${entry.childCount} 个子任务` : ""}</span><span class="session-meta">已隐藏</span></span><button class="session-restore" type="button" data-restore-conversation="${escape(entry.id)}">恢复</button></div>`).join("");
   const hiddenBlock = hidden ? `<div class="session-group">已隐藏</div>${hidden}` : "";
-  $("session-list").innerHTML = `${today.length ? `<div class="session-group">${t("today")}</div>${today.map(blockMarkup).join("")}` : ""}${earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map(blockMarkup).join("")}` : ""}${hiddenBlock}`;
+  $("session-list").innerHTML = `${waitingBlock}${today.length ? `<div class="session-group">${t("today")}</div>${today.map(blockMarkup).join("")}` : ""}${earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map(blockMarkup).join("")}` : ""}${hiddenBlock}`;
 }
 function renderSchedules(schedules, occurrences = [], reportDeliveries = [], reportError = false) {
   state.schedules = schedules;
@@ -697,7 +698,13 @@ function renderSituation(situation, config) {
   const workspacePath = config.config?.workspacePath || paths.workspacePath || "";
   const workspace = $("config-workspace");
   if (workspace) {
-    workspace.textContent = workspacePath || t("workspace-unset");
+    // The runtime reads the workspace at boot, so a saved path that differs
+    // from the running one is pending, not active. The label says which.
+    // Runtime 在启动时读取工作区，因此与运行路径不同的已保存路径只是待生效，并未生效。标签写明。
+    const pendingRestart = workspacePath.length > 0
+      && typeof paths.workspacePath === "string"
+      && workspacePath !== paths.workspacePath;
+    workspace.textContent = `${workspacePath || t("workspace-unset")}${pendingRestart ? ` · ${t("workspace-restart-pending")}` : ""}`;
     workspace.title = workspacePath;
   }
   renderModelOptions();
@@ -994,13 +1001,16 @@ function chooseNativeDirectory(purpose, onChoose) {
 async function chooseWorkspace() {
   chooseNativeDirectory("workspace", async (workspacePath) => {
     try {
-      await api("/api/config", {
+      const saved = await api("/api/config", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ workspacePath }),
       });
       await refresh({ preserveScroll: true });
-      announce(t("workspace-saved"));
+      // The running runtime keeps the workspace it booted with. Saying "saved"
+      // alone made the owner believe the next turn would use the new folder.
+      // 运行中的 Runtime 仍用启动时的工作区。只说"已保存"会让所有者以为下一回合就会用新目录。
+      announce(t(saved.restartRequired ? "workspace-saved-restart" : "workspace-saved"));
     } catch (error) {
       announce(error.message, true);
     }
@@ -1210,7 +1220,7 @@ async function saveLocale() {
 function renderAudit(sessions) { const signature = JSON.stringify(sessions.map((session) => [session.id, session.title, session.status, session.updatedAt])); if (state.signatures.audit === signature) return; state.signatures.audit = signature; $("audit-session-list").innerHTML = sessions.length ? sessions.map((session) => `<article class="audit-session"><div><b>${escape(session.title)}</b><span>${escape(statusMeta(session.status).label)} · ${time(session.updatedAt)}</span></div><button class="audit-open" type="button" data-open-audit-run="${escape(session.id)}">查看记录</button></article>`).join("") : `<div class="memory-empty">还没有可查看的执行记录。</div>`; }
 function renderMemoryCandidates(candidates) {
   if (!candidates || !candidates.length) { $("memory-candidates").innerHTML = ""; return; }
-  $("memory-candidates").innerHTML = `<h4>待确认的记忆候选（${candidates.length}）</h4><p class="candidates-hint">后台 Agent 从已完成任务中提炼了这些候选；提升后会写入本地记忆库，拒绝则丢弃。</p>${candidates.map((candidate) => `<article class="memory-card candidate-card"><textarea readonly aria-label="候选记忆内容">${escape(candidate.summary)}</textarea><div class="memory-meta"><span>${escape(candidate.type || "fact")} · ${escape(candidate.confidence)} 置信度</span>${candidate.sensitivity ? `<span>${escape(candidate.sensitivity)}</span>` : ""}<span>引用 ${(candidate.sourceEvidenceIds || []).length} 条证据</span></div><div class="candidate-actions"><button class="approve" type="button" data-promote-candidate="${escape(candidate.id)}">提升为记忆</button><button class="secondary" type="button" data-reject-candidate="${escape(candidate.id)}">拒绝</button></div></article>`).join("")}`;
+  $("memory-candidates").innerHTML = `<h4>待确认的记忆候选（${candidates.length}）</h4><p class="candidates-hint">配置的记忆提炼器从任务证据或对话中提出了这些候选；提升后会写入本地记忆库，拒绝则丢弃。</p>${candidates.map((candidate) => `<article class="memory-card candidate-card"><textarea readonly aria-label="候选记忆内容">${escape(candidate.summary)}</textarea><div class="memory-meta"><span>${escape(candidate.type || "fact")} · ${escape(candidate.confidence)} 置信度</span>${candidate.sensitivity ? `<span>${escape(candidate.sensitivity)}</span>` : ""}<span>引用 ${(candidate.sourceEvidenceIds || []).length} 条证据</span></div><div class="candidate-actions"><button class="approve" type="button" data-promote-candidate="${escape(candidate.id)}">提升为记忆</button><button class="secondary" type="button" data-reject-candidate="${escape(candidate.id)}">拒绝</button></div></article>`).join("")}`;
 }
 async function decideCandidate(id, action) { try { await api(`/api/memory/candidates/${encodeURIComponent(id)}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }); await refresh(); announce(action === "promote" ? "候选已提升为正式记忆。" : "候选已拒绝。"); } catch (error) { announce(error.message, true); } }
 function renderMemorySearch(results) { $("memory-search-results").innerHTML = results.length ? results.map((match) => `<article class="memory-match"><div><b>${escape(match.summary)}</b><small>匹配：${escape((match.matchedTerms || []).join("、") || "相关上下文")}</small></div><span>${Math.round(match.score * 100)}%</span></article>`).join("") : `<div class="memory-empty">没有找到会被当前检索规则召回的使用中记忆。分身和子 Agent 看到的就是这些结果。</div>`; }
@@ -1437,43 +1447,169 @@ function messageMarkup(message) {
     : "";
   return `<article class="message ${clone ? "clone" : "person"}"><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div><div class="message-body">${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${displayedBody}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}${actions}</div>` : `<div class="message-copy">${body}</div>`}</div></article>`;
 }
-function displayAgentTitle(agent) { return agent.title; }
-function displayAgentDetail(agent) { const provider = agent.providerId ? `${providerLabel(agent.providerId)} · ` : ""; return provider + (agent.status === "completed" ? "已提交可验证证据" : (agent.summary || "正在按任务边界推进")); }
+/**
+ * A conversation's main pane is a dispatch log, not a chat transcript.
+ *
+ * Every new task dispatches its work as Kernel runs, and the sidebar already
+ * lists those runs under the conversation. What the chat bubble repeated was a
+ * one-line summary; what the owner needs when a turn goes wrong — the context
+ * the model was given and the work the turn dispatched — lived only in the
+ * audit tab. Each entry below shows those three things in order: context,
+ * dispatch, result. The reply is still here, inside its entry.
+ *
+ * 对话的主界面是派发日志，不是聊天记录。
+ *
+ * 每个新任务都把工作派发成 Kernel Run，侧栏已经把这些 Run 列在对话之下。聊天气泡重复的
+ * 只是一句话摘要；回合出错时所有者需要的——模型拿到的上下文与本回合派发的工作——只存在于
+ * 审计页。下面的每个条目按顺序显示这三件事：上下文、派发、结果。回复仍在，放在条目里。
+ */
+const LOG_STATUS = {
+  completed: ["完成", "ok"], failed: ["失败", "bad"], interrupted: ["中断", "warn"], started: ["进行中", "info"], info: ["历史", "mute"],
+  cancelled: ["已取消", "mute"], waiting_approval: ["等待确认", "warn"], waiting_review: ["等待复核", "warn"],
+  queued: ["排队中", "info"], planning: ["规划中", "info"], running: ["运行中", "info"], verifying: ["验证中", "info"], created: ["已创建", "mute"],
+};
+function logStatus(status) { const [label, tone] = LOG_STATUS[status] || [status || "未知", "mute"]; return { label, tone }; }
+function logDuration(ms) { return ms === undefined ? "" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`; }
+function logContextMarkup(entry) {
+  const facts = [];
+  const model = [entry.provider, entry.modelId].filter((part) => typeof part === "string" && part.length > 0).join("/");
+  if (model) facts.push(`<span class="log-fact"><i>模型</i>${escape(model)}${entry.effort ? ` · ${escape(entry.effort)}` : ""}</span>`);
+  if (entry.snapshot) {
+    const snapshot = entry.snapshot;
+    facts.push(`<span class="log-fact"><i>系统提示</i>charter v${escape(snapshot.charterVersion)} · 工具 ${snapshot.toolNames.length} 个 · 材料 <code>${escape(String(snapshot.materialHash).slice(0, 10))}</code></span>`);
+    if (snapshot.toolNames.length > 0) facts.push(`<details class="log-detail"><summary>工具表（${snapshot.toolNames.length}）</summary><p>${snapshot.toolNames.map((name) => `<code>${escape(name)}</code>`).join(" ")}</p></details>`);
+  } else if (!entry.journaled) {
+    facts.push(`<span class="log-fact log-fact--muted"><i>上下文</i>这一轮没有 Journal 记录，无法还原提示词材料。</span>`);
+  }
+  if (entry.priorTurns > 0 || entry.priorTurnsOmitted > 0) {
+    const omitted = entry.priorTurnsOmitted > 0 ? `；另有 ${entry.priorTurnsOmitted} 轮更早的对话未进入上下文` : "";
+    facts.push(`<span class="log-fact"><i>历史</i>此前 ${entry.priorTurns} 轮已完成对话${omitted}</span>`);
+  }
+  if (entry.compactions && entry.compactions.length > 0) {
+    // Each compaction records the transcript it collapsed. Summing the counts
+    // across compactions reports a total that never existed; the latest record
+    // is the state of the context now.
+    // 每次压缩记录的是它折叠时的转录。把多次压缩的计数相加会报出一个从未存在过的总数；
+    // 最近一条记录才是当前上下文的状态。
+    const latest = entry.compactions[entry.compactions.length - 1];
+    facts.push(`<span class="log-fact log-fact--warn"><i>压缩</i>${entry.compactions.length} 次 · 最近一次丢弃 ${latest.droppedMessages || 0} 条 / 保留 ${latest.keptMessages || 0} 条${latest.estimatedTokens ? ` · 约 ${Math.round(latest.estimatedTokens)} tokens` : ""}</span>`);
+    for (const compaction of entry.compactions) {
+      if (!compaction.summary) continue;
+      facts.push(`<details class="log-detail"><summary>压缩摘要</summary><p>${escape(compaction.summary)}</p></details>`);
+    }
+  }
+  return facts.length > 0 ? facts.join("") : `<span class="log-fact log-fact--muted">没有记录到上下文材料。</span>`;
+}
+function logDispatchMarkup(entry) {
+  const tools = entry.toolCalls || [];
+  const runs = entry.spawnedRuns || [];
+  if (tools.length === 0 && runs.length === 0) {
+    if (entry.status === "started") return `<span class="log-fact log-fact--muted">仍在运行；还没有记录到工具调用或派发。</span>`;
+    if (entry.status === "failed" || entry.status === "interrupted") return `<span class="log-fact log-fact--muted">本轮在调用工具前就结束了。</span>`;
+    return `<span class="log-fact log-fact--muted">${entry.journaled ? "本轮直接回答，没有派发任务，也没有调用工具。" : "没有 Journal 记录，无法还原工具调用与派发。"}</span>`;
+  }
+  const toolRows = tools.map((call) => `<li class="log-tool${call.isError ? " is-error" : ""}"><code>${escape(call.name)}</code>${call.isError ? '<span class="log-tool-error">错误</span>' : ""}${call.durationMs !== undefined ? `<em>${escape(logDuration(call.durationMs))}</em>` : ""}${call.inputSummary ? `<span class="log-tool-input">${escape(String(call.inputSummary).slice(0, 400))}</span>` : ""}</li>`).join("");
+  // A hidden run has no openable session: it stays evidence of the dispatch,
+  // but it is not a button that would land on a 404 and reset the selection.
+  // 隐藏的 Run 没有可打开的会话：它仍是派发的证据，但不做成按钮——那会落到 404 并重置选择。
+  const runRows = runs.map((run) => run.hidden
+    ? `<span class="log-run log-run--hidden"><code>${escape(String(run.id).slice(0, 8))}</code><span>任务已隐藏</span></span>`
+    : `<button class="log-run" type="button" data-log-run="${escape(run.id)}"><code>${escape(String(run.id).slice(0, 8))}</code><span>${escape(plainPreview(run.title) || "任务 Run")}</span>${run.status ? `<em>${escape(logStatus(run.status).label)}</em>` : ""}</button>`).join("");
+  return `${tools.length > 0 ? `<ul class="log-tools">${toolRows}</ul>` : ""}${runs.length > 0 ? `<div class="log-runs"><b>派生的任务</b>${runRows}</div>` : ""}`;
+}
+function logResultMarkup(entry) {
+  if (entry.error) {
+    // The raw ledger error is for diagnosis; the owner-facing summary and next
+    // step are what the conversation used to show. Keep both, the readable one
+    // first.
+    // 原始台账错误用于诊断；所有者可读的摘要与下一步才是对话过去显示的内容。两者都保留，
+    // 可读的在前。
+    const needsAgentSettings = /Unrestricted host execution|permission_denied|no enforced sandbox|设置\s*→\s*Agent|Worker|Provider/i.test(entry.error);
+    return `<div class="log-error"><b>错误</b><p>${escape(entry.errorSummary || entry.error)}</p>${entry.errorGuidance ? `<p class="log-error-guidance">下一步：${escape(entry.errorGuidance)}</p>` : ""}${needsAgentSettings ? `<div class="message-actions"><button class="secondary" type="button" data-open-agent-settings>打开 Agent 设置</button></div>` : ""}<details class="log-detail"><summary>原始错误</summary><pre>${escape(entry.error)}</pre></details></div>`;
+  }
+  if (entry.reply && entry.reply.trim().length > 0) return `<div class="log-reply">${richText(entry.reply)}</div>`;
+  if (entry.status === "started") return `<span class="log-fact log-fact--muted">仍在本地运行时中推进。</span>`;
+  if (entry.kind === "history") return `<span class="log-fact log-fact--muted">旧记录没有保存回复。</span>`;
+  return `<span class="log-fact log-fact--muted">本轮没有返回文字。</span>`;
+}
+function logEntryMarkup(entry) {
+  const status = logStatus(entry.status);
+  const duration = logDuration(entry.durationMs);
+  const title = String(entry.input || "").replace(/\s+/g, " ").trim();
+  const head = `<div class="log-entry-head"><b class="log-query">${escape(title || (entry.kind === "history" ? "旧对话记录" : "（无输入）"))}</b><span class="log-badge log-badge--${status.tone}">${escape(status.label)}</span><small>${time(entry.startedAt)}${duration ? ` · ${escape(duration)}` : ""}</small></div>`;
+  const body = entry.kind === "history"
+    ? (entry.reply ? `<div class="log-reply">${richText(entry.reply)}</div>` : "")
+    : `<div class="log-step"><span class="log-step-label">上下文</span><div class="log-step-body">${logContextMarkup(entry)}</div></div>
+       <div class="log-step"><span class="log-step-label">派发</span><div class="log-step-body">${logDispatchMarkup(entry)}</div></div>
+       <div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}</div></div>`;
+  return `<article class="log-entry" data-log-kind="${escape(entry.kind)}" data-log-status="${escape(entry.status)}">${head}${body}</article>`;
+}
+function workLogMarkup(message) {
+  // A cancelled update is not a success: the badge follows the run's own
+  // status, not the presence or absence of a warning tone.
+  // 已取消的更新不是成功：标签跟随 Run 自己的状态，而不是有没有告警色调。
+  const status = logStatus(message.workStatus || (message.tone === "warning" ? "waiting_review" : "completed"));
+  return `<article class="log-entry log-entry--work" data-log-kind="work"><div class="log-entry-head"><b class="log-query">任务更新</b><span class="log-badge log-badge--${status.tone}">${escape(status.label)}</span><small>${time(message.occurredAt)}</small></div><div class="log-reply">${richText(message.text)}</div></article>`;
+}
+function turnLogMarkup(session) {
+  const entries = (session.turns || []).map((entry) => ({ at: entry.startedAt, markup: logEntryMarkup(entry) }));
+  for (const message of session.messages || []) {
+    if (!String(message.id || "").startsWith("work-")) continue;
+    entries.push({ at: message.occurredAt, markup: workLogMarkup(message) });
+  }
+  if (entries.length === 0) return "";
+  entries.sort((left, right) => String(left.at).localeCompare(String(right.at)));
+  const omitted = Number(session.turnsOmitted) > 0
+    ? `<p class="log-omitted">更早的 ${escape(session.turnsOmitted)} 个回合未在此显示；可在 设置 → 审计与轨迹 → 回合 搜索。</p>`
+    : "";
+  return `<section class="turn-log" aria-label="Main Agent 运行日志">${omitted}${entries.map((entry) => entry.markup).join("")}</section>`;
+}
+function sessionHasContent(session) {
+  if (!session) return false;
+  if (session.kind === "conversation") return (session.turns || []).length > 0 || (session.messages || []).some((message) => String(message.id || "").startsWith("work-"));
+  return session.messages.length > 0;
+}
+function displayAgentTitle(agent) { return agent.title; }function displayAgentDetail(agent) { const provider = agent.providerId ? `${providerLabel(agent.providerId)} · ` : ""; return provider + (agent.status === "completed" ? "已提交可验证证据" : (agent.summary || "正在按任务边界推进")); }
 function disclosureOpen(session, name, fallback = false) { return state.openDisclosures.get(session.id)?.get(name) ?? fallback; }
-function planMarkup(session) { if (!session.plan) return ""; const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status); const open = disclosureOpen(session, "plan", fallback) ? " open" : ""; return `<details class="activity-card plan-card" data-disclosure="plan"${open}><summary class="activity-summary">${icon("spark")}<b>执行计划</b><span>${session.plan.steps.length} 步</span></summary><p class="plan-summary">${escape(session.plan.summary)}</p><div class="plan-steps">${session.plan.steps.map((step, index) => `<div class="plan-step"><span class="plan-step-index">${index + 1}</span><b>${escape(step.title)}</b>${step.agentId ? `<em class="plan-step-worker">由 ${escape(step.agentId)} 执行</em>` : ""}<span>${step.delegated ? "委派执行" : step.risk === "read_only" ? "直接处理" : "需确认"}</span></div>`).join("")}</div></details>`; }
+function planMarkup(session) { if (!session.plan) return ""; const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status); const open = disclosureOpen(session, "plan", fallback) ? " open" : ""; return `<details class="activity-card plan-card" data-disclosure="plan"${open}><summary class="activity-summary">${icon("spark")}<b>执行计划</b><span>${session.plan.steps.length} 步</span></summary><p class="plan-summary">${escape(session.plan.summary)}</p><div class="plan-steps">${session.plan.steps.map((step, index) => `<div class="plan-step"><span class="plan-step-index">${index + 1}</span><b>${escape(step.title)}</b>${step.agentId ? `<em class="plan-step-worker">由 ${escape(step.agentId)} 执行</em>` : ""}<span>${step.delegated ? "委派执行" : step.risk === "read_only" ? "直接处理" : step.risk === "reversible_write" ? "本地写入" : step.risk === "external_side_effect" ? "外部动作" : step.risk === "irreversible" ? "不可逆" : escape(step.risk)}</span></div>`).join("")}</div></details>`; }
 function agentsMarkup(session) { if (!session.subagents.length) return ""; const completed = session.subagents.filter((agent) => agent.status === "completed").length; const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status); const open = disclosureOpen(session, "agents", fallback) ? " open" : ""; return `<details class="activity-card" data-disclosure="agents"${open}><summary class="activity-summary">${icon("spark")}<b>Agent 协作</b><span>${completed}/${session.subagents.length} 已完成</span></summary><div class="agent-list">${session.subagents.map((agent) => { const status = statusMeta(agent.status); return `<div class="agent-row"><span class="status-dot ${status.dot}"></span><div><strong>${escape(displayAgentTitle(agent))}</strong><small>${escape(displayAgentDetail(agent))}</small></div><span class="agent-status">${escape(status.label)}</span></div>`; }).join("")}</div></details>`; }
 function approvalMarkup(session) {
   const approvals = session.approvals || [];
   if (!approvals.length) return "";
-  // Decisions live in the main conversation. A child task record only points
-  // there; posting to its own id would hit the wrong endpoint.
-  // 决定集中在主对话。子任务记录只提供入口；按子任务 id 提交会打到错误端点。
-  if (session.id !== MAIN_CONVERSATION_ID) {
-    return `<section class="approval-card approval-pointer"><div class="approval-kicker">需要你的决定</div><p>这个任务的确认已集中到主对话。</p><div class="approval-actions"><button class="secondary" type="button" data-open-main-conversation>回到主对话确认</button></div></section>`;
-  }
-  const heading = approvals.length === 1 ? "是否继续执行外部动作？" : `${approvals.length} 个任务等待确认`;
-  return `<section class="approval-card"><div class="approval-kicker">需要你的决定</div><h2>${escape(heading)}</h2>${approvals.map((approval) => `<div class="approval-item"><b>${escape(approval.title || session.title)}</b><p>下一步会影响外部系统，需要你的确认。</p><div class="approval-actions"><button class="approve" type="button" data-approve="${escape(approval.runId)}">确认并继续</button><button class="secondary" type="button" data-reject="${escape(approval.runId)}">拒绝</button></div></div>`).join("")}</section>`;
+  // The decision belongs to the task record that owns the run. Stating that the
+  // task will not proceed without an answer is the point of the card.
+  // 决定属于拥有该 Run 的任务记录。明确说出"不回答就不会继续"，才是这张卡片的意义。
+  const heading = approvals.length === 1 ? "需要你确认后才能继续" : `${approvals.length} 项需要你确认`;
+  return `<section class="approval-card approval-card-action"><div class="approval-kicker">需要你的决定 · 不会自动继续</div><h2>${escape(heading)}</h2>${approvals.map((approval) => {
+    const step = typeof approval.title === "string" && approval.title.length > 0 && approval.title !== session.title
+      ? `<p class="approval-step">步骤：${escape(approval.title)}</p>`
+      : "";
+    return `<div class="approval-item"><b>${escape(session.title)}</b>${step}<p>${escape(approval.description || "下一步会影响外部系统，需要你的确认。")}</p><div class="approval-actions"><button class="approve" type="button" data-approve="${escape(approval.runId)}">确认并继续</button><button class="secondary" type="button" data-reject="${escape(approval.runId)}">拒绝</button></div></div>`;
+  }).join("")}</section>`;
 }
 function reviewMarkup(session) {
-  // Reviews are decisions too: the main conversation shows the criteria and the
-  // accept/reject pair, while a task record only points there. The card follows
-  // the review list, not the conversation's single status pill: approvals and
-  // reviews can be pending at the same time, and a `waiting_approval` pill must
-  // not hide a review the owner still has to answer.
-  // 复核也是决定：主对话显示标准与接受/拒绝，任务记录只提供入口。卡片跟随复核列表，
-  // 而不是对话唯一的状态标签：确认与复核可能同时等待，`waiting_approval` 不能藏起仍需
-  // 所有者回答的复核。
-  if (session.id !== MAIN_CONVERSATION_ID) {
-    if (session.status !== "waiting_review") return "";
-    return `<section class="approval-card approval-pointer"><div class="approval-kicker">等待复核</div><p>这个任务的复核已集中到主对话。</p><div class="approval-actions"><button class="secondary" type="button" data-open-main-conversation>回到主对话复核</button></div></section>`;
-  }
+  // Reviews are decisions too, and they are decided on the same task record:
+  // its criteria, its worker's answer and its own accept/reject pair.
+  // 复核也是决定，并在同一个任务记录上完成：它的标准、它的 Worker 回答与它自己的接受/拒绝按钮。
   const reviews = session.reviews || [];
-  if (!reviews.length) return "";
-  const heading = reviews.length === 1 ? "确认任务结果" : `${reviews.length} 个任务等待复核`;
-  return `<section class="approval-card"><div class="approval-kicker">等待复核</div><h2>${escape(heading)}</h2>${reviews.map((review) => {
+  if (!reviews.length) {
+    if (session.status !== "waiting_review") return "";
+    // A waiting review whose verification record is missing still needs a
+    // decision; the buttons work by run id.
+    // 等待复核但缺少核验记录时仍需要决定；按钮按 Run id 生效。
+    return `<section class="approval-card approval-card-action"><div class="approval-kicker">等待你的复核</div><h2>${escape(session.title || "结果等待复核")}</h2><p>这个任务已经结束，但还没有可显示的核验记录。</p><div class="approval-actions"><button class="approve" type="button" data-review="${escape(session.id)}" data-review-decision="accept">接受结果</button><button class="secondary" type="button" data-review="${escape(session.id)}" data-review-decision="reject">拒绝</button></div></section>`;
+  }
+  const heading = reviews.length === 1 ? "需要你复核结果" : `${reviews.length} 项结果等待复核`;
+  return `<section class="approval-card approval-card-action"><div class="approval-kicker">等待你的复核 · 系统不会自行通过</div><h2>${escape(heading)}</h2>${reviews.map((review) => {
     const criteria = (review.verification.unverifiedCriteria || []).map((criterion) => `<li>${escape(criterion)}</li>`).join("");
     const summary = criteria.length === 0 && review.verification.summary ? `<p>${escape(review.verification.summary)}</p>` : "";
-    return `<div class="approval-item"><b>${escape(review.title)}</b>${summary}${criteria ? `<ul>${criteria}</ul>` : ""}<div class="approval-actions"><button class="approve" type="button" data-review="${escape(review.runId)}" data-review-decision="accept">接受结果</button><button class="secondary" type="button" data-review="${escape(review.runId)}" data-review-decision="reject">拒绝</button></div></div>`;
+    // The decision is about this answer. Without it the card showed only the
+    // criteria and the evidence count, and the owner had nothing to review.
+    // 决定正是针对这个回答。没有它，卡片只有验收标准与证据计数，所有者没有可复核的内容。
+    const result = typeof review.result === "string" && review.result.trim().length > 0
+      ? `<div class="review-result"><b>Worker 的结论</b><div>${richText(review.result)}</div></div>`
+      : "";
+    return `<div class="approval-item"><b>${escape(review.title)}</b>${result}${summary}${criteria ? `<ul>${criteria}</ul>` : ""}<div class="approval-actions"><button class="approve" type="button" data-review="${escape(review.runId)}" data-review-decision="accept">接受结果</button><button class="secondary" type="button" data-review="${escape(review.runId)}" data-review-decision="reject">拒绝</button></div></div>`;
   }).join("")}</section>`;
 }
 
@@ -1554,15 +1690,16 @@ function evidenceMarkup(session) {
   </details>`;
 }
 function recalledMemoryMarkup(session) { const memories = session.recalledMemories || []; if (!memories.length) return ""; return `<details class="activity-card" data-disclosure="memory"><summary class="activity-summary">${icon("spark")}<b>本次任务使用的 Memory</b><span>${memories.length} 条</span></summary><div class="agent-list">${memories.map((memory) => `<div class="agent-row"><div><strong>${escape(memory.summary)}</strong><small>匹配：${escape((memory.matchedTerms || []).join("、") || "相关上下文")} · ${Math.round((memory.score || 0) * 100)}%</small></div></div>`).join("")}</div></details>`; }
-function setTopbar(session) { if (!session) { $("session-kind").textContent = "个人对话"; $("session-title").textContent = t("new-conversation"); $("session-subtitle").textContent = t("start-intent"); $("session-status").textContent = t("ready"); $("session-status").className = "status-pill"; return; } const status = statusMeta(session.status); $("session-kind").textContent = session.id === MAIN_CONVERSATION_ID ? "个人对话" : "任务记录"; $("session-title").textContent = plainPreview(session.title); $("session-subtitle").textContent = `${plainPreview(session.preview)} · ${time(session.updatedAt)}`; $("session-status").textContent = session.id === MAIN_CONVERSATION_ID && session.status === "completed" ? "已保存" : status.label; $("session-status").className = `status-pill ${status.className}`; }
+function setTopbar(session) { if (!session) { $("session-kind").textContent = "个人对话"; $("session-title").textContent = t("new-conversation"); $("session-subtitle").textContent = t("start-intent"); $("session-status").textContent = t("ready"); $("session-status").className = "status-pill"; return; } const status = statusMeta(session.status); const kind = session.kind === "conversation" ? (session.id === MAIN_CONVERSATION_ID ? "个人对话" : "任务对话") : "任务记录"; $("session-kind").textContent = kind; $("session-title").textContent = plainPreview(session.title); $("session-subtitle").textContent = `${plainPreview(session.preview)} · ${time(session.updatedAt)}`; $("session-status").textContent = session.kind === "conversation" && session.status === "completed" ? "已保存" : status.label; $("session-status").className = `status-pill ${status.className}`; }
 function traceMarkup(session) {
   const trace = session.trace || session.activity || [];
   if (!trace.length) return "";
-  // A run that still needs the owner opens its trace: the record is what they
-  // are deciding about. A finished run keeps it collapsed but present.
-  // 仍等待所有者的 Run 默认展开轨迹：记录正是他们要判断的对象。已结束的 Run 保持折叠但保留。
-  const fallback = session.status === "waiting_review" || session.status === "waiting_approval";
-  const open = disclosureOpen(session, "trace", fallback) ? " open" : "";
+  // The record is what the owner opens the task to read, finished or not, so
+  // the trace starts open; the scroll container bounds a long one. A collapse
+  // the owner made is remembered per session and still wins.
+  // 无论是否已结束，记录都是所有者打开任务要读的东西，因此轨迹默认展开；长轨迹由滚动容器
+  // 约束。所有者自己做过的折叠仍按会话记忆生效。
+  const open = disclosureOpen(session, "trace", true) ? " open" : "";
   return `<details class="activity-card" data-disclosure="trace"${open}><summary class="activity-summary">${icon("check")}<b>本地执行轨迹</b><span>${trace.length} 条</span></summary><div class="trace" data-scroll-region="trace">${trace.map((item, index) => `<div class="trace-row"><b><span class="trace-sequence">#${item.sequence ?? index + 1}</span>${escape(item.label)}</b><p>${time(item.occurredAt)} · ${escape(item.detail)}</p></div>`).join("")}</div></details>`;
 }
 const SCROLL_BOTTOM_THRESHOLD = 28;
@@ -1619,13 +1756,61 @@ function restoreDisclosureScrolls(id) {
     });
   });
 }
-function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || session.messages.length === 0); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } content.innerHTML = `<div class="day-divider">${day(session.updatedAt)}</div>${session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}${approvalMarkup(session)}${reviewMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
-async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
-async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) { if (state.streaming) return; const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; if (!state.composingNew && (!state.selectedId || !sessions.some((session) => session.id === state.selectedId))) state.selectedId = sessions.find((session) => session.id === MAIN_CONVERSATION_ID)?.id ?? sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
-let activeTurn = null;
-function stopActiveTurn() { if (activeTurn === null) return; activeTurn.stop(); }
+function decisionDock(session) {
+  // A waiting decision belongs at the top of the pane and stays there while the
+  // owner scrolls: at the bottom of a long log it was easy to miss, and the
+  // auto-scroll could leave it off-screen.
+  // 等待中的决定属于面板顶部，并在滚动时留在那里：放在长日志底部容易被错过，
+  // 自动滚动也可能把它留在视口之外。
+  const cards = `${approvalMarkup(session)}${reviewMarkup(session)}`;
+  return cards.length === 0 ? "" : `<div class="decision-dock">${cards}</div>`;
+}
+function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || !sessionHasContent(session)); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } const conversation = session.kind === "conversation"; const conversationLog = conversation ? turnLogMarkup(session) : ""; const showWelcome = conversation && conversationLog.length === 0; content.innerHTML = showWelcome ? `${decisionDock(session)}${welcomeMarkup()}` : `<div class="day-divider">${day(session.updatedAt)}</div>${decisionDock(session)}${conversation ? conversationLog : session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); requestAnimationFrame(updateScrollBottom); }
+async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; state.newConversationId = null; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); syncComposer(); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
+async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) {
+  // A live stream owns only the selected conversation's view; a background
+  // turn in another task must not stop the sidebar from updating.
+  // 运行中的流只拥有所选对话的视图；另一个任务的后台回合不应阻止侧栏更新。
+  if (state.selectedId && state.streams.has(state.selectedId)) return;
+  if (!state.selectedId && state.composingNew && state.newConversationId && state.streams.has(state.newConversationId)) return;
+  const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, agents, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/agents"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings, agents.providers || []); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; const selectedIsConversation = state.selectedId === MAIN_CONVERSATION_ID || (state.selectedId?.startsWith("conversation-") ?? false) || (state.selectedId?.startsWith("whatsapp:") ?? false); if (!state.composingNew && (!state.selectedId || (!sessions.some((session) => session.id === state.selectedId) && !selectedIsConversation))) state.selectedId = sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } }
+function currentStream() {
+  if (state.selectedId) return state.streams.get(state.selectedId);
+  if (state.composingNew && state.newConversationId) return state.streams.get(state.newConversationId);
+  return undefined;
+}
+function stopActiveTurn() { currentStream()?.stop(); }
+/**
+ * The send slot reflects the selected conversation, not the whole window.
+ * 发送槽位反映所选对话的状态，而不是整个窗口。
+ */
+function syncComposer() {
+  const stream = currentStream();
+  const submit = $("submit");
+  const stop = $("stop-turn");
+  if (submit) { submit.disabled = stream !== undefined; submit.hidden = stream !== undefined; }
+  if (stop) stop.hidden = stream === undefined;
+}
 async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
-  state.streaming = true;
+  // Each task is its own Main Agent conversation: it carries its own history and
+  // can run while another task's subtasks are still executing. A message sent
+  // from a task record goes to the conversation that spawned it.
+  // 每个任务都是自己的 Main Agent 对话：有自己的历史，可以在另一个任务的子任务仍在执行时
+  // 运行。从任务记录发出的消息进入派生它的对话。
+  const selectedSession = (state.dashboard?.sessions || []).find((session) => session.id === state.selectedId);
+  const conversationId = state.composingNew
+    ? (state.newConversationId || (state.newConversationId = mintConversationId()))
+    : selectedSession?.kind === "conversation"
+      ? selectedSession.id
+      : selectedSession?.conversationId ?? selectedSession?.parentId ?? MAIN_CONVERSATION_ID;
+  if (state.streams.has(conversationId)) {
+    announce("这个任务仍在处理中；等它结束，或先停止它再发送。", true);
+    syncComposer();
+    return;
+  }
+  const wasComposing = state.composingNew;
+  const ownedSelection = () => state.selectedId === conversationId
+    || (state.composingNew && state.newConversationId === conversationId);
   // The message and a live reply card appear before the request is sent. A model
   // call can take many seconds, and until now the composer kept the text and the
   // conversation showed nothing, so the app looked frozen mid-thought.
@@ -1641,11 +1826,16 @@ async function createSession(query) { const button = $("submit"); button.disable
   const attachmentMarkup = outgoingAttachments.map((item) => item.kind === "document" || item.kind === "binary-document"
     ? `<div class="message-attachment-doc">${documentIcon}<span><b>${escape(shortName(item.name, 28))}</b><small>${escape(formatBytes(item.size))}</small></span></div>`
     : `<img src="${item.previewUrl}" alt="${escape(item.name)}" />`).join("");
-  inner.insertAdjacentHTML("beforeend", `<div class="message person"><div class="message-heading"><b>你</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="message-copy">${richText(query || "（已发送附件）")}</div>${attachmentMarkup ? `<div class="message-attachments">${attachmentMarkup}</div>` : ""}</div></div>`);
-  const card = document.createElement("div"); card.className = "message clone";
-  card.innerHTML = `<div class="message-heading"><b>clone-ai</b><time>${time(new Date().toISOString())}</time></div><div class="message-body"><div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="tool-timeline" data-tool-timeline hidden></div><div class="clone-text" data-streaming="1" hidden></div></div>`;
+  // The live turn is a log entry from the first moment: the query is the entry
+  // title, and the pending card plus the streaming reply sit under 结果. A chat
+  // bubble here would be replaced by the log as soon as the turn settles.
+  // 实时回合从第一刻起就是日志条目：query 是条目标题，等待卡与流式回复放在"结果"下。
+  // 若用聊天气泡，回合一结束就会被日志替换。
+  const card = document.createElement("article"); card.className = "log-entry log-entry--live";
+  card.innerHTML = `<div class="log-entry-head"><b class="log-query">${escape(plainPreview(query || "（已发送附件）"))}</b><span class="log-badge log-badge--info" data-live-status>运行中</span><small>${time(new Date().toISOString())}</small></div><div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${attachmentMarkup ? `<div class="message-attachments">${attachmentMarkup}</div>` : ""}<div class="clone-card"><div class="response-pending" data-response-pending role="status" aria-live="polite"><span class="response-pending__pulse" aria-hidden="true"><i></i><i></i><i></i></span><div class="response-pending__copy"><strong data-pending-title>${escape(t("pending-connect-title"))}</strong><p data-pending-detail>${escape(t("pending-connect-detail"))}</p><div class="response-pending__track" aria-hidden="true"></div></div><span class="response-pending__time" data-pending-elapsed>${escape(t("pending-elapsed").replace("{seconds}", "0"))}</span></div><div class="tool-timeline" data-tool-timeline hidden></div><div class="clone-text" data-streaming="1" hidden></div></div></div></div>`;
   inner.appendChild(card);
   const target = card.querySelector(".clone-text");
+  const liveStatus = card.querySelector("[data-live-status]");
   const pending = card.querySelector("[data-response-pending]");
   const pendingTitle = card.querySelector("[data-pending-title]");
   const pendingDetail = card.querySelector("[data-pending-detail]");
@@ -1714,13 +1904,8 @@ async function createSession(query) { const button = $("submit"); button.disable
     stoppedByOwner = true;
     controller.abort();
   };
-  activeTurn = { stop: stopTurn };
-  const stopButton = $("stop-turn");
-  // One control occupies the send slot at a time; a second button would widen the
-  // composer mid-turn and shift the textarea under the owner's cursor.
-  // 发送槽位同时只有一个控件；两个按钮会在回合中途撑宽输入区，让光标下的文本跳位。
-  if (stopButton) stopButton.hidden = false;
-  if (stopButton) button.hidden = true;
+  state.streams.set(conversationId, { stop: stopTurn });
+  syncComposer();
   let stallTimer = null;
   const armStallTimer = () => {
     if (stallTimer !== null) clearTimeout(stallTimer);
@@ -1736,6 +1921,7 @@ async function createSession(query) { const button = $("submit"); button.disable
       body: JSON.stringify({
         text: query,
         turnId,
+        conversationId,
         ...(outgoingAttachments.length === 0 ? {} : {
           attachments: outgoingAttachments.map((item) => {
             if (item.kind === "binary-document") return { kind: "document", name: item.name, mimeType: item.mimeType, data: item.data };
@@ -1762,6 +1948,13 @@ async function createSession(query) { const button = $("submit"); button.disable
         const payload = JSON.parse(data);
         if (event === "delta") { revealResponse(); reply += payload.delta; target.textContent = reply; $("conversation").scrollTop = $("conversation").scrollHeight; }
         else if (event === "tool") { noteTool(payload); }
+        else if (event === "queued") {
+          // The server is waiting for a capacity slot; this is progress, not a
+          // stall, and the owner should see why nothing is streaming yet.
+          // 服务端在等容量槽位；这是进展而不是停滞，所有者应看到为什么还没有流式输出。
+          armStallTimer();
+          if (pendingDetail) pendingDetail.textContent = `正在等待空闲的 Main Agent 槽位（上限 ${payload.limit ?? "?"}）…`;
+        }
         else if (event === "done") {
           result = payload;
           for (const report of payload.attachmentReports ?? []) {
@@ -1788,17 +1981,22 @@ async function createSession(query) { const button = $("submit"); button.disable
     target.innerHTML = reply.trim().length > 0
       ? richText(reply)
       : `<span class="response-fallback">${escape(t(firstRun ? "empty-model-reply-with-run" : "empty-model-reply"))}</span>`;
-    // The turn always lands in the one conversation thread; a plan it proposed
-    // becomes a task in the sidebar. Switching into a fresh box per message is
-    // what made the interface look like it kept spawning new conversations.
-    // 每一轮都落进唯一的对话线程；它提案的计划会作为侧栏中的任务出现。每发一条消息就切换
-    // 到一个新对话框，正是界面看起来不断裂变的原因。
-    state.composingNew = false;
-    state.selectedId = MAIN_CONVERSATION_ID;
+    if (liveStatus) { liveStatus.textContent = "完成"; liveStatus.className = "log-badge log-badge--ok"; }
+    // The turn lands in the conversation it was sent from; a plan it proposed
+    // becomes a task under that conversation in the sidebar. A background
+    // completion must not steal the conversation the owner is reading.
+    // 回合落在它被发出的对话里；它提案的计划成为该对话下的侧栏任务。后台完成不得夺走所有者在
+    // 读的对话。
+    const stillOurs = ownedSelection();
+    if (stillOurs) {
+      state.composingNew = false;
+      state.newConversationId = null;
+      state.selectedId = conversationId;
+      state.drafts.delete(conversationId);
+      localStorage.setItem("clone-ai:selected-session", conversationId);
+    }
     if (firstRun) state.scrollPositions.set(firstRun.id, { top: 0, anchor: "bottom" });
-    localStorage.setItem("clone-ai:selected-session", MAIN_CONVERSATION_ID);
-    state.streaming = false;
-    await refresh({ preserveScroll: false, scrollToBottom: true });
+    await refresh({ preserveScroll: false, scrollToBottom: stillOurs });
     announce(firstRun ? "Main Agent 已提交计划，正在推进。" : "Main Agent 已回复（未创建任务）。");
   } catch (error) {
     failed = true;
@@ -1813,8 +2011,16 @@ async function createSession(query) { const button = $("submit"); button.disable
       target.hidden = true;
       target.innerHTML = "";
       target.insertAdjacentHTML("afterend", `<div class="response-error" data-response-error>${escape(t("response-interrupted-detail").replace("{message}", failure))}</div>`);
-      $("query").value = query;
-      resizeComposer();
+      if (liveStatus) { liveStatus.textContent = "失败"; liveStatus.className = "log-badge log-badge--bad"; }
+      // Restore into the composer only if the owner is still looking at this
+      // conversation; otherwise keep the text as that task's draft.
+      // 只有所有者仍看着这个对话时才把文本还回输入框；否则把它留作该任务的草稿。
+      if (ownedSelection()) {
+        $("query").value = query;
+        resizeComposer();
+      } else {
+        state.drafts.set(conversationId, query);
+      }
     } else {
       revealResponse();
       target.classList.remove("is-streaming");
@@ -1822,23 +2028,23 @@ async function createSession(query) { const button = $("submit"); button.disable
     }
     announce(failure, true);
   } finally {
-    state.streaming = false;
+    state.streams.delete(conversationId);
+    syncComposer();
     if (stallTimer !== null) clearTimeout(stallTimer);
     if (pendingTimer !== null) clearInterval(pendingTimer);
     target.removeAttribute("data-streaming");
     target.classList.remove("is-streaming");
-    button.disabled = false;
-    if (stopButton) stopButton.hidden = true;
-    button.hidden = false;
-    activeTurn = null;
   }
   if (failed) {
     await api("/api/main-agent/interruptions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ turnId, text: query, error: failure, startedAt: turnStartedAt }),
+      body: JSON.stringify({ turnId, text: query, error: failure, startedAt: turnStartedAt, conversationId }),
     }).catch(() => undefined);
-    await refresh({ preserveScroll: true, scrollToBottom: true }).catch(() => undefined);
+    // A failed first send keeps its error card: refreshing would render the
+    // welcome screen over it. Existing conversations can refresh normally.
+    // 新任务首次发送失败时保留错误卡：刷新会用欢迎页盖掉它。已有对话可以正常刷新。
+    if (!(wasComposing && !reply)) await refresh({ preserveScroll: true, scrollToBottom: true }).catch(() => undefined);
   }
 }
 
@@ -1940,7 +2146,7 @@ async function restoreConversation(id) {
   } catch (error) { announce(error.message, true); }
 }
 
-async function deleteSession(id) { const session = (state.dashboard?.sessions || []).find((item) => item.id === id); const message = id === "main-agent-conversation" ? `隐藏这个对话？它的 ${session?.childCount || 0} 个子任务会一起隐藏。审计日志、记忆和备份不受影响，随时可以恢复。` : session?.parentId ? "隐藏这条子任务？审计记录会保留。父对话不受影响。" : "从会话列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。"; if (!(await confirmDialog(message, "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
+async function deleteSession(id) { const session = (state.dashboard?.sessions || []).find((item) => item.id === id); const message = session?.kind === "conversation" ? `隐藏这个对话？它的 ${session?.childCount || 0} 个子任务会一起隐藏。审计日志、记忆和备份不受影响，随时可以恢复。` : session?.parentId ? "隐藏这条子任务？审计记录会保留。父对话不受影响。" : "从会话列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。"; if (!(await confirmDialog(message, "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
 $("session-list").addEventListener("click", (event) => { const restore = event.target.closest("[data-restore-conversation]"); if (restore) { void restoreConversation(restore.dataset.restoreConversation); return; } const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
 $("session-list").addEventListener("toggle", (event) => {
   const details = event.target;
@@ -1949,7 +2155,7 @@ $("session-list").addEventListener("toggle", (event) => {
   else state.openChildGroups.delete(details.dataset.childGroup);
   localStorage.setItem("clone-ai:child-groups", JSON.stringify([...state.openChildGroups]));
 }, true);
-$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const openMain = event.target.closest("[data-open-main-conversation]"); if (openMain) { void selectSession(MAIN_CONVERSATION_ID, { scrollToBottom: true }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
+$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const logRun = event.target.closest("[data-log-run]"); if (logRun) { void selectSession(logRun.dataset.logRun); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
 document.querySelector(".settings-nav")?.addEventListener("keydown", (event) => {
@@ -2040,10 +2246,11 @@ $("library-create").addEventListener("click", () => void createLibraryMemory());
 $("opportunity-strip").addEventListener("click", (event) => { const settings = event.target.closest("[data-open-failure-settings]"); if (settings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const accept = event.target.closest("[data-accept-opportunity]"); if (accept) { void decideOpportunity(accept.dataset.acceptOpportunity, "accept"); return; } const dismiss = event.target.closest("[data-dismiss-opportunity]"); if (dismiss) void decideOpportunity(dismiss.dataset.dismissOpportunity, "dismiss"); });
 $("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
-$("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
+$("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; state.newConversationId = mintConversationId(); $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); syncComposer(); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
+$("open-conversation").addEventListener("click", () => { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(MAIN_CONVERSATION_ID, { scrollToBottom: true }); });
 $("stop-turn").addEventListener("click", () => stopActiveTurn());
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && activeTurn !== null) { event.preventDefault(); stopActiveTurn(); }
+  if (event.key === "Escape" && currentStream() !== undefined) { event.preventDefault(); stopActiveTurn(); }
 });
 $("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0 && state.attachments.length === 0) { announce("请输入你想推进的事情，或添加图片/视频/文档。", true); return; } void createSession(query); });
 $("query").addEventListener("input", resizeComposer);

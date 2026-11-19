@@ -84,7 +84,7 @@
 单次失败的教训容易对一次事故过拟合。聚类使用现有的 `FailureReport.signature`（易变细节已去除）
 加类别：
 
-- 1 次失败：只产生低置信、会过期的候选（当前行为）。
+- 1 次失败：只有配置了提炼器时才产生低置信、会过期的候选；未配置时该 Run 的提取请求记录为零候选。
 - 不同 Run 中出现 3 次及以上相同 signature：提议更高置信的教训或 L1 目录条目，并引用全部证据 id。
 
 阈值 3 是为区分巧合与规律而设的假设，需用真实数据复核。
@@ -151,9 +151,11 @@ src/improvement/improvement-service.ts
 阶段 1（只读归因）已经实现，同时补上归因所依赖的三块：
 
 - **对话提炼**（`src/memory/conversation-memory-worker.ts`、`conversation-memory-pipeline.ts`）。
-  每个所有者回合写入一条 `memory.conversation.requested` 事件，并把所有者原文记为证据；
-  维护循环按从旧到新的顺序把它们排空成普通的待审候选。Assistant 的文字永不被引用。
-  与任务提炼一样需要 `CLONE_AI_MEMORY_MINING=1` 开启，因为每个回合会花一次模型调用。
+  流水线收到的每个所有者回合都会写入一条 `memory.conversation.requested` 事件，并把所有者原文
+  记为证据；维护循环按从旧到新的顺序把它们排空成普通的待审候选。Assistant 的文字永不被引用。
+  它拥有自己的 Worker 与流水线。原生循环目前尚未调用 `record()`，因此这条路径在生产中还没有
+  输入；恢复该调用属于修复通道的任务。提炼每个回合会花一次模型调用，因此在 `filtered` 下只为
+  含持久陈述信号的回合运行，`all` 下每个回合都运行。
 - **记忆推送**（`src/main-agent/memory-push.ts`）。与所有者消息匹配的已审核记忆被编译进
   Main Agent 本回合的 System Prompt（边界与 Worker 派发相同：只给摘要、有上限、secret 不外露、
   剥掉指令化文本），并以 run id `main-agent` 记为 `memory.recalled`，使 §4 的归因也能看到对话回合。
@@ -205,7 +207,8 @@ Worker 列出空工作区、写入 `out/hello.txt`、读回确认后停止——
 - **按类别分配上下文预算** —— 偏好 50%、任务结果 25%、事实 20%、Agent 结果 5%，按剩余额度计算；用不完的向后顺延。
 - **冲突复核** —— `src/memory/conflict.ts` 提议退役复述记忆（`findConflicts`），并在召回集中去重复述（`dedupeContext`）。
   词重叠捕获不到取值改变；权衡记录如实记下这一局限。
-- **对话学习默认开启** —— `CLONE_AI_MEMORY_MINING`：未设置=只提炼含持久陈述信号的回合，`off`=两条路径都关闭，`all`=每轮都提炼。
+- **对话学习默认开启** —— `CLONE_AI_MEMORY_MINING`：未设置（`filtered`）= 对话回合含持久陈述信号时
+  提炼（待 `record()` 接线后生效），任务提炼保持静默；`off`=两条路径都关闭；`all`=每个任务与对话回合都提炼。
 - **Connector** —— 日历（ICS 文件或 https URL）与邮件（IMAP，只读），两者在无法运行时都会说明原因而不是显示为空。
 - **对话附件** —— 按签名校验图片，交给会话 Prompt，绝不写入工作区。
 - **注意力列表** —— `GET /api/attention` 把承诺、待审项、建议、机会与观察合成一个按紧迫度排序的列表；每项都指向拥有它的服务。

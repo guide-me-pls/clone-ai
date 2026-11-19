@@ -13,12 +13,65 @@ import { createDefaultVerifier } from "./verification.ts";
 import { DiffFileVerifier } from "./verifier-plugins.ts";
 import { MemoryPipeline } from "../memory/memory-pipeline.ts";
 import { AgentMemoryWorker } from "../memory/agent-memory-worker.ts";
+import { ConversationMemoryWorker } from "../memory/conversation-memory-worker.ts";
 import { ConversationMemoryPipeline } from "../memory/conversation-memory-pipeline.ts";
 import { miningModeFromEnvironment as miningMode } from "../memory/mining-policy.ts";
 import { GovernedMemorySource } from "../memory/md-memory-store.ts";
 import { WorkerSettingsStore } from "../config/worker-settings.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { CapacityGate, sampleCapacity } from "./capacity.ts";
+
+/**
+ * One measured worker budget per clone home, shared by every assembly built
+ * over that home. `runQuery` assembles one runtime per query, the Main Agent
+ * assembles one per tool call and per turn, and the daemon holds one at boot;
+ * a per-assembly gate let each of them dispatch up to the machine's full
+ * budget, so two concurrent Main Agent turns doubled the real worker load.
+ * 每个 clone home 一份实测 Worker 预算，由该 home 上的每个组装共享。`runQuery`
+ * 每次查询组装一个 Runtime，主 Agent 每次工具调用与每个回合各组装一个，Daemon 启动时
+ * 持有一个；逐组装的闸门让它们各自派发到机器的完整预算，因此两个并发 Main Agent 回合
+ * 会把真实 Worker 负载翻倍。
+ */
+interface SharedCapacityEntry {
+  readonly gate: CapacityGate;
+  /** The owner's pin, shared so a refresh through any assembly reaches all. 所有者的固定值，共享后任一组装的刷新都能到达全部。 */
+  readonly pin: { limit?: number };
+  /** Serializes config reads so the last requested refresh wins. 串行化配置读取，使最后发起的刷新胜出。 */
+  refreshChain: Promise<void>;
+  references: number;
+}
+
+const sharedCapacityByHome = new Map<string, SharedCapacityEntry>();
+
+/** Take a reference to the home's gate, creating it on first use. 取得本 home 闸门的引用，首次使用时创建。 */
+function acquireSharedCapacity(dataDirectory: string): SharedCapacityEntry {
+  const existing = sharedCapacityByHome.get(dataDirectory);
+  if (existing !== undefined) {
+    existing.references += 1;
+    return existing;
+  }
+  const pin: { limit?: number } = {};
+  const entry: SharedCapacityEntry = {
+    gate: new CapacityGate(() => sampleCapacity(pin.limit === undefined ? {} : { pinnedLimit: pin.limit })),
+    pin,
+    refreshChain: Promise.resolve(),
+    references: 1,
+  };
+  sharedCapacityByHome.set(dataDirectory, entry);
+  return entry;
+}
+
+/**
+ * Drop one reference; the last one removes the entry so a test suite's many
+ * temporary homes do not accumulate. 释放一个引用；最后一个引用删除条目，使测试套件
+ * 的大量临时 home 不会累积。
+ */
+function releaseSharedCapacity(dataDirectory: string): void {
+  const entry = sharedCapacityByHome.get(dataDirectory);
+  if (entry === undefined) return;
+  entry.references -= 1;
+  if (entry.references <= 0) sharedCapacityByHome.delete(dataDirectory);
+}
 
 export interface RuntimeAssembly {
   paths: ClonePaths;
@@ -108,71 +161,98 @@ export async function createRuntimeAssembly(options: RuntimeAssemblyOptions = {}
   };
   await refreshKnownAgents();
 
+  const extractionLockPath = join(paths.dataDirectory, "memory-extraction-lock");
   const memory = new MemoryPipeline(
     journal,
-    // Task mining stays on the deterministic worker unless the owner asks for a
-    // real miner: every completed task would otherwise cost a model call, and a
-    // miner that is not installed must not turn a finished task into an error.
-    // Conversation mining (below) is the one that defaults to a real miner,
-    // because learning from what the owner says is the point of the feature.
-    // 任务提炼默认仍用确定性 Worker，除非所有者明确要求真实提炼器：否则每个完成的任务都要多花一次
-    // 模型调用，而且没装好的提炼器不该把已完成的任务变成错误。下面默认用真实提炼器的是对话提炼，
-    // 因为"从所有者说的话里学习"正是这个功能的意义。
+    // Task mining needs a model to say what is durable. Without one the default
+    // worker proposes nothing: a completed task's objective is a work order, not
+    // a memory. `=all` opts into the real miner explicitly.
+    // 任务提炼需要模型说出什么值得长期记住。没有模型时默认 Worker 不提出候选：已完成任务的
+    // 目标是工作单，不是记忆。`=all` 才会显式启用真实提炼器。
     miningMode() === "all"
       ? new AgentMemoryWorker({ dataDirectory: paths.dataDirectory })
       : undefined,
-    { lockPath: join(paths.dataDirectory, "memory-extraction-lock") },
+    { lockPath: extractionLockPath },
   );
-  // Conversation mining shares the pipeline's lock, so the two paths never
-  // write candidates concurrently.
-  // 对话提炼共用流水线锁，使两条路径不会并发写候选。
+  // Conversation mining gets its own pipeline and worker. Borrowing the task
+  // pipeline's worker would make the no-op default silently turn it off; the
+  // two share only the lock, so their journal writes never interleave.
+  // 对话提炼拥有自己的流水线与 Worker。借用任务流水线的 Worker 会让空默认静默关掉它；
+  // 两者只共用锁，因此 Journal 写入不会交错。
   const conversationMemory = miningMode() !== "off"
-    ? new ConversationMemoryPipeline(journal, memory)
+    ? new ConversationMemoryPipeline(journal, new MemoryPipeline(
+        journal,
+        new ConversationMemoryWorker({ dataDirectory: paths.dataDirectory }),
+        { lockPath: extractionLockPath },
+      ))
     : undefined;
-  // One gate for this assembly: the queue and every subagent wave draw from the
-  // same measured budget. The pin is re-read on each acquire, so an owner
-  // setting change lands without a restart.
-  // 本组装共用一个闸门：队列与每个子 Agent 波次从同一份实测预算里取用。固定值在每次
-  // 获取时重新读取，因此所有者改设置无需重启即可生效。
+  // One gate per clone home, not per assembly: the queue and every subagent
+  // wave — in this assembly or a concurrently assembled one — draw from the
+  // same measured budget. The pin is shared through the entry and re-read on
+  // each acquire, so an owner setting change lands without a restart.
+  // 每个 clone home 一份闸门，而不是每个组装一份：本组装或并发组装出的其他组装里的
+  // 队列与每个子 Agent 波次，都从同一份实测预算取用。固定值通过条目共享，并在每次获取时
+  // 重新读取，因此所有者改设置无需重启即可生效。
   const configStore = new CloneConfigStore(paths);
-  let currentPinnedLimit: number | undefined;
-  const capacityGate = new CapacityGate(() => {
-    const pinned = currentPinnedLimit;
-    return sampleCapacity(pinned === undefined ? {} : { pinnedLimit: pinned });
-  });
-  currentPinnedLimit = (await configStore.get()).maxConcurrentWorkers;
-  async function refreshCapacityPin(): Promise<void> {
+  const sharedCapacity = acquireSharedCapacity(paths.dataDirectory);
+  const capacityGate = sharedCapacity.gate;
+  async function readCapacityPin(): Promise<void> {
     try {
-      currentPinnedLimit = (await configStore.get()).maxConcurrentWorkers;
+      sharedCapacity.pin.limit = (await configStore.get()).maxConcurrentWorkers;
     } catch {
       // An unreadable config must not stop dispatch; keep the last value.
       // 读不了配置不能让派发停摆；沿用上一次的值。
     }
   }
-  const runtime = new CloneRuntime({
-    capacityGate,
-    journal,
-    policy: new AuthorityPolicyEngine({ config: () => authority.snapshot() }),
-    verifier: evidenceKinds === undefined
-      ? createDefaultVerifier({ workspacePath: paths.workspacePath })
-      // Only the plugins a narrowed evidence set can satisfy: the test plugin
-      // would otherwise demand evidence the worker is not allowed to record.
-      // 只保留收窄后的证据集能满足的插件；否则测试插件会索要 Worker 不允许记录的证据。
-      : new DiffFileVerifier({ workspacePath: paths.workspacePath }),
-    memory,
-    failureCatalog,
-    // Recall comes from the governed store only: promoted memories, never raw
-    // candidates. 召回只来自受治理的 Store：只有已提升的记忆，绝不包含原始候选。
-    memorySource: new GovernedMemorySource(paths.dataDirectory, 4, journal),
-    workspacePath: paths.workspacePath,
-    workspaceCheckpointStore: new JsonWorkspaceCheckpointStore(paths.checkpointsDirectory),
-    workspaceCheckpointDirectory: join(paths.dataDirectory, "checkpoints"),
-    isolatedWorkspaceRoot: paths.isolatedWorkspacesDirectory,
-    knownAgentIds: () => knownAgents,
-  });
-  await runtime.hydrate();
+  // A construction that throws after taking the reference (hydrate over a
+  // corrupt journal, say) must give it back, or the entry outlives this failed
+  // attempt. 取得引用之后再抛错的构造（例如在损坏的 Journal 上 hydrate）必须归还
+  // 引用，否则条目会活得比这次失败的尝试更久。
+  let runtime: CloneRuntime;
+  try {
+    await readCapacityPin();
+    runtime = new CloneRuntime({
+      capacityGate,
+      journal,
+      policy: new AuthorityPolicyEngine({ config: () => authority.snapshot() }),
+      verifier: evidenceKinds === undefined
+        ? createDefaultVerifier({ workspacePath: paths.workspacePath })
+        // Only the plugins a narrowed evidence set can satisfy: the test plugin
+        // would otherwise demand evidence the worker is not allowed to record.
+        // 只保留收窄后的证据集能满足的插件；否则测试插件会索要 Worker 不允许记录的证据。
+        : new DiffFileVerifier({ workspacePath: paths.workspacePath }),
+      memory,
+      failureCatalog,
+      // Recall comes from the governed store only: promoted memories, never raw
+      // candidates. 召回只来自受治理的 Store：只有已提升的记忆，绝不包含原始候选。
+      memorySource: new GovernedMemorySource(paths.dataDirectory, 4, journal),
+      workspacePath: paths.workspacePath,
+      workspaceCheckpointStore: new JsonWorkspaceCheckpointStore(paths.checkpointsDirectory),
+      workspaceCheckpointDirectory: join(paths.dataDirectory, "checkpoints"),
+      isolatedWorkspaceRoot: paths.isolatedWorkspacesDirectory,
+      knownAgentIds: () => knownAgents,
+    });
+    await runtime.hydrate();
+  } catch (error: unknown) {
+    releaseSharedCapacity(paths.dataDirectory);
+    throw error;
+  }
+  async function refreshCapacityPin(): Promise<void> {
+    const refresh = sharedCapacity.refreshChain.then(readCapacityPin);
+    sharedCapacity.refreshChain = refresh.catch(() => undefined);
+    await refresh;
+  }
+  let closed = false;
   const close = (): void => {
+    // One release per assembly, even if a caller closes twice: a test's
+    // cleanup and its `finally` both run, and a double release would delete a
+    // gate another live assembly still holds.
+    // 每个组装只释放一次，即使调用方关闭两次：测试的清理与 `finally` 都会执行，
+    // 重复释放会删掉另一个存活组装仍在使用的闸门。
+    if (closed) return;
+    closed = true;
     (journal as { close?: () => void }).close?.();
+    releaseSharedCapacity(paths.dataDirectory);
   };
   return {
     paths, journal, runtime, memory,

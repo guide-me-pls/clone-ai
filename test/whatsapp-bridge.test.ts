@@ -19,6 +19,7 @@ import {
   MainAgentRetryableError,
   WhatsAppBridge,
   WhatsAppInboxStore,
+  whatsappConversationId,
   type WhatsAppCloudConfig,
   type WhatsAppTextSender,
 } from "../src/mobile/whatsapp-bridge.ts";
@@ -458,4 +459,10 @@ test("a forwarded message is flagged as untrusted data, and bursts are rate limi
   for (let index = 0; index < 20; index += 1) assert.equal(withinRateLimit(bucket, "8613800000000", now + index), true);
   assert.equal(withinRateLimit(bucket, "8613800000000", now + 21), false);
   assert.equal(withinRateLimit(bucket, "8613800000000", now + 61_000), true);
+});
+
+test("a WhatsApp chat maps to one stable conversation id", () => {
+  assert.equal(whatsappConversationId("8613800138000"), "whatsapp:8613800138000");
+  assert.equal(whatsappConversationId("+86 138-0013-8000"), "whatsapp:8613800138000");
+  assert.equal(whatsappConversationId("??? "), "whatsapp:unknown");
 });

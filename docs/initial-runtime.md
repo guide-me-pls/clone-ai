@@ -13,7 +13,7 @@ Desktop shell
   -> local Clone AI daemon
       -> trigger -> Task + durable Run -> plan
       -> policy gate -> child-agent work orders -> evidence
-      -> independent verification -> memory candidate
+      -> independent verification -> memory-extraction request
 ```
 
 ## What works now
@@ -28,7 +28,7 @@ Desktop shell
 | Supervision | Child agents cannot change parent status, bypass policy, commit memory, or close a Run. They can only stream progress, evidence, failure, and an explicit local completion signal. |
 | Durable recovery | Child-agent dispatch, progress, evidence, completion, and failure are journaled. A resumed Run skips work orders that already completed with evidence. |
 | Verification | The Runtime independently checks that every planned step has observable evidence before it completes a Run. |
-| Memory pipeline | A verified Run requests memory extraction asynchronously. The worker proposes candidates; it cannot write durable personal memory directly. |
+| Memory pipeline | A verified Run requests memory extraction asynchronously. A configured miner proposes candidates; without one the request records zero candidates (the task objective is a work order, not a memory). It cannot write durable personal memory directly. |
 
 ## The executable demo
 
@@ -49,7 +49,8 @@ The demo demonstrates this sequence:
    not accept an agent's self-report as final completion.
 3. The parent Run pauses before a simulated external side effect.
 4. After the exact approval is granted, the external operator runs, the
-   Runtime verifies all evidence, and a memory candidate is queued.
+   Runtime verifies all evidence, and a memory-extraction request is queued
+   (a candidate appears only when a miner is configured).
 
 The local journal defaults to `.clone-ai/journal.jsonl`. Set
 `CLONE_AI_DATA_DIR` to use another local directory.
