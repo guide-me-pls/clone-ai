@@ -1653,14 +1653,6 @@ body.empty-conversation .composer-wrap { padding-bottom: 18px; }
 .log-step-body { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 12px; line-height: 1.55; }
 .log-fact { color: var(--subtle); overflow-wrap: anywhere; }
 .log-fact--muted { color: var(--muted); }
-.log-run code {
-  padding: 1px 5px;
-  border-radius: 5px;
-  color: var(--accent-strong);
-  background: var(--accent-soft);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-}
 /* The grounds for a result, kept to one line: how much the turn consulted and
  * where the record is. The model, the prompt and every call's input are in the
  * audit, not here.
@@ -1672,27 +1664,6 @@ body.empty-conversation .composer-wrap { padding-bottom: 18px; }
 .log-basis-open:hover { text-decoration: underline; text-underline-offset: 2px; }
 .log-basis-open:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, white); outline-offset: 2px; border-radius: 4px; }
 .log-detail summary { width: max-content; color: var(--accent); font-size: 11px; font-weight: 650; cursor: pointer; }
-.log-runs { display: flex; flex-direction: column; gap: 5px; }
-.log-runs > b { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .06em; }
-.log-run {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 7px;
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--text);
-  background: var(--surface-raised);
-  font: inherit;
-  font-size: 11.5px;
-  text-align: left;
-  cursor: pointer;
-}
-.log-run:hover { border-color: #a8beaf; background: #f8fbf8; }
-.log-run span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.log-run em { color: var(--muted); font-size: 10px; font-style: normal; white-space: nowrap; }
 .log-reply { color: var(--text); font-size: 13px; line-height: 1.62; overflow-wrap: anywhere; }
 .log-reply .md-heading { margin: 12px 0 4px; color: var(--text); font-size: 13px; font-weight: 720; line-height: 1.4; }
 .log-reply .md-list-line { display: grid; grid-template-columns: 17px minmax(0, 1fr); gap: 4px; margin: 2px 0; padding-left: 2px; }
@@ -1722,15 +1693,13 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
 .log-error p { margin: 0 0 4px; font-size: 12px; line-height: 1.55; }
 .log-error-guidance { color: #6b4a1f; }
 .log-error .log-detail summary { margin-top: 6px; color: #8f3e37; }
-.log-run--hidden { color: var(--muted); background: var(--surface); cursor: default; }
 
 /* Transcript hierarchy — final layer.
- * A turn is a ruled section, a task update is a margin note, a dispatched run
- * is a row on a rail, and a record is a disclosure line. Card fills, radii and
- * shadows are removed on purpose: structure carries the level, not four
- * look-alike white boxes.
- * 对话层级——最终层。回合是有分隔线的章节，任务更新是页边注，派发的 Run 是竖线上的行，
- * 记录是披露行。有意去掉卡片底色、圆角与阴影：层级由结构承担，而不是四只相似的白盒子。 */
+ * A turn is a ruled section, a task update is a margin note, and a record is a
+ * disclosure line. Card fills, radii and shadows are removed on purpose:
+ * structure carries the level, not four look-alike white boxes.
+ * 对话层级——最终层。回合是有分隔线的章节，任务更新是页边注，记录是披露行。有意去掉
+ * 卡片底色、圆角与阴影：层级由结构承担，而不是四只相似的白盒子。 */
 .turn-log { gap: 0; }
 
 .log-entry {
@@ -1948,88 +1917,6 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
 .log-entry--work .log-entry-head small { margin-left: auto; color: var(--subtle); }
 .log-entry--work .log-reply { margin-top: 3px; padding: 0; color: var(--subtle); font-size: 12.5px; line-height: 1.55; }
 
-/* Dispatched runs are the turn's product, not its process: hairline rows on a
- * rail under 结果, not buttons that look like sibling cards. The whole row
- * stays the click target.
- * 派发的 Run 是回合的产物，而不是过程："结果"下竖线上的细线行，而不是看起来像同级卡片
- * 的按钮。整行可点击。 */
-.log-runs {
-  gap: 0;
-  margin-top: 2px;
-  padding: 3px 0 1px 11px;
-  border-left: 1px solid var(--line);
-}
-.log-runs > b {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 1px;
-  color: var(--subtle);
-  font-size: 9.5px;
-  font-weight: 720;
-  letter-spacing: .12em;
-}
-.log-runs-count {
-  padding: 0;
-  border-radius: 0;
-  color: var(--subtle);
-  background: transparent;
-  font-size: 9.5px;
-  font-weight: 650;
-  letter-spacing: .04em;
-  line-height: 1.6;
-}
-.log-run {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 0;
-  padding: 7px 0;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
-  background: transparent;
-  font-size: 11.5px;
-  line-height: 1.45;
-  scroll-margin-top: 72px;
-}
-.log-run:last-child { border-bottom: 0; }
-.log-run:hover { background: transparent; border-bottom-color: var(--line-strong); }
-button.log-run:hover .log-run-title { text-decoration: underline; text-underline-offset: 2px; }
-.log-run:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, white); outline-offset: 2px; border-radius: 4px; }
-.log-run-dot { display: none; }
-.log-run code { padding: 0; color: var(--subtle); background: transparent; font-size: 9.5px; letter-spacing: .02em; }
-.log-run-title { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
-.log-run-status { color: var(--subtle); font-size: 9.5px; font-style: normal; letter-spacing: .06em; white-space: nowrap; }
-.log-run-status::before {
-  content: "";
-  display: inline-block;
-  width: 4px;
-  height: 4px;
-  margin-right: 4px;
-  border-radius: 50%;
-  background: currentColor;
-  vertical-align: 1px;
-}
-.log-run[data-run-status="completed"] .log-run-status { color: var(--success); }
-.log-run[data-run-status="failed"] .log-run-status { color: var(--danger); }
-.log-run[data-run-status="interrupted"] .log-run-status { color: var(--warning); }
-.log-run[data-run-status="waiting_review"] .log-run-status,
-.log-run[data-run-status="waiting_approval"] .log-run-status { color: var(--warning); }
-.log-run[data-run-status="running"] .log-run-status,
-.log-run[data-run-status="planning"] .log-run-status,
-.log-run[data-run-status="queued"] .log-run-status,
-.log-run[data-run-status="started"] .log-run-status,
-.log-run[data-run-status="verifying"] .log-run-status,
-.log-run[data-run-status="created"] .log-run-status { color: #3d5a78; }
-.log-run[data-run-status="cancelled"] .log-run-status,
-.log-run[data-run-status="hidden"] .log-run-status { color: var(--subtle); }
-.log-run-open { color: var(--muted); font-size: 11px; line-height: 1; }
-.log-run--hidden { opacity: .7; cursor: default; }
-.log-run--hidden:hover { border-bottom-color: var(--line); }
-.log-run--hidden .log-run-title { color: var(--subtle); }
-
 /* Records after the log are disclosures, not more cards. The scope matters:
  * a task-record view has no turn log and there the record is the primary
  * content, so it keeps its card grouping.
@@ -2128,9 +2015,6 @@ button.agent-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--acc
   .log-step-label { padding-top: 0; }
   .log-entry--work { margin: 6px 0 10px; padding-left: 10px; }
   .log-entry--work .log-entry-head small { margin-left: 0; }
-  .log-runs { padding-left: 9px; }
-  .log-run { grid-template-columns: minmax(0, 1fr) auto; padding: 9px 0; }
-  .log-run code, .log-run-open { display: none; }
 }
 
 /* The answer is the section — final pass.
