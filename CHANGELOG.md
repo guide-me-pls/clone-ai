@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The whole machine is readable; only writes are scoped
+
+Workers can now read any readable location on the local computer. The step's workspace is the write boundary, not a read boundary: writes still stay inside the workspace or a write root the Kernel grants, and protected locations — credentials, browser profiles, Clone AI's own journal and token — remain refused before any policy can open them. The Main Agent is told that a read-only step can locate and read a project anywhere on the machine, so a project named outside the current folder is read rather than answered with "outside the workspace".
+
+Worker 现在可以读取本机任何可读位置。步骤工作区是写入边界，不再是读取边界：写入仍只落在工作区或 Kernel 授权的写入根内，受保护位置——凭据、浏览器档案、Clone AI 自己的 Journal 与令牌——仍在任何策略之前被拒绝。Main Agent 被告知只读步骤可以定位并读取整机上的项目，因此当前目录之外被点名的项目会被读取，而不是回答"在工作区之外"。
+
 ### A Main Agent can search every task conversation
 
 `search_history` now searches all of the owner's task conversations by default, tags each result with its conversation and time, and can be narrowed to the current conversation. Every search is recorded and shown in the audit — the query, its scope, and the conversations it recovered — so a task can use context established elsewhere without merging all histories. The prompt now tells every Main Agent it is the same twin as in the owner's other tasks, with its own conversation here.

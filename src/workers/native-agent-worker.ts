@@ -31,7 +31,7 @@ import type { FailureReport } from "../core/failure-analysis.ts";
 import { resolveGrants } from "../authority/path-gateway.ts";
 import { containsPath, realTarget } from "../authority/path-contains.ts";
 import { redactMemoryPii } from "../memory/memory-hygiene.ts";
-import { isCaseSensitive } from "../authority/scope.ts";
+import { isCaseSensitive, isForbiddenPath } from "../authority/scope.ts";
 import {
   runAgentLoop,
   type AgentMessage,
@@ -97,48 +97,59 @@ const DEFAULT_NATIVE_WORK = ["research", "filesystem_read", "filesystem_write"] 
 export type ToolDecision = { allowed: true } | { allowed: false; reason: string };
 
 /**
- * The gate. A tool is offered only when the step's granted scopes cover its
- * risk; a per-call path outside the grants is refused even for an allowed tool.
- * External effects stay refused because there is no action connector yet with
- * a receipt that proves the effect really happened.
- * 闸门。只有当步骤的授权 Scope 覆盖某工具的风险时，该工具才会被提供；即使工具本身被允许，
- * 单次调用中出现授权之外的路径也会被拒绝。外部副作用仍被拒绝，因为目前还没有能用 Receipt
- * 证明副作用确实发生的动作连接器。
+ * The gate. A tool is offered only when the step's declared risk covers it. A
+ * read may reach any readable location on this computer except the protected
+ * locations; a write is checked per call against the step's write roots. The
+ * workspace is the write boundary, not a read boundary.
+ * 闸门。只有当步骤声明的风险等级覆盖某工具时才提供它。读取可以到达本机任何可读位置，受保护
+ * 位置除外；写入则在每次调用时对照步骤的写入根检查。工作区是写入边界，不是读取边界。
  */
 export function decideTool(input: {
   risk: NativeToolRisk;
   grants: { readRoots: readonly string[]; writeRoots: readonly string[]; network: boolean };
   path?: string;
   workspace: string;
+  /** Home directory for the protected-location check; injectable for tests. 受保护位置检查所用的家目录；测试可注入。 */
+  home?: string;
 }): ToolDecision {
   if (input.risk === "external") return { allowed: false, reason: "External side effects require a governed action connector; this worker cannot perform them." };
   if (input.risk === "network" && !input.grants.network) return { allowed: false, reason: "The step was not granted a network scope." };
   if (input.path !== undefined) {
-    // Resolve, do not compare. A path is allowed only when the file the OS
-    // would open lies inside the granted roots: a symlink inside the workspace
-    // that points outside it is outside, and a read grant never authorizes a
-    // write. Both sides go through realpath, so the workspace being behind a
-    // symlink (/tmp -> /private/tmp on macOS) still admits its own files.
-    // 解析而不是比较。只有当操作系统实际会打开的文件位于授权根之内时才放行：工作区内指向外部的
-    // 符号链接算外部，读授权绝不授权写。两侧都走 realpath，因此工作区本身位于符号链接之后
-    // （macOS 上 /tmp -> /private/tmp）时，它自己的文件仍然被放行。
+    // Resolve, do not compare. A write is allowed only when the file the OS
+    // would open lies inside a granted write root: a symlink inside the
+    // workspace that points outside it is outside, and a read grant never
+    // authorizes a write. Both sides go through realpath, so the workspace
+    // being behind a symlink (/tmp -> /private/tmp on macOS) still admits its
+    // own files.
+    // 解析而不是比较。只有操作系统实际会打开的文件位于授权写入根之内时才放行：工作区内指向
+    // 外部的符号链接算外部，读授权绝不授权写。两侧都走 realpath，因此工作区本身位于符号链接
+    // 之后（macOS 上 /tmp -> /private/tmp）时，它自己的文件仍然被放行。
     const root = realTarget(input.workspace);
     const target = realTarget(resolve(root, input.path));
+    if (input.risk === "read") {
+      // The owner's computer is the readable surface; only the protected
+      // locations stay closed. They are checked before any scope or approval,
+      // so a worker cannot read keys or Clone AI's own audit trail by handing
+      // the model a path.
+      // 所有者的电脑就是可读范围；只有受保护位置保持关闭。它们在任何 Scope 或审批之前检查，
+      // 因此 Worker 不能通过把路径交给模型来读取密钥或 Clone AI 自己的审计轨迹。
+      if (isForbiddenPath(target, input.home)) {
+        return { allowed: false, reason: `The path ${target} is a protected location; a worker may not read it.` };
+      }
+      return { allowed: true };
+    }
     // Write implies read (the same rule `accessCovers` states for scopes), never
     // the reverse: a read grant must not authorize a write.
     // 写蕴含读（与 `accessCovers` 对 Scope 的规则一致），绝不可反过来：读授权不得授权写。
-    const roots = (input.risk === "write"
-      ? input.grants.writeRoots
-      : [...input.grants.readRoots, ...input.grants.writeRoots])
-      .map((grantRoot) => realTarget(resolve(root, grantRoot)));
+    const roots = input.grants.writeRoots.map((grantRoot) => realTarget(resolve(root, grantRoot)));
     const inside = roots.some((grantRoot) => containsPath(grantRoot, target, { caseSensitive: isCaseSensitive(target) }));
-    if (!inside) return { allowed: false, reason: `The path ${target} is outside the step's granted scopes.` };
+    if (!inside) return { allowed: false, reason: `The path ${target} is outside the step's granted write roots.` };
     // A repository's `.git` is the commit mechanism; a write there can alter or
     // add commits in the checkout a repair is supposed to leave untouched. It is
     // never a legitimate edit target for a worker, wherever the workspace is.
     // 仓库的 `.git` 是提交机制；写入它可以改动或新增检出中的提交，而修复本应不碰那个检出。
     // 无论工作区在哪里，它都不是 Worker 的合法编辑目标。
-    if (input.risk !== "read" && (target === join(root, ".git") || target.startsWith(join(root, ".git") + "/"))) {
+    if (target === join(root, ".git") || target.startsWith(join(root, ".git") + "/")) {
       return { allowed: false, reason: `The path ${target} is inside the repository's .git directory, which a worker may not write.` };
     }
   }
@@ -238,7 +249,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
     // worker should write there.
     // 修复通道的证据目录（`.rsi/traces`）位于工作区内，是只读材料：模型必须能读，但任何 Worker
     // 都不该写。
-    const evidenceRoot = join(workspace, ".rsi");
+    const evidenceRoot = realTarget(join(workspace, ".rsi"));
     const offered = this.#config.tools.filter(
       (tool) => stepAllows(tool.risk) && decideTool({ risk: tool.risk, grants, workspace }).allowed,
     );
@@ -318,7 +329,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
             if (tool.pathOf !== undefined && (typeof path !== "string" || path.length === 0)) {
               return { behavior: "deny" as const, reason: `The ${tool.name} call did not name a readable path.` };
             }
-            if (tool.risk === "write" && typeof path === "string" && realTarget(join(workspace, path)).startsWith(evidenceRoot + "/")) {
+            if (tool.risk === "write" && typeof path === "string" && containsPath(evidenceRoot, realTarget(resolve(workspace, path)))) {
               return { behavior: "deny" as const, reason: `${path} is repair evidence and is read-only.` };
             }
             const decision = decideTool({
@@ -524,9 +535,9 @@ export function buildInstructions(input: ExecutionAssignment, dropped: readonly 
   const lines = [
     input.workOrder?.objective ?? input.step.instructions,
     "",
-    ...(input.workspacePath === undefined ? [] : [`Your workspace is ${input.workspacePath}.`]),
-    "You may call only the tools provided. Any path outside the workspace or the granted scopes is refused.",
-    "If the objective names a project or directory that is not inside this workspace, do not review this workspace in its place: say that it is outside the workspace and stop.",
+    ...(input.workspacePath === undefined ? [] : [`Your workspace is ${input.workspacePath}. Writes go there unless this step granted another write root.`]),
+    "You may call only the tools provided. Reads may reach any readable location on this computer except protected locations. A write outside the workspace or a granted write root is refused.",
+    "If the objective names a project or directory, read that path. If it cannot be found or read, do not review this workspace in its place: say that the named project could not be read and stop.",
     "If an input declared with required: true is missing or unreadable at the end of the step, stop and report it. A path mentioned only in prose is not a required input. Do not invent file contents.",
   ];
   // The contract is what the Kernel will verify; a worker that has not seen it

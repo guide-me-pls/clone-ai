@@ -37,14 +37,37 @@ function grants(workspace: string): { readRoots: string[]; writeRoots: string[];
   return { readRoots: [workspace], writeRoots: [workspace], network: false };
 }
 
-test("a symlink inside the workspace that points outside is refused for reads and writes", async (t) => {
+test("a symlink inside the workspace that points outside is readable, but never writable", async (t) => {
   const { workspace, outside } = await scratch(t);
   await symlink(outside, join(workspace, "link"));
-  assert.equal(decideTool({ risk: "read", grants: grants(workspace), workspace, path: "link/secret.txt" }).allowed, false);
+  // Reads are machine-wide; the symlink is a read target like any other. A
+  // write through the same link is outside the write roots and stays refused.
+  // 读取覆盖整机；该符号链接与其他读取目标一样。经由同一链接的写入落在写入根之外，仍被拒绝。
+  assert.equal(decideTool({ risk: "read", grants: grants(workspace), workspace, path: "link/secret.txt" }).allowed, true);
   assert.equal(decideTool({ risk: "write", grants: grants(workspace), workspace, path: "link/new.txt" }).allowed, false);
   // The same path written directly is still allowed. 直接写同一位置的路径仍然放行。
   await writeFile(join(workspace, "inside.txt"), "ok", "utf8");
   assert.equal(decideTool({ risk: "read", grants: grants(workspace), workspace, path: "inside.txt" }).allowed, true);
+});
+
+test("a read outside the workspace needs no scope, while a write still does", async (t) => {
+  const { workspace, outside } = await scratch(t);
+  assert.equal(decideTool({ risk: "read", grants: grants(workspace), workspace, path: join(outside, "secret.txt") }).allowed, true);
+  assert.equal(decideTool({ risk: "write", grants: grants(workspace), workspace, path: join(outside, "new.txt") }).allowed, false);
+  // A write root granted by the Kernel admits the same path. Kernel 授权的写入根会放行同一路径。
+  const granted = { ...grants(workspace), writeRoots: [workspace, outside] };
+  assert.equal(decideTool({ risk: "write", grants: granted, workspace, path: join(outside, "new.txt") }).allowed, true);
+});
+
+test("a read at a protected location is refused even without a workspace boundary", async (t) => {
+  const { workspace } = await scratch(t);
+  const home = await mkdtemp(join(tmpdir(), "clone-gate-home-read-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await mkdir(join(home, ".ssh"), { recursive: true });
+  await writeFile(join(home, ".ssh", "id_ed25519"), "key", "utf8");
+  const decision = decideTool({ risk: "read", grants: grants(workspace), workspace, path: join(home, ".ssh", "id_ed25519"), home });
+  assert.equal(decision.allowed, false);
+  assert.match(decision.allowed === false ? decision.reason : "", /protected location/);
 });
 
 test("a read grant does not authorize a write, while write implies read", async (t) => {

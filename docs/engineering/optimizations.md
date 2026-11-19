@@ -31,6 +31,63 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — The machine is the workspace for reads
+
+- **Goal / hypothesis:** the owner's model is that this agent has no project
+  workspace: the local computer is the workspace, every place is readable, and
+  operations are checked by tool permission and owner approval. The old gate
+  made reads obey the step's workspace and read scopes, so a project named
+  elsewhere was answered with "outside the workspace" and a read needed a
+  plan/approval round. Make reads machine-wide, keep writes scoped, and keep
+  the protected list.
+- **Trade-off:** [The machine is the workspace: reads are not confined](../architecture/trade-offs.md#2026-11-19--the-machine-is-the-workspace-reads-are-not-confined).
+- **Change:** `src/workers/native-agent-worker.ts` — `decideTool` admits a read
+  path anywhere except `isForbiddenPath`, refuses a write outside the write
+  roots, and the `.rsi` evidence guard now resolves absolute paths;
+  `buildInstructions` and the worker system prompt state the read/write split.
+  `src/main-agent/prompt.ts` — the charter (version 3) and `workspaceGuidance`
+  say the machine is the readable surface, a read needs no scope, and a
+  read-only step may locate and read a named project; version bumped 2 → 3.
+  `src/main-agent/tools/kernel-tools.ts` — the plan description says reads need
+  no scope. `src/workers/native-worker-factory.ts` — read/list descriptions say
+  "anywhere on this computer", write/edit say "workspace or a granted write
+  root", and `read_file` refuses a device or FIFO instead of blocking on it.
+  `src/authority/path-gateway.ts` — `readRoots` documented as
+  sandbox/audit only. `src/repair/worktree.ts` — the `node_modules` link comment
+  no longer claims reads are refused.
+- **Eval:** focused command `node --experimental-strip-types --test
+  test/path-gate.test.ts test/native-agent-worker.test.ts
+  test/native-worker-tools.test.ts test/mcp.test.ts
+  test/companion-main-agent.test.ts` — **50/50**. Before: a read outside the
+  workspace returned `outside the step's granted scopes`, and the worker and
+  Main Agent prompts said reads outside the workspace were refused. After: the
+  read is allowed; a write at the same path is still refused; a granted write
+  root admits it; a read under `~/.ssh` is refused as a protected location; a
+  device is refused instead of being read. Full suite **862/862**,
+  `npm run typecheck` pass.
+- **Benchmark run:** none — deterministic tests; no provider, model, dataset,
+  seed or scoring parameters.
+- **Execution chain:** reviewed the gate, grant resolver, prompts and tests;
+  committed the preceding working tree first so this change is isolated; wrote
+  the trade-off, changed the gate and prompt text, updated four affected test
+  files and added four cases; focused run 50/50; the first full run found one
+  stale prompt assertion in `test/native-client.test.ts` (expected "will be
+  refused"), updated it, and the rerun was 861/861. Added the regular-file
+  guard for devices after that run because machine-wide reads make `/dev/zero`
+  reachable, then reran the suite. No model calls; wall time was dominated by
+  the suite (~7 s per run).
+- **Pros:** the boundary now matches the owner's model and the OS profile, which
+  already allowed reads elsewhere; writes still pass a single testable gate;
+  protected locations are checked before any scope, so machine-wide reads do
+  not open keys.
+- **Cons / next time:** a worker can now feed any readable file into a model
+  call, and there is no search tool — discovery is `list_directory` by hand.
+  If exploration proves wasteful, add a bounded search tool rather than
+  narrowing reads again.
+- **Reversal condition:** if a run leaks credentials or unrelated personal
+  files, or the product serves more than one person, require read scopes for
+  outside roots and enable `strictReads`; keep the protected list.
+
 ### 2026-11-19 — A Main Agent can retrieve across task conversations
 
 - **Goal / hypothesis:** automatic context stays per conversation; a fact or

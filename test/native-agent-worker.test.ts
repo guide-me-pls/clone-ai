@@ -43,11 +43,12 @@ function fakeClient(
   };
 }
 
-test("the gate refuses paths outside the grants, network without a scope, and external effects", async (t) => {
+test("the gate refuses writes outside the write roots, network without a scope, and external effects", async (t) => {
   const directory = await workspace(t);
   const grants = { readRoots: [realpathSync(directory)], writeRoots: [realpathSync(directory)], network: false };
   const root = realpathSync(directory);
   assert.deepEqual(decideTool({ risk: "read", grants, workspace: root }), { allowed: true });
+  assert.equal(decideTool({ risk: "read", grants, workspace: root, path: join(root, "..", "outside.md") }).allowed, true);
   assert.equal(decideTool({ risk: "write", grants, workspace: root, path: "notes/today.md" }).allowed, true);
   assert.equal(decideTool({ risk: "write", grants, workspace: root, path: "../escape.md" }).allowed, false);
   assert.equal(decideTool({ risk: "network", grants, workspace: directory }).allowed, false);
@@ -93,7 +94,7 @@ test("a refused call returns a tool error to the model instead of killing the ru
   assert.match(String(toolMessages[0]!.content), /blue template/);
   // The write is refused because its path escapes; the network tool is not offered.
   // 写入因路径逃逸被拒；网络工具根本不会被提供。
-  assert.match(String(toolMessages[1]!.content), /outside the step's granted scopes/);
+  assert.match(String(toolMessages[1]!.content), /outside the step's granted write roots/);
   assert.match(String(toolMessages[2]!.content), /No tool named fetch_url/);
   assert.equal(events.at(-1)?.type, "completed");
 });

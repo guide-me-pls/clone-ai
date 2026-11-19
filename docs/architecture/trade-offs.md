@@ -4426,3 +4426,63 @@ gunplay, audio or fun.
 **Reversal condition:** if a benchmark needs a private, non-inspectable artifact
 to be fair, replace the hook-driven checker with a recorded playtrace; if hook
 driving proves easy to fake, add an independent scripted playthrough.
+
+## 2026-11-19 — The machine is the workspace: reads are not confined
+
+**Decision.** A worker may read any readable location on the local computer.
+The step's workspace stops being a read boundary; it remains the write
+boundary. Writes stay limited to the workspace plus the roots the Kernel grants
+through `files` scopes, and protected locations (credentials, browser profiles,
+Clone AI's own journal and token) are still refused before any policy can open
+them. The Main Agent is told that it has no filesystem tool of its own, but that
+a read-only step can look anywhere, so a project named outside the current
+folder is found by reading it rather than by asking the owner for a workspace
+switch. `search_history` already reaches every task conversation; this makes the
+same rule true for files. The macOS sandbox profile already allowed reads
+elsewhere by default (`strictReads` was opt-in); the tool gate was the stricter
+layer.
+
+**Alternatives rejected.**
+
+- *Keep workspace-only reads and require a read scope for every outside path.*
+  That was the gate. Run `062716a9` refused `list_directory("..")`, so the worker
+  reviewed the Clone AI workspace instead of the project the owner named, and
+  the honest reply became "outside the workspace" on a personal computer where
+  the owner can read the file themselves. A read scope adds a plan and approval
+  round for information the owner already owns, and "workspace switch" changes
+  where writes land in order to answer a question.
+- *Make writes machine-wide as well.* Writes are the part that can destroy or
+  exfiltrate; the existing `files` write scope plus the Kernel's approval is the
+  human check. Reads need no such check.
+- *Open protected locations too.* No scope or approval can open keys, browser
+  profiles or the journal; a model that can read `~/.ssh` can leak it in one
+  prompt. "All places are readable" removes the project-folder boundary, not the
+  credential boundary.
+- *Add a disk-search tool in the same change.* Reading anywhere makes discovery
+  possible with `list_directory`; a search or glob tool has its own ranking,
+  budget and prompt-injection questions and is a separate optimization.
+
+**Evidence.** Before this change `decideTool({ risk: "read", path: <outside> })`
+returned `The path … is outside the step's granted scopes.`; the worker prompt
+said "Paths outside the workspace … will be refused", and the Main Agent prompt
+said "Workers can only read and write inside this workspace". The macOS profile
+in `src/authority/seatbelt.ts` already allowed reads outside the granted roots
+by default, so the tool gate was refusing what the OS allowed. The documented
+incident behind the workspace-only rule is run `062716a9` (nine evidence rows
+from the Clone AI workspace, `list_directory("..")` refused); trade-off
+2026-11-18 records it.
+
+**What it costs.** A worker can feed any readable file into the model, so
+unrelated personal content and prompt injection are now reachable; the protected
+list is the only carve-out. Evidence rows can point outside the workspace, so a
+review may cite files the owner did not expect. A vague objective can read
+unrelated folders; the step's risk class and tool budget bound the cost, not the
+path. The `.git` write guard still covers only the workspace repository; a
+granted write root elsewhere is owner-approved.
+
+**Reversal condition.** If a run leaks credentials or unrelated personal files
+into a prompt or trace, or if the product serves more than one person,
+reintroduce a read policy: require read scopes for outside roots by default and
+enable `strictReads` in the OS profile. Keep the protected list in every
+variant. If models routinely waste rounds exploring, add a bounded search tool
+before widening further.

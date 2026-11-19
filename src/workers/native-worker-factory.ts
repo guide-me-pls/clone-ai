@@ -58,11 +58,13 @@ export function readNativeWorkerEnvironment(environment: NodeJS.ProcessEnv = pro
 }
 
 /**
- * Filesystem tools with their scope risk, rooted at the step's workspace. All
- * path checks happen in NativeAgentWorker; these functions assume the path was
- * already allowed.
- * 以步骤工作区为根、带 Scope 风险等级的文件工具。路径检查全部在 NativeAgentWorker 中完成；
- * 这些函数假定路径已被允许。
+ * Filesystem tools with their scope risk, resolved against the step's
+ * workspace. All path checks happen in NativeAgentWorker; these functions
+ * assume the path was already allowed. Reads may reach anywhere on the
+ * computer; writes are gated to the workspace and the granted write roots.
+ * 以步骤工作区为基准解析、带 Scope 风险等级的文件工具。路径检查全部在 NativeAgentWorker
+ * 中完成；这些函数假定路径已被允许。读取可以到达本机任何位置；写入被限制在工作区与已授权的
+ * 写入根内。
  */
 export type WriteFileMode = "overwrite" | "refuse-existing";
 
@@ -98,7 +100,7 @@ export function fileTools(options: { writeFileMode?: WriteFileMode } = {}): Nati
     {
       name: "read_file",
       description:
-        "Read a UTF-8 text file inside the step workspace. A long file is returned in windows: "
+        "Read a UTF-8 text file anywhere on this computer. A long file is returned in windows: "
         + "the reply names the total line count and the range it returned, so read the rest with offset.",
       parameters: {
         type: "object",
@@ -112,7 +114,18 @@ export function fileTools(options: { writeFileMode?: WriteFileMode } = {}): Nati
       risk: "read",
       pathOf: (input) => String(input.path ?? ""),
       run: async (call, { workspace }) => {
-        const text = await (await import("node:fs/promises")).readFile(resolveInWorkspace(workspace, String(call.input.path)), "utf8")
+        const { readFile, stat } = await import("node:fs/promises");
+        const target = resolveInWorkspace(workspace, String(call.input.path));
+        // A device or FIFO can block forever or never end; machine-wide reads
+        // make those reachable, and "text file" is the contract. Directories
+        // fail naturally on readFile.
+        // 设备或 FIFO 可能永远阻塞或永不结束；整机读取让它们可达，而契约是"文本文件"。
+        // 目录本来就会在 readFile 上失败。
+        const info = await stat(target).catch(() => undefined);
+        if (info !== undefined && !info.isFile()) {
+          return { output: `Error: ${String(call.input.path)} is not a regular file.`, isError: true };
+        }
+        const text = await readFile(target, "utf8")
           .catch((error: Error) => `Error: ${error.message}`);
         if (text.startsWith("Error:")) return { output: text, isError: true };
         // A windowed read with an explicit total is what keeps a model from
@@ -132,7 +145,7 @@ export function fileTools(options: { writeFileMode?: WriteFileMode } = {}): Nati
     },
     {
       name: "list_directory",
-      description: "List entries of a directory inside the step workspace.",
+      description: "List entries of a directory anywhere on this computer.",
       parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
       risk: "read",
       pathOf: (input) => String(input.path ?? "."),
@@ -147,7 +160,7 @@ export function fileTools(options: { writeFileMode?: WriteFileMode } = {}): Nati
     },
     {
       name: "write_file",
-      description: "Write a UTF-8 text file inside the step workspace, creating directories as needed.",
+      description: "Write a UTF-8 text file inside the step's workspace or a granted write root, creating directories as needed.",
       parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] },
       risk: "write",
       pathOf: (input) => String(input.path ?? ""),
@@ -186,7 +199,7 @@ export function fileTools(options: { writeFileMode?: WriteFileMode } = {}): Nati
     },
     {
       name: "edit_file",
-      description: "Replace one exact occurrence of old_text with new_text in a UTF-8 file inside the step workspace. Prefer this over write_file for a small change to an existing file.",
+      description: "Replace one exact occurrence of old_text with new_text in a UTF-8 file inside the step's workspace or a granted write root. Prefer this over write_file for a small change to an existing file.",
       parameters: { type: "object", properties: { path: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" } }, required: ["path", "old_text", "new_text"] },
       risk: "write",
       pathOf: (input) => String(input.path ?? ""),

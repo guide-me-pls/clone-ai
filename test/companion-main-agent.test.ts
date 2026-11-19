@@ -299,8 +299,8 @@ test("the Main Agent reads its project instructions from the configured workspac
   const system = messages.find((message) => message.role === "system")?.content ?? "";
   assert.match(system, /WORKSPACE_MARKER_ONLY_IN_THE_CONFIGURED_FOLDER/);
   assert.ok(system.includes(`Current workspace: ${workspaceDirectory}`), "the prompt must name the configured workspace");
-  assert.match(system, /not inside this workspace/);
-  assert.match(system, /cannot search the disk/);
+  assert.match(system, /This computer is the readable surface/);
+  assert.match(system, /no filesystem tool of your own/);
   assert.doesNotMatch(system, /rules for changing Clone AI/, "the daemon's cwd must not supply the project rules");
 });
 

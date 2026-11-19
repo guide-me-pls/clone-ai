@@ -505,8 +505,9 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
       + "Each step needs id, title, instructions, risk (read_only | reversible_write | external_side_effect | irreversible), "
       + "acceptanceCriteria (string[]), and either agentId+requiredCapabilities or a subagents group. "
       + "A read_only subagent may only require observation or tool_result evidence; artifact and receipt contracts need a write-capable or external step. "
-      + "A step that must touch anything outside the workspace declares scopes: "
+      + "A step that must write anything outside the workspace declares scopes: "
       + "[{domain: files|shell|network, resource, access: read|write|exec}] (files: absolute path; network: host). "
+      + "Reads need no scope: a worker may read any readable location on this computer except protected locations. "
       + "Call get_authority first to see what the owner has allowed; scopes that are protected or not allowed are denied by the Kernel.",
     parameters: Type.Object({
       summary: Type.String({ description: "One-sentence summary of the plan." }),
