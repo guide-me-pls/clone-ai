@@ -38,8 +38,17 @@ export class WorkspaceExecutionLock {
     let releaseLocal!: () => void;
     const current = new Promise<void>((resolveRelease) => { releaseLocal = resolveRelease; });
     localQueues.set(workspace, current);
+    const releaseQueue = (): void => {
+      releaseLocal();
+      if (localQueues.get(workspace) === current) localQueues.delete(workspace);
+    };
 
-    await previous;
+    // Waiting for an in-process holder must honour the signal too: an aborted
+    // pass queued behind a scheduled run's extraction would otherwise stay
+    // parked until that run finishes, and close() waits for the pass.
+    // 等待进程内持有者也必须遵守信号：被中止的维护轮若排在定时任务的提炼之后，否则会一直
+    // 停到那次运行结束，而 close() 又要等维护轮。
+    await waitForPrevious(previous, options.signal, releaseQueue);
     let releaseExternal: (() => Promise<void>) | undefined;
     try {
       releaseExternal = await acquireExternalLock(workspace, options.signal);
@@ -49,8 +58,7 @@ export class WorkspaceExecutionLock {
       try {
         if (releaseExternal !== undefined) await releaseExternal();
       } finally {
-        releaseLocal();
-        if (localQueues.get(workspace) === current) localQueues.delete(workspace);
+        releaseQueue();
       }
     }
   }
@@ -58,6 +66,34 @@ export class WorkspaceExecutionLock {
 
 /** One queue is shared by separately-created runtimes. 独立创建的 Runtime 共用一条队列。 */
 export const workspaceExecutionLock = new WorkspaceExecutionLock();
+
+/**
+ * Wait for the in-process holder, but stop waiting when the caller aborts. The
+ * caller's queue slot still resolves when the holder finishes, so an aborted
+ * caller cannot wedge the next waiter behind a promise nobody releases.
+ * 等待进程内持有者，但调用方中止时停止等待。调用方的队列槽仍在持有结束后解析，因此被中止
+ * 的调用不会把下一个等待者卡在一个无人释放的 Promise 后面。
+ */
+async function waitForPrevious(previous: Promise<void>, signal: AbortSignal | undefined, releaseQueue: () => void): Promise<void> {
+  if (signal === undefined) {
+    await previous;
+    return;
+  }
+  let onAbort: (() => void) | undefined;
+  try {
+    signal.throwIfAborted();
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    await Promise.race([previous, aborted]);
+  } catch (error) {
+    void previous.finally(releaseQueue);
+    throw error;
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+  }
+}
 
 async function acquireExternalLock(workspace: string, signal?: AbortSignal): Promise<() => Promise<void>> {
   const directory = join(workspace, CLONE_DIRECTORY_NAME);

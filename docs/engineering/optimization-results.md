@@ -15,6 +15,44 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-19 — A Main Agent can recall another task's context on demand
+
+- **Claim:** `search_history` searches every task conversation by default, tags
+  each result with its conversation and time, can be narrowed to the current
+  conversation, and records the query, scope and hits in the audit; automatic
+  context stays scoped, so multiple Main Agent instances keep their isolation
+  and concurrency.
+- **Evidence:** `test/history-search.test.ts` **2/2**; the cross-conversation
+  tool case in `test/native-main-agent.test.ts`; the provenance case in
+  `test/main-agent-turn-audit.test.ts`; the UI case in
+  `test/ui-structure.test.ts`; full suite **858/858**, `npm run typecheck` and
+  `npm run gate` pass. Browser: a main-conversation question recovered the
+  `conversation-other` turn plus one weak match, and the audit showed
+  "检索 1 次 … 历史检索 海港项目 · 全部对话 → 2 条 · 对话 other、对话
+  b276bc66-d13".
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-main-agent-can-retrieve-across-task-conversations),
+  [execution chain](optimizations.md#2026-11-19--a-main-agent-can-retrieve-across-task-conversations).
+
+## 2026-11-19 — A new request is routed by Clone AI, not chosen by the owner
+
+- **Claim:** one "新请求" action replaces the new-conversation/new-task choice;
+  rule cues reuse a related conversation, a new-goal cue or no context starts a
+  new Main Agent, and an ambiguous request asks the model once (fail-open new);
+  each task record names the dispatching Main Agent and opens its conversation;
+  the audit shows the routing decision and why.
+- **Evidence:** `test/conversation-router.test.ts` **8/8** (rule continue/new,
+  new-goal cue, model continue/new, model-unavailable fallback, latest
+  conversation, task → conversation); route API and journal cases in
+  `test/companion-control-plane.test.ts`; audit routing case in
+  `test/main-agent-turn-audit.test.ts`; UI case in `test/ui-structure.test.ts`;
+  full suite **848/848**, `npm run typecheck` and `npm run gate` pass. Browser:
+  a task record showed "派发者 对话 ce9205bc-c20… 的 Main Agent" with a button;
+  "继续整理这份资料…" reused that conversation (rule); "做一个全新的项目…" created
+  `conversation-b276…`; the audit showed "路由 沿用对话 …（规则判断）" and
+  "新开 Main Agent …（模型不可用，按新开处理）".
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--one-new-request-action-clone-ai-routes-to-a-main-agent),
+  [execution chain](optimizations.md#2026-11-19--one-new-request-routed-to-a-main-agent-by-clone-ai).
+
 ## 2026-11-19 — Readiness no longer waits for the first maintenance pass
 
 - **Claim:** the companion server publishes its loopback endpoint and answers
@@ -25,22 +63,33 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   held, the sidecar now reaches ready in about 170 ms instead of never within
   the 15 s harness timeout; the lock-free control is 246 ms. Inside the pass,
   the opportunity scan runs before the extraction drain, so the deadline cards
-  the owner sees on first paint are current while the lock is held; `close()`
-  aborts a pass that is only waiting for the lock, so shutdown stays graceful
-  instead of hanging until SIGKILL.
-- **Evidence:** `test/companion-startup-readiness.test.ts` — three pinned
+  the owner sees on first paint are current while the lock is held; shutdown
+  aborts every background lock wait — the maintenance pass, its governance
+  operations, the in-process lock queue and a scheduled run's post-run
+  extraction — so it stays graceful instead of hanging until SIGKILL.
+- **Evidence:** `test/companion-startup-readiness.test.ts` — four pinned
   behaviors: readiness while the extraction lock is held, a deadline card
   visible through `/api/opportunities` while it is still held, and `close()`
-  returning in under 2 s without releasing it. The first case was red before the
-  change (fails in 4.04 s with `startCompanionServer did not publish readiness
-  while the extraction lock was held`) and green after; the scan and shutdown
+  returning in under 2 s without releasing the extraction or governance lock.
+  `test/workspace-lock-abort.test.ts` — four focused cases (external lock wait,
+  queued waiter, pipeline extraction, conversation drain) that time out if the
+  shutdown signal is dropped. The first case was red before the
+  change (the 4 s readiness wait timed out at 4.04 s; the first test version
+  reported `startCompanionServer did not publish readiness while the extraction
+  lock was held`) and green after; the scan and shutdown
   cases were verified red against the first version of the change by the
   independent review's probes (`0` cards until release; close pending after
-  2 s). Final isolated run: **62.7 ms** / **18.9 ms**, both green. Startup
+  2 s). Final isolated runs: **52.9 / 15.1 / 114.2 ms** for the server cases and
+  **105.6 / 53.1 / 107.6 / 108.3 ms** for the focused abort cases, all green. Startup
   measurement on a copy of the live home,
   `node /tmp/clone-startup-measure.mjs /tmp/clone-home-hang-tJjQVr 15000`:
   no `CLONE_AI_READY` within 15 s before, **178 ms** / **170 ms** after.
-  Full suite **848/848**, `npm run typecheck` exit 0, `npm run gate` **PASS**.
+  Full suite **858/858**, `npm run typecheck` exit 0, `npm run gate` **PASS**.
+  End-to-end launch with no LaunchAgent loaded (the app spawns its bundled
+  sidecar, which contains this change): `CLONE_AI_DESKTOP_READY` in **512–1158
+  ms** across five clean launches; a separate browser measurement of the UI
+  finished its initial API round at 282 ms (one extra launch a second after a
+  quit took 4.4 s; cause not established, not reproduced).
   Live symptom: launchd PID 80762 was alive for 15 h 51 m with no listening
   socket and no endpoint file; the window showed 正在连接.
 - **Where:** [trade-off: publish readiness before the first maintenance

@@ -562,12 +562,15 @@ relationship automation, broad inbox access, and unconstrained proactive behavio
 The macOS app is the only product surface. Its conversation, settings and audit
 views cover every owner action:
 
-- **对话** — each task is its own Main Agent conversation with its own context;
-  the sidebar lists dispatched tasks only, and the 对话 control opens the main
-  thread. Approve or reject an external action, and accept or reject a result,
-  on the task record that needs the decision; waiting tasks are flagged at the
-  top. A task running subtasks does not block starting another; the number of
-  concurrent Main Agents follows measured machine capacity.
+- **对话** — the sidebar lists dispatched tasks only. Type inside a conversation
+  to continue it; "新请求" sends a fresh request through a router that decides
+  whether to reuse a related conversation or start a new Main Agent, and says
+  which it chose. A Main Agent can call `search_history` to recall another
+  task's conversation, with each result tagged by its conversation and time.
+  Approve or reject external actions and results on the task record that needs
+  the decision; waiting tasks are flagged at the top. A task running subtasks
+  does not block starting another; the number of concurrent Main Agents follows
+  measured machine capacity.
 - **设置 → Agent** — model endpoint, gateway, reasoning effort and provider.
 - **设置 → 权限与安全** — per-domain autonomy (`observe` … `act_auto`) and
   owner-written standing policies.
@@ -576,9 +579,10 @@ views cover every owner action:
 - **设置 → 上下文** — compactions and full-history search.
 - **设置 → 手机通道** — WhatsApp binding and the public webhook tunnel.
 - **设置 → 审计与评估** — runs, Main Agent turns (including how each turn
-  assembled its task: conversation, history window, prompt materials, tools and
-  dispatched runs), Agent invocations, the bad-case log, self-check rounds,
-  improvement suggestions, and cancellation of an active run.
+  assembled its task: routing, conversation, history window, prompt materials,
+  tools, history searches and dispatched runs), Agent invocations, the bad-case
+  log, self-check rounds, improvement suggestions, and cancellation of an active
+  run.
 
 The most important capability is not "run". It is the ability to inspect why the
 twin thinks something matters, what it is allowed to do, and what evidence proves

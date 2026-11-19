@@ -11,23 +11,60 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-19 —— Main Agent 可以按需召回另一个任务的上下文
+
+- **主张：** `search_history` 默认检索全部任务对话，每条结果带对话与时间，可收窄到当前对话，
+  并把查询、范围与命中写入审计；自动上下文仍按对话隔离，因此多个 Main Agent 实例保留隔离与
+  并发。
+- **证据：** `test/history-search.test.ts` **2/2**；`test/native-main-agent.test.ts` 的
+  跨对话工具用例；`test/main-agent-turn-audit.test.ts` 的来源用例；
+  `test/ui-structure.test.ts` 的界面用例；全量 **858/858**，`npm run typecheck` 与
+  `npm run gate` 通过。浏览器：主对话的提问召回了 `conversation-other` 的回合与一个弱匹配，
+  审计显示 "检索 1 次 … 历史检索 海港项目 · 全部对话 → 2 条 · 对话 other、对话 b276bc66-d13"。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--main-agent-可以跨任务对话检索)、
+  [执行链路](optimizations.zh-CN.md#2026-11-19--main-agent-可以跨任务对话检索)。
+
+## 2026-11-19 —— 新请求由 Clone AI 路由，而不是由所有者选择
+
+- **主张：** 一个"新请求"动作取代新建对话/新建任务的选择；规则线索沿用相关对话，新目标线索
+  或没有上下文时新开 Main Agent，含糊请求只问模型一次（失败即新开）；每个任务记录标出派发它的
+  Main Agent 并可打开该对话；审计显示路由决定与理由。
+- **证据：** `test/conversation-router.test.ts` **8/8**（规则续接/新开、新目标线索、模型
+  续接/新开、模型不可用回落、最近对话、任务 → 对话）；`test/companion-control-plane.test.ts`
+  的路由 API 与 Journal 用例；`test/main-agent-turn-audit.test.ts` 的审计路由用例；
+  `test/ui-structure.test.ts` 的界面用例；全量 **848/848**，`npm run typecheck` 与
+  `npm run gate` 通过。浏览器：任务记录显示 "派发者 对话 ce9205bc-c20… 的 Main Agent" 与
+  按钮；"继续整理这份资料…" 以规则沿用了该对话；"做一个全新的项目…" 创建了
+  `conversation-b276…`；审计显示 "路由 沿用对话 …（规则判断）" 与
+  "新开 Main Agent …（模型不可用，按新开处理）"。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--只有一个新请求动作由-clone-ai-路由到-main-agent)、
+  [执行链路](optimizations.zh-CN.md#2026-11-19--一个新请求由-clone-ai-路由到-main-agent)。
+
 ## 2026-11-19 —— 就绪不再等待首轮维护
 
 - **主张：** 伴随服务器先发布回环端点并回答 `/api/health`，再运行首轮后台维护。被持有的
   记忆提炼锁——另一个 sidecar 正在提炼，或提炼器正在等模型——不再让 Daemon 活着却不可见、
   桌面窗口停在"正在连接"。在八条待提炼请求且锁被持有时，sidecar 现在约 170 毫秒就绪，
   而不是在 15 秒测量脚本超时内始终不就绪；锁空闲的对照为 246 毫秒。维护轮内部，机会扫描
-  先于提炼排空，因此所有者首屏看到的到期卡片在锁被持有时仍然最新；`close()` 会中止仅在
-  等待锁的维护轮，关停保持优雅，而不是挂起到 SIGKILL。
-- **证据：** `test/companion-startup-readiness.test.ts` 钉住三种行为：持锁时就绪、持锁时
-  `/api/opportunities` 已含到期卡片、以及不释放锁时 `close()` 在 2 秒内返回。第一条在变更前
-  为红（4.04 秒时失败，信息为 `startCompanionServer did not publish readiness while the
-  extraction lock was held`），变更后为绿；扫描与关停两条由独立审查的探针在变更第一版上
-  验证为红（释放前 `0` 张卡片；close 在 2 秒后仍未返回）。最终隔离运行：**62.7 毫秒** /
-  **18.9 毫秒**，均通过。对线上 home 副本的启动测量，
+  先于提炼排空，因此所有者首屏看到的到期卡片在锁被持有时仍然最新；关停会中止所有后台锁等待
+  ——维护轮、其治理操作、进程内锁队列，以及定时任务运行后的提炼——保持优雅，而不是挂起到
+  SIGKILL。
+- **证据：** `test/companion-startup-readiness.test.ts` 钉住四种行为：持锁时就绪、持锁时
+  `/api/opportunities` 已含到期卡片、不释放提炼锁或治理锁时 `close()` 在 2 秒内返回。
+  `test/workspace-lock-abort.test.ts` 钉住四个聚焦用例（外部锁等待、排队等待、流水线提炼、
+  对话排空）：信号被去掉时它们会超时。第一条在变更前
+  为红（4 秒就绪等待在 4.04 秒超时；测试第一版报告的信息为
+  `startCompanionServer did not publish readiness while the extraction lock was
+  held`），变更后为绿；扫描与关停两条由独立审查的探针在变更第一版上
+  验证为红（释放前 `0` 张卡片；close 在 2 秒后仍未返回）。最终隔离运行：服务器用例
+  **52.9 / 15.1 / 114.2 毫秒**，聚焦中止用例 **105.6 / 53.1 / 107.6 / 108.3 毫秒**，
+  均通过。对线上 home 副本的启动测量，
   `node /tmp/clone-startup-measure.mjs /tmp/clone-home-hang-tJjQVr 15000`：变更前 15 秒内
-  没有 `CLONE_AI_READY`，变更后 **178 毫秒** / **170 毫秒**。完整测试 **848/848**，
-  `npm run typecheck` 退出码 0，`npm run gate` **PASS**。现场症状：launchd PID 80762
+  没有 `CLONE_AI_READY`，变更后 **178 毫秒** / **170 毫秒**。完整测试 **858/858**，
+  `npm run typecheck` 退出码 0，`npm run gate` **PASS**。没有加载 LaunchAgent 时的端到端
+  启动（App 拉起自带的 sidecar，其中包含本次变更）：五次干净启动在 **512–1158 毫秒** 打印
+  `CLONE_AI_DESKTOP_READY`；另有独立的界面浏览器测量在 282 毫秒完成最初一轮 API 调用
+  （另一次在退出一秒后的启动耗时 4.4 秒，原因未查明且未复现）。现场症状：launchd PID 80762
   存活 15 小时 51 分，却没有监听套接字与端点文件；窗口停在"正在连接"。
 - **位置：** [取舍：先发布就绪端点，再跑首轮维护](../architecture/trade-offs.zh-CN.md#2026-11-19--先发布就绪端点再跑首轮维护)、
   [执行链路](optimizations.zh-CN.md#2026-11-19--先发布就绪端点再跑首轮维护)。

@@ -31,6 +31,94 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — A Main Agent can retrieve across task conversations
+
+- **Goal / hypothesis:** automatic context stays per conversation; a fact or
+  decision made in another task was invisible unless the owner repeated it or
+  the memory pipeline promoted it. Give `search_history` a global default with
+  provenance, keep the automatic window scoped, and journal what it recovered.
+  Keep multiple Main Agent instances (the owner's choice B).
+- **Trade-off:** [A Main Agent can retrieve across task conversations](../architecture/trade-offs.md#2026-11-19--a-main-agent-can-retrieve-across-task-conversations).
+- **Change:** `src/main-agent/history-search.ts` (ledger plus legacy Pi excerpts,
+  `all` / `conversation` scope, conversation/time tags, term-overlap ranking,
+  model-facing format); the native `search_history` override and the kernel tool
+  description/parameters; `conversationGuidance` in the prompt (same twin,
+  separate task conversation, global search available); the
+  `main_agent.history_searched` journal event; audit projection and a
+  "历史检索" section in the assembly block.
+- **Eval:** `test/history-search.test.ts` **2/2** (global hits with provenance,
+  scoped search, labels); the cross-conversation tool case in
+  `test/native-main-agent.test.ts` (the tool result carries the other
+  conversation; the journal has the search event); the provenance case in
+  `test/main-agent-turn-audit.test.ts`; the UI case in
+  `test/ui-structure.test.ts`. Full suite **858/858**, `npm run typecheck` and
+  `npm run gate` pass. Browser on the preview home: a main-conversation request
+  "海港项目什么时候截止？" searched all conversations and recovered the
+  `conversation-other` turn and one unrelated project (score 0.333); the audit
+  showed "检索 1 次 … 历史检索 海港项目 · 全部对话 → 2 条 · 对话 other、对话
+  b276bc66-d13".
+- **Benchmark run:** none — deterministic tests and a browser check with a stub
+  model; no provider or scoring parameters.
+- **Execution chain:** wrote the trade-off; added the search module; wired the
+  native and kernel tools; added the prompt guidance and event; projected the
+  event into the audit and rendered it; added the search/tool/audit/UI tests; ran
+  the suite, typecheck and gate; checked a real cross-conversation retrieval in
+  the browser. The checkout also carried other sessions' changes; the full suite
+  includes them.
+- **Pros:** a task can recover context established elsewhere on demand; every
+  result carries provenance; automatic context stays isolated and cheap; no
+  serialization or single-agent rewrite.
+- **Cons / next time:** term overlap returns weak matches (the unrelated project
+  scored 0.333); legacy Pi sessions are reachable only through the main
+  conversation; retrieval spends prompt tokens; the model must choose good terms;
+  there is no semantic ranking or thread summary yet.
+- **Reversal condition:** see the trade-off entry.
+
+### 2026-11-19 — One new request, routed to a Main Agent by Clone AI
+
+- **Goal / hypothesis:** choosing between "new conversation" and "new task" was
+  the learning cost; the owner should type a request and Clone AI decides
+  whether it continues a conversation or starts a new Main Agent. A task record
+  should name the Main Agent that dispatched it.
+- **Trade-off:** [One new-request action; Clone AI routes to a Main Agent](../architecture/trade-offs.md#2026-11-19--one-new-request-action-clone-ai-routes-to-a-main-agent).
+- **Change:** `src/main-agent/conversation-router.ts` (narrow continuation and
+  new-goal cues, latest-conversation fallback, one model tie-break with a
+  10-second timeout and fail-open to a new agent, journaled decision),
+  `conversation.routed` in the journal contract, `POST /api/main-agent/route`,
+  `buildSession.dispatchedBy` for a run proposed by a Main Agent, routing
+  projected into the turn audit and rendered as a "路由" row, the desktop
+  "新请求" action sending `state.routeContext` through the router, a
+  `state.routing` refresh guard, a "派发者" line on task records with an
+  `data-open-conversation` button, and the welcome hint/locale.
+- **Eval:** `test/conversation-router.test.ts` **8/8** (rule continue, rule new,
+  new-goal cue beats context, model continue/new, model-unavailable fallback,
+  latest-conversation fallback, task → conversation); the route API case in
+  `test/companion-control-plane.test.ts` (200 continue/new, 400 invalid context,
+  two `conversation.routed` events), the audit routing case in
+  `test/main-agent-turn-audit.test.ts`, and the UI case in
+  `test/ui-structure.test.ts` (route call, routing state, welcome hint,
+  dispatch-source markup/button). Full suite **848/848**, `npm run typecheck`
+  and `npm run gate` pass. Browser on the preview home: the task record showed
+  "派发者 对话 ce9205bc-c20… 的 Main Agent"; the new request
+  "继续整理这份资料…" reused that conversation with rule source;
+  "做一个全新的项目…" created `conversation-b276…`; the audit showed
+  "路由 沿用对话 …（规则判断）" and "新开 Main Agent …（模型不可用，按新开处理）".
+- **Benchmark run:** none — deterministic tests and a browser check; the stub
+  model only exercised Main Agent replies, not scoring.
+- **Execution chain:** wrote the trade-off; added the router and event; wired
+  the API; moved the UI to one new-request action with a route request before the
+  stream; added the dispatch-source line; projected routing into the audit; added
+  the router/API/audit/UI tests; ran the full suite, typecheck and gate; checked
+  the rule-continue and fail-open-new paths in the browser. The checkout also
+  carried other sessions' changes; the full suite includes them.
+- **Pros:** one action; the owner can see why a Main Agent was chosen; explicit
+  conversation selection still wins; the model is only a tie-breaker.
+- **Cons / next time:** keyword cues can misfire, and a misroute cannot be moved
+  automatically; the fail-open path always creates a new agent; the router spends
+  one model call on ambiguous requests; the welcome hint is the only teaching
+  surface.
+- **Reversal condition:** see the trade-off entry.
+
 ### 2026-11-19 — Agent settings show workers, not wiring
 
 - **Goal / hypothesis:** the Agent page exposed controls for states that no
@@ -89,7 +177,8 @@ file keeps every attempt, including the ones that did not work.
 - **Change:** `src/companion-server.ts` — removed `await startMaintenance()`
   from the pre-listen path; the first pass starts fire-and-forget right after
   `persistCompanionEndpoint`, with failures logged through `noteMaintenanceFailure`.
-  Inside the pass, lock-independent work now runs before the extraction drain:
+  Inside the pass, work that does not need the extraction lock now runs before
+  the extraction drain (the governance-lock steps follow the scan):
   reconcile → opportunity scan → legacy candidate cleanup → improvement sweep →
   idle/expiry sweeps → bad-case report, then `rebuild`/`processNext` and
   conversation memory last. A `shutdown` AbortController aborts a pass that is
@@ -101,21 +190,35 @@ file keeps every attempt, including the ones that did not work.
   `src/memory/conversation-memory-pipeline.ts` pass the signal through
   `processNext`/`processJob`/`processDue`. `test/companion-config-api.test.ts`
   now waits for the one-time legacy-candidate cleanup instead of assuming it
-  finishes before `startCompanionServer` returns. New tests:
-  `test/companion-startup-readiness.test.ts` — readiness under a held lock, an
-  opportunity card present while it is held, and `close()` under 2 s while it is
-  still held.
+  finishes before `startCompanionServer` returns.
+  `src/application/run-query.ts` — `QueryWorkflowOptions.memorySignal` ends only
+  the post-run extraction wait; the scheduler passes `shutdown.signal` as
+  `memorySignal`, so a scheduled run still finishes but its queued extraction
+  gives up. `src/memory/memory-governance.ts` takes the signal in its
+  constructor and every governance lock wait (`withLock`) honours it.
+  `src/core/workspace-lock.ts` also races the in-process queue wait against the
+  signal and releases an aborted caller's queue slot when the holder finishes.
+  New tests: `test/companion-startup-readiness.test.ts` — readiness under a held
+  lock, an opportunity card present while it is held, `close()` under 2 s while
+  it is held, and `close()` while the governance lock is held;
+  `test/workspace-lock-abort.test.ts` — the external lock wait, a queued
+  waiter, a pipeline extraction and a conversation drain, each aborting before
+  the holder releases.
 - **Eval:** `node --experimental-strip-types --test
-  test/companion-startup-readiness.test.ts` — final two-test run: **62.7 ms**
-  and **18.9 ms**, both green. Before the readiness change the first test fails
-  in **4.04 s** with `startCompanionServer did not publish readiness while the
-  extraction lock was held` (the test allows 4 s). The scan and shutdown cases
-  were verified red against the first version of the change by the independent
-  review's probes: `/api/opportunities` returned **0** cards while the lock was
-  held, and `close()` was still pending after **2 s**; both pass under the
-  final code. Final full suite **848/848** (the tree also carries concurrent
-  sessions' changes); both new tests pass; `npm run typecheck` exit 0;
-  `npm run gate` **PASS**.
+  test/companion-startup-readiness.test.ts test/workspace-lock-abort.test.ts`
+  — final isolated runs: the readiness/close cases **52.9 / 15.1 / 114.2 ms**,
+  the four focused abort cases **105.6 / 53.1 / 107.6 / 108.3 ms**, all green.
+  Before the readiness change the first test timed out at **4.04 s** on the 4 s
+  readiness wait; the first version of the test reported
+  `startCompanionServer did not publish readiness while the extraction lock was
+  held`. The scan and shutdown cases were verified red against the first version
+  of the change by the independent review's probes: `/api/opportunities`
+  returned **0** cards while the lock was held, and `close()` was still pending
+  after **2 s**. The server-level close case is a smoke test — the focused abort
+  tests are the discriminator and time out if the signal is dropped; the close
+  checks race a 2 s timer so a hang fails at the assertion. Final full suite
+  **858/858** (the tree also carries concurrent sessions' changes);
+  `npm run typecheck` exit 0; `npm run gate` **PASS**.
   Measurement harness on a copy of the real clone home with eight
   `memory.candidate.requested` pending (the `extracted` and `proposed` rows
   removed) and `BEGIN IMMEDIATE` held on
@@ -127,7 +230,14 @@ file keeps every attempt, including the ones that did not work.
   journal). Browser against the isolated server while the lock was still held:
   `#startup-screen` and `.app-shell` both reached `ready`; the initial 15 API
   calls started at 70 ms and the last finished at 282 ms, all HTTP 200 — no
-  request handler waited for the maintenance pass.
+  request handler waited for the maintenance pass. End-to-end launch with no
+  LaunchAgent loaded (the app spawns its bundled sidecar, which contains this
+  change): `node /tmp/clone-app-startup-measure.mjs` printed
+  `CLONE_AI_DESKTOP_READY` in **1158**, **682**, **773**, **572** and **512 ms**
+  across five clean launches. The separate browser measurement of the UI (not
+  the app's WebView) had its initial 15 API calls finish at 282 ms. One extra
+  launch taken about a second after a quit took **4.4 s**;
+  the cause was not established and it did not recur in the clean sequence.
 - **Benchmark run:** none — deterministic tests and a local startup
   measurement; no provider, dataset, or scoring parameters.
 - **Execution chain:** observed the live symptom first (launchd job
@@ -148,26 +258,42 @@ file keeps every attempt, including the ones that did not work.
   the scan-before-drain ordering, the abortable lock wait, a second test pinning
   both, pinned `CLONE_AI_MEMORY_MINING=off` for the extraction-marker assertion,
   and cleared the readiness timer on the rejection path. Re-ran: both tests
-  green, typecheck 0, gate PASS.
+  green, typecheck 0, gate PASS. Then ran a second adversarial review workflow
+  (same three lenses; three agents, 259 tool calls, 136,660 subagent tokens,
+  13.7 min). It found shutdown could still hang outside the maintenance pass: a
+  scheduled run's post-run extraction had no signal, the in-process queue wait
+  ignored the signal, and the governance-lock waits had no abort path; it also
+  found the server-level close case could pass without parking in the lock
+  wait. Fixed by threading `memorySignal` through `runQuery` and the scheduler,
+  giving `MemoryGovernance` the shutdown signal, and racing the local queue
+  wait; added the four focused abort tests and the governance-lock close case,
+  and made every server close check race a 2 s timer. Re-ran: **853/853**,
+  typecheck 0, gate PASS.
   Failures and retries: the first reproduction deleted only
   `memory.candidate.extracted`, but `processedRuns` treats a proposal with no
   extraction marker as processed, so the server started in 202 ms; deleting
   `memory.candidate.proposed` as well produced the pending job and the 15 s
   hang. The legacy-cleanup test failed after the change until it waited for the
   background pass. The review's two major findings required a second
-  implementation round. No provider or model call was made by the work itself;
-  cost: none. Duration: roughly 35 minutes end to end, including the 11-minute
-  review.
+  implementation rounds. No provider or model call was made by the work itself;
+  cost: none. Duration: roughly 50 minutes end to end, including the two review
+  rounds (11.3 and 13.7 minutes; 275,529 subagent tokens in total).
 - **Pros:** the window no longer depends on unbounded background work; the
   opportunity and attention surfaces are current even while the extraction lock
-  is held; shutdown remains graceful because the wait is abortable; the
-  red-first tests pin the exact failures; the review-before-ship loop caught
-  both second-order defects; the final full suite is **848/848**.
-- **Cons / next time:** the abort covers the lock wait, not a miner call that
-  already holds the lock, so a shutdown during a long call still waits for it
-  (the shell bounds it with SIGKILL). An approve, review, or scheduled run can
-  contend with the first drain for the extraction lock, as with any periodic
-  pass. The live app was not relaunched for an end-to-end timing. Two sidecars
+  is held; shutdown remains graceful because the maintenance pass, the
+  governance operations, the in-process queue and a scheduled run's post-run
+  extraction all give up their waits; the red-first and focused tests pin the
+  exact failures; two adversarial review rounds caught every second-order
+  defect found; the final full suite is **858/858**.
+- **Cons / next time:** the abort ends waits, not work already running: a
+  shutdown during a miner call still waits for it (the shell bounds it with
+  SIGKILL), and a scheduled run that is executing is not cancelled — only its
+  queued extraction gives up. An approve, review, or scheduled run can contend
+  with the first drain for the extraction lock, as with any periodic pass. The
+  server-level close case is a smoke test; the focused lock tests carry the
+  guarantee. The scheduler wiring (`memorySignal`) is covered by the shared
+  pipeline abort test and typecheck, not by an end-to-end scheduled run. Two
+  sidecars
   on one home (an app-spawned dev sidecar and the launchd daemon) were observed,
   which makes the lock scenario real, but the multi-writer setup was not
   changed. Next time, run the adversarial review before the full-suite pass so
@@ -180,7 +306,9 @@ file keeps every attempt, including the ones that did not work.
   the scan-before-drain ordering if the scan ever needs extraction results (it
   does not today) or starts duplicating the drain's work. Reverse the abort if
   a pass cancelled during shutdown leaves derived state the next start cannot
-  rebuild (today the pending job stays journaled and is re-enqueued).
+  rebuild, or if cancelling a scheduled run's post-run extraction loses a
+  candidate the next start cannot rebuild (today the job stays journaled and is
+  re-enqueued).
 
 ### 2026-11-18 — The list is tasks, decisions are per task, and the audit shows the assembly
 

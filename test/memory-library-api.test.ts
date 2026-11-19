@@ -195,17 +195,27 @@ test("a conflicting file remains accessible and the owner can keep it explicitly
   const store = new MdMemoryStore({ dataDirectory });
   const journal = createJournalStore(dataDirectory);
   const governance = new MemoryGovernance({ store, journal });
+  const path = join(dataDirectory, "memory", `${memory.id}.md`);
   try {
     const apply = store.applyMutation.bind(store);
-    store.applyMutation = async () => { throw new Error("simulated interruption"); };
-    await assert.rejects(governance.update(memory.id, { summary: "待处理的修改" }));
+    // The hand edit must land inside the interrupted write's lock, before the
+    // failed update releases it: the live server's maintenance pass recovers a
+    // staged mutation as soon as it gets the lock, and an edit made after that
+    // would no longer conflict. Editing here makes the simulated crash stable.
+    // 手改必须落在中断写入仍持锁的窗口内：失败的更新一释放锁，运行中的服务器的维护轮就会
+    // 回放暂存变更，之后再改文件就不再冲突了。在这里修改，模拟才稳定。
+    store.applyMutation = async () => {
+      const source = await readFile(path, "utf8");
+      assert.match(source, /原始偏好内容/, "the interrupted write must not have reached the file");
+      await writeFile(path, source.replace("原始偏好内容", "用户手改的偏好"), "utf8");
+      throw new Error("simulated interruption");
+    };
+    await assert.rejects(governance.update(memory.id, { summary: "待处理的修改" }), /simulated interruption/);
     store.applyMutation = apply;
   } finally {
     await governance.close();
     (journal as { close?: () => void }).close?.();
   }
-  const path = join(dataDirectory, "memory", `${memory.id}.md`);
-  await writeFile(path, (await readFile(path, "utf8")).replace("原始偏好内容", "用户手改的偏好"), "utf8");
   const response = await companionFetch(url, token, "/api/memory/governed");
   assert.equal(response.status, 200);
   const view = await response.json() as { syncError?: string; conflicts: Array<{ id: string }> };

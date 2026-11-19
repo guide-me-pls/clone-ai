@@ -409,7 +409,13 @@ export type JournalEventType =
   // next. The desktop context panel reads this record.
   // 一次确定性上下文压缩：估算大小、阈值、被摘要掉与保留下来的消息数，以及模型随后看到的
   // 摘要。桌面上下文面板读这条记录。
-  | "main_agent.context_compacted";
+  | "main_agent.context_compacted"
+  // A search_history call: the query, its scope and the conversations the
+  // results came from. The tool call alone does not show what was recovered;
+  // the audit needs the provenance to explain the context the model assembled.
+  // 一次 search_history 调用：查询、范围与结果来源的对话。只有工具调用看不出召回了什么；
+  // 审计需要来源信息才能解释模型组装的上下文。
+  | "main_agent.history_searched";
 
 export interface JournalEvent {
   id: string;

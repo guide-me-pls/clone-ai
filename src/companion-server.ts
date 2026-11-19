@@ -430,9 +430,22 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   // Store，每个都持有自己的 sequence 计数器和缓存视图——重复 sequence 与陈旧读数正是这么来的。
   const assembly = await createRuntimeAssembly({ dataDirectory, workspacePath });
   const journal = assembly.journal;
+  /**
+   * Close aborts background waits that have no acquisition deadline: the
+   * maintenance pass's extraction lock, the governance lock its sweeps take,
+   * and the post-run extraction a scheduled run queues. The controller never
+   * cancels work that already holds a lock or a run that is executing; it ends
+   * only the waits, so shutdown cannot be held until the shell SIGKILLs the
+   * process.
+   * 关停会中止没有获取截止时间的后台等待：维护轮的提炼锁、其扫描所取的治理锁，以及定时任务
+   * 运行后排队的提炼。该控制器绝不取消已经持有锁的工作或正在执行的 Run；它只结束等待，使关停
+   * 不会被拖到外壳 SIGKILL 进程。
+   */
+  const shutdown = new AbortController();
   const memoryGovernance = new MemoryGovernance({
     journal,
     store: new MdMemoryStore({ dataDirectory }),
+    signal: shutdown.signal,
   });
   const improvement = new ImprovementService({ journal, governance: memoryGovernance, pipeline: assembly.memory });
   const config = new CloneConfigStore(paths);
@@ -453,7 +466,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
           scheduleKind: schedule.kind,
           scheduleDescription: describeSchedule(schedule),
         },
-      }, await agentSettings.get(), { workspacePath });
+      }, await agentSettings.get(), { workspacePath, memorySignal: shutdown.signal });
     },
   });
   // The opportunity plane and the daily bad-case report share the same
@@ -527,18 +540,6 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
    * `memory.candidate.requested` 转成可审核的候选（未配置时则记录为零候选提炼）。这两件事
    * 正是“分身会注意到事情、会学习”的来源，因此它们属于定时器，而不是属于某个用户动作。
    */
-  /**
-   * Close aborts a maintenance pass that is only *waiting* for a lock. The
-   * extraction lock has no acquisition deadline, and the first pass now starts
-   * after readiness, so without this a held lock would make SIGTERM/SIGINT wait
-   * for a lock release that may never come, until the shell SIGKILLs the
-   * process. The controller does not abort a miner call already holding the
-   * lock; it stops the wait and the rest of the pass.
-   * 关停会中止只在对锁等待中的维护轮。提炼锁没有获取截止时间，而首轮维护现在在就绪之后
-   * 才开始，因此没有它时，被持有的锁会让 SIGTERM/SIGINT 等一个可能永远不会到来的释放，
-   * 直到外壳 SIGKILL 进程。该控制器不会中止已持有锁的提炼调用；它停止等待与后续步骤。
-   */
-  const shutdown = new AbortController();
   const runMaintenance = async (): Promise<void> => {
     if (shutdown.signal.aborted) return;
     // The reconcile pass runs before the scan and settles what landed since
@@ -571,6 +572,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         await memoryGovernance.rejectRestatedCandidates();
         restatedCandidatesRetired = true;
       } catch (error: unknown) {
+        if (shutdown.signal.aborted) return;
         logJson("error", "Legacy memory-candidate cleanup failed; it will retry", {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -583,13 +585,16 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     // 改进扫描先于闲置扫描，使环路即将评判的记忆不会先因闲置被归档。
     if (ImprovementService.enabled()) {
       await improvement.sweep().catch((error: unknown) => {
+        if (shutdown.signal.aborted) return;
         logJson("error", "Improvement sweep failed", { error: error instanceof Error ? error.message : String(error) });
       });
     }
     await memoryGovernance.archiveIdle().catch((error: unknown) => {
+      if (shutdown.signal.aborted) return;
       logJson("error", "Memory idle sweep failed", { error: error instanceof Error ? error.message : String(error) });
     });
     await memoryGovernance.expireDue().catch((error: unknown) => {
+      if (shutdown.signal.aborted) return;
       logJson("error", "Memory expiry sweep failed", { error: error instanceof Error ? error.message : String(error) });
     });
     await badCaseLog.appendNew(await journal.list()).catch(() => undefined);
