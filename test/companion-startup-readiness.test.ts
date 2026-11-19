@@ -99,8 +99,8 @@ interface HeldLock {
   release(): void;
 }
 
-async function holdExtractionLock(dataDirectory: string): Promise<HeldLock> {
-  const lockDirectory = join(dataDirectory, "memory-extraction-lock", ".clone");
+async function holdLock(lockPath: string): Promise<HeldLock> {
+  const lockDirectory = join(lockPath, ".clone");
   await mkdir(lockDirectory, { recursive: true });
   const holder = new DatabaseSync(join(lockDirectory, "workspace-execution.sqlite3"));
   holder.exec("BEGIN IMMEDIATE");
@@ -115,19 +115,22 @@ async function holdExtractionLock(dataDirectory: string): Promise<HeldLock> {
   };
 }
 
-async function waitForReady(started: Promise<RunningCompanionServer>, what: string): Promise<RunningCompanionServer> {
-  let readinessTimeout: NodeJS.Timeout | undefined;
-  let outcome: "ready" | "timeout";
+async function within<T>(promise: Promise<T>, timeoutMs: number, onTimeout: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
   try {
-    outcome = await Promise.race([
-      started.then(() => "ready" as const),
-      new Promise<"timeout">((resolve) => {
-        readinessTimeout = setTimeout(() => resolve("timeout"), 4_000);
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(onTimeout), timeoutMs);
       }),
     ]);
   } finally {
-    clearTimeout(readinessTimeout);
+    clearTimeout(timer);
   }
+}
+
+async function waitForReady(started: Promise<RunningCompanionServer>, what: string): Promise<RunningCompanionServer> {
+  const outcome = await within(started.then(() => "ready" as const), 4_000, "timeout" as const);
   assert.equal(outcome, "ready", `${what}: startCompanionServer did not publish readiness`);
   return started;
 }
@@ -137,7 +140,7 @@ test("readiness is published while the first maintenance pass waits on the extra
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-startup-readiness-"));
   const workspacePath = await mkdtemp(join(tmpdir(), "clone-ai-startup-readiness-ws-"));
   await seedPendingExtraction(dataDirectory);
-  const holder = await holdExtractionLock(dataDirectory);
+  const holder = await holdLock(join(dataDirectory, "memory-extraction-lock"));
 
   let closed = false;
   const started = startCompanionServer({ port: 0, dataDirectory, workspacePath });
@@ -171,8 +174,9 @@ test("readiness is published while the first maintenance pass waits on the extra
     assert.ok(Date.now() < maintenanceDeadline, "the first maintenance pass did not run after readiness");
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  await server.close();
+  const closeOutcome = await within(server.close().then(() => "closed" as const), 2_000, "timeout" as const);
   closed = true;
+  assert.equal(closeOutcome, "closed", "close() waited for the extraction lock");
 });
 
 test("opportunity cards stay current and close() returns while the extraction lock is held", { timeout: 15_000 }, async (t) => {
@@ -181,7 +185,7 @@ test("opportunity cards stay current and close() returns while the extraction lo
   const workspacePath = await mkdtemp(join(tmpdir(), "clone-ai-startup-cards-ws-"));
   await seedPendingExtraction(dataDirectory);
   await seedDeadline(dataDirectory);
-  const holder = await holdExtractionLock(dataDirectory);
+  const holder = await holdLock(join(dataDirectory, "memory-extraction-lock"));
 
   let closed = false;
   const started = startCompanionServer({ port: 0, dataDirectory, workspacePath });
@@ -211,8 +215,43 @@ test("opportunity cards stay current and close() returns while the extraction lo
   // Shutdown must not wait for the lock either: close() aborts the wait and the
   // pass unwinds before the journal is closed.
   // 关停同样不得等待该锁：close() 中止等待，维护轮在 Journal 关闭前解除。
-  const closeStarted = Date.now();
-  await server.close();
+  const closeOutcome = await within(server.close().then(() => "closed" as const), 2_000, "timeout" as const);
   closed = true;
-  assert.ok(Date.now() - closeStarted < 2_000, "close() waited for the extraction lock");
+  assert.equal(closeOutcome, "closed", "close() waited for the extraction lock");
+});
+
+test("close() returns while the governance lock is held", { timeout: 15_000 }, async (t) => {
+  pinMiningOff(t);
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-startup-governance-"));
+  const workspacePath = await mkdtemp(join(tmpdir(), "clone-ai-startup-governance-ws-"));
+  await seedDeadline(dataDirectory);
+  const holder = await holdLock(join(dataDirectory, "memory-governance-lock"));
+
+  let closed = false;
+  const started = startCompanionServer({ port: 0, dataDirectory, workspacePath });
+  t.after(async () => {
+    holder.release();
+    const running = await started.catch(() => undefined);
+    if (running !== undefined && !closed) await running.close();
+    await rm(dataDirectory, { recursive: true, force: true });
+    await rm(workspacePath, { recursive: true, force: true });
+  });
+
+  const server = await waitForReady(started, "governance lock held");
+  // The scan runs first; once the deadline card is visible the pass has moved
+  // on to the legacy cleanup, whose governance-lock wait is now blocked.
+  // 机会扫描先运行；到期卡片出现后，维护轮已进入旧候选清理，并阻塞在治理锁上。
+  const cardDeadline = Date.now() + 3_000;
+  while (true) {
+    const listed = await (await companionFetch(server.url, server.token, "/api/opportunities")).json() as {
+      opportunities?: Array<{ title?: string }>;
+    };
+    if ((listed.opportunities ?? []).some((card) => (card.title ?? "").includes("Startup probe deadline"))) break;
+    assert.ok(Date.now() < cardDeadline, "the opportunity scan did not run while the governance lock was held");
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const closeOutcome = await within(server.close().then(() => "closed" as const), 2_000, "timeout" as const);
+  closed = true;
+  assert.equal(closeOutcome, "closed", "close() waited for the governance lock");
 });

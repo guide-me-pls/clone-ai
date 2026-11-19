@@ -359,6 +359,50 @@ export async function recordContextCompaction(
   await turn.pending;
 }
 
+export interface NativeHistorySearchInfo {
+  query: string;
+  scope: "all" | "conversation";
+  limit: number;
+  hitCount: number;
+  hits: Array<{ conversationId: string; at: string; score: number; excerpt?: string; source?: string }>;
+}
+
+/**
+ * Records what a search_history call recovered from other conversations. The
+ * tool result is the model's view; this event is the audit's view, bounded and
+ * PII-redacted like every other turn record.
+ * 记录一次 search_history 从其他对话召回了什么。工具结果给模型看；本事件给审计看，与所有
+ * 回合记录一样有上限并做 PII 脱敏。
+ */
+export async function recordNativeHistorySearch(
+  context: MainAgentTurnContext,
+  info: NativeHistorySearchInfo,
+): Promise<void> {
+  const query = redactAndCap(info.query, 500);
+  const hits = info.hits.slice(0, 20).map((hit) => ({
+    conversationId: hit.conversationId,
+    at: hit.at,
+    score: Number(hit.score.toFixed(3)),
+    ...(hit.excerpt === undefined ? {} : { excerpt: redactAndCap(hit.excerpt, 300).text }),
+    ...(hit.source === undefined ? {} : { source: hit.source }),
+  }));
+  context.pending = context.pending.then(() => appendSafely(context.journal, context.turnId, {
+    type: "main_agent.history_searched",
+    payload: {
+      schemaVersion: 1,
+      turnId: context.turnId,
+      conversationId: context.conversationId,
+      query: query.text,
+      ...(query.truncated ? { queryTruncated: true } : {}),
+      scope: info.scope,
+      limit: info.limit,
+      hitCount: info.hitCount,
+      hits,
+    },
+  }));
+  await context.pending;
+}
+
 /**
  * Records a tool start for a runtime that drives its own loop instead of Pi.
  * It writes the same events and fills the same `toolCalls` list, so both

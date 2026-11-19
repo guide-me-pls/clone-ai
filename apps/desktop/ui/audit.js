@@ -497,7 +497,13 @@
     const routing = turn.routing
       ? `${turn.routing.decision === "continue" ? "沿用对话" : "新开 Main Agent"} · ${turn.routing.reason}（${turn.routing.source === "model" ? "模型判断" : turn.routing.source === "fallback" ? "模型不可用，按新开处理" : "规则判断"}）`
       : "直接由所选对话处理";
-    return `<details class="au-assembly"><summary>任务组装 · ${num(runs.length)} 个 Run${material}</summary>
+    const searches = (turn.historySearches ?? []).map((search) => {
+      const found = [...new Set(search.hits.map((hit) => hit.conversationId === turn.conversationId
+        ? "本对话"
+        : hit.conversationId === "main-agent-conversation" ? "主对话" : `对话 ${hit.conversationId.replace(/^conversation-/, "").slice(0, 12)}`))].join("、");
+      return `<li><b>${esc(search.query)}</b> · ${search.scope === "conversation" ? "本对话" : "全部对话"} → ${num(search.hitCount)} 条${found ? ` · ${esc(found)}` : ""}</li>`;
+    }).join("");
+    return `<details class="au-assembly"><summary>任务组装 · ${num(runs.length)} 个 Run${searches ? ` · 检索 ${num((turn.historySearches ?? []).length)} 次` : ""}${material}</summary>
       <dl class="au-assembly-grid">
         <dt>对话</dt><dd>${esc(conversation)}</dd>
         <dt>路由</dt><dd>${esc(routing)}</dd>
@@ -508,6 +514,7 @@
         <dt>工具表</dt>${tools}
       </dl>
       <p class="au-note">派发的任务</p>${runRows}
+      ${searches ? `<p class="au-note">历史检索</p><ul class="au-assembly-searches">${searches}</ul>` : ""}
     </details>`;
   }
   function turnsView() {

@@ -638,3 +638,12 @@ test("a new request is routed, and a task record names its dispatcher", async ()
   assert.equal(dispatchSourceMarkup({ id: "conversation-a", kind: "conversation", dispatchedBy: "conversation-a" }), "");
   assert.equal(dispatchSourceMarkup({ id: "run-3" }), "");
 });
+
+test("the audit shows the history a turn searched", async () => {
+  const audit = await read("audit.js");
+  const auditCss = await read("audit.css");
+  assert.match(audit, /turn\.historySearches/);
+  assert.match(audit, /历史检索/);
+  assert.match(audit, /全部对话/);
+  assert.match(auditCss, /\.au-assembly-searches/);
+});

@@ -6,6 +6,18 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A Main Agent can search every task conversation
+
+`search_history` now searches all of the owner's task conversations by default, tags each result with its conversation and time, and can be narrowed to the current conversation. Every search is recorded and shown in the audit — the query, its scope, and the conversations it recovered — so a task can use context established elsewhere without merging all histories. The prompt now tells every Main Agent it is the same twin as in the owner's other tasks, with its own conversation here.
+
+`search_history` 现在默认检索所有者的全部任务对话，每条结果带所属对话与时间，并可收窄到当前对话。每次检索都会记录并显示在审计里——查询、范围以及召回了哪些对话——因此任务可以使用在别处建立的上下文，而不必合并所有历史。Prompt 现在告诉每个 Main Agent：它和所有者的其他任务是同一个分身，但在这里有自己的对话。
+
+### One "new request"; Clone AI picks the Main Agent
+
+The desktop no longer asks you to choose between a new conversation and a new task. "新请求" sends your message through a router: an explicit continuation ("继续", "刚才", "上次") reuses the related conversation, a new-goal cue or no context starts a new Main Agent, and an ambiguous request asks the model once (falling back to a new agent). Each task record shows "派发者" with the Main Agent that dispatched it and a button to open that conversation; the audit's turn assembly shows the routing decision and why.
+
+桌面端不再让你在"新建对话"与"新建任务"之间选择。"新请求"会先经过路由器：明确的续接（"继续""刚才""上次"）沿用相关对话；明确的新目标或没有上下文时新开一个 Main Agent；语义含糊时问模型一次（失败则新开）。每个任务记录显示"派发者"与派发它的 Main Agent，并可一键打开该对话；审计的任务组装显示路由决定与理由。
+
 ### Agent settings show workers, not wiring
 
 Settings → Agent now shows the detected Magpie gateway with its model picker and a read-only list of the four workers — title, role and what each one is for. The manual endpoint/API-key form, the redundant local-provider list, and the per-worker provider selects and enable switches are gone. Magpie's loopback endpoint is still discovered and pinned when a model is applied, and every worker stays enabled. `test/ui-locale.test.ts` asserts the removed controls stay out of the page.
@@ -14,9 +26,9 @@ Settings → Agent now shows the detected Magpie gateway with its model picker a
 
 ### Readiness is published before the first maintenance pass
 
-The desktop window now connects as soon as the companion server binds its loopback port and publishes `companion-endpoint.json`. The first background maintenance pass — memory extraction, commitment reconciliation, opportunity scanning and the one-time legacy-candidate cleanup — starts right after that instead of running before the server listens. A held memory-extraction lock or a miner waiting on a model could previously leave the daemon alive but invisible, with the window stuck on 正在连接; with eight pending extractions and the lock held, the sidecar now reaches ready in about 170 ms instead of never becoming ready while the lock was held. The opportunity and attention strips are scanned before the extraction drain, so their cards stay current while another process holds the lock, and shutdown aborts a pass that is only waiting for it. `test/companion-startup-readiness.test.ts` pins readiness, card freshness and close under a held lock.
+The desktop window now connects as soon as the companion server binds its loopback port and publishes `companion-endpoint.json`. The first background maintenance pass — memory extraction, commitment reconciliation, opportunity scanning and the one-time legacy-candidate cleanup — starts right after that instead of running before the server listens. A held memory-extraction lock or a miner waiting on a model could previously leave the daemon alive but invisible, with the window stuck on 正在连接; with eight pending extractions and the lock held, the sidecar now reaches ready in about 170 ms instead of never becoming ready while the lock was held. The opportunity and attention strips are scanned before the extraction drain, so their cards stay current while another process holds the lock. Shutdown aborts every background lock wait — the maintenance pass, its governance operations, the in-process lock queue and a scheduled run's post-run extraction — while a run that is already executing is left to finish. `test/companion-startup-readiness.test.ts` pins readiness, card freshness and close under a held extraction or governance lock; `test/workspace-lock-abort.test.ts` pins each abortable wait.
 
-桌面窗口现在在伴随服务器绑定回环端口并发布 `companion-endpoint.json` 后立即连接。首轮后台维护——记忆提炼、承诺收敛、机会扫描以及一次性旧候选清理——改为在端点发布之后立即开始，而不是挡在服务器监听之前。此前，被持有的记忆提炼锁或等待模型的提炼器会让 Daemon 活着却不可见，窗口停在"正在连接"；在八条待提炼请求且锁被持有时，sidecar 现在约 170 毫秒就绪，而不是锁被持有时始终无法就绪。机会条与注意力条在提炼排空之前扫描，因此别的进程持锁时卡片仍然最新；关停会中止仅在等待该锁的维护轮。`test/companion-startup-readiness.test.ts` 钉住就绪、卡片新鲜度与持锁时的 close。
+桌面窗口现在在伴随服务器绑定回环端口并发布 `companion-endpoint.json` 后立即连接。首轮后台维护——记忆提炼、承诺收敛、机会扫描以及一次性旧候选清理——改为在端点发布之后立即开始，而不是挡在服务器监听之前。此前，被持有的记忆提炼锁或等待模型的提炼器会让 Daemon 活着却不可见，窗口停在"正在连接"；在八条待提炼请求且锁被持有时，sidecar 现在约 170 毫秒就绪，而不是锁被持有时始终无法就绪。机会条与注意力条在提炼排空之前扫描，因此别的进程持锁时卡片仍然最新。关停会中止所有后台锁等待——维护轮、其治理操作、进程内锁队列与定时任务运行后的提炼——已经执行的 Run 则允许完成。`test/companion-startup-readiness.test.ts` 钉住就绪、卡片新鲜度与持有提炼锁或治理锁时的 close；`test/workspace-lock-abort.test.ts` 钉住每一种可中止等待。
 
 ### Task records own the decision; the audit shows the assembly
 

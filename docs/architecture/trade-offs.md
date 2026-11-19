@@ -6,6 +6,53 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — A Main Agent can retrieve across task conversations
+
+**Decision.** Keep multiple Main Agent instances — the same identity, one per
+task conversation — and give each one a global retrieval tool. Automatic context
+stays scoped to the current conversation; `search_history` searches every
+conversation by default, tags each result with its conversation id and time, and
+records the query, scope and hits as `main_agent.history_searched`. The tool can
+still be narrowed to the current conversation. The prompt tells the agent it is
+the same twin as in the owner's other tasks, with its own conversation here.
+
+**Alternatives rejected.**
+
+- *One serialized Main Agent that searches history and assembles context for
+  every request.* It makes every turn wait behind the longest turn and turns
+  context assembly into a retrieval/budget subsystem that must be right before
+  the agent can work. The owner chose the multi-instance model (B) on 2026-11-19.
+- *Inject all history into every prompt.* It is unbounded, mostly irrelevant,
+  and makes the prompt change on every task.
+- *Keep search scoped to the current conversation.* A fact established in one
+  task is then invisible in another unless the memory pipeline promoted it; this
+  is the fragmentation the owner is trying to solve.
+- *Memory-only sharing.* Reviewed memories are durable facts, not the reasoning
+  and decisions in earlier conversations; retrieval is the only way to recover
+  those without promoting everything.
+
+**Evidence.** The native `search_history` filters the ledger to the current
+`conversationId` (`searchLedger`), so a task cannot see another task's turns;
+the ledger already stores every turn with its conversation id, so provenance is
+free. `readMainAgentTurnRecords` and the existing tokenizer provide the search
+base. The owner's 2026-11-19 decision: add global retrieval, keep B (multiple
+per-thread instances), and treat context assembly as an ongoing problem rather
+than a reason to serialize.
+
+**What it costs.** Retrieval quality becomes part of every cross-task lookup:
+the terms the model chooses determine what it recovers, and a miss looks like
+absence. Results consume prompt tokens (bounded by limit and excerpt size).
+Cross-task context can blur boundaries if the model treats another task's
+instruction as this task's; results are labelled as records, not instructions.
+The ledger search does not rank by semantics, only by term overlap and recency.
+
+**Reversal condition.** If cross-task retrieval routinely mixes goals or pulls
+the wrong task's instructions in, restrict the default to explicit queries and
+add a thread-summary tool instead of raw excerpts. If retrieval misses dominate
+the owner's corrections, add semantic/embedding search or thread summaries. If
+the single serialized Main Agent is adopted later, this tool becomes its base
+and the multi-instance locks are removed.
+
 ## 2026-11-19 — One new-request action; Clone AI routes to a Main Agent
 
 **Decision.** The desktop exposes one "新请求" action instead of asking the owner
@@ -103,12 +150,17 @@ The pass starts immediately after the endpoint is published, fire-and-forget,
 with its failure logged and retried by the existing five-minute interval. The
 window no longer waits for memory extraction, commitment reconciliation,
 opportunity scanning, or any other periodic work before it can connect. Inside
-the pass, lock-independent work runs first — commitment reconciliation, then the
-opportunity scan, the legacy candidate cleanup, the improvement sweep, the
-idle/expiry sweeps and the bad-case report — and the extraction and
-conversation drains run last. `close()` aborts a pass that is only *waiting* for
-the extraction lock, so shutdown still completes while another process holds
-it.
+the pass, work that does not need the extraction lock runs first — commitment
+reconciliation, then the opportunity scan, the legacy candidate cleanup, the
+improvement sweep, the idle/expiry sweeps and the bad-case report — and the
+extraction and conversation drains run last. The governance-lock steps follow
+the scan, so they can still wait on the governance lock without delaying the
+opportunity cards. One shutdown controller is shared by the maintenance pass,
+the governance operations its sweeps use, the in-process lock queue, and a
+scheduled run's post-run extraction; `close()` aborts it before waiting, so
+shutdown completes while another process holds any of those locks. A run that
+is already executing and an extraction that already holds its lock are never
+cancelled.
 
 **Alternatives rejected.**
 
@@ -163,13 +215,14 @@ it.
   `test/companion-startup-readiness.test.ts`: the deadline card is present
   while the lock is held, and close returns in under 2 s without releasing it.
 
-**What it costs.** The abort covers a pass that is *waiting* for the extraction
-lock, not one already inside a miner call; a shutdown during a long call still
-waits for that call (the shell bounds it with SIGKILL). An approve, review, or
-scheduled run that calls `processNext` while the first drain holds the lock
-waits for the current extraction, just as it could during any periodic pass;
-this change makes the largest drain overlap the first requests. The scan is
-ordered before the drain so the first paint is not affected.
+**What it costs.** The abort ends waits, not work that already holds a lock: a
+shutdown during a miner call still waits for that call (the shell bounds it with
+SIGKILL), and a scheduled run that is executing is not cancelled — only its
+queued extraction gives up, staying journaled for the next start. An approve,
+review, or scheduled run that calls `processNext` while the first drain holds
+the lock waits for the current extraction, as with any periodic pass; this
+change makes the largest drain overlap the first requests. The scan is ordered
+before the drain so the first paint is not affected.
 
 **Reversal condition.** Reverse this if a request served before the first pass
 completes starts returning observably stale state the owner can see on first

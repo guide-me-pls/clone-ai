@@ -58,6 +58,17 @@ export interface QueryWorkflowOptions {
    * 能停掉它启动的工作；此前回合结束后 Run 仍继续执行。
    */
   signal?: AbortSignal;
+  /**
+   * Ends the post-run extraction wait on shutdown without cancelling the run
+   * itself. A scheduled or dispatched run must be allowed to finish; only its
+   * queued extraction step gives up, leaving the job journaled for the next
+   * start. The extraction lock has no acquisition deadline, so a daemon that
+   * waited here could keep shutdown blocked until SIGKILL.
+   * 关停时结束运行后的提炼等待，但不取消 Run 本身。定时或派发的 Run 必须允许完成；只有排队
+   * 的提炼步骤放弃等待，任务仍写入 Journal 等下次启动。提炼锁没有获取截止时间，在这里等待
+   * 会让关停一直阻塞到 SIGKILL。
+   */
+  memorySignal?: AbortSignal;
 }
 
 /**
@@ -239,7 +250,7 @@ async function runQueryWithin(
     failureCatalog,
   });
   const result = await executeClaimingRun(journal, runtime, run.id, registry, options.signal);
-  const candidates = result.status === "completed" ? await processMemorySafely(memory, result.run.id) : [];
+  const candidates = result.status === "completed" ? await processMemorySafely(memory, result.run.id, options.memorySignal) : [];
   return {
     ...toQueryResult(runtime, result, candidates.length),
     routing: {
@@ -480,10 +491,16 @@ function toQueryResult(runtime: CloneRuntime, result: DispatchResult, memoryCand
   };
 }
 
-async function processMemorySafely(memory: MemoryPipeline, runId: string): Promise<MemoryCandidate[]> {
+async function processMemorySafely(memory: MemoryPipeline, runId: string, signal?: AbortSignal): Promise<MemoryCandidate[]> {
   try {
-    return await memory.processNext(runId);
+    return await memory.processNext(runId, signal === undefined ? {} : { signal });
   } catch (error: unknown) {
+    // Shutdown ends this wait; the job stays journaled and the next start
+    // rebuilds it. Logging an error here would report a cancelled wait as a
+    // memory failure.
+    // 关停结束了这次等待；任务仍在 Journal 中，下次启动会重建它。这里记录错误会把一次被取消
+    // 的等待报成记忆失败。
+    if (signal?.aborted) return [];
     logJson("error", "Memory extraction failed; the completed task is unaffected and the job remains pending", {
       error: error instanceof Error ? error.message : String(error),
     });

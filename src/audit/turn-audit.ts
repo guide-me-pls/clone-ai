@@ -85,6 +85,24 @@ export interface MainAgentTurnRouting {
   model?: string;
 }
 
+/** One excerpt a search_history call recovered, with its provenance. search_history 召回的一条摘录及来源。 */
+export interface MainAgentTurnHistoryHit {
+  conversationId: string;
+  at: string;
+  score: number;
+  excerpt?: string;
+  source?: string;
+}
+
+/** One search_history call: the query, its scope and what it recovered. 一次 search_history 调用：查询、范围与召回内容。 */
+export interface MainAgentTurnHistorySearch {
+  query: string;
+  scope: string;
+  limit: number;
+  hitCount: number;
+  hits: MainAgentTurnHistoryHit[];
+}
+
 export interface MainAgentTurnAudit {
   turnId: string;
   source: string;
@@ -116,6 +134,8 @@ export interface MainAgentTurnAudit {
   runs: MainAgentTurnRun[];
   /** Which Main Agent handled the request, and why. 哪个 Main Agent 处理了请求，以及原因。 */
   routing?: MainAgentTurnRouting;
+  /** History the turn searched, with provenance. 本回合检索过的历史及来源。 */
+  historySearches: MainAgentTurnHistorySearch[];
   /** The prompt materials the model was given, when capture succeeded. 模型拿到的提示词材料，捕获成功时存在。 */
   snapshot?: MainAgentTurnPromptSnapshot;
   startedAt: string;
@@ -174,6 +194,7 @@ export function projectTurnAudits(events: readonly JournalEvent[]): MainAgentTur
         toolCalls: [],
         compactions: [],
         runs: [],
+        historySearches: [],
       });
       continue;
     }
@@ -192,6 +213,7 @@ export function projectTurnAudits(events: readonly JournalEvent[]): MainAgentTur
       toolCalls: [],
       compactions: [],
       runs: [],
+      historySearches: [],
     };
     byKey.set(key, {
       ...base,
@@ -230,7 +252,7 @@ export function projectTurnAudits(events: readonly JournalEvent[]): MainAgentTur
   for (const event of events) {
     if (event.type !== "agent.tool_started" && event.type !== "agent.tool_completed"
       && event.type !== "main_agent.context_compacted" && event.type !== "main_agent.prompt_snapshot"
-      && event.type !== "conversation.routed") continue;
+      && event.type !== "conversation.routed" && event.type !== "main_agent.history_searched") continue;
     const payload = asRecord(event.payload);
     const turnId = typeof payload.turnId === "string" ? payload.turnId : undefined;
     if (turnId === undefined) continue;
@@ -266,6 +288,17 @@ export function projectTurnAudits(events: readonly JournalEvent[]): MainAgentTur
         source: typeof payload.source === "string" ? payload.source : "rule",
         ...(typeof payload.model === "string" ? { model: payload.model } : {}),
       };
+      continue;
+    }
+    if (event.type === "main_agent.history_searched") {
+      const hits = Array.isArray(payload.hits) ? payload.hits.flatMap(parseHistoryHit) : [];
+      turn.historySearches.push({
+        query: typeof payload.query === "string" ? payload.query : "",
+        scope: typeof payload.scope === "string" ? payload.scope : "all",
+        limit: typeof payload.limit === "number" ? payload.limit : hits.length,
+        hitCount: typeof payload.hitCount === "number" ? payload.hitCount : hits.length,
+        hits,
+      });
       continue;
     }
     const snapshot = parseSnapshot(payload);
@@ -341,8 +374,19 @@ function projectRunInfo(events: readonly JournalEvent[]): Map<string, RunInfo> {
   return runs;
 }
 
-function upsertToolCall(turn: MainAgentTurnAudit, call: MainAgentTurnToolCall): void {
-  const existing = turn.toolCalls.find((item) => item.toolCallId === call.toolCallId);
+function parseHistoryHit(value: unknown): MainAgentTurnHistoryHit[] {
+  const record = asRecord(value);
+  if (typeof record.conversationId !== "string" || typeof record.at !== "string" || typeof record.score !== "number") return [];
+  return [{
+    conversationId: record.conversationId,
+    at: record.at,
+    score: record.score,
+    ...(typeof record.excerpt === "string" ? { excerpt: record.excerpt } : {}),
+    ...(typeof record.source === "string" ? { source: record.source } : {}),
+  }];
+}
+
+function upsertToolCall(turn: MainAgentTurnAudit, call: MainAgentTurnToolCall): void {  const existing = turn.toolCalls.find((item) => item.toolCallId === call.toolCallId);
   if (existing === undefined) {
     turn.toolCalls.push(call);
     return;
@@ -395,6 +439,10 @@ function matchesTurnQuery(turn: MainAgentTurnAudit, needle: string): boolean {
     ]),
     ...turn.runs.flatMap((run) => [run.id, run.title, run.status, ...(run.steps ?? [])]),
     turn.routing?.reason, turn.routing?.source, turn.routing?.model, turn.routing?.candidateConversationId,
+    ...turn.historySearches.flatMap((search) => [
+      search.query, search.scope,
+      ...search.hits.flatMap((hit) => [hit.conversationId, hit.excerpt]),
+    ]),
   ];
   return fields.some((field) => field !== undefined && field.toLowerCase().includes(needle));
 }

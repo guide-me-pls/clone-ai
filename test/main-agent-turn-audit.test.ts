@@ -467,3 +467,37 @@ test("the audit carries the routing decision", async (t) => {
   assert.equal(projected.routing.source, "rule");
   assert.match(projected.routing.reason, /continuation/);
 });
+
+test("the audit carries history search provenance", async (t) => {
+  const directory = await tempDir(t);
+  const turn = await beginMainAgentTurn({
+    dataDirectory: directory,
+    text: "What did we decide about the template?",
+    source: "companion",
+    turnId: "turn-search",
+    conversationId: "conversation-b",
+  });
+  const journal = createJournalStore(directory);
+  try {
+    await journal.append({
+      type: "main_agent.history_searched",
+      payload: {
+        turnId: "turn-search",
+        conversationId: "conversation-b",
+        query: "template",
+        scope: "all",
+        limit: 6,
+        hitCount: 1,
+        hits: [{ conversationId: "conversation-a", at: "2026-11-19T07:00:00.000Z", score: 1, excerpt: "blue template" }],
+      },
+    });
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
+  await finishMainAgentTurn(turn, { status: "completed", reply: "It was blue." });
+  const projected = projectTurnAudits(await journalEvents(directory)).find((turnAudit) => turnAudit.turnId === "turn-search");
+  assert.ok(projected);
+  assert.equal(projected.historySearches.length, 1);
+  assert.equal(projected.historySearches[0]!.query, "template");
+  assert.equal(projected.historySearches[0]!.hits[0]!.conversationId, "conversation-a");
+});

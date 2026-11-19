@@ -52,15 +52,25 @@ const MEMORY_DECISION_TYPES = [
 export interface MemoryGovernanceOptions {
   journal: JournalStore;
   store: MdMemoryStore;
+  /**
+   * Ends a governance-lock wait on shutdown. The governance lock has no
+   * acquisition deadline either; without this, close() could wait on it until
+   * SIGKILL. Operations already holding the lock are never cancelled.
+   * 关停时结束治理锁等待。治理锁同样没有获取截止时间；没有它，close() 会等到 SIGKILL。
+   * 已经持有锁的操作绝不被取消。
+   */
+  signal?: AbortSignal;
 }
 
 export class MemoryGovernance {
   readonly #journal: JournalStore;
   readonly #store: MdMemoryStore;
+  readonly #signal: AbortSignal | undefined;
 
   constructor(options: MemoryGovernanceOptions) {
     this.#journal = options.journal;
     this.#store = options.store;
+    this.#signal = options.signal;
   }
 
   /**
@@ -551,7 +561,11 @@ export class MemoryGovernance {
   }
 
   private async withLock<T>(operation: () => Promise<T>): Promise<T> {
-    return workspaceExecutionLock.run(this.#store.governanceLockPath, operation);
+    return workspaceExecutionLock.run(
+      this.#store.governanceLockPath,
+      operation,
+      this.#signal === undefined ? {} : { signal: this.#signal },
+    );
   }
 
   private async recoverUnlocked(): Promise<void> {

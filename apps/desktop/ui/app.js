@@ -1277,10 +1277,10 @@ async function searchContextHistory(query) { try { renderContextSearch((await ap
 function welcomeMarkup() {
   return `<div class="welcome">
     <div class="welcome-copy">
-      <span class="welcome-eyebrow">开始新任务</span>
+      <span class="welcome-eyebrow">${escape(t("new-session"))}</span>
       <h2>今天想推进什么？</h2>
       <p>直接描述目标，或贴一段上下文。我会先拆解、准备和验证；会影响外部世界的动作会先停下来问你。</p>
-      <p class="welcome-routing">发送时 clone-ai 会判断：继续相关对话，还是新开一个 Main Agent。</p>
+      <p class="welcome-routing">${escape(t("welcome-routing"))}</p>
     </div>
   </div>`;
 }

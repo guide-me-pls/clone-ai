@@ -26,6 +26,65 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— Main Agent 可以跨任务对话检索
+
+- **目标 / 假设：** 自动上下文按对话隔离；在另一个任务里确定的事实或决定，除非所有者重说或记忆
+  流水线提升，否则不可见。让 `search_history` 默认全局并带来源，保持自动窗口按对话隔离，并把
+  召回内容写入 Journal。保留多个 Main Agent 实例（所有者的 B 选择）。
+- **取舍：** [Main Agent 可以跨任务对话检索](../architecture/trade-offs.zh-CN.md#2026-11-19--main-agent-可以跨任务对话检索)。
+- **变更：** `src/main-agent/history-search.ts`（台账加旧 Pi 摘录、`all` / `conversation`
+  范围、对话/时间标签、词重叠排序、面向模型的格式）；原生 `search_history` 覆盖与 kernel
+  工具的描述/参数；Prompt 中的 `conversationGuidance`（同一个分身、独立任务对话、可用全局
+  检索）；`main_agent.history_searched` Journal 事件；审计投影与组装块中的"历史检索"分区。
+- **Eval：** `test/history-search.test.ts` **2/2**（带来源的全局命中、范围检索、标签）；
+  `test/native-main-agent.test.ts` 的跨对话工具用例（工具结果带另一个对话；Journal 有检索
+  事件）；`test/main-agent-turn-audit.test.ts` 的来源用例；`test/ui-structure.test.ts` 的
+  界面用例。全量 **858/858**，`npm run typecheck` 与 `npm run gate` 通过。预览 home 的
+  浏览器检查：主对话请求"海港项目什么时候截止？"检索了全部对话，召回了
+  `conversation-other` 的回合与一个无关项目（得分 0.333）；审计显示
+  "检索 1 次 … 历史检索 海港项目 · 全部对话 → 2 条 · 对话 other、对话 b276bc66-d13"。
+- **Benchmark run：** 无——确定性测试加桩模型的浏览器检查；不涉及 Provider 或评分参数。
+- **执行链路：** 写取舍；加检索模块；接原生与 kernel 工具；加 Prompt 指导与事件；把事件投影
+  进审计并渲染；补检索/工具/审计/界面测试；跑全量、typecheck 与 gate；在浏览器里做了一次真实
+  的跨对话检索。同一检出还带有其他会话的改动；全量测试包含它们。
+- **优点：** 任务可按需找回在别处建立的上下文；每条结果带来源；自动上下文仍隔离且便宜；不需要
+  串行化或单一 agent 重写。
+- **缺点 / 下次：** 词重叠会返回弱匹配（无关项目得 0.333）；旧 Pi 会话只能通过主对话检索；
+  检索消耗 Prompt token；模型必须选好词；尚无语义排序或线程摘要。
+- **推翻条件：** 见取舍条目。
+
+### 2026-11-19 —— 一个新请求，由 Clone AI 路由到 Main Agent
+
+- **目标 / 假设：** 在"新建对话"与"新建任务"之间选择就是学习成本；所有者应只输入请求，由
+  Clone AI 判断是沿用某个对话还是新开 Main Agent。任务记录应标出派发它的 Main Agent。
+- **取舍：** [只有一个"新请求"动作；由 Clone AI 路由到 Main Agent](../architecture/trade-offs.zh-CN.md#2026-11-19--只有一个新请求动作由-clone-ai-路由到-main-agent)。
+- **变更：** `src/main-agent/conversation-router.ts`（收窄的续接与新目标线索、最近对话回落、
+  一次模型裁决（10 秒超时、失败即新开）、决定写入 Journal）、Journal 合约中的
+  `conversation.routed`、`POST /api/main-agent/route`、`buildSession.dispatchedBy`（Main
+  Agent 提案的 Run）、把路由投影进回合审计并渲染为"路由"行、桌面"新请求"动作把
+  `state.routeContext` 交给路由器、`state.routing` 刷新闸门、任务记录上的"派发者"行与
+  `data-open-conversation` 按钮，以及欢迎提示与 locale。
+- **Eval：** `test/conversation-router.test.ts` **8/8**（规则续接、规则新开、新目标线索压过
+  上下文、模型续接/新开、模型不可用回落、最近对话回落、任务 → 对话）；
+  `test/companion-control-plane.test.ts` 的路由 API 用例（200 续接/新开、400 非法上下文、
+  两条 `conversation.routed`）；`test/main-agent-turn-audit.test.ts` 的审计路由用例；
+  `test/ui-structure.test.ts` 的界面用例（路由调用、routing 状态、欢迎提示、派发者标记/
+  按钮）。全量 **848/848**，`npm run typecheck` 与 `npm run gate` 通过。在预览 home 的
+  浏览器检查：任务记录显示 "派发者 对话 ce9205bc-c20… 的 Main Agent"；新请求
+  "继续整理这份资料…" 以规则来源沿用了该对话；"做一个全新的项目…" 创建了
+  `conversation-b276…`；审计显示 "路由 沿用对话 …（规则判断）" 与
+  "新开 Main Agent …（模型不可用，按新开处理）"。
+- **Benchmark run：** 无——确定性测试加浏览器检查；桩模型只用于 Main Agent 回复，不涉及评分。
+- **执行链路：** 写取舍；加入路由器与事件；接上 API；把界面收成一个新请求动作，并在流之前
+  请求路由；加入派发者行；把路由投影进审计；补路由器/API/审计/界面测试；跑全量、typecheck
+  与 gate；在浏览器里检查规则续接与失败即新开两条路径。同一检出还带有其他会话的改动；全量
+  测试包含它们。
+- **优点：** 一个动作；所有者能看到为什么选了某个 Main Agent；显式选中对话仍然优先；模型只做
+  裁决者。
+- **缺点 / 下次：** 关键词线索可能误判，误路由不能自动搬移；失败即新开会总是创建新 Agent；
+  含糊请求多一次模型调用；欢迎提示是唯一的教学面。
+- **推翻条件：** 见取舍条目。
+
 ### 2026-11-19 —— Agent 设置展示 Worker，而不是接线
 
 - **目标 / 假设：** Agent 页暴露了一些已不再变化的控件：自动发现网关旁边的手填端点/API Key
@@ -64,14 +123,32 @@
 - **取舍：** [先发布就绪端点，再跑首轮维护](../architecture/trade-offs.zh-CN.md#2026-11-19--先发布就绪端点再跑首轮维护)。
 - **变更：** `src/companion-server.ts`——从监听前路径移除 `await startMaintenance()`；
   首轮维护改为在 `persistCompanionEndpoint` 之后以 fire-and-forget 方式启动，失败经
-  `noteMaintenanceFailure` 记录，与五分钟定时器共用。维护轮本身与定时器不变。
-  `test/companion-config-api.test.ts` 改为等待一次性旧候选清理，而不是假定它在
-  `startCompanionServer` 返回前完成。新增测试：`test/companion-startup-readiness.test.ts`。
+  `noteMaintenanceFailure` 记录。维护轮内部，不需要提炼锁的工作先运行：承诺收敛 → 机会扫描
+  → 旧候选清理 → 改进扫描 → 闲置/过期扫描 → 坏案例报告，然后才是 `rebuild`/`processNext`
+  与对话记忆。`shutdown` AbortController 会中止仅在*等待*提炼锁的维护轮；`close()` 在等待
+  维护轮之前先中止它。`src/core/workspace-lock.ts`——`run`、`acquireExternalLock` 与
+  `waitForLegacyLock` 接受 AbortSignal，并在每次 50 毫秒重试时检查；已经持有锁的操作绝不
+  被取消。`src/memory/memory-pipeline.ts` 与
+  `src/memory/conversation-memory-pipeline.ts` 通过
+  `processNext`/`processJob`/`processDue` 传递信号。`test/companion-config-api.test.ts`
+  改为等待一次性旧候选清理，而不是假定它在 `startCompanionServer` 返回前完成。
+  `src/application/run-query.ts`——`QueryWorkflowOptions.memorySignal` 只结束后台提炼的
+  等待；定时任务把 `shutdown.signal` 作为 `memorySignal` 传入，因此 Run 仍会完成，只有排队
+  的提炼放弃。`src/memory/memory-governance.ts` 在构造时接收信号，每个治理锁等待
+  （`withLock`）都遵守它。`src/core/workspace-lock.ts` 还让进程内队列等待与信号竞争，并在
+  持有者结束时释放被中止调用方的队列槽。新增测试：
+  `test/companion-startup-readiness.test.ts`——持锁时就绪、持锁时已有机会卡片、仍持锁时
+  `close()` 在 2 秒内返回、以及治理锁被持有时 `close()` 返回；
+  `test/workspace-lock-abort.test.ts`——外部锁等待、排队等待、流水线提炼与对话排空，各自
+  在持有者释放前中止。
 - **Eval：** `node --experimental-strip-types --test
-  test/companion-startup-readiness.test.ts`——变更前在 4.04 秒失败，信息为
-  `startCompanionServer did not publish readiness while the extraction lock was
-  held`（测试允许 4 秒）；最终两条测试分别为 **62.7 毫秒** 与 **18.9 毫秒**，均通过。
-  完整测试 **848/848**（同一检出还带有其他会话的改动），`npm run typecheck` 退出码 0，
+  test/companion-startup-readiness.test.ts test/workspace-lock-abort.test.ts`——
+  最终隔离运行：就绪/关停三条分别为 **52.9 / 15.1 / 114.2 毫秒**，四条聚焦中止用例分别为
+  **105.6 / 53.1 / 107.6 / 108.3 毫秒**，全部通过。变更前 4 秒就绪等待超时（4.04 秒）；
+  测试第一版报告的信息为 `startCompanionServer did not publish readiness while the
+  extraction lock was held`。服务器级 close 用例是烟雾测试——聚焦中止测试才是判别器，信号被
+  去掉时会超时；所有 close 检查都与 2 秒计时器竞争，挂起会在断言处失败。完整测试
+  **858/858**（同一检出还带有其他会话的改动），`npm run typecheck` 退出码 0，
   `npm run gate` **PASS**。
   测量脚本：复制真实 clone home，删除 `extracted` 与 `proposed` 行，留下八条
   `memory.candidate.requested` 待处理，并由另一个进程对
@@ -82,7 +159,11 @@
   接近。数据来自 `~/.clone` 的副本（8 条请求，1.2 MB Journal）。锁仍被持有时用浏览器
   打开该隔离服务器：`#startup-screen` 与 `.app-shell` 都进入 `ready`；最初 15 个 API
   调用从 70 毫秒开始，最后一个在 282 毫秒结束，全部 HTTP 200——没有任何请求处理器等待
-  维护轮完成。
+  维护轮完成。没有加载 LaunchAgent 时的端到端启动（App 拉起自带的 sidecar，其中包含本次
+  变更）：`node /tmp/clone-app-startup-measure.mjs` 五次干净启动分别在 **1158**、**682**、
+  **773**、**572**、**512 毫秒** 打印 `CLONE_AI_DESKTOP_READY`。另有针对界面的浏览器测量
+  （不是 App 的 WebView）显示最初 15 个 API 调用在 282 毫秒结束。另一次在退出约一秒后进行
+  的启动耗时 **4.4 秒**；原因未查明，且在干净序列中没有复现。
 - **Benchmark run：** 无——确定性测试加本地启动测量；没有 Provider、数据集或评分参数。
 - **执行链路：** 先观察现场症状（launchd 任务 `ai.clone.companion` 的 PID 80762 从
   2026-11-18 17:53:26 存活到 2026-11-19 09:45，没有监听套接字也没有端点文件；桌面窗口停在
@@ -96,26 +177,37 @@
   排空之后（探针：持锁时 0 张卡片），以及 `close()` 卡在锁等待上（探针：2 秒后仍未返回）。
   随后加入扫描先于排空、可中止的锁等待、钉住两者的第二条测试，为提炼标记断言固定
   `CLONE_AI_MEMORY_MINING=off`，并在启动拒绝路径上清理就绪定时器。复查：两条测试通过、
-  typecheck 0、gate PASS；最终完整测试 **848/848**（同一检出还带有其他会话的改动）。
+  typecheck 0、gate PASS。随后运行第二轮对抗性审查（同样三视角；3 个 Agent、259 次工具调用、
+  136,660 子 Agent token、13.7 分钟）。它发现关停仍可能在维护轮之外挂起：定时任务运行后的
+  提炼没有信号，进程内队列等待忽略信号，治理锁等待完全没有中止路径；它还发现服务器级 close
+  用例可以不在锁等待中驻留就通过。修复方式：把 `memorySignal` 穿过 `runQuery` 与调度器，把
+  关停信号交给 `MemoryGovernance`，让本地队列等待与信号竞争；新增四条聚焦中止测试与治理锁
+  close 用例，并让所有服务器 close 检查与 2 秒计时器竞争。复查：**853/853**、typecheck 0、
+  gate PASS。
   失败与重试：第一次复现只删了 `memory.candidate.extracted`，但
   `processedRuns` 会把没有提炼标记的提案视为已处理，服务器 202 毫秒就启动；同时删除
   `memory.candidate.proposed` 后才产生待处理任务与 15 秒挂起。变更后旧候选清理测试失败，
-  直到它等待后台维护轮完成——这正是测试现在写明的顺序。审查的两个主要发现要求第二轮实现。
-  工作本身没有调用 Provider 或模型；成本：无。端到端约 35 分钟，其中审查约 11 分钟。
+  直到它等待后台维护轮完成——这正是测试现在写明的顺序。两轮审查的主要发现要求两轮实现。
+  工作本身没有调用 Provider 或模型；成本：无。端到端约 50 分钟，其中两轮审查约 11.3 与
+  13.7 分钟（合计 275,529 子 Agent token）。
 - **优点：** 窗口不再依赖无上限的后台工作；提炼锁被持有时，机会与注意力面仍然是最新的；
-  关停保持优雅，因为锁等待可中止；先红后绿的测试钉住了确切故障；发布前的审查回路抓住了两个
-  二阶缺陷。最终完整测试 **848/848**。
-- **缺点 / 下次：** 中止覆盖的是锁等待，而不是已经持有锁的提炼调用，因此长调用期间的关停
-  仍会等它（外壳用 SIGKILL 兜底）。在首轮排空持有锁时，确认、复核或定时任务里调用
-  `processNext` 会等待当前提炼，就像任何周期性维护轮期间一样。没有重新启动真实 App 做端到端
-  计时。本机上观察到同一 home 上有两个 sidecar（App 拉起的开发 sidecar 与 launchd Daemon）；
+  关停保持优雅，因为维护轮、治理操作、进程内队列与定时任务运行后的提炼都会放弃等待；先红后绿
+  与聚焦测试钉住了确切故障；两轮对抗性审查抓住了发现的每一个二阶缺陷。最终完整测试
+  **858/858**。
+- **缺点 / 下次：** 中止结束的是等待，不是已经在运行的工作：提炼调用期间的关停仍会等它
+  （外壳用 SIGKILL 兜底），正在执行的定时 Run 也不会被取消——只有它排队的提炼放弃。在首轮
+  排空持有锁时，确认、复核或定时任务里调用 `processNext` 会等待当前提炼，就像任何周期性维护
+  轮期间一样。服务器级 close 用例是烟雾测试；保证由聚焦锁测试承担。调度器的接线（`memorySignal`）由共享
+  的流水线中止测试与 typecheck 覆盖，没有端到端的定时任务验证。本机上观察到同一 home 上
+  有两个 sidecar（App 拉起的开发 sidecar 与 launchd Daemon）；
   正是这种竞争让锁场景真实存在，但多写者配置本身未改。下次应先跑对抗性审查，再跑完整测试，
   让记录只保留一个最终状态。
 - **推翻条件：** 如果首轮维护完成前提供的请求开始返回首屏可见的陈旧状态，且修复方式不是让
   该路由等待 `startMaintenance()`，就应推翻就绪移动；若锁获取变得有界，且测量显示首轮维护
   足够快、等待它能换来首屏可见的新鲜度，同样应当推翻。若机会扫描开始依赖提炼结果（当前不
   依赖），或开始与排空重复工作，应推翻扫描先于排空的顺序。若关停中止的维护轮留下下次启动
-  无法重建的派生状态，应推翻中止（当前待处理任务仍写入 Journal 并会被重新入队）。
+  无法重建的派生状态，或取消定时任务运行后的提炼会丢掉下次启动无法重建的候选，应推翻中止
+  （当前待处理任务仍写入 Journal 并会被重新入队）。
 
 ### 2026-11-18 —— 列表是任务，决定在任务内，审计说明组装
 

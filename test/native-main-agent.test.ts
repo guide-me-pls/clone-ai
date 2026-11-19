@@ -285,3 +285,86 @@ test("each conversation sees only its own history and records its id", async (t)
   assert.equal(completed?.status, "completed");
   assert.equal(completed?.conversationId, "conversation-b");
 });
+
+test("search_history retrieves another conversation and the turn records the provenance", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-native-cross-search-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const at = new Date(Date.now() - 120_000).toISOString();
+  await appendMainAgentTurnRecord(directory, {
+    id: "blue-turn",
+    text: "Remember the blue template.",
+    status: "completed",
+    startedAt: at,
+    completedAt: at,
+    reply: "Noted blue.",
+    conversationId: "conversation-a",
+  });
+  await appendMainAgentTurnRecord(directory, {
+    id: "red-turn",
+    text: "Remember the red template.",
+    status: "completed",
+    startedAt: at,
+    completedAt: at,
+    reply: "Noted red.",
+    conversationId: "conversation-b",
+  });
+
+  let secondBody: { messages: Array<{ role: string; content?: unknown }> } | undefined;
+  let calls = 0;
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    calls += 1;
+    if (calls === 1) {
+      return sseResponse([
+        {
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: "search-1",
+                type: "function",
+                function: { name: "search_history", arguments: JSON.stringify({ query: "blue" }) },
+              }],
+            },
+          }],
+        },
+        { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+        { choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } },
+      ]);
+    }
+    secondBody = JSON.parse(String(init.body)) as { messages: Array<{ role: string; content?: unknown }> };
+    return sseResponse([
+      { choices: [{ delta: { content: "Found it." } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      { choices: [], usage: { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 } },
+    ]);
+  }) as unknown as typeof fetch;
+
+  const result = await runNativeMainAgentTurn({
+    dataDirectory: directory,
+    text: "What was the template?",
+    source: "cli",
+    conversationId: "conversation-b",
+    endpoint: { baseUrl: "http://gateway", model: "m" },
+    fetchImpl,
+  });
+  assert.equal(result.reply, "Found it.");
+  const messages = secondBody?.messages ?? [];
+  const system = messages.find((message) => message.role === "system");
+  assert.match(String(system?.content), /This task's conversation: conversation-b/);
+  assert.match(String(system?.content), /search_history searches all of these conversations/);
+  const toolMessage = messages.find((message) => message.role === "tool");
+  assert.match(String(toolMessage?.content), /blue template/);
+  assert.match(String(toolMessage?.content), /conversation a/);
+
+  const journal = createJournalStore(directory);
+  try {
+    const search = (await journal.list()).find((event) => event.type === "main_agent.history_searched");
+    assert.ok(search, "the search provenance must be journaled");
+    const payload = search.payload as { query: string; hits: Array<{ conversationId: string }>; hitCount: number };
+    assert.equal(payload.query, "blue");
+    assert.equal(payload.hitCount, 1);
+    assert.equal(payload.hits[0]?.conversationId, "conversation-a");
+  } finally {
+    (journal as { close?: () => void }).close?.();
+  }
+});

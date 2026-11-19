@@ -40,16 +40,18 @@ import {
   finishMainAgentTurn,
   readMainAgentTurnRecords,
   recordContextCompaction,
+  recordNativeHistorySearch,
   recordNativeToolCompleted,
   recordNativeToolStarted,
+  type MainAgentTurnContext,
   type MainAgentTurnSource,
 } from "./turn-audit.ts";
 import { recordUsage, type UsageRecord } from "../observability/usage.ts";
 import { parseUsage } from "../workers/openai-compatible-client.ts";
 import { createJournalStore } from "../core/sqlite-journal.ts";
 import { mainAgentRunConversations } from "./run-triggers.ts";
+import { formatHistorySearch, searchOwnerHistory, type HistorySearchScope } from "./history-search.ts";
 import { redactMemoryPii } from "../memory/memory-hygiene.ts";
-import { tokenize } from "../memory/md-memory-store.ts";
 import { readMainAgentEffortPreference } from "./model-preferences.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
@@ -255,14 +257,21 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
   }
   const endpoint = resolved.endpoint;
   const effort = await readMainAgentEffortPreference(options.dataDirectory, environment);
+  const conversationId = conversationIdOf(options.conversationId);
   const compiled = await compileMainAgentPrompt({
     dataDirectory: options.dataDirectory,
+    conversationId,
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     query: options.text,
     ...(options.environment === undefined ? {} : { environment: options.environment }),
   });
-  const conversationId = conversationIdOf(options.conversationId);
-  const tools = nativeTools(options.dataDirectory, conversationId, options.cwd, options.signal);
+  // The tool is created before the turn exists; the callback writes the search
+  // provenance into the turn once the loop starts.
+  // 工具在回合存在之前创建；循环开始时回调把检索来源写入该回合。
+  let searchTurn: MainAgentTurnContext | undefined;
+  const tools = nativeTools(options.dataDirectory, conversationId, options.cwd, options.signal, (info) => {
+    if (searchTurn !== undefined) void recordNativeHistorySearch(searchTurn, info);
+  });
   // Skills and MCP are opt-in per turn: without roots or servers the tool table
   // and prompt are exactly what they were before.
   // 技能与 MCP 是按回合显式开启的：没有根目录或服务器时，工具表与 Prompt 与之前完全相同。
@@ -322,6 +331,7 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
     historyMessages: history.messages.length,
     historyTurns: history.historyTurns,
   });
+  searchTurn = turn;
   options.onMetadata?.({
     modelId: endpoint.model,
     provider: "native",
@@ -760,7 +770,13 @@ async function chat(
  * 旧版 search_history 读 Pi 会话文件；原生对话记录是回合台账，因此本运行时只替换
  * 这一个工具为台账检索。
  */
-function nativeTools(dataDirectory: string, conversationId: string, workspacePath?: string, signal?: AbortSignal): PlainKernelTool[] {
+function nativeTools(
+  dataDirectory: string,
+  conversationId: string,
+  workspacePath?: string,
+  signal?: AbortSignal,
+  onSearch?: (info: { query: string; scope: HistorySearchScope; limit: number; hitCount: number; hits: Array<{ conversationId: string; at: string; score: number; excerpt?: string; source?: string }> }) => void,
+): PlainKernelTool[] {
   return [
     ...kernelToolDefinitions({ dataDirectory, conversationId, ...(workspacePath === undefined ? {} : { workspacePath }) }),
     dispatchTaskTool({
@@ -772,38 +788,32 @@ function nativeTools(dataDirectory: string, conversationId: string, workspacePat
   ].map((tool) => tool.name === "search_history"
     ? {
       ...tool,
-      execute: async (_toolCallId: string, params: Record<string, unknown>) => ({
-        content: [{
-          type: "text",
-          text: await searchLedger(dataDirectory, String(params.query ?? ""), Number(params.limit ?? 6), conversationId),
-        }],
-        details: {},
-      }),
+      execute: async (_toolCallId: string, params: Record<string, unknown>) => {
+        const query = String(params.query ?? "");
+        const scope: HistorySearchScope = params.scope === "conversation" ? "conversation" : "all";
+        const requested = Number(params.limit ?? 6);
+        const limit = Math.max(1, Math.min(20, Number.isFinite(requested) ? Math.trunc(requested) : 6));
+        const result = await searchOwnerHistory(dataDirectory, query, { limit, scope, conversationId });
+        onSearch?.({
+          query,
+          scope,
+          limit,
+          hitCount: result.hits.length,
+          hits: result.hits.map((hit) => ({
+            conversationId: hit.conversationId,
+            at: hit.at,
+            score: hit.score,
+            excerpt: hit.excerpt,
+            source: hit.source,
+          })),
+        });
+        return {
+          content: [{ type: "text", text: formatHistorySearch(result, conversationId) }],
+          details: { matches: result.hits.length },
+        };
+      },
     }
     : tool);
-}
-
-async function searchLedger(dataDirectory: string, query: string, limit: number, conversationId: string): Promise<string> {
-  const terms = tokenize(query);
-  if (terms.length === 0) return "No search terms were provided.";
-  const records = (await readMainAgentTurnRecords(dataDirectory))
-    // A task reads its own past, not another task's. 任务只读自己的过去，不读别的任务。
-    .filter((record) => record.status === "completed" && conversationIdOf(record.conversationId) === conversationId);
-  const scored: Array<{ at: string; score: number; excerpt: string }> = [];
-  for (const record of records) {
-    const haystack = `${record.text}\n${record.reply ?? ""}`.toLocaleLowerCase();
-    const matched = terms.filter((term) => haystack.includes(term.toLocaleLowerCase()));
-    if (matched.length === 0) continue;
-    scored.push({
-      at: record.startedAt,
-      score: matched.length / terms.length,
-      excerpt: `${record.text}\n— ${record.reply ?? ""}`.slice(0, 600),
-    });
-  }
-  scored.sort((left, right) => right.score - left.score);
-  if (scored.length === 0) return "No matching past turns were found in the native transcript.";
-  const take = Math.max(1, Math.min(20, Number.isFinite(limit) ? Math.trunc(limit) : 6));
-  return scored.slice(0, take).map((item) => `[${item.at}] ${item.excerpt}`).join("\n\n");
 }
 
 async function buildHistory(
