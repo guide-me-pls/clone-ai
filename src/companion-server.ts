@@ -2699,21 +2699,32 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
   // 独立会话，就使每条消息都裂变出一个新的对话框。这些 Run 仍留在 Journal 与审计里，
   // 侧栏只显示任务。
   const taskRuns = visibleRuns.filter((run) => !isConversationalRun(state, run));
-  // A request that dispatched no task is still a request. The sidebar used to
-  // list only task Runs, so "整理今天的工作信息" vanished as soon as the Main
-  // Agent answered directly. The turn ledger already records every request and
-  // answer; a conversation without a visible task becomes one row, while a
-  // conversation whose tasks are listed is represented by those task rows and
-  // never duplicated.
-  // 没有派发任务的请求仍然是请求。侧栏过去只列任务 Run，因此"整理今天的工作信息"在主 Agent
-  // 直接作答后就消失了。回合台账已经记录了每次请求与回答；没有可见任务的对话成为一行，
-  // 而任务已列出的对话由任务行代表，绝不重复。
-  const conversationWithRuns = new Set(
-    taskRuns.map((run) => derived.get(run.id)).filter((id): id is string => id !== undefined),
-  );
+  // Every conversation is a row; the Runs its turns dispatched are its
+  // children. The row is the thread, so the owner reads one kind at the top
+  // level instead of a row that is a conversation or a task depending on
+  // whether this request dispatched work. The main conversation stays the
+  // fixed control surface and never becomes a row; its tasks are grouped under
+  // a non-row header by the UI.
+  // 每个对话都是行，回合派发的 Run 是它的子行。顶层只有一种行，所有者不必先判断这次请求
+  // 有没有派发工作。主对话仍是固定操作面，永不成行；它的任务由界面放在不可点击的分组标题下。
+  const taskSessions: DashboardSession[] = taskRuns.map((run) => {
+    const conversationId = derived.get(run.id);
+    return {
+      ...toSessionSummary(run, tasks, describeRunFailure(run, eventsByRun.get(run.id) ?? []).reason),
+      updatedAtMs: Date.parse(run.updatedAt),
+      ...(conversationId === undefined ? {} : { conversationId, parentId: conversationId }),
+    };
+  });
+  const childrenByConversation = new Map<string, DashboardSession[]>();
+  for (const session of taskSessions) {
+    if (session.parentId === undefined) continue;
+    const list = childrenByConversation.get(session.parentId) ?? [];
+    list.push(session);
+    childrenByConversation.set(session.parentId, list);
+  }
   const conversationSessions = conversationRowsFromTurns(turns, {
     excludeConversationIds: deletedConversationIds,
-    conversationWithRuns,
+    childrenByConversation,
   });
   // Runs the Main Agent proposed are tasks of the conversation that asked for
   // them, not sibling chats: one request must not read as two conversations in
@@ -2721,16 +2732,8 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
   // 主 Agent 提案的 Run 是请求它们的对话的任务，而不是同级对话：一次请求不应在侧栏读成两个
   // 对话，由新任务派生的任务也应留在该任务下。`derived` is computed before the visibility
   // filter so a hidden conversation takes its later runs with it.
-  // 列表是派发的任务，不是对话。
-  const allSessions: DashboardSession[] = [...conversationSessions, ...taskRuns
-    .map((run) => {
-      const conversationId = derived.get(run.id);
-      return {
-        ...toSessionSummary(run, tasks, describeRunFailure(run, eventsByRun.get(run.id) ?? []).reason),
-        updatedAtMs: Date.parse(run.updatedAt),
-        ...(conversationId === undefined ? {} : { conversationId }),
-      };
-    })]
+  // 列表是对话与它的任务，不是同级会话。
+  const allSessions: DashboardSession[] = [...conversationSessions, ...taskSessions]
     .sort((left, right) => right.updatedAtMs - left.updatedAtMs);
   // Legacy builds created a fresh Run every time the owner accepted the same
   // failed-task card. Group those identical failures so the sidebar reflects
@@ -2790,7 +2793,7 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
     subagents,
     completed,
     memories,
-    sessions: groupedSessions.slice(0, 40).map(({ updatedAtMs: _updatedAtMs, duplicateCount: _duplicateCount, ...summary }) => summary),
+    sessions: capSessionRows(groupedSessions, 40).map(({ updatedAtMs: _updatedAtMs, duplicateCount: _duplicateCount, ...summary }) => summary),
     deletedConversations: (await sessions.deletedConversations())
       .map((entry) => {
         const latest = turns
@@ -2928,32 +2931,139 @@ function toMainAgentTurnSummary(
 }
 
 /**
- * One row for every conversation that dispatched no visible task.
+ * One row for every conversation, with the Runs it dispatched as children.
  *
- * The main conversation is the owner's control surface, not a row. A
- * conversation whose tasks are visible is represented by those task rows, so
- * one request never reads as two entries; a hidden conversation stays hidden.
- * 每个没有派发可见任务的对话一行。
+ * The row's title is the first request, so the sidebar does not rename a thread
+ * every turn; the preview and status follow the latest turn or child. The main
+ * conversation never appears: it is the owner's control surface, not a row. A
+ * hidden conversation stays hidden.
+ * 每个对话一行，派发的 Run 作为子行。
  *
- * 主对话是所有者的操作面，不是一行。任务已可见的对话由那些任务行代表，因此一次请求绝不会
- * 读成两条；被隐藏的对话保持隐藏。
+ * 标题取第一个请求，侧栏不会每回合重命名线索；预览与状态跟随最近的回合或子任务。主对话
+ * 永不出现：它是所有者的操作面，不是一行。被隐藏的对话保持隐藏。
  */
 function conversationRowsFromTurns(
   turns: readonly MainAgentTurnRecord[],
-  options: { excludeConversationIds: ReadonlySet<string>; conversationWithRuns: ReadonlySet<string> },
+  options: {
+    excludeConversationIds: ReadonlySet<string>;
+    childrenByConversation: ReadonlyMap<string, readonly DashboardSession[]>;
+  },
 ): DashboardSession[] {
-  const latest = new Map<string, MainAgentTurnRecord>();
+  const turnsByConversation = new Map<string, MainAgentTurnRecord[]>();
   for (const turn of turns) {
     const id = conversationIdOf(turn.conversationId);
-    if (id === MAIN_AGENT_SESSION_ID || options.excludeConversationIds.has(id) || options.conversationWithRuns.has(id)) continue;
-    const at = turn.completedAt ?? turn.startedAt;
-    const current = latest.get(id);
-    if (current === undefined || at >= (current.completedAt ?? current.startedAt)) latest.set(id, turn);
+    if (id === MAIN_AGENT_SESSION_ID || options.excludeConversationIds.has(id)) continue;
+    const list = turnsByConversation.get(id) ?? [];
+    list.push(turn);
+    turnsByConversation.set(id, list);
   }
-  return [...latest.entries()].map(([conversationId, turn]) => ({
-    ...toMainAgentTurnSummary(turn, conversationId),
-    kind: "conversation" as const,
-  }));
+  // Only the turn ledger can open a conversation view. A run whose derived
+  // conversation has no turn row is shown as a standalone task by the UI, not
+  // as a conversation row that would 404 when selected.
+  // 只有回合台账能打开对话视图。派生对话没有回合行的 Run 由界面按独立任务显示，
+  // 而不是生成一条点开就 404 的对话行。
+  const ids = new Set(turnsByConversation.keys());
+  ids.delete(MAIN_AGENT_SESSION_ID);
+  return [...ids].map((conversationId) => {
+    const records = (turnsByConversation.get(conversationId) ?? [])
+      .sort((left, right) => Date.parse(left.completedAt ?? left.startedAt) - Date.parse(right.completedAt ?? right.startedAt));
+    const first = records[0];
+    const latest = records.at(-1);
+    const children = [...(options.childrenByConversation.get(conversationId) ?? [])]
+      .sort((left, right) => right.updatedAtMs - left.updatedAtMs);
+    // Children are sorted newest first, so the earliest one is last and names
+    // a thread that has runs but no turn ledger row.
+    // 子行按最新在前排序，最早的一条在末尾；没有回合台账行的线程用它命名。
+    const firstChild = children.at(-1);
+    const title = first === undefined
+      ? firstChild?.title ?? "Main Agent 对话"
+      : toMainAgentTurnSummary(first, conversationId).title;
+    const status = conversationStatus(latest, children);
+    const updatedAtMs = Math.max(
+      latest === undefined ? 0 : Date.parse(latest.completedAt ?? latest.startedAt),
+      ...children.map((child) => child.updatedAtMs),
+    );
+    return {
+      id: conversationId,
+      title,
+      status,
+      updatedAt: new Date(updatedAtMs).toISOString(),
+      preview: conversationPreview(status, records, children),
+      kind: "conversation" as const,
+      childCount: children.length,
+      updatedAtMs,
+    };
+  });
+}
+
+/** A Run still occupying a slot or waiting on the owner. 仍占槽位或等待所有者的 Run 状态。 */
+const ACTIVE_RUN_STATUSES = new Set(["planning", "queued", "running", "verifying"]);
+
+/**
+ * The row status is an aggregate, in the order that matters to the owner:
+ * a pending decision, then work in flight, then the newest outcome.
+ * 行状态是聚合状态，按所有者关心的顺序：待决定、进行中、最新结果。
+ */
+function conversationStatus(
+  latestTurn: MainAgentTurnRecord | undefined,
+  children: readonly { status: string; updatedAtMs: number }[],
+): string {
+  if (children.some((child) => child.status === "waiting_approval")) return "waiting_approval";
+  if (children.some((child) => child.status === "waiting_review")) return "waiting_review";
+  if (children.some((child) => ACTIVE_RUN_STATUSES.has(child.status))) return "running";
+  const latestChild = [...children].sort((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
+  const childAt = latestChild?.updatedAtMs ?? 0;
+  const turnAt = latestTurn === undefined ? 0 : Date.parse(latestTurn.completedAt ?? latestTurn.startedAt);
+  // An older child failure followed by a completed turn is history, not the
+  // row's current state. 子任务较早的失败之后回合已完成，那是历史，不是行当前的状态。
+  if (latestChild !== undefined && childAt >= turnAt
+    && (latestChild.status === "failed" || latestChild.status === "cancelled")) return "failed";
+  if (latestTurn !== undefined && turnAt >= childAt
+    && (latestTurn.status === "failed" || latestTurn.status === "interrupted")) return "failed";
+  if (latestTurn?.status === "started") return "running";
+  return "completed";
+}
+
+function conversationPreview(
+  status: string,
+  records: readonly MainAgentTurnRecord[],
+  children: readonly DashboardSession[],
+): string {
+  const waitingApproval = children.filter((child) => child.status === "waiting_approval").length;
+  if (waitingApproval > 0) return `${waitingApproval} 个任务等待你的确认`;
+  const waitingReview = children.filter((child) => child.status === "waiting_review").length;
+  if (waitingReview > 0) return `${waitingReview} 个任务等待你的复核`;
+  const active = children.filter((child) => ACTIVE_RUN_STATUSES.has(child.status)).length;
+  if (active > 0) return `${active} 个任务正在执行`;
+  const latestTurn = records.at(-1);
+  const latestChild = [...children].sort((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
+  const turnAt = latestTurn === undefined ? 0 : Date.parse(latestTurn.completedAt ?? latestTurn.startedAt);
+  if (latestChild !== undefined && latestChild.updatedAtMs > turnAt) return latestChild.preview;
+  if (latestTurn === undefined) return "这轮对话没有返回文字";
+  return toMainAgentTurnSummary(latestTurn).preview;
+}
+
+/**
+ * Cap root sessions, not rows: a conversation's children travel with it so a
+ * slice cannot orphan a task. 按根会话截断，而不是按行：对话的子行随它一起保留，
+ * 切片不会让任务失去父行。
+ */
+function capSessionRows(sessions: readonly DashboardSession[], limit: number): DashboardSession[] {
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const hasConversationParent = (session: DashboardSession): boolean =>
+    session.parentId !== undefined
+    && session.parentId !== MAIN_AGENT_SESSION_ID
+    && byId.get(session.parentId)?.kind === "conversation";
+  const roots = sessions.filter((session) => !hasConversationParent(session));
+  const keptRoots = [...roots]
+    .sort((left, right) => right.updatedAtMs - left.updatedAtMs)
+    .slice(0, limit);
+  const keptIds = new Set(keptRoots.map((session) => session.id));
+  const children = sessions.filter((session) => {
+    const parentId = session.parentId;
+    return parentId !== undefined && hasConversationParent(session) && keptIds.has(parentId);
+  });
+  return [...keptRoots, ...children].sort((left, right) => right.updatedAtMs - left.updatedAtMs);
 }
 
 async function buildMainAgentConversation(
@@ -3175,6 +3285,24 @@ async function buildMainAgentConversation(
         const { updatedAtMs: _updatedAtMs, duplicateCount: _duplicateCount, ...value } = summary;
         return { ...value, kind: "conversation" as const };
       })();
+  // The sidebar row and this view must agree on the thread's current state.
+  // The row aggregates the latest turn with the Runs' states; the pane uses the
+  // same rule and the first request as its stable name. The main conversation
+  // stays the control surface with its own turn status.
+  // 侧栏行与本视图必须对线程的当前状态给出一致答案。行把最近回合与 Run 状态聚合；面板用同一
+  // 规则，并以第一个请求作为稳定名称。主对话仍是操作面，沿用自身回合状态。
+  if (!isMainConversation) {
+    const conversationRuns = visibleRuns.filter((run) => derived.get(run.id) === conversationId);
+    sessionSummary.status = conversationStatus(
+      turns.at(-1),
+      conversationRuns.map((run) => ({ status: run.status, updatedAtMs: Date.parse(run.updatedAt) })),
+    );
+    sessionSummary.childCount = conversationRuns.length;
+    sessionSummary.title = plainText(turns[0]?.text ?? sessionSummary.title).slice(0, 80) || sessionSummary.title;
+    const latestRunAt = conversationRuns.reduce((latest, run) => Math.max(latest, Date.parse(run.updatedAt) || 0), 0);
+    const updatedAtMs = Math.max(Date.parse(sessionSummary.updatedAt) || 0, latestRunAt);
+    sessionSummary.updatedAt = new Date(updatedAtMs).toISOString();
+  }
   const latestUser = [...history].reverse().find((message) => message.speaker === "user");
   // The main conversation is the owner's control surface: every waiting run and
   // every visible subagent is shown here, so a child task record is for reading,
@@ -3308,9 +3436,17 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
   // message sent from this task record reaches that task's context.
   // 请求该 Run 的对话保存在 Trigger 上，从本任务记录发送的消息因此进入该任务的上下文。
   const triggerPayload = asRecord(asRecord(trigger?.payload).payload);
-  const conversationId = conversationIdOf(
-    typeof triggerPayload.conversationId === "string" ? triggerPayload.conversationId : undefined,
-  );
+  // A missing conversation is only "the main conversation" when the Main Agent
+  // dispatched the run and omitted the id (legacy rows). A scheduled, repair or
+  // desktop request has no conversation; defaulting it to the main one sent a
+  // follow-up into the wrong thread.
+  // 只有 Main Agent 派发且省略了 id 的 Run（旧记录）才把缺省值当主对话。定时、修复或桌面
+  // 请求没有对话；把它们默认成主对话，会把追问送进错误的线程。
+  const conversationId = typeof triggerPayload.conversationId === "string" && triggerPayload.conversationId.length > 0
+    ? triggerPayload.conversationId
+    : triggerPayload.source === "main-agent"
+      ? MAIN_AGENT_DEFAULT_CONVERSATION_ID
+      : undefined;
   // Only a run the Main Agent proposed has a dispatcher to show. A task created
   // by a desktop request has no Main Agent conversation.
   // 只有 Main Agent 提案的 Run 才有可显示的派发者。桌面请求创建的任务没有 Main Agent 对话。
@@ -3363,7 +3499,7 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
   }));
   return {
     ...toSessionSummary(run, tasks, describeRunFailure(run, runEvents).reason),
-    conversationId,
+    ...(conversationId === undefined ? {} : { conversationId, parentId: conversationId }),
     ...(dispatchedBy === undefined ? {} : { dispatchedBy }),
     query,
     evidenceCount,

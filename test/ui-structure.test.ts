@@ -639,24 +639,34 @@ test("decisions are confirmed on the task record that owns the run", async () =>
   // 等待中的决定固定在面板顶部，而不是留在日志末尾。
   assert.match(app, /function decisionDock\(session\)/);
   assert.match(app, /\$\{decisionDock\(session\)\}/);
-  // The sidebar lists every request: a conversation that answered without
-  // dispatching a task is a row too, marked 对话; a waiting task is promoted
-  // into its own section and flagged in the row. The audit's record list stays
-  // tasks-only because a conversation is not a Run.
-  // 侧栏列出每一次请求：没有派发任务就作答的对话也是一行，并标注"对话"；等待中的任务被提升
-  // 到独立分区，并在行内标记。审计的记录列表仍只列任务，因为对话不是 Run。
-  assert.match(app, /const blocks = rawSessions\s*\.map\(/);
-  assert.doesNotMatch(app, /const blocks = rawSessions[\s\S]{0,80}kind !== "conversation"/);
-  assert.match(app, /class="session-kind"/);
-  assert.match(app, /const records = sessions\.filter\(\(session\) => session\.kind !== "conversation"\)/);
-  assert.doesNotMatch(app, /data-child-group/);
+  // The sidebar has one top-level kind: a conversation row with its dispatched
+  // tasks nested. A waiting task is promoted into its own section and flagged
+  // in the row; the main conversation is a navigation entry, and runs with no
+  // conversation live under 定时/自动. The audit's record list stays tasks-only
+  // because a conversation is not a Run.
+  // 侧栏顶层只有一种行：对话行与其派发任务的子行。等待中的任务提升到独立分区并在行内标记；
+  // 主对话是导航入口，没有对话的 Run 放在"定时/自动"下。审计的记录列表仍只列任务，
+  // 因为对话不是 Run。
+  assert.match(app, /const conversations = rawSessions\.filter\(\(session\) => session\.kind === "conversation"\)/);
+  assert.match(app, /const tasks = rawSessions\.filter\(\(session\) => session\.kind !== "conversation"\)/);
+  assert.match(app, /data-child-group="\$\{escape\(block\.session\.id\)\}"/);
+  assert.match(app, /class="session-children"/);
   assert.match(app, /session-group-needs/);
+  assert.match(app, /session-group-main/);
+  assert.match(app, /session-group-auto/);
   assert.match(app, /session-flag-approval/);
   assert.match(app, /session-flag-review/);
   assert.match(app, /needs-you/);
+  // The conversation row no longer carries a species badge; nesting says what
+  // a child is. 对话行不再携带种类徽章；嵌套本身说明子行是什么。
+  assert.doesNotMatch(app, /class="session-kind"/);
+  assert.match(app, /const records = sessions\.filter\(\(session\) => session\.kind !== "conversation"\)/);
   assert.match(index, /id="open-conversation"/);
   assert.match(css, /\.session-flag/);
   assert.match(css, /\.session-item\.is-attention/);
+  const auditCss = await read("audit.css");
+  assert.match(auditCss, /\.session-item\.is-child/);
+  assert.match(auditCss, /\.session-children/);
   // A saved workspace that differs from the running one says it needs a restart.
   // 已保存但不同于运行中的工作区会标明需要重启。
   assert.match(app, /workspace-saved-restart/);
@@ -1020,11 +1030,11 @@ test("a new request is routed, and a task record names its dispatcher", async ()
     { escape: (value: unknown) => String(value ?? "") },
   ) as (session: unknown) => string;
   const markup = dispatchSourceMarkup({ id: "run-1", dispatchedBy: "conversation-abc" });
-  assert.match(markup, /派发者/);
+  assert.match(markup, /所属对话/);
   assert.match(markup, /data-open-conversation="conversation-abc"/);
-  assert.match(dispatchSourceMarkup({ id: "run-2", dispatchedBy: "main-agent-conversation" }), /主对话的 Main Agent/);
-  // A conversation view has no dispatcher line, and a run with no dispatcher has none either.
-  // 对话视图没有派发者行；没有派发者的 Run 也没有。
+  assert.match(dispatchSourceMarkup({ id: "run-2", dispatchedBy: "main-agent-conversation" }), /来自主对话/);
+  // A conversation view has no parent line, and a run with no parent has none either.
+  // 对话视图没有所属对话行；没有父对话的 Run 也没有。
   assert.equal(dispatchSourceMarkup({ id: "conversation-a", kind: "conversation", dispatchedBy: "conversation-a" }), "");
   assert.equal(dispatchSourceMarkup({ id: "run-3" }), "");
 });

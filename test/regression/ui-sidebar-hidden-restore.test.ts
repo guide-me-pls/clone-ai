@@ -181,10 +181,19 @@ function createSidebar(source: string) {
     t,
     escape: escapeHtml,
     plainPreview: (value: unknown) => String(value ?? ""),
+    shortName: (value: unknown) => String(value ?? ""),
     day: () => "day",
     time: () => "time",
     statusMeta: (status: unknown) => ({ label: String(status ?? ""), className: "running", dot: "running" }),
     icon: () => "",
+    // The grouping logic is what this sandbox tests; the row markup and the
+    // small labels are stubs so the slice stays one function.
+    // 本沙箱验证分组逻辑；行标记与小标签用桩，切片仍只包含一个函数。
+    sessionMarkup: (session: any, options: any = {}) => `<div class="session-item${options.child ? " is-child" : ""}" data-test-session="${session.id}">${session.title ?? ""}</div>`,
+    sessionTime: (session: any) => Date.parse(session.updatedAt) || 0,
+    isZhLocale: () => true,
+    taskCountLabel: (count: number) => `${count} 个任务`,
+    childSummary: () => "已完成",
     MAIN_CONVERSATION_ID: "main-agent-conversation",
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     setTimeout,
@@ -266,4 +275,45 @@ test("the same sandbox reaches the hidden group when a session is visible", asyn
     /data-restore-conversation/,
     "the hidden group renders alongside visible sessions, so the sandbox itself is sound",
   );
+});
+
+test("the sidebar nests a conversation's tasks and promotes a waiting one", async () => {
+  const sidebar = createSidebar(renderSessionsSource);
+  const at = new Date().toISOString();
+  const conversation = {
+    id: "conversation-x", kind: "conversation", title: "整理资料",
+    status: "waiting_approval", preview: "1 个任务等待你的确认", updatedAt: at, childCount: 2,
+  };
+  const running = {
+    id: "run-running", parentId: "conversation-x", conversationId: "conversation-x",
+    title: "派发一", status: "running", preview: "正在执行", updatedAt: at,
+  };
+  const waiting = {
+    id: "run-waiting", parentId: "conversation-x", conversationId: "conversation-x",
+    title: "派发二", status: "waiting_approval", preview: "等待确认", updatedAt: at,
+  };
+  const mainTask = {
+    id: "run-main", parentId: "main-agent-conversation", conversationId: "main-agent-conversation",
+    title: "主对话的任务", status: "completed", preview: "完成", updatedAt: at,
+  };
+  const scheduled = { id: "run-scheduled", title: "定时跑", status: "completed", preview: "完成", updatedAt: at };
+  const sessions = [conversation, running, waiting, mainTask, scheduled];
+  sidebar.state.dashboard.sessions = sessions;
+
+  await sidebar.renderSessions(sessions);
+  const markup = sidebar.markup();
+
+  // One top-level conversation, its non-waiting child nested, the waiting child
+  // promoted, and the two conversation-less origins in their own groups.
+  // 一个顶层对话，非等待子行内嵌，等待子行被提升；两个没有对话的来源各归其组。
+  assert.match(markup, /data-child-group="conversation-x"/);
+  assert.match(markup, /class="session-group session-group-needs"/);
+  assert.match(markup, /class="session-group">(?:主对话|session-group-main)</);
+  assert.match(markup, /class="session-group">(?:定时\/自动|session-group-auto)</);
+  const occurrences = (id: string) => (markup.match(new RegExp(`data-test-session="${id}"`, "g")) ?? []).length;
+  assert.equal(occurrences("conversation-x"), 1, "the conversation is one row");
+  assert.equal(occurrences("run-running"), 1, "the running task is nested once");
+  assert.equal(occurrences("run-waiting"), 1, "the waiting task is promoted, not repeated in the group");
+  assert.equal(occurrences("run-main"), 1, "the main conversation's task has its own group");
+  assert.equal(occurrences("run-scheduled"), 1, "a conversation-less task sits under 定时/自动");
 });

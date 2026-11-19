@@ -483,6 +483,56 @@ test("a derived task belongs to the conversation, and hiding the chat hides it t
   }
 });
 
+test("a conversation row owns its dispatched runs and aggregates their status", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const assembly = await createRuntimeAssembly({ dataDirectory });
+  try {
+    const at = "2026-11-04T09:00:00.000Z";
+    await writeFile(join(dataDirectory, "main-agent-turns.jsonl"), `${JSON.stringify({
+      id: "turn-x", text: "整理资料", status: "completed",
+      startedAt: at, completedAt: at, reply: "已整理。", conversationId: "conversation-x",
+    })}\n`, "utf8");
+    const first = await assembly.runtime.acceptTrigger({
+      kind: "query", summary: "派发一", payload: { source: "main-agent", conversationId: "conversation-x" },
+    });
+    await assembly.runtime.attachPlan(first.run.id, {
+      summary: "派发一",
+      steps: [{ id: "send", title: "发送", instructions: "发送到外部", risk: "external_side_effect", acceptanceCriteria: ["receipt"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+    });
+    const paused = await assembly.runtime.execute(first.run.id, new StaticAgentRegistry([]));
+    assert.equal(paused.status, "waiting_approval");
+    const second = await assembly.runtime.acceptTrigger({
+      kind: "query", summary: "派发二", payload: { source: "main-agent", conversationId: "conversation-x" },
+    });
+    await assembly.runtime.attachPlan(second.run.id, {
+      summary: "派发二",
+      steps: [{ id: "draft", title: "起草", instructions: "起草", risk: "reversible_write", acceptanceCriteria: ["草稿"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+    });
+
+    const dashboard = await (await companionFetch(url, token, "/api/dashboard")).json() as {
+      sessions: Array<{
+        id: string; kind?: string; status: string; title: string;
+        childCount?: number; parentId?: string; conversationId?: string;
+      }>;
+    };
+    const conversation = dashboard.sessions.find((session) => session.id === "conversation-x");
+    assert.equal(conversation?.kind, "conversation", "the conversation is a row");
+    assert.equal(conversation?.title, "整理资料", "the first request names the thread");
+    assert.equal(conversation?.childCount, 2, "both dispatched runs belong to it");
+    assert.equal(conversation?.status, "waiting_approval", "a waiting child colors the parent row");
+    const children = dashboard.sessions.filter((session) => session.parentId === "conversation-x");
+    assert.deepEqual(new Set(children.map((child) => child.id)), new Set([first.run.id, second.run.id]));
+    assert.ok(children.every((child) => child.conversationId === "conversation-x"));
+    assert.equal(
+      dashboard.sessions.filter((session) => session.id === "conversation-x").length,
+      1,
+      "the conversation is not duplicated beside its children",
+    );
+  } finally {
+    assembly.close();
+  }
+});
+
 test("a paused run is offered for phone approval and the request is journaled", async (t) => {
   const { url, token, dataDirectory } = await companion(t);
   const assembly = await createRuntimeAssembly({ dataDirectory });

@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The sidebar's top level is the conversation, and tasks nest inside it
+
+The sidebar now has one top-level kind: a conversation. The tasks its turns dispatched are collapsible children, with a count and a running/waiting/failed summary. Tasks dispatched by the main conversation sit under a non-row 主对话 header; scheduled, repair and opportunity runs sit under 定时/自动. A waiting child is still promoted into 需要你的确认, so a decision is never hidden inside a collapsed group. The owner-facing words are now 新请求 (the action), 对话 (the thread), 任务 (one bounded Run) and 定时 (the schedule); 最近任务, the peer 任务记录 kind, 任务对话 and 个人对话 are gone, and a task record's top bar is a breadcrumb back to its conversation. A task with no conversation no longer sends a follow-up into the main conversation: sending from its record starts a new request. The dashboard row is the thread, named by its first request, and its status aggregates waiting > running > recent failure > completed.
+
+侧栏现在只有一种顶层行：对话。回合派发的任务是可折叠的子行，摘要显示数量与运行中/待确认/失败的分布。主对话派发的任务放在不可点击的"主对话"标题下；定时、修复与机会卡 Run 放在"定时/自动"下。等待中的子任务仍被提升到"需要你的确认"，决定不会被折叠组藏起来。所有者词表现在是"新请求（动作）、对话（线程）、任务（一次有界 Run）、定时（计划规则）"；"最近任务"、作为并列种类的"任务记录"、"任务对话"与"个人对话"已移除，任务记录顶栏改为回到所属对话的面包屑。没有对话的任务不再把追问送进主对话：从它的记录发送会作为新请求开始。Dashboard 的行是线程，以第一个请求命名，状态聚合为等待 > 运行中 > 最近失败 > 已完成。
+
 ### A repeated tool call stops the turn instead of looping until the provider stops it
 
 The shared agent loop now warns once when the same call returns the same result three times in a row, and ends the turn at five with a new `no_progress` failure. It compares the tool name, the arguments regardless of JSON key order, and the result text, so a call whose result changes is still progress. The Main Agent is also told that a run proposed by `propose_work_plan` advances on its own: it reports the runId, ends the turn, and never polls `get_run_status`; a live run's status now ends with "Snapshot only — calling this again does not change it." This closes the 2026-11-19 failure where eight identical `get_run_status` calls were stopped by the external model gateway, whose notice was recorded as a completed reply.

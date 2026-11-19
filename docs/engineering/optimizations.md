@@ -31,6 +31,85 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — The sidebar's top level is the conversation, with its tasks nested
+
+- **Goal / hypothesis:** the owner's complaint was that having both 对话 and
+  任务 costs too much to learn. The hypothesis is that the cost is not the
+  existence of two runtime objects but the flat mixed list and the unstable
+  referents: a row is a conversation or a Run depending on whether that request
+  dispatched work, and 任务 names the new-request action, the list header, a
+  schedule rule, a Run record and a child Run. One top-level kind — the
+  conversation — with its Runs nested, plus 主对话/定时 groups for Runs without a
+  conversation row, should leave one hierarchy and one word per level.
+- **Trade-off:** [The sidebar's top level is the conversation; tasks nest inside it](../architecture/trade-offs.md#2026-11-19--the-sidebars-top-level-is-the-conversation-tasks-nest-inside-it).
+- **Change:** `src/companion-server.ts` builds a row for every conversation,
+  attaches `parentId`/`childCount` to task rows, aggregates the parent status
+  (waiting > running > recent failure > completed), keeps children with their
+  parent under the root cap, and stops `buildSession` defaulting a
+  conversation-less trigger to the main conversation. `apps/desktop/ui/app.js`
+  nests task rows under conversation rows, promotes waiting children, groups
+  main-conversation tasks under a non-row 主对话 header and conversation-less
+  runs under 定时/自动, routes a send from a conversation-less task record as a
+  new request, and replaces the species badge/topbar labels with the
+  新请求/对话/任务/定时 vocabulary. `apps/desktop/ui/index.html`,
+  `src/desktop/ui-locale.ts` and the desktop README labels follow.
+- **Eval:** `node --experimental-strip-types --test test/companion-control-plane.test.ts test/ui-structure.test.ts test/ui-locale.test.ts test/regression/ui-sidebar-hidden-restore.test.ts`
+  — **59/59**. The new deterministic cases: one conversation with two spawned
+  Runs returns one conversation row (`childCount: 2`, aggregate
+  `waiting_approval`) and two children carrying `parentId`; the sidebar sandbox
+  renders one parent + one nested running child, promotes the waiting child
+  once, and puts the main-conversation task and the scheduled run in their own
+  groups. Before the change the new server case fails (no conversation row, no
+  `parentId`/`childCount`) and the sandbox case fails (no `data-child-group`);
+  the old test pinned the absence of `data-child-group` and the 对话 badge.
+  **In an isolated tree containing only this change** (HEAD plus the sidebar
+  work, without the concurrent refactor), `npm test` passes **917/917**,
+  `npm run typecheck` passes, and `npm run gate` **PASS** with `baseline
+  unchanged`; the targeted suite is **58/58** there (the shared tree also runs
+  one concurrent UI test, hence 59/59). In the shared worktree the full suite
+  was **908/919** with 11 failures: six repair-lane cases, one 20-second
+  killed-executor concurrency case, one write-scope default case, one
+  configured-workspace instruction case, one golden-path case, and one
+  browser-preview entry created by an untracked `.claude/launch.json`. None
+  touched the sidebar code; `npm run gate` there still reported the concurrent
+  `policy/local-write-allowed` baseline change (`allowed -> denied`).
+- **Benchmark run:** none — a deterministic UI/read-model contract; no
+  provider, model, dataset, seed or scoring parameters.
+- **Execution chain:** a 9-agent workflow mapped the runtime, UI and decision
+  history, generated three candidate models and judged them from three lenses
+  (25.9 min, 1.37M subagent tokens, 563 tool uses). The main agent then wrote
+  the bilingual trade-off, implemented the server read model and the UI, added
+  the two evals, and ran the targeted suite. Two fixes during the chain: the
+  child-group summary double-counted waiting children (use the visible children
+  for the summary), and the regression sandbox needed stubs for the row/label
+  helpers the slice does not include. The shared working tree also carried a
+  concurrent refactor, so the commit was rebuilt in a detached worktree from
+  HEAD plus only this change; there `npm test` passed 917/917, typecheck passed
+  and the gate passed. The split needed one manual hunk review: the concurrent
+  refactor had added negative workspace assertions inside the same test hunk as
+  the sidebar assertions; those were removed from the commit while the HEAD
+  workspace assertions stayed.
+- **Pros:** the hierarchy matches the runtime relation instead of inventing a
+  session object; it reuses the existing `.session-children`/`.is-child` CSS,
+  `openChildGroups` state and `parentId`/`childCount` fields; the waiting child
+  remains on page one; the new evals pin the parent/child relation and the
+  promoted decision.
+- **Cons / next time:** the shared working tree carried a concurrent
+  workspacePath/write-scope refactor, so that tree's typecheck and full suite
+  were red for reasons outside this change. Isolating the commit in a detached
+  worktree from HEAD plus only this change produced a green 917/917 and a gate
+  PASS; next time, start in that isolated tree rather than splitting the commit
+  afterwards. The one-request/one-Run case still renders a parent and a nearly
+  identical child, and the learning-cost gain is assumed — no owner usability
+  check was run. `optimization-results.md` gets no entry: the deterministic eval
+  pins the shape, not a measured reduction in learning cost.
+- **Reversal condition:** if grouped rows make dispatched work hard to find, add
+  a flat task filter or fall back to the task-only list; if the parent/child
+  duplication for one-request/one-Run conversations confuses owners, collapse a
+  single-child group into the parent row. Do not hide direct answers again. If
+  owners need every Run as a top-level row, add a "tasks" view rather than
+  removing the conversation parent.
+
 ### 2026-11-19 — Agent settings stop printing the loopback URL and the duplicate raw model id
 
 - **Goal / hypothesis:** the owner's two screenshots mark the Magpie loopback
