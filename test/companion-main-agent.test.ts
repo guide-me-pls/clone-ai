@@ -334,3 +334,112 @@ test("shutdown completes while an SSE stream is still open", async (t) => {
   assert.equal(outcome, "closed", "an open stream must not block shutdown");
   assert.ok(Date.now() - started < 5_000);
 });
+
+test("a turn sends the model and effort chosen in the composer to the provider", async (t) => {
+  // The composer's pickers must change what the provider is asked for, not only
+  // the audit row. The effort was previously read and recorded but never put
+  // into the request body, so this test also pins that wiring.
+  // 输入框的选择器必须改变真正发给 Provider 的请求，而不只是审计行。强度此前只被读取与
+  // 记录、从未进入请求体，因此这个测试同时钉住这条接线。
+  const bodies: Array<{ model?: string; reasoning_effort?: string }> = [];
+  const modelServer = createServer((request, response) => {
+    if (request.url !== "/v1/chat/completions") {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    let raw = "";
+    request.on("data", (chunk) => { raw += String(chunk); });
+    request.on("end", () => {
+      try {
+        bodies.push(JSON.parse(raw) as { model?: string; reasoning_effort?: string });
+      } catch {
+        bodies.push({});
+      }
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\n\ndata: [DONE]\n\n`);
+    });
+  });
+  await new Promise<void>((resolve) => modelServer.listen(0, "127.0.0.1", resolve));
+  const address = modelServer.address();
+  if (address === null || typeof address === "string") throw new Error("The fake model did not bind a port.");
+  const saved = {
+    model: process.env.CLONE_AI_NATIVE_MODEL,
+    base: process.env.CLONE_AI_NATIVE_BASE_URL,
+    effort: process.env.CLONE_AI_MAIN_EFFORT,
+  };
+  process.env.CLONE_AI_NATIVE_MODEL = "settings-model";
+  process.env.CLONE_AI_NATIVE_BASE_URL = `http://127.0.0.1:${address.port}`;
+  delete process.env.CLONE_AI_MAIN_EFFORT;
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-companion-choice-"));
+  const server = await startCompanionServer({ port: 0, dataDirectory });
+  t.after(async () => {
+    await server.close();
+    modelServer.closeAllConnections?.();
+    await new Promise<void>((resolve) => modelServer.close(() => resolve()));
+    if (saved.model === undefined) delete process.env.CLONE_AI_NATIVE_MODEL;
+    else process.env.CLONE_AI_NATIVE_MODEL = saved.model;
+    if (saved.base === undefined) delete process.env.CLONE_AI_NATIVE_BASE_URL;
+    else process.env.CLONE_AI_NATIVE_BASE_URL = saved.base;
+    if (saved.effort === undefined) delete process.env.CLONE_AI_MAIN_EFFORT;
+    else process.env.CLONE_AI_MAIN_EFFORT = saved.effort;
+    await rm(dataDirectory, { recursive: true, force: true });
+  });
+
+  // The owner's pick in the composer travels with the turn.
+  // 所有者输入框里的选择随回合发送。
+  const chosen = await companionFetch(server.url, server.token, "/api/main-agent/stream", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      text: "quick question",
+      turnId: "turn-chosen",
+      conversationId: "conversation-chosen",
+      model: "composer-model",
+      effort: "high",
+    }),
+  });
+  assert.equal(chosen.status, 200);
+  await chosen.text();
+  assert.equal(bodies.length, 1);
+  assert.equal(bodies[0]?.model, "composer-model");
+  assert.equal(bodies[0]?.reasoning_effort, "high");
+
+  // A turn without a pick keeps the configured default and provider default effort.
+  // 没有选择时沿用配置的默认模型与 Provider 默认强度。
+  const fallback = await companionFetch(server.url, server.token, "/api/main-agent/stream", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      text: "another question",
+      turnId: "turn-default",
+      conversationId: "conversation-chosen",
+    }),
+  });
+  assert.equal(fallback.status, 200);
+  await fallback.text();
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[1]?.model, "settings-model");
+  assert.equal("reasoning_effort" in (bodies[1] ?? {}), false);
+
+  // A level the gateway declares but this build's fallback list omits travels
+  // as written. The picker lists the gateway's per-model levels, so refusing
+  // `ultra` here would reject a level the model advertises.
+  // 网关声明、但本版本兜底列表没有的档位按所写送达。选择器列出网关的按模型档位，因此
+  // 在这里拒绝 `ultra` 会拒绝模型宣称支持的档位。
+  const declaredOnly = await companionFetch(server.url, server.token, "/api/main-agent/stream", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      text: "go deeper",
+      turnId: "turn-declared-only",
+      conversationId: "conversation-chosen",
+      model: "composer-model",
+      effort: "ultra",
+    }),
+  });
+  assert.equal(declaredOnly.status, 200);
+  await declaredOnly.text();
+  assert.equal(bodies.length, 3);
+  assert.equal(bodies[2]?.reasoning_effort, "ultra");
+});

@@ -1,5 +1,5 @@
 import { readJsonFile, writeJsonAtomic } from "./json-file.ts";
-import { isEffortLevel, type EffortLevel } from "../workers/effort.ts";
+import { normalizeEffort } from "../workers/effort.ts";
 import type { ClonePaths } from "./clone-home.ts";
 
 export interface CloneConfig {
@@ -14,10 +14,13 @@ export interface CloneConfig {
    */
   mainAgentModel?: string;
   /**
-   * Reasoning effort for the Main Agent, passed to the model provider. Only levels the model offers should be chosen.
-   * 主 Agent 的推理强度，传给模型供应商。应只选择模型支持的档位。
+   * Reasoning effort for the Main Agent, as the provider spells it. The
+   * gateway declares which levels each model offers; the provider stays the
+   * authority, so this is a bounded name rather than a fixed list.
+   * 主 Agent 的推理强度，采用 Provider 的写法。网关声明每个模型提供哪些档位；
+   * Provider 仍是权威，因此这里是受长度限制的名称，而不是固定列表。
    */
-  mainAgentEffort?: EffortLevel;
+  mainAgentEffort?: string;
   /**
    * The OpenAI-compatible endpoint the Main Agent and every native worker call.
    * Stored here so an app launched from Finder — where the environment is
@@ -76,13 +79,14 @@ function normalizeConfig(value: Partial<CloneConfig> | undefined): CloneConfig {
   const mainAgentModel = nonEmpty(value?.mainAgentModel);
   const mainAgentBaseUrl = nonEmpty(value?.mainAgentBaseUrl)?.replace(/\/+$/, "");
   const mainAgentApiKey = nonEmpty(value?.mainAgentApiKey);
+  const mainAgentEffort = normalizeEffort(value?.mainAgentEffort);
   return {
     version: 1,
     locale: value?.locale === "en" ? "en" : "zh-CN",
     ...(mainAgentModel === undefined ? {} : { mainAgentModel }),
     ...(mainAgentBaseUrl === undefined ? {} : { mainAgentBaseUrl }),
     ...(mainAgentApiKey === undefined ? {} : { mainAgentApiKey }),
-    ...(isEffortLevel(value?.mainAgentEffort) ? { mainAgentEffort: value.mainAgentEffort } : {}),
+    ...(mainAgentEffort === undefined ? {} : { mainAgentEffort }),
     ...(typeof value?.maxConcurrentWorkers === "number" && Number.isFinite(value.maxConcurrentWorkers) && value.maxConcurrentWorkers > 0
       ? { maxConcurrentWorkers: Math.trunc(value.maxConcurrentWorkers) }
       : {}),

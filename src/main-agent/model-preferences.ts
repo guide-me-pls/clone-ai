@@ -12,14 +12,14 @@
  */
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { resolveClonePaths } from "../config/clone-home.ts";
-import { isEffortLevel, type EffortLevel } from "../workers/effort.ts";
+import { normalizeEffort } from "../workers/effort.ts";
 
 export async function readMainAgentEffortPreference(
   dataDirectory: string,
   environment: NodeJS.ProcessEnv = process.env,
-): Promise<EffortLevel | undefined> {
-  const fromEnv = environment.CLONE_AI_MAIN_EFFORT?.trim();
-  if (isEffortLevel(fromEnv)) return fromEnv;
+): Promise<string | undefined> {
+  const fromEnv = normalizeEffort(environment.CLONE_AI_MAIN_EFFORT);
+  if (fromEnv !== undefined) return fromEnv;
   const paths = resolveClonePaths({ dataDirectory });
   const config = await new CloneConfigStore(paths).get();
   return config.mainAgentEffort;

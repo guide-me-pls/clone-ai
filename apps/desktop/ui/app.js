@@ -824,6 +824,7 @@ function renderSettings(settings) {
 function renderGateways(gateways) {
   state.gateways = gateways;
   renderAgentPage();
+  renderComposerChoice();
 }
 function renderAgentPage() {
   const host = $("agent-page");
@@ -988,8 +989,7 @@ function renderSituation(situation, config) {
     : `<div class="memory-empty">还没有记录任何目标、承诺或观察。分身只会依据你确认过的内容行动。</div>`;
   const paths = config.paths || {};
   $("config-paths").innerHTML = `<h4>本地数据</h4><p>数据目录：${escape(paths.dataDirectory || "-")}</p><p>Provider 配置：${escape(paths.providersFile || "-")}</p><p>记忆：${escape(paths.memoryDirectory || "-")}</p><span class="settings-value">仅本机</span>`;
-  renderModelOptions();
-  renderMainAgentEffort();
+  renderComposerChoice();
   renderAgentPage();
 }
 
@@ -1212,35 +1212,6 @@ function openMetaDeveloperConsole() {
   announce("当前窗口无法打开外部链接，请手动访问 developers.facebook.com/apps。", true);
 }
 
-function renderModelOptions() {
-  const select = $("config-main-agent-model");
-  if (!select) return;
-  const current = state.config?.config?.mainAgentModel || "";
-  const models = [];
-  const seen = new Set();
-  for (const model of state.modelOptions || []) {
-    if (!model?.reference || seen.has(model.reference)) continue;
-    seen.add(model.reference);
-    const label = String(model.label || model.id || model.reference);
-    const provider = String(model.provider || "");
-    models.push({
-      value: model.reference,
-      label: `${label}${provider && provider !== "magpie" && !label.includes(provider) ? ` · ${provider}` : ""}`,
-    });
-  }
-  if (current && !seen.has(current)) {
-    models.unshift({ value: current, label: `${current} · ${t("model-current")}` });
-  }
-  const signature = JSON.stringify([models, current]);
-  if (select.dataset.signature === signature) {
-    if (document.activeElement !== select) select.value = current;
-    return;
-  }
-  select.dataset.signature = signature;
-  select.innerHTML = `<option value="">${escape(t("model-default"))}</option>${models.map((model) => `<option value="${escape(model.value)}">${escape(model.label)}</option>`).join("")}`;
-  select.value = current;
-}
-
 async function loadModelOptions({ force = false } = {}) {
   if ((!force && state.modelOptionsLoaded) || state.modelOptionsLoading) return;
   state.modelOptionsLoading = true;
@@ -1248,17 +1219,17 @@ async function loadModelOptions({ force = false } = {}) {
     const result = await api("/api/options");
     state.modelOptions = Array.isArray(result.models) ? result.models : [];
     state.modelOptionsLoaded = true;
-    renderModelOptions();
+    renderComposerChoice();
   } catch {
-    // A catalog failure must not hide the rest of the settings surface.
-    // 目录读取失败不应遮住其余设置界面。
+    // A catalog failure must not hide the rest of the composer.
+    // 目录读取失败不应遮住输入框的其余部分。
     state.modelOptionsLoaded = true;
   } finally {
     state.modelOptionsLoading = false;
   }
 }
 
-function renderConnectors(connectors) { state.connectors = connectors; const signature = JSON.stringify(connectors); if (state.signatures.connectors === signature) return; state.signatures.connectors = signature; $("connector-list").innerHTML = connectors.length ? connectors.map((connector) => `<article class="agent-setting"><div><h3>${escape(connector.id)}</h3><p>${escape(connector.target || "（未设置目录）")}</p><small>只读观察，绝不获得执行权限</small></div><label class="agent-switch" title="${connector.enabled ? "停用此来源" : "启用此来源"}"><input type="checkbox" data-connector-toggle="${escape(connector.id)}" ${connector.enabled ? "checked" : ""}/><span></span></label><button class="schedule-toggle" type="button" data-connector-remove="${escape(connector.id)}">移除</button></article>`).join("") : `<div class="memory-empty">还没有观察来源。选择目录后，分身才能知道你没主动告诉它的事。</div>`; }
+function renderConnectors(connectors) { state.connectors = connectors; const signature = JSON.stringify(connectors); if (state.signatures.connectors === signature) return; state.signatures.connectors = signature; $("connector-list").innerHTML = connectors.length ? connectors.map((connector) => `<article class="agent-setting"><div><h3>${escape(connector.id)}</h3><p>${escape(connector.target || "（未设置目录）")}</p><small>只读观察，绝不获得执行权限</small></div><label class="agent-switch" title="${connector.enabled ? "停用此来源" : "启用此来源"}"><input type="checkbox" data-connector-toggle="${escape(connector.id)}" ${connector.enabled ? "checked" : ""}/><span></span></label><button class="schedule-toggle" type="button" data-connector-remove="${escape(connector.id)}">移除</button></article>`).join("") : `<div class="memory-empty">还没有观察来源。选一个笔记目录后，分身每轮开始时会读取其中的 .md / .txt 文件，把标题作为背景事实——它只能看，不能改也不能执行。</div>`; }
 
 async function saveConnectors(connectors, message) { try { await api("/api/connectors", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ connectors }) }); await refresh(); announce(message); } catch (error) { announce(error.message, true); } }
 
@@ -1471,25 +1442,121 @@ async function setConnectorEnabled(id, enabled) { const next = (state.connectors
 
 async function removeConnector(id) { await saveConnectors((state.connectors || []).filter((connector) => connector.id !== id), "观察来源已移除。"); }
 
-function renderMainAgentEffort() {
-  const select = $("config-main-agent-effort");
-  if (!select) return;
-  const current = state.config?.config?.mainAgentEffort || "";
-  const model = String(state.config?.config?.mainAgentModel || "");
-  // The gateway knows which levels this exact model offers; without it, fall back
-  // to the levels the CLIs understand so the choice is never invented.
-  // 网关知道这个模型具体支持哪些档位；拿不到时退回 CLI 通用档位，绝不凭空编造。
-  const fromGateway = (state.gateway?.models || []).find((entry) => entry.id === model)?.reasoningLevels;
-  const levels = Array.isArray(fromGateway) && fromGateway.length > 0 ? fromGateway : EFFORT_LEVELS;
-  const signature = JSON.stringify([levels, current]);
-  if (select.dataset.signature === signature) return;
-  select.dataset.signature = signature;
-  select.innerHTML = `<option value="">${escape(t("effort-default"))}</option>${levels.map((level) => `<option value="${escape(level)}"${current === level ? " selected" : ""}>${escape(level)}</option>`).join("")}`;
+/** Selectable Main Agent models, deduplicated and labeled like the Settings picker. 可选的 Main Agent 模型，去重并按设置页的方式标注。 */
+function selectableModels() {
+  const models = [];
+  const seen = new Set();
+  for (const model of state.modelOptions || []) {
+    if (!model?.reference || seen.has(model.reference)) continue;
+    seen.add(model.reference);
+    const label = String(model.label || model.id || model.reference);
+    const provider = String(model.provider || "");
+    models.push({
+      value: model.reference,
+      label: `${label}${provider && provider !== "magpie" && !label.includes(provider) ? ` · ${provider}` : ""}`,
+    });
+  }
+  return models;
 }
 
-async function saveMainAgentEffort() { const select = $("config-main-agent-effort"); if (!select) return; try { await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ mainAgentEffort: select.value }) }); await refresh({ preserveScroll: true }); announce(t("effort-saved")); } catch (error) { announce(error.message, true); } }
+/**
+ * Reasoning levels the gateway declares for a model.
+ *
+ * A gateway that reports no levels gets the known list rather than an empty
+ * picker: a provider may accept levels it does not advertise, and the owner
+ * should not lose the choice because discovery was sparse. The earlier code
+ * read `state.gateway`, which is never assigned, so the declared list was
+ * never actually used.
+ * 网关为该模型声明的推理档位。
+ *
+ * 没有报告档位的网关退回已知列表，而不是空选择器：Provider 可能接受未声明的档位，所有者
+ * 不该因为发现数据稀疏而失去选择。此前的代码读取从未赋值的 `state.gateway`，因此声明的
+ * 列表其实从未生效。
+ */
+function reasoningLevelsFor(model) {
+  const id = String(model || state.config?.config?.mainAgentModel || "");
+  const gateway = state.gateways.find((candidate) => candidate.id === "magpie");
+  const declared = (gateway?.models || []).find((entry) => entry.id === id)?.reasoningLevels;
+  return Array.isArray(declared) && declared.length > 0 ? declared : EFFORT_LEVELS;
+}
 
-async function saveMainAgentModel() { const select = $("config-main-agent-model"); if (!select) return; try { await api("/api/config", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ mainAgentModel: select.value }) }); await refresh({ preserveScroll: true }); announce(t("model-saved")); } catch (error) { announce(error.message, true); } }
+/* ---------- Composer model and effort, saved with the conversation ---------- */
+const TURN_CHOICE_STORAGE = "clone-ai:turn-choice:";
+
+/**
+ * The conversation the composer currently speaks to. Empty means a new
+ * request, which the router has not bound to a conversation yet.
+ * 输入框当前对应的对话。空值表示尚未路由到对话的新请求。
+ */
+function activeConversationId() {
+  if (state.composingNew) return "";
+  if (state.selectedId === MAIN_CONVERSATION_ID) return MAIN_CONVERSATION_ID;
+  const selected = (state.dashboard?.sessions || []).find((session) => session.id === state.selectedId);
+  if (selected?.kind === "conversation") return selected.id;
+  return selected?.conversationId ?? selected?.parentId ?? "";
+}
+
+function readTurnChoice(conversationId) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(`${TURN_CHOICE_STORAGE}${conversationId || "new"}`) || "{}");
+    return {
+      model: typeof stored.model === "string" ? stored.model : "",
+      effort: typeof stored.effort === "string" ? stored.effort : "",
+    };
+  } catch {
+    return { model: "", effort: "" };
+  }
+}
+
+function writeTurnChoice(conversationId, choice) {
+  const key = `${TURN_CHOICE_STORAGE}${conversationId || "new"}`;
+  if (!choice.model && !choice.effort) localStorage.removeItem(key);
+  else localStorage.setItem(key, JSON.stringify({ model: choice.model || "", effort: choice.effort || "" }));
+}
+
+/** Render the composer pickers from the saved choice; empty means "follow Settings". 按保存的选择渲染输入框选择器；空值表示"跟随设置"。 */
+function renderComposerChoice() {
+  const modelSelect = $("composer-model");
+  const effortSelect = $("composer-effort");
+  if (!modelSelect || !effortSelect) return;
+  const choice = readTurnChoice(activeConversationId());
+  const models = selectableModels();
+  const modelSignature = JSON.stringify([models, choice.model]);
+  if (modelSelect.dataset.signature !== modelSignature) {
+    modelSelect.dataset.signature = modelSignature;
+    const outsideCatalog = choice.model && !models.some((model) => model.value === choice.model)
+      ? `<option value="${escape(choice.model)}">${escape(choice.model)} · ${escape(t("composer-choice-current"))}</option>`
+      : "";
+    modelSelect.innerHTML = `<option value="">${escape(t("composer-default"))}</option>${outsideCatalog}${models.map((model) => `<option value="${escape(model.value)}">${escape(model.label)}</option>`).join("")}`;
+    // Rebuilding the options resets the selection to the first one; restore the
+    // saved choice even while the select is focused.
+    // 重建选项会把选中项重置为第一项；即使选择器处于聚焦状态也要恢复已保存的选择。
+    modelSelect.value = choice.model;
+  } else if (document.activeElement !== modelSelect) {
+    modelSelect.value = choice.model;
+  }
+  const levels = reasoningLevelsFor(choice.model);
+  const effortSignature = JSON.stringify([levels, choice.effort]);
+  if (effortSelect.dataset.signature !== effortSignature) {
+    effortSelect.dataset.signature = effortSignature;
+    const outsideLevels = choice.effort && !levels.includes(choice.effort)
+      ? `<option value="${escape(choice.effort)}">${escape(choice.effort)} · ${escape(t("composer-choice-current"))}</option>`
+      : "";
+    effortSelect.innerHTML = `<option value="">${escape(t("effort-default"))}</option>${outsideLevels}${levels.map((level) => `<option value="${escape(level)}">${escape(level)}</option>`).join("")}`;
+    effortSelect.value = choice.effort;
+  } else if (document.activeElement !== effortSelect) {
+    effortSelect.value = choice.effort;
+  }
+}
+
+/** Persist a picker change for the current conversation; a level the new model rejects is cleared. 保存选择器改动；新模型不接受的档位会被清空。 */
+function saveComposerChoice() {
+  const model = $("composer-model")?.value || "";
+  const effort = $("composer-effort")?.value || "";
+  const accepted = reasoningLevelsFor(model);
+  writeTurnChoice(activeConversationId(), { model, effort: accepted.includes(effort) ? effort : "" });
+  renderComposerChoice();
+}
 
 async function saveLocale() {
   const locale = $("config-locale")?.value;
@@ -2322,6 +2389,7 @@ function syncComposer() {
   const stop = $("stop-turn");
   if (submit) { submit.disabled = stream !== undefined; submit.hidden = stream !== undefined; }
   if (stop) stop.hidden = stream === undefined;
+  renderComposerChoice();
 }
 async function createSession(query) { const button = $("submit"); button.disabled = true; rememberCurrentScroll();
   // Each task is its own Main Agent conversation: it carries its own history and
@@ -2355,6 +2423,12 @@ async function createSession(query) { const button = $("submit"); button.disable
   const routeContext = state.routeContext
     ?? (standaloneTask ? { kind: "task", id: selectedSession.id } : null);
   state.routeContext = null;
+  // The composer's pickers are the owner's choice for this turn. Read them
+  // before the first await: a change made while routing belongs to the next
+  // turn, not to this one.
+  // 输入框的选择器代表所有者对本次请求的选择。在第一个 await 之前读取：路由期间改选
+  // 属于下一回合，而不是这一回合。
+  const sentChoice = readTurnChoice(activeConversationId());
   const ownedSelection = () => state.selectedId === conversationId
     || (state.composingNew && state.newConversationId === conversationId)
     || (standaloneTask && state.newConversationId === conversationId);
@@ -2523,6 +2597,26 @@ async function createSession(query) { const button = $("submit"); button.disable
       }
     }
     if (!conversationId) conversationId = mintConversationId();
+    // A conversation keeps its saved choice; an explicit pick in this composer
+    // wins and becomes that conversation's choice. A new request without an
+    // explicit pick adopts the choice of the conversation the router continued.
+    // 对话沿用已保存的选择；本次输入框里的显式选择优先，并写回该对话。没有显式选择的
+    // 新请求沿用路由命中的对话的选择。
+    let turnModel = sentChoice.model;
+    let turnEffort = sentChoice.effort;
+    if (wasComposing) {
+      const inherited = readTurnChoice(conversationId);
+      if (turnModel === "" && turnEffort === "") {
+        turnModel = inherited.model;
+        turnEffort = inherited.effort;
+      }
+    }
+    // Whatever actually runs belongs to this conversation, including an id
+    // minted for the welcome screen; a turn that follows Settings keeps no
+    // entry, so the conversation stays on the default.
+    // 实际运行的选择属于这个对话，包括在欢迎页现场生成的 id；跟随设置的回合不写条目，
+    // 对话保持默认。
+    if (turnModel || turnEffort) writeTurnChoice(conversationId, { model: turnModel, effort: turnEffort });
     if (state.streams.has(conversationId)) throw new Error("这个对话仍在处理中；等它结束再发送。");
     state.streams.set(conversationId, { stop: stopTurn });
     syncComposer();
@@ -2535,6 +2629,8 @@ async function createSession(query) { const button = $("submit"); button.disable
         text: query,
         turnId,
         conversationId,
+        ...(turnModel ? { model: turnModel } : {}),
+        ...(turnEffort ? { effort: turnEffort } : {}),
         ...(preparedAttachments.attachments.length === 0 ? {} : { attachments: preparedAttachments.attachments }),
       }),
       signal: controller.signal,
@@ -2755,7 +2851,12 @@ async function restoreConversation(id) {
   } catch (error) { announce(error.message, true); }
 }
 
-async function deleteSession(id) { const session = (state.dashboard?.sessions || []).find((item) => item.id === id); const message = session?.kind === "conversation" ? `隐藏这个对话？它的 ${session?.childCount || 0} 个任务会一起隐藏。审计日志、记忆和备份不受影响，随时可以恢复。` : session?.parentId ? "隐藏这条任务？它会从所属对话中隐藏，审计记录会保留。" : "从列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。"; if (!(await confirmDialog(message, "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
+async function deleteSession(id) {
+  // The main conversation is the pinned entry to the owner's original thread;
+  // hiding it would leave the sidebar without it until a restore.
+  // 主对话是所有者最初线程的固定入口；隐藏它会让侧栏失去这个入口，直到恢复。
+  if (id === MAIN_CONVERSATION_ID) { announce("主对话始终保留在列表中。", true); return; }
+  const session = (state.dashboard?.sessions || []).find((item) => item.id === id); const message = session?.kind === "conversation" ? `隐藏这个对话？它的 ${session?.childCount || 0} 个任务会一起隐藏。审计日志、记忆和备份不受影响，随时可以恢复。` : session?.parentId ? "隐藏这条任务？它会从所属对话中隐藏，审计记录会保留。" : "从列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。"; if (!(await confirmDialog(message, "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
 $("session-list").addEventListener("click", (event) => { const restore = event.target.closest("[data-restore-conversation]"); if (restore) { void restoreConversation(restore.dataset.restoreConversation); return; } const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
 $("session-list").addEventListener("toggle", (event) => {
   const details = event.target;
@@ -2800,8 +2901,6 @@ $("authority-root").addEventListener("submit", (event) => {
 });
 $("data-export-choose").addEventListener("click", () => void exportOwnerDataFromDesktop());
 $("data-export-reveal").addEventListener("click", revealExport);
-$("config-main-agent-model-save").addEventListener("click", () => void saveMainAgentModel());
-$("config-main-agent-effort-save").addEventListener("click", () => void saveMainAgentEffort());
 $("config-locale")?.addEventListener("change", () => void saveLocale());
 $("connector-add").addEventListener("click", () => void addConnector());
 $("connector-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-connector-remove]"); if (remove) void removeConnector(remove.dataset.connectorRemove); });
@@ -2844,12 +2943,13 @@ $("opportunity-strip").addEventListener("click", (event) => { const settings = e
 $("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
 $("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); const selected = (state.dashboard?.sessions || []).find((session) => session.id === state.selectedId); const selectedConversation = state.selectedId === MAIN_CONVERSATION_ID || (state.selectedId?.startsWith("conversation-") ?? false) || (state.selectedId?.startsWith("whatsapp:") ?? false) ? state.selectedId : selected?.conversationId ?? selected?.parentId; state.routeContext = selectedConversation ? { kind: "conversation", id: selectedConversation } : null; state.routing = false; if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; state.newConversationId = null; $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); syncComposer(); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });
-$("open-conversation").addEventListener("click", () => { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(MAIN_CONVERSATION_ID, { scrollToBottom: true }); });
 $("stop-turn").addEventListener("click", () => stopActiveTurn());
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && currentStream() !== undefined) { event.preventDefault(); stopActiveTurn(); }
 });
 $("request-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("query").value.trim(); if (query.length === 0 && state.attachments.length === 0 && state.attachmentsPending.length === 0) { announce("请输入你想推进的事情，或添加图片/视频/文档。", true); return; } void createSession(query); });
+$("composer-model").addEventListener("change", saveComposerChoice);
+$("composer-effort").addEventListener("change", saveComposerChoice);
 $("query").addEventListener("input", resizeComposer);
 $("query").addEventListener("paste", async (event) => {
   const files = clipboardAttachmentFiles(event.clipboardData);

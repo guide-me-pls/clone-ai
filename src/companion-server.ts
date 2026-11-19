@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task, VerificationResult } from "./core/contracts.ts";
-import { EFFORT_LEVELS, isEffortLevel, type EffortLevel } from "./workers/effort.ts";
+import { EFFORT_LEVELS, MAX_EFFORT_LENGTH, normalizeEffort } from "./workers/effort.ts";
 import { describeFailureForOwner } from "./core/failure-display.ts";
 import { appendWorkUpdate, describeWorkUpdate, readWorkUpdates } from "./main-agent/work-updates.ts";
 import { createJournalStore } from "./core/sqlite-journal.ts";
@@ -111,6 +111,47 @@ export interface RunningCompanionServer {
  */
 export function normalizeMainAgentRequestText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * The model and effort chosen for one turn, when that surface has a picker.
+ *
+ * The effort name is forwarded as the owner wrote it: the gateway declares
+ * per-model levels (`none`, `ultra`, …) that this build has never heard of, so
+ * membership in a fixed list would refuse a level the model advertises. Only a
+ * value that is not a name at all — a non-string, or one beyond
+ * `MAX_EFFORT_LENGTH` — is refused. An absent or empty value means "use the
+ * configured default", which is what WhatsApp and scheduled turns send.
+ *
+ * 某个界面带有选择器时，本回合选定的模型与强度。
+ *
+ * 强度名称按所有者所写原样转发：网关按模型声明了本版本从未听说过的档位（`none`、`ultra`
+ * 等），因此"在固定列表中"的校验会拒绝模型宣称支持的档位。只有根本不像名称的值——非字符串、
+ * 或超过 `MAX_EFFORT_LENGTH`——会被拒绝。空值或缺省表示"使用配置的默认值"——WhatsApp 与
+ * 定时回合就是这样发送的。
+ */
+function parseTurnModelAndEffort(
+  body: Record<string, unknown>,
+): { ok: true; model?: string; effort?: string } | { ok: false; error: string } {
+  let model: string | undefined;
+  if (body.model !== undefined && body.model !== null) {
+    if (typeof body.model !== "string") return { ok: false, error: "model must be a string." };
+    const trimmed = body.model.trim();
+    if (trimmed.length > 200) return { ok: false, error: "model must be at most 200 characters." };
+    if (trimmed.length > 0) model = trimmed;
+  }
+  let effort: string | undefined;
+  if (body.effort !== undefined && body.effort !== null && body.effort !== "") {
+    effort = normalizeEffort(body.effort);
+    if (effort === undefined) {
+      return { ok: false, error: `effort must be a name of at most ${MAX_EFFORT_LENGTH} characters (empty uses the configured default).` };
+    }
+  }
+  return {
+    ok: true,
+    ...(model === undefined ? {} : { model }),
+    ...(effort === undefined ? {} : { effort }),
+  };
 }
 
 /**
@@ -1054,7 +1095,7 @@ async function handleRequest(
       sendJson(response, 400, { error: "The working-directory setting was removed; a step names its own write targets." });
       return;
     }
-    const update: { locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: EffortLevel | undefined; mainAgentBaseUrl?: string; mainAgentApiKey?: string; maxConcurrentWorkers?: number; maxConcurrentMainAgents?: number } = {};
+    const update: { locale?: "zh-CN" | "en"; mainAgentModel?: string; mainAgentEffort?: string | undefined; mainAgentBaseUrl?: string; mainAgentApiKey?: string; maxConcurrentWorkers?: number; maxConcurrentMainAgents?: number } = {};
     if (body.locale === "zh-CN" || body.locale === "en") update.locale = body.locale;
     if ("mainAgentModel" in body) {
       if (typeof body.mainAgentModel !== "string") {
@@ -1087,10 +1128,13 @@ async function handleRequest(
     }
     if ("mainAgentEffort" in body) {
       if (body.mainAgentEffort === "" || body.mainAgentEffort === null) update.mainAgentEffort = undefined;
-      else if (isEffortLevel(body.mainAgentEffort)) update.mainAgentEffort = body.mainAgentEffort;
       else {
-        sendJson(response, 400, { error: `mainAgentEffort must be one of ${EFFORT_LEVELS.join(", ")} (empty clears it).` });
-        return;
+        const effort = normalizeEffort(body.mainAgentEffort);
+        if (effort === undefined) {
+          sendJson(response, 400, { error: `mainAgentEffort must be a name of at most ${MAX_EFFORT_LENGTH} characters (empty clears it).` });
+          return;
+        }
+        update.mainAgentEffort = effort;
       }
     }
     if ("maxConcurrentWorkers" in body) {
@@ -2096,6 +2140,11 @@ async function handleRequest(
 
   if (request.method === "POST" && url.pathname === "/api/main-agent/stream") {
     const body = await readJsonBody(request);
+    const overrides = parseTurnModelAndEffort(body);
+    if (!overrides.ok) {
+      sendJson(response, 400, { error: overrides.error });
+      return;
+    }
     const conversation = parseConversationId(body.conversationId);
     if (!conversation.ok) {
       sendJson(response, 400, { error: conversation.error });
@@ -2198,6 +2247,8 @@ async function handleRequest(
         },
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
         ...(documents.length === 0 ? {} : { documents }),
+        ...(overrides.model === undefined ? {} : { model: overrides.model }),
+        ...(overrides.effort === undefined ? {} : { effort: overrides.effort }),
         ...invocation,
         signal: abortController.signal,
         onToolEvent: (event) => send("tool", event),
@@ -2226,6 +2277,11 @@ async function handleRequest(
 
   if (request.method === "POST" && url.pathname === "/api/main-agent/query") {
     const body = await readJsonBody(request);
+    const overrides = parseTurnModelAndEffort(body);
+    if (!overrides.ok) {
+      sendJson(response, 400, { error: overrides.error });
+      return;
+    }
     const conversation = parseConversationId(body.conversationId);
     if (!conversation.ok) {
       sendJson(response, 400, { error: conversation.error });
@@ -2314,6 +2370,8 @@ async function handleRequest(
         conversationId: conversation.id,
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
         ...(resolvedAttachments.documents.length === 0 ? {} : { documents: resolvedAttachments.documents }),
+        ...(overrides.model === undefined ? {} : { model: overrides.model }),
+        ...(overrides.effort === undefined ? {} : { effort: overrides.effort }),
         ...invocation,
         signal: abortController.signal,
       });
