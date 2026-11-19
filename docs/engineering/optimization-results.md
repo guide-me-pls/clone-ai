@@ -74,6 +74,23 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   [trade-off: folders are learned](../architecture/trade-offs.md#2026-11-19--folders-are-learned-from-use-not-configured-todays-changes-come-from-the-machine);
   [execution chain](optimizations.md#2026-11-19--a-new-request-stays-visible-a-turn-reads-as-an-exchange-and-todays-work-comes-from-learned-folders).
 
+## 2026-11-19 — The audit view renders without waiting for gateway usage
+
+- **Claim:** the audit list caches Magpie usage rows for 15 s and bounds the
+  optional gateway wait at 1 s; a slow or missing gateway no longer makes every
+  audit open wait, and repeated opens reuse the 499 KB response instead of
+  re-fetching and re-parsing it.
+- **Evidence:** live `/api/audit` before the change: 2,290/404/62 ms
+  (181 KB, 27 runs); the gateway usage request alone 429/57/21 ms for
+  499,369 bytes. After the change the direct fetch measured **438 ms first /
+  0 ms second**; the audit projection is ~60 ms, so a warm audit open is ~60 ms
+  and a cold one is bounded near 1.5 s. `test/magpie-usage.test.ts` **4/4**
+  (cache, expiry, hanging gateway, failure cached empty); full suite
+  **916/916** at the time of this run; typecheck and gate pass. Benchmark:
+  [`benchmark/results/audit-usage-2026-11-19T06-46-17Z.json`](../../benchmark/results/audit-usage-2026-11-19T06-46-17Z.json).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--audit-usage-enrichment-is-cached-and-bounded),
+  [execution chain](optimizations.md#2026-11-19--the-audit-view-stops-waiting-on-the-gateways-usage-history).
+
 ## 2026-11-19 — The attachment picker skips the sheet animation
 
 - **Claim:** the native attachment picker uses the app-modal `NSOpenPanel.begin`

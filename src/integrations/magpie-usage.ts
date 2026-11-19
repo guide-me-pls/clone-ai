@@ -50,28 +50,57 @@ export interface GatewayUsage {
   errorSamples: Array<{ status: number; model?: string; message: string }>;
 }
 
+/** The audit's optional usage enrichment must not dominate its request path. 审计可选的用量补充不能主导请求路径。 */
+const DEFAULT_USAGE_TIMEOUT_MS = 1_000;
+/** A short TTL keeps repeated audit opens fast while usage stays recent. 短 TTL 让重复打开审计保持快，同时用量仍然新鲜。 */
+const DEFAULT_USAGE_CACHE_TTL_MS = 15_000;
+
+interface GatewayRowsCacheEntry {
+  rows: GatewayRequestRow[];
+  at: number;
+}
+
+const gatewayRowsCache = new Map<string, GatewayRowsCacheEntry>();
+
+/** Test seam: the cache is process-wide, so a test starts from a known empty state. 测试接缝：缓存是进程级的，测试从已知空状态开始。 */
+export function resetGatewayUsageCache(): void {
+  gatewayRowsCache.clear();
+}
+
 export async function fetchGatewayRows(options: {
   endpoint?: string;
   limit?: number;
   timeoutMs?: number;
+  cacheTtlMs?: number;
   fetchImpl?: typeof fetch;
 } = {}): Promise<GatewayRequestRow[]> {
   const endpoint = normalizeLoopbackEndpoint(options.endpoint ?? process.env.MAGPIE_GATEWAY_URL ?? "http://127.0.0.1:3425");
+  const limit = options.limit ?? 500;
+  const ttlMs = options.cacheTtlMs ?? DEFAULT_USAGE_CACHE_TTL_MS;
+  const cacheKey = `${endpoint}|${limit}`;
+  const cached = gatewayRowsCache.get(cacheKey);
+  if (ttlMs > 0 && cached !== undefined && Date.now() - cached.at < ttlMs) return cached.rows;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 2_000);
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_USAGE_TIMEOUT_MS);
   timer.unref();
+  const remember = (rows: GatewayRequestRow[]): GatewayRequestRow[] => {
+    if (ttlMs > 0) gatewayRowsCache.set(cacheKey, { rows, at: Date.now() });
+    return rows;
+  };
   try {
-    const response = await (options.fetchImpl ?? fetch)(`${endpoint}/v1/magpie/usage/requests?limit=${options.limit ?? 500}`, {
+    const response = await (options.fetchImpl ?? fetch)(`${endpoint}/v1/magpie/usage/requests?limit=${limit}`, {
       headers: { accept: "application/json" },
       signal: controller.signal,
     });
-    if (!response.ok) return [];
+    if (!response.ok) return remember([]);
     const body = await response.json() as { rows?: unknown };
-    return Array.isArray(body.rows) ? (body.rows as GatewayRequestRow[]) : [];
+    return remember(Array.isArray(body.rows) ? (body.rows as GatewayRequestRow[]) : []);
   } catch {
     // The gateway is optional: no gateway means no usage, never a failed audit.
-    // 网关是可选的：没有网关只是没有用量，绝不让审计失败。
-    return [];
+    // Cache the empty result so a slow gateway cannot make every audit open wait.
+    // 网关是可选的：没有网关只是没有用量，绝不让审计失败。缓存空结果，使慢网关不能拖慢每次
+    // 打开审计。
+    return remember([]);
   } finally {
     clearTimeout(timer);
   }
