@@ -28,8 +28,8 @@ Desktop shell
 
 `ui/` contains the temporary WebView assets. The native Tauri shell starts the packaged
 Node daemon as a supervised sidecar, waits for its ready event, then navigates the native
-window to an available loopback port. The port is selected dynamically, so a stale
-developer preview on `4317` cannot block the desktop client.
+window to an available loopback port. The port is selected dynamically, so a
+fixed port left by another process cannot block the desktop client.
 
 The WebView assets are an internal implementation detail of the installed window. Clone AI
 does not expose a supported browser UI, browser preview command, or Chrome app window.

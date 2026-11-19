@@ -130,7 +130,7 @@ A provider's own `--resume` behavior is optional and never the source of truth.
 ### Run the desktop client (Windows)
 
 The native Tauri shell starts the daemon on an available loopback port, so it does not
-depend on port `4317` or on a browser tab. With the Windows C++ Build Tools and Windows
+depend on a fixed port or on a browser tab. With the Windows C++ Build Tools and Windows
 SDK installed, build it with:
 
 ```bash

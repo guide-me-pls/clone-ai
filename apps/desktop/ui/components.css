@@ -1402,6 +1402,8 @@ body.empty-conversation .composer-wrap { padding-top: 0; padding-bottom: 24px; }
 .attachment-chip img { width: 100%; height: 100%; object-fit: cover; }
 .attachment-chip button { position: absolute; top: 3px; right: 3px; display: grid; width: 20px; height: 20px; padding: 0; place-items: center; border: 0; border-radius: 50%; color: #fff; background: rgba(0,0,0,.62); cursor: pointer; }
 .attachment-chip.document { flex: 0 0 auto; width: auto; max-width: 200px; padding: 0 26px 0 10px; }
+.attachment-chip.is-preparing { border-style: dashed; background: #fbfbf9; opacity: .82; }
+.attachment-chip.is-preparing .attachment-doc-text small { color: #a2a59f; }
 .attachment-doc { display: flex; align-items: center; height: 100%; min-width: 0; gap: 8px; color: #4b4f49; }
 .attachment-doc svg { flex: 0 0 22px; width: 22px; height: 22px; }
 .attachment-doc-text { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
@@ -1644,3 +1646,409 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
 .log-error-guidance { color: #6b4a1f; }
 .log-error .log-detail summary { margin-top: 6px; color: #8f3e37; }
 .log-run--hidden { color: var(--muted); background: var(--surface); cursor: default; }
+
+/* Transcript hierarchy — final layer.
+ * A turn is a ruled section, a task update is a margin note, a dispatched run
+ * is a row on a rail, and a record is a disclosure line. Card fills, radii and
+ * shadows are removed on purpose: structure carries the level, not four
+ * look-alike white boxes.
+ * 对话层级——最终层。回合是有分隔线的章节，任务更新是页边注，派发的 Run 是竖线上的行，
+ * 记录是披露行。有意去掉卡片底色、圆角与阴影：层级由结构承担，而不是四只相似的白盒子。 */
+.turn-log { gap: 0; }
+
+.log-entry {
+  gap: 12px;
+  padding: 17px 0 16px;
+  overflow: visible;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.log-entry[data-log-status="failed"] { border-top: 2px solid #d19a92; background: transparent; }
+.log-entry[data-log-status="interrupted"] { border-top: 2px solid #d9b87e; background: transparent; }
+.log-entry[data-log-status="started"] { border-top: 1px solid #b8d2c2; background: transparent; }
+.log-entry--live { border-top: 2px solid var(--accent); }
+.log-entry[data-log-kind="history"] { border-top-color: var(--line); }
+/* A turn that hands over to a status notice also closes with a rule, so the
+ * notice cannot look attached to the turn's tail. Consecutive turns need none:
+ * the next turn's top rule is the boundary.
+ * 交接给状态通知的回合同时以一条底线收尾，通知就不会看起来粘在回合尾部；相邻回合不需要，
+ * 下个回合的顶线就是边界。 */
+.log-entry:not(.log-entry--work):has(+ .log-entry--work) { border-bottom: 1px solid var(--line); }
+
+/* The owner's request is a right-aligned bubble; the twin's answer is the
+ * ruled section below it. Two voices, two sides, so a long reply cannot hide
+ * where the request ended.
+ * 所有者的请求是靠右的气泡；分身的回答是它下面带分隔线的章节。两个声音、两侧，长回复也
+ * 藏不住请求在哪里结束。 */
+.turn-query {
+  display: flex;
+  justify-content: flex-end;
+  padding: 18px 0 4px;
+}
+.turn-query-bubble {
+  max-width: min(620px, 86%);
+  padding: 9px 13px 10px;
+  border: 1px solid #e7e7e1;
+  border-radius: 14px 14px 4px 14px;
+  color: var(--text);
+  background: #f4f5f1;
+  font-size: 13.5px;
+  line-height: 1.62;
+  overflow-wrap: anywhere;
+}
+.turn-query-who {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--subtle);
+  font-size: 9.5px;
+  font-weight: 720;
+  letter-spacing: .12em;
+}
+.turn-query-text { white-space: pre-wrap; }
+.turn-query-text .md-heading { margin: 8px 0 3px; color: var(--text); font-size: 13px; font-weight: 720; line-height: 1.4; }
+.turn-query-text .md-list-line { display: grid; grid-template-columns: 17px minmax(0, 1fr); gap: 4px; margin: 2px 0; }
+.turn-query-text .md-inline { padding: 1px 5px; border-radius: 5px; background: rgba(0, 0, 0, .05); font-family: var(--font-mono); font-size: 11.5px; }
+.turn-log > .turn-query:first-child { padding-top: 4px; }
+
+.log-entry-head {
+  position: sticky;
+  top: -28px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 4px;
+  padding: 3px 0 5px;
+  border: 0;
+  border-bottom: 1px solid #f1f1eb;
+  background: #fff;
+}
+/* The author strip pins only inside its own answer: while any part of the
+ * answer is on screen, its author, status and time are still there; the next
+ * answer's strip replaces it. The request bubble above marks the exchange.
+ * 作者条只在所属回答内吸附：回答还有任何部分在屏幕上时，作者、状态与时间都还在；
+ * 下一个回答的条从自己的顶部开始替换它。上方的请求气泡标记这次交换。 */
+.log-entry-kicker {
+  flex: none;
+  margin: 0;
+  color: var(--subtle);
+  font-size: 9.5px;
+  font-weight: 720;
+  letter-spacing: .12em;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.log-query {
+  display: -webkit-box;
+  grid-row: 2;
+  grid-column: 1 / -1;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 680;
+  letter-spacing: -.02em;
+  line-height: 1.32;
+  text-overflow: clip;
+  white-space: normal;
+}
+.log-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--subtle);
+  background: transparent;
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: .06em;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.log-badge::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .85;
+}
+.log-badge--ok { color: var(--success); }
+.log-badge--bad { color: var(--danger); }
+.log-badge--warn { color: var(--warning); }
+.log-badge--info { color: #3d5a78; }
+.log-badge--mute { color: var(--subtle); }
+.log-entry-head small {
+  flex: none;
+  color: var(--subtle);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+.log-entry-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.log-entry-body > .log-reply { padding: 0; }
+
+.log-step {
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 12px;
+  padding: 0;
+  border: 0;
+}
+.log-step-label { padding-top: 1px; color: var(--subtle); font-size: 10px; font-weight: 720; letter-spacing: .14em; }
+.log-step-body { gap: 6px; font-size: 12.5px; line-height: 1.6; }
+.log-fact i { margin-right: 5px; color: var(--subtle); font-size: 9.5px; font-weight: 720; letter-spacing: .08em; }
+.log-reply { font-size: 13.5px; line-height: 1.68; }
+.log-error { padding: 10px 12px; border: 0; border-left: 3px solid #d19a92; border-radius: 6px; background: #fdf5f3; }
+
+/* A 任务更新 is a margin note about a task, not a task: one small label line
+ * beside a rule, then the update text. No fill, no title, no steps.
+ * 任务更新是任务的页边注：细线旁一行小标签，然后是正文。无底色、无标题、无步骤。 */
+.log-entry--work {
+  display: block;
+  gap: 0;
+  width: auto;
+  margin: 6px 0 12px;
+  padding: 0 0 0 13px;
+  border: 0;
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+/* The left rule carries the update's state before the badge word is read;
+ * the word stays the authoritative label.
+ * 左侧线在读到徽章文字之前先给出状态；文字仍是权威标签。 */
+.log-entry--work[data-log-status="completed"] { border-left-color: #9db9a6; }
+.log-entry--work[data-log-status="failed"] { border-top: 0; border-left-color: var(--danger); background: transparent; }
+.log-entry--work[data-log-status="waiting_review"],
+.log-entry--work[data-log-status="waiting_approval"] { border-left-color: var(--warning); }
+.log-entry--work[data-log-status="cancelled"] { border-left-color: #b9b9b2; }
+.log-entry--work[data-log-status="running"],
+.log-entry--work[data-log-status="queued"],
+.log-entry--work[data-log-status="planning"],
+.log-entry--work[data-log-status="verifying"],
+.log-entry--work[data-log-status="started"],
+.log-entry--work[data-log-status="created"] { border-left-color: #7d9bb2; }
+.log-entry--work .log-entry-head {
+  position: static;
+  z-index: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 3px;
+  padding: 7px 11px 0;
+  border: 0;
+  background: transparent;
+}
+.log-entry--work .log-query {
+  display: block;
+  flex: none;
+  overflow: visible;
+  color: var(--subtle);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: .12em;
+  line-height: 1.5;
+  white-space: normal;
+}
+.log-entry--work .log-badge { margin-left: 0; }
+.log-entry--work .log-entry-head small { margin-left: auto; color: var(--subtle); }
+.log-entry--work .log-reply { margin-top: 3px; padding: 0; color: var(--subtle); font-size: 12.5px; line-height: 1.55; }
+
+/* Dispatched runs hang on a rail under 派发: hairline rows, not buttons that
+ * look like sibling cards. The whole row stays the click target.
+ * 派发的 Run 挂在"派发"下的竖线上：细线行，而不是看起来像同级卡片的按钮。整行可点击。 */
+.log-runs {
+  gap: 0;
+  margin-top: 2px;
+  padding: 3px 0 1px 11px;
+  border-left: 1px solid var(--line);
+}
+.log-runs > b {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 1px;
+  color: var(--subtle);
+  font-size: 9.5px;
+  font-weight: 720;
+  letter-spacing: .12em;
+}
+.log-runs-count {
+  padding: 0;
+  border-radius: 0;
+  color: var(--subtle);
+  background: transparent;
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: .04em;
+  line-height: 1.6;
+}
+.log-run {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 0;
+  padding: 7px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  font-size: 11.5px;
+  line-height: 1.45;
+  scroll-margin-top: 72px;
+}
+.log-run:last-child { border-bottom: 0; }
+.log-run:hover { background: transparent; border-bottom-color: var(--line-strong); }
+button.log-run:hover .log-run-title { text-decoration: underline; text-underline-offset: 2px; }
+.log-run:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, white); outline-offset: 2px; border-radius: 4px; }
+.log-run-dot { display: none; }
+.log-run code { padding: 0; color: var(--subtle); background: transparent; font-size: 9.5px; letter-spacing: .02em; }
+.log-run-title { min-width: 0; overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.log-run-status { color: var(--subtle); font-size: 9.5px; font-style: normal; letter-spacing: .06em; white-space: nowrap; }
+.log-run-status::before {
+  content: "";
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 1px;
+}
+.log-run[data-run-status="completed"] .log-run-status { color: var(--success); }
+.log-run[data-run-status="failed"] .log-run-status { color: var(--danger); }
+.log-run[data-run-status="interrupted"] .log-run-status { color: var(--warning); }
+.log-run[data-run-status="waiting_review"] .log-run-status,
+.log-run[data-run-status="waiting_approval"] .log-run-status { color: var(--warning); }
+.log-run[data-run-status="running"] .log-run-status,
+.log-run[data-run-status="planning"] .log-run-status,
+.log-run[data-run-status="queued"] .log-run-status,
+.log-run[data-run-status="started"] .log-run-status,
+.log-run[data-run-status="verifying"] .log-run-status,
+.log-run[data-run-status="created"] .log-run-status { color: #3d5a78; }
+.log-run[data-run-status="cancelled"] .log-run-status,
+.log-run[data-run-status="hidden"] .log-run-status { color: var(--subtle); }
+.log-run-open { color: var(--muted); font-size: 11px; line-height: 1; }
+.log-run--hidden { opacity: .7; cursor: default; }
+.log-run--hidden:hover { border-bottom-color: var(--line); }
+.log-run--hidden .log-run-title { color: var(--subtle); }
+
+/* Records after the log are disclosures, not more cards. The scope matters:
+ * a task-record view has no turn log and there the record is the primary
+ * content, so it keeps its card grouping.
+ * 日志之后的记录是披露行，而不是更多卡片。限定作用域很重要：任务记录视图没有回合日志，
+ * 记录就是那里的主体内容，因此保留卡片分组。 */
+.turn-log ~ .activity-card {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.turn-log ~ .activity-card[open] { padding-bottom: 10px; }
+.turn-log ~ .activity-card.verification-card { padding: 12px 0 14px; }
+.turn-log ~ .activity-card .activity-summary {
+  position: relative;
+  padding: 11px 22px 11px 0;
+  color: var(--subtle);
+}
+.turn-log ~ .activity-card .activity-summary b { color: var(--subtle); font-size: 11px; font-weight: 680; }
+.turn-log ~ .activity-card .activity-summary span { color: var(--subtle); font-size: 10.5px; }
+.turn-log ~ .activity-card .activity-summary svg { color: var(--muted); }
+.turn-log ~ .activity-card .activity-summary:hover b { color: var(--text); }
+/* The native details marker is hidden, so the record row draws its own
+ * chevron; without it only the cursor says the row opens.
+ * 原生 details 标记已被隐藏，记录行自己画一个箭头；没有它，只有光标暗示这行可以展开。 */
+.turn-log ~ .activity-card .activity-summary::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid #8f958d;
+  border-bottom: 1.5px solid #8f958d;
+  transform: translateY(-60%) rotate(45deg);
+  transition: transform .16s ease;
+}
+.turn-log ~ .activity-card[open] .activity-summary::after { transform: translateY(-40%) rotate(-135deg); }
+@media (prefers-reduced-motion: reduce) {
+  .turn-log ~ .activity-card .activity-summary::after { transition: none; }
+}
+
+/* A subagent row outside its own record opens that record: the whole row is
+ * the button, the title underlines on hover, and focus draws a ring. A row
+ * inside its record keeps the same look without the affordance.
+ * 不在自身记录中的子 Agent 行可打开该记录：整行是按钮，悬停时标题下划线，聚焦时画焦点环。
+ * 记录内的行保持同样外观，但没有可点击提示。 */
+button.agent-row {
+  width: 100%;
+  border-left-width: 0;
+  border-right-width: 0;
+  border-bottom-width: 0;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.agent-row:hover strong { text-decoration: underline; text-underline-offset: 2px; }
+button.agent-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, white); outline-offset: -2px; border-radius: 4px; }
+.agent-row-text { display: block; min-width: 0; }
+.agent-row.is-revealed { animation: agent-row-reveal 1.4s ease-out; }
+@keyframes agent-row-reveal {
+  from { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  to { background: transparent; }
+}
+
+/* Omitted history is a footnote, not another transcript entry.
+ * 省略的历史是脚注，不是又一条转录条目。 */
+.log-omitted {
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--subtle);
+  background: transparent;
+  font-size: 11px;
+}
+
+@media (max-width: 760px) {
+  /* The conversation's top padding is 22px here; keep the pin flush with the
+   * scrollport instead of leaving a strip of content above it.
+   * 这里的对话顶部内边距是 22px；让吸附条贴住视口，而不是在它上方留一条内容。 */
+  .log-entry-head { top: -22px; }
+}
+
+@media (max-width: 640px) {
+  .log-entry { gap: 11px; padding: 18px 0 14px; }
+  .log-entry-head { column-gap: 8px; row-gap: 5px; }
+  .log-query { font-size: 15px; }
+  .log-step { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .log-step-label { padding-top: 0; }
+  .log-entry--work { margin: 6px 0 10px; padding-left: 10px; }
+  .log-entry--work .log-entry-head small { margin-left: 0; }
+  .log-runs { padding-left: 9px; }
+  .log-run { grid-template-columns: minmax(0, 1fr) auto; padding: 9px 0; }
+  .log-run code, .log-run-open { display: none; }
+}

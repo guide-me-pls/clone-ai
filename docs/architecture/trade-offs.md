@@ -6,6 +6,462 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-19 — A request that dispatched no task is still a sidebar row
+
+**Decision.** The sidebar lists every request the owner started. A conversation
+whose visible task Runs exist is represented by those task rows, as before; a
+conversation whose turns dispatched no visible task — a direct answer, a failed
+or interrupted turn — becomes one row with `kind: "conversation"`, the latest
+turn text as its title, and that turn's status and reply as its preview. The
+fixed main conversation is never a row, and a hidden conversation stays hidden.
+`buildDashboard` builds these rows from the turn ledger it already reads; the UI
+stops filtering them out, marks them 对话, and opens them through the existing
+conversation route.
+
+**Alternatives rejected.**
+
+- *Keep the tasks-only list.* This is what produced the report: 整理今天的工作信息
+  was answered directly, so no Run existed, and the request vanished from the
+  sidebar as soon as the reply arrived. Only a localStorage selection or a child
+  record could reopen it.
+- *List every conversation and its tasks.* One request would read as two rows.
+  The conversation row represents the request; the task rows represent the work
+  it dispatched.
+- *Create a Run for a direct answer.* The Kernel deliberately refuses a one-step
+  `direct_response` proposal, so "hello" does not become a task, a capacity slot
+  and a worker launch.
+- *Add a separate "requests" list.* Two lists lengthen the sidebar and force the
+  owner to know which list a message lives in; the request is the natural unit.
+
+**Evidence.** `buildDashboard` built `sessions` only from `taskRuns`, and
+`renderSessions` filtered `kind !== "conversation"`. The turn for 整理今天的工作信息
+exists in `main-agent-turns.jsonl` (conversation-a17fbdb8…, completed) with no
+`run.created`; the dashboard returned nine task rows and no row for it. A
+direct-answer turn creates no Run: `proposePlanToKernel` returns before
+`acceptTrigger`. `test/companion-control-plane.test.ts` now expects both
+direct-answer conversations as rows; `test/ui-structure.test.ts` pins that the
+sidebar no longer filters conversations and marks them.
+
+**What it costs.** The sidebar can grow one row per answered request; a
+conversation whose latest turn failed keeps a failed status even when an earlier
+turn succeeded; the row title is the last request, not a summary of the thread.
+Hiding a run without hiding its conversation still leaves the conversation row.
+
+**Reversal condition.** If answered requests make dispatched work hard to find,
+group a conversation with its child tasks under one collapsible row or add a
+filter; do not hide direct answers again.
+
+## 2026-11-19 — A turn is an exchange: the owner on the right, the twin on the left
+
+**Decision.** The main conversation log and 设置 → 审计与轨迹 → 主 Agent 回合 render
+a turn as two sides: the owner's request is a right-aligned bubble; the twin's
+reply is the left-hand section with its author, status, time and evidence below.
+The audit's duplicated 140-character input preview in the card head and the two
+same-looking `<pre>` blocks under 输入 and 回复 are gone. The 上下文 / 派发 / 结果
+steps stay under the answer, and the audit's assembly and tool evidence stay in
+the card below the exchange.
+
+**Alternatives rejected.**
+
+- *Keep the unified log card with the query as a clamped title.* That was the
+  shipped design and the screenshot's complaint: with a long reply, the request
+  and the answer shared one block and one text style.
+- *Restore only the lost `.au-turn*` styles.* Those rules were dropped in an
+  earlier merge, so two grey blocks were all that remained; spacing alone would
+  still leave both voices in one left column.
+- *Change only the audit view.* The screenshot was the audit, but the main
+  conversation used the same stacking; two layouts would make the same turn look
+  different depending on where it is read.
+- *Put the reply in a bubble too.* The reply carries steps, tool rows and
+  dispatched runs; a bubble cannot hold them without nesting cards again.
+
+**Evidence.** The screenshot shows 输入 and 回复 as identical grey `<pre>` blocks
+with the request repeated in the head. `audit.css` at HEAD had no `.au-turn*`
+rules (they were deleted in the merge at 9e24cd8 / 2a3ac95). The main view kept
+the query only in the `.log-query` head and the reply under 结果.
+`test/ui-structure.test.ts` now pins the right bubble, the left answer, the
+author overline and the audit's two sides; the old "not chat bubbles" assertion
+was replaced.
+
+**What it costs.** A turn is taller: request bubble, answer, then evidence. The
+log is no longer a uniform card list, so export and print readers must learn the
+two-sided grammar. The live composer and the settled server render must stay in
+sync; both call the same two-side markup.
+
+**Reversal condition.** If the owner asks for a compact single-column log again
+(e.g. to compare many turns on one screen), add a density switch that collapses
+the two sides into the old bordered card; keep the right-aligned request as the
+default.
+
+## 2026-11-19 — Folders are learned from use, not configured; today's changes come from the machine
+
+**Decision.** "今天的工作信息" no longer depends on a folder setting or a worker
+Run. The twin learns folders from the owner's own requests and from the tasks it
+dispatched: a path is reduced to the folder that holds the project
+(`~/work/knowledge_base/README.md` → `~/work`; a project under the noisy
+`~/Documents` container → the project itself). The list is derived from the
+persisted turn ledger and task events, so it survives restarts without a second
+store, and the situation briefing carries it every turn. A new read-only Kernel
+tool, `recent_file_changes`, lists files whose content changed since local
+midnight (Spotlight on macOS, with a bounded directory walk elsewhere) plus each
+Git repository's branch, uncommitted changes and commits. It defaults to the
+learned folders and accepts a path only when the owner names one. The Main Agent
+charter tells it to call the tool before claiming there is no work material.
+
+**Alternatives rejected.**
+
+- *Add a "work folder" setting.* The owner rejected this explicitly: work,
+  study and other folders exist, and setting them one by one is unrealistic. A
+  setting also cannot learn a new folder when the owner starts using it.
+- *Point the files connector at `~/work`.* The connector is a declaration with a
+  target; it reads only `.md`/`.txt` heads, returns at most 10 observations and
+  has no Git or mtime view, so it cannot produce a change record.
+- *Dispatch a read-only worker to scan the folder.* That was the old path:
+  `context-researcher` failed with "completed step without evidence", the native
+  worker has no shell/Git/mtime tool, and the reply became "no material". The
+  Main Agent also cannot pass a worker's conclusion back.
+- *Scan every known folder in the briefing.* Walking a 130 GB tree takes ~5 s;
+  the briefing is compiled every turn. The tool scans on demand, and Spotlight
+  answers the "changed today" query in ~0.13 s.
+- *Auto-promote the folder list into the reviewed memory library.* Promotion is
+  owner-governed; the learned list is a deterministic projection of the owner's
+  own requests, not a model claim, so it stays in the briefing and the 情境 panel
+  instead of becoming a review candidate.
+
+**Evidence.** The turn 整理今天的工作信息 called only `get_situation`,
+`search_history`, `get_authority` and `get_capacity`, and replied that it had no
+material. The turn ledger and task events already contain
+`/Users/user/work/knowledge_base/README.md` (six requests); the new extractor
+returns `/Users/user/work`. Against the live machine, `recent_file_changes`
+reports 9 files changed today under `~/work` and five repositories; Spotlight
+answers in 0.13 s versus 5.2 s for a pruned `find` over the same tree.
+`test/known-folders.test.ts` pins the reduction rules and protected-path
+refusal; `test/recent-changes.test.ts` pins the change list, Git status and
+protected refusal; `test/situation-briefing.test.ts` pins the briefing section.
+
+**What it costs.** One mention can teach a one-off folder; it sorts by recency
+and the tool caps at five folders. The list is per clone home and disappears if
+the turn ledger and journal are deleted. The walk is bounded (8 s, 4,000
+directories) and can miss files in an unindexed huge tree; Spotlight covers the
+normal case. The tool reads file names and Git status, never file contents.
+Running `git` in a folder is read-only but starts one process per repository.
+
+**Reversal condition.** If learned folders are routinely wrong or noisy, add a
+"forget this folder" action and require two mentions before a path is learned;
+if the briefing grows too large, move the list to a tool result only. If the
+tool leaks sensitive paths into a context the owner did not expect, restrict it
+to folders named in the current request.
+
+## 2026-11-19 — The installed window is the only UI; the browser preview entry is removed
+
+**Decision.** Remove the browser preview surface end to end: delete
+`.claude/launch.json` (its only configuration started `npm run companion:dev`
+on port 4317), `scripts/companion-dev.mjs`, and the `companion:dev` npm script.
+Keep `src/companion-server.ts` and the supervised `src/desktop-sidecar.ts`
+loopback server, because the native window needs that port. The two archived
+eval harnesses that started `companion-dev` now start
+`src/companion-server.ts` with `CLONE_AI_PORT=$PORT` and their existing
+`CLONE_AI_DATA_DIR`, so replay keeps its port and its isolated home. This
+supersedes the preview fallback in the 2026-11-18 "Maintenance automation runs
+in its own clone home" entry.
+
+**Alternatives rejected.**
+
+- *Keep the preview and add a banner.* The preview seeds the owner's providers,
+  settings and MCP credentials and can execute tasks and approvals; a label
+  makes the confusion visible but leaves a second real execution surface whose
+  every run is invisible to the app. A banner is a mitigation, not a boundary.
+- *Delete only `.claude/launch.json`.* `npm run companion:dev` would still start
+  the same browser page by hand, and the docs would still promise that no
+  browser preview exists. The entry point Claude sessions use is the one that
+  made it appear without the owner's request; remove the surface, not just its
+  shortcut.
+- *Point the preview at `~/.clone` so its tasks appear in the app.* That is the
+  two-writer collision the isolated home was introduced to prevent: on
+  2026-11-18 an automation prompt held the Main Agent prompt lock for 149.9 s
+  and rejected the owner's messages. Two UIs must not share one journal.
+- *Keep a fixed-port server for eval replay.* The eval scripts need an HTTP
+  server with a token and a home, not a browser UI. `src/companion-server.ts`
+  already serves that and accepts `CLONE_AI_PORT`; tests use `port: 0`.
+
+**Evidence.** On 2026-11-19 the owner was looking at `localhost:4317`, not the
+app: three `companion-dev` servers launched by Claude sessions (4317, 4318,
+4319) shared `.automation/preview`, while the desktop sidecar used
+`127.0.0.1:58277` and `~/.clone`. The task `发送周报` existed only in the
+preview journal (seq 18, created 2026-11-18T10:24Z) and not in the owner's
+journal (0 matches in 1760 events), so the app could not show it; the approval
+at 2026-11-19T02:10:58Z failed with "An isolated workspace cannot be created
+inside the owner's live project", because the preview's workspace is the repo
+itself. The preview was never a mock: it seeds the owner's config and can run
+tasks and approvals. The owner had asked for this removal on 2026-11-18 (task
+`0a563166`), but that run failed after 12 s with "Required input missing:
+AGENTS.md" (owner journal seq 1548–1577). `apps/desktop/README.md` and
+`docs/initial-runtime.md` already state that there is no supported browser
+preview; the launch config contradicted them.
+
+**What it costs.** Browser-pane UI verification is gone; UI work now uses
+`npm run desktop:dev`, which opens the real `.app` against the live source.
+Archived eval replays use the direct server entry. A session that calls
+`preview_start` gets no server — the intended outcome, not a regression.
+
+**Reversal condition.** If a class of UI bugs can only be reproduced in a
+browser (not in the native WebKit window or `desktop:dev`), reintroduce a
+preview as a separately homed, visibly labeled tool that refuses `~/.clone`,
+serves only a test home, and carries a test that it never writes the owner's
+journal. If a headless CI needs a UI oracle, add a `port: 0` test harness that
+is not a product surface.
+
+## 2026-11-19 — An Agent 协作 row opens the task record that owns it
+
+**Decision.** A subagent row in the Agent 协作 card is a button when its run is
+not the record being viewed: clicking it opens that run's task record, opens the
+target record's own Agent 协作 disclosure and scrolls the matching row into view
+once. Rows inside the run's own record stay plain text, because they are already
+at the destination. The title underlines on hover and the button carries a focus
+ring, matching the child-run rows in 派发. The conversation payload now carries
+`runId` on each subagent so the row can address its record; a task record's rows
+carry `runId === session.id` and remain unlinked.
+
+**Alternatives rejected.**
+
+- *Keep the rows as status text.* This is what the owner's screenshot showed: the
+  main conversation listed three rows titled 准备本地交付物, two needing attention,
+  and the only way to learn which task each belonged to was to scan the sidebar
+  for an identical title. A status list without a destination forces the hunt the
+  row already knows the answer to.
+- *Open a dedicated subagent detail page.* A subagent is a work order, not a
+  session: it has no run status, no approvals and no owner review of its own. A
+  separate page would duplicate the task record and add a route that exists for
+  one row.
+- *Link to the run's journal trace.* The full trace is a diagnostic view; the
+  owner's next action (see the evidence, review the result, retry the task) lives
+  on the task record.
+- *Make the whole card one link to the newest run.* The card aggregates several
+  runs; a single destination would be wrong for every other row.
+
+**Evidence.** The 2026-11-19 screenshot shows the Agent 协作 card in the main
+conversation with three identical titles and no clickable affordance; the
+sidebar holds the owning tasks under the same conversation but under different
+labels. The session payload made the link impossible: `buildMainAgentConversation`
+mapped subagents without `runId`, so the UI could not name a destination even
+though `state.subagents` carries one. `buildSession` already had `runId` through
+the source record, and its rows are all the record's own run.
+
+**What it costs.** The session view grows one field per subagent; a click leaves
+the conversation (there is no back stack — the sidebar's conversation row is the
+way back); the destination record is forced open once, which is a deliberate
+one-shot state rather than a new remembered disclosure. A subagent whose run is
+hidden never appears in the card (the existing visibility filter), so no link can
+land on a 404.
+
+**Reversal condition.** If the Agent 协作 card gains an inline subagent transcript
+(or subagents become first-class sessions with their own run records), the row
+should open that detail instead of the parent task record; if hover links prove
+undiscoverable, add a persistent chevron rather than more colour.
+
+## 2026-11-19 — The transcript separates a turn, a task update and a child run by structure
+
+**Decision.** The conversation log no longer renders every level as the same
+bordered white card. A Main Agent turn is an exchange: the owner's request sits
+above as a right-aligned bubble (recorded in the 2026-11-19 "A turn is an
+exchange" entry), and the twin's answer below it is a ruled section — a hairline
+top rule (2 px in a danger or warning tone when failed or interrupted), a small
+author overline (`clone-ai` / `历史记录`), a status dot plus word and time on one
+line, and the 上下文 / 派发 / 结果 steps on one 52 px label gutter. The
+author/status/time strip is sticky inside its own answer section: while any part
+of the answer is on screen, the reader still knows whose answer and which state
+it is, and the next answer's strip replaces it. A turn that hands over to a
+status note closes with a bottom rule, so the note cannot look attached to the
+answer's tail. A 任务更新 is an indented margin note beside a 2 px rule — small
+label, status, time, then text — with no fill, title or steps; its left rule
+carries the state tone and the badge word stays authoritative. A dispatched child
+run is a hairline row on a 1 px rail inside 派发, showing its id, a truncating
+title and a tone-coloured status word; the whole row stays the button. Records
+after the log (Agent 协作, 执行计划, 证据与产物, 本地执行轨迹, 核验结果) are
+top-rule disclosures, not cards; the flattening is scoped to the conversation, so
+a task-record view keeps its card grouping. The error block inside 结果 is the
+only filled callout left in the transcript.
+
+**Alternatives rejected.**
+
+- *Keep cards and give each status a tinted header band.* This was the first
+  implementation. It reduced the "everything is one white card" effect for turns,
+  but a work update, a child run and a record still kept the same card chrome;
+  the owner still had to read the title to know which level a block was.
+- *Give the child runs their own badges instead of a rail.* A bordered, filled
+  child row is exactly what made the nested dispatch look like sibling tasks.
+  The rail and the status word establish containment; a badge adds back the
+  chrome being removed.
+- *Return the whole exchange to chat bubbles.* The answer carries steps, tool
+  rows and dispatched runs; a bubble cannot hold them without nesting cards. The
+  bubble is reserved for the owner's request, and the answer stays a section.
+- *Collapse dispatched runs into a count.* It hides the openable task and hides
+  which run failed.
+- *Tint every state of every card.* A completed task would then compete with
+  failures and waiting decisions; state salience belongs in the rule, the dot-word
+  and the error content, not in four card fills.
+
+**Evidence.** The owner's 2026-11-19 screenshot shows four blocks in one
+viewport — a turn's tail, a 任务更新, the next turn and an Agent 协作 disclosure —
+sharing the same 1 px border, near-white background, 9–14 px radius and shadow;
+nested run buttons are also white bordered cards, so a child run is
+indistinguishable from a sibling task. The complaint: "这里每次任务区分的ui设计
+不清晰". The source matched the screenshot: `.log-entry`, `.log-entry--work`,
+`.log-run` and `.activity-card` all used the same border, background and shadow
+recipe. The revised design was checked in the browser preview at 1280 px and
+640 px with a synthetic conversation containing a completed turn with two child
+runs, a waiting-review update, an interrupted turn with an error and an expanded
+record.
+
+**What it costs.** A turn loses the container that used to clip hover and focus
+outlines. The request bubble already separates the owner's voice from the
+answer; the sticky author strip reserves about 25 px at the top of the scrollport
+while any part of an answer is visible, and a pending decision dock sits above it
+and covers it until the decision is made. The strip pins the author, state and
+time, not the request text, so a long answer is identified by its opening bubble
+plus the pinned author bar. The status pill becomes a dot plus word, so it is
+visually smaller; the word remains, so colour is never the only carrier. The
+margin note is intentionally quiet and can be missed in a fast scroll except for
+its coloured rule, dot and word. Child rows rely on a full-row click target, a
+7 px vertical padding and a hairline hover rather than a box; if they feel hard
+to hit, raise the row height. Removing the activity-card fills also removes the
+grouping those boxes provided; the top rule and the summary spacing replace it,
+but only after the turn log — task-record views keep their cards.
+
+**Reversal condition.** If owners still cannot tell where one answer ends in a
+long transcript, add a bottom hairline to every answer or a faint section
+background while keeping task updates as margin notes. If the pinned author
+strip is not enough to identify a long answer, pin the request bubble within its
+exchange or add a truncated request line to the strip. If the decision dock keeps
+it hidden for long, move the strip below the dock. If child runs are missed or
+hard to hit, increase their row height and restore a subtle hover fill. If the
+`clone-ai` overline proves too terse, name the level there while keeping one
+named level per block. If the request bubble plus the answer makes each exchange
+too tall, collapse the context steps behind a disclosure rather than shrinking
+the request.
+
+## 2026-11-19 — Attachment clicks answer first; bytes stay behind the chip
+
+**Decision.** Selecting a file returns to the composer immediately: a placeholder
+chip is painted in the change handler before any bytes are read, and files are
+prepared with a bounded pool of three readers instead of one serial chain.
+Images are decoded once into a 240 px thumbnail that the chip and the live card
+share; the original `File` is kept for the request. Image and PDF/`.docx` bytes
+are then read in the background, after the chip exists, with
+`Uint8Array.prototype.toBase64()` when the runtime has it and
+`FileReader.readAsDataURL()` otherwise; no `data:` URL enters the DOM or the
+item. A send awaits only the reads that are still in flight, and that await
+overlaps the route decision. Text documents are read at selection because their
+length decides the 50,000/100,000-character caps. The submit path waits for an
+in-flight attachment batch and re-checks that the turn is not empty after the
+wait, so a batch whose files were all rejected keeps the composer and its route
+context. The failed-send path restores the attachments by identity inside the
+four-attachment cap, a transient read failure stays retryable instead of being
+cached, and a preview URL is not revoked while a connected live card still
+displays it. `applyChrome` stops rewriting every
+`[data-i18n]` node when the locale and strings did not change, the 3-second
+refresh is skipped while a batch is being prepared and is single-flight, and
+the post-turn refresh now runs after the stream slot is released instead of
+being skipped and landing on an arbitrary tick. The server extraction path
+stays sequential and in-process.
+
+**Alternatives rejected.**
+
+- *Keep eager data URLs (the previous behavior).* Four 5 MB images took 94 ms to
+  attach and produced ~28 MB of `data:` markup that was parsed by `innerHTML`
+  twice (composer chip and live card) and decoded at full resolution for 76 px
+  and 120 px boxes. The live-card copy is discarded at the next refresh.
+- *Defer every byte read to send time (the first version of this change).* It
+  moved the 14–17 ms encode onto the send path instead of removing it, and a
+  file moved, deleted or evicted by iCloud became a new send failure. Reading in
+  the background after the chip keeps the click path free, makes the send body
+  usually ready, and narrows the unreadable-file window.
+- *`Promise.all` over the batch with slots reserved from file metadata.* Text
+  document lengths and the shared 100,000-character budget are unknown before
+  reading, and completion order is not input order; pushing results as they
+  settle would reorder the chips, the request array, the reports and the
+  audited manifest. The ordered prefetch keeps the sequential checks exactly.
+- *Parallel extraction of binary documents on the server.* The sidecar is one
+  Node thread, so concurrency adds interleaving, not cores: four real PDFs took
+  273 ms sequentially and 356 ms with `Promise.all`. The budget arithmetic also
+  depends on order (`cap = min(50,000, remaining)`, the truncation marker counts
+  toward `remaining`, and `remaining` may go slightly negative), so a parallel
+  allocator can silently change the model message and the ledger manifest.
+- *Page-level PDF fan-out.* Concurrent `getPage`/`getTextContent` calls on one
+  `unpdf` document throw `DataCloneError` from its loopback port; the parser is
+  not safe for concurrent page access in this build.
+- *Worker threads or child processes for PDF text.* The macOS app ships the
+  source tree and a Node binary, but the Windows sidecar is bundled with
+  esbuild and `pkg`; a worker would need a second packaging path on one
+  platform and a fallback on the other. The realistic gain is also after the
+  send, not on the click: four in-cap PDFs measured 232 ms sequentially and
+  134 ms with four workers, while a single PDF gains nothing. That is below
+  model-latency noise for this change.
+- *Parallel OCR in the native helper.* A 20-page scanned PDF took 2.34 s
+  sequentially and 2.10 s with four concurrent pages (~10%), while rasterized
+  pages multiply peak memory and PDFKit/Vision concurrency is not documented as
+  safe. The helper also cannot run inside `npm test`, so the change would have
+  to ship "assumed".
+- *Defer text-document reads too.* The 2 MB cap rejects before reading, and a
+  2 MB read measured 2 ms; its length is required for the per-document and
+  total character checks.
+
+**Evidence.** In Chromium, attaching four generated 5 MB PNGs took 94 ms with
+the old serial data-URL path and 3 ms to create the ordered object URLs before
+any read; the background encode of the same four files took 14–17 ms. Four
+12 MP photos produced 240 px thumbnails in 36–58 ms concurrently, 2.5 KB each
+instead of a 2.4 MB data URL and a full-resolution decode in a 76 px chip. The
+UI survey measured four full-resolution data-URL previews at 115.8 ms of
+`innerHTML` insert and a 270.8 ms maximum main-thread gap, versus 2.5 ms and
+18.2 ms for the same images as blob URLs. A real 8 MB MP4 frame took 561 ms on
+first attach; four in-memory copies took 174 ms sequentially and 102 ms
+concurrently (timings noisy). The client survey measured
+`Uint8Array.prototype.toBase64()` in the system JavaScriptCore at 0.56 ms for
+5 MB (assumption: the desktop WebView exposes it; the code feature-detects and
+falls back). Code review found three real races: the four-attachment cap is
+checked before an `await` and the push after it, `createSession` clears the
+composer before pending reads finish, and a failed send drops the attachments;
+the review also found that caching a rejected payload made a transient read
+failure permanent. The deterministic eval is `test/attachment-client.test.ts`
+(concurrency and the global three-reader bound across overlapping batches,
+input order, cap and budget semantics, chip-before-read, one background encode
+per binary/image, payload reuse across requests, the FileReader fallback,
+payload accepted by the real `parseAttachments`, attachment retention on
+failure, a retry after a transient failure, failed-send restore within the cap,
+and a connected card keeping its preview). A committed VM benchmark
+(`benchmark/attachment-client.ts --old-ref 4f0149e --runs 3 --read-ms 10`)
+reproduces the strategy difference: four 5 MB images went from 68 ms of serial
+attach work, four `data:` previews and 28 MB of preview markup to 0 ms of
+attach work, four `blob:` previews and 704 bytes of markup, with four
+background encodes; the mixed batch went from 58 ms to 12 ms. Browser timings
+are manual measurements, not a committed benchmark, and are labelled
+approximate.
+
+**What it costs.** The base64 payload is held from attach until the turn ends,
+bounded by the same four attachments and 10 MB per binary; the previous path
+held the payload plus a second `data:` URL copy. A file must remain readable
+while the background read runs; if it was moved or deleted, the send fails with
+the attachment name and the attachments are restored so the owner can retry.
+The 240 px thumbnail loses full-resolution inspection and GIF animation in the
+composer and live card; the model still receives the original bytes. A video's
+placeholder remains "读取中…" until its frame is decoded. Blob URLs live until
+the attachment is removed or the live card is replaced, then are revoked; all
+remaining URLs are revoked on unload. Scanned PDFs still pay the native OCR
+time at send; the native file panel was not measured and may be the owner's
+actual click delay. Chromium numbers are not WKWebView numbers.
+
+**Reversal condition.** If profiling in the packaged app shows the native
+`NSOpenPanel` or server extraction dominates the wait, stop optimizing this
+path and write a trade-off for that layer. If four large binaries held as
+base64 pressure memory, defer the read to send time and accept the smaller
+unreadable-file window. If send-time encoding becomes visible (roughly >100 ms)
+or fails on slow volumes, pre-encode in an idle callback and cache the result.
+If the target WebView lacks `createImageBitmap` resizing, keep the object-URL
+fallback or remove thumbnails. If four large images at three-way preparation
+pressure memory, lower the pool to one or two. If scanned PDFs become a common
+input, revisit OCR with a varied multi-page fixture and a bounded worker model,
+and record the benchmark.
+
 ## 2026-11-19 — A Main Agent can retrieve across task conversations
 
 **Decision.** Keep multiple Main Agent instances — the same identity, one per

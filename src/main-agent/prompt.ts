@@ -52,6 +52,9 @@ export const MAIN_AGENT_CHARTER = [
   "Steps that touch external systems must carry risk external_side_effect or irreversible so the Kernel can gate them.",
   "Call get_capacity before proposing a wide plan: independent steps in one plan run in parallel up to the machine's limit,",
   "and dependent steps still wait for their inputs. You cannot change that limit; only the owner can pin it.",
+  "When the owner asks what they worked on, what changed today, or to organize today's work, call recent_file_changes",
+  "before answering: it reads the files whose content changed in the folders you learned from their past requests,",
+  "plus each repository's uncommitted changes and commits. Never claim there is no work material without calling it.",
   "Be concise. When a plan is accepted, tell the owner the runId and what happens next.",
 ].join("\n");
 
@@ -62,7 +65,7 @@ export const MAIN_AGENT_CHARTER = [
  * 上面那份 charter 的语义版本。含义变化时递增；哈希已经能捕捉措辞修改，而版本号
  * 才是人比较两个基线时真正会读的东西。
  */
-export const MAIN_AGENT_CHARTER_VERSION = 4;
+export const MAIN_AGENT_CHARTER_VERSION = 5;
 
 /**
  * Whether synthesized recall is on. Off by default: it costs one model call on
@@ -151,6 +154,7 @@ export async function compileMainAgentPrompt(options: {
       journal,
       dataDirectory: options.dataDirectory,
       workspacePath,
+      ...(options.query === undefined ? {} : { query: options.query }),
     });
     const { describeExecutors } = await import("./tools/kernel-tools.ts");
     const executors = await describeExecutors(options.dataDirectory);

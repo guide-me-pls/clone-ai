@@ -6,6 +6,48 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A request that dispatched no task stays in the sidebar
+
+The sidebar now lists every request you started, not only task Runs. A request the Main Agent answered directly — or one whose turn failed or was interrupted — becomes its own 对话 row with the latest request as its title and the reply as its preview, so it no longer disappears when the answer arrives. A conversation that did dispatch tasks still appears as those task rows only, never twice; the main conversation is still opened from 对话 and hidden conversations stay hidden with a restore action. The audit's execution list remains tasks-only because a conversation is not a Run.
+
+侧栏现在列出你发起的每一次请求，而不只是任务 Run。主 Agent 直接作答的请求——或回合失败、中断的请求——会成为一条"对话"行，标题是最近一次请求，预览是回复，因此回答到达后它不再消失。派发过任务的对话仍只由那些任务行表示，绝不重复；主对话仍从"对话"打开，隐藏的对话仍可从"已隐藏"恢复。审计的执行记录列表仍只列任务，因为对话不是 Run。
+
+### A turn reads as an exchange: your request on the right, the answer on the left
+
+The conversation log and 设置 → 审计与轨迹 → 主 Agent 回合 now render a turn as two sides. Your request is a right-aligned bubble; the reply is the left-hand section with its author, status, time and evidence below. In the audit, the duplicated 140-character input preview in the card head and the two identical grey blocks under 输入 and 回复 are gone; the assembly and tool evidence stay in the card below the exchange.
+
+对话日志与 设置 → 审计与轨迹 → 主 Agent 回合 现在把回合渲染成两侧。你的请求是靠右的气泡；回复是左侧章节，作者、状态、时间与证据在它下面。审计卡片头部重复的 140 字输入预览、以及"输入""回复"下两个相同的灰块都已移除；任务组装与工具证据仍在卡片内、交流下方。
+
+### Today's work comes from learned folders, not a setting
+
+The twin now learns the folders you work in from your own requests and from the tasks it dispatched — `~/work/knowledge_base/README.md` teaches `~/work`, a project under `~/Documents` teaches that project — and remembers them in the persisted turn ledger. Every turn's situation briefing carries the list. A new read-only `recent_file_changes` tool lists the files whose content changed since local midnight (Spotlight on macOS, with a bounded directory walk fallback) plus each Git repository's branch, uncommitted changes and commits; it reads the learned folders by default and only a folder you name otherwise. The Main Agent is told to call it before saying it has no material. No folder has to be configured one by one.
+
+分身现在从你自己的请求与它派发过的任务中学习你工作的文件夹——`~/work/knowledge_base/README.md` 学到 `~/work`，`~/Documents` 下的项目学到该项目本身——并把它们记在持久化的回合台账里。每回合的情境简报都会带上这份列表。新增只读工具 `recent_file_changes`：列出本地午夜以来内容发生变化的文件（macOS 用 Spotlight，其他情况回退到有界目录遍历），以及每个 Git 仓库的分支、未提交改动与提交；默认读取学到的文件夹，只有你点名时才读取别处。主 Agent 被告知在说"没有素材"之前先调用它。不需要逐个配置文件夹。
+
+### Attachments answer the click before they are read
+
+Choosing a file now paints a "读取中…" chip immediately, then prepares independent files through one global ordered three-way pool. Images are shown through a 240 px thumbnail shared by the composer chip and the live card instead of a full-resolution data URL, and image/PDF bytes are encoded in the background after the chip exists; a send waits only for reads still in flight, overlapping the route decision. The four-attachment cap and the 100,000-character document budget are unchanged, a failed send restores the chosen files, and a transient read failure can be retried. Enter with only a reading chip waits for the batch; if every file is rejected, the composer keeps the message unsent. Measured in Chromium, four 5 MB images went from 94 ms of serial data-URL work to 3 ms of ordered blob previews, and four 12 MP photos now cost 69 ms for four 4.9 KB thumbnails. The server's PDF/.docx/OCR extraction stays sequential and in-process: parallel extraction measured slower on the single Node thread, concurrent PDF pages throw `DataCloneError`, and parallel OCR gained about 10% on a 20-page scan.
+
+选择文件后现在会立刻画出"读取中…"chip，然后由同一个全局的、按输入顺序的 3 路池准备独立文件。图片通过 chip 与实时卡片共用的 240px 缩略图显示，而不是全分辨率 data URL；图片与 PDF 的字节在 chip 出现后于后台编码，发送只等待仍在进行的读取，并与路由决定重叠。四附件上限与 100,000 字符文档预算不变；发送失败会恢复已选文件；瞬时读取失败可以重试。只有"读取中…"chip 时按回车会等待批次；如果所有文件都被拒绝，输入框保留消息、不发送。Chromium 实测：四张 5MB 图片从 94ms 的串行 data URL 处理降到 3ms 的按序 blob 预览；四张 12MP 照片现在 69ms 生成四张 4.9KB 缩略图。服务端的 PDF/.docx/OCR 提取保持串行、进程内：单 Node 线程上的并行提取实测更慢，并发 PDF 页面会抛 `DataCloneError`，并行 OCR 在 20 页扫描件上仅提升约 10%。
+
+### The installed window is the only UI
+
+The browser preview entry is gone: `.claude/launch.json` (its only configuration started the preview on port 4317), `scripts/companion-dev.mjs` and the `companion:dev` npm script are deleted. The installed window's supervised loopback server is unchanged, and the two archived eval harnesses now start `src/companion-server.ts` on `CLONE_AI_PORT` with their own home, so replay still works. UI work uses `npm run desktop:dev`, which opens the real app against the live source. The preview home under `.automation/preview` is not part of the app; a task created there (such as 发送周报) never appears in `~/.clone`, and this change removes the page that made that look like a missing app task.
+
+浏览器预览入口已移除：`.claude/launch.json`（它唯一的配置在 4317 端口启动预览）、`scripts/companion-dev.mjs` 与 `companion:dev` npm 脚本均已删除。已安装窗口的受监督 loopback 服务不变；两个归档评测 harness 改为以 `CLONE_AI_PORT` 和各自的 home 直接启动 `src/companion-server.ts`，重放仍然可用。UI 工作改用 `npm run desktop:dev`，它以活源码打开真实的 App。`.automation/preview` 下的预览 home 不属于 App；在那里创建的任务（例如 发送周报）永远不会出现在 `~/.clone`，这次变更移除了那个让它看起来像"App 丢任务"的页面。
+
+### An Agent 协作 row opens the task record that owns it
+
+Subagent rows in the Agent 协作 card are now buttons when they belong to another task record. Clicking one opens that run's task record, expands its Agent 协作 card and scrolls the matching row into view once; the title underlines on hover, the cursor turns into a pointer, and keyboard focus draws a ring. Rows inside a task record stay plain text because they are already at their destination. The conversation payload now carries each subagent's `runId`, so the row can address its record even when several runs contribute to the same card. `test/ui-structure.test.ts` and `test/agent-collaboration-link.test.ts` pin the markup, the click wiring and both views' payload.
+
+Agent 协作 卡片里的子 Agent 行，当它属于另一条任务记录时现在是按钮。点击会打开该 Run 的任务记录、展开它的 Agent 协作 卡片，并把对应的行滚动到视野内一次；悬停时标题显示下划线，光标变成指针，键盘聚焦时画出焦点环。任务记录内部的行保持纯文本，因为它们已经在目的地。对话载荷现在为每个子 Agent 携带 `runId`，即使同一张卡片聚合了多个 Run，行也能寻址到自己的记录。`test/ui-structure.test.ts` 与 `test/agent-collaboration-link.test.ts` 固定了标记、点击接线以及两种视图的载荷。
+
+### A transcript says which block is which
+
+The conversation log now separates its four levels by structure instead of giving every block the same white card. A Main Agent turn is an exchange: the owner's request sits above as a right-aligned bubble, and the twin's answer below it is a ruled section with an author overline (`clone-ai` / `历史记录`), a status dot plus word and time, and its 上下文 / 派发 / 结果 steps on one label gutter; the author strip pins within its own answer, so a tail whose head scrolled out of view still says whose answer it is, and an answer that hands over to an update closes with a rule. Failed and interrupted answers carry a 2-px state rule, and the error stays the only tinted callout inside 结果. A 任务更新 is an indented margin note beside a tone-coloured rule — small label, status, time, then text — so it no longer reads as an answer. A dispatched child run is a hairline row on a rail inside 派发, with its id, title and tone-coloured status word; the whole row still opens the task. Records after the log (Agent 协作, 执行计划, 证据与产物, 本地执行轨迹, 核验结果) are top-rule disclosures with a drawn chevron, not more cards; the flattening is scoped to the conversation, so task-record views keep their card grouping. `test/ui-structure.test.ts` pins the four levels' markup and CSS grammar.
+
+对话日志现在用结构区分四个层级，而不是给每个块都套同一只白卡片。主 Agent 回合是一次交换：所有者的请求在上方，是靠右的气泡；分身的回答在下方，是带分隔线的章节——作者眉线（`clone-ai` / `历史记录`）、状态圆点加文字与时间，以及共用一条标签栏的 上下文 / 派发 / 结果 步骤；作者条只在所属回答内吸附，头部滚出视口后尾部仍能说明这是谁的回答；交接给更新的回答以底线收尾。失败与中断的回答带 2px 状态线，"结果"里的错误也是唯一带底色的提示块。任务更新是带状态色竖线旁的缩进页边注——小标签、状态、时间，然后是正文——不再读成一个回答。派发的子任务 Run 是"派发"里竖线上的细线行，带 id、标题与按状态着色的状态词，整行仍可打开该任务。日志之后的记录（Agent 协作、执行计划、证据与产物、本地执行轨迹、核验结果）是带自绘箭头的顶线披露行，而不是更多卡片；这种变平只作用于对话转录，任务记录视图保留卡片分组。`test/ui-structure.test.ts` 固定了这四个层级的标记与 CSS 语法。
+
 ### The machine is the workspace: reads are open, every write carries a scope
 
 Workers can read any readable location on the local computer, and the live folder is no longer an implicit write root. Every write step must carry a `files` write scope; when a step names no target, the Kernel proposes the workspace as an explicit scope, and the policy engine still decides — `observe` denies writes, `prepare` and `act_with_approval` ask the owner, and only an `act_auto` standing policy allows them without a prompt. External work runs in an isolated copy and the repair lane in its own worktree; those sandboxes stay writable. Protected locations — credentials, browser profiles, Clone AI's own journal and token — remain refused before any policy can open them. The audit now lists each step's scopes. With files still at 只观察, writes are denied until you raise 设置 → 权限与安全 → 文件 to 需批准后执行 (or add a standing policy).

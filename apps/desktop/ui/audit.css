@@ -196,3 +196,40 @@ body.empty-conversation .welcome { padding-bottom: 0; }
 .au-assembly-searches { list-style: none; margin: 0; padding: 0 11px 10px; display: grid; gap: 4px; font-size: 12px; }
 .au-assembly-searches li { color: var(--subtle, #5c6675); }
 .au-assembly-searches b { color: var(--text, #20242c); }
+
+/* A turn is an exchange: the owner speaks on the right, the twin answers from
+ * the left, and the evidence sits under the answer. The .au-turn* rules were
+ * lost in an earlier merge, so two identical grey <pre> blocks were all that
+ * remained; these rules restore the level and make the two voices distinct.
+ * 回合是一次交流：所有者在右侧说话，分身在左侧回答，证据放在回答下面。此前的合并丢失了
+ * .au-turn* 规则，只剩两个相同的灰色 <pre> 块；下面的规则恢复层级，并让两个声音可区分。 */
+.au-turns { display: grid; gap: 14px; }
+.au-turn { display: grid; gap: 10px; }
+.au-turn-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.au-turn-who { color: var(--text, #20242c); font-size: 12px; font-weight: 720; letter-spacing: .02em; }
+.au-turn-head .au-badge { margin-left: auto; }
+.au-turn-head small { color: var(--muted, #8791a1); font-size: 11px; }
+.au-turn-exchange { display: grid; gap: 12px; margin-top: 2px; }
+.au-turn-query {
+  justify-self: end;
+  width: fit-content;
+  max-width: min(78ch, 88%);
+  padding: 9px 12px 10px;
+  border: 1px solid #e3e4e8;
+  border-radius: 13px 13px 4px 13px;
+  background: #f4f5f7;
+}
+.au-turn-answer { justify-self: start; width: 100%; max-width: min(92ch, 100%); }
+.au-turn-role { display: block; margin-bottom: 4px; color: var(--muted, #8791a1); font-size: 10px; font-weight: 720; letter-spacing: .1em; }
+#audit-root .au-turn-query pre,
+#audit-root .au-turn-answer pre { margin: 0; padding: 0; border: 0; background: transparent; max-height: 360px; }
+#audit-root .au-turn-answer pre { padding: 9px 11px; border: 1px solid #e8eaee; border-radius: 10px; background: #fafbfc; }
+#audit-root .au-turn-query pre { white-space: pre-wrap; }
+.au-turn-tools { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12px; }
+.au-turn-tools li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--line, #eef1f5); }
+.au-turn-tools em { color: var(--muted, #8791a1); font-style: normal; font-size: 11px; }
+.au-turn-tools span { color: var(--subtle, #5c6675); overflow-wrap: anywhere; }
+.au-turn .au-assembly { margin: 2px 0 0; }
+@media (max-width: 720px) {
+  .au-turn-query { max-width: 96%; }
+}

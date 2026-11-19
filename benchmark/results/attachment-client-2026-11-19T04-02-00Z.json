@@ -1,0 +1,56 @@
+{
+  "kind": "manual-browser-measurement",
+  "date": "2026-11-19T04:02:00Z",
+  "claim": "The attach path no longer puts multi-megabyte data URLs into innerHTML and prepares independent files concurrently; image/PDF encoding runs after the chip exists.",
+  "command": "Playwright MCP browser_evaluate against http://localhost:4317 (the desktop UI's app.js served by the then-available browser preview server, scripts/companion-dev.mjs, removed in a separate change), calling addAttachmentFiles / prepareAttachment / attachmentsForRequest with generated File objects and the real 8 MB MP4 fixture.",
+  "provider": "none",
+  "model": "none (local Chromium engine in the Playwright MCP browser)",
+  "machine": "Apple M5 Pro, 18 CPU cores, 25.8 GB RAM, macOS 27.0.0, Node 26.8.1",
+  "fixtures": {
+    "image5mb": "generated 5 MB PNG (random header, incompressible body)",
+    "image12mp": "generated 4032x3024 JPEG, 2.4 MB",
+    "pdf10mb": "generated 10 MB byte stream starting with %PDF-",
+    "video8mb": "eval-runs/2026-11-17-forbidden-city/verify/f/video.mp4, 8.2 MB",
+    "text2mb": "generated 2 MB plain text (rejected by the 50,000-character cap)"
+  },
+  "parameters": {
+    "maxAttachments": 4,
+    "prepareConcurrency": 3,
+    "thumbnailSize": 240,
+    "imagePreviewFormat": "JPEG quality 0.82"
+  },
+  "metrics": {
+    "before": {
+      "attachFour5mbImagesMs": 94,
+      "attach10mbPdfMs": 15,
+      "attach5mbImageMs": 44,
+      "fourFullResolutionDataUrlPreviewInsertMs": 115.8,
+      "fourFullResolutionDataUrlMaxMainThreadGapMs": 270.8,
+      "fourVideoFramesSequentialMs": 561,
+      "note": "The 94/44/15 ms numbers were measured on the pre-change app.js with the same generated files; the 115.8/270.8 ms numbers come from the UI survey's Chromium measurement of four 7.35 MB JPEG data URLs."
+    },
+    "after": {
+      "orderedObjectUrlsFour5mbImagesMs": 3,
+      "attachFour5mbFakeImagesMs": 14,
+      "attachFour12mpRealPhotosMs": 69,
+      "one12mpPhotoThumbnailMs": 24,
+      "thumbnailBytes": 4912,
+      "thumbnailDimensions": [240, 180],
+      "imagePayloadEncode5mbMs": 3,
+      "pdfPayloadEncode10mbMs": 8,
+      "attach10mbPdfMs": 0,
+      "attachTwoMbTextMs": 4,
+      "videoFirstFrameMs": 561,
+      "videoFourFramesConcurrentMs": 102,
+      "videoPlaceholder": "visible in the change handler before the frame resolves ('读取中…')"
+    }
+  },
+  "comparison": "Four 5 MB images: 94 ms of serial data-URL work plus ~28 MB of innerHTML parsing removed; the chip path creates ordered blob URLs in 3 ms. Four 12 MP photos: 69 ms to prepare four 240 px thumbnails (4.9 KB each) versus 94 ms plus full-resolution decode for the old previews. Image/PDF base64 is produced in the background (3 ms / 8 ms) and awaited only if the send arrives first.",
+  "limits": [
+    "Chromium numbers, not WKWebView numbers; the packaged desktop app was not profiled.",
+    "The native NSOpenPanel latency was not measured and may dominate the owner's click.",
+    "The 561 ms first video frame is unchanged; only the placeholder feedback and multi-video concurrency improve.",
+    "Server extraction was deliberately not parallelized: four real PDFs measured 273 ms sequential vs 356 ms with Promise.all; page-level concurrency throws DataCloneError; 20-page OCR measured 2.34 s sequential vs 2.10 s with four pages.",
+    "Timings are single runs with host load; treat them as approximate."
+  ]
+}

@@ -31,6 +31,293 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — A new request stays visible, a turn reads as an exchange, and today's work comes from learned folders
+
+- **Goal / hypothesis:** the owner reported three problems from one screenshot:
+  (a) 整理今天的工作信息 could not find the modification records under `~/work`
+  because the Main Agent had no file/change tool and no connector;
+  (b) a new request answered directly disappeared from the left sidebar;
+  (c) the audit turn card mixed the request and the reply into two identical
+  grey blocks. The hypotheses were that the request was missing because the
+  dashboard lists only task Runs, that the audit classes had been dropped in an
+  earlier merge, and that the "today" context never had a file-change source.
+- **Trade-off:** [a request is still a row](../architecture/trade-offs.md#2026-11-19--a-request-that-dispatched-no-task-is-still-a-sidebar-row),
+  [a turn is an exchange](../architecture/trade-offs.md#2026-11-19--a-turn-is-an-exchange-the-owner-on-the-right-the-twin-on-the-left),
+  [folders are learned](../architecture/trade-offs.md#2026-11-19--folders-are-learned-from-use-not-configured-todays-changes-come-from-the-machine).
+- **Change:** `src/main-agent/known-folders.ts` learns and renders folders from
+  the turn ledger and `task.created` events; `src/main-agent/tools/recent-changes.ts`
+  adds the read-only `recent_file_changes` tool (Spotlight plus a bounded walk,
+  Git status/log, protected-path refusal); `situation-briefing.ts`, `prompt.ts`,
+  `native-runtime.ts`, `kernel-tools.ts` and `/api/situation` carry the folder
+  memory and the tool; `companion-server.ts` adds conversation rows without
+  visible tasks and keeps a conversation whose tasks are visible represented by
+  those tasks; `app.js` stops filtering conversations, marks them 对话, and
+  renders a right-hand request bubble plus a left-hand answer in the live and
+  settled turn log; `audit.js`/`audit.css` restore the lost `.au-turn*` layer as
+  a two-sided exchange. The charter is version 5.
+- **Eval:** `node --experimental-strip-types --test test/known-folders.test.ts test/recent-changes.test.ts`
+  **8/8** (the modules and cases did not exist before; the live tool now returns
+  the 9 files changed today under `~/work` and five repositories, while the old
+  path answered "no material"). A real preview turn with
+  `deepseek-v4.1-flash` called `recent_file_changes` first (**573 ms**), then
+  `get_situation`, and wrote a project-by-project digest from the result; its
+  follow-up `dispatch_task` failed (the external operator is disabled) but no
+  longer blocked the answer. `test/companion-control-plane.test.ts` **25/25**:
+  the old assertion expected **0** conversation rows and now expects both
+  `conversation-a` and `conversation-b`. `test/ui-structure.test.ts` **21/21**:
+  the old "not chat bubbles" assertion is replaced by right-bubble / left-answer
+  and audit-side assertions. `npm test` **900 tests, 899 pass, 1 fail** on the
+  first full run: `whatsapp-bridge.test.ts` "a queued message resumes…" timed out
+  at 5.1 s under four concurrent sessions; it passes **21/21** alone, and the
+  second full run passes **900/900** in 6.0 s. `npm run typecheck` exit 0; `npm run gate`
+  **PASS**, baseline unchanged.
+- **Benchmark run:** none — all three changes are deterministic contracts and
+  UI/wiring; no provider, model, dataset, split, seed, scoring parameters or
+  result file are involved.
+- **Execution chain:** a five-reader read-only workflow mapped the sidebar, the
+  audit view, the Main Agent context, the runtime data model and the repo
+  conventions (~29 min, 1.13M subagent tokens, 673 tool uses). It found that the
+  audit `.au-turn*` CSS had been deleted in the merge at 9e24cd8 / 2a3ac95, that
+  the running daemon (started 11:07) still had charter v2, and that the live
+  turn for 整理今天的工作信息 called only four read-only tools. Four other
+  sessions were editing the same checkout; the owner chose to wait, and the
+  hot files were edited after they went quiet. Implementation was server-first
+  (new modules, briefing, prompt, tool, dashboard), then the UI and tests.
+  Failures: `extractFolders` initially swallowed Chinese punctuation into the
+  path and learned nothing; `folderCollection` compared a realpath against a
+  non-canonical home and returned the project instead of `~/work`; the first
+  full test run hit the WhatsApp timing flake. All were fixed or re-run.
+- **Pros:** the change is deterministic and read-only; folder learning needs no
+  new store or setting; the same folder list feeds the briefing, the tool and
+  the 情境 panel; the sidebar represents a request exactly once.
+- **Cons / next time:** the first UI verification happened while four sessions
+  were mutating the same files, which cost ~20 minutes of waiting and one
+  near-conflict on `renderSessions`; next time, isolate UI work in a worktree
+  before starting. `recent_file_changes` relies on Spotlight for speed and can
+  be slow on an unindexed huge tree. Folder memory has no "forget" action yet.
+- **Reversal condition:** see each trade-off entry; the common one is "if the
+  sidebar becomes noisy, group conversations with their tasks; if learned
+  folders are noisy, add a forget action and a two-mention threshold."
+
+### 2026-11-19 — Attachments acknowledge the click first
+
+- **Goal / hypothesis:** the owner reported that choosing a file to attach felt
+  very slow even on an 18-core M5 Pro. The hypothesis was that the click was
+  not CPU-bound: the old path serialized every file, read every byte as a
+  full-resolution data URL, inserted that URL into a 76 px chip and again into
+  the live card, and showed nothing until the whole batch finished. Paint the
+  chip before reading, prepare independent files concurrently, keep only a
+  small thumbnail in the DOM, and read/encode the bytes behind the chip. Use
+  the server's cores only where measurement proves a gain.
+- **Trade-off:** [Attachment clicks answer first; bytes stay behind the chip](../architecture/trade-offs.md#2026-11-19--attachment-clicks-answer-first-bytes-stay-behind-the-chip).
+- **Change:** `apps/desktop/ui/app.js` — placeholder chips painted in the change
+  handler, an ordered 3-way prefetch pool (`prefetchAttachments`), 240 px
+  thumbnails via `createImageBitmap` with an object-URL fallback
+  (`imagePreviewUrl`), background payload prefetch with
+  `Uint8Array.prototype.toBase64()`/`FileReader` fallback, cap and
+  100,000-character checks re-applied after every await, `createSession`
+  waiting for the latest batch, failed-send restore by identity inside the
+  four-file cap, retryable payload failures, blob-URL revocation on
+  remove/replacement/unload, `applyChrome` skipping unchanged i18n writes,
+  single-flight refresh, refresh skipped for up to five seconds while a batch
+  prepares, and the post-turn refresh moved after the stream slot is released.
+  `apps/desktop/ui/components.css` adds the dashed preparing-chip state.
+  `test/attachment-client.test.ts` is the new deterministic eval.
+  `benchmark/results/attachment-client-2026-11-19T04-02-00Z.json` records the
+  manual browser measurements. The server extraction path is deliberately
+  unchanged.
+- **Eval:** `node --experimental-strip-types --test test/attachment-client.test.ts`
+  **12/12** (chip before a slow read, concurrent preparation with input order,
+  the global three-reader bound across overlapping batches, four-file cap and
+  100,000-character budget, File + blob preview instead of a data URL, payload
+  accepted by the real `parseAttachments`, one encode reused across requests,
+  the FileReader fallback, attachment retained after failure, transient read
+  retried, failed-send originals restored within the cap, and a connected card
+  or restored item keeping its preview URL). The existing
+  `test/ui-structure.test.ts`, `test/desktop-only-surface.test.ts`,
+  `test/ui-locale.test.ts`, `test/attachments.test.ts`,
+  `test/document-extract.test.ts` and `test/desktop-shell.test.ts` pass. Full
+  suite **899/899** at the time of this run, `npm run typecheck` passes, `npm run gate` passes with the
+  baseline unchanged. Before/after in Chromium: attaching four 5 MB images
+  94 ms → 3 ms to the ordered blob previews (14 ms including fake-image
+  preparation); four 12 MP photos 69 ms to four 240 px thumbnails (4.9 KB
+  each) versus 94 ms plus full-resolution decode; image payload 3 ms and
+  10 MB PDF payload 8 ms in the background; a 10 MB PDF now attaches in 0 ms
+  and a 2 MB text rejection takes 4 ms. The UI survey measured the removed
+  full-resolution preview insert at 115.8 ms with a 270.8 ms maximum main-thread
+  gap for four 7.35 MB JPEG data URLs, versus 2.5 ms/18.2 ms as blob URLs.
+- **Benchmark run:** `node --experimental-strip-types benchmark/attachment-client.ts
+  --old-ref 4f0149e --new apps/desktop/ui/app.js --runs 3 --read-ms 10`;
+  no provider or model; fixtures: four 5 MB image/png files, a mixed
+  image/PDF/text batch, and six 1 MB images for the cap; parameters: four
+  attachments, `--read-ms 10` simulated read latency, `--runs 3`, three-way
+  client pool; machine: Apple M5 Pro, 18 cores, 25.8 GB RAM, macOS 27.0.0,
+  Node 26.8.1; result:
+  `benchmark/results/attachment-client-2026-11-19T04-14-38-659Z.json`.
+  Medians: four images old attach 68 ms / `data:` previews 4 / maxActive 1,
+  new attach 0 ms / `blob:` previews 4 / maxActive 4 (background encodes);
+  mixed batch 58 ms → 12 ms; six files 53 ms → 0 ms with four accepted. The VM
+  has no `createImageBitmap`, so the new revision uses its object-URL fallback.
+  A separate manual Chromium measurement (four 12 MP photos, a real 8 MB MP4)
+  is recorded in `benchmark/results/attachment-client-2026-11-19T04-02-00Z.json`;
+  those numbers are not WKWebView numbers and are single-run approximations.
+- **Execution chain:** reproduced the old path in the desktop UI's Chromium and
+  measured 44 ms for a 5 MB image, 15 ms for a 10 MB PDF, 94 ms for four 5 MB
+  images, and 561 ms for an 8 MB MP4 frame. Ran a twelve-agent workflow (five
+  read-only surveys, three independent designs, three judges and one
+  synthesis). The surveys measured four PDFs at 273 ms sequential versus
+  356 ms with `Promise.all`; concurrent `getPage` on one `unpdf` document threw
+  `DataCloneError`; a 20-page scanned PDF took 2.34 s serial versus 2.10 s with
+  four concurrent pages. The judges rejected the server worker pool and the
+  keyed transcript rewrite for this change. Implemented the client path; three
+  defects were found and fixed during verification: the structural guard
+  flagged a `prepare` callback parameter (inlined `prepareAttachment`), the
+  thumbnail branch returned the full-resolution URL after `createImageBitmap`
+  had already resized the bitmap (removed the early return), and a cached
+  failed payload made a transient read failure permanent (delete the cache on
+  rejection). The VM test needed an IIFE wrapper because `runInNewContext`
+  rejects a top-level `return`. One full-suite run was red on
+  `test/desktop-only-ui.test.ts` while a concurrent session was deleting the
+  browser-preview entry; after that edit settled, the suite passed. That
+  session also added the `recent_file_changes` Kernel tool during verification;
+  its prompt-snapshot expectation was updated by one name, and the shared suite
+  passed **899/899**. The workflow and verification took roughly 35 minutes; no
+  provider tokens were spent by the product, and the workflow's model cost was
+  not measured.
+- **Pros:** the change is backed by measurements at every rejection (server
+  parallelism, page fan-out, OCR concurrency, worker threads), the eval is
+  deterministic and tests the exact races found in review, and the click path
+  no longer carries multi-megabyte strings or serial waits. The thread count
+  stays low, so the optimization does not add packaging or memory risk to the
+  sidecar.
+- **Cons / next time:** no results entry is written yet: the packaged
+  WKWebView and the native `NSOpenPanel` were not measured, so this stays an
+  experiment in this log until packaged marks show a real gain. The whole-pane
+  transcript rebuild (11.6 + 40.4 ms at 4k characters, 21 + 120.4 ms at 20k)
+  and the 3-second session fetch/`JSON.parse` remain, and keyed rendering was
+  deferred. Scanned PDFs still pay the native page-serial OCR time at send, and
+  four large text PDFs still extract sequentially (about 1.1 s) because the
+  worker pool was rejected for this change. The per-chunk UTF-8 corruption in
+  `readJsonBody` is a correctness bug and must go through the repair lane, not
+  a hand fix. Next time: instrument the packaged click path first, then decide
+  between a native-panel change, a session-fetch short-circuit, and keyed
+  transcript rendering.
+- **Reversal condition:** if profiling in the packaged app shows the native
+  `NSOpenPanel` or server extraction dominates the wait, stop optimizing this
+  path and write a trade-off for that layer. If four large binaries held as
+  base64 pressure memory, defer the read to send time. If send-time encoding
+  becomes visible (>100 ms) or fails on slow volumes, pre-encode in an idle
+  callback and cache. If the target WebView lacks `createImageBitmap` resizing,
+  keep the object-URL fallback or remove thumbnails. If four large images at
+  three-way preparation pressure memory, lower the pool to one or two. If
+  scanned PDFs become a common input, revisit OCR with a varied multi-page
+  fixture and a bounded worker model, and record the benchmark.
+
+### 2026-11-19 — The browser preview entry is removed; the native window is the only UI
+
+- **Goal / hypothesis:** a second UI entry that looks exactly like the app and
+  writes a separate clone home lets the owner read, approve and retry preview
+  tasks as if they were app tasks. Remove the browser surface so a fixed-port
+  page can no longer be mistaken for the product, while keeping the native
+  window's supervised loopback server.
+- **Trade-off:** [The installed window is the only UI; the browser preview entry is removed](../architecture/trade-offs.md#2026-11-19--the-installed-window-is-the-only-ui-the-browser-preview-entry-is-removed).
+- **Change:** deleted `.claude/launch.json` (its only entry started
+  `npm run companion:dev` on 4317), `scripts/companion-dev.mjs`, and the
+  `companion:dev` package script; migrated
+  `eval-runs/2026-11-17-forbidden-city/run-task.sh` and
+  `eval-runs/2026-11-18-interactive/run-task.sh` to
+  `CLONE_AI_PORT=$PORT node --experimental-strip-types src/companion-server.ts`
+  (that tree is git-excluded, so the harness migration is a local replay fix);
+  updated `docs/usage/local-setup.md` and its zh-CN pair, `README.md` and
+  `apps/desktop/README.md`; added `test/desktop-only-ui.test.ts`. The desktop
+  sidecar (`port: 0`), `src/companion-server.ts` and the WebView assets are
+  unchanged.
+- **Eval:** `node --experimental-strip-types --test test/desktop-only-ui.test.ts`
+  — before: **1 pass / 1 fail**, the failure naming the launch config
+  (`true !== false`) with `scripts/companion-dev.mjs` and `companion:dev`
+  present; after: **2/2 pass**. `npm test`: **884/884, 0 fail**.
+  `npm run typecheck`: exit 0. `npm run gate`: **PASS** (13 cases, 9 decided,
+  agreement 100%, falsePass 0, falseFail 0; policy 14/14, audit 4/4 labeled,
+  memory 26/26; baseline unchanged). After stopping the three preview servers,
+  `lsof -nP -iTCP:4317 -iTCP:4318 -iTCP:4319` returns nothing.
+- **Benchmark run:** none — deterministic test-only eval; no provider, model,
+  dataset, seed or scoring parameter changed.
+- **Execution chain:** one read-only investigation workflow with three agents
+  (process topology, data provenance, removal impact; 464.5 s, 137,755 subagent
+  tokens) established the three preview servers, the isolated
+  `.automation/preview` home and the failed 2026-11-18 removal task. Then, in
+  this session: wrote both trade-off entries first; added the contract test and
+  ran it before (intentional failure); removed the launch config, script and
+  npm entry; migrated the two eval harnesses; updated active docs; stopped the
+  running preview servers; ran the targeted test, full suite, typecheck and
+  gate; wrote this entry and the result entry. No retries.
+- **Pros:** the before/after is one deterministic command; a second test pins
+  the app's `port: 0` loopback so the removal cannot delete the wrong server;
+  the eval harnesses keep replaying through the direct server entry.
+- **Cons / next time:** the original 2026-11-18 removal request ran as a worker
+  task and failed before touching the repo, which is why the surface survived;
+  the fix waited a day and needed an investigation across two journals. Killing
+  the preview servers also interrupts any concurrent Claude session using them;
+  a future removal should check for active preview users first. The preview data
+  under `.automation/preview` is left in place as evidence and is not part of
+  the app.
+- **Reversal condition:** copied from the trade-off entry: if a class of UI
+  bugs only reproduces in a browser, reintroduce a separately homed, visibly
+  labeled preview that refuses `~/.clone` and carries its own no-owner-write
+  test; a headless CI oracle should be a `port: 0` test harness, not a product
+  surface.
+
+### 2026-11-19 — Agent 协作 rows open the record that explains them
+
+- **Goal / hypothesis:** the main conversation aggregates subagents from several
+  runs. The rows named the subagent and its status but carried no destination,
+  so finding the task that failed meant scanning the sidebar for an identical
+  title. Make each row open the owning run's task record and land on the row,
+  with a hover underline so the affordance is visible.
+- **Trade-off:** [An Agent 协作 row opens the task record that owns it](../architecture/trade-offs.md#2026-11-19--an-agent-协作-row-opens-the-task-record-that-owns-it).
+- **Change:** `src/companion-server.ts` adds `runId` to the subagent rows in
+  both `buildSession` and `buildMainAgentConversation`, and to the `SessionView`
+  type; `apps/desktop/ui/app.js` renders a row as a button when the subagent's
+  run is not the displayed record, records a one-shot `agentFocus`, forces the
+  target record's Agent 协作 card open and scrolls the matching row into view;
+  `apps/desktop/ui/components.css` adds the hover underline, pointer cursor and
+  focus ring. A row inside its own record stays a plain `div`.
+- **Eval:** new `test/agent-collaboration-link.test.ts` **1/1** (a seeded
+  SQLite journal: both the conversation and the task record return the owning
+  `runId` for the subagent); a new case in `test/ui-structure.test.ts`
+  (button outside the record, plain row inside, forced-open focused row, click
+  wiring, hover underline). Before the change the UI case fails on the missing
+  `data-open-agent-run` and the server case fails on the missing `runId`. Full
+  suite **876** tests, **875 pass**; the only failure is
+  `test/whatsapp-bridge.test.ts` (`EADDRINUSE 4318`, a dev companion holds the
+  port), **21/21** with `CLONE_AI_WHATSAPP_PORT=4399`; a final re-run on the
+  shared working tree, after a concurrent session's edits, passed **885/885**.
+  `npm run typecheck` and
+  `npm run gate` pass. Browser preview: seeded two subagents, clicked a row and
+  landed on the task record with its card open and the row scrolled into view;
+  Playwright hover reported `underline` and `pointer`.
+- **Benchmark run:** none — deterministic tests and a browser check; no
+  provider, model, dataset, seed or scoring parameters.
+- **Execution chain:** one working agent (this session), edits in the checkout;
+  no subagents, workflow or benchmark. Read the panel, both session builders and
+  the existing `data-log-run` navigation; wrote the trade-off first; added the
+  payload field and the UI; wrote both tests; ran the focused tests (green), the
+  full suite (one environmental WhatsApp port failure, re-run green on 4399),
+  typecheck and gate (green); seeded the preview home's SQLite journal and
+  verified the click and hover in the browser. No retries beyond the port
+  re-run.
+- **Pros:** the destination comes from data the journal already owns (no new
+  route); the click stays on the existing `selectSession` path; rows without a
+  distinct run degrade to text, so the card is unchanged inside a task.
+- **Cons / next time:** the click leaves the conversation, and returning means
+  the sidebar's conversation row; the first reveal scrolls past the task's
+  opportunity card. A dedicated subagent view would be better if work orders
+  ever gain their own transcript.
+- **Reversal condition:** if the Agent 协作 card gains an inline subagent
+  transcript (or subagents become first-class sessions), open that detail
+  instead of the parent task record; if hover links prove undiscoverable, add a
+  persistent chevron rather than more colour.
+
 ### 2026-11-19 — Writes are scoped per step, not by workspace
 
 - **Goal / hypothesis:** the owner's model is a personal agent with no

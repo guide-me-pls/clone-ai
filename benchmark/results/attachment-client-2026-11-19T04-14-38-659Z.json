@@ -1,0 +1,327 @@
+{
+  "kind": "attachment-client-benchmark",
+  "date": "2026-11-19T04:14:39.583Z",
+  "command": "node --experimental-strip-types benchmark/attachment-client.ts --old-ref 4f0149e --new apps/desktop/ui/app.js --runs 3 --read-ms 10",
+  "provider": "none",
+  "model": "none",
+  "machine": {
+    "platform": "darwin",
+    "node": "v26.8.1",
+    "cpu": "Apple M5 Pro",
+    "cores": 18,
+    "memoryGb": 26
+  },
+  "parameters": {
+    "runs": 3,
+    "readMs": 10,
+    "maxAttachments": 4,
+    "fixtures": {
+      "fourImages": "four 5 MB image/png files with a PNG signature",
+      "mixed": "5 MB image, 10 MB PDF, 40,000-character text, 5 MB image",
+      "sixFiles": "six 1 MB image/png files (tests the four-file cap)"
+    }
+  },
+  "old": {
+    "ref": "4f0149e",
+    "source": "HEAD:apps/desktop/ui/app.js"
+  },
+  "new": {
+    "path": "apps/desktop/ui/app.js"
+  },
+  "scenarios": {
+    "fourImages": {
+      "old": {
+        "attachMsMedian": 68,
+        "totalMsMedian": 68,
+        "added": 4,
+        "maxActive": 1,
+        "reads": 4,
+        "innerHtmlBytesMedian": 27962776,
+        "dataPreviews": 4,
+        "blobPreviews": 0,
+        "payloadOk": null
+      },
+      "new": {
+        "attachMsMedian": 0,
+        "totalMsMedian": 37,
+        "added": 4,
+        "maxActive": 4,
+        "reads": 0,
+        "innerHtmlBytesMedian": 704,
+        "dataPreviews": 0,
+        "blobPreviews": 4,
+        "payloadOk": true
+      },
+      "runs": {
+        "old": [
+          {
+            "attachMs": 76.218875,
+            "totalMs": 76.21924999999999,
+            "added": 4,
+            "maxActive": 1,
+            "reads": 4,
+            "innerHtmlBytes": 27962776,
+            "dataPreviews": 4,
+            "blobPreviews": 0,
+            "payloadOk": null
+          },
+          {
+            "attachMs": 65.45749999999998,
+            "totalMs": 65.46350000000001,
+            "added": 4,
+            "maxActive": 1,
+            "reads": 4,
+            "innerHtmlBytes": 27962776,
+            "dataPreviews": 4,
+            "blobPreviews": 0,
+            "payloadOk": null
+          },
+          {
+            "attachMs": 68.30483299999997,
+            "totalMs": 68.305791,
+            "added": 4,
+            "maxActive": 1,
+            "reads": 4,
+            "innerHtmlBytes": 27962776,
+            "dataPreviews": 4,
+            "blobPreviews": 0,
+            "payloadOk": null
+          }
+        ],
+        "new": [
+          {
+            "attachMs": 0.568916999999999,
+            "totalMs": 31.32612499999999,
+            "added": 4,
+            "maxActive": 4,
+            "reads": 0,
+            "innerHtmlBytes": 704,
+            "dataPreviews": 0,
+            "blobPreviews": 4,
+            "payloadOk": true
+          },
+          {
+            "attachMs": 0.134666999999979,
+            "totalMs": 38.70483300000001,
+            "added": 4,
+            "maxActive": 4,
+            "reads": 0,
+            "innerHtmlBytes": 704,
+            "dataPreviews": 0,
+            "blobPreviews": 4,
+            "payloadOk": true
+          },
+          {
+            "attachMs": 0.14558399999998528,
+            "totalMs": 36.52724999999998,
+            "added": 4,
+            "maxActive": 4,
+            "reads": 0,
+            "innerHtmlBytes": 704,
+            "dataPreviews": 0,
+            "blobPreviews": 4,
+            "payloadOk": true
+          }
+        ]
+      }
+    },
+    "mixed": {
+      "old": {
+        "attachMsMedian": 58,
+        "totalMsMedian": 58,
+        "added": 4,
+        "maxActive": 1,
+        "reads": 4,
+        "innerHtmlBytesMedian": 13982238,
+        "dataPreviews": 2,
+        "blobPreviews": 0,
+        "payloadOk": null
+      },
+      "new": {
+        "attachMsMedian": 12,
+        "totalMsMedian": 47,
+        "added": 4,
+        "maxActive": 3,
+        "reads": 1,
+        "innerHtmlBytesMedian": 1202,
+        "dataPreviews": 0,
+        "blobPreviews": 2,
+        "payloadOk": true
+      },
+      "runs": {
+        "old": [
+          {
+            "attachMs": 63.21879100000001,
+            "totalMs": 63.219583,
+            "added": 4,
+            "maxActive": 1,
+            "reads": 4,
+            "innerHtmlBytes": 13982238,
+            "dataPreviews": 2,
+            "blobPreviews": 0,
+            "payloadOk": null
+          },
+          {
+            "attachMs": 58.134915999999976,
+            "totalMs": 58.135332999999946,
+            "added": 4,
+            "maxActive": 1,
+            "reads": 4,
+            "innerHtmlBytes": 13982238,
+            "dataPreviews": 2,
+            "blobPreviews": 0,
+            "payloadOk": null
+          },
+          {
+            "attachMs": 57.85845800000004,
+            "totalMs": 57.86141600000008,
+            "added": 4,
+            "maxActive": 1,
+            "reads": 4,
+            "innerHtmlBytes": 13982238,
+            "dataPreviews": 2,
+            "blobPreviews": 0,
+            "payloadOk": null
+          }
+        ],
+        "new": [
+          {
+            "attachMs": 10.477499999999964,
+            "totalMs": 44.05379199999993,
+            "added": 4,
+            "maxActive": 3,
+            "reads": 1,
+            "innerHtmlBytes": 1202,
+            "dataPreviews": 0,
+            "blobPreviews": 2,
+            "payloadOk": true
+          },
+          {
+            "attachMs": 12.440667000000076,
+            "totalMs": 47.13654200000008,
+            "added": 4,
+            "maxActive": 3,
+            "reads": 1,
+            "innerHtmlBytes": 1202,
+            "dataPreviews": 0,
+            "blobPreviews": 2,
+            "payloadOk": true
+          },
+          {
+            "attachMs": 11.699583999999959,
+            "totalMs": 46.934334000000035,
+            "added": 4,
+            "maxActive": 3,
+            "reads": 1,
+            "innerHtmlBytes": 1202,
+            "dataPreviews": 0,
+            "blobPreviews": 2,
+            "payloadOk": true
+          }
+        ]
+      }
+    },
+    "sixFiles": {
+      "old": {
+        "attachMsMedian": 53,
+        "totalMsMedian": 53,
+        "added": 4,
+        "maxActive": 1,
+        "reads": 4,
+        "innerHtmlBytesMedian": 5593160,
+        "dataPreviews": 4,
+        "blobPreviews": 0,
+        "payloadOk": null
+      },
+      "new": {
+        "attachMsMedian": 0,
+        "totalMsMedian": 21,
+        "added": 4,
+        "maxActive": 4,
+        "reads": 0,
+        "innerHtmlBytesMedian": 704,
+        "dataPreviews": 0,
+        "blobPreviews": 4,
+        "payloadOk": true
+      },
+      "runs": {
+        "old": [
+          {
+            "attachMs": 50.35425000000009,
+            "totalMs": 50.35733300000004,
+            "added": 4,
+            "maxActive": 1,
+            "reads": 4,
+            "innerHtmlBytes": 5593160,
+            "dataPreviews": 4,
+            "blobPreviews": 0,
+            "payloadOk": null
+          },
+          {
+            "attachMs": 52.593124999999986,
+            "totalMs": 52.593458000000055,
+            "added": 4,
+            "maxActive": 1,
+            "reads": 4,
+            "innerHtmlBytes": 5593160,
+            "dataPreviews": 4,
+            "blobPreviews": 0,
+            "payloadOk": null
+          },
+          {
+            "attachMs": 57.35525000000007,
+            "totalMs": 57.355792000000065,
+            "added": 4,
+            "maxActive": 1,
+            "reads": 4,
+            "innerHtmlBytes": 5593160,
+            "dataPreviews": 4,
+            "blobPreviews": 0,
+            "payloadOk": null
+          }
+        ],
+        "new": [
+          {
+            "attachMs": 0.17908399999998892,
+            "totalMs": 19.70158399999991,
+            "added": 4,
+            "maxActive": 4,
+            "reads": 0,
+            "innerHtmlBytes": 704,
+            "dataPreviews": 0,
+            "blobPreviews": 4,
+            "payloadOk": true
+          },
+          {
+            "attachMs": 0.1595829999999978,
+            "totalMs": 20.65354100000002,
+            "added": 4,
+            "maxActive": 4,
+            "reads": 0,
+            "innerHtmlBytes": 704,
+            "dataPreviews": 0,
+            "blobPreviews": 4,
+            "payloadOk": true
+          },
+          {
+            "attachMs": 0.230542000000014,
+            "totalMs": 20.71666700000003,
+            "added": 4,
+            "maxActive": 4,
+            "reads": 0,
+            "innerHtmlBytes": 704,
+            "dataPreviews": 0,
+            "blobPreviews": 4,
+            "payloadOk": true
+          }
+        ]
+      }
+    }
+  },
+  "notes": [
+    "The VM has no createImageBitmap, so the new revision uses its object-URL fallback rather than decoding a 240 px thumbnail.",
+    "Read latency is simulated with --read-ms; this compares strategies, not WebView or disk speed.",
+    "The old revision is taken from git; run with --old-ref at a commit before the change.",
+    "Chromium/JS numbers are not WKWebView numbers; the native NSOpenPanel is not represented."
+  ]
+}

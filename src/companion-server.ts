@@ -1530,6 +1530,7 @@ async function handleRequest(
       dueSoon: briefing.situation.dueSoonCommitments,
       activeGoals: briefing.situation.activeGoals,
       selfModel: briefing.situation.selfModel,
+      folders: briefing.folders,
       observations: briefing.observations.map((result) => ({
         connectorId: result.connectorId,
         count: result.observations.length,
@@ -2646,6 +2647,22 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
   // 独立会话，就使每条消息都裂变出一个新的对话框。这些 Run 仍留在 Journal 与审计里，
   // 侧栏只显示任务。
   const taskRuns = visibleRuns.filter((run) => !isConversationalRun(state, run));
+  // A request that dispatched no task is still a request. The sidebar used to
+  // list only task Runs, so "整理今天的工作信息" vanished as soon as the Main
+  // Agent answered directly. The turn ledger already records every request and
+  // answer; a conversation without a visible task becomes one row, while a
+  // conversation whose tasks are listed is represented by those task rows and
+  // never duplicated.
+  // 没有派发任务的请求仍然是请求。侧栏过去只列任务 Run，因此"整理今天的工作信息"在主 Agent
+  // 直接作答后就消失了。回合台账已经记录了每次请求与回答；没有可见任务的对话成为一行，
+  // 而任务已列出的对话由任务行代表，绝不重复。
+  const conversationWithRuns = new Set(
+    taskRuns.map((run) => derived.get(run.id)).filter((id): id is string => id !== undefined),
+  );
+  const conversationSessions = conversationRowsFromTurns(turns, {
+    excludeConversationIds: deletedConversationIds,
+    conversationWithRuns,
+  });
   // Runs the Main Agent proposed are tasks of the conversation that asked for
   // them, not sibling chats: one request must not read as two conversations in
   // the sidebar, and a task spawned from a new task stays under that task.
@@ -2653,13 +2670,7 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
   // 对话，由新任务派生的任务也应留在该任务下。`derived` is computed before the visibility
   // filter so a hidden conversation takes its later runs with it.
   // 列表是派发的任务，不是对话。
-  // The list is the dispatched tasks. A Main Agent conversation is where the
-  // owner talks, not a task: it is reachable from the chat control and from a
-  // task record, but never a row here. Each run carries the conversation that
-  // spawned it so a follow-up still reaches that task's context.
-  // 列表就是已派发的任务。Main Agent 对话是所有者在说话的地方，不是任务：它从对话控件与任务
-  // 记录进入，但不再是这里的行。每个 Run 携带派生它的对话，后续消息因此仍进入该任务上下文。
-  const allSessions = taskRuns
+  const allSessions: DashboardSession[] = [...conversationSessions, ...taskRuns
     .map((run) => {
       const conversationId = derived.get(run.id);
       return {
@@ -2667,7 +2678,7 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
         updatedAtMs: Date.parse(run.updatedAt),
         ...(conversationId === undefined ? {} : { conversationId }),
       };
-    })
+    })]
     .sort((left, right) => right.updatedAtMs - left.updatedAtMs);
   // Legacy builds created a fresh Run every time the owner accepted the same
   // failed-task card. Group those identical failures so the sidebar reflects
@@ -2862,6 +2873,35 @@ function toMainAgentTurnSummary(
         ? plainText(turn.reply).slice(0, 120)
         : "本轮没有返回文字",
   };
+}
+
+/**
+ * One row for every conversation that dispatched no visible task.
+ *
+ * The main conversation is the owner's control surface, not a row. A
+ * conversation whose tasks are visible is represented by those task rows, so
+ * one request never reads as two entries; a hidden conversation stays hidden.
+ * 每个没有派发可见任务的对话一行。
+ *
+ * 主对话是所有者的操作面，不是一行。任务已可见的对话由那些任务行代表，因此一次请求绝不会
+ * 读成两条；被隐藏的对话保持隐藏。
+ */
+function conversationRowsFromTurns(
+  turns: readonly MainAgentTurnRecord[],
+  options: { excludeConversationIds: ReadonlySet<string>; conversationWithRuns: ReadonlySet<string> },
+): DashboardSession[] {
+  const latest = new Map<string, MainAgentTurnRecord>();
+  for (const turn of turns) {
+    const id = conversationIdOf(turn.conversationId);
+    if (id === MAIN_AGENT_SESSION_ID || options.excludeConversationIds.has(id) || options.conversationWithRuns.has(id)) continue;
+    const at = turn.completedAt ?? turn.startedAt;
+    const current = latest.get(id);
+    if (current === undefined || at >= (current.completedAt ?? current.startedAt)) latest.set(id, turn);
+  }
+  return [...latest.entries()].map(([conversationId, turn]) => ({
+    ...toMainAgentTurnSummary(turn, conversationId),
+    kind: "conversation" as const,
+  }));
 }
 
 async function buildMainAgentConversation(
@@ -3106,6 +3146,11 @@ async function buildMainAgentConversation(
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, 8)
     .map((subagent) => ({
+      // The record this row belongs to. A conversation aggregates subagents
+      // from several runs; without the run id the UI cannot open the one whose
+      // record explains a failure. 这一行所属的记录。对话会聚合多个 Run 的子 Agent；
+      // 没有 Run id，界面无法打开解释失败的记录。
+      runId: subagent.runId,
       id: subagent.id,
       title: subagent.title,
       agentId: subagent.agentId,
@@ -3195,6 +3240,7 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
     .filter((subagent) => subagent.runId === run.id)
     .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
     .map((subagent) => ({
+      runId: subagent.runId,
       id: subagent.id,
       title: subagent.title,
       agentId: subagent.agentId,
@@ -3989,7 +4035,7 @@ interface SessionView extends SessionSummary {
     summary: string;
     steps: Array<{ id: string; title: string; risk: string; delegated: boolean; agentId?: string }>;
   };
-  subagents: Array<{ id: string; title: string; agentId: string; role: string; providerId: string; status: string; summary?: string; updatedAt: string }>;
+  subagents: Array<{ runId: string; id: string; title: string; agentId: string; role: string; providerId: string; status: string; summary?: string; updatedAt: string }>;
   approvals: Array<{ runId: string; stepId: string; title?: string; description: string }>;
   reviews?: Array<{ runId: string; title: string; verification: VerificationResult; result?: string }>;
   verification?: import("./core/contracts.ts").VerificationResult;

@@ -15,6 +15,59 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-19 — A direct answer stays in the sidebar, and today's work comes from learned folders
+
+- **Claim:** a request the Main Agent answers without dispatching a task is now
+  one 对话 row in the sidebar, and 整理今天的工作信息 can name the files that
+  actually changed today under the folders the twin learned from use — without a
+  folder setting, a connector, or a worker Run.
+- **Evidence:** `test/companion-control-plane.test.ts` changed from expecting **0**
+  conversation rows to expecting `conversation-a` and `conversation-b` (**25/25**);
+  `test/known-folders.test.ts` + `test/recent-changes.test.ts` **8/8**;
+  `test/ui-structure.test.ts` **21/21**; the live tool against the owner's machine
+  reports **9 files** changed today under `/Users/user/work` and **5
+  repositories** with their status (Spotlight **0.13 s** vs a pruned `find` **5.2 s**);
+  a live preview turn with `deepseek-v4.1-flash` called the tool first (**573 ms**)
+  and answered with a project-by-project digest; the audit turn card now has a
+  right-hand request and a left-hand answer, with the lost `.au-turn*` layer restored.
+- **Where:** [trade-off: a request is still a row](../architecture/trade-offs.md#2026-11-19--a-request-that-dispatched-no-task-is-still-a-sidebar-row),
+  [trade-off: a turn is an exchange](../architecture/trade-offs.md#2026-11-19--a-turn-is-an-exchange-the-owner-on-the-right-the-twin-on-the-left),
+  [trade-off: folders are learned](../architecture/trade-offs.md#2026-11-19--folders-are-learned-from-use-not-configured-todays-changes-come-from-the-machine);
+  [execution chain](optimizations.md#2026-11-19--a-new-request-stays-visible-a-turn-reads-as-an-exchange-and-todays-work-comes-from-learned-folders).
+
+## 2026-11-19 — The native window is the only UI; the browser preview entry is gone
+
+- **Claim:** the repository exposes one UI entry, the installed native window
+  and its supervised `port: 0` loopback server. `.claude/launch.json`,
+  `scripts/companion-dev.mjs` and the `companion:dev` script are gone, so a
+  Claude session can no longer start a browser page that looks like the app and
+  writes a second clone home. Archived eval replays still start the server
+  directly on `CLONE_AI_PORT`.
+- **Evidence:** `test/desktop-only-ui.test.ts` fails before the removal
+  (`.claude/launch.json` present) and passes **2/2** after; `npm test`
+  **884/884**; `npm run typecheck` exit 0; `npm run gate` **PASS**; after
+  stopping the three preview servers no listener remains on 4317/4318/4319.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--the-installed-window-is-the-only-ui-the-browser-preview-entry-is-removed),
+  [execution chain](optimizations.md#2026-11-19--the-browser-preview-entry-is-removed-the-native-window-is-the-only-ui).
+
+## 2026-11-19 — An Agent 协作 row opens the task record that owns it
+
+- **Claim:** every subagent row in the main conversation's Agent 协作 card opens
+  the task record that owns it in one click; the target card is expanded, the
+  matching row is scrolled into view once, and the title underlines with a
+  pointer cursor on hover. A row inside its own record stays plain text.
+- **Evidence:** `test/agent-collaboration-link.test.ts` **1/1** (both the
+  conversation and the task record return the subagent's `runId`),
+  `test/ui-structure.test.ts` (button outside the record, plain row inside,
+  one-shot focus, click wiring, hover underline), full suite **876** tests /
+  **875 pass** with the WhatsApp file green on a free port (a final re-run on
+  the shared tree passed **885/885**),
+  `npm run typecheck` and `npm run gate` pass; in the browser preview a click
+  landed on the record with its card open and the row in view, and Playwright
+  hover reported `underline` and `pointer`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--an-agent-协作-row-opens-the-task-record-that-owns-it),
+  [execution chain](optimizations.md#2026-11-19--agent-協作-rows-open-the-record-that-explains-them).
+
 ## 2026-11-19 — Workers read the whole machine; every write carries a scope
 
 - **Claim:** a worker may read any readable location on the local computer

@@ -533,13 +533,23 @@
       const tools = turn.toolCalls.length
         ? `<ul class="au-turn-tools">${turn.toolCalls.map((call) => `<li><code>${esc(call.name)}</code>${call.isError ? badge("错误", "bad") : ""}${call.durationMs !== undefined ? `<em>${ms(call.durationMs)}</em>` : ""}${call.inputSummary ? `<span>${esc(call.inputSummary.slice(0, 240))}</span>` : ""}</li>`).join("")}</ul>`
         : `<p class="au-empty">本轮没有调用工具。</p>`;
+      // The owner's request and the twin's answer read as one exchange: the
+      // request is a right-aligned bubble, the answer is the left column, and
+      // the assembly and tool evidence sit below them. The input used to be
+      // repeated in the head and again as the first of two identical grey
+      // blocks; with no .au-turn* styles left after a merge, "mixed together"
+      // was the honest description.
+      // 所有者的请求与分身的回答读成一次交流：请求是靠右的气泡，回答是左侧一栏，任务组装与
+      // 工具证据排在它们下面。过去输入在标题里重复一次、又作为两个相同灰块中的第一个出现；
+      // 合并时丢失 .au-turn* 样式后，"混在一起"是诚实的描述。
       return `<section class="au-card au-turn">
-        <div class="au-turn-head"><b>${esc(turn.input.replace(/\s+/g, " ").slice(0, 140) || "（无输入）")}</b>${badge(label, tone)}
+        <div class="au-turn-head"><span class="au-turn-who">clone-ai</span>${badge(label, tone)}
           <small>${esc(turn.source)} · ${esc(turn.modelId ?? "默认模型")}${turn.effort ? ` · ${esc(turn.effort)}` : ""} · ${stamp(turn.startedAt)}${turn.durationMs !== undefined ? ` · ${ms(turn.durationMs)}` : ""}</small></div>
+        <div class="au-turn-exchange">
+          <div class="au-turn-query" aria-label="你的请求"><span class="au-turn-role">你</span><pre>${esc(turn.input)}</pre></div>
+          <div class="au-turn-answer" aria-label="clone-ai 的回复"><span class="au-turn-role">clone-ai</span>${turn.reply ? `<pre>${esc(turn.reply)}</pre>` : `<p class="au-empty">本轮没有返回文字。</p>`}${turn.error ? `<div class="au-callout au-callout-bad"><b>错误</b><pre>${esc(turn.error)}</pre></div>` : ""}</div>
+        </div>
         ${assemblyBlock(turn)}
-        <div class="au-turn-body"><p class="au-note">输入</p><pre>${esc(turn.input)}</pre>
-          ${turn.reply ? `<p class="au-note">回复</p><pre>${esc(turn.reply)}</pre>` : ""}
-          ${turn.error ? `<div class="au-callout au-callout-bad"><b>错误</b><pre>${esc(turn.error)}</pre></div>` : ""}</div>
         ${tools}
         <div class="au-chips">${usage}${turn.promptMaterialHash ? `<span>prompt ${esc(turn.promptMaterialHash.slice(0, 8))}</span>` : ""}${turn.spawnedRunIds?.length ? `<span>${turn.spawnedRunIds.length} 个 Run</span>` : ""}</div>
       </section>`;

@@ -452,9 +452,10 @@ test("a derived task belongs to the conversation, and hiding the chat hides it t
       sessions: Array<{ id: string; conversationId?: string; kind?: string }>;
       deletedConversations: unknown[];
     };
-    // Conversations are not rows; the run names the conversation that spawned it.
-    // 对话不是列表行；Run 携带派生它的对话。
-    assert.equal(before.sessions.some((session) => session.kind === "conversation"), false);
+    // Conversations are not rows when their task is a row: the run names the
+    // conversation that spawned it, and the task represents the request.
+    // 任务已成为行时对话不再单独成行：Run 携带派生它的对话，任务代表这次请求。
+    assert.equal(before.sessions.some((session) => session.kind === "conversation" && session.id === "main-agent-conversation"), false);
     const child = before.sessions.find((session) => session.id === run.id);
     assert.equal(child?.conversationId, "main-agent-conversation", "the run is a task of the conversation that spawned it");
     const runView = await (await companionFetch(url, token, `/api/sessions/${run.id}`)).json() as { dispatchedBy?: string };
@@ -575,8 +576,12 @@ test("each task has its own conversation and its own history", async (t) => {
   const dashboardResponse = await companionFetch(url, token, "/api/dashboard");
   assert.equal(dashboardResponse.status, 200);
   const dashboard = await dashboardResponse.json() as { sessions: Array<{ id: string; kind?: string }> };
-  // The sidebar lists dispatched tasks, never conversations. 侧栏只列派发的任务，绝不列对话。
-  assert.equal(dashboard.sessions.filter((session) => session.kind === "conversation").length, 0);
+  // A request that dispatched no task is still a row: the twin answered it, and
+  // the owner must be able to reopen it. The main conversation is not a row.
+  // 没有派发任务的请求仍然是一行：分身回答了它，所有者必须能重新打开。主对话不是一行。
+  const conversationRows = dashboard.sessions.filter((session) => session.kind === "conversation");
+  assert.deepEqual(new Set(conversationRows.map((session) => session.id)), new Set(["conversation-a", "conversation-b"]));
+  assert.equal(conversationRows.some((session) => session.id === "main-agent-conversation"), false);
 
   const viewResponse = await companionFetch(url, token, "/api/sessions/conversation-a");
   assert.equal(viewResponse.status, 200);

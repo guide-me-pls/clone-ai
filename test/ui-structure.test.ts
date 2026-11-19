@@ -183,6 +183,7 @@ test("populated conversations stay vertical and empty-state flex requires no mes
     decisionDock: () => "", dispatchSourceMarkup: () => "", evidenceMarkup: () => "", approvalMarkup: () => "", reviewMarkup: () => "", traceMarkup: () => "",
     verificationMarkup: () => "",
     restoreDisclosureScrolls: () => {}, requestAnimationFrame: () => {}, updateScrollBottom: () => {},
+    revealAgentFocus: () => {},
   });
   renderSession(null);
   assert.equal(empty, true);
@@ -215,7 +216,7 @@ test("populated conversations stay vertical and empty-state flex requires no mes
   assert.match(css, /\.message\.person\s*\{[^}]*width:\s*100%/);
 });
 
-test("a conversation renders one dispatch log entry per turn, not chat bubbles", async () => {
+test("a conversation renders each turn as a right-hand request and a left-hand answer", async () => {
   const app = await read("app.js");
   const start = app.indexOf("const LOG_STATUS = {");
   const end = app.indexOf("function displayAgentTitle", start);
@@ -262,8 +263,15 @@ test("a conversation renders one dispatch log entry per turn, not chat bubbles",
   assert.match(html, /dispatch_task/);
   assert.match(html, /data-log-run="run-12345678"/);
   assert.match(html, /已整理。/);
-  // Work updates join the same log, and no chat bubble survives.
-  // 工作更新进入同一份日志，不再有聊天气泡。
+  // The owner's request is a right-hand bubble and the answer is the left-hand
+  // section; the two voices no longer share one clamped title line.
+  // 所有者的请求是靠右的气泡，回答是左侧章节；两个声音不再共用一条被截断的标题行。
+  assert.match(html, /class="turn-query"/);
+  assert.match(html, /class="turn-query-bubble"/);
+  assert.match(html, /class="log-entry-kicker">clone-ai/);
+  assert.doesNotMatch(html, /<b class="log-query">整理资料/);
+  // Work updates join the same log and keep their own label.
+  // 工作更新进入同一份日志，并保留自己的标签。
   assert.match(html, /任务更新/);
   assert.match(html, /任务「整理资料」已完成。/);
   assert.doesNotMatch(html, /class="message/);
@@ -320,6 +328,66 @@ test("a conversation renders one dispatch log entry per turn, not chat bubbles",
     turns: [{ id: "t4", kind: "turn", input: "最近一轮", status: "completed", startedAt: "2026-11-18T10:02:00.000Z", journaled: true, compactions: [], toolCalls: [], spawnedRuns: [], priorTurns: 0, priorTurnsOmitted: 0, reply: "好。" }],
   });
   assert.match(omitted, /更早的 12 个回合/);
+});
+
+test("the transcript separates a turn, a task update, a child run and a record by level", async () => {
+  const app = await read("app.js");
+  const css = await read("components.css");
+  // The screenshot that prompted this had four look-alike white cards: a turn
+  // tail, a 任务更新, the next turn and an Agent 协作 disclosure, with child-run
+  // buttons that looked like sibling tasks. The levels are now carried by
+  // structure: a ruled section with a named overline, a margin note, a row on a
+  // rail and a disclosure line.
+  // 触发这次改版的截图里有四只相似的白卡片：回合尾部、任务更新、下一个回合与 Agent 协作
+  // 记录，子 Run 按钮还像同级任务。现在层级由结构承担：带层级眉线的分隔章节、页边注、
+  // 竖线上的行与披露行。
+  const start = app.indexOf("const LOG_STATUS = {");
+  const end = app.indexOf("function displayAgentTitle", start);
+  assert.ok(start >= 0 && end > start, "the log markup must exist");
+  const markup = runInNewContext(`${app.slice(start, end)}; turnLogMarkup`, {
+    escape: (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]!)),
+    richText: (value: unknown) => String(value ?? ""),
+    plainPreview: (value: unknown) => String(value ?? ""),
+    time: () => "17:13",
+    welcomeMarkup: () => "welcome",
+  }) as (session: unknown) => string;
+  const html = markup({
+    id: "chat",
+    kind: "conversation",
+    messages: [{ id: "work-1", role: "clone", text: "任务「整理资料」等待你复核。", occurredAt: "2026-11-18T09:00:00.000Z", workStatus: "waiting_review", tone: "warning" }],
+    turns: [{
+      id: "turn-1", kind: "turn", input: "整理资料", status: "completed", startedAt: "2026-11-18T08:59:00.000Z",
+      journaled: true, compactions: [], priorTurns: 0, priorTurnsOmitted: 0,
+      toolCalls: [], spawnedRuns: [{ id: "run-12345678", title: "整理资料", status: "completed" }],
+      reply: "已整理。",
+    }],
+  });
+  // A turn names its author and keeps its steps in a body the CSS can rule.
+  // 回合点明作者，并把步骤放进 CSS 可以画分隔的正文容器。
+  assert.match(html, /class="log-entry-kicker">clone-ai/);
+  assert.match(html, /class="log-entry-body"/);
+  // A work update carries its own run status but no turn overline, so a failed
+  // or waiting update cannot look like a turn with a different badge.
+  // 任务更新携带自己的 Run 状态，但没有回合眉线：失败或等待中的更新不会看起来只是换了个标签的回合。
+  assert.match(html, /data-log-kind="work" data-log-status="waiting_review"/);
+  assert.equal((html.match(/class="log-entry-kicker"/g) || []).length, 1);
+  // A dispatched run is a row with a status marker; the whole row stays the
+  // control. The CSS renders it as a hairline on a rail, not a card.
+  // 派发的 Run 是带状态标记的行；整行仍是控件。CSS 把它画成竖线上的细线，而不是卡片。
+  assert.match(html, /data-run-status="completed"/);
+  assert.match(html, /class="log-run-status">完成/);
+  // The level grammar must live in the final CSS layer: ruled turns, a ruled
+  // note, a status dot on run rows and top-rule records. The turn's identity
+  // strip pins only within its own section, and records flatten only after the
+  // turn log — a task record keeps its card grouping.
+  // 层级语法必须落在最终 CSS 层：分隔的回合、带竖线的页边注、Run 行的状态圆点与顶线记录。
+  // 回合的身份条只在自身章节内吸附；记录只在回合日志之后变平——任务记录保留卡片分组。
+  assert.match(css, /\.log-entry\s*\{[^}]*border-top:\s*1px solid var\(--line\)/);
+  assert.match(css, /\.log-entry--work\s*\{[^}]*border-left:\s*2px solid/);
+  assert.match(css, /\.log-run-status::before/);
+  assert.match(css, /\.turn-log\s*~\s*\.activity-card\s*\{[^}]*border-top:\s*1px solid/);
+  assert.match(css, /\.log-entry-head\s*\{[^}]*position:\s*sticky/);
+  assert.match(css, /\.log-entry:not\(\.log-entry--work\):has\(\+ \.log-entry--work\)/);
 });
 
 test("a finished task record keeps its verification, evidence and artifacts", async () => {
@@ -423,6 +491,64 @@ test("a plan step names its risk instead of promising a confirmation", async () 
   assert.doesNotMatch(markup, /需确认/);
 });
 
+test("a subagent row outside its record opens the task record that owns it", async () => {
+  const app = await read("app.js");
+  const css = (await read("style.css")) + (await read("components.css"));
+  const start = app.indexOf("function agentsMarkup(session)");
+  const end = app.indexOf("function approvalMarkup", start);
+  assert.ok(start >= 0 && end > start, "agentsMarkup must exist");
+  const markupFor = (session: unknown, agentFocus: { runId: string; agentId: string } | null = null) => runInNewContext(
+    `${app.slice(start, end)}; agentsMarkup(sessionParam)`,
+    {
+      escape: (value: unknown) => String(value ?? ""),
+      icon: () => "",
+      disclosureOpen: () => false,
+      statusMeta: (status: string) => ({ label: status, dot: status }),
+      displayAgentTitle: (agent: { title: string }) => agent.title,
+      displayAgentDetail: (agent: { summary?: string }) => agent.summary ?? "",
+      state: { agentFocus },
+      sessionParam: session,
+    },
+  );
+  const agent = {
+    id: "agent-1",
+    runId: "run-1",
+    title: "准备本地交付物",
+    status: "failed",
+    providerId: "native",
+    summary: "Subagent draft did not satisfy its artifact contract.",
+  };
+  // In the conversation the subagent belongs to another record: the row is the
+  // button that opens it, and the title is the hover affordance.
+  // 对话中的子 Agent 属于另一条记录：整行是打开它的按钮，标题是悬停提示。
+  const conversation = markupFor({ id: "main-agent-conversation", status: "running", subagents: [agent] });
+  assert.match(conversation, /<button class="agent-row agent-row--open" type="button" data-open-agent-run="run-1" data-agent-id="agent-1"/);
+  assert.match(conversation, /<strong>准备本地交付物<\/strong>/);
+  assert.match(conversation, /title="打开这个子 Agent 所属的任务记录"/);
+  // Inside the record the row is already where the click would land: it keeps
+  // the same information without an affordance.
+  // 记录内的行已经在目的地：保留同样信息，但不做成可点击。
+  const record = markupFor({ id: "run-1", status: "failed", subagents: [agent] });
+  assert.match(record, /<div class="agent-row" data-agent-id="agent-1">/);
+  assert.doesNotMatch(record, /data-open-agent-run/);
+  // A click asks for one row; the target record opens its card and marks that
+  // row so the reveal can scroll to it.
+  // 点击要求查看某一行；目标记录展开卡片并标出该行，供 reveal 滚动到它。
+  const focused = markupFor({ id: "run-1", status: "completed", subagents: [agent] }, { runId: "run-1", agentId: "agent-1" });
+  assert.match(focused, /data-disclosure="agents" open/);
+  assert.match(focused, /data-agent-focus="true"/);
+  // The click handler and the one-shot reveal are wired, and the row's title
+  // underlines on hover.
+  // 点击处理器与一次性 reveal 已接线，行的标题在悬停时显示下划线。
+  assert.match(app, /event\.target\.closest\("\[data-open-agent-run\]"\)/);
+  assert.match(app, /state\.agentFocus = \{ runId: agentRun\.dataset\.openAgentRun, agentId: agentRun\.dataset\.agentId \}/);
+  assert.match(app, /void selectSession\(agentRun\.dataset\.openAgentRun\)/);
+  assert.match(app, /function revealAgentFocus\(id\)/);
+  assert.match(app, /revealAgentFocus\(session\.id\)/);
+  assert.match(css, /button\.agent-row:hover strong\s*\{[^}]*text-decoration:\s*underline/);
+  assert.match(css, /button\.agent-row:focus-visible\s*\{[^}]*outline:/);
+});
+
 test("invocation rows keep selection and deletion as sibling controls", async () => {
   const audit = await read("audit.js");
   // A button cannot contain another button, so a per-row delete control forces
@@ -460,10 +586,16 @@ test("decisions are confirmed on the task record that owns the run", async () =>
   // 等待中的决定固定在面板顶部，而不是留在日志末尾。
   assert.match(app, /function decisionDock\(session\)/);
   assert.match(app, /\$\{decisionDock\(session\)\}/);
-  // The sidebar lists dispatched tasks only; a waiting task is promoted into its
-  // own section and flagged in the row.
-  // 侧栏只列派发的任务；等待中的任务被提升到独立分区，并在行内标记。
-  assert.match(app, /session\.kind !== "conversation"/);
+  // The sidebar lists every request: a conversation that answered without
+  // dispatching a task is a row too, marked 对话; a waiting task is promoted
+  // into its own section and flagged in the row. The audit's record list stays
+  // tasks-only because a conversation is not a Run.
+  // 侧栏列出每一次请求：没有派发任务就作答的对话也是一行，并标注"对话"；等待中的任务被提升
+  // 到独立分区，并在行内标记。审计的记录列表仍只列任务，因为对话不是 Run。
+  assert.match(app, /const blocks = rawSessions\s*\.map\(/);
+  assert.doesNotMatch(app, /const blocks = rawSessions[\s\S]{0,80}kind !== "conversation"/);
+  assert.match(app, /class="session-kind"/);
+  assert.match(app, /const records = sessions\.filter\(\(session\) => session\.kind !== "conversation"\)/);
   assert.doesNotMatch(app, /data-child-group/);
   assert.match(app, /session-group-needs/);
   assert.match(app, /session-flag-approval/);
@@ -546,16 +678,18 @@ test("a finished run keeps its verification, evidence and trace on the task", as
 test("the owner's message renders markdown like the agent's", async () => {
   const app = await read("app.js");
   const css = await read("components.css");
-  // The conversation log keeps the owner's query on one line (it is the entry
-  // title), so it is plain-previewed; the task-record bubble and the agent's
-  // reply share the escaping renderer. A pasted task brief therefore never
-  // shows raw markdown in the record view.
-  // 对话日志把所有者 query 保持为单行标题（即条目标题），因此用纯文本预览；任务记录气泡
-  // 与 Agent 回复共用先转义的渲染器。粘贴的任务说明在记录视图里不会显示字面 Markdown。
+  // The owner's request is a right-hand bubble and the live turn uses the same
+  // escaping renderer. A pasted task brief therefore never shows raw markdown,
+  // and the agent's reply keeps the same treatment on the left.
+  // 所有者的请求是靠右的气泡，实时回合使用同一套先转义的渲染器。粘贴的任务说明因此不会显示
+  // 字面 Markdown，Agent 的回复在左侧保持同样的处理。
   assert.match(app, /const body = richText\(text\);/);
-  assert.match(app, /escape\(plainPreview\(query \|\| "（已发送附件）"\)\)/);
+  assert.match(app, /class="turn-query-bubble"/);
+  assert.match(app, /richText\(query \|\| "（已发送附件）"\)/);
   assert.match(css, /\.message-copy \.md-heading/);
   assert.match(css, /\.message-copy \.md-list-line/);
+  assert.match(css, /\.turn-query-text \.md-heading/);
+  assert.match(css, /\.turn-query-text \.md-list-line/);
   assert.match(css, /\.log-reply \.md-heading/);
 });
 
@@ -616,6 +750,24 @@ test("the audit shows the write scopes a step was checked against", async () => 
   assert.match(audit, /au-scopes/);
   assert.match(audit, /s\.resource/);
   assert.match(auditCss, /\.au-scopes/);
+});
+
+test("an audit turn reads as a right-hand request and a left-hand answer", async () => {
+  const audit = await read("audit.js");
+  const auditCss = await read("audit.css");
+  // The screenshot showed two identical grey <pre> blocks under 输入 and 回复;
+  // the exchange now has sides, and the duplicated input preview in the head is
+  // gone.
+  // 截图里"输入"与"回复"下是两个相同的灰色 <pre>；现在交流有左右两侧，标题里重复的输入
+  // 预览也去掉了。
+  assert.match(audit, /class="au-turn-query"/);
+  assert.match(audit, /class="au-turn-answer"/);
+  assert.match(audit, /class="au-turn-role">你/);
+  assert.match(audit, /class="au-turn-role">clone-ai/);
+  assert.doesNotMatch(audit, /<p class="au-note">输入<\/p>/);
+  assert.match(auditCss, /\.au-turn-query\s*\{[^}]*justify-self:\s*end/);
+  assert.match(auditCss, /\.au-turn-answer\s*\{[^}]*justify-self:\s*start/);
+  assert.match(auditCss, /\.au-turns\s*\{[^}]*display:\s*grid/);
 });
 
 test("a new request is routed, and a task record names its dispatcher", async () => {
