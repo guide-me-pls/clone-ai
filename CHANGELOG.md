@@ -6,6 +6,18 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The composer chooses the model and reasoning effort for a conversation
+
+The composer now has model and effort pickers beside the send box, saved with the conversation; Settings keeps the default model and effort, which still apply to WhatsApp and scheduled turns. The choice travels with the turn: the stream and query endpoints accept `model` and `effort`, and an unknown effort is refused with HTTP 400 before any model call. Wiring this exposed that the Main Agent recorded `mainAgentEffort` but never sent `reasoning_effort` to the provider — the request now carries it, so the setting and the new picker actually change the reasoning budget. The effort list now uses the gateway's declared levels for the selected model; the previous code read a field that was never assigned and always fell back to the full list. The observation-sources panel now explains that a source only reads `.md`/`.txt` files from the folder you chose and has no write or execute authority.
+
+输入框旁现在有模型与推理强度选择器，选择随对话保存；设置里保留默认模型与默认强度，仍对 WhatsApp 与定时回合生效。选择随回合发送：流式与查询接口接受 `model` 与 `effort`，未知强度在任何模型调用前以 HTTP 400 拒绝。接上这条线时发现主 Agent 只记录了 `mainAgentEffort`，从未把 `reasoning_effort` 发给 Provider——现在请求会携带它，设置与新选择器真正改变推理预算。强度列表现在使用网关为所选模型声明的档位；此前的代码读取从未赋值的字段，永远退回完整列表。观察来源面板现在说明：来源只读取所选目录中的 `.md`/`.txt` 文件，没有写入或执行权限。
+
+### The internal base is the machine root
+
+A task's internal base is now `/` — the whole machine — when no explicit `CLONE_AI_WORKSPACE` is set; the companion server no longer falls back to the clone home. The execution lock now actually lives at `~/.clone/workspace-runtime/workspace-execution.sqlite3`, so a root workspace never tries to create `/.clone`. The verifier's default root is the machine, and `verifiedWorkspacePath` still refuses the locations no policy may open. Relative paths in plans should be absolute; the clone home remains the data directory.
+
+任务的内部基准现在默认是 `/`——整台机器——除非显式设置 `CLONE_AI_WORKSPACE`；companion server 不再回退到 clone home。执行锁现在确实位于 `~/.clone/workspace-runtime/workspace-execution.sqlite3`，根工作区不会再尝试创建 `/.clone`。验证器的默认根是整台机器，`verifiedWorkspacePath` 仍拒绝任何策略都无法打开的位置。计划中的相对路径应改为绝对路径；clone home 仍是数据目录。
+
 ### The no-progress guard counts a repeated call across the turn
 
 The shared agent loop now counts each executed call's identity — tool name, arguments (ignoring JSON key order) and result text — across the whole turn, not only against the previous batch. Two identical polls alternated with each other, or a poll sharing a batch with a read whose result changes, now get the same warning at three and the `no_progress` stop at five. A call whose result changes is still progress, and a changed argument is a different call. The exact 2026-11-19 eight-poll shape still stops at five, and no round cap is reintroduced.

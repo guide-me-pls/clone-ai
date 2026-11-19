@@ -350,17 +350,16 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   // 由唯一的解析器决定所有持久化路径，使 Daemon 与 Main Agent 不会对
   // "所有者数据在哪里" 产生分歧。
   // There is no configured working directory. The internal base is an explicit
-  // override (option or CLONE_AI_WORKSPACE) or the clone home; it is used for
+  // override (option or CLONE_AI_WORKSPACE) or the machine root; it is used for
   // relative paths and verification, not as a write permission.
-  // 没有配置的工作目录。内部基准是显式覆盖（选项或 CLONE_AI_WORKSPACE），否则是
-  // clone home；它用于相对路径与验证，不是写权限。
+  // 没有配置的工作目录。内部基准是显式覆盖（选项或 CLONE_AI_WORKSPACE），否则是机器
+  // 根目录；它用于相对路径与验证，不是写权限。
   const basePaths = resolveClonePaths({
     ...(options.dataDirectory === undefined ? {} : { dataDirectory: options.dataDirectory }),
   });
   const paths = resolveClonePaths({
     dataDirectory: basePaths.dataDirectory,
-    workspacePath: options.workspacePath
-      ?? (process.env.CLONE_AI_WORKSPACE?.trim() || basePaths.dataDirectory),
+    ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
   });
   await prepareCloneHome(paths);
   // Copying is additive and never overwrites a file the owner already has in

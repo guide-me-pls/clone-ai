@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import {
@@ -28,20 +28,38 @@ test("the owner's home is the default, and CLONE_HOME overrides it", async (t) =
   // 数据属于人，而不属于命令碰巧在哪个目录执行。
   const fromHome = resolveClonePaths({
     env: { HOME: home, USERPROFILE: home },
-    cwd: workspace,
   });
   assert.equal(fromHome.dataDirectory, join(home, CLONE_DIRECTORY_NAME));
-  assert.equal(fromHome.workspacePath, workspace);
+  // The computer is the workspace: no folder is the default internal base.
+  // 整台电脑就是工作空间：没有任何文件夹是默认内部基准。
+  assert.equal(fromHome.workspacePath, resolve("/"));
+  // The execution lock belongs to the runtime, not to the machine root.
+  // 执行锁属于 Runtime，不属于机器根目录。
+  assert.equal(
+    fromHome.workspaceLockFile,
+    join(fromHome.dataDirectory, "workspace-runtime", "workspace-execution.sqlite3"),
+  );
   // Runtime state lives with the owner's data, not with a project folder:
   // there is no fixed working directory whose `.clone` could own it.
   // 运行时状态与所有者数据放在一起，而不是项目文件夹里：没有固定工作目录，
   // 也就没有它的 `.clone` 可以存放这些数据。
   assert.equal(fromHome.workspaceRuntimeDirectory, join(fromHome.dataDirectory, "workspace-runtime"));
 
+  // An explicit base still wins, through the environment or the option.
+  // 显式基准仍然优先：环境变量或选项。
+  const fromEnvironment = resolveClonePaths({
+    env: { HOME: home, USERPROFILE: home, CLONE_AI_WORKSPACE: workspace },
+  });
+  assert.equal(fromEnvironment.workspacePath, workspace);
+  const named = resolveClonePaths({
+    env: { HOME: home, USERPROFILE: home, CLONE_AI_WORKSPACE: workspace },
+    workspacePath: join(home, "chosen"),
+  });
+  assert.equal(named.workspacePath, join(home, "chosen"));
+
   const explicit = await tempDirectory(t, "clone-explicit-");
   const overridden = resolveClonePaths({
     env: { HOME: home, USERPROFILE: home, CLONE_HOME: explicit },
-    cwd: workspace,
   });
   assert.equal(overridden.dataDirectory, explicit);
 });

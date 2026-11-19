@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +51,23 @@ async function outcomeOf<T>(promise: Promise<T>, timeoutMs: number): Promise<T |
  * 关停中止的是对提炼锁的*等待*，不是已经持有锁的操作。这些是服务器级就绪测试背后的聚焦用例：
  * 比持有者更久的等待、不得卡住队列的排队者，以及定时任务使用的流水线路径。
  */
+test("an explicit lock file stays outside the workspace", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "clone-ai-lock-file-ws-"));
+  const lockDirectory = await mkdtemp(join(tmpdir(), "clone-ai-lock-file-db-"));
+  t.after(async () => {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(lockDirectory, { recursive: true, force: true });
+  });
+  const lockFile = join(lockDirectory, "workspace-execution.sqlite3");
+  const lock = new WorkspaceExecutionLock();
+
+  const result = await lock.run(workspace, async () => "ran", { lockFile });
+
+  assert.equal(result, "ran");
+  assert.equal(existsSync(lockFile), true);
+  assert.equal(existsSync(join(workspace, ".clone")), false);
+});
+
 test("a lock wait aborts before the holder releases, and the lock stays usable", async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), "clone-ai-lock-abort-"));
   t.after(() => rm(workspace, { recursive: true, force: true }));

@@ -239,6 +239,7 @@ export async function createRuntimeAssembly(options: RuntimeAssemblyOptions = {}
       // candidates. 召回只来自受治理的 Store：只有已提升的记忆，绝不包含原始候选。
       memorySource: new GovernedMemorySource(paths.dataDirectory, 4, journal),
       workspacePath: paths.workspacePath,
+      workspaceLockFile: paths.workspaceLockFile,
       ...(options.workspaceWritable === true ? { workspaceWritable: true } : {}),
       workspaceCheckpointStore: new JsonWorkspaceCheckpointStore(paths.checkpointsDirectory),
       workspaceCheckpointDirectory: join(paths.dataDirectory, "checkpoints"),

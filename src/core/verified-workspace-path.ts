@@ -2,6 +2,8 @@ import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isForbiddenPath } from "../authority/scope.ts";
+
 export async function verifiedWorkspacePath(locator: string, workspacePath: string | undefined): Promise<string | undefined> {
   if (workspacePath === undefined) return undefined;
   let path = locator;
@@ -13,6 +15,12 @@ export async function verifiedWorkspacePath(locator: string, workspacePath: stri
   try {
     const root = await realpath(workspacePath);
     const candidate = await realpath(isAbsolute(path) ? path : resolve(workspacePath, path));
+    // With the machine root as the base, containment alone would authorize
+    // every readable file. The locations no policy may open stay off-limits to
+    // the verifier too, so a fabricated locator cannot read a key or a token.
+    // 基准是机器根目录时，仅靠包含关系会授权所有可读文件。任何策略都无法打开的位置对验证器
+    // 同样关闭，因此伪造的 locator 读不到密钥或 token。
+    if (isForbiddenPath(candidate)) return undefined;
     const inside = relative(root, candidate);
     if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return undefined;
     return candidate;

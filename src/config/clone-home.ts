@@ -10,9 +10,13 @@ export interface ClonePaths {
   dataDirectory: string;
   /**
    * The internal base for relative paths, project-instruction lookup and the
-   * verifier's default root. It is not an owner setting and not a permission;
-   * writes name their own targets. 相对路径、项目指令查找与验证器默认根的内部基准。
-   * 它不是所有者设置，也不是权限；写入自己点名目标。
+   * verifier's default root. It defaults to the machine root (`/`): the
+   * computer is the workspace, and a folder is neither a default nor a
+   * permission. An explicit option or CLONE_AI_WORKSPACE still overrides it.
+   * It is not an owner setting and not a permission; writes name their own
+   * targets. 相对路径、项目指令查找与验证器默认根的内部基准。默认是机器根目录（`/`）：
+   * 整台电脑就是工作空间，文件夹既不是默认值也不是权限。显式选项或 CLONE_AI_WORKSPACE
+   * 仍可覆盖它。它不是所有者设置，也不是权限；写入自己点名目标。
    */
   workspacePath: string;
   configFile: string;
@@ -47,18 +51,19 @@ export interface ClonePaths {
 export interface ClonePathOptions {
   dataDirectory?: string;
   workspacePath?: string;
-  cwd?: string;
   env?: NodeJS.ProcessEnv;
 }
 
 /**
  * Resolve every persistent path from one place. Explicit test paths win,
- * then CLONE_HOME/CLONE_AI_DATA_DIR, then the user's home directory.
+ * then CLONE_HOME/CLONE_AI_DATA_DIR, then the user's home directory. The
+ * internal base is the machine root unless a caller or CLONE_AI_WORKSPACE
+ * names another one.
  * 所有持久化路径都从一个地方解析：测试显式路径优先，其次是环境变量，最后才是用户主目录。
+ * 除非调用方或 CLONE_AI_WORKSPACE 指定了别的路径，内部基准就是机器根目录。
  */
 export function resolveClonePaths(options: ClonePathOptions = {}): ClonePaths {
   const env = options.env ?? process.env;
-  const cwd = options.cwd ?? process.cwd();
   const home = userHomeDirectory(env);
   const dataDirectory = resolve(
     options.dataDirectory
@@ -67,7 +72,7 @@ export function resolveClonePaths(options: ClonePathOptions = {}): ClonePaths {
       ?? env.CLONE_AI_DATA_DIR
       ?? join(home, CLONE_DIRECTORY_NAME),
   );
-  const workspacePath = resolve(options.workspacePath ?? env.CLONE_AI_WORKSPACE ?? cwd);
+  const workspacePath = resolve(options.workspacePath ?? env.CLONE_AI_WORKSPACE ?? "/");
   // Runtime state belongs to the clone home. There is no fixed working
   // directory, so a project folder cannot be the owner of the execution lock.
   // 运行时状态属于 clone home。没有固定工作目录，因此项目文件夹不能成为执行锁的持有者。
