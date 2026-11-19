@@ -3110,6 +3110,13 @@ function conversationStatus(
 ): string {
   if (children.some((child) => child.status === "waiting_approval")) return "waiting_approval";
   if (children.some((child) => child.status === "waiting_review")) return "waiting_review";
+  // The conversation's own last turn is what the owner needs to see; an active
+  // child it spawned is still running, but the turn did not answer. Waiting
+  // children still outrank the failure, because they need a decision.
+  // 对话自己的上一回合才是所有者需要看到的状态；它派发的活跃子任务仍在运行，但回合没有给出
+  // 回答。等待中的子任务仍然优先于失败，因为它们需要决定。
+  if (latestTurn !== undefined
+    && (latestTurn.status === "failed" || latestTurn.status === "interrupted")) return "failed";
   if (children.some((child) => ACTIVE_RUN_STATUSES.has(child.status))) return "running";
   const latestChild = [...children].sort((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
   const childAt = latestChild?.updatedAtMs ?? 0;
@@ -3118,8 +3125,6 @@ function conversationStatus(
   // row's current state. 子任务较早的失败之后回合已完成，那是历史，不是行当前的状态。
   if (latestChild !== undefined && childAt >= turnAt
     && (latestChild.status === "failed" || latestChild.status === "cancelled")) return "failed";
-  if (latestTurn !== undefined && turnAt >= childAt
-    && (latestTurn.status === "failed" || latestTurn.status === "interrupted")) return "failed";
   if (latestTurn?.status === "started") return "running";
   return "completed";
 }
@@ -3134,8 +3139,17 @@ function conversationPreview(
   const waitingReview = children.filter((child) => child.status === "waiting_review").length;
   if (waitingReview > 0) return `${waitingReview} 个任务等待你的复核`;
   const active = children.filter((child) => ACTIVE_RUN_STATUSES.has(child.status)).length;
-  if (active > 0) return `${active} 个任务正在执行`;
   const latestTurn = records.at(-1);
+  // A failed turn is the conversation's latest answer, even while a child it
+  // spawned keeps working. Say both instead of letting the active count hide
+  // the failure. 失败回合是对话最新的回答，即使它派发的子任务仍在工作。两者都说出来，
+  // 而不是让活跃计数藏起失败。
+  if (latestTurn !== undefined
+    && (latestTurn.status === "failed" || latestTurn.status === "interrupted")) {
+    const failure = toMainAgentTurnSummary(latestTurn).preview;
+    return active > 0 ? `${failure} · ${active} 个任务仍在执行` : failure;
+  }
+  if (active > 0) return `${active} 个任务正在执行`;
   const latestChild = [...children].sort((left, right) => right.updatedAtMs - left.updatedAtMs)[0];
   const turnAt = latestTurn === undefined ? 0 : Date.parse(latestTurn.completedAt ?? latestTurn.startedAt);
   if (latestChild !== undefined && latestChild.updatedAtMs > turnAt) return latestChild.preview;
