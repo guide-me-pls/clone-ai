@@ -4493,3 +4493,63 @@ reintroduce a read policy: require read scopes for outside roots by default and
 enable `strictReads` in the OS profile. Keep the protected list in every
 variant. If models routinely waste rounds exploring, add a bounded search tool
 before widening further.
+
+## 2026-11-19 — Writes have no workspace either; every write carries a scope
+
+**Decision.** The live folder is no longer an implicit write root. A worker may
+write only when the step declares a `files` write scope covering the target,
+the policy engine approves that scope (or the owner approves the step), and the
+target is not a protected location. The step's workspace is only the folder
+relative paths resolve against and the default target a planner proposes for a
+new deliverable; it grants nothing by itself. When a write step names no target,
+the Kernel adds the workspace as an explicit scope at `attachPlan`, visible in
+the journal and the audit, and the policy engine still checks it. External and
+irreversible work runs in an isolated copy the Kernel creates; that copy and
+the repair lane's own worktree are writable as sandboxes, never the owner's live
+tree. Reads stay machine-wide.
+
+**Alternatives rejected.**
+
+- *Keep the implicit workspace write root.* Then `observe` does not mean "no
+  writes": the owner's `~/.clone/policies.json` has no `files` domain, which is
+  `observe`, yet any step could write the workspace. A folder was a permission
+  nobody granted, and the authority pane could not describe it.
+- *Allow every non-protected path and rely only on the step's risk class.* A
+  prompt-injected step could write anywhere the owner can; `reversible_write` is
+  auto-allowed by the base policy, so the "check" would be a label.
+- *Ask for human approval inside every tool call.* The native worker has no
+  approval callback; a per-call prompt needs a new UI channel and blocks the
+  loop. The step is the existing approval unit, and its scope is visible before
+  execution.
+- *Auto-grant the home directory as the new default.* That is a workspace by
+  another name, cannot be narrowed per task, and hands every task the same
+  reach.
+- *Make the repair lane declare scopes like an owner task.* The lane writes only
+  in a git worktree it created after the owner invoked `npm run repair`; treating
+  that sandbox as an owner write would block the loop on a policy the owner did
+  not set. The assembly carries `workspaceWritable` for that tree alone.
+
+**Evidence.** `resolveGrants` always added the workspace to `writeRoots`, so
+`decideTool` admitted a workspace write with no scope. The owner's
+`~/.clone/policies.json` contains no `files` domain (observe), yet workspace
+writes succeeded. With this change the same path is refused until a scope is
+present; `AuthorityPolicyEngine` then denies writes while the domain is
+`observe`, asks for approval at `prepare` or `act_with_approval`, and allows
+automatically only under an `act_auto` standing policy. `test/write-scopes.test.ts`
+(9/9) pins the auto-fill, write-cue extraction, and the observe/approve
+transition; `test/path-gate.test.ts` pins that the live workspace is not a write
+root while the isolated copy is.
+
+**What it costs.** A write step now needs a scope. A Main Agent plan that writes
+elsewhere must declare that path; the fallback planner's prose is scanned for
+absolute and `~/` targets, and otherwise the workspace is proposed. With the
+owner's current `observe` setting, every write is denied until the owner raises
+`files` to at least `prepare` or `act_with_approval`, or adds a standing policy;
+that is the intended permission check, not a regression. Approval is per step,
+not per file. The audit now lists each step's scopes instead of a count.
+
+**Reversal condition.** If step-level approval is too coarse for folder-sized
+work, add a standing policy for that folder at `act_auto`; do not reintroduce an
+implicit root. If planners routinely name targets the extractor misses, add an
+explicit `request_write_scope` tool or a per-call approval channel instead of
+widening the default.

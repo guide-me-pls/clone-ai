@@ -14,7 +14,7 @@ Deployment: [Mac app](apps/desktop/README.md) · [WhatsApp phone channel](docs/u
 
 ## Current Safety Boundary
 
-- The only executor is the in-process native worker. Its tools are gated per call: reads may reach any readable location on this computer except protected locations (credentials, browser profiles and Clone AI's own audit trail); writes stay inside the workspace or a write root the Kernel granted, and path checks resolve symlinks. A step's declared risk caps which tools it is offered: a `read_only` step is never given a write tool. Clone AI does **not** enforce an OS sandbox for this worker: its tools are the boundary.
+- The only executor is the in-process native worker. Its tools are gated per call: reads may reach any readable location on this computer except protected locations (credentials, browser profiles and Clone AI's own audit trail); every write step must carry a `files` write scope, the policy engine checks it and may require approval, and no folder — including the workspace — is writable by default. Path checks resolve symlinks. A step's declared risk caps which tools it is offered: a `read_only` step is never given a write tool. Clone AI does **not** enforce an OS sandbox for this worker: its tools are the boundary.
 - External or irreversible actions cannot be executed at all. A governed external-action connector is not implemented yet.
 - Acceptance criteria that cannot be checked automatically enter `waiting_review` for the owner to inspect and accept or reject in the desktop conversation or under 审计与评估 → 运行记录.
 - Scheduled occurrences live in `schedules.sqlite3`; an existing `schedules.json` is imported once and retained as a backup. Interrupted occurrences with unknown effects require review rather than automatic retry.

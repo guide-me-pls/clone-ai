@@ -11,18 +11,24 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
-## 2026-11-19 —— Worker 可读整机，写入仍受限
+## 2026-11-19 —— Worker 可读整机，每个写入都携带 Scope
 
-- **主张：** Worker 可以读取本机任何可读位置，受保护位置除外；写入仍只落在工作区与 Kernel
-  授权的写入根内；当前目录之外被点名的项目会被读取，而不是回答"在工作区之外"。
-- **证据：** `test/path-gate.test.ts`（外部读取放行、同一路径写入被拒、授权写入根放行、
-  `~/.ssh` 被拒）、`test/native-worker-tools.test.ts`（工作区外无 Scope 读取）、
-  `test/native-agent-worker.test.ts` 与 `test/mcp.test.ts`（读取路径不受限、写入仍受限）、
-  `test/companion-main-agent.test.ts`（提示词说明整机是可读范围）、
-  `test/native-worker-tools.test.ts` 中 `read_file` 对设备的拒绝；全量 **862/862**，
-  `npm run typecheck` 通过。
-- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--整台电脑就是工作区读取不设边界)、
-  [执行链路](optimizations.zh-CN.md#2026-11-19--整台电脑就是工作区仅限读取)。
+- **主张：** Worker 可以读取本机任何可读位置，受保护位置除外；没有文件夹（包括工作区）默认
+  可写——每个写入步骤携带显式的 `files` 写 Scope，由权限引擎判定（`observe` 拒绝，
+  `prepare`/`act_with_approval` 询问所有者，`act_auto` 放行）。当前目录之外被点名的项目会被
+  读取，而不是回答"在工作区之外"。
+- **证据：** `test/path-gate.test.ts`（外部读取放行、写入需要授权根、活工作区不是根、隔离副本
+  是根、`~/.ssh` 被拒、任何根下的 `.git` 被拒）、`test/native-worker-tools.test.ts`
+  （工作区外无 Scope 读取、设备被拒）、`test/native-agent-worker.test.ts` 与
+  `test/mcp.test.ts`（读取路径不受限、写入仍受限）、`test/companion-main-agent.test.ts`
+  （提示词说明整机是可读范围且没有默认可写文件夹）、`test/write-scopes.test.ts` **9/9**
+  （工作区回退、点名目标、写入线索提取、observe/批准转换）、`test/golden-path.test.ts` 在 `act_auto`
+  策略下完成；全量 **873/873**（排除端口冲突的 WhatsApp 文件为 852/852，空闲端口下
+  21/21），`npm run typecheck` 与 `npm run gate` 通过。
+- **记录位置：** [读取取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--整台电脑就是工作区读取不设边界)、
+  [写入取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--写入也没有工作区每个写入都携带-scope)、
+  [读取链路](optimizations.zh-CN.md#2026-11-19--整台电脑就是工作区仅限读取)、
+  [写入链路](optimizations.zh-CN.md#2026-11-19--写入按步骤授权而不是按工作区)。
 
 ## 2026-11-19 —— Main Agent 可以按需召回另一个任务的上下文
 

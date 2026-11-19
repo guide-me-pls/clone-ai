@@ -31,6 +31,60 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-19 — Writes are scoped per step, not by workspace
+
+- **Goal / hypothesis:** the owner's model is a personal agent with no
+  workspace: reads are machine-wide, and every write is permission-checked.
+  The previous step left the live workspace as an implicit write root, so
+  `observe` did not mean "no writes". Make every write step carry a `files`
+  write scope, let the policy engine decide it, and keep the workspace only as
+  the default target. This supersedes the write half of the entry below.
+- **Trade-off:** [Writes have no workspace either; every write carries a scope](../architecture/trade-offs.md#2026-11-19--writes-have-no-workspace-either-every-write-carries-a-scope).
+- **Change:** `src/authority/write-scopes.ts` (new: `ensureWriteScopes` adds
+  the workspace or an absolute/`~/` target named in the step, bounded and
+  de-duplicated); `src/core/runtime.ts` (`attachPlan` fills missing scopes,
+  `workspaceWritable` for a sandbox workspace, assignment field);
+  `src/authority/path-gateway.ts` (no implicit workspace in `writeRoots`;
+  `includeWorkspace` only for sandbox copies); `src/workers/native-agent-worker.ts`
+  (write prompt and generic `.git` guard, `workspaceWritable`); the Main Agent
+  charter (version 4), `workspaceGuidance`, `propose_work_plan` description and
+  worker tool descriptions; `src/core/runtime-factory.ts` and
+  `src/repair/repair-lane.ts` (`workspaceWritable` for the repair worktree);
+  `apps/desktop/ui/audit.js` and `audit.css` (list the scopes, not the count).
+- **Eval:** `node --experimental-strip-types --test test/write-scopes.test.ts`
+  **9/9** (workspace fallback, absolute and `~/` targets, write-cue extraction, existing scope kept,
+  read scope insufficient, read-only/external untouched, observe denies,
+  act_with_approval asks, approval allows); `test/path-gate.test.ts` (the live
+  workspace is not a write root; `includeWorkspace` admits only the sandbox
+  copy; `.git` is refused under any granted root); `test/golden-path.test.ts`
+  seeds an `act_auto` policy and completes. Full suite **873/873**: 852/852
+  excluding `test/whatsapp-bridge.test.ts`, plus 21/21 with
+  `CLONE_AI_WHATSAPP_PORT=4399` because a running `scripts/companion-dev.mjs`
+  holds 4318. `npm run typecheck` passes; `npm run gate` passes.
+- **Benchmark run:** none — deterministic tests; no provider, model, dataset,
+  seed or scoring parameters.
+- **Execution chain:** wrote the trade-off; added the scope filler and wired it
+  into `attachPlan`; removed the implicit workspace root; updated prompts,
+  descriptions and the audit; ran the suite and found 10 failures — golden path
+  and the chaos fixture needed an owner policy, repair needed its worktree
+  treated as a sandbox, and two evidence tests needed an explicit scope. Added
+  `workspaceWritable` for the repair lane, seeded authority in the two owner
+  simulations, updated the evidence tests, and fixed the trailing-period path
+  extractor. Re-ran: green. The WhatsApp port failure was environmental (the
+  dev companion held 4318); the file passes on a free port.
+- **Pros:** every write now has an explicit, journaled, auditable scope; the
+  owner's files autonomy finally governs writes; the repair lane's sandbox is
+  the only unscoped writable tree and is documented as such.
+- **Cons / next time:** with files still at `observe`, writes are denied until
+  the owner raises the domain or adds a standing policy. The fallback path
+  extractor is heuristic; a step that names a target in a form it misses falls
+  back to the workspace. Approval is per step, not per file.
+- **Reversal condition:** if step-level approval is too coarse, add an
+  `act_auto` standing policy for the folder; do not reintroduce an implicit
+  root. If target extraction misses too often, add an explicit
+  `request_write_scope` tool or per-call approval instead of widening the
+  default.
+
 ### 2026-11-19 — The machine is the workspace for reads
 
 - **Goal / hypothesis:** the owner's model is that this agent has no project

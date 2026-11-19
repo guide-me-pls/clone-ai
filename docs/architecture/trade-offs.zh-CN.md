@@ -3089,3 +3089,44 @@ this workspace"。`src/authority/seatbelt.ts` 的 macOS profile 本就默认允�
 一个人，就重新引入读取策略：默认要求外部根声明 read Scope，并在 OS profile 中启用
 `strictReads`。任何变体都保留受保护清单。如果模型经常浪费轮次探索，先加入有界搜索工具，
 再继续放宽。
+
+## 2026-11-19 —— 写入也没有工作区；每个写入都携带 Scope
+
+**决定：** 活文件夹不再是隐式写入根。只有当步骤声明覆盖目标的 `files` 写 Scope、权限引擎
+批准该 Scope（或所有者批准该步骤），且目标不是受保护位置时，Worker 才能写入。步骤工作区
+只是相对路径的基准，以及 Planner 为新产出提出的缺省目标；它本身不授予任何权限。写入步骤
+没有点名目标时，Kernel 在 `attachPlan` 把工作区作为显式 Scope 加入，记入 Journal 与审计，
+并仍由权限引擎判定。外部与不可逆工作运行在 Kernel 创建的隔离副本里；该副本与修复通道自己的
+worktree 作为沙箱可写，绝不是所有者的活树。读取仍然覆盖整机。
+
+**被否决的备选。**
+
+- *保留隐式工作区写入根。* 那样 `observe` 就不意味着"禁止写入"：所有者的
+  `~/.clone/policies.json` 没有 `files` 域（即 observe），但任何步骤都能写工作区。文件夹成了
+  没人授予的权限，权限面板也无法描述它。
+- *允许所有非受保护路径，只依赖步骤的风险等级。* 被提示注入的步骤可以写所有者的任何位置；
+  `reversible_write` 在基础策略下自动放行，所谓"校验"就只是一个标签。
+- *在每次工具调用里请求人工批准。* 原生 Worker 没有审批回调；逐调用提示需要新的 UI 通道，
+  并会阻塞循环。步骤是现有的审批单位，它的 Scope 在执行前可见。
+- *把家目录自动授权成新的默认。* 那只是换名字的工作区，无法按任务收窄，并把同样的范围交给
+  每个任务。
+- *让修复通道像所有者任务一样声明 Scope。* 通道只在所有者执行 `npm run repair` 后由它创建
+  的 git worktree 里写入；把该沙箱当成所有者写入，会让循环卡在所有者没有设置的策略上。
+  组装用 `workspaceWritable` 只标记那棵树。
+
+**证据。** `resolveGrants` 总是把工作区加入 `writeRoots`，因此 `decideTool` 在没有 Scope 时
+也放行工作区写入。所有者的 `~/.clone/policies.json` 没有 `files` 域（observe），工作区写入
+却成功了。变更后，同一路径在没有 Scope 时被拒绝；`AuthorityPolicyEngine` 随后在 `observe`
+下拒绝写入，在 `prepare` 或 `act_with_approval` 下请求批准，只有 `act_auto` 常设策略才自动
+放行。`test/write-scopes.test.ts`（9/9）钉住自动补全、写入线索提取与 observe/批准转换；
+`test/path-gate.test.ts` 钉住活工作区不是写入根、隔离副本才是。
+
+**代价。** 写入步骤现在需要 Scope。写到别处的 Main Agent 计划必须声明那个路径；备用 Planner
+会从正文中扫描绝对路径与 `~/` 目标，否则提出工作区。以所有者当前的 `observe` 档位，所有写入
+都会被拒绝，直到把 `files` 提到至少 `prepare` 或 `act_with_approval`，或加入常设策略；这是
+有意的权限校验，不是回退。批准按步骤，而不是按文件。审计现在列出每个步骤的 Scope，而不只是
+数量。
+
+**可推翻条件：** 如果步骤级批准对文件夹规模的工作太粗，就为该文件夹加一条 `act_auto` 常设
+策略；不要重新引入隐式根。如果 Planner 经常点名提取器漏掉的目标，就加显式的
+`request_write_scope` 工具或逐调用审批通道，而不是放宽默认。

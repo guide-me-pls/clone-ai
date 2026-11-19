@@ -26,6 +26,42 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— 写入按步骤授权，而不是按工作区
+
+- **目标 / 假设：** 所有者的模型是 personal agent：没有工作区，读取覆盖整机，每个写入都经过
+  权限校验。上一步仍把活工作区当作隐式写入根，因此 `observe` 并不等于"禁止写入"。让每个写入
+  步骤携带 `files` 写 Scope，由权限引擎判定，工作区只作为缺省目标。这取代下一条中的写入部分。
+- **取舍：** [写入也没有工作区；每个写入都携带 Scope](../architecture/trade-offs.zh-CN.md#2026-11-19--写入也没有工作区每个写入都携带-scope)。
+- **变更：** `src/authority/write-scopes.ts`（新增：`ensureWriteScopes` 补上工作区或步骤中
+  点名的绝对/`~/` 目标，有界且去重）；`src/core/runtime.ts`（`attachPlan` 补全缺失 Scope，
+  `workspaceWritable` 沙箱工作区，派发字段）；`src/authority/path-gateway.ts`
+  （`writeRoots` 不再隐式包含工作区；`includeWorkspace` 只用于沙箱副本）；
+  `src/workers/native-agent-worker.ts`（写入提示与通用 `.git` 保护、`workspaceWritable`）；
+  Main Agent charter（版本 4）、`workspaceGuidance`、`propose_work_plan` 描述与 Worker 工具
+  描述；`src/core/runtime-factory.ts` 与 `src/repair/repair-lane.ts`（修复 worktree 的
+  `workspaceWritable`）；`apps/desktop/ui/audit.js` 与 `audit.css`（列出 Scope，而不是数量）。
+- **Eval：** `node --experimental-strip-types --test test/write-scopes.test.ts` **9/9**
+  （工作区回退、绝对与 `~/` 目标、写入线索提取、保留已有 Scope、读 Scope 不满足写入、
+  只读/外部不动、observe 拒绝、act_with_approval 询问、批准放行）；`test/path-gate.test.ts`（活工作区不是
+  写入根；`includeWorkspace` 只放行沙箱副本；任何授权根下的 `.git` 都拒绝）；
+  `test/golden-path.test.ts` 种入 `act_auto` 策略后完成。全量 **873/873**：排除
+  `test/whatsapp-bridge.test.ts` 为 852/852，加上设置 `CLONE_AI_WHATSAPP_PORT=4399` 的
+  21/21（运行中的 `scripts/companion-dev.mjs` 占着 4318）。`npm run typecheck` 通过；
+  `npm run gate` 通过。
+- **Benchmark run：** 无——确定性测试；没有 Provider、模型、数据集、种子或评分参数。
+- **执行链路：** 写取舍；新增 Scope 补全并接入 `attachPlan`；移除隐式工作区写入根；更新提示词、
+  描述与审计；跑全量发现 10 个失败——黄金路径与混沌夹具需要所有者策略，修复通道需要把自己的
+  worktree 当作沙箱，两个证据测试需要显式 Scope。为修复通道加入 `workspaceWritable`，在两个
+  所有者模拟中种入授权，更新证据测试，修正路径提取器对句尾句点的处理。重跑全绿。WhatsApp 的
+  端口失败是环境问题（开发伴随进程占着 4318）；换成空闲端口后该文件通过。
+- **优点：** 每个写入现在都有显式、记入 Journal、可审计的 Scope；所有者的 files 自主档位终于
+  真正约束写入；修复通道的沙箱是唯一无 Scope 的可写树，并被明确记录。
+- **缺点 / 下次：** 在 files 仍为 `observe` 时，所有者提高档位或加入常设策略前写入都会被拒。
+  备用路径提取器是启发式的；步骤以它没识别出的形式点名目标时，会回退到工作区。批准按步骤，
+  而不是按文件。
+- **推翻条件：** 如果步骤级批准太粗，就为该文件夹加 `act_auto` 常设策略；不要重新引入隐式根。
+  如果目标提取经常漏掉，就加显式的 `request_write_scope` 工具或逐调用审批，而不是放宽默认。
+
 ### 2026-11-19 —— 整台电脑就是工作区（仅限读取）
 
 - **目标 / 假设：** 所有者的模型是：这个 Agent 没有项目工作区，本机就是工作区，所有地方都可读，

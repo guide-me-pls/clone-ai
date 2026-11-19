@@ -476,6 +476,14 @@ export interface ExecutionAssignment {
     kind: "git_worktree" | "directory_copy";
     ownerPath: string;
   };
+  /**
+   * Present when this Runtime's workspace is itself a sandbox the Kernel owns
+   * (the repair worktree), so writes there need no plan scope. It never
+   * authorizes the owner's live tree.
+   * 本 Runtime 的工作区本身是 Kernel 拥有的沙箱（修复 worktree）时出现，因此那里的写入
+   * 无需计划 Scope。它绝不授权所有者的活树。
+   */
+  workspaceWritable?: true;
 }
 
 export interface MemoryContextPacket {

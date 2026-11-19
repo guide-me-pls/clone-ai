@@ -169,7 +169,7 @@ test("successful writes become artifact evidence the verifier can check", async 
       { content: "wrote it", toolCalls: [] },
     ]),
   });
-  const base = assignment(directory);
+  const base = assignment(directory, [{ domain: "files", resource: directory, access: "write" }]);
   const events: ExecutionEvent[] = [];
   for await (const event of worker.execute({ ...base, step: { ...base.step, risk: "reversible_write" } })) events.push(event);
   const evidence = events.filter((event) => event.type === "evidence");

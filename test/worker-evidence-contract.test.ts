@@ -139,8 +139,12 @@ test("a write after a read upgrades the path to artifact evidence", async (t) =>
       { content: "wrote it", toolCalls: [] },
     ]),
   });
+  const base = assignment(directory, "reversible_write");
   const events: ExecutionEvent[] = [];
-  for await (const event of worker.execute(assignment(directory, "reversible_write"))) events.push(event);
+  for await (const event of worker.execute({
+    ...base,
+    step: { ...base.step, scopes: [{ domain: "files", resource: directory, access: "write" }] },
+  })) events.push(event);
 
   const evidence = events.filter((event) => event.type === "evidence").map((event) => event.evidence);
   assert.ok(

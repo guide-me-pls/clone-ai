@@ -6,11 +6,11 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
-### The whole machine is readable; only writes are scoped
+### The machine is the workspace: reads are open, every write carries a scope
 
-Workers can now read any readable location on the local computer. The step's workspace is the write boundary, not a read boundary: writes still stay inside the workspace or a write root the Kernel grants, and protected locations — credentials, browser profiles, Clone AI's own journal and token — remain refused before any policy can open them. The Main Agent is told that a read-only step can locate and read a project anywhere on the machine, so a project named outside the current folder is read rather than answered with "outside the workspace".
+Workers can read any readable location on the local computer, and the live folder is no longer an implicit write root. Every write step must carry a `files` write scope; when a step names no target, the Kernel proposes the workspace as an explicit scope, and the policy engine still decides — `observe` denies writes, `prepare` and `act_with_approval` ask the owner, and only an `act_auto` standing policy allows them without a prompt. External work runs in an isolated copy and the repair lane in its own worktree; those sandboxes stay writable. Protected locations — credentials, browser profiles, Clone AI's own journal and token — remain refused before any policy can open them. The audit now lists each step's scopes. With files still at 只观察, writes are denied until you raise 设置 → 权限与安全 → 文件 to 需批准后执行 (or add a standing policy).
 
-Worker 现在可以读取本机任何可读位置。步骤工作区是写入边界，不再是读取边界：写入仍只落在工作区或 Kernel 授权的写入根内，受保护位置——凭据、浏览器档案、Clone AI 自己的 Journal 与令牌——仍在任何策略之前被拒绝。Main Agent 被告知只读步骤可以定位并读取整机上的项目，因此当前目录之外被点名的项目会被读取，而不是回答"在工作区之外"。
+Worker 现在可以读取本机任何可读位置，活文件夹也不再是隐式写入根。每个写入步骤必须携带 `files` 写 Scope；步骤没有点名目标时，Kernel 把工作区作为显式 Scope 提出，仍由权限引擎判定——`observe` 拒绝写入，`prepare` 与 `act_with_approval` 询问所有者，只有 `act_auto` 常设策略才无需询问。外部工作运行在隔离副本里，修复通道运行在自己的 worktree 里；这些沙箱保持可写。受保护位置——凭据、浏览器档案、Clone AI 自己的 Journal 与令牌——仍在任何策略之前被拒绝。审计现在列出每个步骤的 Scope。在 files 仍为"只观察"时，写入会被拒绝，直到你在 设置 → 权限与安全 → 文件 调到"需批准后执行"（或加入常设策略）。
 
 ### A Main Agent can search every task conversation
 

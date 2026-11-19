@@ -362,7 +362,10 @@
     const reason = r.status !== "completed" && r.outcome.reason
       ? `<div class="au-callout au-callout-bad"><b>为什么没成功</b> · 阶段：${esc(STAGE[r.outcome.failureStage] ?? r.outcome.failureStage)}${r.outcome.failureCategory ? ` · 类别：${esc(r.outcome.failureCategory)}` : ""}<pre>${esc(r.outcome.reason)}</pre></div>` : "";
     const evidence = r.evidence.length ? r.evidence.map((e) => `<li>${badge(e.kind, "info")} ${esc(e.locator ?? "")} <small>${esc((e.summary ?? "").slice(0, 160))}</small></li>`).join("") : `<li class="au-empty">没有证据。</li>`;
-    const plan = r.plan.map((p) => `<li><code>${esc(p.id)}</code> ${esc(p.title)} ${badge(p.risk, p.risk === "read_only" ? "ok" : p.risk === "reversible_write" ? "info" : "warn")}${p.agentId ? ` <small>${esc(p.agentId)}</small>` : ""}${p.scopes ? ` <small>${p.scopes.length} 个 scope</small>` : ""}</li>`).join("");
+    const plan = r.plan.map((p) => {
+      const scopes = (p.scopes ?? []).map((s) => `${s.domain}:${s.access} ${s.resource}`).join("、");
+      return `<li><code>${esc(p.id)}</code> ${esc(p.title)} ${badge(p.risk, p.risk === "read_only" ? "ok" : p.risk === "reversible_write" ? "info" : "warn")}${p.agentId ? ` <small>${esc(p.agentId)}</small>` : ""}${scopes ? ` <small class="au-scopes">${esc(scopes)}</small>` : ""}</li>`;
+    }).join("");
     return `<header class="au-detail-head"><div><h4>${esc(r.taskTitle || r.runId.slice(0, 8))}</h4><small>${esc(r.runId)}</small></div>${statusBadge(r.status)}${r.deleted ? badge("已删除", "mute") : ""}</header>
       <div class="au-facts"><span>创建 ${stamp(r.createdAt)}</span><span>耗时 ${ms(r.durationMs)}</span><span>触发 ${esc(r.triggerKind ?? "—")}</span><span>${r.basis.events} 条事件</span></div>
       ${stages(r)}${reason}

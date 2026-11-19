@@ -61,9 +61,9 @@ export function readNativeWorkerEnvironment(environment: NodeJS.ProcessEnv = pro
  * Filesystem tools with their scope risk, resolved against the step's
  * workspace. All path checks happen in NativeAgentWorker; these functions
  * assume the path was already allowed. Reads may reach anywhere on the
- * computer; writes are gated to the workspace and the granted write roots.
+ * computer; writes are gated to the write roots granted to the step.
  * 以步骤工作区为基准解析、带 Scope 风险等级的文件工具。路径检查全部在 NativeAgentWorker
- * 中完成；这些函数假定路径已被允许。读取可以到达本机任何位置；写入被限制在工作区与已授权的
+ * 中完成；这些函数假定路径已被允许。读取可以到达本机任何位置；写入被限制在步骤获得的
  * 写入根内。
  */
 export type WriteFileMode = "overwrite" | "refuse-existing";
@@ -160,7 +160,7 @@ export function fileTools(options: { writeFileMode?: WriteFileMode } = {}): Nati
     },
     {
       name: "write_file",
-      description: "Write a UTF-8 text file inside the step's workspace or a granted write root, creating directories as needed.",
+      description: "Write a UTF-8 text file inside a write root granted to this step, creating directories as needed.",
       parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] },
       risk: "write",
       pathOf: (input) => String(input.path ?? ""),
@@ -199,7 +199,7 @@ export function fileTools(options: { writeFileMode?: WriteFileMode } = {}): Nati
     },
     {
       name: "edit_file",
-      description: "Replace one exact occurrence of old_text with new_text in a UTF-8 file inside the step's workspace or a granted write root. Prefer this over write_file for a small change to an existing file.",
+      description: "Replace one exact occurrence of old_text with new_text in a UTF-8 file inside a write root granted to this step. Prefer this over write_file for a small change to an existing file.",
       parameters: { type: "object", properties: { path: { type: "string" }, old_text: { type: "string" }, new_text: { type: "string" } }, required: ["path", "old_text", "new_text"] },
       risk: "write",
       pathOf: (input) => String(input.path ?? ""),

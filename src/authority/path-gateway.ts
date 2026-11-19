@@ -21,7 +21,13 @@ export interface EffectiveGrants {
    * 范围）；它们仍供 macOS profile 的 `strictReads` 模式与审计使用。
    */
   readRoots: string[];
-  /** Canonical directories/files the process may write, always including the workspace. 可写的规范路径，始终包含工作空间。 */
+  /**
+   * Canonical directories/files the step may write. The workspace is not added
+   * implicitly: every write comes from a `files` write scope, except the
+   * isolated sandbox copy the Kernel creates for external work.
+   * 步骤可写的规范路径。工作区不会被隐式加入：每次写入都来自 `files` 写 Scope，唯一例外是
+   * Kernel 为外部工作创建的隔离沙箱副本。
+   */
   writeRoots: string[];
   /**
    * Seatbelt filters by address, not by host name, so network is all-or-nothing
@@ -37,12 +43,23 @@ export interface EffectiveGrants {
 
 export function resolveGrants(
   scopes: readonly Scope[] | undefined,
-  options: { workspace: string; home?: string },
+  options: {
+    workspace: string;
+    home?: string;
+    /**
+     * Add the workspace itself as a write root. Only the isolated sandbox copy
+     * uses this: it is the tree the Kernel created for the step, not the
+     * owner's live folder. A normal step must declare a write scope.
+     * 把工作区本身加入写入根。只有隔离沙箱副本使用：它是 Kernel 为步骤创建的树，不是
+     * 所有者的活文件夹。普通步骤必须声明写 Scope。
+     */
+    includeWorkspace?: boolean;
+  },
 ): EffectiveGrants {
   const home = options.home ?? homedir();
   const workspace = canonicalPath(options.workspace, home);
   const readRoots = new Set<string>();
-  const writeRoots = new Set<string>([workspace]);
+  const writeRoots = new Set<string>(options.includeWorkspace === true ? [workspace] : []);
   let network = false;
   const dropped: EffectiveGrants["dropped"] = [];
 
