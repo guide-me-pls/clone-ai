@@ -580,6 +580,64 @@ textarea:focus-visible {
 .message-copy .md-list-line > span:first-child { color: var(--accent); font-weight: 700; }
 .clone-text .md-list-line--ordered > span:first-child,
 .message-copy .md-list-line--ordered > span:first-child { font-variant-numeric: tabular-nums; }
+/* A table is a block the message earns when it has one: the scroller keeps a
+   wide table inside the reading column, and the CSV control turns what the
+   owner sees into a file Excel opens.
+   表格是消息在有需要时才获得的块：滚动容器把宽表限制在阅读栏内，CSV 控件把所有者看到的
+   内容变成 Excel 能打开的文件。 */
+.md-table-wrap {
+  margin: 10px 0 12px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+.md-table-tools {
+  display: flex;
+  justify-content: flex-end;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(0, 0, 0, .02);
+}
+.md-table-export {
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--subtle);
+  background: var(--surface-raised);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.md-table-export:hover { border-color: var(--line-strong); color: var(--text); background: var(--surface-hover); }
+.md-table-scroll { overflow-x: auto; }
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+}
+.md-table .md-table-cell {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: break-word;
+}
+.md-table th.md-table-cell {
+  color: var(--text);
+  background: var(--surface-hover);
+  font-weight: 720;
+  white-space: nowrap;
+}
+.md-table tbody tr:last-child .md-table-cell { border-bottom: 0; }
+.md-table .md-table-cell--right { text-align: right; }
+.md-table .md-table-cell--center { text-align: center; }
+.md-table .md-inline { padding: 1px 4px; border-radius: 4px; background: var(--surface-hover); font-family: var(--font-mono); font-size: 11px; }
 @keyframes pending-dot {
   0%, 80%, 100% { opacity: .28; transform: translateY(0); }
   40% { opacity: 1; transform: translateY(-2px); }
@@ -1577,10 +1635,8 @@ body.empty-conversation .composer-wrap { padding-bottom: 18px; }
 .log-step-label { padding-top: 2px; color: var(--muted); font-size: 10px; font-weight: 720; letter-spacing: .08em; }
 .log-step-body { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 12px; line-height: 1.55; }
 .log-fact { color: var(--subtle); overflow-wrap: anywhere; }
-.log-fact i { margin-right: 6px; color: var(--muted); font-style: normal; font-size: 10px; font-weight: 700; letter-spacing: .06em; }
 .log-fact--muted { color: var(--muted); }
-.log-fact--warn { color: var(--warning); }
-.log-fact code, .log-tool code, .log-run code {
+.log-run code {
   padding: 1px 5px;
   border-radius: 5px;
   color: var(--accent-strong);
@@ -1588,13 +1644,17 @@ body.empty-conversation .composer-wrap { padding-bottom: 18px; }
   font-family: var(--font-mono);
   font-size: 10.5px;
 }
+/* The grounds for a result, kept to one line: how much the turn consulted and
+ * where the record is. The model, the prompt and every call's input are in the
+ * audit, not here.
+ * 结果所依据的东西压缩成一行：本回合查了多少、记录在哪里。模型、提示词与每次调用的输入
+ * 在审计页，不在这里。 */
+.log-basis { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 8px; color: var(--subtle); font-size: 11px; line-height: 1.5; }
+.log-basis b { color: var(--subtle); font-size: 9.5px; font-weight: 720; letter-spacing: .12em; }
+.log-basis-open { display: inline-flex; align-items: center; min-height: 24px; margin-left: -5px; padding: 0 5px; border: 0; border-radius: 4px; color: var(--accent); background: transparent; font: inherit; font-size: 11px; font-weight: 650; cursor: pointer; }
+.log-basis-open:hover { text-decoration: underline; text-underline-offset: 2px; }
+.log-basis-open:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, white); outline-offset: 2px; border-radius: 4px; }
 .log-detail summary { width: max-content; color: var(--accent); font-size: 11px; font-weight: 650; cursor: pointer; }
-.log-detail p { margin: 5px 0 0; padding: 8px 10px; border-radius: 8px; color: var(--subtle); background: var(--surface); font-size: 11px; overflow-wrap: anywhere; white-space: pre-wrap; }
-.log-tools { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.log-tool { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; min-width: 0; }
-.log-tool em { color: var(--muted); font-size: 10px; font-style: normal; font-variant-numeric: tabular-nums; }
-.log-tool-error { padding: 1px 6px; border-radius: 999px; color: var(--danger); background: var(--danger-soft); font-size: 10px; font-weight: 680; }
-.log-tool-input { flex: 1 1 100%; overflow: hidden; color: var(--muted); font-family: var(--font-mono); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .log-runs { display: flex; flex-direction: column; gap: 5px; }
 .log-runs > b { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .06em; }
 .log-run {
@@ -1809,7 +1869,8 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
 }
 .log-step-label { padding-top: 1px; color: var(--subtle); font-size: 10px; font-weight: 720; letter-spacing: .14em; }
 .log-step-body { gap: 6px; font-size: 12.5px; line-height: 1.6; }
-.log-fact i { margin-right: 5px; color: var(--subtle); font-size: 9.5px; font-weight: 720; letter-spacing: .08em; }
+.log-basis { margin-top: 3px; font-size: 10.5px; }
+.log-basis b { font-size: 9px; }
 .log-reply { font-size: 13.5px; line-height: 1.68; }
 .log-error { padding: 10px 12px; border: 0; border-left: 3px solid #d19a92; border-radius: 6px; background: #fdf5f3; }
 
@@ -1870,9 +1931,11 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
 .log-entry--work .log-entry-head small { margin-left: auto; color: var(--subtle); }
 .log-entry--work .log-reply { margin-top: 3px; padding: 0; color: var(--subtle); font-size: 12.5px; line-height: 1.55; }
 
-/* Dispatched runs hang on a rail under 派发: hairline rows, not buttons that
- * look like sibling cards. The whole row stays the click target.
- * 派发的 Run 挂在"派发"下的竖线上：细线行，而不是看起来像同级卡片的按钮。整行可点击。 */
+/* Dispatched runs are the turn's product, not its process: hairline rows on a
+ * rail under 结果, not buttons that look like sibling cards. The whole row
+ * stays the click target.
+ * 派发的 Run 是回合的产物，而不是过程："结果"下竖线上的细线行，而不是看起来像同级卡片
+ * 的按钮。整行可点击。 */
 .log-runs {
   gap: 0;
   margin-top: 2px;

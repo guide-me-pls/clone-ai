@@ -62,6 +62,13 @@ export function describeFailureForOwner(
       permissionBlocked: false,
     };
   }
+  if (/repeated the same tool call|made no progress|no progress/i.test(text)) {
+    return {
+      summary: "这一轮反复调用同一个工具、得到相同结果，已停止以免空转。",
+      guidance: "换一种做法，或直接说明下一步要查什么；这次尝试已记录在下方轨迹中。",
+      permissionBlocked: false,
+    };
+  }
   if (/attempt budget|retry budget|exceeded/i.test(text)) {
     return {
       summary: "这个任务已经用完当前的重试预算。",

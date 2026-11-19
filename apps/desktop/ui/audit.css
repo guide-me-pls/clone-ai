@@ -192,6 +192,11 @@ body.empty-conversation .welcome { padding-bottom: 0; }
 .au-assembly-runs { list-style: none; margin: 0; padding: 0 11px 10px; display: grid; gap: 4px; font-size: 12px; }
 .au-assembly-runs li { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
 .au-assembly-runs small { color: var(--muted, #8791a1); }
+.au-assembly-compactions { list-style: none; margin: 0; padding: 0 11px 10px; display: grid; gap: 7px; font-size: 12px; }
+.au-assembly-compactions li { color: var(--subtle, #5c6675); overflow-wrap: anywhere; }
+.au-assembly-compactions b { margin-left: 6px; color: var(--text, #20242c); }
+.au-assembly-compactions small { margin-left: 6px; color: var(--muted, #8791a1); }
+.au-assembly-compactions p { margin: 4px 0 0; padding: 7px 9px; border-radius: 6px; color: var(--subtle, #5c6675); background: var(--surface, #fff); white-space: pre-wrap; }
 .au-scopes { color: var(--muted, #8791a1); overflow-wrap: anywhere; }
 .au-assembly-searches { list-style: none; margin: 0; padding: 0 11px 10px; display: grid; gap: 4px; font-size: 12px; }
 .au-assembly-searches li { color: var(--subtle, #5c6675); }

@@ -1,0 +1,65 @@
+{
+  "date" : "2026-11-19T06:21:37Z",
+  "kind" : "attachment-panel-benchmark",
+  "machine" : {
+    "cores" : 18,
+    "memoryBytes" : 25769803776,
+    "os" : "Version 27.0.1 (Build 26A434)",
+    "platform" : "macOS"
+  },
+  "measurements" : [
+    {
+      "buildMs" : 659,
+      "label" : "first-sheet-cold",
+      "mode" : "sheet",
+      "visibleMs" : 984
+    },
+    {
+      "buildMs" : 112,
+      "label" : "construction-warm",
+      "mode" : "none"
+    },
+    {
+      "buildMs" : 100,
+      "label" : "sheet-after-construction-warm",
+      "mode" : "sheet",
+      "visibleMs" : 389
+    },
+    {
+      "label" : "show-warm",
+      "mode" : "sheet",
+      "visibleMs" : 365
+    },
+    {
+      "buildMs" : 91,
+      "label" : "sheet-after-show-warm",
+      "mode" : "sheet",
+      "visibleMs" : 370
+    },
+    {
+      "buildMs" : 80,
+      "label" : "begin-after-show-warm",
+      "mode" : "begin",
+      "visibleMs" : 106
+    }
+  ],
+  "notes" : [
+    "buildMs is the synchronous NSOpenPanel construction; visibleMs includes presenting the panel and its file view.",
+    "The first panel in a process pays a one-time cold start; later panels are warm.",
+    "The harness window is offscreen, so the panels are not user-visible; absolute times may differ from the packaged app."
+  ],
+  "parameters" : {
+    "allowedContentTypes" : [
+      "public.image",
+      "public.movie",
+      "public.text",
+      "public.json",
+      "public.comma-separated-values-text",
+      "com.adobe.pdf",
+      "org.openxmlformats.wordprocessingml.document",
+      "com.microsoft.word.doc"
+    ],
+    "waitLimitMs" : 8000,
+    "window" : "offscreen titled 900x600"
+  }
+}

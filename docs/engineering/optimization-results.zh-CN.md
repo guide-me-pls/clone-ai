@@ -11,6 +11,35 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-19 —— 重复的工具调用在本机停下，运行中的 Run 不被轮询
+
+- **主张：** 共享循环现在在第三次连续相同调用时提示，在第五次以 `no_progress` 停止；它用工具名、
+  规范化参数与结果文本标识一次调用，因此结果变化的调用仍算进展。主 Agent 被告知
+  `propose_work_plan` 提出的 Run 会自行推进、`get_run_status` 只是快照且不得轮询，运行中的
+  Run 状态文本也这样写。以此停下的 Worker 记为 `no_progress` 而不是 `completed`，所有者会看到
+  中文摘要与下一步。
+- **证据：** `test/agent-loop.test.ts` 变更前 **23/26**（失败三条为无进展停止、提示、JSON 键
+  重排）→ 变更后 **26/26**；`test/main-agent.test.ts` **16/16**；`npm test` **906/906**；
+  `npm run typecheck` 退出 0；`npm run gate` **PASS**，baseline 不变。真实失败在所有者
+  Journal 中：回合 `fa63e0f3…` 对 Run `fa36a720…` 调用八次 `get_run_status`，得到相同的
+  `running` 投影，外部网关的停止被存成了一条完成的回复。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--重复的工具调用在本机停下排队中的-run-不再被轮询)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--重复的工具调用在本机停下排队中的-run-不再被轮询)。
+
+## 2026-11-19 —— 对话回合只显示结果与依据，不显示过程
+
+- **主张：** 对话的阅读栏现在只承载请求、结果、派生的 Run 与一行"依据"。模型、提示词快照、
+  工具表与每次工具调用的输入不再渲染在那里；"查看审计"控件以本请求为搜索词落在"主 Agent
+  回合"。
+- **证据：** `test/ui-structure.test.ts` 从断言对话标记里有"上下文 / 派发 / 模型字符串 /
+  `charter v3` / `dispatch_task`"改为断言它们不存在，且"结果 / 产物 / 依据 / 审计入口"存在
+  （**22/22**）；`npm test` **901/901**；`npm run typecheck` 退出 0；`npm run gate`
+  **PASS**，baseline 不变。用真实标记与 CSS 做静态渲染：四次调用的回合显示为回答加
+  `依据 工具调用 4 次 查看审计 ›`；派发任务的回合显示 `产物 1` 与其 Run 行。可用性收益为
+  假设；没有测量所有者会话。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--对话只显示结果与依据过程移入审计页)；
+  [执行链路](optimizations.zh-CN.md#2026-11-19--对话回合只显示结果与依据过程移入审计页)。
+
 ## 2026-11-19 —— 直接作答留在侧栏，今天的工作来自学到的文件夹
 
 - **主张：** 主 Agent 没有派发任务就作答的请求，现在是侧栏里的一条"对话"行；整理今天的工作信息
@@ -21,12 +50,28 @@
   `test/recent-changes.test.ts` **8/8**；`test/ui-structure.test.ts` **21/21**；线上工具在
   所有者机器上报告 `/Users/qihoo/work` 下今天 **9 个文件** 变化、**5 个仓库** 及其状态
   （Spotlight **0.13 秒**，裁剪 `find` **5.2 秒**）；一次使用 `deepseek-v4.1-flash` 的
-  真实预览回合先调用该工具（**573 毫秒**），并给出了按项目组织的摘要；审计回合卡现在有
-  右侧请求与左侧回答，丢失的 `.au-turn*` 层已恢复。
+  真实预览回合先调用该工具（**573 毫秒**），并给出了按项目组织的摘要；桌面重启后，同一
+  工具在真实 home 的线上回合中先被调用（**454 毫秒**，未派发），侧栏显示 **10 行**、其中
+  一条"对话"行；审计回合卡现在有右侧请求与左侧回答，丢失的 `.au-turn*` 层已恢复。
 - **位置：** [取舍：请求仍是一行](../architecture/trade-offs.zh-CN.md#2026-11-19--没有派发任务的请求仍是侧栏的一行)、
   [取舍：回合是一次交流](../architecture/trade-offs.zh-CN.md#2026-11-19--回合是一次交流所有者在右分身在左)、
   [取舍：文件夹是学到的](../architecture/trade-offs.zh-CN.md#2026-11-19--文件夹是学到的不是配置的今天的修改来自本机)；
   [执行链路](optimizations.zh-CN.md#2026-11-19--新请求留在侧栏回合读成交流今天的工作来自学到的文件夹)。
+
+## 2026-11-19 —— 附件选择器跳过 sheet 动画
+
+- **主张：** 原生附件选择器改用应用级模态 `NSOpenPanel.begin`，不再用窗口 sheet；页面就绪
+  1.5 秒后预热一次冷构造。每次选择的 sheet 约 270ms 动画消失，第一次点击不再支付约
+  300–660ms 的冷构造。
+- **证据：** `benchmark/attachment-panel.swift` 在 M5 Pro 上用外壳的内容类型测得：第一次冷
+  sheet `build=659ms, visible=984ms`；构造预热 `112ms`；热 sheet
+  `build=100ms, visible=389ms`；热 `begin` `build=80ms, visible=106ms`。结果文件：
+  [`benchmark/results/attachment-panel-2026-11-19T06-21-31Z.json`](../../benchmark/results/attachment-panel-2026-11-19T06-21-31Z.json)。
+  `test/desktop-shell.test.ts` 钉住 `panel.begin` 与预热函数；全量 **906/906**（本次运行时），
+  `npm run typecheck` 与 `npm run gate` 通过。打包 App 没有为点击到面板的绝对值加计时，但在
+  2026-11-19 重建并重启后，所有者反馈附件交互"现在很快了"。
+- **记录位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--附件面板不再播放-sheet-动画)、
+  [执行链路](optimizations.zh-CN.md#2026-11-19--附件面板约-110ms-出现不再播放-sheet-动画)。
 
 ## 2026-11-19 —— 原生窗口是唯一的界面；浏览器预览入口已移除
 

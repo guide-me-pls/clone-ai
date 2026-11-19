@@ -26,6 +26,112 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-19 —— Agent 设置不再打印回环地址与重复的原始模型 id
+
+- **目标 / 假设：** 所有者两张截图把 Magpie 回环路径（`http://127.0.0.1:3425/v1`）和显示
+  `360/deepseek/deepseek-v4.1-flash` 的"当前模型"卡标记为没有用的展示。两者都是诊断信息，
+  不是选择；正下方的模型下拉已经显示友好名称。
+- **取舍：** [Agent 设置只显示连接，不显示回环路径或原始模型 id](../architecture/trade-offs.zh-CN.md#2026-11-19--agent-设置只显示连接不显示回环路径或原始模型-id)。
+- **变更：** `apps/desktop/ui/app.js` 的 `renderAgentPage`：从 Magpie 卡中移除
+  `<code>${gateway.endpoint}/v1</code>` 行，并去掉第三张"当前模型"统计卡；保留连接状态、
+  识别说明、模型下拉与使用/刷新/清除动作。服务端与配置不变。
+- **Eval：** `node --experimental-strip-types --test test/ui-locale.test.ts` **4/4**。新增
+  断言要求 `app.js` 中不存在 `127.0.0.1:3425/v1`、`gateway?.endpoint` 与
+  `label: "当前模型"`，并保留模型下拉（`id: "gateway-model"`）与 `data-gateway-apply`。
+  在变更前的源码上，三条"不存在"断言会失败，因为 URL 与卡片是直接渲染的。
+- **Benchmark run：** 无——确定性的界面字符串契约；不涉及 provider、模型、数据集、种子、
+  评分参数或结果文件。
+- **执行链路：** 读取 `renderAgentPage`，先写双语取舍，对 `app.js` 做两处定点修改，在
+  `test/ui-locale.test.ts` 增加断言；由于其他会话正在并发编辑 `app.js`，修改后用 `grep`
+  复核。`test/ui-structure.test.ts` 有一个与本变更无关的失败（另一个会话的
+  `showTurns(query)` 与进行中的 `showTurns(turnId, conversationId)`），未触碰。
+  修改后重跑 `npm run typecheck` 与 `npm run gate`。
+- **优点：** 设置页现在显示状态与选择，而不是回环地址与原始标识；少一个会过期的位置。
+- **代价 / 下次：** 界面上不再能看到端点；非标准端点需要查配置文件或日志。并发会话会让
+  `app.js` 持续处于热状态，定点修改后立刻复核是安全的做法。
+- **推翻条件：** 见取舍条目；如果必须从设置页诊断端点，增加折叠的"连接详情"。
+
+### 2026-11-19 —— 重复的工具调用在本机停下，排队中的 Run 不再被轮询
+
+- **目标 / 假设：** 所有者的截图显示一个"完成"的回合，回复是 Provider 网关的"发给模型之前已被
+  停止"提示；上方是三个派生的 Run（两个失败、一个运行中）与八次相同的 `get_run_status` 调用。
+  假设是：主 Agent 把排队中的 Run 当成需要轮询等待的东西，而运行时没有本机的"没有进展"守卫，
+  所以只有外部网关能拦住它——而那次停止被记成了一条完成的回答。在共享循环里比较每次调用与
+  它的结果，并告诉 Agent 排队中的 Run 会自行推进，应当更早、且不依赖 Provider 地结束重复，
+  并如实记为失败。
+- **取舍：** [重复的工具调用在本机停下](../architecture/trade-offs.zh-CN.md#2026-11-19--重复的工具调用在本机停下排队中的-run-不再被轮询)。
+- **变更：** `src/agent/loop.ts` 新增批次指纹（工具名、规范化参数、结果文本）、
+  `REPEAT_WARN_AT = 3`、`REPEAT_STOP_AT = 5`、`no_progress` 终止原因与事件，以及提示时的
+  system 消息。`src/main-agent/prompt.ts` 增加"`propose_work_plan` 提出的 Run 会自行推进……
+  `get_run_status` 是快照而不是等待"，charter 升到 6。
+  `src/main-agent/tools/kernel-tools.ts` 更新工具描述，并在运行中的 Run 状态末尾追加
+  "仅快照——这个 Run 会自行推进"。`src/workers/native-agent-worker.ts` 把新原因记为
+  `no_progress` 而不是 `completed`；`src/core/failure-display.ts` 给所有者中文摘要与下一步。
+- **Eval：** `node --experimental-strip-types --test test/agent-loop.test.ts` **变更前
+  23/26**（失败三条：无进展停止、提示、JSON 键重排）→ **26/26**；`test/main-agent.test.ts`
+  **16/16**（`get_run_status` 用例断言快照行）；`npm test` **906/906**；`npm run typecheck`
+  退出 0；`npm run gate` **PASS**，baseline 不变。变更前的运行用
+  `git show HEAD:src/agent/loop.ts` 替换 `src/agent/loop.ts`，随后恢复新文件。
+- **Benchmark run：** 无——确定性循环契约；不涉及 Provider、模型、数据集、切分、种子或评分参数。
+- **执行链路：** 约 12 分钟，一次内联作业。读取运行中应用的 `~/.clone/main-agent-turns.jsonl`、
+  `~/.clone/audit/invocations.jsonl`、Journal（`journal_events`、`run_claims`）与
+  `companion.log`；定位回合 `fa63e0f3…` 对 Run `fa36a720…` 的八次相同调用
+  （06:13:59–06:14:21Z），以及被记成 `completed` 的网关回复；阅读 `runAgentLoop`、
+  `run-query.ts`、`dispatch-task.ts`、charter 与 `runStatusInfo`；写取舍条目（中英）、实现
+  守卫、提示与工具改动、新增六个循环测试与快照断言；跑目标测试、`loop.ts` 的前后替换、全量
+  测试、typecheck 与 gate。首次运行出现一个失败：既有的"没有轮次上限"测试用十二次相同的
+  no-op 调用，新守卫正确地停住了它；现在该测试让每次调用的参数与结果变化，因为它验证的是没有
+  轮次上限，而不是重复。除 shell 外没有重试或外部工具。
+- **优点：** 诊断建立在所有者自己的 Journal 上（精确的回合与 Run id），而不只是截图；守卫在
+  共享循环里，Worker 自动继承；新测试在旧代码上按正确的理由失败；"没有轮次上限"的契约因为
+  既有测试现在有进展而保留；提示与工具描述处理的是行为原因，不只是症状。
+- **缺点 / 下次：** 守卫比较结果文本，因此对慢速外部任务的合法轮询若连续五次状态文本不变，
+  会被截停；阈值是常量，不是 benchmark 测量出来的。截图里两个失败的 `dispatch_task` 是另一个
+  缺陷：只读目标被规划成 `reversible_write`，被 files 策略拒绝；这个 Planner 问题仍然开放。
+  卡住的 Run 的领取也已观察到过期（`lease_until` 06:25:09，未续租），但没有深入排查。下次：
+  复现只读目标经 `dispatch_task` 的规划结果，决定该改 Planner 提示还是策略。
+- **推翻条件：** 如果某个 benchmark 或所有者的回合并未取得进展却被判为 `no_progress`，提高
+  阈值、把守卫收窄到只读工具，或改为对"进展字段"取指纹；如果 Provider 改写工具结果、使相同
+  调用不再比较相等，就对截断前的结果取指纹。
+
+### 2026-11-19 —— 对话回合只显示结果与依据，过程移入审计页
+
+- **目标 / 假设：** 所有者的截图在请求与回复之间显示"上下文"（模型、系统提示、工具表）与
+  "派发"（四次调用的 JSON 输入与耗时），并要求对话只保留产物与结论——且有依据——过程放在
+  审计页。假设是：对话在重复审计回合卡片，因此去掉这两块、只留一行可计数的"依据"与一个带
+  筛选的审计入口，就能让阅读栏承载回答而不失去可核查性。
+- **取舍：** [对话显示结果与依据](../architecture/trade-offs.zh-CN.md#2026-11-19--对话只显示结果与依据过程移入审计页)。
+- **变更：** `apps/desktop/ui/app.js` 用 `logProductMarkup`（派生的 Run 作为"产物"行）与
+  `logBasisMarkup`（工具调用次数、失败次数、派生任务数，以及携带请求的"查看审计"控件）替换
+  `logContextMarkup` / `logDispatchMarkup`；回合正文只渲染"结果"。对话的点击处理器打开
+  设置 → 审计与轨迹，并调用新的 `window.CloneAudit.showTurns(request)`，落在"主 Agent 回合"
+  并以本请求作为服务端搜索词。`components.css` 删除不再使用的上下文/工具表/工具行样式，新增
+  单行依据样式。`audit.js`/`audit.css` 增加"上下文压缩"块，使对话过去显示的压缩摘要仍能在
+  新家读到。`test/ui-structure.test.ts` 翻转对话断言，固定审计落点，并渲染 `assemblyBlock`
+  证明压缩摘要仍在。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts` **22/22**。
+  变更前同一测试断言对话标记里有"上下文 / 派发 / 模型字符串 / `charter v3` / `dispatch_task`"，
+  因此在新标记上会失败。`npm test` **901/901**；`npm run typecheck` 退出 0；`npm run gate`
+  **PASS**，baseline 不变。用真实标记与 CSS 做静态渲染（1000×900）：四次调用的回合显示为
+  回答加 `依据 工具调用 4 次 查看审计 ›`；派发任务的回合显示 `产物 1` 与其 Run 行。可用性收益
+  本身标为**假设**：没有测量所有者会话，只有确定性契约与一张渲染截图。
+- **Benchmark run：** 无——确定性 UI 契约与接线；不涉及 Provider、模型、数据集、切分、种子或
+  评分参数。
+- **执行链路：** 一次内联作业：用 `rg`/读取回合日志、审计回合视图、它的 `/api/audit/turns`
+  投影与取舍历史；然后写取舍条目（双语）、改渲染、接审计落点、清理 CSS、重写测试。作业中修掉
+  两个测试失败：过宽的 `doesNotMatch(/上下文/)` 命中了新 aria-label 里的词（改为只匹配步骤
+  标签），以及失败回合的依据句缺少旧断言期望的句号。随后目标测试、全量测试、typecheck 与
+  gate 通过。一个三视角的对抗审查工作流（正确性、UX/可访问性、测试/文档）正在检查
+  diff；其结论在返回后补记到这里。没有 Provider 调用与 benchmark 成本。
+- **优点：** 对话里只剩回答与一行紧凑的依据；审计页仍是过程唯一的可搜索副本，两处视图不再
+  漂移。运行中的实时卡片与落定回合现在共用同一个"结果"章节。
+- **缺点 / 下次：** "依据"里的计数本身不是论据——回答仍须写明查了什么——且审计落点按请求
+  文本搜索，请求相同的两个回合会共享结果集。密度尚未在运行中的 App 里与所有者确认。下次在
+  改测试的同一遍里就固定 aria-label 的措辞，让断言从一开始就有明确范围。
+- **推翻条件：** 如果所有者反馈"理解一个普通回答必须打开审计"，或带筛选的审计没有落在对应
+  回合，就在结果下方恢复一个折叠的"过程"披露——不要恢复两个完整步骤——或给审计加上按回合的
+  锚点。
+
 ### 2026-11-19 —— 新请求留在侧栏，回合读成交流，今天的工作来自学到的文件夹
 
 - **目标 / 假设：** 所有者从一张截图报告了三个问题：(a) 整理今天的工作信息 找不到
@@ -47,7 +153,9 @@
   **8/8**（模块与用例此前不存在；线上工具现在返回 `~/work` 今天变化的 9 个文件与 5 个仓库，
   旧路径回答"没有素材"）。一次真实的预览回合使用 `deepseek-v4.1-flash`，先调用
   `recent_file_changes`（**573 毫秒**），再调用 `get_situation`，并据结果写出了按项目组织的
-  摘要；随后的 `dispatch_task` 失败（外部执行 Agent 已关闭），但不再挡住回答。`test/companion-control-plane.test.ts` **25/25**：旧断言期望
+  摘要；随后的 `dispatch_task` 失败（外部执行 Agent 已关闭），但不再挡住回答。桌面重启后，
+  线上真实 home 的一次回合先调用 `recent_file_changes`（**454 毫秒**），据此作答且没有派发；
+  侧栏显示 **10 行**，其中恰好一条"对话"行（旧请求），预览已换成新的整理结果。`test/companion-control-plane.test.ts` **25/25**：旧断言期望
   **0** 条对话行，现在期望 `conversation-a` 与 `conversation-b` 两条。
   `test/ui-structure.test.ts` **21/21**：旧的"不是聊天气泡"断言被右侧气泡 / 左侧回答与审计
   两侧断言替换。`npm test` 首次全量 **900 个测试、899 通过、1 失败**：
@@ -71,6 +179,61 @@
   依赖 Spotlight 获得速度，在未建索引的巨大目录树上会变慢。文件夹记忆还没有"忘记"操作。
 - **推翻条件：** 见三条取舍条目；共同的推翻条件是"侧栏太吵时把对话与任务收进可折叠行；
   学到的文件夹太吵时增加忘记操作并要求点名两次"。
+
+### 2026-11-19 —— 附件面板约 110ms 出现，不再播放 sheet 动画
+
+- **目标 / 假设：** 客户端附件优化落地后，所有者的"点击上传很慢"仍没有归因。分别测量打包
+  WebView 的 JS 路径、3 秒 tick 与原生选择器；原生 `NSOpenPanel` 是最大的未测量嫌疑。如果
+  sheet 动画或第一次冷构造占主导，就在不改变选中文件与 WebView 契约的前提下移除这两项成本。
+- **取舍：** [附件面板不再播放 sheet 动画](../architecture/trade-offs.zh-CN.md#2026-11-19--附件面板不再播放-sheet-动画)。
+- **变更：** `apps/desktop/macos/main.swift`——附件 `WKUIDelegate` 改用
+  `NSOpenPanel.begin`，不再用 `beginSheetModal(for:)`；`warmAttachmentPanel()` 在页面报告
+  就绪 1.5 秒后构造一次同内容类型的丢弃面板（真实选择器已打开时跳过）。
+  `test/desktop-shell.test.ts` 钉住应用级模态调用、预热函数与预热标记。
+  `benchmark/attachment-panel.swift` 是新的可重跑原生 benchmark。`chooseDirectory` 流程
+  保留 sheet；文件类型、拖放与返回的 URL 不变。
+- **Eval：** `swiftc -O -target arm64-apple-macos13.5
+  benchmark/attachment-panel.swift -framework AppKit
+  -framework UniformTypeIdentifiers -o /tmp/attachment-panel &&
+  /tmp/attachment-panel > benchmark/results/attachment-panel-<timestamp>.json`。
+  结果 `benchmark/results/attachment-panel-2026-11-19T06-21-31Z.json`：新进程第一个面板
+  `build=659ms, visible=984ms`（sheet）；构造预热 `112ms`；预热构造后的 sheet
+  `build=100ms, visible=389ms`；隐藏显示/取消后的 sheet `build=91ms, visible=370ms`；
+  预热后的 `begin` `build=80ms, visible=106ms`。因此新呈现每次选择都去掉约 270ms 的
+  sheet 动画，预热构造去掉第一次约 300–660ms 的冷构造。`test/desktop-shell.test.ts`
+  通过；全量 **906/906**（本次运行时），`npm run typecheck` 与 `npm run gate` 通过且基线未变。本次之后重新构建并重启了打包后的 App；
+  点击到面板的绝对值没有加计时，但所有者反馈附件交互"现在很快了"。测试使用同一个 AppKit
+  面板与内容类型。
+- **Benchmark run：** 先
+  `swiftc -O -target arm64-apple-macos13.5 benchmark/attachment-panel.swift
+  -framework AppKit -framework UniformTypeIdentifiers -o /tmp/attachment-panel`，再
+  `/tmp/attachment-panel > benchmark/results/attachment-panel-2026-11-19T06-21-31Z.json`；
+  无 Provider/模型；参数：外壳的 `allowedContentTypes`、离屏 900×600 带标题窗口、8 秒
+  可见上限、一次冷 sheet、一次构造预热、一次隐藏显示/取消预热、预热后的 sheet 与
+  `begin`；机器：Apple M5 Pro、18 核、macOS 27.0.0；结果路径如上。
+- **执行链路：** 构造一个最小的 Swift + WKWebView harness，通过回环提供工作区与
+  `4f0149e` 版本的附件代码块，测量生成的 12MP JPEG、5MB PNG、10MB PDF、2MB 文本与真实
+  8MB/30 秒 MP4。WKWebView 结果：新版四张照片附加 233–244ms、240px/0.9KB 标记，旧版
+  129ms 但带 24.4MB data URL 标记与 4032×3024 解码；PDF 2–3ms；视频 1.07s（所有
+  seek/编码变体都在 1.1–1.2s，编码仅 10–19ms）。160px 缩略图 201ms，240px 为 233ms，
+  但为了预览清晰度未采用。随后只读测量线上 companion：第一轮 11 个端点并发 315ms，之后
+  34–37ms；`/api/dashboard` 6.5KB，主对话 9KB、1 个回合；`renderSession` 在 27×4k 回合
+  约 13ms，在 60×20k 约 70ms。因此 3 秒 tick 不是秒级成本。最后隔离 `NSOpenPanel`：
+  第一次冷 sheet 984ms，热 sheet 385–394ms，应用级模态 `begin` 112–133ms，构造预热后
+  下一个面板约 100ms。实现原生变更并验证 Swift typecheck、外壳测试、全量套件、typecheck
+  与 gate。测量 harness 除提交的面板 benchmark 外都在 `/tmp`；WKWebView harness 依赖
+  生成页面与本地视频 fixture，未提交。
+- **优点：** 用一个小的本地原生改动移除最大的测量前选择器延迟；不触碰 WebView 契约、文件
+  类型或附件载荷；benchmark 可重跑，失败模式（面板模式/sheet UX）在取舍里写明。
+- **缺点 / 下次：** 浮动面板是可见的 UX 变化，打包后的点击到面板绝对值仍未测；预热在页面
+  就绪后一次性占用主线程约 300ms，前 1.5 秒内的点击仍支付冷构造（但仍享受 `begin`）。
+  视频抽帧仍约 1.1s，四张 12MP 照片缩略图约 200–240ms，160px 方案未采用。线上 tick 的
+  第一轮 315ms 爆发若所有者报告周期性卡顿，值得单独排查；按当前 9KB 对话，整页重建还不
+  值得改写。下次：重新构建 App，在打包 WebKit 中测量点击→change→面板可见，再决定后续。
+- **推翻条件：** 如果浮动面板显得割裂、妨碍全屏或窗口管理，或比 sheet 更难访问，就恢复
+  `beginSheetModal` 并接受约 270ms 动画。如果延迟预热造成可见的启动卡顿或撞上一次点击，
+  把预热改到附件按钮的 hover/focus，或移除。如果未来的 macOS 去掉 sheet 动画或为 `begin`
+  加上锚定，重新测量并保留更快的呈现方式。
 
 ### 2026-11-19 —— 附件先回应点击
 

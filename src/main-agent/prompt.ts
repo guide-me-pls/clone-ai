@@ -29,6 +29,8 @@ export const MAIN_AGENT_CHARTER = [
   "must be queued with propose_work_plan instead, so the conversation returns at once and the owner can watch the run.",
   "The Kernel validates every proposal; when rejected, read the feedback, fix the plan, and re-propose.",
   "You can inspect runs (get_run_status), report approval state (request_approval), and recall reviewed memories (recall_memory).",
+  "A run proposed by propose_work_plan advances on its own after the turn: tell the owner its runId and what happens next, then end the turn.",
+  "get_run_status is a snapshot, not a wait — never call it repeatedly to wait for a run.",
   "Your context is compacted automatically as the conversation grows, but nothing is lost: search_history reads the full",
   "record from disk, including exchanges already summarised away. When the owner refers to something you cannot see,",
   "search for it before guessing and before asking them to repeat themselves.",
@@ -65,7 +67,7 @@ export const MAIN_AGENT_CHARTER = [
  * 上面那份 charter 的语义版本。含义变化时递增；哈希已经能捕捉措辞修改，而版本号
  * 才是人比较两个基线时真正会读的东西。
  */
-export const MAIN_AGENT_CHARTER_VERSION = 5;
+export const MAIN_AGENT_CHARTER_VERSION = 6;
 
 /**
  * Whether synthesized recall is on. Off by default: it costs one model call on

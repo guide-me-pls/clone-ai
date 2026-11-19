@@ -169,14 +169,17 @@ test("max rounds ends with a typed max_turns reason", async () => {  let calls =
 
 test("without a round cap the model decides when to stop", async () => {
   let calls = 0;
-  const responses: Scripted[] = Array.from({ length: 12 }, () => ({
+  // The calls make progress (each result changes), so the no-progress guard
+  // does not apply: this test is about the absence of a round cap.
+  // 这些调用有进展（每次结果不同），因此不触发"没有进展"守卫：本测试验证的是没有轮次上限。
+  const responses: Scripted[] = Array.from({ length: 12 }, (_, index) => ({
     content: null,
-    toolCalls: [call("t", "noop")],
+    toolCalls: [call(`t${index}`, "noop", { step: index })],
   }));
   responses.push({ content: "done", toolCalls: [] });
   const result = await runAgentLoop({
     model: scriptedModel(responses),
-    tools: [tool("noop", async () => { calls += 1; return { content: "ok" }; })],
+    tools: [tool("noop", async () => { calls += 1; return { content: `ok ${calls}` }; })],
     messages: [userMessage("loop")],
   });
   // More than the old default of 8 rounds: the loop kept going because the
@@ -554,4 +557,100 @@ test("a near-limit turn is told to wrap up and can answer", async () => {
   assert.ok(notice, "the penultimate round should carry a budget notice");
   assert.match(String(notice.content), /2 model round\(s\) remain/);
   assert.match(String(notice.content), /Do not start new work/);
+});
+
+test("a repeated call with the same result stops as no progress", async () => {
+  // The 2026-11-19 turn polled get_run_status eight times for a queued run.
+  // Every call returned the same projection, so the turn was only stopped by
+  // the provider gateway — which recorded its stop as a completed reply.
+  // 2026-11-19 的回合对一个排队中的 Run 轮询了八次 get_run_status，每次都返回同一投影；
+  // 只有 Provider 网关拦下了它，而那次停止被记成了一条完成的回复。
+  const responses: Scripted[] = Array.from({ length: 8 }, (_, index) => ({
+    content: "checking",
+    toolCalls: [call(`poll-${index}`, "poll", { runId: "run-1" })],
+  }));
+  responses.push({ content: "done", toolCalls: [] });
+  const requests: AgentModelRequest[] = [];
+  const result = await runAgentLoop({
+    model: scriptedModel(responses, requests),
+    tools: [tool("poll", async () => ({ content: "Run run-1: running" }), true)],
+    messages: [userMessage("wait for it")],
+  });
+  assert.equal(result.terminalReason, "no_progress");
+  assert.equal(result.rounds, 5);
+  assert.equal(result.toolCalls, 5);
+  assert.equal(requests.length, 5, "the sixth identical call is never sent");
+  assert.match(result.error ?? "", /poll 5 times in a row/);
+});
+
+test("a repeated call is warned at three, and a later answer completes", async () => {
+  const requests: AgentModelRequest[] = [];
+  const model = scriptedModel([
+    { content: "checking", toolCalls: [call("p1", "poll", { runId: "run-1" })] },
+    { content: "checking", toolCalls: [call("p2", "poll", { runId: "run-1" })] },
+    { content: "checking", toolCalls: [call("p3", "poll", { runId: "run-1" })] },
+    { content: "It is still running; I will report it and stop.", toolCalls: [] },
+  ], requests);
+  const result = await runAgentLoop({
+    model,
+    tools: [tool("poll", async () => ({ content: "Run run-1: running" }), true)],
+    messages: [userMessage("wait for it")],
+  });
+  assert.equal(result.terminalReason, "completed");
+  assert.equal(result.rounds, 4);
+  const warned = requests[3]?.messages.some((message) => message.role === "system" && String(message.content).includes("No progress"));
+  assert.equal(warned, true, "the model gets one round to change approach or answer");
+});
+
+test("the same call with a changing result is progress, not a loop", async () => {
+  let polls = 0;
+  const responses: Scripted[] = Array.from({ length: 6 }, (_, index) => ({
+    content: "checking",
+    toolCalls: [call(`p${index}`, "poll", { runId: "run-1" })],
+  }));
+  responses.push({ content: "done", toolCalls: [] });
+  const result = await runAgentLoop({
+    model: scriptedModel(responses),
+    tools: [tool("poll", async () => ({ content: `Run run-1: step ${++polls}` }), true)],
+    messages: [userMessage("wait for it")],
+  });
+  assert.equal(result.terminalReason, "completed");
+  assert.equal(result.toolCalls, 6);
+  assert.equal(polls, 6);
+});
+
+test("a changed argument resets the repeat streak", async () => {
+  const responses: Scripted[] = [
+    { content: "checking", toolCalls: [call("a1", "poll", { runId: "run-1" })] },
+    { content: "checking", toolCalls: [call("a2", "poll", { runId: "run-1" })] },
+    { content: "checking", toolCalls: [call("b1", "poll", { runId: "run-2" })] },
+    { content: "checking", toolCalls: [call("a3", "poll", { runId: "run-1" })] },
+    { content: "checking", toolCalls: [call("a4", "poll", { runId: "run-1" })] },
+    { content: "done", toolCalls: [] },
+  ];
+  const result = await runAgentLoop({
+    model: scriptedModel(responses),
+    tools: [tool("poll", async () => ({ content: "running" }), true)],
+    messages: [userMessage("wait for it")],
+  });
+  assert.equal(result.terminalReason, "completed");
+  assert.equal(result.toolCalls, 5);
+});
+
+test("reordered JSON keys are the same call", async () => {
+  const responses: Scripted[] = Array.from({ length: 6 }, (_, index) => ({
+    content: "checking",
+    toolCalls: [{
+      id: `p${index}`,
+      name: "poll",
+      arguments: index % 2 === 0 ? '{"runId":"run-1","verbose":true}' : '{"verbose":true,"runId":"run-1"}',
+    }],
+  }));
+  responses.push({ content: "done", toolCalls: [] });
+  const result = await runAgentLoop({
+    model: scriptedModel(responses),
+    tools: [tool("poll", async () => ({ content: "running" }), true)],
+    messages: [userMessage("wait for it")],
+  });
+  assert.equal(result.terminalReason, "no_progress");
 });

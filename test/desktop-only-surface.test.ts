@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -105,6 +105,34 @@ test("the desktop export writes outside the data directory", async (t) => {
     body: JSON.stringify({ destination: dataDirectory }),
   });
   assert.equal(inside.status, 400);
+});
+
+test("a rendered table exports as CSV into an owner-chosen folder", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const parent = await mkdtemp(join(tmpdir(), "clone-ai-table-"));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const csv = "位置,状态\nsrc/a.js,已修改\n";
+  const post = (destination: string, content: string) => companionFetch(url, token, "/api/tables/export", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ destination, csv: content }),
+  });
+
+  const response = await post(parent, csv);
+  assert.equal(response.status, 200);
+  const body = await response.json() as { path: string; name: string; bytes: number };
+  assert.ok(body.path.startsWith(parent));
+  assert.match(body.name, /^clone-ai-table-.*\.csv$/);
+  assert.equal(body.bytes, Buffer.byteLength(csv, "utf8"));
+  assert.equal(await readFile(body.path, "utf8"), csv);
+
+  // The write is owner-initiated but still bounded: no empty table, no relative
+  // path, no missing folder, and never the clone data directory.
+  // 写入由所有者发起，但仍有边界：空表、相对路径、不存在的目录与 clone 数据目录都不行。
+  assert.equal((await post(parent, "  ")).status, 400);
+  assert.equal((await post("relative-folder", "a,b\n")).status, 400);
+  assert.equal((await post(join(parent, "missing"), "a,b\n")).status, 400);
+  assert.equal((await post(dataDirectory, "a,b\n")).status, 400);
 });
 
 test("bad cases and improvement are reachable without the CLI", async (t) => {

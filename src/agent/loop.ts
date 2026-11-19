@@ -98,6 +98,19 @@ export interface AgentHooks {
 const PROVIDER_NAME = /^[a-zA-Z0-9_-]{1,64}$/;
 
 /**
+ * A model that keeps making the same call with the same result is not making
+ * progress, even though each round technically adds a request. The loop warns
+ * once at three and stops at five. The external gateway that caught the
+ * 2026-11-19 polling loop used eight; a local guard must fire before a provider
+ * can misreport the stop as a model answer.
+ * 模型反复发出同一个调用、得到同样的结果，即使每一轮都多了一次请求，也没有进展。循环在
+ * 第三次提示一次，在第五次停下。2026-11-19 的轮询循环被外部网关在第八次拦下；本机守卫必须
+ * 更早，才能避免 Provider 把这次停止误报成模型回答。
+ */
+const REPEAT_WARN_AT = 3;
+const REPEAT_STOP_AT = 5;
+
+/**
  * The name a provider will accept, derived from the tool's own name.
  *
  * Tools are named for humans (`Skill(release-notes)`, `docs.search`), but a
@@ -144,7 +157,8 @@ export type AgentTerminalReason =
   | "max_turns"
   | "budget_exhausted"
   | "aborted"
-  | "model_error";
+  | "model_error"
+  | "no_progress";
 
 /** A loop event; callers map these onto their journal or UI. 循环事件；调用方映射到 Journal 或 UI。 */
 export type AgentLoopEvent =
@@ -165,6 +179,8 @@ export type AgentLoopEvent =
     denied?: boolean;
   }
   | { type: "budget_exhausted"; kind: "rounds" | "tool_calls" | "tokens" | "duration"; limit: number }
+  /** The same call returned the same result too many times in a row. 同一调用连续返回同样结果太多次。 */
+  | { type: "no_progress"; tool: string; repeats: number }
   | { type: "turn_completed"; reason: AgentTerminalReason; replyLength: number }
   | { type: "turn_failed"; reason: AgentTerminalReason; error: string };
 
@@ -257,6 +273,11 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   let terminalReason: AgentTerminalReason | undefined;
   let terminalError: string | undefined;
   let budgetNoticeSent = false;
+  // The previous batch's identity, so a repeat is detected without an extra
+  // model call or a scan of the transcript.
+  // 上一批调用的指纹；重复检测不需要额外模型调用或扫描转录。
+  let previousBatchFingerprint: string | undefined;
+  let repeatedBatches = 0;
 
   await emit(options, { type: "turn_started", ...(maxRounds === undefined ? {} : { maxRounds }) });
 
@@ -385,6 +406,38 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     });
     toolCalls += batch.executed;
     messages.push(...batch.messages);
+    if (!batch.budgetHit && batch.executed > 0) {
+      // A batch is identified by what it asked and what came back. Two calls
+      // with the same name and arguments can still make progress when the
+      // result changes (a status moved, a counter advanced); identical results
+      // cannot. The warning gives the model one round to change approach or
+      // answer, and the stop keeps a provider-side guard from being the only
+      // limit.
+      // 一批调用的身份由"问了什么、得到了什么"决定。同名同参数的调用在结果变化时仍然有进展
+      // （状态推进、计数器增加）；结果相同则没有。提示给模型一轮时间改变做法或作答，停止则
+      // 确保 Provider 侧的守卫不是唯一的上限。
+      const fingerprint = batchFingerprint(response.toolCalls, batch.messages);
+      repeatedBatches = fingerprint === previousBatchFingerprint ? repeatedBatches + 1 : 1;
+      previousBatchFingerprint = fingerprint;
+      const toolNames = [...new Set(response.toolCalls.map((call) => call.name))].join(", ");
+      if (repeatedBatches >= REPEAT_STOP_AT) {
+        await emit(options, { type: "no_progress", tool: toolNames, repeats: repeatedBatches });
+        stop(
+          "no_progress",
+          `The agent called ${toolNames} ${repeatedBatches} times in a row with the same arguments and the same result; `
+            + "the turn was stopped because it was making no progress.",
+        );
+        break;
+      }
+      if (repeatedBatches === REPEAT_WARN_AT) {
+        messages.push({
+          role: "system",
+          content: `No progress: this exact call (${toolNames}) returned the same result ${repeatedBatches} times in a row. `
+            + "Calling it again cannot advance the work. Change the arguments or the approach, use a different tool, "
+            + "or answer with what you have now.",
+        });
+      }
+    }
     if (batch.budgetHit) {
       await emit(options, { type: "budget_exhausted", kind: "tool_calls", limit: options.maxToolCalls ?? 0 });
       stop("budget_exhausted", batch.budgetHitMessage ?? "The turn reached its tool-call budget.");
@@ -541,6 +594,46 @@ function applyTotalResultBudget(messages: AgentMessage[], totalChars: number | u
     message.content = truncated.content;
     total -= content.length - truncated.content.length;
   }
+}
+
+/**
+ * Identify one executed tool-call batch by name, canonical arguments and
+ * result text. Canonicalizing the arguments means a provider that reorders
+ * JSON keys does not defeat the comparison, and the result text is what makes
+ * a repeated call "no progress" rather than merely "repeated".
+ * 用名称、规范化参数与结果文本标识一批已执行的工具调用。参数规范化使 Provider 重排 JSON
+ * 键也无法绕过比较；结果文本则把"重复调用"与"没有进展"区分开。
+ */
+function batchFingerprint(calls: AgentToolCall[], results: AgentMessage[]): string {
+  return calls.map((call, index) => {
+    const result = results[index];
+    return [call.name, canonicalArguments(call.arguments), result === undefined ? "" : messageText(result)].join("\u0000");
+  }).join("\u0001");
+}
+
+function canonicalArguments(raw: string): string {
+  const text = raw.trim();
+  if (text.length === 0) return "";
+  try {
+    return stableStringify(JSON.parse(text));
+  } catch {
+    return text;
+  }
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? String(value);
+}
+
+function messageText(message: AgentMessage): string {
+  if (typeof message.content === "string") return message.content;
+  if (message.content === null) return "";
+  return message.content.map((part) => (part.type === "text" ? part.text : `[image ${part.image_url.url.slice(0, 120)}]`)).join("\n");
 }
 
 async function executeOne(input: {

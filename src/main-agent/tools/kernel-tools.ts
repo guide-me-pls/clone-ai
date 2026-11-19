@@ -264,6 +264,11 @@ export async function runStatusInfo(runtime: CloneRuntime, runId: string): Promi
   }
   const subagents = runtime.getSubagentsForRun(runId);
   const completed = subagents.filter((item) => item.status === "completed").length;
+  // A live run advances in the queue, not in this read. Saying so here is where
+  // the model reads it: a bare "running" invites another identical call.
+  // 运行中的 Run 在队列里推进，不在这条读取里。把这句话写在模型会读到的位置：只写
+  // "running" 只会招来下一次一模一样的调用。
+  const live = run.status !== "completed" && run.status !== "failed" && run.status !== "cancelled";
   return [
     `Run ${run.id}: ${run.status}`,
     `Task: ${run.taskId}`,
@@ -271,6 +276,7 @@ export async function runStatusInfo(runtime: CloneRuntime, runId: string): Promi
     ...(run.activeStepId === undefined ? [] : [`Active step: ${run.activeStepId}`]),
     `Subagents: ${completed}/${subagents.length} completed`,
     ...stepProgressLines(runtime, runId),
+    ...(live ? ["Snapshot only — this run advances on its own; calling this again does not change it."] : []),
   ].join("\n");
 }
 
@@ -607,7 +613,10 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
     name: "get_run_status",
     label: "Get Run Status",
     description:
-      "Summarize the Kernel projection of a run: status, plan, active step, subagent completion. Read-only.",
+      "Summarize the Kernel projection of a run: status, plan, active step, subagent completion. Read-only. "
+      + "This is a snapshot of the moment: it does not wait for the run, and calling it again does not advance it. "
+      + "Use it to answer a question about a run that already exists; never poll it in a loop. "
+      + "A run proposed by propose_work_plan continues on its own after the turn ends.",
     parameters: Type.Object({
       runId: Type.String({ description: "Run id returned by propose_work_plan." }),
     }),

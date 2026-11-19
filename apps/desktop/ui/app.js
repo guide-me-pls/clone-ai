@@ -774,7 +774,7 @@ function renderAgentPage() {
     tone: gateway?.running ? "accent" : "warning",
     className: "agent-gateway",
     actions: gatewayBadge,
-    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><code>${escape(gateway?.endpoint ? `${gateway.endpoint}/v1` : "http://127.0.0.1:3425/v1")}</code><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
+    body: `<div class="gateway-layout"><div class="gateway-summary">${ui.providerMark("Magpie", "magpie")}<div class="gateway-summary__copy"><strong>${escape(gateway?.running ? t("gateway-connected") : gateway?.installed ? t("gateway-installed") : t("gateway-unavailable"))}</strong><p class="agent-role-note">${escape(t("gateway-recognition-note"))}</p></div></div>${gatewayControls}</div>`,
   });
   const agentRows = settings.agents.map((agent) => {
     const description = agent.role === "external" ? t("external-unavailable") : agent.description;
@@ -793,7 +793,7 @@ function renderAgentPage() {
       description: "Main Agent 由 Clone AI 自己持有；模型由本机 Magpie Gateway 提供。",
       actions: ui.button({ label: t("gateway-refresh"), iconName: "refresh", variant: "secondary", attributes: { "data-settings-refresh": "" } }),
     })}
-    <div class="c-stat-grid agent-overview">${ui.stat({ label: "Main Agent", value: "内置", detail: "Clone AI 原生工具循环", tone: "success" })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length} ${t("gateway-models-usable")}` : "等待模型端点", tone: gateway?.running && exposedModels.length ? "success" : "warning" })}${ui.stat({ label: "当前模型", value: mainAgentModel || "未选择", detail: gateway?.running ? "通过 Magpie Gateway" : "选择模型后开始对话" })}</div>
+    <div class="c-stat-grid agent-overview">${ui.stat({ label: "Main Agent", value: "内置", detail: "Clone AI 原生工具循环", tone: "success" })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length} ${t("gateway-models-usable")}` : "等待模型端点", tone: gateway?.running && exposedModels.length ? "success" : "warning" })}</div>
     ${gatewayCard}
     <div class="agent-section-head"><div><h3>${t("roles-bindings")}</h3><p>${t("roles-section-lead")}</p></div><div class="c-segmented">${ui.badge(t("workers-enabled"), "success", { dot: true })}</div></div>
     <div id="agent-settings-list" class="c-list agent-role-list">${agentRows}</div>
@@ -1371,6 +1371,40 @@ function revealExport() {
   announce(t("directory-native-only"), true);
 }
 
+/**
+ * Saves one rendered table as CSV, the file Excel opens directly. The desktop
+ * keeps the write on the daemon, after the owner picks a folder; a browser
+ * preview has no native picker, so it falls back to a download.
+ * 把一张已渲染的表格保存为 Excel 可直接打开的 CSV。桌面端在所有者在原生选择器里挑中
+ * 文件夹后，由 daemon 完成写入；浏览器预览没有原生选择器，回退为下载。
+ */
+function exportMarkdownTable(csv) {
+  if (!csv.trim()) { announce("这张表没有可导出的内容。", true); return; }
+  const payload = String.fromCharCode(0xFEFF) + csv;
+  if (!window.CloneNative?.chooseDirectory) {
+    const blob = new Blob([payload], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `clone-ai-table-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    announce("表格已下载为 CSV。");
+    return;
+  }
+  chooseNativeDirectory("table-export", async (destination) => {
+    try {
+      const result = await api("/api/tables/export", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ destination, csv: payload }),
+      });
+      if (window.CloneNative?.revealInFinder) window.CloneNative.revealInFinder(result.path);
+      announce(`表格已导出：${result.name}`);
+    } catch (error) { announce(error.message, true); }
+  });
+}
+
 async function addConnector() {
   chooseNativeDirectory("connector", async (target) => {
     const existing = state.connectors || [];
@@ -1602,6 +1636,104 @@ function welcomeMarkup() {
     </div>
   </div>`;
 }
+/** Inline Markdown inside a table cell: the same escape-first path as a message. 表格单元格内的行内 Markdown：与消息相同的先转义路径。 */
+function mdInline(value) {
+  return escape(value)
+    .replace(/&lt;br\s*\/?&gt;/gi, "<br>")
+    .replace(/`([^`\n]+)`/g, '<code class="md-inline">$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+}
+/**
+ * Splits a GFM table row on unescaped pipes. A leading or trailing pipe is
+ * optional and does not create an empty cell; `\|` is a literal pipe.
+ * 按未转义的竖线切分 GFM 表格行。首尾竖线可选，且不会产生空单元格；`\|` 是字面竖线。
+ */
+function splitTableRow(line) {
+  const cells = [];
+  let current = "";
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === "\\" && line[index + 1] === "|") { current += "|"; index += 1; continue; }
+    if (character === "|") { cells.push(current); current = ""; continue; }
+    current += character;
+  }
+  cells.push(current);
+  if (line.trimStart().startsWith("|")) cells.shift();
+  if (line.trimEnd().endsWith("|") && !line.trimEnd().endsWith("\\|") && cells.length > 0) cells.pop();
+  return cells.map((cell) => cell.trim());
+}
+/** GFM delimiter row → per-column alignment, or undefined when the row is not one. 分隔行 → 每列对齐，或 undefined 表示不是分隔行。 */
+function tableAlignments(line) {
+  if (!line.includes("|")) return undefined;
+  const cells = splitTableRow(line);
+  if (cells.length === 0) return undefined;
+  const alignments = [];
+  for (const cell of cells) {
+    if (!/^:?-+:?$/.test(cell)) return undefined;
+    alignments.push(cell.startsWith(":") && cell.endsWith(":") ? "center" : cell.endsWith(":") ? "right" : cell.startsWith(":") ? "left" : undefined);
+  }
+  return alignments;
+}
+/**
+ * Lifts GFM table blocks out of the source before the inline pass. A table is a
+ * header row, a delimiter row with the same cell count, and body rows up to the
+ * next blank line. The caller restores the placeholders after escaping.
+ * 在行内渲染之前把 GFM 表格块取出：表头行、单元格数相同的分隔行，以及直到下一个空行为止的
+ * 数据行。调用方在转义之后恢复占位符。
+ */
+function extractMarkdownTables(source) {
+  const lines = source.split("\n");
+  const tables = [];
+  const kept = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const header = lines[index] ?? "";
+    const delimiter = lines[index + 1] ?? "";
+    const alignments = header.includes("|") ? tableAlignments(delimiter) : undefined;
+    if (alignments !== undefined) {
+      const headerCells = splitTableRow(header);
+      if (headerCells.length > 0 && headerCells.length === alignments.length) {
+        const rows = [];
+        let cursor = index + 2;
+        while (cursor < lines.length && (lines[cursor] ?? "").trim() !== "" && (lines[cursor] ?? "").includes("|")) {
+          rows.push(splitTableRow(lines[cursor] ?? ""));
+          cursor += 1;
+        }
+        tables.push({ alignments, header: headerCells, rows });
+        kept.push(`\u0000TABLE${tables.length - 1}\u0000`);
+        index = cursor - 1;
+        continue;
+      }
+    }
+    kept.push(lines[index] ?? "");
+  }
+  return { source: kept.join("\n"), tables };
+}
+/** The plain text of a cell for CSV: markup is flattened, line breaks survive. 供 CSV 使用的单元格纯文本：标记压平，换行保留。 */
+function tableCellText(value) {
+  return String(value ?? "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .trim();
+}
+function csvCell(value) {
+  const text = tableCellText(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+function markdownTableMarkup(table) {
+  const alignment = (index) => table.alignments[index] ? ` md-table-cell--${table.alignments[index]}` : "";
+  const head = table.header.map((cell, index) => `<th class="md-table-cell${alignment(index)}">${mdInline(cell)}</th>`).join("");
+  const body = table.rows.map((row) => `<tr>${table.header.map((_, index) => `<td class="md-table-cell${alignment(index)}">${mdInline(row[index] ?? "")}</td>`).join("")}</tr>`).join("");
+  const csv = [table.header, ...table.rows].map((row) => table.header.map((_, index) => csvCell(row[index] ?? "")).join(",")).join("\n");
+  // The CSV rides on the button so the click handler needs no table registry:
+  // escaped into an attribute, it survives every re-render of the message.
+  // Newlines become character references because the message pass turns literal
+  // newlines into <br> after this markup is restored; the DOM decodes them back.
+  // CSV 随按钮保存，点击处理无需表格注册表：转义进属性后，它能在消息的每次重渲染中存活。
+  // 换行变成字符引用，因为在这段标记恢复之后，消息渲染会把字面换行变成 <br>；DOM 会解码回来。
+  const csvAttribute = escape(csv).replace(/\n/g, "&#10;").replace(/\r/g, "&#13;");
+  return `<div class="md-table-wrap"><div class="md-table-tools"><button class="md-table-export" type="button" data-export-table data-export-csv="${csvAttribute}" title="导出 CSV（Excel 可直接打开）" aria-label="导出这张表为 CSV">导出 CSV</button></div><div class="md-table-scroll"><table class="md-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></div>`;
+}
 function richText(value) {
   const blocks = [];
   const source = String(value ?? "").replace(/\r\n?/g, "\n")
@@ -1609,18 +1741,23 @@ function richText(value) {
       const index = blocks.push(`<div class="md-code-wrap"><button class="md-copy" type="button" data-copy-code>复制</button><pre class="md-code"><code>${escape(code.replace(/^\n+|\n+$/g, ""))}</code></pre></div>`) - 1;
       return `\n\u0000BLOCK${index}\u0000\n`;
     });
-  return escape(source)
+  // Tables leave the source before escaping; their generated markup is restored
+  // after the inline pass, so it is not escaped with the message text.
+  // 表格在转义之前离开源文本；生成的标记在行内渲染之后恢复，因此不会随消息正文一起被转义。
+  const extracted = extractMarkdownTables(source);
+  return escape(extracted.source)
     .replace(/`([^`\n]+)`/g, '<code class="md-inline">$1</code>')
     .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
     .replace(/^#{1,4}\s+(.+)$/gm, '<div class="md-heading">$1</div>')
     .replace(/^\s*[-*]\s+(.+)$/gm, '<div class="md-list-line"><span aria-hidden="true">•</span><span>$1</span></div>')
     .replace(/^\s*(\d+)[.)]\s+(.+)$/gm, '<div class="md-list-line md-list-line--ordered"><span>$1.</span><span>$2</span></div>')
+    .replace(/\u0000TABLE(\d+)\u0000/g, (match, index) => markdownTableMarkup(extracted.tables[Number(index)] ?? { alignments: [], header: [], rows: [] }))
     .replace(/\n/g, "<br>")
     // A block element already starts a new line, so a <br> next to it only adds an
     // empty line: list items used to render double-spaced with the marker far from
     // its text. 块级元素本身就会换行，紧邻的 <br> 只会多出一整行——列表项因此被拉开双倍行距，
     // 圆点离正文很远。
-    .replace(/<br>(?=<div class="md-(?:heading|list-line))/g, "")
+    .replace(/<br>(?=<div class="md-(?:heading|list-line|table-wrap))/g, "")
     .replace(/(<\/div>)<br>/g, "$1")
     .replace(/\u0000BLOCK(\d+)\u0000/g, (match, index) => blocks[Number(index)] ?? "");
 }
@@ -1654,20 +1791,21 @@ function messageMarkup(message) {
   return `<article class="message ${clone ? "clone" : "person"}"><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div><div class="message-body">${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${displayedBody}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}${actions}</div>` : `<div class="message-copy">${body}</div>`}</div></article>`;
 }
 /**
- * A conversation's main pane is a dispatch log, not a chat transcript.
+ * A conversation's turn log shows the result and its grounds, not the process.
  *
  * Every new task dispatches its work as Kernel runs, and the sidebar already
- * lists those runs under the conversation. What the chat bubble repeated was a
- * one-line summary; what the owner needs when a turn goes wrong — the context
- * the model was given and the work the turn dispatched — lived only in the
- * audit tab. Each entry below shows those three things in order: context,
- * dispatch, result. The reply is still here, inside its entry.
+ * lists those runs under the conversation. What the owner reads between a
+ * request and its answer is the product: the reply, the runs the turn spawned,
+ * and one line naming how much the turn consulted, with a link into the audit.
+ * The context the model was given and every tool call's input live in
+ * 设置 → 审计与轨迹 → 主 Agent 回合, where they are searchable.
  *
- * 对话的主界面是派发日志，不是聊天记录。
+ * 对话的回合日志显示结果与依据，而不是过程。
  *
- * 每个新任务都把工作派发成 Kernel Run，侧栏已经把这些 Run 列在对话之下。聊天气泡重复的
- * 只是一句话摘要；回合出错时所有者需要的——模型拿到的上下文与本回合派发的工作——只存在于
- * 审计页。下面的每个条目按顺序显示这三件事：上下文、派发、结果。回复仍在，放在条目里。
+ * 每个新任务都把工作派发成 Kernel Run，侧栏已经把这些 Run 列在对话之下。所有者在请求与
+ * 回答之间读到的是产物：回复、本回合派生的 Run，以及一行说明查了多少工具调用并提供审计
+ * 入口。模型拿到的上下文与每次工具调用的输入在 设置 → 审计与轨迹 → 主 Agent 回合，
+ * 那里可以搜索。
  */
 const LOG_STATUS = {
   completed: ["完成", "ok"], failed: ["失败", "bad"], interrupted: ["中断", "warn"], started: ["进行中", "info"], info: ["历史", "mute"],
@@ -1676,55 +1814,60 @@ const LOG_STATUS = {
 };
 function logStatus(status) { const [label, tone] = LOG_STATUS[status] || [status || "未知", "mute"]; return { label, tone }; }
 function logDuration(ms) { return ms === undefined ? "" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`; }
-function logContextMarkup(entry) {
-  const facts = [];
-  const model = [entry.provider, entry.modelId].filter((part) => typeof part === "string" && part.length > 0).join("/");
-  if (model) facts.push(`<span class="log-fact"><i>模型</i>${escape(model)}${entry.effort ? ` · ${escape(entry.effort)}` : ""}</span>`);
-  if (entry.snapshot) {
-    const snapshot = entry.snapshot;
-    facts.push(`<span class="log-fact"><i>系统提示</i>charter v${escape(snapshot.charterVersion)} · 工具 ${snapshot.toolNames.length} 个 · 材料 <code>${escape(String(snapshot.materialHash).slice(0, 10))}</code></span>`);
-    if (snapshot.toolNames.length > 0) facts.push(`<details class="log-detail"><summary>工具表（${snapshot.toolNames.length}）</summary><p>${snapshot.toolNames.map((name) => `<code>${escape(name)}</code>`).join(" ")}</p></details>`);
-  } else if (!entry.journaled) {
-    facts.push(`<span class="log-fact log-fact--muted"><i>上下文</i>这一轮没有 Journal 记录，无法还原提示词材料。</span>`);
-  }
-  if (entry.priorTurns > 0 || entry.priorTurnsOmitted > 0) {
-    const omitted = entry.priorTurnsOmitted > 0 ? `；另有 ${entry.priorTurnsOmitted} 轮更早的对话未进入上下文` : "";
-    facts.push(`<span class="log-fact"><i>历史</i>此前 ${entry.priorTurns} 轮已完成对话${omitted}</span>`);
-  }
-  if (entry.compactions && entry.compactions.length > 0) {
-    // Each compaction records the transcript it collapsed. Summing the counts
-    // across compactions reports a total that never existed; the latest record
-    // is the state of the context now.
-    // 每次压缩记录的是它折叠时的转录。把多次压缩的计数相加会报出一个从未存在过的总数；
-    // 最近一条记录才是当前上下文的状态。
-    const latest = entry.compactions[entry.compactions.length - 1];
-    facts.push(`<span class="log-fact log-fact--warn"><i>压缩</i>${entry.compactions.length} 次 · 最近一次丢弃 ${latest.droppedMessages || 0} 条 / 保留 ${latest.keptMessages || 0} 条${latest.estimatedTokens ? ` · 约 ${Math.round(latest.estimatedTokens)} tokens` : ""}</span>`);
-    for (const compaction of entry.compactions) {
-      if (!compaction.summary) continue;
-      facts.push(`<details class="log-detail"><summary>压缩摘要</summary><p>${escape(compaction.summary)}</p></details>`);
-    }
-  }
-  return facts.length > 0 ? facts.join("") : `<span class="log-fact log-fact--muted">没有记录到上下文材料。</span>`;
-}
-function logDispatchMarkup(entry) {
-  const tools = entry.toolCalls || [];
+function logProductMarkup(entry) {
   const runs = entry.spawnedRuns || [];
-  if (tools.length === 0 && runs.length === 0) {
-    if (entry.status === "started") return `<span class="log-fact log-fact--muted">仍在运行；还没有记录到工具调用或派发。</span>`;
-    if (entry.status === "failed" || entry.status === "interrupted") return `<span class="log-fact log-fact--muted">本轮在调用工具前就结束了。</span>`;
-    return `<span class="log-fact log-fact--muted">${entry.journaled ? "本轮直接回答，没有派发任务，也没有调用工具。" : "没有 Journal 记录，无法还原工具调用与派发。"}</span>`;
-  }
-  const toolRows = tools.map((call) => `<li class="log-tool${call.isError ? " is-error" : ""}"><code>${escape(call.name)}</code>${call.isError ? '<span class="log-tool-error">错误</span>' : ""}${call.durationMs !== undefined ? `<em>${escape(logDuration(call.durationMs))}</em>` : ""}${call.inputSummary ? `<span class="log-tool-input">${escape(String(call.inputSummary).slice(0, 400))}</span>` : ""}</li>`).join("");
-  // A hidden run has no openable session: it stays evidence of the dispatch,
-  // but it is not a button that would land on a 404 and reset the selection.
-  // 隐藏的 Run 没有可打开的会话：它仍是派发的证据，但不做成按钮——那会落到 404 并重置选择。
+  if (runs.length === 0) return "";
+  // A produced run is the turn's product, not its process: it stays beside the
+  // answer as an openable row. The tool calls that asked for it — with their
+  // inputs and durations — live in the audit.
+  // 派生的 Run 是回合的产物，不是过程：它作为可打开的行留在回答旁边。请求它的工具调用
+  // 及其输入、耗时在审计页。
+  // A hidden run has no openable session: it stays evidence of the product, but
+  // it is not a button that would land on a 404 and reset the selection.
+  // 隐藏的 Run 没有可打开的会话：它仍是产物的证据，但不做成按钮——那会落到 404 并重置选择。
   // A child run is a subordinate row, not a card: it sits on a connector under
-  // the 派发 step, carries a status dot, and keeps the openable id as its affordance.
-  // 子 Run 是次级行，而不是卡片：它挂在"派发"步骤下的连接线上，带状态点，并保留可打开的 id。
-  const runRows = runs.map((run) => run.hidden
+  // the product heading, carries a status dot, and keeps the openable id as its
+  // affordance.
+  // 子 Run 是次级行，而不是卡片：它挂在产物标题下的连接线上，带状态点，并保留可打开的 id。
+  const rows = runs.map((run) => run.hidden
     ? `<span class="log-run log-run--hidden" data-run-status="hidden"><span class="log-run-dot" aria-hidden="true"></span><code>${escape(String(run.id).slice(0, 8))}</code><span class="log-run-title">任务已隐藏</span></span>`
     : `<button class="log-run" type="button" data-log-run="${escape(run.id)}"${run.status ? ` data-run-status="${escape(run.status)}"` : ""}><span class="log-run-dot" aria-hidden="true"></span><code>${escape(String(run.id).slice(0, 8))}</code><span class="log-run-title">${escape(plainPreview(run.title) || "任务 Run")}</span>${run.status ? `<em class="log-run-status">${escape(logStatus(run.status).label)}</em>` : ""}<span class="log-run-open" aria-hidden="true">›</span></button>`).join("");
-  return `${tools.length > 0 ? `<ul class="log-tools">${toolRows}</ul>` : ""}${runs.length > 0 ? `<div class="log-runs"><b>派生的任务<span class="log-runs-count">${runs.length}</span></b>${runRows}</div>` : ""}`;
+  return `<div class="log-runs log-products"><b>产物<span class="log-runs-count">${runs.length}</span></b>${rows}</div>`;
+}
+function logBasisMarkup(entry, conversationId) {
+  // The grounds a conclusion stands on, kept to one line: how much this turn
+  // consulted and where its record is. The model, the prompt snapshot and every
+  // call's input stay in the audit.
+  // 结论所依据的东西压缩成一行：本回合查了多少、记录在哪里。模型、提示词快照与每次调用的
+  // 输入留在审计页。
+  const tools = entry.toolCalls || [];
+  const runs = entry.spawnedRuns || [];
+  const failed = tools.filter((call) => call.isError).length;
+  const facts = [];
+  if (tools.length > 0) facts.push(`工具调用 ${tools.length} 次${failed > 0 ? `（${failed} 次失败）` : ""}`);
+  if (runs.length > 0) facts.push(`派生任务 ${runs.length} 个`);
+  if (facts.length === 0) {
+    if (!entry.journaled) facts.push("没有 Journal 记录，过程无法还原。");
+    else if (entry.status === "started") facts.push("仍在运行；还没有工具调用记录。");
+    else if (entry.status === "failed" || entry.status === "interrupted") facts.push("本轮在调用工具前就结束了。");
+    else facts.push("本轮直接回答，没有调用工具或派发任务。");
+  }
+  // The audit is a projection of the journal: without a journal record there is
+  // no page to open, so the control is absent rather than a dead end.
+  // 审计是 Journal 的投影：没有 Journal 记录就没有可打开的页面，因此控件不出现，而不是
+  // 一个失效的死角。
+  // The locator is the turn id, not the request: a request can be 20,000
+  // characters (a GET query of that size is rejected with 431) and the journal
+  // stores it redacted, so the raw text is not a reliable key. The conversation
+  // id keeps a reused turn id from matching another task.
+  // 定位键是回合 id，而不是请求：请求可达 20,000 字（这个长度的 GET query 会被 431 拒绝），
+  // 且 Journal 存的是脱敏后的文本，原文不是可靠的键。带上对话 id，复用的回合 id 就不会
+  // 命中另一个任务。
+  const preview = plainPreview(entry.input || "").slice(0, 24);
+  const audit = entry.journaled
+    ? `<button class="log-basis-open" type="button" data-open-turn-audit="${escape(entry.id)}" data-open-turn-conversation="${escape(conversationId || "")}" aria-label="查看审计：${escape(preview || "本回合")}">查看审计 ›</button>`
+    : "";
+  return `<div class="log-basis"><b>依据</b><span>${escape(facts.join(" · "))}</span>${audit}</div>`;
 }
 function logResultMarkup(entry) {
   if (entry.error) {
@@ -1751,7 +1894,7 @@ function logQueryMarkup(input) {
   // 一旦回复变长就分不清谁在说话。
   return `<article class="turn-query" aria-label="你的请求"><div class="turn-query-bubble"><span class="turn-query-who">你</span><div class="turn-query-text">${richText(text)}</div></div></article>`;
 }
-function logEntryMarkup(entry) {
+function logEntryMarkup(entry, conversationId) {
   const status = logStatus(entry.status);
   const duration = logDuration(entry.durationMs);
   const history = entry.kind === "history";
@@ -1759,11 +1902,12 @@ function logEntryMarkup(entry) {
   // so the head carries only the author, state and time.
   // 回答标明作者。请求已作为气泡在其上方，因此头部只保留作者、状态与时间。
   const head = `<div class="log-entry-head"><span class="log-entry-kicker">${history ? "历史记录" : "clone-ai"}</span><span class="log-badge log-badge--${status.tone}">${escape(status.label)}</span><small>${time(entry.startedAt)}${duration ? ` · ${escape(duration)}` : ""}</small></div>`;
+  // Legacy history entries never entered the journal, so they are honest about
+  // it: the reply is still the product, and there is no process to link to.
+  // 旧历史条目从未进入 Journal，因此如实说明：回复仍是产物，但没有可链接的过程。
   const body = history
-    ? (entry.reply ? `<div class="log-reply">${richText(entry.reply)}</div>` : "")
-    : `<div class="log-step"><span class="log-step-label">上下文</span><div class="log-step-body">${logContextMarkup(entry)}</div></div>
-       <div class="log-step"><span class="log-step-label">派发</span><div class="log-step-body">${logDispatchMarkup(entry)}</div></div>
-       <div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}</div></div>`;
+    ? `<div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}<div class="log-basis"><b>依据</b><span>旧记录没有保存过程。</span></div></div></div>`
+    : `<div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}${logProductMarkup(entry)}${logBasisMarkup(entry, conversationId)}</div></div>`;
   return `${logQueryMarkup(entry.input)}<article class="log-entry" data-log-kind="${escape(entry.kind)}" data-log-status="${escape(entry.status)}">${head}<div class="log-entry-body">${body}</div></article>`;
 }
 function workLogMarkup(message) {
@@ -1778,7 +1922,7 @@ function workLogMarkup(message) {
   return `<article class="log-entry log-entry--work" data-log-kind="work" data-log-status="${escape(rawStatus)}"><div class="log-entry-head"><b class="log-query">任务更新</b><span class="log-badge log-badge--${status.tone}">${escape(status.label)}</span><small>${time(message.occurredAt)}</small></div><div class="log-reply">${richText(message.text)}</div></article>`;
 }
 function turnLogMarkup(session) {
-  const entries = (session.turns || []).map((entry) => ({ at: entry.startedAt, markup: logEntryMarkup(entry) }));
+  const entries = (session.turns || []).map((entry) => ({ at: entry.startedAt, markup: logEntryMarkup(entry, session.id) }));
   for (const message of session.messages || []) {
     if (!String(message.id || "").startsWith("work-")) continue;
     entries.push({ at: message.occurredAt, markup: workLogMarkup(message) });
@@ -2514,7 +2658,7 @@ $("session-list").addEventListener("toggle", (event) => {
   else state.openChildGroups.delete(details.dataset.childGroup);
   localStorage.setItem("clone-ai:child-groups", JSON.stringify([...state.openChildGroups]));
 }, true);
-$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const logRun = event.target.closest("[data-log-run]"); if (logRun) { void selectSession(logRun.dataset.logRun); return; } const agentRun = event.target.closest("[data-open-agent-run]"); if (agentRun) { state.agentFocus = { runId: agentRun.dataset.openAgentRun, agentId: agentRun.dataset.agentId }; void selectSession(agentRun.dataset.openAgentRun); return; } const openConversation = event.target.closest("[data-open-conversation]"); if (openConversation) { void selectSession(openConversation.dataset.openConversation, { scrollToBottom: true }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
+$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const turnAudit = event.target.closest("[data-open-turn-audit]"); if (turnAudit) { openSettings(); selectSettingsSection("audit"); window.CloneAudit?.showTurns?.(turnAudit.dataset.openTurnAudit || ""); return; } const logRun = event.target.closest("[data-log-run]"); if (logRun) { void selectSession(logRun.dataset.logRun); return; } const agentRun = event.target.closest("[data-open-agent-run]"); if (agentRun) { state.agentFocus = { runId: agentRun.dataset.openAgentRun, agentId: agentRun.dataset.agentId }; void selectSession(agentRun.dataset.openAgentRun); return; } const openConversation = event.target.closest("[data-open-conversation]"); if (openConversation) { void selectSession(openConversation.dataset.openConversation, { scrollToBottom: true }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const tableExport = event.target.closest("[data-export-table]"); if (tableExport) { exportMarkdownTable(tableExport.dataset.exportCsv || ""); return; } const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
 document.querySelector(".settings-nav")?.addEventListener("keydown", (event) => {

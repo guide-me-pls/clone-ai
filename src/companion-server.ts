@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -1428,6 +1428,58 @@ async function handleRequest(
       sendJson(response, 200, { destination, manifest, summary: describeExport(manifest, destination), excludes: EXPORT_EXCLUDES });
     } catch (error: unknown) {
       sendJson(response, 500, { error: error instanceof Error ? error.message : "The export failed." });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/tables/export") {
+    // A table the owner keeps: the desktop sends the CSV it already shows, and
+    // the daemon writes it into the folder the owner picked. The write stays
+    // owner-initiated — no agent scope, no approval, no Worker.
+    // 所有者要留下的表格：桌面端把它已经显示的 CSV 发来，daemon 写进所有者挑中的文件夹。
+    // 写入者是所有者而不是 Agent——不需要作用域、批准或 Worker。
+    try {
+      const body = await readJsonBody(request);
+      const raw = typeof body.destination === "string" ? body.destination.trim() : "";
+      const csv = typeof body.csv === "string" ? body.csv : "";
+      if (raw.length === 0) {
+        sendJson(response, 400, { error: "Choose a folder for the table." });
+        return;
+      }
+      if (csv.trim().length === 0) {
+        sendJson(response, 400, { error: "The table has no content to export." });
+        return;
+      }
+      const bytes = Buffer.byteLength(csv, "utf8");
+      if (bytes > MAX_TABLE_CSV_BYTES) {
+        sendJson(response, 413, { error: `The table is too large to export (${bytes} bytes).` });
+        return;
+      }
+      const expanded = expandHome(raw);
+      if (!isAbsolute(expanded)) {
+        sendJson(response, 400, { error: "The table destination must be an absolute path." });
+        return;
+      }
+      const parent = resolve(expanded);
+      const stats = await stat(parent).catch(() => undefined);
+      if (stats === undefined || !stats.isDirectory()) {
+        sendJson(response, 400, { error: "The table destination must be an existing folder." });
+        return;
+      }
+      const dataDirectory = resolve(context.dataDirectory);
+      if (parent === dataDirectory || parent.startsWith(`${dataDirectory}${sep}`) || dataDirectory.startsWith(`${parent}${sep}`)) {
+        sendJson(response, 400, { error: "The table destination must be outside the clone data directory." });
+        return;
+      }
+      const stamp = new Date().toISOString().slice(0, 23).replace(/[-:]/g, "").replace("T", "-").replace(".", "-");
+      const name = `clone-ai-table-${stamp}.csv`;
+      const target = join(parent, name);
+      // "wx" refuses an existing file: a stale export is never overwritten.
+      // "wx" 拒绝已存在的文件：旧导出永远不会被覆盖。
+      await writeFile(target, csv, { encoding: "utf8", flag: "wx" });
+      sendJson(response, 200, { path: target, name, bytes });
+    } catch (error: unknown) {
+      sendJson(response, 500, { error: error instanceof Error ? error.message : "The table export failed." });
     }
     return;
   }
@@ -3930,6 +3982,8 @@ function asRecord(value: unknown): Record<string, unknown> {
  * 图片混合。32 KB 的上限会拒绝每张真实截图；40 MB 仍可能拒绝四个 10 MB 的 PDF。
  */
 const MAX_BODY_CHARACTERS = 60_000_000;
+/** A rendered conversation table is small; this bounds an owner-initiated CSV write. 对话表格很小；这限制所有者发起的 CSV 写入。 */
+const MAX_TABLE_CSV_BYTES = 5_000_000;
 
 class RequestBodyTooLargeError extends Error {
   constructor() {

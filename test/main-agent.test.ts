@@ -262,6 +262,7 @@ test("get_run_status summarizes a run from the Kernel projection", async (t) => 
   assert.match(text, new RegExp(proposed.runId));
   assert.match(text, /queued/);
   assert.match(text, new RegExp(proposed.planId ?? ""));
+  assert.match(text, /Snapshot only/);
 
   const missing = await runStatusInfo(runtime, "run-does-not-exist");
   assert.match(missing, /not found/);

@@ -6,6 +6,18 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A repeated tool call stops the turn instead of looping until the provider stops it
+
+The shared agent loop now warns once when the same call returns the same result three times in a row, and ends the turn at five with a new `no_progress` failure. It compares the tool name, the arguments regardless of JSON key order, and the result text, so a call whose result changes is still progress. The Main Agent is also told that a run proposed by `propose_work_plan` advances on its own: it reports the runId, ends the turn, and never polls `get_run_status`; a live run's status now ends with "Snapshot only — calling this again does not change it." This closes the 2026-11-19 failure where eight identical `get_run_status` calls were stopped by the external model gateway, whose notice was recorded as a completed reply.
+
+共享 Agent 循环现在在同一个调用连续三次返回同样结果时提示一次，并在第五次以新的 `no_progress` 失败结束回合。它比较工具名、参数（忽略 JSON 键顺序）与结果文本，因此结果变化的调用仍算进展。主 Agent 也被告知：`propose_work_plan` 提出的 Run 会自行推进——报出 runId、结束回合，绝不轮询 `get_run_status`；运行中的 Run 状态末尾现在写"仅快照——再次调用不会改变它"。这关闭了 2026-11-19 的失败：八次相同的 `get_run_status` 调用被外部模型网关拦下，而它的提示被记成了一条完成的回复。
+
+### A turn shows its result and evidence; the process moves to the audit
+
+A conversation no longer renders the 上下文 block (model, system prompt, tool table, history window, compactions) or the 派发 block (every tool call with its JSON input and duration) for a turn. A turn now shows your request, the result, the runs it produced as 产物 rows, and one muted 依据 line — how many tools it called, how many failed, how many tasks it spawned — with a 查看审计 control that opens 设置 → 审计与轨迹 → 主 Agent 回合 with this request as the search. The audit keeps the full assembly, tool list and history searches. The live running card already showed only 结果, so a settled turn now matches it.
+
+对话不再为每个回合渲染"上下文"块（模型、系统提示、工具表、历史窗口、压缩）与"派发"块（每次工具调用及其 JSON 输入与耗时）。一个回合只显示你的请求、结果、本回合派生的 Run（"产物"行），以及一行低调的"依据"——调用了多少次工具、多少次失败、派生了多少个任务——并带一个"查看审计"控件，打开 设置 → 审计与轨迹 → 主 Agent 回合 并以本请求作为搜索词。审计页保留完整的任务组装、工具清单与历史检索。运行中的实时卡片本来就只显示"结果"，落定后的回合现在与它一致。
+
 ### A request that dispatched no task stays in the sidebar
 
 The sidebar now lists every request you started, not only task Runs. A request the Main Agent answered directly — or one whose turn failed or was interrupted — becomes its own 对话 row with the latest request as its title and the reply as its preview, so it no longer disappears when the answer arrives. A conversation that did dispatch tasks still appears as those task rows only, never twice; the main conversation is still opened from 对话 and hidden conversations stay hidden with a restore action. The audit's execution list remains tasks-only because a conversation is not a Run.
@@ -23,6 +35,12 @@ The conversation log and 设置 → 审计与轨迹 → 主 Agent 回合 now ren
 The twin now learns the folders you work in from your own requests and from the tasks it dispatched — `~/work/knowledge_base/README.md` teaches `~/work`, a project under `~/Documents` teaches that project — and remembers them in the persisted turn ledger. Every turn's situation briefing carries the list. A new read-only `recent_file_changes` tool lists the files whose content changed since local midnight (Spotlight on macOS, with a bounded directory walk fallback) plus each Git repository's branch, uncommitted changes and commits; it reads the learned folders by default and only a folder you name otherwise. The Main Agent is told to call it before saying it has no material. No folder has to be configured one by one.
 
 分身现在从你自己的请求与它派发过的任务中学习你工作的文件夹——`~/work/knowledge_base/README.md` 学到 `~/work`，`~/Documents` 下的项目学到该项目本身——并把它们记在持久化的回合台账里。每回合的情境简报都会带上这份列表。新增只读工具 `recent_file_changes`：列出本地午夜以来内容发生变化的文件（macOS 用 Spotlight，其他情况回退到有界目录遍历），以及每个 Git 仓库的分支、未提交改动与提交；默认读取学到的文件夹，只有你点名时才读取别处。主 Agent 被告知在说"没有素材"之前先调用它。不需要逐个配置文件夹。
+
+### The attachment picker skips the sheet animation
+
+The native attachment picker now opens as an app-modal panel instead of a window sheet, removing about 270 ms of sheet animation from every click; its first cold construction is warmed once after the page is ready, so the first click builds in about 100 ms instead of 300–660 ms. Measured with the same content types and an offscreen window: cold sheet 984 ms to become visible, warm sheet 389 ms, warm app-modal panel 106 ms. File types, drag/drop and the selected URLs are unchanged; the directory picker keeps its sheet. The running app must be rebuilt and relaunched to get the native change.
+
+原生附件选择器现在以应用级模态面板打开，而不是窗口 sheet，每次点击少掉约 270ms 的 sheet 动画；页面就绪后会预热一次冷构造，因此第一次点击的构造约 100ms，而不是 300–660ms。用相同内容类型与离屏窗口测得：冷 sheet 可见 984ms，热 sheet 389ms，热应用级模态面板 106ms。文件类型、拖放与选中的 URL 不变；目录选择器仍用 sheet。运行中的 App 需要重新构建并重启才能获得这项原生变更。
 
 ### Attachments answer the click before they are read
 
