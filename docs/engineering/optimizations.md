@@ -250,7 +250,9 @@ file keeps every attempt, including the ones that did not work.
   ran it before (intentional failure); removed the launch config, script and
   npm entry; migrated the two eval harnesses; updated active docs; stopped the
   running preview servers; ran the targeted test, full suite, typecheck and
-  gate; wrote this entry and the result entry. No retries.
+  gate; wrote this entry and the result entry. After that, the owner asked to
+  delete the preview data; `.automation/preview` was moved to Trash after
+  confirming no process held it. No retries.
 - **Pros:** the before/after is one deterministic command; a second test pins
   the app's `port: 0` loopback so the removal cannot delete the wrong server;
   the eval harnesses keep replaying through the direct server entry.
@@ -259,8 +261,9 @@ file keeps every attempt, including the ones that did not work.
   the fix waited a day and needed an investigation across two journals. Killing
   the preview servers also interrupts any concurrent Claude session using them;
   a future removal should check for active preview users first. The preview data
-  under `.automation/preview` is left in place as evidence and is not part of
-  the app.
+  under `.automation/preview` — two verification tasks, their journal, prompt
+  snapshots and audit, 488 KB — was moved to Trash at the owner's request after
+  this entry was written; `~/.clone` was never touched.
 - **Reversal condition:** copied from the trade-off entry: if a class of UI
   bugs only reproduces in a browser, reintroduce a separately homed, visibly
   labeled preview that refuses `~/.clone` and carries its own no-owner-write
