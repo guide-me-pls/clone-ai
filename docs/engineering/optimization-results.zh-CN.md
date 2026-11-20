@@ -23,7 +23,6 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-19--provider-的停止是失败不是完成的回答)；
   [执行链路](optimizations.zh-CN.md#2026-11-19--provider-的停止是失败不是完成的回答)。
 
-
 ## 2026-11-19 —— 失败轨迹带上步骤指令与标准
 
 - **主张：** `FailedTrace.plan` 现在携带每个步骤脱敏后的 instructions、验收标准、所需能力、

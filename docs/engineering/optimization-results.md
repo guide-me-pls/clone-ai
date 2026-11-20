@@ -29,7 +29,6 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-19--a-provider-stop-is-a-failure-not-a-completed-answer);
   [execution chain](optimizations.md#2026-11-19--a-provider-stop-is-a-failure-not-a-completed-answer).
 
-
 ## 2026-11-19 — A failed trace carries its step instructions
 
 - **Claim:** `FailedTrace.plan` now carries each step's redacted instructions,
