@@ -12,7 +12,6 @@ A response that ends with `content_filter`, a safety stop or another defined fin
 
 以 `content_filter`、安全停止或其它已定义、但不在正常完成集合里的 finish reason 结束的回答，不再被记成完成。回合以该 finish reason 失败，所有者看到中文摘要（“提供方拦截或中止了这次回答”）与下一步。`length`/`max_tokens` 保留截断失败，正常 `stop` 仍然完成。
 
-
 ### A failed trace carries the step's instructions
 
 Failed traces now include each step's instructions, acceptance criteria, required capabilities, scopes and subagent count, redacted and capped, so the repair lane can reproduce a plan or verification failure from the trace. The verifier repair's first lane run had failed because the trace held only the step id, title and risk.

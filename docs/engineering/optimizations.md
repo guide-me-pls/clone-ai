@@ -72,7 +72,6 @@ file keeps every attempt, including the ones that did not work.
   providers deliver stop notices with `stop`, handle them in the provider
   adapter.
 
-
 ### 2026-11-19 — A failed trace carries the step's instructions
 
 - **Goal / hypothesis:** the verifier repair's first lane run failed the
