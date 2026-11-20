@@ -265,7 +265,7 @@ test("a write step's declared scope is a verification root outside the workspace
     run: run(), plan: planFor([{ ...step, scopes: undefined }]), evidence,
   });
   assert.equal(unscoped.passed, false);
-  assert.match(unscoped.summary, /does not exist on disk/);
+  assert.match(unscoped.summary, /outside the roots this step may verify|protected/i);
 });
 
 test("the Kernel does not mark an external step completed when the adapter only produced an artifact", async (t) => {

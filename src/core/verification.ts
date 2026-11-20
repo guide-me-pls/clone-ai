@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { Evidence, PlanStep, Verifier, VerificationResult } from "./contracts.ts";
 import { DiffFileVerifier, TestCommandVerifier } from "./verifier-plugins.ts";
@@ -250,20 +250,39 @@ export class EvidenceVerifier implements Verifier {
         candidates.push(resolve(root, expectation.path));
       }
     }
-    if (candidates.length === 0) {
-      return `"${expectation.path}" could not be located (no authorized root and no evidence locator)`;
-    }
-
+    let absent = candidates.length === 0;
     for (const candidate of candidates) {
+      const inside = roots.some((root) => {
+        if (root === undefined) return false;
+        const path = relative(resolve(root), resolve(candidate));
+        return path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+      });
+      const safe = await verifiedPathInRoots(candidate, roots);
+      if (safe === undefined) {
+        if (inside) {
+          try {
+            await stat(candidate);
+          } catch {
+            absent = true;
+          }
+        }
+        continue;
+      }
+      let info: Awaited<ReturnType<typeof stat>>;
+      try {
+        info = await stat(safe);
+      } catch {
+        absent = true;
+        continue;
+      }
+      if (!info.isFile()) {
+        return `"${expectation.path}" is a directory, not a promised file`;
+      }
       let contents: string;
       try {
-        const safe = await verifiedPathInRoots(candidate, roots);
-        if (safe === undefined) continue;
-        const info = await stat(safe);
-        if (!info.isFile()) continue;
         contents = await readFile(safe, "utf8");
       } catch {
-        continue;
+        return `"${expectation.path}" exists but could not be read`;
       }
       if (contents.trim().length === 0) {
         return `"${expectation.path}" exists but is empty`;
@@ -277,7 +296,9 @@ export class EvidenceVerifier implements Verifier {
       }
       return undefined;
     }
-    return `"${expectation.path}" was promised but does not exist on disk`;
+    return absent
+      ? `"${expectation.path}" was promised but does not exist on disk`
+      : `"${expectation.path}" is outside the roots this step may verify or is protected`;
   }
 }
 
@@ -325,7 +346,9 @@ export class CompositeVerifier implements Verifier {
     const needsReview = failures.length === 0 && results.some((result) => result.needsReview);
     const passed = failures.length === 0 && !needsReview;
     const summaries = (failures.length === 0 ? results : failures)
-      .map((result) => result.summary.trim())
+      .map((result) => failures.length === 0
+        ? result.summary.trim()
+        : result.summary.trim().replace(/^Verification failed\.\s*/i, ""))
       .filter((summary) => summary.length > 0);
     return {
       runId: input.run.id,
