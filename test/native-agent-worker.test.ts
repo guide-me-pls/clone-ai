@@ -308,6 +308,33 @@ test("a model-call budget is reported when the loop cannot finish in time", asyn
   assert.equal(failed.report?.signature, "budget-model-calls");
 });
 
+test("a worker that repeats the same call reports no_progress instead of completed", async (t) => {
+  // The 2026-11-19 loop stopped the Main Agent at five identical calls; the
+  // worker maps the same terminal reason to a failed event with its own
+  // category and signature. Without this case a regression could publish the
+  // repetition as a completed step again.
+  // 2026-11-19 的循环在五次相同调用时停下主 Agent；Worker 把同一个终止原因映射成带自己的
+  // category 与 signature 的 failed 事件。没有这条用例，回退可能再次把重复发布成完成的步骤。
+  const directory = await workspace(t);
+  const worker = new NativeAgentWorker({
+    id: "n",
+    label: "N",
+    tools: fileTools(),
+    createClient: () => fakeClient(Array.from({ length: 5 }, (_, index) => ({
+      content: null,
+      toolCalls: [{ id: `r${index}`, name: "read_file", arguments: JSON.stringify({ path: "a.md" }) }],
+    }))),
+  });
+  const events: ExecutionEvent[] = [];
+  for await (const event of worker.execute(assignment(directory))) events.push(event);
+  const failed = events.find((event) => event.type === "failed");
+  assert.ok(failed?.type === "failed");
+  assert.equal(failed.report?.category, "no_progress");
+  assert.equal(failed.report?.signature, "native-worker-no-progress");
+  assert.match(failed.message, /making no progress/);
+  assert.equal(events.some((event) => event.type === "completed"), false);
+});
+
 test("the worker has no round cap unless the plan or owner sets one", () => {
   // Without a plan budget or owner setting there is no cap: the model decides.
   // 没有计划预算或所有者设置时没有上限：由模型决定。
