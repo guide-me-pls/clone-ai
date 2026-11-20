@@ -26,6 +26,38 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-20 —— 验证失败只说一次原因，并把原因说准
+
+- **目标 / 假设：** 审计发现组合摘要重复了 "Verification failed."，并且 `checkFile` 把已存在的
+  目录或根外路径报成 "does not exist on disk"。给每种情况各自的文案，并让组合摘要只带一次前缀。
+- **取舍：** [验证失败只说一次原因，并把原因说准](../architecture/trade-offs.zh-CN.md#2026-11-20--验证失败只说一次原因并把原因说准)。
+- **变更：** `src/core/verification.ts`——`checkFile` 先在词法层判断根归属，再让
+  `verifiedPathInRoots` 做 realpath；根外/受保护、目录、不可读、缺失分别报告；
+  `CompositeVerifier` 拼接前剥掉子验证器开头的 "Verification failed."。
+  `test/verification.test.ts` 更新唯一一条过期的根外断言；
+  `test/regression/verification-failure-messages.test.ts` 覆盖四种情况与单一前缀。
+- **Eval：** 通道回归修复前红、修复后绿；worktree 全量 **952/952**、typecheck 0、gate PASS
+  （在测试契约更新之后）。main 上：目标测试 **18/18**，全量 **956/956**，typecheck 退出 0，
+  gate **PASS**。
+- **Benchmark run：** 无——确定性的验证契约；不涉及 Provider、模型、数据集、切分、种子或评分参数。
+- **执行链路：** 四次通道运行，合计 **约 408 秒 / 52 次模型调用 / 410,701 token**
+  （`.automation/repair-messages`）。(1) 第一次 phase 运行被 Kernel 的文件集验证停下，因为决定
+  说明里写了 "Diff verification failed."——`mentionsDiff` 把它读成需要 `.diff` 定位符；说明改写成
+  不含 `diff`/`patch`。(2) 下一次回归仍红：`verifiedPathInRoots` 会 realpath，根内缺失文件被报成
+  根外；说明补充“先做词法根内判断”。(3) 第三次修复与已有的 `missing` 数组发生 TDZ 命名冲突；
+  说明点名命名规则。(4) 第四次回归绿，但全量套件因一条过期断言失败；phase-2 没有更新
+  `test/verification.test.ts`，因此工作 Agent 只更新了这一条测试契约（未动生产补丁），重跑
+  worktree 全量（952/952、typecheck 0、gate PASS），提交通道分支 `78006a9`，rebase 到 main
+  （已是 `f8e09b1` 的后代）并 fast-forward。
+- **优点：** 所有者与主 Agent 现在能区分缺失交付物、文件类型不对、不可读与未授权路径；摘要只有
+  一个前缀；通道的四次失败各产出一个具体的输入修正，而不是手写补丁。
+- **缺点 / 下次：** 通道的 phase-2 不会更新既有测试断言，因此文案变化需要工作 Agent 做一行测试
+  契约更新；决定说明必须避开 `diff`/`patch` 触发词；四次运行因逐次修正说明花了约 410k token。
+  下次：先读 `mentionsDiff` 与既有文案断言，再写说明。
+- **推翻条件：** 如果读者需要机器可读的原因，就加 category/root 字段而不是解析散文。如果 stat
+  根外路径变得可以接受，就精确报告存在性。如果某个消费者依赖重复前缀，就保留结构化摘要。
+
+
 ### 2026-11-19 —— Provider 的停止是失败，不是完成的回答
 
 - **目标 / 假设：** 审计发现循环只读取 `finish_reason` 的 `length`/`max_tokens`；带
