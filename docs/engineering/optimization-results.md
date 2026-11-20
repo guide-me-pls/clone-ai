@@ -15,6 +15,21 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-20 — A verification failure names its cause once
+
+- **Claim:** a failed verification now says whether a promised path is missing,
+  a directory, unreadable, or outside the roots this step may verify, and the
+  composite summary carries exactly one "Verification failed." prefix.
+- **Evidence:** the lane's regression is red before and green after; the
+  worktree suite is **952/952**, typecheck 0, gate PASS after the one stale
+  test-contract update; on main the targeted cases are **18/18**, the full suite
+  **956/956**, typecheck exit 0, gate **PASS**. Landed as `78006a9` after the
+  protected-path approval. The four lane runs cost ~408 s / 52 model calls /
+  410,701 tokens.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-20--a-verification-failure-says-why-once);
+  [execution chain](optimizations.md#2026-11-20--a-verification-failure-says-why-once).
+
+
 ## 2026-11-19 — A provider-blocked answer is reported as a failure
 
 - **Claim:** a response with `content_filter` or another defined finish reason

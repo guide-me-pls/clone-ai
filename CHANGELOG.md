@@ -6,6 +6,13 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A verification failure names its cause once
+
+A failed verification now says whether a promised path is missing, a directory, unreadable, or outside the roots this step may verify; the summary carries a single "Verification failed." prefix. The existing unscoped-write expectation was updated to the outside-roots message.
+
+验证失败现在说明被承诺的路径是缺失、目录、不可读，还是在步骤可验证的根之外；摘要只带一个 "Verification failed." 前缀。原有的“无 Scope 写入”断言已更新为根外文案。
+
+
 ### A provider's blocked or abnormal stop is a failure
 
 A response that ends with `content_filter`, a safety stop or another defined finish reason outside the normal completion set is no longer stored as a completed answer. The turn fails with the finish reason, and the owner sees a Chinese summary ("提供方拦截或中止了这次回答") and next step. `length`/`max_tokens` keep the truncation failure, and a normal `stop` still completes.

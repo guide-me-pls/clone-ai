@@ -6,6 +6,53 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-20 — A verification failure says why, once
+
+**Decision.** `CompositeVerifier` prefixes "Verification failed." exactly once,
+stripping a sub-verifier's identical prefix before joining. `EvidenceVerifier
+.checkFile` distinguishes four cases instead of one: a path outside the
+authorized roots (or protected) says it is outside the roots this step may
+verify; an existing directory says it is a directory, not a promised file; an
+unreadable file says it exists but could not be read; only a truly absent path
+says it does not exist. The existing assertion that pinned "does not exist on
+disk" for an existing outside path is updated to the new message.
+
+**Why it won.** The audit found the recorded `fa36a720` summary read
+"Verification failed. Verification failed. …" and reported an existing directory
+outside the root as "does not exist on disk". The failure reason is now what the
+owner and the Main Agent read (the failed-run reason fix), so a missing
+deliverable, an unauthorized path and a wrong file type must not look the same.
+
+**Alternatives rejected.**
+
+- *Keep one generic message for every failure.* It is the misleading text this
+  entry fixes.
+- *Stat the raw outside path to report whether it exists.* It would reveal
+  existence outside the verifier's boundary; the outside-root message is enough.
+- *Only fix the duplicate prefix.* The misleading reason would remain.
+- *Add structured reason codes now.* The readers show prose; a code adds a
+  contract without a consumer yet. It is the reversal condition below.
+
+**What was given up.** A path that is both outside and a directory reports
+"outside" rather than "directory". A protected location inside a root reports
+"outside or protected". The messages are prose, not machine-readable; old traces
+keep the text journaled at the time.
+
+**Evidence.** The audit findings and the recorded summary. The lane's regression
+case covers an existing directory, an outside-root file, a missing file and the
+composite's single prefix; it is red on the current code and green after. The
+existing `test/verification.test.ts` assertion is updated with the fix. Four lane
+runs cost ~408 s / 52 model calls / 410,701 tokens; after the working agent
+updated that one test contract, the worktree suite was **952/952**, typecheck 0,
+gate PASS. Landed as `78006a9`; on main the targeted cases are **18/18**, the full
+suite **956/956**, typecheck exit 0, gate **PASS**.
+
+**Reversal condition.** If readers need machine-readable causes, add a
+category/root field instead of parsing prose. If statting outside paths becomes
+acceptable, report existence precisely. If a consumer relies on the duplicated
+prefix, keep a structured summary instead of the prose.
+
+
 ## 2026-11-19 — The answer is the section; the 结果 gutter is retired
 
 **Decision.** A turn's answer starts at the section's left edge. The 52 px

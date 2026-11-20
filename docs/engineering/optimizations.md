@@ -31,6 +31,57 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-20 — A verification failure says why, once
+
+- **Goal / hypothesis:** the audit found the composite summary duplicated
+  "Verification failed." and `checkFile` reported an existing directory or an
+  outside-root path as "does not exist on disk". Give each case its own message
+  and make the composite summary carry the prefix once.
+- **Trade-off:** [a verification failure says why, once](../architecture/trade-offs.md#2026-11-20--a-verification-failure-says-why-once).
+- **Change:** `src/core/verification.ts` — `checkFile` decides root membership
+  lexically before `verifiedPathInRoots` realpaths the candidate, then reports
+  outside/protected, directory, unreadable or missing separately;
+  `CompositeVerifier` strips a sub-verifier's leading "Verification failed."
+  before joining. `test/verification.test.ts` updates the one stale
+  unscoped-write assertion; `test/regression/verification-failure-messages.test.ts`
+  covers the four cases and the single prefix.
+- **Eval:** the lane's regression is red before and green after; the worktree
+  suite is **952/952**, typecheck 0, gate PASS after the one test-contract
+  update. On main: targeted **18/18**, full suite **956/956**, typecheck exit 0,
+  gate **PASS**.
+- **Benchmark run:** none — deterministic verifier contract; no provider, model,
+  dataset, split, seed or scoring parameter.
+- **Execution chain:** four lane runs, **~408 s / 52 model calls / 410,701
+  tokens** total (`.automation/repair-messages`). (1) The first phase run was
+  stopped by the Kernel's file-set verification because the decision brief
+  contained "Diff verification failed." — `mentionsDiff` read that as a request
+  for a `.diff` locator; the brief was reworded without `diff`/`patch`. (2) The
+  next regression stayed red because `verifiedPathInRoots` realpaths the
+  candidate, so a missing file inside a root was reported as outside; the brief
+  added the lexical inside-root rule. (3) The third fix hit a `missing`
+  temporal-dead-zone collision with the existing `mustContain` array; the brief
+  named the naming rule. (4) The fourth produced a green regression but the full
+  suite failed one stale assertion; the phase-2 worker did not update
+  `test/verification.test.ts`, so the working agent updated that one test
+  contract only (the production patch was untouched), re-ran the worktree suite
+  (952/952, typecheck 0, gate PASS), committed the lane branch `78006a9`,
+  rebased it onto main (already a descendant of `f8e09b1`) and fast-forwarded.
+- **Pros:** the owner and the Main Agent can now tell a missing deliverable, a
+  wrong file type, an unreadable file and an unauthorized path apart; the summary
+  shows one prefix; the lane's four failures each produced a concrete input fix
+  rather than a hand-written patch.
+- **Cons / next time:** the lane's phase-2 worker does not update existing test
+  assertions, so a message change needs the working agent's one-line test
+  contract update; a decision brief must avoid `diff`/`patch` trigger words; the
+  four runs cost about 410k tokens because the brief was refined run by run.
+  Next time: read `mentionsDiff` and the existing message assertions before
+  writing the brief.
+- **Reversal condition:** if readers need machine-readable causes, add a
+  category/root field instead of parsing prose. If statting outside paths becomes
+  acceptable, report existence precisely. If a consumer relies on the duplicated
+  prefix, keep a structured summary.
+
+
 ### 2026-11-19 — A provider stop is a failure, not a completed answer
 
 - **Goal / hypothesis:** the audit found that only `length`/`max_tokens` were
