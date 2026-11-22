@@ -6,6 +6,135 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-22 — A bundled local MCP server fills the worker's search, git, date and web gaps
+
+**Decision.** Add one owner-installed stdio MCP server, `agent-tools`, that a
+native worker opts into through `mcp.json`. It exposes seven tools:
+`search_text` and `find_files` (read; recursive literal/regex search and glob
+discovery in the workspace), `git_status`, `git_diff` and `git_log` (read;
+`execFile` only, never a shell), `current_time` (read; ISO/local time and time
+zone), and `fetch_url` (network; HTTP(S) GET with private-address refusal,
+redirect re-validation and a response cap). The installer copies a
+self-contained server into the clone home and merges the `agent-tools` entry
+into `mcp.json`; every other server is preserved. No write tool and no shell
+tool are declared. Both tools that take a path declare a `pathField`, and the
+server itself skips the protected roots and symlinked directories while
+walking, so a search rooted at the home directory is not a way around the
+protected-location rule.
+
+**Why it won.** The native worker's built-in surface is exactly four file
+tools — `read_file`, `list_directory`, `write_file`, `edit_file` — asserted in
+`test/mcp.test.ts`; it cannot find a symbol across files, see a diff or a
+commit history, learn the wall-clock date, or read a documentation URL. The
+repair lane's own log records 12 of 31 rounds spent reading files before it
+began pre-extracting defect locations (`src/repair/repair-lane.ts`);
+`read_file` returns a 400-line window and the loop caps a tool result at 8,000
+characters, so finding a symbol by repeated reads is the expensive path this
+replaces. The Main Agent is deliberately tool-less for files
+(`src/main-agent/prompt.ts` says so), so a missing capability belongs on the
+worker. The parity study lists
+Glob, Grep, WebFetch and WebSearch among Claude Code's canonical tools
+(`docs/study/claude-code-parity.md` section 2.2); this bundle closes the
+search, discovery, web-read and date gaps without adding the shell. MCP is
+already the intended second tool source (`src/workers/mcp-client.ts`): a
+server is disabled unless `mcp.json` says `"enabled": true`, every tool needs a
+declared risk, path-taking tools are checked per call, and output is framed as
+untrusted observation. The browser integration already establishes the
+installer-and-declaration pattern (`src/integrations/browser-mcp.ts`). One
+server keeps the cost to one opt-in entry and one child process, and the tools
+share one workspace root and one output convention.
+
+**Alternatives rejected.**
+
+- *Implement these as built-in worker tools.* They would be offered to every
+  worker and every step, including steps that need neither git nor network;
+  the MCP path keeps them opt-in and lets `mcp.json` remain the authority for
+  each tool's risk. The cost accepted instead is one child process and JSON-RPC
+  framing.
+- *Use the Python reference servers (`mcp-server-git`, `mcp-server-fetch`).*
+  They add a Python/uv runtime dependency and do not know clone-ai's per-tool
+  risk declarations or protected-path rule. Their package names and behaviour
+  are assumed as of 2026-11-22; no live install was measured.
+- *Declare a generic filesystem MCP.* Skipped: it duplicates the four built-in
+  file tools, and a generic server's write path would not understand the
+  step's write roots or the `.git` write guard (`decideTool`).
+- *Declare a memory MCP.* Skipped: clone-ai already has a reviewed memory
+  pipeline (`recall_memory`, `read_memory`); a second, unreviewed memory store
+  would split memory authority.
+- *Add sequential-thinking MCP.* Skipped: no verified gap. The loop, plan
+  proposal and the model's own reasoning already provide structure, and the
+  tool produces no executable evidence. This judgment is an assumption, not a
+  measurement.
+- *Add a shell or `run_command` tool.* Deferred: `decideTool` refuses
+  `external`, and no worker-facing sandboxed exec domain is wired. A shell
+  server would either be refused or widen authority. Revisit when a
+  Seatbelt-backed exec domain is available to workers.
+- *Add GitHub, Slack or Notion MCP.* Deferred: the MCP client has no OAuth
+  flow and only forwards environment names a server declares. Without an
+  owner-configured token these servers cannot authenticate. Revisit when a
+  token is configured and a task needs the service.
+- *Add web search MCP.* Deferred: a search provider needs its own API key.
+  `fetch_url` covers "read this known URL", which is the documented need.
+  Revisit when a search key is configured.
+- *Add SQLite or another database MCP.* Skipped for now: no evidence in this
+  repository of data work that needs a database; adding it now would be
+  speculation. Revisit only on an explicit owner request with a read-only
+  database role.
+- *Add chrome-devtools MCP.* Deferred: it overlaps the existing Playwright MCP.
+  Its extra value is performance traces and network inspection, and no current
+  task needs them. Revisit on a performance task.
+- *Ship `current_time` as its own server.* Rejected: a one-function server
+  costs more configuration and process overhead than one tool in this bundle.
+- *Inject the date into every step instruction instead.* Rejected: the Kernel
+  already holds the clock, but injection still cannot answer an explicit "what
+  time is it" or a time-zone conversion request, and it changes every step's
+  prompt; one opt-in read tool costs one schema. This is the weakest of the
+  seven additions and is marked as an assumption, not a measured gain.
+
+**What was given up.** The server is a child process per worker step; a step
+that calls no tool pays only lazy startup and the tool-table tokens. The tools
+are not available to the Main Agent (by design) and not to providers that
+cannot take MCP configuration. `fetch_url` is GET-only, sends no credentials,
+refuses private addresses, and caps the body; a page behind a login or a POST
+API is out of scope. It is offered only to a step that already carries a
+network scope: the all-or-nothing network grant is unchanged, so an ordinary
+read-only or reversible-write repair step still cannot use it. Making
+documentation lookup available there would need a separate read-only-network
+contract, which this entry does not introduce. Git is read-only in effect, not
+only in intent: `--no-optional-locks` and `GIT_OPTIONAL_LOCKS=0` stop index
+refreshes, `--no-textconv` and `--no-ext-diff` stop repository-configured
+helpers from running, `core.fsmonitor=false` stops the fsmonitor hook, and a
+revision that starts with `-` is refused before git can read it as an option.
+Committing remains the repair lane's job, not a worker tool. Search resolves
+the root before walking, so a symlink into `~/.ssh` is refused even when the
+link's own name is outside; a query over 500 characters, a line over 20 KB, and
+a walk over 100,000 entries are bounded. Search and discovery skip `.git`,
+`node_modules`, build output, binary files and the protected roots, so a match
+inside a skipped tree is not found; the skip list is a constant, not
+owner-configurable. The installer pins the node path, so rerun it after a Node
+upgrade, as with the daemon installer. DNS rebinding between the address check
+and the request is not fully prevented; the network grant and the opt-in server
+are the accepted boundary.
+
+**Evidence.** `test/mcp.test.ts` still asserts the built-in-only four-tool
+table and the risk gate. The new `test/agent-tools-mcp.test.ts` starts the
+server as a real child, calls `tools/list` and `tools/call`, exercises search,
+discovery, git and time, asserts the fetch refusals (private host, non-HTTP
+scheme, embedded credentials), and checks that every declared tool has a risk
+and that no write or shell tool is declared. Before this change neither the
+server nor its test existed. The live network path is exercised only through an
+injected fetch in the test; no public URL was called, so live network behavior
+is marked assumed. `npm test`, `npm run typecheck` and `npm run gate` are
+recorded in the optimization log.
+
+**Reversal condition.** If the child process or the added tool-table tokens
+measurably slow a step, or if these tools produce more wrong or unsafe calls
+than useful ones, remove the `agent-tools` entry from `mcp.json` — the server is
+opt-in — and move only the surviving tools into the built-in table. If no step
+ever carries a network grant, remove `fetch_url`; if a read-only-network
+contract arrives, revisit it. If a maintained MCP SDK or a sandboxed exec
+domain arrives, replace this hand-written server rather than growing it.
+
 ## 2026-11-20 — A verification failure says why, once
 
 **Decision.** `CompositeVerifier` prefixes "Verification failed." exactly once,

@@ -15,6 +15,22 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-22 — Workers gain seven read-only tools, including repository search
+
+- **Claim:** the native worker can now search a repository (`search_text`,
+  `find_files`), inspect git status, diff and history, read the clock, and fetch
+  one documentation URL — seven read-only tools behind the existing per-server
+  opt-in and per-tool risk declarations. No write or shell tool was added.
+- **Evidence:** `node --experimental-strip-types --test test/agent-tools-mcp.test.ts`
+  **17/17**; `npm test` **974/974**, 0 fail; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**, baseline unchanged. The installer's `--print` emits
+  the seven declarations with `fetch_url` as `network`. The live network path is
+  assumed: the happy path uses an injected fetch, not a public URL. The search
+  gain is supported by the repair lane's 12-of-31-rounds exploration evidence,
+  not by a before/after benchmark of this change.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-22--a-bundled-local-mcp-server-fills-the-workers-search-git-date-and-web-gaps);
+  [execution chain](optimizations.md#2026-11-22--a-bundled-agent-tools-mcp-server-gives-workers-search-git-time-and-web-read).
+
 ## 2026-11-20 — A verification failure names its cause once
 
 - **Claim:** a failed verification now says whether a promised path is missing,

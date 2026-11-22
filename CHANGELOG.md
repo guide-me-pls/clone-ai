@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Workers gain a read-only agent-tools MCP server
+
+The native worker can now search a repository (`search_text`, `find_files`), inspect `git_status`/`git_diff`/`git_log`, read `current_time`, and fetch one HTTP(S) URL (`fetch_url`) through a bundled `agent-tools` MCP server installed with `scripts/install-agent-tools.mjs`. Every tool is opt-in through `mcp.json` and carries a declared risk: `fetch_url` is `network` and is offered only to a step with a network scope; no write or shell tool is declared. The server resolves paths before walking, skips protected roots and symlinked directories, disables repository-configured git diff helpers and fsmonitor, refuses private/loopback fetch targets and caps results. `browser-mcp.ts` now shares its `mcp.json` merge helpers with the new installer. New docs: `docs/usage/agent-tools-mcp.md` and its Chinese pair. `npm test` 974/974, typecheck 0, gate PASS.
+
+原生 Worker 现在可以通过随 clone-ai 发布的 `agent-tools` MCP 服务器检索仓库（`search_text`、`find_files`）、查看 `git_status`/`git_diff`/`git_log`、读取 `current_time`，并抓取一个 HTTP(S) URL（`fetch_url`）；用 `scripts/install-agent-tools.mjs` 安装。每个工具都通过 `mcp.json` 选择启用并声明风险：`fetch_url` 是 `network`，只提供给带网络 Scope 的步骤；没有声明写工具或 shell 工具。服务器在遍历前解析路径、跳过受保护根与符号链接目录、关闭仓库配置的 Git diff 助手与 fsmonitor、拒绝私有/回环抓取目标并限制结果。`browser-mcp.ts` 现在与新安装器共用 `mcp.json` 合并函数。新文档：`docs/usage/agent-tools-mcp.md` 及其中文版。`npm test` 974/974，typecheck 0，gate PASS。
+
 ### A verification failure names its cause once
 
 A failed verification now says whether a promised path is missing, a directory, unreadable, or outside the roots this step may verify; the summary carries a single "Verification failed." prefix. The existing unscoped-write expectation was updated to the outside-roots message.

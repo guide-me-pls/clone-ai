@@ -26,6 +26,60 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-22 —— 内置 agent-tools MCP 服务器为 Worker 补上检索、Git、日期与网页读取
+
+- **目标 / 假设：** 原生 Worker 的内建工具面是四个文件工具，跨文件找符号只能靠
+  `list_directory` 加带窗口的 `read_file` 反复读；修复通道的日志记录过，在开始预提取缺陷
+  位置之前，31 轮中有 12 轮花在读文件上。一个随 clone-ai 发布的只读 MCP 服务器应当替换掉
+  这部分探索成本，让 Worker 能看 diff 与历史，并获得时钟和文档读取能力——同时不引入 shell
+  或写工具。
+- **取舍：** [一个内置本地 MCP 服务器补齐 Worker 的检索、Git、日期与网页能力](../architecture/trade-offs.zh-CN.md#2026-11-22--一个内置本地-mcp-服务器补齐-worker-的检索git日期与网页能力)。
+- **变更：** `src/mcp/agent-tools-server.ts` —— 自包含的 stdio JSON-RPC 服务器，提供
+  `search_text`、`find_files`、`git_status`、`git_diff`、`git_log`、`current_time` 与
+  `fetch_url`；含受保护根与符号链接保护、Git 助手抑制、SSRF 检查与结果上限。
+  `src/integrations/agent-tools-mcp.ts` —— `mcp.json` 条目与逐工具风险声明。
+  `src/integrations/mcp-config.ts` —— 共享合并函数，`browser-mcp.ts` 改为再导出。
+  `scripts/install-agent-tools.mjs` —— 把服务器复制进 clone home 并合并 `mcp.json`。
+  `docs/usage/agent-tools-mcp.md` 及其中文版。`test/agent-tools-mcp.test.ts` —— 17 个用例。
+  `test/bilingual-documentation.test.ts` 加入文档对。`test/connectors-extra.test.ts` 修正了
+  一个既有的、依赖运行日期的日历测试：它计算了 `now` 时钟却没有把它交给连接器，导致固定的
+  11 月 6–7 日事件在 2026-11-20 之后落到 14 天窗口之外。产品行为未变。
+- **Eval：** `node --experimental-strip-types --test test/agent-tools-mcp.test.ts` ——
+  **17/17**。变更前服务器与测试都不存在，Worker 的纯内建工具表就是 `test/mcp.test.ts` 断言的
+  四个工具。变更后：测试以真实 stdio 子进程启动服务器，列出七个工具，调用 `current_time`，
+  覆盖检索、发现与 Git，并检查 `fetch_url` 的拒绝路径（私有主机、`file:`、内嵌凭据、重定向到
+  `127.0.0.1`）。`workerTools` 用例写入安装器的 `mcp.json` 条目，构建 Worker 工具表，并通过
+  MCP 客户端运行 `search_text`。`node --experimental-strip-types
+  scripts/install-agent-tools.mjs --workspace /tmp/agent-tools-eval --clone-home
+  /tmp/agent-tools-clone --print` 输出七个带风险的声明（`fetch_url` = network）。
+  `npm test` —— **974/974**，0 失败；`npm run typecheck` 退出 0；`npm run gate` **PASS**，
+  基线不变。
+- **Benchmark run：** 无——确定性测试与本地安装器打印；没有 Provider、模型、数据集、切分、
+  种子或评分参数。真实网络路径没有调用：正常路径的 fetch 通过注入的 `fetch` 与 `lookupHost`
+  走通，因此取舍条目把真实网络行为标为假设。
+- **执行链路：**（1）读 Worker 工厂、`decideTool`、MCP 客户端/宿主、浏览器集成与对标研究；
+  （2）启动一个三 Agent 审计 Workflow（Worker 工具面、集成选择、安全）。两个结果返回：
+  Worker 工具面的那一份把仓库检索列为唯一会阻断普通编码工作的缺口，并引用修复通道
+  12/31 轮的证据；集成选择的那一份建议新增检索、Git、fetch 与时间，跳过文件系统、记忆与
+  sequential-thinking，延后 shell、网页搜索、数据库与 chrome-devtools。安全审计在变更完成前
+  没有返回；它的简报仍然塑造了下面的保护。（3）先写取舍条目，再写服务器、集成、安装器与
+  测试。（4）失败与重试：第一次 `git_diff` 使用 `-c diff.external=`，Git 试图执行空命令——
+  改为 `--no-ext-diff`；双语注释测试把 `globToRegExp("src/**")` 里的字面 `/**` 当成注释——
+  拆开字符串；随后全量测试暴露了上面那个既有的日历测试定时炸弹。（5）运行目标测试、全量测试、
+  typecheck 与 gate。
+- **优点：** 现有 MCP 闸门承载了新能力，没有新增权威路径；声明仍是风险权威；审计既提供了
+  实测的检索证据，也指出了第一版遗漏的两个安全边界（符号链接指向受保护根、Git 选项与仓库
+  自带助手）。安装器保留其他服务器且幂等。
+- **缺点 / 下次：** 安全审计的第三份结果始终没有返回，因此服务器的安全审查依赖 Worker 工具面
+  的发现与上面的保护；受保护根列表是从 `scope.ts` 复制的，只靠测试保持同步；`fetch_url`
+  在普通修复步骤里用不了，因为网络授权是全有或全无，它的实际范围是研究步骤；`current_time`
+  是最弱的一项，Kernel 也可以改为注入日期；没有发起真实网络请求。审计 Workflow 约 5 分钟，
+  产生约 3MB 轨迹；没有测量 token 数。下次应给安全审计更短的简报或先跑它，因为它的结果才是
+  写代码前最需要的。
+- **推翻条件：** 如果子进程或新增工具表的 token 明显拖慢步骤，或者这些工具造成的错误/不安全
+  调用多于有用调用，就移除 `agent-tools` 条目；如果没有步骤再携带网络授权，移除
+  `fetch_url`；如果出现维护中的 MCP SDK 或沙箱执行域，替换手写服务器。
+
 ### 2026-11-20 —— 验证失败只说一次原因，并把原因说准
 
 - **目标 / 假设：** 审计发现组合摘要重复了 "Verification failed."，并且 `checkFile` 把已存在的

@@ -11,6 +11,19 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-22 —— Worker 获得七个只读工具，包括仓库检索
+
+- **主张：** 原生 Worker 现在可以检索仓库（`search_text`、`find_files`）、查看 Git 状态、
+  diff 与历史、读取时钟，并抓取一个文档 URL——七个只读工具，沿用现有的按服务器启用与逐工具
+  风险声明。没有新增写工具或 shell 工具。
+- **证据：** `node --experimental-strip-types --test test/agent-tools-mcp.test.ts`
+  **17/17**；`npm test` **974/974**，0 失败；`npm run typecheck` 退出 0；
+  `npm run gate` **PASS**，基线不变。安装器的 `--print` 输出七个声明，`fetch_url` 为
+  `network`。真实网络路径是假设：正常路径使用注入的 fetch，而不是公网 URL。检索收益的依据是
+  修复通道 12/31 轮的探索证据，而不是本次变更的前后 benchmark。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-22--一个内置本地-mcp-服务器补齐-worker-的检索git日期与网页能力)；
+  [执行链路](optimizations.zh-CN.md#2026-11-22--内置-agent-tools-mcp-服务器为-worker-补上检索git日期与网页读取)。
+
 ## 2026-11-20 —— 验证失败只点名一次原因
 
 - **主张：** 验证失败现在说明被承诺的路径是缺失、目录、不可读，还是在步骤可验证的根之外；

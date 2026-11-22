@@ -14,7 +14,7 @@
  * 控制台、快照、求值、截图、键盘——绝不暴露 `browser_run_code_unsafe` 或文件上传。
  */
 import type { McpServerConfig, McpToolDeclaration } from "../workers/mcp-client.ts";
-import type { AuthorityConfig, StandingPolicy } from "../authority/standing-policy-store.ts";
+import type { StandingPolicy } from "../authority/standing-policy-store.ts";
 
 export const BROWSER_MCP_SERVER_ID = "playwright";
 export const BROWSER_MCP_VERSION = "0.0.85";
@@ -142,34 +142,7 @@ export function browserMcpPolicy(now = new Date()): StandingPolicy {
 }
 
 /** Merge a server into an mcp.json document without dropping other servers. 合并服务器，不丢其他服务器。 */
-export function mergeMcpConfig(existing: unknown, server: McpServerConfig): { servers: McpServerConfig[] } {
-  const source = existing && typeof existing === "object" && !Array.isArray(existing)
-    ? (existing as { servers?: unknown })
-    : {};
-  const list = Array.isArray(source.servers)
-    ? source.servers.filter((entry): entry is McpServerConfig => typeof entry === "object" && entry !== null && typeof (entry as { id?: unknown }).id === "string")
-    : [];
-  const next = list.filter((entry) => entry.id !== server.id);
-  next.push(server);
-  return { servers: next };
-}
-
-/** Merge the local policy into an authority document; idempotent by policy id. 合并策略；按 id 幂等。 */
-export function mergeAuthority(existing: unknown, policy: StandingPolicy): AuthorityConfig {
-  const source = existing && typeof existing === "object" && !Array.isArray(existing)
-    ? (existing as Partial<AuthorityConfig>)
-    : {};
-  const policies = Array.isArray(source.policies)
-    ? source.policies.filter((entry): entry is StandingPolicy => typeof entry === "object" && entry !== null && typeof (entry as { id?: unknown }).id === "string")
-    : [];
-  const kept = policies.filter((entry) => entry.id !== policy.id);
-  kept.push(policy);
-  return {
-    version: 1,
-    domains: { ...(source.domains ?? {}) },
-    policies: kept,
-  };
-}
+export { mergeMcpConfig, mergeAuthority } from "./mcp-config.ts";
 
 /** The one paragraph a workspace can carry so a user prompt stays short. 工作区里的一段说明，让用户提示词保持简短。 */
 export function browserMcpInstructions(port = BROWSER_MCP_DEFAULT_PORT): string {

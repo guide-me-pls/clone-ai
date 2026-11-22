@@ -31,6 +31,85 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-22 — A bundled agent-tools MCP server gives workers search, git, time and web read
+
+- **Goal / hypothesis:** the native worker's built-in surface is four file
+  tools, so finding a symbol across files is a sequence of `list_directory` plus
+  windowed `read_file` calls; the repair lane's log records 12 of 31 rounds
+  spent reading files before it began pre-extracting defect locations. A
+  bundled, read-only MCP server should replace that exploration cost, let a
+  worker inspect a diff and history, and give it a clock and a documentation
+  fetch — without adding a shell or a write tool.
+- **Trade-off:** [A bundled local MCP server fills the worker's search, git, date and web gaps](../architecture/trade-offs.md#2026-11-22--a-bundled-local-mcp-server-fills-the-workers-search-git-date-and-web-gaps).
+- **Change:** `src/mcp/agent-tools-server.ts` — a self-contained stdio JSON-RPC
+  server with `search_text`, `find_files`, `git_status`, `git_diff`, `git_log`,
+  `current_time` and `fetch_url`; protected-root and symlink guards, git helper
+  suppression, SSRF checks and result caps. `src/integrations/agent-tools-mcp.ts`
+  — the `mcp.json` entry and per-tool risk declarations. `src/integrations/mcp-config.ts`
+  — shared merge helpers, now re-exported by `browser-mcp.ts`.
+  `scripts/install-agent-tools.mjs` — copies the server into the clone home and
+  merges `mcp.json`. `docs/usage/agent-tools-mcp.md` and its zh-CN pair.
+  `test/agent-tools-mcp.test.ts` — 17 cases. `test/bilingual-documentation.test.ts`
+  adds the doc pair. `test/connectors-extra.test.ts` corrects a pre-existing
+  date-sensitive calendar test: it computed a `now` clock but built the
+  connector without it, so its fixed November 6–7 events fell outside the
+  14-day window after 2026-11-20. No product behavior changed.
+- **Eval:** `node --experimental-strip-types --test test/agent-tools-mcp.test.ts`
+  — **17/17**. Before this change neither the server nor the test existed, and
+  the worker's built-in-only table was the four tools asserted in
+  `test/mcp.test.ts`. After: the suite starts the server as a real stdio child,
+  lists seven tools, calls `current_time`, exercises search, discovery and git,
+  and checks the fetch refusals (private host, `file:`, embedded credentials, a
+  redirect to `127.0.0.1`). The `workerTools` case writes the installer's
+  `mcp.json` entry, builds the worker tool table, and runs `search_text` through
+  the MCP client. `node --experimental-strip-types scripts/install-agent-tools.mjs
+  --workspace /tmp/agent-tools-eval --clone-home /tmp/agent-tools-clone --print`
+  emits the seven declarations with risks (`fetch_url` = network). `npm test`
+  — **974/974**, 0 fail; `npm run typecheck` exit 0; `npm run gate` **PASS**,
+  baseline unchanged.
+- **Benchmark run:** none — deterministic tests and a local installer print; no
+  provider, model, dataset, split, seed or scoring parameter. The live network
+  path was not called: the happy-path fetch is exercised through an injected
+  `fetch` and `lookupHost`, so live network behavior is marked assumed in the
+  trade-off.
+- **Execution chain:** (1) read the worker factory, `decideTool`, the MCP
+  client/host, the browser integration and the parity study; (2) launched a
+  three-agent audit workflow (worker surface, integration choices, safety). Two
+  results returned: the worker-surface pass ranked repository search as the one
+  missing capability that blocks ordinary coding work and cited the repair
+  lane's 12-of-31-rounds evidence; the integration pass recommended add for
+  search, git, fetch and time, skip for filesystem, memory and
+  sequential-thinking, and defer for shell, web search, database and
+  chrome-devtools. The safety pass did not return before the change was
+  finished; its brief still shaped the guards below. (3) wrote the trade-off
+  entry, then the server, integration, installer and tests. (4) failures and
+  retries: the first `git_diff` attempt used `-c diff.external=` and git tried
+  to execute an empty command — replaced with `--no-ext-diff`; the
+  bilingual-comment test read the literal `/**` inside `globToRegExp("src/**")`
+  as a comment — split the string; the full suite then exposed the pre-existing
+  calendar test time bomb above. (5) ran the targeted suite, the full suite,
+  typecheck and gate.
+- **Pros:** the existing MCP gate carried the new capabilities without a new
+  authority path; the declaration remains the risk authority; the audit supplied
+  both the measured search evidence and two safety edges (symlinked protected
+  roots, git options and repo-configured helpers) the first implementation
+  missed. The installer preserves other servers and is idempotent.
+- **Cons / next time:** the safety audit's third result never arrived, so the
+  server's safety review rests on the worker-surface findings and the guards
+  above; the protected-root list is duplicated from `scope.ts` and kept in sync
+  only by a test; `fetch_url` is unusable from an ordinary repair step because
+  the network grant is all-or-nothing, so its practical scope is research steps;
+  `current_time` is the weakest addition and the Kernel could inject the date
+  instead; no live network call was made. The audit workflow took about five
+  minutes and produced about 3 MB of transcripts; no token count was measured.
+  Next time, give the safety audit its own shorter brief or run it first,
+  because its result was the one needed before the code.
+- **Reversal condition:** remove the `agent-tools` entry if the child process or
+  the added tool-table tokens measurably slow a step, or if the tools cause more
+  wrong or unsafe calls than useful ones; remove `fetch_url` if no step ever
+  carries a network grant; replace the hand-written server if a maintained MCP
+  SDK or a sandboxed exec domain arrives.
+
 ### 2026-11-20 — A verification failure says why, once
 
 - **Goal / hypothesis:** the audit found the composite summary duplicated

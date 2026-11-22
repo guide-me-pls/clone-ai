@@ -5,6 +5,90 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-22 —— 一个内置本地 MCP 服务器补齐 Worker 的检索、Git、日期与网页能力
+
+**决定。** 增加一个由所有者安装的 stdio MCP 服务器 `agent-tools`，原生 Worker 通过
+`mcp.json` 选择启用。它提供七个工具：`search_text` 与 `find_files`（read；在工作区内递归做
+字面量/正则检索与 glob 发现），`git_status`、`git_diff`、`git_log`（read；只用 `execFile`，
+绝不经过 shell），`current_time`（read；ISO/本地时间与时区），以及 `fetch_url`（network；
+HTTP(S) GET，拒绝私有地址、逐跳复核重定向、限制响应大小）。安装脚本把自包含的服务器复制到
+clone home，并把 `agent-tools` 条目合并进 `mcp.json`，保留其他服务器。不声明任何写工具或
+shell 工具。两个接收路径的工具都声明 `pathField`；服务器在遍历时跳过受保护根与符号链接目录，
+因此以家目录为根的检索不能绕过受保护位置规则。
+
+**为什么这样更好。** 原生 Worker 的内建工具面正好是四个文件工具——`read_file`、
+`list_directory`、`write_file`、`edit_file`（`test/mcp.test.ts` 有断言）；它无法跨文件找符号、
+看不到 diff 或提交历史、不知道当前日期，也读不了一个文档 URL。修复通道自己的日志记录过：
+在开始预提取缺陷位置之前，31 轮中有 12 轮花在反复读文件上（`src/repair/repair-lane.ts`）；
+`read_file` 返回 400 行窗口，循环又把单次工具结果截到 8,000 字符，因此靠反复读取找符号正是
+这个变更要替换掉的高成本路径。Main Agent 刻意没有文件工具（`src/main-agent/prompt.ts`
+明说），所以缺失的能力应当落在 Worker 上。对标研究把 Glob、Grep、WebFetch、WebSearch 列为
+Claude Code 的规范工具（`docs/study/claude-code-parity.md` 第 2.2 节）；这个组合在不增加
+shell 的前提下补齐检索、文件发现、网页读取与日期四个缺口。MCP 本来就是第二工具来源
+（`src/workers/mcp-client.ts`）：除非 `mcp.json` 写 `"enabled": true`，服务器一律关闭；
+每个工具必须声明风险；带路径的工具逐次核对；输出被包裹为不可信观察。浏览器集成已经确立了
+“安装脚本 + 声明”的模式（`src/integrations/browser-mcp.ts`）。一个服务器把成本控制在一个
+可选项、一个子进程；这些工具共用同一个工作区根与同一种输出约定。
+
+**被否决的备选方案。**
+
+- *把它们做成内建 Worker 工具。* 那样每个 Worker、每个步骤都会拿到它们，包括既不需要 Git 也
+  不需要网络的步骤；MCP 路径让它们保持可选，并让 `mcp.json` 继续作为每个工具风险的权威。
+  代价是一个子进程与 JSON-RPC 封装。
+- *使用 Python 参考服务器（`mcp-server-git`、`mcp-server-fetch`）。* 它们引入 Python/uv 运行时
+  依赖，也不懂 clone-ai 的逐工具风险声明与受保护路径规则。其包名与行为按 2026-11-22 的假设
+  处理；没有做实际安装测量。
+- *声明通用文件系统 MCP。* 跳过：它与四个内建文件工具重复，而且通用服务器的写路径不懂步骤
+  的写入根与 `.git` 写保护（`decideTool`）。
+- *声明记忆 MCP。* 跳过：clone-ai 已有经过审核的记忆管线（`recall_memory`、`read_memory`）；
+  第二个未经审核的记忆库会分裂记忆权威。
+- *加入 sequential-thinking MCP。* 跳过：没有已核实的缺口。循环、计划提案与模型自身的推理
+  已经提供结构，而该工具不产出可执行证据。这一判断是假设，不是测量。
+- *加入 shell 或 `run_command` 工具。* 延后：`decideTool` 拒绝 `external`，而面向 Worker 的
+  沙箱执行域尚未接通。shell 服务器要么被拒绝，要么扩大权威。等 Seatbelt 支持的执行域可供
+  Worker 使用时再议。
+- *加入 GitHub、Slack 或 Notion MCP。* 延后：MCP 客户端没有 OAuth 流程，只转发服务器声明的
+  环境变量名。没有所有者配置的 token，这些服务器无法认证。等 token 配置好且任务确实需要时
+  再议。
+- *加入网页搜索 MCP。* 延后：搜索提供商需要自己的 API key。`fetch_url` 覆盖“读这个已知 URL”，
+  这是文档化的需求。等搜索 key 配置好再议。
+- *加入 SQLite 或其他数据库 MCP。* 暂时跳过：本仓库没有证据表明有需要数据库的数据工作；
+  现在加只是推测。只有所有者明确要求并提供只读数据库角色时才重新考虑。
+- *加入 chrome-devtools MCP。* 延后：它与现有的 Playwright MCP 重叠。它的额外价值是性能轨迹
+  与网络检查，当前没有任务需要。等有性能任务再议。
+- *把 `current_time` 做成独立服务器。* 否决：单函数服务器的配置与进程开销高于把它放进本组合。
+- *改为在每次步骤指令里注入日期。* 否决：Kernel 确实持有时钟，但注入仍回答不了明确的
+  “现在几点”或时区换算请求，而且会改动每个步骤的 prompt；一个可选读取工具只多一份 Schema。
+  这是七项新增里最弱的一项，标为假设而非实测收益。
+
+**放弃了什么。** 服务器是每个 Worker 步骤一个子进程；不调用任何工具的步骤只付惰性启动与
+工具表的 token。这些工具不提供给 Main Agent（这是设计），也不提供给无法接收 MCP 配置的
+Provider。`fetch_url` 只做 GET、不发送凭据、拒绝私有地址并限制响应体；需要登录的页面或 POST
+API 不在范围内。它只提供给已经带有网络 Scope 的步骤：全有或全无的网络授权没有改变，因此
+普通的只读或可逆写入修复步骤仍然用不了它。要让这些步骤也能查文档，需要一个单独的只读网络
+契约，本条目不引入它。Git 在效果上只读，而不只是意图上只读：`--no-optional-locks` 与
+`GIT_OPTIONAL_LOCKS=0` 阻止刷新索引，`--no-textconv` 与 `--no-ext-diff` 阻止仓库自带的
+助手执行，`core.fsmonitor=false` 关掉 fsmonitor 钩子，以 `-` 开头的修订号在 Git 把它当成
+选项之前就被拒绝。提交仍是修复通道的职责，不是 Worker 工具。检索在遍历前先解析根路径，因此
+指向 `~/.ssh` 的符号链接即使名字在外也会被拒绝；超过 500 字符的查询、超过 20KB 的单行、
+超过 100,000 个条目的遍历都有上限。检索与发现会跳过 `.git`、`node_modules`、构建输出、
+二进制文件与受保护根，因此被跳过树内的匹配找不到；跳过表是常量，暂不可由所有者配置。安装
+脚本固定 node 路径，Node 升级后需要重跑，与 daemon 安装器相同。地址检查与请求之间的 DNS
+rebinding 没有被完全阻止；网络授权与此服务器的可选启用是接受的边界。
+
+**证据。** `test/mcp.test.ts` 仍断言只有四个内建工具的表格与风险闸门。新增的
+`test/agent-tools-mcp.test.ts` 以真实子进程启动服务器，调用 `tools/list` 与 `tools/call`，
+覆盖检索、发现、Git 与时间，断言 `fetch_url` 的拒绝路径（私有主机、非 HTTP 协议、内嵌凭据），
+并检查每个声明工具都有风险、且没有声明写工具或 shell 工具。变更前服务器与测试都不存在。
+实际网络请求只在测试中通过注入的 fetch 走通；没有请求公网 URL，因此真实网络行为标为假设。
+`npm test`、`npm run typecheck` 与 `npm run gate` 的结果记录在优化日志里。
+
+**推翻条件。** 如果子进程或新增工具表的 token 明显拖慢步骤，或者这些工具产生的错误/不安全
+调用多于有用调用，就从 `mcp.json` 移除 `agent-tools` 条目——服务器本身是可选的——只把仍然
+有用的工具移回内建表。如果没有任何步骤再携带网络授权，移除 `fetch_url`；如果出现只读网络
+契约，再重新考虑它。如果出现维护中的 MCP SDK 或沙箱执行域，替换这个手写服务器，而不是让
+它继续膨胀。
+
 ## 2026-11-20 —— 验证失败只说一次原因，并把原因说准
 
 **决定。** `CompositeVerifier` 只加一次 "Verification failed." 前缀，拼接前先剥掉子验证器
