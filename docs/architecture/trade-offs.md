@@ -6,6 +6,104 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-23 — A sandboxed, allowlisted command runner gives the worker a test loop
+
+**Decision.** Add a second bundled stdio MCP server, `agent-exec`, with two
+tools: `list_commands` (read) and `run_command` (write). Commands are an
+owner-written allowlist of argv arrays in `<clone home>/agent-exec.json`; the
+installer seeds it from the project — the `test`, `typecheck`, `lint`, `check`,
+`gate` and `build` scripts of `package.json`, or `pytest`, `go test`,
+`cargo test`, `mvn test` or `gradlew test` when those project types are detected.
+`run_command` takes only a command name: no shell, no model-supplied arguments.
+The server runs `execFile` with the workspace as cwd, a minimal environment
+(`PATH`, `HOME`, `LANG`, `TMPDIR`, `CI`), a 240-second timeout, a process-group
+kill and a 100 KB output cap that keeps the tail. On macOS it wraps the command
+with `/usr/bin/sandbox-exec -p <profile>`; the profile comes from
+`buildSeatbeltProfile` with the workspace (plus the package caches) as the
+write roots, network off and the kernel's protected roots denied. When no
+sandbox is available it refuses to run unless the config explicitly sets
+`allowUnsandboxed: true`. No commit tool is added; committing remains the
+repair lane's job.
+
+**Why it won.** The 2026-11-22 entry deferred shell because `decideTool` refuses
+`external` and no worker-facing sandbox existed. The builder already exists in
+`src/authority/seatbelt.ts` with no call sites, `/usr/bin/sandbox-exec` is
+present on this machine, and a smoke profile ran `/bin/echo` successfully. The
+repair lane itself records the gap: its prompt says "You have no shell tool: the
+lane runs the whole suite and the typecheck after you stop"
+(`src/repair/repair-lane.ts`), and the lane runs the suite through an injected
+command runner (`src/repair/gates.ts`). A code agent that cannot reproduce or
+verify a bug writes the fix blind; running the project's own test/typecheck
+scripts inside the step closes that loop. The project's scripts are the
+smallest command surface, and an owner-authored allowlist is inspectable in a
+way model-supplied argv is not.
+
+**Alternatives rejected.**
+
+- *A general `run_command` whose argv comes from the model.* Rejected: it is
+  arbitrary command execution, the exact authority gap the gate cannot express;
+  the allowlist is the smallest surface that still enables the loop.
+- *Add a new `execute`/shell risk and enforce shell scopes now.* Deferred:
+  `resolveGrants` parses `shell` scopes but discards them
+  (`src/authority/path-gateway.ts`), and `decideTool` has no command check. A
+  new risk touches the worker loop, the MCP client, policy and tests. Revisit
+  when the shell scope is enforced; until then the allowlist plus the OS sandbox
+  is the boundary.
+- *Run commands unsandboxed because the project's own tests are trusted.*
+  Rejected: tests are project code and can read credentials, write outside the
+  workspace or reach the network. The sandbox is the boundary; on non-macOS the
+  runner refuses unless the owner explicitly opts out.
+- *A dedicated `run_test` that accepts a test file path or extra arguments.*
+  Rejected for v1: it is runner-specific and widens the argument surface. The
+  project's own `test` script is the abstraction; the owner can add a focused
+  script to `agent-exec.json`.
+- *Add LSP, symbol navigation or a debugger now.* Deferred: executing the
+  project's tests and typecheck is the blocker for bug fixing; a language
+  server or debugger needs its own inventory and contract. Revisit on a task
+  where search, read and typecheck are insufficient.
+- *Add an HTTP POST/API tool or a database tool.* Deferred: both need a
+  separate network/credential contract; `fetch_url` covers reading a known URL,
+  and no evidence in this repository shows a database task.
+- *Add a git commit tool.* Rejected: committing remains the repair lane's and
+  the owner's job; the worker gets status/diff/log only.
+
+**What was given up.** Only allowlisted commands run: no one-off `node -e`, no
+`git clone`, no package installation. The owner edits `agent-exec.json` to add a
+command, which is a deliberate act. `run_command` is declared `write`, so a
+read-only step cannot run tests; the step must be `reversible_write`. The
+sandbox confines writes to the workspace, temp directories and the package
+caches, denies network and denies the protected roots; a test that needs the
+network or writes outside fails, and on Linux or Windows the runner refuses by
+default. `sandbox-exec` is deprecated; if a future macOS removes it, the runner
+refuses until a replacement sandbox is wired. Output is a 100 KB tail, so a
+very large log is truncated. The detected command list is a heuristic; the
+owner reviews the JSON.
+
+**Evidence.** `src/authority/seatbelt.ts` builds the profile and
+`wrapWithSandbox`; `/usr/bin/sandbox-exec` is present, and
+`sandbox-exec -p '(version 1)(allow default)(deny network*)' /bin/echo sandbox-ok`
+printed `sandbox-ok` on 2026-11-23. `src/repair/repair-lane.ts` states the worker
+has no shell and the lane runs the suite and typecheck; `src/repair/gates.ts`
+runs tests through an injected runner. The new `test/agent-exec-mcp.test.ts` is
+**17/17**: declarations, config validation, command detection, a real allowed
+command, a non-allowlisted command, the sandbox refusal, a denied write outside
+the workspace and inside `.git`, the timeout and the output cap. The live
+macOS sandbox is exercised, not assumed. The first probe let a `.git` write
+through because the temp workspace's `/var` spelling did not match the kernel's
+`/private/var` path; `agentExecSandboxProfile` now resolves the workspace with
+`realpathSync`, and the test asserts the write is denied. `npm test` is
+**991/991**, `npm run typecheck` exits 0 and `npm run gate` is **PASS** with the
+baseline unchanged; the commands are recorded in the optimization log.
+
+**Reversal condition.** If the allowlist is too narrow for real bug fixing — the
+owner repeatedly needs a command that is not in `agent-exec.json` — implement
+the shell-scope/`execute`-risk contract instead of widening the allowlist to
+arbitrary argv. If `sandbox-exec` is removed or breaks common test runners,
+remove the `agent-exec` entry from `mcp.json` until a replacement sandbox
+exists. If the tools produce more unsafe or incorrect calls than useful ones,
+remove the entry. If a maintained MCP SDK or a sandboxed exec domain arrives,
+replace the hand-written server rather than growing it.
+
 ## 2026-11-22 — A bundled local MCP server fills the worker's search, git, date and web gaps
 
 **Decision.** Add one owner-installed stdio MCP server, `agent-tools`, that a

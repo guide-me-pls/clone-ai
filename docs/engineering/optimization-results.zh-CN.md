@@ -11,6 +11,24 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-23 —— Worker 可以在沙箱里运行允许的测试与类型检查
+
+- **主张：** 原生 Worker 现在可以运行项目自己的 `test`、`typecheck`、`lint`、`check`、`gate`
+  或 `build` 脚本——只要所有者在 `agent-exec.json` 里列出——不经过 shell，也不接收模型提供的
+  argv。在 macOS 上每条命令都在 Seatbelt 下运行：写入留在工作区、临时目录与包缓存；网络关闭；
+  受保护位置与工作区 `.git` 只读。`run_command` 是提供给可逆写入步骤的 write 风险工具；
+  `list_commands` 只读。Worker 可以在一个步骤内复现失败、编辑并重跑检查。
+- **证据：** `node --experimental-strip-types --test test/agent-exec-mcp.test.ts`
+  **17/17**；`npm test` **991/991**，0 失败；`npm run typecheck` 退出 0；
+  `npm run gate` **PASS**，基线不变。安装器 `--print` 检测到 `test`/`typecheck`/`gate`，并
+  输出包含工作区、缓存、网络拒绝、受保护根与 `.git` 拒绝的 profile。真实 macOS 探测：允许的
+  命令在 `sandbox: seatbelt` 下打印 `sandbox-ok`；写工作区之外的 `$HOME` 失败；写 `.git` 失败；
+  500ms 超时杀死命令；120KB 输出保留 50KB 尾部。安装后，安装副本通过 `workerTools` 在
+  `sandbox: seatbelt` 下运行 `npm run typecheck`（退出 0，1.8 秒）。主张的是反馈回路；测试
+  仍可在工作区内覆盖源码。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-23--沙箱内白名单式的命令执行器给-worker-一个测试回路)；
+  [执行链路](optimizations.zh-CN.md#2026-11-23--沙箱化的-agent-exec-服务器给-worker-一个测试回路)。
+
 ## 2026-11-22 —— Worker 获得七个只读工具，包括仓库检索
 
 - **主张：** 原生 Worker 现在可以检索仓库（`search_text`、`find_files`）、查看 Git 状态、

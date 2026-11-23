@@ -5,6 +5,72 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-23 —— 沙箱内、白名单式的命令执行器给 Worker 一个测试回路
+
+**决定。** 增加第二个随仓库发布的 stdio MCP 服务器 `agent-exec`，提供两个工具：
+`list_commands`（read）与 `run_command`（write）。命令是所有者写在
+`<clone home>/agent-exec.json` 里的 argv 数组白名单；安装器从项目里播种：`package.json` 的
+`test`、`typecheck`、`lint`、`check`、`gate`、`build` 脚本，或检测到相应项目类型时的
+`pytest`、`go test`、`cargo test`、`mvn test`、`gradlew test`。`run_command` 只接收命令名：
+不经过 shell，也不接收模型提供的参数。服务器用 `execFile` 执行，cwd 为工作区，环境只保留
+`PATH`、`HOME`、`LANG`、`TMPDIR`、`CI`，超时 240 秒，超时杀进程组，输出上限 100KB 并保留
+尾部。在 macOS 上，命令由 `/usr/bin/sandbox-exec -p <profile>` 包裹；profile 由
+`buildSeatbeltProfile` 生成，工作区（外加包缓存）是写入根，网络关闭，内核的受保护根被拒绝。
+没有沙箱时，除非配置显式写 `allowUnsandboxed: true`，否则拒绝执行。不增加提交工具；提交仍归
+修复通道。
+
+**为什么这样更好。** 2026-11-22 的条目因为 `decideTool` 拒绝 `external`、且没有面向 Worker
+的沙箱而延后了 shell。`src/authority/seatbelt.ts` 里的构造器早已存在却没有调用点；本机的
+`/usr/bin/sandbox-exec` 存在，冒烟 profile 成功运行了 `/bin/echo`。修复通道自己记录了缺口：
+它的提示词写着“你没有 shell 工具：通道会在你停下后运行完整套件与 typecheck”
+（`src/repair/repair-lane.ts`），而通道通过注入的命令执行器跑测试（`src/repair/gates.ts`）。
+一个无法复现或验证 Bug 的代码 Agent 只能盲写修复；在步骤内运行项目自己的测试/类型检查脚本
+才能闭合这个回路。项目脚本是最小的命令面，所有者撰写的白名单也比模型提供的 argv 更可审查。
+
+**被否决的备选方案。**
+
+- *让模型提供 argv 的通用 `run_command`。* 否决：那是任意命令执行，正是闸门表达不了的权威
+  缺口；白名单是仍能支撑回路的最小面。
+- *现在就增加新的 `execute`/shell 风险并强制 shell Scope。* 延后：`resolveGrants` 会解析
+  `shell` Scope 却把它丢弃（`src/authority/path-gateway.ts`），`decideTool` 也没有命令检查。
+  新风险会改动 Worker 循环、MCP 客户端、策略与测试。等 shell Scope 真正强制时再议；在那之前，
+  白名单加 OS 沙箱就是边界。
+- *因为项目自己的测试可信，就直接无沙箱执行。* 否决：测试是项目代码，能读凭据、写工作区之外
+  或访问网络。沙箱才是边界；在非 macOS 上，除非所有者显式放弃，服务器拒绝执行。
+- *做一个接收测试文件路径或额外参数的 `run_test`。* v1 否决：它绑定具体运行器，还扩大参数面。
+  项目自己的 `test` 脚本就是抽象；所有者可以在 `agent-exec.json` 里加一条聚焦脚本。
+- *现在就加 LSP、符号导航或调试器。* 延后：执行测试与类型检查才是修 Bug 的阻塞点；语言服务器
+  或调试器需要单独的清单与契约。等检索、读取与 typecheck 都不够用时再议。
+- *增加 HTTP POST/API 工具或数据库工具。* 延后：两者都需要单独的网络/凭据契约；`fetch_url`
+  已覆盖读已知 URL，而且本仓库没有数据库任务的证据。
+- *增加 git 提交工具。* 否决：提交仍归修复通道与所有者；Worker 只拿到 status/diff/log。
+
+**放弃了什么。** 只能运行白名单里的命令：没有一次性的 `node -e`，没有 `git clone`，没有安装
+依赖。所有者编辑 `agent-exec.json` 添加命令，这是一个有意的动作。`run_command` 声明为
+`write`，因此只读步骤不能跑测试；步骤必须是 `reversible_write`。沙箱把写入限制在工作区、
+临时目录与包缓存，关闭网络并拒绝受保护根；需要网络或写工作区之外的测试会失败，在
+Linux/Windows 上默认拒绝执行。`sandbox-exec` 已被弃用；如果未来的 macOS 移除它，执行器会
+拒绝运行，直到接上替代沙箱。输出只保留 100KB 尾部，超大日志会被截断。检测出的命令清单是
+启发式的；所有者需要复核 JSON。
+
+**证据。** `src/authority/seatbelt.ts` 生成 profile 与 `wrapWithSandbox`；
+`/usr/bin/sandbox-exec` 存在，2026-11-23 执行
+`sandbox-exec -p '(version 1)(allow default)(deny network*)' /bin/echo sandbox-ok` 打印了
+`sandbox-ok`。`src/repair/repair-lane.ts` 说明 Worker 没有 shell、通道负责跑套件与
+typecheck；`src/repair/gates.ts` 用注入的执行器跑测试。新增的
+`test/agent-exec-mcp.test.ts` **17/17**：声明、配置校验、命令检测、真实允许命令、非白名单
+命令、无沙箱拒绝、工作区外与 `.git` 内写入被拒、超时与输出上限。真实 macOS 沙箱由测试走通，
+不是假设。第一次探测曾让 `.git` 写入通过，因为临时工作区的 `/var` 写法与内核看到的
+`/private/var` 路径不一致；`agentExecSandboxProfile` 现在用 `realpathSync` 解析工作区，测试
+断言该写入被拒绝。`npm test` **991/991**，`npm run typecheck` 退出 0，`npm run gate`
+**PASS** 且基线不变；命令记录在优化日志里。
+
+**推翻条件。** 如果白名单对真实修 Bug 太窄——所有者反复需要不在 `agent-exec.json` 里的命令
+——实现 shell Scope/`execute` 风险契约，而不是把白名单放宽成任意 argv。如果 `sandbox-exec`
+被移除或破坏常见测试运行器，就从 `mcp.json` 移除 `agent-exec` 条目，直到有替代沙箱。如果这些
+工具造成的错误/不安全调用多于有用调用，移除条目。如果出现维护中的 MCP SDK 或沙箱执行域，
+替换手写服务器，而不是让它继续膨胀。
+
 ## 2026-11-22 —— 一个内置本地 MCP 服务器补齐 Worker 的检索、Git、日期与网页能力
 
 **决定。** 增加一个由所有者安装的 stdio MCP 服务器 `agent-tools`，原生 Worker 通过

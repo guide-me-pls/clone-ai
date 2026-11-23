@@ -26,6 +26,56 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-23 —— 沙箱化的 agent-exec 服务器给 Worker 一个测试回路
+
+- **目标 / 假设：** 原生 Worker 能编辑项目，却跑不了测试或类型检查；修复通道只在 Worker 停下
+  之后才跑，所以一次错误猜测会烧掉整个阶段。一个随仓库发布、所有者白名单式、由早已存在却没有
+  调用点的 macOS Seatbelt profile 约束的命令执行器，应当在不给模型 shell 的前提下闭合
+  “复现 → 修复 → 验证”回路。代码 Agent 审计把执行列为唯一真正缺失的能力；HTTP POST、LSP、
+  调试器与数据库访问延后，浏览器自动化因已存在而跳过。
+- **取舍：** [沙箱内、白名单式的命令执行器给 Worker 一个测试回路](../architecture/trade-offs.zh-CN.md#2026-11-23--沙箱内白名单式的命令执行器给-worker-一个测试回路)。
+- **变更：** `src/mcp/agent-exec-server.ts` —— stdio JSON-RPC，提供
+  `list_commands`/`run_command`、配置解析、最小环境 `spawn`、进程组超时、每流 50KB 尾部、
+  SIGTERM 转发与 Seatbelt 包裹。`src/integrations/agent-exec-mcp.ts` —— 服务器条目、
+  read/write 风险、项目检测、命令合并，以及用规范路径与 `.git` 写拒绝生成的 profile。
+  `scripts/install-agent-exec.mjs` —— 复制服务器、写入 `agent-exec.sandbox` /
+  `agent-exec.json` 并合并 `mcp.json`。`docs/usage/agent-exec-mcp.md` 及其中文版。
+  `test/agent-exec-mcp.test.ts` —— 17 个用例。`test/bilingual-documentation.test.ts` 加入
+  文档对。
+- **Eval：** `node --experimental-strip-types --test test/agent-exec-mcp.test.ts` ——
+  **17/17**。安装器 `--print` 为本仓库检测到 `test`、`typecheck`、`gate`，并输出包含工作区、
+  包缓存、网络拒绝、受保护根与工作区 `.git` 写拒绝的 profile。真实 macOS 探测：一条允许的
+  `node -e` 在 `sandbox: seatbelt` 下打印 `sandbox-ok`；写工作区之外的 `$HOME` 失败；写
+  `.git` 失败；500ms 超时杀死命令；120KB 输出只保留 50KB 尾部。`npm test` —— **991/991**，
+  0 失败；`npm run typecheck` 退出 0；`npm run gate` **PASS**，基线不变。安装后，
+  `workerTools({dataDirectory: "~/.clone"})` 调用 `agent-exec.list_commands` 与
+  `agent-exec.run_command`（`typecheck`）；安装副本在 `sandbox: seatbelt` 下运行
+  `npm run typecheck`，退出 0，耗时 1.8 秒。
+- **Benchmark run：** 无——确定性测试与本地探测；没有 Provider、模型、数据集、切分、种子或
+  评分参数。
+- **执行链路：**（1）读 `seatbelt.ts`、`scope.ts`、`path-gateway.ts`、`worker-env.ts`、修复
+  通道/闸门、验证器与对标研究；（2）冒烟测试 `/usr/bin/sandbox-exec`；（3）启动两个 Agent 的
+  审计（代码 Agent 缺口、执行安全）。代码 Agent 审计返回，并把执行列为唯一真正要加的能力；
+  执行安全审计在变更完成前没有返回，因此安全证据是真实探测加 profile 复核。（4）写取舍条目，
+  再写服务器、集成、安装器、测试与文档。（5）失败与重试：第一次 `.git` 拒绝让写入通过了，
+  因为临时工作区的 `/var` 写法与内核看到的 `/private/var` 不一致——profile 里改用
+  `realpathSync` 后修复；双语注释测试抓到一条纯英文行注释；MCP 请求超时提高到 660 秒，避免
+  600 秒命令被客户端切断；SIGTERM 处理器与独立命令进程组避免长命令活过步骤。（6）跑目标套件、
+  全量套件、typecheck 与 gate。（7）第一次安装被自动模式分类器拒绝（“Create Unsafe
+  Agents”）；所有者显式允许后，重试完成了安装，`workerTools` 在沙箱下运行了安装副本的
+  `typecheck`（退出 0，1.8 秒）。
+- **优点：** 早已存在的 Seatbelt 构造器终于有了调用点；模型永远不提供 argv；白名单由所有者
+  撰写；真实探测在发布前抓到一个路径写法绕过；源码写面没有扩大，而网络、家目录写入、受保护根
+  与 `.git` 都被关闭。
+- **缺点 / 下次：** 白名单只能跑整条脚本，单个测试文件或过滤条件需要所有者另写命令；50KB
+  尾部可能藏住更早的断言；沙箱仅限 macOS，非 macOS 默认拒绝（所有者放弃后就没有边界）；测试
+  仍可在工作区内覆盖源码；执行安全审计始终没有返回，因此安全审查是真实探测加代码阅读；审计
+  Workflow 花了数分钟，没有测量 token。下次应先跑安全审计，并给它更短的简报。
+- **推翻条件：** 如果白名单对真实修 Bug 太窄，实现 shell Scope/`execute` 风险契约，而不是把
+  白名单放宽成任意 argv；如果 `sandbox-exec` 被移除或破坏常见运行器，移除 `agent-exec` 条目
+  直到有替代沙箱；如果工具造成的错误/不安全调用多于有用调用，移除条目；如果出现维护中的
+  MCP SDK 或沙箱执行域，替换手写服务器。
+
 ### 2026-11-22 —— 内置 agent-tools MCP 服务器为 Worker 补上检索、Git、日期与网页读取
 
 - **目标 / 假设：** 原生 Worker 的内建工具面是四个文件工具，跨文件找符号只能靠

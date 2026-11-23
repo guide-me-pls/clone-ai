@@ -31,6 +31,78 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-23 — A sandboxed agent-exec server gives the worker a test loop
+
+- **Goal / hypothesis:** the native worker can edit a project but cannot run
+  its tests or typecheck; the repair lane runs them only after the worker stops,
+  so a wrong guess burns the phase. A bundled, owner-allowlisted command runner,
+  confined by the macOS Seatbelt profile that already existed but had no call
+  sites, should close the reproduce → fix → verify loop without giving the model
+  a shell. The code-agent audit ranked execution as the only genuine missing
+  capability; HTTP POST, LSP, a debugger and database access were deferred, and
+  browser automation was skipped as already present.
+- **Trade-off:** [A sandboxed, allowlisted command runner gives the worker a test loop](../architecture/trade-offs.md#2026-11-23--a-sandboxed-allowlisted-command-runner-gives-the-worker-a-test-loop).
+- **Change:** `src/mcp/agent-exec-server.ts` — stdio JSON-RPC with
+  `list_commands`/`run_command`, config parsing, `spawn` with a minimal
+  environment, process-group timeout, 50 KB tail per stream, SIGTERM forwarding
+  and the Seatbelt wrapper. `src/integrations/agent-exec-mcp.ts` — the server
+  entry, read/write risks, project detection, command merge and the profile with
+  a canonical workspace and a `.git` write deny. `scripts/install-agent-exec.mjs`
+  — copies the server, writes `agent-exec.sandbox`/`agent-exec.json` and merges
+  `mcp.json`. `docs/usage/agent-exec-mcp.md` and its zh-CN pair.
+  `test/agent-exec-mcp.test.ts` — 17 cases. `test/bilingual-documentation.test.ts`
+  adds the doc pair.
+- **Eval:** `node --experimental-strip-types --test test/agent-exec-mcp.test.ts`
+  — **17/17**. The installer `--print` detects `test`, `typecheck` and `gate` for
+  this repository and emits a profile with the workspace, the package caches,
+  network denied, the protected roots and the workspace `.git` write deny. Live
+  macOS probes: an allowlisted `node -e` prints `sandbox-ok` under
+  `sandbox: seatbelt`; a write to `$HOME` outside the workspace fails; a write
+  inside `.git` fails; a 500 ms timeout kills the command; a 120 KB output keeps
+  a 50 KB tail. `npm test` — **991/991**, 0 fail; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**, baseline unchanged. After installation,
+  `workerTools({dataDirectory: "~/.clone"})` called `agent-exec.list_commands`
+  and `agent-exec.run_command` with `typecheck`; the installed copy ran
+  `npm run typecheck` under `sandbox: seatbelt` and exited 0 in 1.8 s.
+- **Benchmark run:** none — deterministic tests and local probes; no provider,
+  model, dataset, split, seed or scoring parameter.
+- **Execution chain:** (1) read `seatbelt.ts`, `scope.ts`, `path-gateway.ts`,
+  `worker-env.ts`, the repair lane/gates, the verifier and the parity study;
+  (2) smoke-tested `/usr/bin/sandbox-exec`; (3) launched a two-agent audit
+  (code-agent gaps, exec safety). The code-agent audit returned and named
+  execution as the only genuine add; the exec-safety audit did not return before
+  the change was finished, so the live probes plus the profile review are the
+  safety evidence. (4) wrote the trade-off, then the server, integration,
+  installer, tests and docs. (5) failures and retries: the first `.git` deny let
+  a write through because the temp workspace's `/var` spelling did not match the
+  kernel's `/private/var` path — `realpathSync` in the profile fixed it; the
+  bilingual-comment test caught one English-only line comment; the MCP request
+  timeout was raised to 660 s so a 600 s command is not cut by the client; a
+  SIGTERM handler and detached command groups keep a long command from
+  outliving the step. (6) ran the targeted suite, the full suite, typecheck and
+  gate. (7) the first installer run was denied by the auto-mode classifier
+  ("Create Unsafe Agents"); after the owner explicitly allowed it, the retry
+  installed the server, and `workerTools` ran the installed `typecheck` under
+  the sandbox (exit 0, 1.8 s).
+- **Pros:** the existing Seatbelt builder finally has a call site; the model
+  never supplies argv; the allowlist is owner-authored; the live probes found a
+  real path-spelling bypass before it shipped; the source-write surface is
+  unchanged, while network, home writes, protected roots and `.git` are closed.
+- **Cons / next time:** the allowlist runs whole scripts, so a single test file
+  or filter needs an owner-authored command; the 50 KB tail can hide an earlier
+  assertion; the sandbox is macOS-only and the non-macOS path refuses by default
+  (there is no boundary if the owner opts out); a test can still overwrite
+  source inside the workspace; the exec-safety audit never returned, so the
+  safety review is the live probes plus code reading; the audit workflow took
+  several minutes and no token count was measured. Next time, run the safety
+  audit first with a shorter brief.
+- **Reversal condition:** if the allowlist is too narrow for real bug fixing,
+  implement the shell-scope/`execute`-risk contract rather than widening to
+  arbitrary argv; if `sandbox-exec` is removed or breaks common runners, remove
+  the `agent-exec` entry until a replacement sandbox exists; if the tools cause
+  more unsafe/incorrect calls than useful ones, remove the entry; replace the
+  hand-written server if a maintained MCP SDK or sandboxed exec domain arrives.
+
 ### 2026-11-22 — A bundled agent-tools MCP server gives workers search, git, time and web read
 
 - **Goal / hypothesis:** the native worker's built-in surface is four file

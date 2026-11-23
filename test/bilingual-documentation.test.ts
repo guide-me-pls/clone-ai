@@ -16,6 +16,7 @@ const documentPairs = [
   ["docs/usage/mobile-whatsapp.md", "docs/usage/mobile-whatsapp.zh-CN.md"],
   ["docs/usage/agent-invocations.md", "docs/usage/agent-invocations.zh-CN.md"],
   ["docs/usage/agent-tools-mcp.md", "docs/usage/agent-tools-mcp.zh-CN.md"],
+  ["docs/usage/agent-exec-mcp.md", "docs/usage/agent-exec-mcp.zh-CN.md"],
   ["docs/architecture/agent-runtime-convergence.md", "docs/architecture/agent-runtime-convergence.zh-CN.md"],
   ["docs/engineering/optimizations.md", "docs/engineering/optimizations.zh-CN.md"],
   ["docs/engineering/optimization-results.md", "docs/engineering/optimization-results.zh-CN.md"],

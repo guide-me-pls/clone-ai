@@ -15,6 +15,30 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-23 — The worker can run allowlisted tests and typecheck under a sandbox
+
+- **Claim:** the native worker can now run the project's own `test`, `typecheck`,
+  `lint`, `check`, `gate` or `build` script — whichever the owner lists in
+  `agent-exec.json` — without a shell and without model-supplied argv. On macOS
+  each command runs under Seatbelt: writes stay in the workspace, temp and
+  package caches; network is off; protected locations and the workspace `.git`
+  are read-only. `run_command` is a write-risk tool for reversible-write steps;
+  `list_commands` is read-only. The worker can reproduce a failure, edit and
+  rerun the check inside one step.
+- **Evidence:** `node --experimental-strip-types --test test/agent-exec-mcp.test.ts`
+  **17/17**; `npm test` **991/991**, 0 fail; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**, baseline unchanged. The installer's `--print` detects
+  `test`/`typecheck`/`gate` and emits the profile with the workspace, caches,
+  network deny, protected roots and `.git` deny. Live macOS probes: an
+  allowlisted command prints `sandbox-ok` under `sandbox: seatbelt`; a write to
+  `$HOME` outside the workspace fails; a write inside `.git` fails; a 500 ms
+  timeout kills the command; a 120 KB output keeps a 50 KB tail. After
+  installation, the installed copy ran `npm run typecheck` through
+  `workerTools` under `sandbox: seatbelt` (exit 0, 1.8 s). The claim is the
+  feedback loop; a test can still overwrite source inside the workspace.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-23--a-sandboxed-allowlisted-command-runner-gives-the-worker-a-test-loop);
+  [execution chain](optimizations.md#2026-11-23--a-sandboxed-agent-exec-server-gives-the-worker-a-test-loop).
+
 ## 2026-11-22 — Workers gain seven read-only tools, including repository search
 
 - **Claim:** the native worker can now search a repository (`search_text`,

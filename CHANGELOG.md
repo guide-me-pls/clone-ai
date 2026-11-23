@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The worker can run allowlisted tests inside a sandbox
+
+The native worker gains `agent-exec`: `list_commands` and `run_command` run only the commands the owner lists in `agent-exec.json` — the installer seeds `test`, `typecheck`, `lint`, `check`, `gate` and `build` scripts, or pytest/go/cargo/mvn/gradle when detected — without a shell or model-supplied argv. On macOS every command runs under a Seatbelt profile: writes stay in the workspace, temp and package caches; network is off; protected locations and the workspace `.git` are read-only. The default timeout is 240 s (600 max), output keeps a 50 KB tail per stream, and the runner refuses unsandboxed execution unless the owner explicitly opts out. `run_command` is a write-risk tool for reversible-write steps. New docs: `docs/usage/agent-exec-mcp.md` and its Chinese pair. `npm test` 991/991, typecheck 0, gate PASS.
+
+原生 Worker 新增 `agent-exec`：`list_commands` 与 `run_command` 只运行所有者在 `agent-exec.json` 里列出的命令——安装器播种 `test`、`typecheck`、`lint`、`check`、`gate` 与 `build` 脚本，或检测到的 pytest/go/cargo/mvn/gradle——不经过 shell，也不接收模型提供的 argv。在 macOS 上，每条命令都在 Seatbelt profile 下运行：写入留在工作区、临时目录与包缓存；网络关闭；受保护位置与工作区 `.git` 只读。默认超时 240 秒（最多 600 秒），每个流保留 50KB 尾部；除非所有者显式放弃，执行器拒绝无沙箱运行。`run_command` 是提供给可逆写入步骤的 write 风险工具。新文档：`docs/usage/agent-exec-mcp.md` 及其中文版。`npm test` 991/991，typecheck 0，gate PASS。
+
 ### Workers gain a read-only agent-tools MCP server
 
 The native worker can now search a repository (`search_text`, `find_files`), inspect `git_status`/`git_diff`/`git_log`, read `current_time`, and fetch one HTTP(S) URL (`fetch_url`) through a bundled `agent-tools` MCP server installed with `scripts/install-agent-tools.mjs`. Every tool is opt-in through `mcp.json` and carries a declared risk: `fetch_url` is `network` and is offered only to a step with a network scope; no write or shell tool is declared. The server resolves paths before walking, skips protected roots and symlinked directories, disables repository-configured git diff helpers and fsmonitor, refuses private/loopback fetch targets and caps results. `browser-mcp.ts` now shares its `mcp.json` merge helpers with the new installer. New docs: `docs/usage/agent-tools-mcp.md` and its Chinese pair. `npm test` 974/974, typecheck 0, gate PASS.
