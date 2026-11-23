@@ -34,6 +34,10 @@ const state = {
   openDisclosures: new Map(),
   disclosureScrollPositions: new Map(),
   schedules: [],
+  // A backlog of failed follow-ups renders as one summary row until the owner
+  // expands it; the flag survives the 3-second refresh.
+  // 一堆失败跟进在所有者展开前显示为一行摘要；该标记跨越 3 秒刷新保留。
+  opportunitiesExpanded: false,
   settings: null,
   gateways: [],
   gatewayLoading: false,
@@ -631,6 +635,10 @@ function applyChrome(locale, strings) {
   const localeSelect = $("config-locale");
   if (localeSelect && document.activeElement !== localeSelect) localeSelect.value = state.locale;
   state.signatures = {};
+  // The picker labels are localized now; rebuild the option text for the new
+  // language without touching a focused select's selection.
+  // 选择器的标签现在已本地化；为新语言重建选项文本，同时不动正在聚焦的选择器的选中值。
+  renderComposerChoice();
 }
 const api = async (path, options = {}) => {
   const headers = new Headers(options.headers);
@@ -1416,24 +1424,63 @@ function selectableModels() {
 }
 
 /**
- * Reasoning levels the gateway declares for a model.
+ * Known reasoning-effort names, in the provider's spelling.
  *
- * A gateway that reports no levels gets the known list rather than an empty
- * picker: a provider may accept levels it does not advertise, and the owner
- * should not lose the choice because discovery was sparse. The earlier code
- * read `state.gateway`, which is never assigned, so the declared list was
- * never actually used.
- * 网关为该模型声明的推理档位。
+ * The gateway declares levels per model, but it also accepts names it does not
+ * list: a direct probe against the local gateway with `deepseek-v4.1-flash`
+ * returned HTTP 200 for `medium`, `minimal`, `xhigh`, `ultra`, `none` and
+ * `off`. The picker therefore offers the model's declared levels first and the
+ * rest of this vocabulary under a marked group, instead of hiding levels the
+ * provider accepts.
+ * 已知推理强度名称，采用 Provider 的写法。
  *
- * 没有报告档位的网关退回已知列表，而不是空选择器：Provider 可能接受未声明的档位，所有者
- * 不该因为发现数据稀疏而失去选择。此前的代码读取从未赋值的 `state.gateway`，因此声明的
- * 列表其实从未生效。
+ * 网关逐模型声明档位，但也接受未列出的名称：用 `deepseek-v4.1-flash` 直接探测本地网关，
+ * `medium`、`minimal`、`xhigh`、`ultra`、`none`、`off` 都返回 HTTP 200。因此选择器先列
+ * 模型声明的档位，再把其余词汇放在带标记的分组里，而不是藏起 Provider 接受的档位。
  */
-function reasoningLevelsFor(model) {
+const EFFORT_LEVELS = ["none", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+const EFFORT_LEVEL_KEYS = {
+  none: "effort-level-none",
+  off: "effort-level-off",
+  minimal: "effort-level-minimal",
+  low: "effort-level-low",
+  medium: "effort-level-medium",
+  high: "effort-level-high",
+  xhigh: "effort-level-xhigh",
+  max: "effort-level-max",
+  ultra: "effort-level-ultra",
+};
+
+/** A level as the owner reads it, with the exact name sent to the provider. 所有者读到的档位，附带真正发送给 Provider 的名称。 */
+function effortLevelLabel(level) {
+  const key = EFFORT_LEVEL_KEYS[level];
+  const label = key ? t(key) : "";
+  return label && label !== key ? `${label} · ${level}` : level;
+}
+
+/** The levels the gateway actually declares for this model; empty when it declares none. 网关为该模型实际声明的档位；未声明时为空。 */
+function declaredReasoningLevelsFor(model) {
   const id = String(model || state.config?.config?.mainAgentModel || "");
   const gateway = state.gateways.find((candidate) => candidate.id === "magpie");
   const declared = (gateway?.models || []).find((entry) => entry.id === id)?.reasoningLevels;
-  return Array.isArray(declared) && declared.length > 0 ? declared : EFFORT_LEVELS;
+  return Array.isArray(declared) && declared.length > 0 ? declared : [];
+}
+
+/**
+ * The effort picker's groups: what the model declares, then every other known
+ * level. A gateway that declares nothing gets one honest "known levels" group
+ * rather than a fake declaration.
+ * 强度选择器的分组：模型声明的档位，然后是其余已知档位。网关什么都没声明时，只给一个
+ * 诚实的"已知档位"组，而不是伪造一份声明。
+ */
+function effortLevelGroupsFor(model) {
+  const declared = declaredReasoningLevelsFor(model);
+  if (declared.length === 0) return [{ label: t("effort-group-known"), levels: EFFORT_LEVELS }];
+  const others = EFFORT_LEVELS.filter((level) => !declared.includes(level));
+  return [
+    { label: t("effort-group-declared"), levels: declared },
+    ...(others.length === 0 ? [] : [{ label: t("effort-group-other"), levels: others }]),
+  ];
 }
 
 /* ---------- Composer model and effort, saved with the conversation ---------- */
@@ -1470,6 +1517,16 @@ function writeTurnChoice(conversationId, choice) {
   else localStorage.setItem(key, JSON.stringify({ model: choice.model || "", effort: choice.effort || "" }));
 }
 
+/** The effort select's full option list. A saved level outside the offered groups still appears as the current choice. 强度选择器的完整选项列表；已保存但不在提供范围内的档位仍作为当前选择出现。 */
+function effortOptionsMarkup(groups, choice) {
+  const offered = groups.flatMap((group) => group.levels);
+  const outside = choice && !offered.includes(choice)
+    ? `<option value="${escape(choice)}">${escape(choice)} · ${escape(t("composer-choice-current"))}</option>`
+    : "";
+  const body = groups.map((group) => `<optgroup label="${escape(group.label)}">${group.levels.map((level) => `<option value="${escape(level)}">${escape(effortLevelLabel(level))}</option>`).join("")}</optgroup>`).join("");
+  return `<option value="">${escape(t("effort-default"))}</option>${outside}${body}`;
+}
+
 /** Render the composer pickers from the saved choice; empty means "follow Settings". 按保存的选择渲染输入框选择器；空值表示"跟随设置"。 */
 function renderComposerChoice() {
   const modelSelect = $("composer-model");
@@ -1477,7 +1534,7 @@ function renderComposerChoice() {
   if (!modelSelect || !effortSelect) return;
   const choice = readTurnChoice(activeConversationId());
   const models = selectableModels();
-  const modelSignature = JSON.stringify([models, choice.model]);
+  const modelSignature = JSON.stringify([models, choice.model, state.locale]);
   if (modelSelect.dataset.signature !== modelSignature) {
     modelSelect.dataset.signature = modelSignature;
     const outsideCatalog = choice.model && !models.some((model) => model.value === choice.model)
@@ -1491,26 +1548,35 @@ function renderComposerChoice() {
   } else if (document.activeElement !== modelSelect) {
     modelSelect.value = choice.model;
   }
-  const levels = reasoningLevelsFor(choice.model);
-  const effortSignature = JSON.stringify([levels, choice.effort]);
+  const effortGroups = effortLevelGroupsFor(choice.model);
+  const effortSignature = JSON.stringify([effortGroups, choice.effort, state.locale]);
   if (effortSelect.dataset.signature !== effortSignature) {
     effortSelect.dataset.signature = effortSignature;
-    const outsideLevels = choice.effort && !levels.includes(choice.effort)
-      ? `<option value="${escape(choice.effort)}">${escape(choice.effort)} · ${escape(t("composer-choice-current"))}</option>`
-      : "";
-    effortSelect.innerHTML = `<option value="">${escape(t("effort-default"))}</option>${outsideLevels}${levels.map((level) => `<option value="${escape(level)}">${escape(level)}</option>`).join("")}`;
+    effortSelect.innerHTML = effortOptionsMarkup(effortGroups, choice.effort);
     effortSelect.value = choice.effort;
   } else if (document.activeElement !== effortSelect) {
     effortSelect.value = choice.effort;
   }
+  // An undeclared level is a request, not a guarantee: say so in the closed
+  // control, where the group label is no longer visible. A model that declares
+  // nothing also gets the note, for the same reason.
+  // 未声明的档位是请求，不是保证：在分组标签已不可见的闭合态里说明这一点。什么都没
+  // 声明的模型也应显示提示，理由相同。
+  const caveat = $("composer-effort-caveat");
+  if (caveat) {
+    const declared = declaredReasoningLevelsFor(choice.model);
+    caveat.hidden = !choice.effort || declared.includes(choice.effort);
+  }
 }
 
-/** Persist a picker change for the current conversation; a level the new model rejects is cleared. 保存选择器改动；新模型不接受的档位会被清空。 */
+/** Persist a picker change for the current conversation. The effort select only
+ * offers known values plus the saved current choice, so saving it as rendered
+ * cannot silently clear a mapped level. 保存选择器改动；强度选择器只会提供已知值与已保存的
+ * 当前选择，因此按渲染值保存不会悄悄清掉映射档位。 */
 function saveComposerChoice() {
   const model = $("composer-model")?.value || "";
   const effort = $("composer-effort")?.value || "";
-  const accepted = reasoningLevelsFor(model);
-  writeTurnChoice(activeConversationId(), { model, effort: accepted.includes(effort) ? effort : "" });
+  writeTurnChoice(activeConversationId(), { model, effort });
   renderComposerChoice();
 }
 
@@ -1559,21 +1625,56 @@ function isFailureCard(card) {
   return card.source === "failed_task";
 }
 
-function renderOpportunities(cards) {
-  state.opportunities = cards;
-  const signature = JSON.stringify(cards);
-  if (state.signatures.opportunities === signature) return;
-  state.signatures.opportunities = signature;
-  const strip = $("opportunity-strip");
-  if (!cards.length) { strip.hidden = true; strip.innerHTML = ""; return; }
-  strip.hidden = false;
-  strip.innerHTML = cards.slice(0, 4).map((card) => {
-    const failed = isFailureCard(card);
-    return `<article class="opportunity-card${failed ? " is-failure" : ""}">
+const ISO_TIMESTAMP_PATTERN = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/;
+function normalizedCopy(value) { return String(value ?? "").replace(/[。！？!?.]+$/g, "").trim(); }
+
+/** The failure title without the source prefix its chip already names. 去掉芯片已经点名的来源前缀后的失败标题。 */
+function failureTitleText(card) {
+  return plainPreview(card.title).replace(/^任务需要跟进[：:]\s*/, "").trim();
+}
+
+/**
+ * The failure card's why-line, said once: the raw ISO timestamp becomes the
+ * owner's local date and time, and the trailing sentence that merely restates
+ * the title is dropped only when it matches exactly. Any structure the helper
+ * does not recognise is kept as written — the card is a diagnostic entry, not
+ * a place to rewrite server prose.
+ * 失败卡的 why 行只说一遍：原始 ISO 时间变成所有者的本地日期时间；只有与标题完全相同的
+ * 结尾复述才删除。助手不认识的任何结构都原样保留——卡片是诊断入口，不是改写后端散文的地方。
+ */
+function failureWhyText(card) {
+  const raw = plainPreview(card.whyNow);
+  if (!raw.trim()) return "";
+  const withTime = raw.replace(ISO_TIMESTAMP_PATTERN, (match) => {
+    const date = new Date(match);
+    if (Number.isNaN(date.getTime())) return match;
+    return new Intl.DateTimeFormat(state.locale || "zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
+  });
+  const title = normalizedCopy(failureTitleText(card));
+  const sentences = withTime.split("。");
+  // A sentence-ending "。" leaves an empty trailing segment; drop it before
+  // looking at the last real sentence, or a repeated tail is never seen.
+  // 句末的"。"会留下空的尾段；先去掉它，再检查最后一句，否则复述永远看不到。
+  while (sentences.length > 0 && !sentences[sentences.length - 1]?.trim()) sentences.pop();
+  const last = sentences[sentences.length - 1]?.trim() ?? "";
+  if (sentences.length > 1 && last && normalizedCopy(last) === title) sentences.pop();
+  const joined = sentences.join("。").trim();
+  if (!joined || normalizedCopy(joined) === title) return "";
+  return /[。！？!?]$/.test(joined) ? joined : `${joined}。`;
+}
+
+function opportunityCardMarkup(card) {
+  const failed = isFailureCard(card);
+  // The chip already says 任务跟进; keeping the same prefix in the title makes
+  // every failure card say it twice.
+  // 芯片已经写着“任务跟进”；标题里再保留同样前缀会让每条失败卡说两遍。
+  const title = failed ? failureTitleText(card) : plainPreview(card.title);
+  const why = failed ? failureWhyText(card) : plainPreview(card.whyNow);
+  return `<article class="opportunity-card${failed ? " is-failure" : ""}">
       <div class="opportunity-icon" aria-hidden="true">${failed ? "!" : "✦"}</div>
       <div class="opportunity-copy">
-        <div class="opportunity-head"><span class="opportunity-source">${escape(opportunitySourceLabel(card.source))}</span><b>${escape(plainPreview(card.title))}</b></div>
-        <p class="opportunity-why">${escape(plainPreview(card.whyNow))}</p>
+        <div class="opportunity-head"><span class="opportunity-source">${escape(opportunitySourceLabel(card.source))}</span><b>${escape(title)}</b></div>
+        ${why ? `<p class="opportunity-why">${escape(why)}</p>` : ""}
         <p class="opportunity-proposal">${escape(plainPreview(card.proposedResult))}</p>
       </div>
       <div class="opportunity-actions">
@@ -1582,7 +1683,84 @@ function renderOpportunities(cards) {
         <button class="opportunity-dismiss" type="button" data-dismiss-opportunity="${escape(card.id)}">忽略</button>
       </div>
     </article>`;
-  }).join("");
+}
+
+/**
+ * A backlog of failed tasks is one status row, not a stack of identical
+ * notices: three cards occupied 205 px of a 1080 px window before the
+ * conversation started. The row names the count and the newest failure;
+ * expanding restores the cards and their actions. A single failure still
+ * shows its card — one alert is information, a wall of them is noise.
+ * 一堆失败任务是状态行，不是一叠相同的通知：三张卡片在 1080px 窗口里占掉 205px，对话还
+ * 没开始。状态行写明条数与最新一条；展开后恢复卡片与操作。单条失败仍显示卡片——一条是
+ * 信息，一堵墙是噪音。
+ */
+function opportunitiesMarkup(cards, expanded) {
+  const failures = cards.filter(isFailureCard);
+  const others = cards.filter((card) => !isFailureCard(card));
+  const collapsed = failures.length > 1 && !expanded;
+  const newest = failures[0];
+  // The card title repeats the source label ("任务需要跟进：…"); the summary
+  // already names the group, so only the specific failure remains.
+  // 卡片标题重复了来源标签（"任务需要跟进：…"）；摘要已经点名分组，所以只留具体失败。
+  const newestTitle = newest ? failureTitleText(newest) : "";
+  const summary = failures.length > 1
+    ? `<button class="opportunity-summary" type="button" data-toggle-opportunities aria-expanded="${expanded ? "true" : "false"}" aria-controls="opportunity-failure-cards">
+        <span class="opportunity-icon" aria-hidden="true">!</span>
+        <span class="opportunity-summary-copy"><b>任务跟进</b><span>${failures.length} 条待处理${newestTitle ? ` · 最新：${escape(newestTitle)}` : ""}</span></span>
+        <span class="opportunity-summary-action">${expanded ? "收起" : "展开"}</span>
+      </button>`
+    : "";
+  // Non-failure opportunities stay visible: a deadline is something to act on,
+  // not backlog. Failure cards are always in the DOM so aria-controls resolves
+  // and toggling can flip `hidden` in place without moving keyboard focus;
+  // a long backlog scrolls instead of pushing the conversation off-screen.
+  // 非失败机会始终可见：临近承诺是要行动的事，不是积压。失败卡始终在 DOM 中，这样
+  // aria-controls 有目标，切换时可以原地翻转 `hidden` 而不会丢掉键盘焦点；过长的积压
+  // 在卡片区内滚动，而不是把对话顶出屏幕。
+  const otherCards = others.length
+    ? `<div class="opportunity-cards">${others.slice(0, 4).map(opportunityCardMarkup).join("")}</div>`
+    : "";
+  const failureCards = failures.length
+    ? `<div class="opportunity-cards opportunity-cards--failures" id="opportunity-failure-cards"${collapsed ? " hidden" : ""}>${failures.map(opportunityCardMarkup).join("")}</div>`
+    : "";
+  return `${summary}${otherCards}${failureCards}`;
+}
+
+function toggleOpportunities() {
+  const expanded = !state.opportunitiesExpanded;
+  state.opportunitiesExpanded = expanded;
+  const summary = $("opportunity-strip").querySelector("[data-toggle-opportunities]");
+  const failureCards = $("opportunity-failure-cards");
+  if (!summary || !failureCards) return;
+  summary.setAttribute("aria-expanded", expanded ? "true" : "false");
+  const action = summary.querySelector(".opportunity-summary-action");
+  if (action) action.textContent = expanded ? "收起" : "展开";
+  failureCards.hidden = !expanded;
+  // Keep the refresh's signature in step with the DOM change it just made.
+  // 让刷新使用的签名与刚刚完成的 DOM 变更保持一致。
+  state.signatures.opportunities = JSON.stringify([state.opportunities || [], expanded]);
+}
+
+function renderOpportunities(cards) {
+  state.opportunities = cards;
+  const signature = JSON.stringify([cards, state.opportunitiesExpanded]);
+  if (state.signatures.opportunities === signature) return;
+  state.signatures.opportunities = signature;
+  const strip = $("opportunity-strip");
+  if (!cards.length) {
+    state.opportunitiesExpanded = false;
+    strip.hidden = true;
+    strip.innerHTML = "";
+    return;
+  }
+  // A background refresh can replace the strip while the summary holds focus;
+  // give the new summary the focus back so the keyboard is not dropped on body.
+  // 后台刷新可能在摘要持有焦点时换掉整条；把焦点还给新摘要，别让键盘落回 body。
+  const restoreFocus = document.activeElement instanceof Element && document.activeElement.closest("[data-toggle-opportunities]") !== null;
+  strip.hidden = false;
+  strip.innerHTML = opportunitiesMarkup(cards, state.opportunitiesExpanded);
+  if (restoreFocus) strip.querySelector("[data-toggle-opportunities]")?.focus();
 }
 
 function opportunitySourceLabel(source) { return { deadline: "临近承诺", failed_task: "任务跟进", neglected_goal: "目标提醒", observation: "新观察" }[source] || "机会"; }
@@ -1605,7 +1783,6 @@ async function decideOpportunity(id, action) {
   } catch (error) { announce(error.message, true); }
 }
 
-const EFFORT_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const MEMORY_TYPES = [["preference", "偏好"], ["fact", "事实"], ["decision", "决定"], ["procedure", "流程"], ["commitment", "承诺"]];
 const MEMORY_SENSITIVITIES = [["private", "私有"], ["public", "公开"], ["secret", "机密"]];
 function options(pairs, selected) { return pairs.map(([value, label]) => `<option value="${value}" ${value === selected ? "selected" : ""}>${label}</option>`).join(""); }
@@ -1952,9 +2129,13 @@ function logEntryMarkup(entry, conversationId) {
   const duration = logDuration(entry.durationMs);
   const history = entry.kind === "history";
   // The answer names its author. The request is already above it as a bubble,
-  // so the head carries only the author, state and time.
-  // 回答标明作者。请求已作为气泡在其上方，因此头部只保留作者、状态与时间。
-  const head = `<div class="log-entry-head"><span class="log-entry-kicker">${history ? "历史记录" : "clone-ai"}</span><span class="log-badge log-badge--${status.tone}">${escape(status.label)}</span><small>${time(entry.startedAt)}${duration ? ` · ${escape(duration)}` : ""}</small></div>`;
+  // so the head carries only the author, state and time. Everything sits on the
+  // left as one byline: a status stranded at the right edge can read as the
+  // request's completion, and it belongs beside the author it describes.
+  // 回答标明作者。请求已作为气泡在其上方，因此头部只保留作者、状态与时间。它们都在左侧
+  // 排成一条署名：孤零零挂在右端的状态会被读成请求的完成态，而状态属于它描述的作者。
+  const meta = `<span class="log-entry-meta"><span class="log-badge log-badge--${status.tone}">${escape(status.label)}</span><small>${time(entry.startedAt)}${duration ? ` · ${escape(duration)}` : ""}</small></span>`;
+  const head = `<div class="log-entry-head"><span class="log-entry-kicker">${history ? "历史记录" : "clone-ai"}</span>${meta}</div>`;
   // Legacy history entries never entered the journal, so they are honest about
   // it: the reply is still the product, and there is no process to link to.
   // 旧历史条目从未进入 Journal，因此如实说明：回复仍是产物，但没有可链接的过程。
@@ -2880,7 +3061,7 @@ $("audit-session-list").addEventListener("click", (event) => { const button = ev
 $("memory-candidates").addEventListener("click", (event) => { const promote = event.target.closest("[data-promote-candidate]"); if (promote) { void decideCandidate(promote.dataset.promoteCandidate, "promote"); return; } const reject = event.target.closest("[data-reject-candidate]"); if (reject) void decideCandidate(reject.dataset.rejectCandidate, "reject"); });
 $("library-list").addEventListener("click", (event) => { const conflict = event.target.closest("[data-memory-conflict]"); if (conflict) { void keepMemoryFile(conflict.dataset.memoryConflict); return; } const save = event.target.closest("[data-save-library]"); if (save) { void saveLibraryMemory(save.dataset.saveLibrary); return; } const source = event.target.closest("[data-open-memory-source]"); if (source) { closeSettings(); void selectSession(source.dataset.openMemorySource); } });
 $("library-create").addEventListener("click", () => void createLibraryMemory());
-$("opportunity-strip").addEventListener("click", (event) => { const settings = event.target.closest("[data-open-failure-settings]"); if (settings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const accept = event.target.closest("[data-accept-opportunity]"); if (accept) { void decideOpportunity(accept.dataset.acceptOpportunity, "accept"); return; } const dismiss = event.target.closest("[data-dismiss-opportunity]"); if (dismiss) void decideOpportunity(dismiss.dataset.dismissOpportunity, "dismiss"); });
+$("opportunity-strip").addEventListener("click", (event) => { const toggle = event.target.closest("[data-toggle-opportunities]"); if (toggle) { toggleOpportunities(); return; } const settings = event.target.closest("[data-open-failure-settings]"); if (settings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const accept = event.target.closest("[data-accept-opportunity]"); if (accept) { void decideOpportunity(accept.dataset.acceptOpportunity, "accept"); return; } const dismiss = event.target.closest("[data-dismiss-opportunity]"); if (dismiss) void decideOpportunity(dismiss.dataset.dismissOpportunity, "dismiss"); });
 $("context-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("context-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来搜索历史。", true); return; } void searchContextHistory(query); });
 $("memory-search-form").addEventListener("submit", (event) => { event.preventDefault(); const query = $("memory-search-query").value.trim(); if (query.length === 0) { announce("请输入内容来测试检索。", true); return; } void searchMemories(query); });
 $("new-session").addEventListener("click", () => { state.sessionEpoch += 1; notifyDesktopNavigation("conversation"); closeSchedules(); closeSettings(); setSidebarOpen(false); rememberCurrentScroll(); const selected = (state.dashboard?.sessions || []).find((session) => session.id === state.selectedId); const selectedConversation = state.selectedId === MAIN_CONVERSATION_ID || (state.selectedId?.startsWith("conversation-") ?? false) || (state.selectedId?.startsWith("whatsapp:") ?? false) ? state.selectedId : selected?.conversationId ?? selected?.parentId; state.routeContext = selectedConversation ? { kind: "conversation", id: selectedConversation } : null; state.routing = false; if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); state.composingNew = true; state.newConversationId = null; $("query").value = ""; resizeComposer(); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); syncComposer(); renderSessions(state.dashboard?.sessions || []); renderSession(null); $("query").focus(); });

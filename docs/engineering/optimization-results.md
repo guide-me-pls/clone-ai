@@ -31,6 +31,27 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-22--a-bundled-local-mcp-server-fills-the-workers-search-git-date-and-web-gaps);
   [execution chain](optimizations.md#2026-11-22--a-bundled-agent-tools-mcp-server-gives-workers-search-git-time-and-web-read).
 
+## 2026-11-20 — The conversation starts 155 px sooner and the effort picker offers ten levels
+
+- **Claim:** three failure follow-ups now occupy a 40 px summary row instead of a
+  205 px stack, so the conversation begins 155 px earlier; the effort picker for
+  the default model offers ten rows (three declared, six other known levels and
+  the model default) instead of four; the request bubble keeps its voice without
+  the overline, and the reply prose reads at a 620 px measure.
+- **Evidence:** the updated `test/ui-structure.test.ts` is **26/32** against the
+  HEAD UI files and **32/32** on the working tree; `npm test` **957/957**;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline unchanged. The
+  same real conversation and 1468×1080 viewport, rendered by the working-tree UI
+  against live `/api` payloads, measures `.opportunity-strip` **205 → 50 px**,
+  `.conversation` top **279 → 124 px**, the request bubble **61 → 45 px**, effort
+  options **4 → 10**, and reply measure **760 → 620 px**
+  (`/tmp/clone-ui-fixture/before-full.png`, `after-full.png`). The comfort
+  gain itself is assumed; no owner session was measured.
+- **Where:** [trade-off: effort vocabulary](../architecture/trade-offs.md#2026-11-20--the-effort-picker-offers-the-known-vocabulary-marked-by-what-the-model-declared);
+  [trade-off: failure backlog](../architecture/trade-offs.md#2026-11-20--a-backlog-of-failed-follow-ups-is-one-row-not-a-wall);
+  [trade-off: quiet voice](../architecture/trade-offs.md#2026-11-20--the-conversation-reads-as-one-quiet-voice);
+  [execution chain](optimizations.md#2026-11-20--the-conversation-starts-sooner-reads-quieter-and-offers-the-known-effort-levels).
+
 ## 2026-11-20 — A verification failure names its cause once
 
 - **Claim:** a failed verification now says whether a promised path is missing,
@@ -44,7 +65,6 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   410,701 tokens.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-20--a-verification-failure-says-why-once);
   [execution chain](optimizations.md#2026-11-20--a-verification-failure-says-why-once).
-
 
 ## 2026-11-19 — A provider-blocked answer is reported as a failure
 

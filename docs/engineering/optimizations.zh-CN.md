@@ -80,6 +80,62 @@
   调用多于有用调用，就移除 `agent-tools` 条目；如果没有步骤再携带网络授权，移除
   `fetch_url`；如果出现维护中的 MCP SDK 或沙箱执行域，替换手写服务器。
 
+### 2026-11-20 —— 对话更早开始、读起来更安静，并提供已知的强度档位
+
+- **目标 / 假设：** 所有者 2026-11-19 的截图里，三张近乎相同的失败卡占掉 1080px 窗口中的
+  205px，对话才开始；强度选择器只有“使用模型默认 / low / high / max”。所有者说对话还是
+  “有一点不是特别舒服”，并希望有更多强度选择。假设：把失败积压收成一行摘要、把正常完成的
+  状态词降调、收窄正文行宽，并列出网关真正接受的档位——全部是展示层改动，不动运行时契约。
+- **取舍：** [强度选择器给出已知档位](../architecture/trade-offs.md#2026-11-20--the-effort-picker-offers-the-known-vocabulary-marked-by-what-the-model-declared)；
+  [失败的跟进是一行](../architecture/trade-offs.md#2026-11-20--a-backlog-of-failed-follow-ups-is-one-row-not-a-wall)；
+  [对话用一个安静的声音说话](../architecture/trade-offs.md#2026-11-20--the-conversation-reads-as-one-quiet-voice)。
+- **变更：** `apps/desktop/ui/app.js` —— `effortLevelGroupsFor` / `effortOptionsMarkup` /
+  闭合态提示与直接保存的 `saveComposerChoice`；`opportunitiesMarkup` /
+  `opportunityCardMarkup` / `toggleOpportunities`（`aria-expanded` + `aria-controls`，
+  原地翻转 `hidden`）；`logEntryMarkup` 把作者、状态与时间排成一条左侧署名。
+  `apps/desktop/ui/components.css` —— 摘要行与失败卡滚动区、25px 药丸输入控件（11px 选中值）、
+  14px 请求气泡（隐藏眉线）、与请求气泡同尺并同时套在流式 `.clone-text` 上的 620px 正文行宽、
+  保留绿色“完成”的左侧署名。`apps/desktop/ui/index.html` —— `composer-effort-caveat` 及其
+  `aria-describedby`。`src/desktop/ui-locale.ts` —— 两种语言的档位、分组与映射提示。
+  `test/ui-structure.test.ts` —— 四个新测试。服务端、台账与 Provider 契约不变。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts` 在
+  `/tmp/clone-ui-head` 的 HEAD UI 文件上（同一份更新后的测试）：**26/32**，四个新测试与两条
+  读取新提示 id / CSS 的既有断言为红。当前工作区：**32/32**。`npm test`：**957/957**。
+  `npm run typecheck`：exit 0。`npm run gate`：**PASS**，基线不变。视觉 eval：1468×1080 的
+  静态夹具，链接当前工作区 UI，用 mocked fetch 接真实 `/api` 负载（dashboard、所有者对话、
+  config、gateways、options、opportunities）。前后：`.opportunity-strip` **205 → 50px**
+  （摘要 40px），`.conversation` 顶部 **279 → 124px**（拿回 155px），请求气泡
+  **61 → 45px**，强度选项 **4 → 10**（三个声明、六个其他、一个默认），正文行宽
+  **760 → 620px**，输入值 **10.5px 原生 → 25px 控件里的 11px 药丸**。截图在
+  `/tmp/clone-ui-fixture/before-full.png`、`after-full.png`、`before-composer.png`、
+  `after-composer.png`（临时文件，未提交）。
+- **Benchmark run：** 无——确定性的 UI 契约与本地视觉检查；没有 Provider、模型、数据集、
+  切分、种子或评分参数。证据探测是对 `deepseek/deepseek-v4.1-flash` 的六次
+  `POST /v1/chat/completions`（`max_tokens` 1，`reasoning_effort` 为
+  `medium/minimal/xhigh/ultra/none/off`），全部 HTTP 200；记录在取舍条目里，不是基准测试。
+- **执行链路：** 一个会话加一个 Workflow（`clone-ui-review`，三个设计镜头 + 一个评审）。
+  （1）用 companion token 抓取真实 `/api` 负载，搭起让工作区 UI 跑在它们上面的静态夹具；
+  （2）读回合 / 机会 / 输入框代码与既有取舍；（3）Workflow 的阅读、层级、输入框镜头返回带
+  测量的提案——阅读镜头渲染了 620/660px 的正文变体，层级镜头提出摘要行，输入框镜头提出分组
+  词汇与闭合态提示；（4）把共同结论内联实现并写测试；（5）用 `playwright-core` + 系统 Chrome
+  截图，等待 App 自己的 ready 标记与 420ms 启动淡出。**失败 / 重试：** 纯 headless Chrome
+  会间歇抓到启动遮罩（改为显式等待透明度）；摘要测试第一次把 `opportunity-cards` 容器数成
+  卡片（用 `opportunity-card(?!s)` 修正）；vm 数组的跨 realm `deepEqual` 改为 join 字符串；
+  第一版词汇残留未使用的 `offeredEffortLevelsFor`，按输入框镜头的直接保存规则删除。耗时约
+  1.5 小时，其中设计 Workflow 约 45 分钟：**4 个 Agent、246 次工具调用、602,367 子 Agent
+  token、45.1 分钟**。评审返回后保留了摘要行、620px 行宽、左侧署名、25px 药丸行与卡片文案
+  去重，否决了灰色完成态与页脚字号两项。
+- **优点：** 一次可逆的展示层改动；摘要行保留所有操作与键盘焦点；测试同时钉住新标记与 CSS；
+  前后夹具使用所有者的真实对话、两侧同一视口；服务端与运行时行为没有移动。
+- **缺点 / 下次：** 视觉判断来自工作的 Agent，而不是所有者；所有者应在重新构建的 App 里确认，
+  尤其是 macOS 窗口中的药丸折角。展开的失败卡仍打印 run id 与后端写法的 why 行；展示助手只
+  认识已记录的几种形状，其他原样保留，ISO 换本地时间依赖系统时区（没有测试钉住具体输出）。
+  对一次 CSS 改动而言 Workflow 偏重（三个镜头 + 评审，45 分钟 / 602k 子 Agent token）；下次
+  这种规模只用一条镜头。夹具是 `/api` 的 mock，证明的是 CSS/标记对真实负载的效果，而不是
+  运行中的 sidecar。
+- **推翻条件：** 见三条取舍。简言之：映射档位让回合变差就恢复只列声明档位；所有者漏看失败
+  就在摘要旁显示最新一张卡；如果 620px 太窄或左侧署名太安静，就调整行宽或状态处理。
+
 ### 2026-11-20 —— 验证失败只说一次原因，并把原因说准
 
 - **目标 / 假设：** 审计发现组合摘要重复了 "Verification failed."，并且 `checkFile` 把已存在的
@@ -110,7 +166,6 @@
   下次：先读 `mentionsDiff` 与既有文案断言，再写说明。
 - **推翻条件：** 如果读者需要机器可读的原因，就加 category/root 字段而不是解析散文。如果 stat
   根外路径变得可以接受，就精确报告存在性。如果某个消费者依赖重复前缀，就保留结构化摘要。
-
 
 ### 2026-11-19 —— Provider 的停止是失败，不是完成的回答
 

@@ -135,6 +135,210 @@ ever carries a network grant, remove `fetch_url`; if a read-only-network
 contract arrives, revisit it. If a maintained MCP SDK or a sandboxed exec
 domain arrives, replace this hand-written server rather than growing it.
 
+## 2026-11-20 — The effort picker offers the known vocabulary, marked by what the model declared
+
+**Decision.** The composer's effort picker no longer shows only the levels the
+selected model advertises. It offers the known vocabulary — `none`, `off`,
+`minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` — with the model's
+declared levels first under "模型声明" and every other known level under
+"其他已知 · 可能映射". Each option is labeled in Chinese with the provider
+spelling (`低 · low`), so the owner can see both the meaning and the exact value
+sent; a chosen undeclared level also shows a small "Provider 可能映射" caveat
+beside the closed select, where the group label is no longer visible. When the
+gateway declares no levels for the model, the picker shows one "已知 · 模型未声明"
+group instead of pretending a declaration exists. A saved level outside the
+vocabulary still appears as the current choice. The choice is saved exactly as
+rendered, so a mapped level cannot be silently cleared on the next change. The
+server's `EFFORT_LEVELS` and its self-review whitelist are unchanged: this is a
+picker contract, not a change to what a turn accepts.
+
+**Why it won.** The owner's screenshot showed the default model
+(`deepseek/deepseek-v4.1-flash`) with only four rows: 使用模型默认, low,
+high, max. The gateway reports exactly those three levels for that model
+(`/v1/models`), while other models it lists declare up to seven —
+`low/medium/high/xhigh` for Gemini 4 Hydrogen and
+`none/low/medium/high/xhigh/max/ultra` for GPT-6.1 Terra. A direct probe of the
+gateway with the default model and an undeclared `reasoning_effort` returned
+HTTP 200 with a reasoning answer for `medium`, `minimal`, `xhigh`, `ultra`,
+`none` and `off`. The short list was therefore a discovery artifact, not a
+provider limit, and the picker had been hiding levels the provider accepted.
+
+**Alternatives rejected.**
+
+- *Keep only the gateway-declared levels.* This is the current state the owner
+  reported as too narrow; the probe shows it is also stricter than the provider.
+- *Show extra levels without marking them.* The owner could not tell a declared
+  level from one the provider may map or ignore. The group name and the closed-state
+  caveat are what mark it.
+- *Call the second group "supported".* The probe proves acceptance, not that the
+  provider honors the request; "可能映射" is the truthful label.
+- *A free-text effort field.* It moves validation and discovery errors into the
+  turn, and the owner loses the useful labels; the vocabulary is small and known.
+- *Expand the server's `EFFORT_LEVELS` and the self-review whitelist too.* The
+  self-review is a conservative proposer, and `normalizeEffort` already forwards
+  any bounded name; widening those lists would change a different contract for
+  the picker's sake.
+
+**What was given up.** An undeclared level is a request, not a guarantee: the
+provider decides whether to honor or map it, and a refusal reaches the turn as
+a normal failure. The picker shows the provider spelling rather than localized
+names alone, because the name is what is sent. The list is longer (up to ten
+rows), so the open dropdown is no longer a glance; the declared group stays first
+so the safest choices are still at the top. The closed-state caveat costs one
+short line whenever a mapped level is selected.
+
+**Evidence.** `/v1/models` from the local Magpie gateway (11 models, per-model
+`reasoning_levels`); the probe above (`POST /v1/chat/completions`, `max_tokens`
+1, six undeclared levels, all 200); the owner's screenshot; the new structural
+test asserts the two groups, the labels and the option count for a model that
+declares `low/high/max`.
+
+**Reversal condition.** If undeclared levels routinely produce failed or
+degraded turns for the default model, restrict the picker to declared levels
+again. If the gateway starts reporting a per-model default effort, show that
+value next to 使用模型默认. If a provider rejects an undeclared level at the
+gateway boundary with a local error, the group can stay but should say which
+levels are refused.
+
+## 2026-11-20 — A backlog of failed follow-ups is one row, not a wall
+
+**Decision.** Two or more `failed_task` opportunities collapse into one summary
+row above the conversation: a warning icon, "任务跟进", the count, the newest
+failure's title (with the shared "任务需要跟进：" prefix removed), and an
+expand control. The cards themselves stay in the DOM inside
+`#opportunity-failure-cards`, hidden until expanded, so `aria-controls` resolves
+and the toggle flips `hidden` in place without moving keyboard focus. The
+expanded list scrolls inside the strip when it outgrows the viewport. A single
+failure still renders its card: one alert is information. Non-failure
+opportunities (deadlines, goals, observations) stay visible while failures are
+collapsed, because they are things to act on rather than backlog. The expanded
+failure card also says the same thing once: its title drops the prefix the chip
+already names, its `whyNow` replaces the raw ISO stamp with the owner's local
+date and time, and a trailing sentence is dropped only when it exactly restates
+the title. Any structure the display helper does not recognise is kept as
+written; the server prose is not rewritten.
+
+**Why it won.** The owner's screenshot showed three near-identical failure cards
+occupying 205 px of a 1080 px window (y=84–279) before the conversation began;
+the date divider and the turn head were pushed to y≈308 and y≈415. The cards
+repeated the same "任务跟进" chip, the same title prefix and a `whyNow` sentence
+that ended by restating the title, and each carried the same three buttons. The
+summary row measures 40 px and the conversation now starts at y≈124 — 155 px
+returned to the reading area — while the count and the newest failure stay
+visible and all actions are one click away.
+
+**Alternatives rejected.**
+
+- *Keep every card visible.* That is the 205 px backlog the owner reported as
+  uncomfortable, and it makes the first screen read as an inbox instead of a
+  conversation.
+- *Hide the failures entirely.* Their actions (查看原因, Agent 设置, 忽略) are
+  the next step for each failure; hiding them would hide the work.
+- *Collapse one failure too.* A single failure is information, not a wall; a
+  summary row would add a click for no gain.
+- *Use a `<details>` element.* The native marker and the need to style its
+  summary as a card row add markup for no benefit; a real button with
+  `aria-expanded` and `aria-controls` is the same disclosure in the app's own
+  language, and it keeps focus in place.
+- *Flatten the summary to a hairline row.* The opportunity strip's existing
+  language is cards; a second visual grammar inside the same strip would make
+  the non-failure cards look unrelated.
+- *De-duplicate by parsing every possible card sentence.* The display helper
+  only recognises the documented shapes: the source prefix, the ISO stamp and a
+  trailing exact restatement. Anything else is kept as written, so a change in
+  the backend's wording loses the de-duplication but never the information.
+- *Convert the ISO stamp with a fixed timezone or leave it raw.* Local time is
+  what the owner reads; an invalid date falls back to the raw stamp rather than
+  throwing.
+
+**What was given up.** A failure is one click away instead of on screen. The
+summary must carry the count and the newest title accurately, or it lies about
+what is behind the click. An expanded backlog can scroll inside the strip; a very
+long list is bounded by that scroll rather than by silently dropping cards. The
+summary row is a new element in the strip, with its own focus ring and chevron.
+
+**Evidence.** Before/after measurements from the working-tree fixture at
+1468×1080 with the owner's real conversation data: `.opportunity-strip` 205 → 50
+px, `.opportunity-summary` 40 px, `.conversation` top 279 → 124 px. The
+structural test renders three failure cards collapsed and expanded, checks the
+count, the prefix removal, local-time replacement, exact-restatement removal and
+the unrecognised-structure fallback, `aria-expanded`, the hidden wrapper, the
+non-failure card staying outside the hidden wrapper, and the card actions.
+
+**Reversal condition.** If the owner misses failures behind the summary, show the
+newest failure card plus a summary for the rest. If the count and the expanded
+cards diverge (the backend returns more cards than the strip renders), fix the
+rendering before keeping the count. If the strip's own scroll feels wrong above
+the chat, move the expanded list into a separate panel instead of growing the
+strip.
+
+## 2026-11-20 — The conversation reads as one quiet voice
+
+**Decision.** Four small reading changes, all in CSS plus the turn markup:
+the owner's bubble is 14 px / 1.7 with no "你" overline — right placement
+identifies the speaker, and the bubble's existing padding, radius and fill are
+kept; the turn's author, status word and time become one left-side byline
+instead of a status stranded at the right edge, and the routine 完成 keeps its
+green word and pin; the reply's prose is capped at a 620 px measure (~43
+full-width characters), shared with the request bubble's maximum measure, and
+the live streaming `.clone-text` gets the same cap so a settling turn does not
+jump narrower; the composer's model and effort pickers become 25 px pills with
+an 11 px value, a custom chevron and a more legible 10.5 px label, instead of a
+10.5 px native select with no visible boundary.
+
+**Why it won.** At 1468×1080 the before reply ran 754 px, ~52 full-width
+characters per line; the reading lens measured the owner's bubble at 13.5 px and
+the reply at 14.5 px, and the two adjacent blocks read as two type systems. The
+"你" overline made a one-line request 61 px tall; the reply itself is the
+speaker's evidence, and the owner's bubble no longer repeats it. The turn head's
+green dot and 完成 sat under the request bubble's right edge, where they could
+read as the request's completion; clustering the whole byline on the left
+removes that misread without deleting a truthful status word. The 760 px prose
+ran past the comfortable band and was wider than the bubble's own 620 px cap;
+sharing the 620 px measure makes request and answer use one ruler. The
+composer's 10.5 px select had no border until hover and looked like a footnote;
+its value is now readable at a glance and the control looks like a control.
+
+**Alternatives rejected.**
+
+- *Remove the completed status word entirely.* The absence of a badge would be
+  the signal, but it would remove truthful status information; the green word
+  stays.
+- *Keep the status and time as one right-hand group.* The reading lens showed
+  the status could read as the request's completion; the byline belongs on the left.
+- *Cap the prose at 660 px instead of 620 px.* 660 px holds ~45 characters and
+  adds no line here, but it does not share the request bubble's measure; 620 px
+  makes both voices read with the same ruler.
+- *Keep the native select's platform arrow.* The app already draws its own
+  chevrons for disclosure rows; one more would be a second arrow language.
+  The pill's custom chevron matches those controls and lets the closed state
+  carry its own boundary.
+- *Shrink the type instead of narrowing the measure.* The 2026-11-19 trade-off
+  names the measure as the lever; shrinking the type would trade comfort for
+  line count.
+
+**What was given up.** A narrower measure can add lines to long answers; tables
+and code scroll sooner inside the reply. The green completion word remains the
+reply area's only saturated color on a normal turn. The pill's custom chevron is
+CSS rather than a platform control, so the closed state is worth checking in the
+macOS window (the options popup itself stays native).
+
+**Evidence.** Before/after measurements from the working-tree fixture at
+1468×1080 with the owner's real conversation data: reply 760 px / 52 characters
+→ 620 px / ~43; bubble 61 px → 46 px (14 px / 1.7, original padding); head text
+"clone-ai 完成 14:13 · 66.1 s" with the whole byline at the left; composer value
+10.5 px native → 11 px pill in a 25 px control. The structural test pins the
+bubble, the left byline, the green completion, the 620 px measure and the pill
+shape.
+
+**Reversal condition.** If 620 px still reads too wide, try 660–680 px with a
+multi-paragraph fixture; if long answers become too tall, restore 760 px and
+shrink the type instead. If the green completion word is too loud, mute the word
+and keep the pin. If the left byline loses a useful right-edge cue, move the time
+back to the right while keeping the status beside the author. If the pill row
+crowds the composer at narrow widths, fall back to the borderless select rather
+than hiding the controls.
+
 ## 2026-11-20 — A verification failure says why, once
 
 **Decision.** `CompositeVerifier` prefixes "Verification failed." exactly once,
@@ -180,7 +384,6 @@ suite **956/956**, typecheck exit 0, gate **PASS**.
 category/root field instead of parsing prose. If statting outside paths becomes
 acceptable, report existence precisely. If a consumer relies on the duplicated
 prefix, keep a structured summary instead of the prose.
-
 
 ## 2026-11-19 — The answer is the section; the 结果 gutter is retired
 

@@ -512,6 +512,10 @@ test("the transcript separates a turn, a task update, a child run and a record b
   assert.match(css, /\.log-step\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)[^}]*gap:\s*0/);
   assert.match(css, /\.log-step-label\s*\{[^}]*display:\s*none/);
   assert.match(css, /\.log-reply\s*\{[^}]*font-size:\s*14\.5px[^}]*line-height:\s*1\.75/);
+  // The prose shares the request bubble's 620 px measure; the live streaming
+  // text gets the same cap so the settled reply does not jump narrower.
+  // 正文与请求气泡共用 620px 行宽；流式文字套同一上限，落定时不会突然变窄。
+  assert.match(css, /\.log-step \.log-reply,\s*\n\.log-step \.clone-text\s*\{[^}]*max-width:\s*620px/);
   assert.match(css, /\.log-basis\s*\{[^}]*padding-top:\s*10px[^}]*border-top:\s*1px solid var\(--line\)/);
   assert.match(css, /\.log-basis-open\s*\{[^}]*margin-left:\s*auto/);
 });
@@ -1166,4 +1170,228 @@ test("the audit shows the history a turn searched", async () => {
   assert.match(audit, /历史检索/);
   assert.match(audit, /全部对话/);
   assert.match(auditCss, /\.au-assembly-searches/);
+});
+
+test("the effort picker offers declared levels first and the other known levels after them", async () => {
+  const app = await read("app.js");
+  const css = await read("components.css");
+  const start = app.indexOf('const EFFORT_LEVELS = ["none"');
+  const mid = app.indexOf("/* ---------- Composer model and effort", start);
+  const markupStart = app.indexOf("function effortOptionsMarkup");
+  const markupEnd = app.indexOf("/** Render the composer pickers", markupStart);
+  assert.ok(start >= 0 && mid > start, "the effort vocabulary must live before the composer");
+  assert.ok(markupStart >= 0 && markupEnd > markupStart, "effortOptionsMarkup must exist");
+  const labels: Record<string, string> = {
+    "effort-default": "使用模型默认",
+    "composer-choice-current": "当前选择",
+    "effort-group-declared": "模型声明",
+    "effort-group-other": "其他已知 · 可能映射",
+    "effort-group-known": "已知 · 模型未声明",
+    "effort-mapped-note": "Provider 可能映射",
+    "effort-level-none": "无",
+    "effort-level-off": "关闭",
+    "effort-level-minimal": "极简",
+    "effort-level-low": "低",
+    "effort-level-medium": "中",
+    "effort-level-high": "高",
+    "effort-level-xhigh": "极高",
+    "effort-level-max": "最高",
+    "effort-level-ultra": "极限",
+  };
+  const state = {
+    config: { config: { mainAgentModel: "deepseek/deepseek-v4.1-flash" } },
+    gateways: [{
+      id: "magpie",
+      models: [
+        { id: "deepseek/deepseek-v4.1-flash", reasoningLevels: ["low", "high", "max"] },
+        { id: "openai/gpt-6.1-terra", reasoningLevels: ["none", "low", "medium", "high", "xhigh", "max", "ultra"] },
+      ],
+    }],
+  };
+  const effort = runInNewContext(
+    `${app.slice(start, mid)}\n${app.slice(markupStart, markupEnd)}; ({ effortLevelGroupsFor, effortLevelLabel, effortOptionsMarkup })`,
+    {
+      state,
+      t: (key: string) => labels[key] || key,
+      escape: (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]!)),
+    },
+  ) as {
+    effortLevelGroupsFor: (model: string) => Array<{ label: string; levels: string[] }>;
+    effortLevelLabel: (level: string) => string;
+    effortOptionsMarkup: (groups: Array<{ label: string; levels: string[] }>, choice: string) => string;
+  };
+  const groups = effort.effortLevelGroupsFor("deepseek/deepseek-v4.1-flash");
+  // The default model declares three levels; the picker still offers the six
+  // other known levels, under a label that says they were not declared and may
+  // be mapped.
+  // 默认模型声明三档；选择器仍提供其余六个已知档位，并在组名里说明它们未被声明、可能被映射。
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0]!.label, "模型声明");
+  assert.equal(groups[0]!.levels.join(","), "low,high,max");
+  assert.equal(groups[1]!.label, "其他已知 · 可能映射");
+  assert.equal(groups[1]!.levels.join(","), "none,off,minimal,medium,xhigh,ultra");
+  assert.equal([...groups[0]!.levels, ...groups[1]!.levels].join(","), "low,high,max,none,off,minimal,medium,xhigh,ultra");
+  assert.equal(effort.effortLevelLabel("low"), "低 · low");
+  const markup = effort.effortOptionsMarkup(groups, "");
+  assert.match(markup, /<optgroup label="模型声明"><option value="low">低 · low<\/option>/);
+  assert.match(markup, /<optgroup label="其他已知 · 可能映射"><option value="none">无 · none<\/option>/);
+  assert.equal((markup.match(/<option /g) || []).length, 1 + 3 + 6, "the default option plus three declared and six other levels");
+  // A saved choice outside the offered vocabulary still appears as the current choice.
+  // 已保存但不在提供范围内的选择仍作为当前选择出现。
+  assert.match(effort.effortOptionsMarkup(groups, "ultra"), /<option value="high">高 · high<\/option>/);
+  assert.match(effort.effortOptionsMarkup(groups, "custom"), /value="custom">custom · 当前选择/);
+  // A gateway that declares nothing gets one honest group, not a fake declaration.
+  // 网关什么都没声明时，只给一个诚实的组，而不是伪造一份声明。
+  state.gateways = [];
+  const unknown = effort.effortLevelGroupsFor("any-model");
+  assert.equal(unknown.length, 1);
+  assert.equal(unknown[0]!.label, "已知 · 模型未声明");
+  assert.equal(unknown[0]!.levels.length, 9);
+  // The closed control carries the pill shape and a custom chevron.
+  // 闭合态控件带药丸形状与自绘箭头。
+  assert.match(css, /\.composer-option select\s*\{[^}]*height:\s*25px/);
+  assert.match(css, /\.composer-option select\s*\{[^}]*border-radius:\s*999px/);
+  assert.match(css, /\.composer-option select\s*\{[^}]*background-image:\s*url\("data:image\/svg\+xml/);
+  assert.match(css, /\.composer-option select\s*\{[^}]*appearance:\s*none/);
+  // A mapped level is flagged in the closed state, where the group label cannot be seen.
+  // 映射档位在闭合态被标注出来，因为那里看不到分组标签。
+  assert.match(await read("app.js"), /\$\(\"composer-effort-caveat\"\)/);
+  assert.match(css, /\.composer-effort-caveat\s*\{[^}]*color:\s*#806b48/);
+  assert.match(await read("index.html"), /aria-describedby="composer-effort-caveat"/);
+});
+
+test("a backlog of failed follow-ups is one summary row that expands to its cards", async () => {
+  const app = await read("app.js");
+  const css = await read("components.css");
+  const start = app.indexOf("function isFailureCard");
+  const end = app.indexOf("async function decideOpportunity", start);
+  assert.ok(start >= 0 && end > start, "the opportunity markup must exist");
+  const opportunity = runInNewContext(
+    `${app.slice(start, end)}; ({ opportunitiesMarkup })`,
+    {
+      escape: (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]!)),
+      plainPreview: (value: unknown) => String(value ?? ""),
+      state: { locale: "zh-CN" },
+    },
+  ) as { opportunitiesMarkup: (cards: unknown[], expanded: boolean) => string };
+  const failures = [
+    { id: "f1", source: "failed_task", title: "任务需要跟进：任务已取消", whyNow: "任务 64de 在 08:46 被取消。" },
+    { id: "f2", source: "failed_task", title: "任务需要跟进：Worker 执行失败。", whyNow: "任务 8c54 执行失败。" },
+    { id: "f3", source: "failed_task", title: "任务需要跟进：这次任务没有完成，但没有记录到具体原因。", whyNow: "任务 1649 执行失败。" },
+  ];
+  const collapsed = opportunity.opportunitiesMarkup(failures, false);
+  // Three alerts become one row; the newest title loses the source prefix it
+  // shares with the row's own label. The cards stay in the DOM behind `hidden`
+  // so aria-controls resolves and toggling needs no rebuild.
+  // 三条通知变成一行；最新标题去掉与行标签重复的来源前缀。卡片以 `hidden` 留在 DOM 中，
+  // 这样 aria-controls 有目标，切换也不必重建。
+  assert.match(collapsed, /data-toggle-opportunities/);
+  assert.match(collapsed, /aria-expanded="false"/);
+  assert.match(collapsed, /aria-controls="opportunity-failure-cards"/);
+  assert.match(collapsed, /3 条待处理/);
+  assert.match(collapsed, /最新：任务已取消/);
+  assert.doesNotMatch(collapsed, /最新：任务需要跟进/);
+  assert.match(collapsed, /展开/);
+  assert.match(collapsed, /id="opportunity-failure-cards" hidden/);
+  assert.equal((collapsed.match(/class="opportunity-card(?!s)/g) || []).length, 3);
+  // The chip already says 任务跟进; the card title no longer repeats it.
+  // 芯片已经写着“任务跟进”；卡片标题不再重复。
+  assert.match(collapsed, /<b>任务已取消<\/b>/);
+  assert.doesNotMatch(collapsed, /<b>任务需要跟进：/);
+  const expanded = opportunity.opportunitiesMarkup(failures, true);
+  assert.match(expanded, /aria-expanded="true"/);
+  assert.match(expanded, /收起/);
+  assert.match(expanded, /id="opportunity-failure-cards">/);
+  assert.equal((expanded.match(/class="opportunity-card(?!s)/g) || []).length, 3);
+  assert.match(expanded, /data-accept-opportunity="f1"/);
+  assert.match(expanded, /data-open-failure-settings/);
+  // A failure card's why-line is said once: the raw ISO stamp becomes local
+  // time, and a trailing sentence that exactly restates the title is dropped;
+  // an unrecognised structure is kept as written, and an all-title why-line
+  // disappears instead of repeating the heading.
+  // 失败卡的 why 行只说一遍：原始 ISO 变成当地时间，完全复述标题的结尾句删除；不认识
+  // 的结构原样保留；整段等于标题时不渲染 why 行。
+  const noisy = opportunity.opportunitiesMarkup([{
+    id: "f4", source: "failed_task", title: "任务需要跟进：任务已取消",
+    whyNow: "任务 64de5418-c0d 在 2026-11-19T08:46:44.853Z 被取消。任务已取消",
+  }], true);
+  assert.doesNotMatch(noisy, /2026-11-19T08:46:44\.853Z/);
+  assert.doesNotMatch(noisy, /被取消。任务已取消/);
+  // A trailing "。" in whyNow leaves an empty split segment; the restatement
+  // before it must still be removed.
+  // whyNow 末尾的"。"会留下空分段；在它之前的复述仍应被删除。
+  const noisyWithPeriod = opportunity.opportunitiesMarkup([{
+    id: "f7", source: "failed_task", title: "任务需要跟进：Worker 执行失败。",
+    whyNow: "任务 8c54bba4-bf1 在 2026-11-19T08:40:24.059Z 执行失败。Worker 执行失败。",
+  }], true);
+  assert.doesNotMatch(noisyWithPeriod, /执行失败。Worker 执行失败/);
+  assert.doesNotMatch(noisyWithPeriod, /2026-11-19T08:40:24\.059Z/);
+  const foreign = opportunity.opportunitiesMarkup([{
+    id: "f5", source: "failed_task", title: "任务需要跟进：Worker 执行失败。",
+    whyNow: "这条失败记录由旧版本写入，没有保存具体原因。",
+  }], true);
+  assert.match(foreign, /这条失败记录由旧版本写入，没有保存具体原因。/);
+  const onlyTitle = opportunity.opportunitiesMarkup([{
+    id: "f6", source: "failed_task", title: "任务需要跟进：任务已取消", whyNow: "任务已取消",
+  }], true);
+  assert.doesNotMatch(onlyTitle, /class="opportunity-why"/);
+  // One failure is information, not a wall: it keeps its card and actions.
+  // 单条失败是信息而不是墙：保留卡片与操作。
+  const single = opportunity.opportunitiesMarkup([failures[0]], false);
+  assert.doesNotMatch(single, /data-toggle-opportunities/);
+  assert.match(single, /class="opportunity-card is-failure"/);
+  assert.match(single, /id="opportunity-failure-cards">/);
+  // Non-failure opportunities stay visible even while failures collapse.
+  // 非失败的机会在失败收起时仍然可见。
+  const mixed = opportunity.opportunitiesMarkup([{ id: "d1", source: "deadline", title: "临近承诺", whyNow: "交付在周五。" }, ...failures], false);
+  assert.match(mixed, /data-toggle-opportunities/);
+  assert.match(mixed, /class="opportunity-card"[\s\S]*临近承诺/);
+  assert.ok(mixed.indexOf('data-accept-opportunity="d1"') < mixed.indexOf('id="opportunity-failure-cards"'), "the deadline card precedes the hidden failure wrapper");
+  assert.equal((mixed.match(/class="opportunity-card(?!s)/g) || []).length, 4);
+  assert.match(css, /\.opportunity-summary\s*\{[^}]*grid-template-columns:\s*24px/);
+  assert.match(css, /\.opportunity-summary \.opportunity-icon\s*\{[^}]*color:\s*#a75850/);
+  assert.match(css, /\.opportunity-summary[^}]*aria-expanded="true"[^}]*rotate\(-135deg\)/);
+  assert.match(css, /\.opportunity-cards\s*\{[^}]*display:\s*grid/);
+  assert.match(css, /\.opportunity-cards--failures\s*\{[^}]*max-height:\s*min\(52vh/);
+  assert.match(css, /\.opportunity-summary-action::after\s*\{[^}]*border-right/);
+});
+
+test("a completed turn keeps its byline on the left, while a failure keeps its colored word", async () => {
+  const app = await read("app.js");
+  const css = await read("components.css");
+  const start = app.indexOf("const LOG_STATUS = {");
+  const end = app.indexOf("function displayAgentTitle", start);
+  assert.ok(start >= 0 && end > start, "turnLogMarkup must exist");
+  const markup = runInNewContext(`${app.slice(start, end)}; turnLogMarkup`, {
+    escape: (value: unknown) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]!)),
+    richText: (value: unknown) => String(value ?? ""),
+    plainPreview: (value: unknown) => String(value ?? ""),
+    time: () => "14:13",
+    welcomeMarkup: () => "welcome",
+  }) as (session: unknown) => string;
+  const completed = markup({
+    id: "chat", kind: "conversation", messages: [],
+    turns: [{ id: "t", kind: "turn", input: "问", status: "completed", startedAt: "2026-11-19T06:13:15.500Z", durationMs: 66_136, journaled: true, toolCalls: [], spawnedRuns: [], reply: "答。" }],
+  });
+  // Routine completion keeps its word and color, but the whole byline is
+  // clustered on the left instead of sending the state to the right edge.
+  // 正常完成保留状态词与颜色，但整条署名聚在左侧，而不是把状态送到右缘。
+  assert.match(completed, /class="log-entry-kicker">clone-ai<\/span><span class="log-entry-meta"><span class="log-badge log-badge--ok">完成<\/span><small>14:13 · 66\.1 s/);
+  assert.match(css, /\.log-badge--ok\s*\{[^}]*color:\s*var\(--success\)/);
+  const failed = markup({
+    id: "chat", kind: "conversation", messages: [],
+    turns: [{ id: "t2", kind: "turn", input: "问", status: "failed", startedAt: "2026-11-19T06:13:15.500Z", journaled: true, toolCalls: [], spawnedRuns: [], error: "boom" }],
+  });
+  assert.match(failed, /log-badge--bad/);
+  assert.match(failed, /失败/);
+  // The state and time stay together on the left.
+  // 状态与时间一起留在左侧。
+  assert.match(css, /\.log-entry-meta\s*\{[^}]*margin-left:\s*0/);
+});
+
+test("the user's bubble says who spoke by placement, not by an overline", async () => {
+  const css = await read("components.css");
+  assert.match(css, /\.turn-query-who\s*\{[^}]*display:\s*none/);
+  assert.match(css, /\.turn-query-bubble\s*\{[^}]*font-size:\s*14px[^}]*line-height:\s*1\.7/);
+  assert.match(css, /\.turn-query-bubble\s*\{[^}]*padding:\s*9px 13px 10px/);
 });

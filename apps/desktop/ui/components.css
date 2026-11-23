@@ -1067,19 +1067,44 @@ body.empty-conversation #session-subtitle, body.empty-conversation #session-stat
 .send:hover { background: #000; }
 .composer-hint { width: min(760px, 100%); padding-left: 4px; color: #aaa; text-align: left; font-size: 10.5px; }
 
-/* The composer's model and effort pickers: a quiet second row. The choice is
-   saved with the conversation, so the note says so; Settings stays the
-   default for turns that have no composer (WhatsApp, schedules). */
-/* 输入框的模型与强度选择器：安静的第二行。选择随对话保存，因此有这行说明；设置仍是没有
-   输入框的回合（WhatsApp、定时）的默认值。 */
+/* The composer's model and effort pickers: a quiet second row, now as pills.
+   The label names the control, the selected value is readable at a glance,
+   and the note stays at the far end. Native selects keep their platform popup;
+   the pill only owns the closed state.
+   输入框的模型与强度选择器：安静的第二行，现在排成药丸。标签点明控件，选中值一眼可读，
+   说明留在行尾。选择器保留原生弹出层；药丸只负责闭合态。 */
 .composer { flex-wrap: wrap; }
-.composer-options { display: flex; flex: 1 0 100%; align-items: center; gap: 14px; margin-top: 5px; padding: 6px 2px 1px; border-top: 1px solid #f2f2f2; }
-.composer-option { display: inline-flex; min-width: 0; align-items: center; gap: 5px; color: #9a9a9a; font-size: 10.5px; }
-.composer-option select { min-width: 0; max-width: 210px; padding: 2px 4px; border: 1px solid transparent; border-radius: 6px; color: #5c5c5c; background: transparent; font: inherit; font-size: 10.5px; outline: 0; cursor: pointer; }
-.composer-option select:hover { border-color: #ececec; background: #f7f7f7; }
-.composer-option select:focus-visible { border-color: #c7c7c7; outline: 2px solid #f4f4f4; }
-.composer-option-note { margin-left: auto; color: #b6b6b6; font-size: 10.5px; white-space: nowrap; }
-@media (max-width: 560px) { .composer-option-note { display: none; } .composer-option select { max-width: 116px; } }
+.composer-options { display: flex; flex: 1 0 100%; align-items: center; gap: 10px; margin-top: 5px; padding: 6px 2px 1px; border-top: 1px solid #f1f1eb; }
+.composer-option { display: inline-flex; min-width: 0; align-items: center; gap: 6px; color: #70766f; font-size: 10.5px; font-weight: 560; letter-spacing: .01em; }
+.composer-option select {
+  min-width: 0; max-width: 240px;
+  height: 25px;
+  padding: 0 22px 0 9px;
+  border: 1px solid #e2e2dd;
+  border-radius: 999px;
+  color: #3d3d38;
+  background-color: #fafaf6;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238c8c83' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-position: right 8px center;
+  background-repeat: no-repeat;
+  background-size: 9px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 520;
+  line-height: 23px;
+  outline: 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.composer-option select:hover { border-color: #d9d7cf; background-color: #f7f7f3; }
+.composer-option select:focus-visible { border-color: #c5c3ba; outline: 2px solid #f0efe9; outline-offset: 1px; }
+/* The group label is only visible while the menu is open; when a mapped level
+ * is chosen, the closed control says so once. 分组标签只在菜单展开时可见；选中映射档位
+ * 后，闭合态控件再说明一次。 */
+.composer-effort-caveat { color: #806b48; font-size: 10px; font-weight: 520; line-height: 1.4; white-space: nowrap; }
+.composer-option-note { margin-left: auto; color: #81877f; font-size: 10.5px; white-space: nowrap; }
+@media (max-width: 560px) { .composer-option-note, .composer-effort-caveat { display: none; } .composer-option select { max-width: 132px; } }
 
 .c-button--primary { border-color: #202020; color: #fff; background: #202020; box-shadow: none; }
 .c-button--primary:hover:not(:disabled) { background: #000; }
@@ -1339,6 +1364,41 @@ body.empty-conversation #session-subtitle, body.empty-conversation #session-stat
   box-shadow: 0 1px 2px rgba(43, 46, 40, .025);
 }
 .opportunity-card.is-failure { border-color: #eadbd4; background: #fffafa; }
+/* A backlog of failed follow-ups is one row, not a stack of cards. The count
+ * and the newest title stay visible; expanding restores the cards and their
+ * actions. One alert is information; a wall of them is noise.
+ * 一堆失败跟进是一行，而不是一叠卡片。条数与最新标题始终可见；展开后恢复卡片与操作。
+ * 一条是信息，一堵墙是噪音。 */
+.opportunity-summary {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 12px;
+  border: 1px solid #eadbd4;
+  border-radius: 10px;
+  color: #4c5049;
+  background: #fffafa;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.opportunity-summary:hover { border-color: #e3c8c1; background: #fff6f4; }
+.opportunity-summary:focus-visible { outline: 2px solid #f0ded9; outline-offset: 1px; }
+.opportunity-summary .opportunity-icon { width: 24px; height: 24px; border-radius: 7px; color: #a75850; background: #f9e9e6; font-size: 11px; }
+.opportunity-summary-copy { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
+.opportunity-summary-copy b { flex: none; color: #4c5049; font-size: 11.5px; font-weight: 650; }
+.opportunity-summary-copy span { overflow: hidden; color: #8b877d; font-size: 10.5px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.opportunity-summary-action { display: inline-flex; flex: none; align-items: center; gap: 5px; color: #8a6b64; font-size: 10px; font-weight: 620; }
+.opportunity-summary-action::after { content: ""; width: 6px; height: 6px; border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor; transform: translateY(-1px) rotate(45deg); transition: transform .16s ease; }
+.opportunity-summary[aria-expanded="true"] .opportunity-summary-action::after { transform: translateY(-3px) rotate(-135deg); }
+.opportunity-cards { display: grid; gap: 7px; }
+/* An expanded backlog scrolls inside the strip rather than pushing the
+ * conversation below the fold; three cards fit without a scrollbar.
+ * 展开的积压条在条内滚动，而不是把对话顶出屏幕；三张卡不需要滚动条。 */
+.opportunity-cards--failures { max-height: min(52vh, 520px); overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; scrollbar-color: #d8d3ca transparent; }
+@media (prefers-reduced-motion: reduce) { .opportunity-summary-action::after { transition: none; } }
 .opportunity-icon {
   display: grid;
   width: 28px;
@@ -1419,6 +1479,8 @@ body.empty-conversation .composer-wrap { padding-top: 0; padding-bottom: 24px; }
 @media (max-width: 900px) {
   .opportunity-card { grid-template-columns: 26px minmax(0, 1fr); }
   .opportunity-actions { grid-column: 2; justify-content: flex-start; }
+  .opportunity-summary { grid-template-columns: 24px minmax(0, 1fr); }
+  .opportunity-summary-action { grid-column: 2; justify-self: start; }
 }
 
 @media (max-width: 760px) {
@@ -1732,7 +1794,7 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
 .turn-query {
   display: flex;
   justify-content: flex-end;
-  padding: 18px 0 4px;
+  padding: 18px 0 12px;
 }
 .turn-query-bubble {
   max-width: min(620px, 86%);
@@ -1741,18 +1803,14 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
   border-radius: 14px 14px 4px 14px;
   color: var(--text);
   background: #f4f5f1;
-  font-size: 13.5px;
-  line-height: 1.62;
+  font-size: 14px;
+  line-height: 1.7;
   overflow-wrap: anywhere;
 }
-.turn-query-who {
-  display: block;
-  margin-bottom: 3px;
-  color: var(--subtle);
-  font-size: 9.5px;
-  font-weight: 720;
-  letter-spacing: .12em;
-}
+/* The right-hand placement already says who spoke; the overline repeated it
+ * inside every bubble and made a one-line request taller than its text.
+ * 靠右的位置已经说明是谁说的；气泡内的眉线只是重复一遍，并让一行请求比正文更高。 */
+.turn-query-who { display: none; }
 .turn-query-text { white-space: pre-wrap; }
 .turn-query-text .md-heading { margin: 8px 0 3px; color: var(--text); font-size: 13px; font-weight: 720; line-height: 1.4; }
 .turn-query-text .md-list-line { display: grid; grid-template-columns: 17px minmax(0, 1fr); gap: 4px; margin: 2px 0; }
@@ -1781,13 +1839,17 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
 .log-entry-kicker {
   flex: none;
   margin: 0;
-  color: var(--subtle);
-  font-size: 9.5px;
+  color: var(--muted);
+  font-size: 10px;
   font-weight: 720;
-  letter-spacing: .12em;
+  letter-spacing: .1em;
   line-height: 1.5;
   white-space: nowrap;
 }
+/* The state and time sit together on the left as one byline; the right edge is
+ * left quiet for the sticky head's rule.
+ * 状态与时间一起留在左侧署名里；右缘留给吸附头部的分隔线，保持安静。 */
+.log-entry-meta { display: inline-flex; flex: none; align-items: baseline; gap: 8px; margin-left: 0; }
 .log-query {
   display: -webkit-box;
   grid-row: 2;
@@ -1809,7 +1871,7 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
   flex: none;
   align-items: center;
   gap: 5px;
-  margin-left: auto;
+  margin-left: 0;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -2034,6 +2096,17 @@ button.agent-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--acc
 .log-step-label { display: none; }
 .log-step-body { gap: 14px; }
 .log-reply { font-size: 14.5px; line-height: 1.75; }
+/* A 760 px measure at 14.5 px runs to ~52 full-width characters per line, past
+ * the comfortable reading band; the turn head and the 依据 footer may span the
+ * section, but the prose keeps a narrower measure. 620 px shares the request
+ * bubble's maximum measure and holds ~43 characters, so request and answer are
+ * read with the same ruler. The live streaming text gets the same cap, or the
+ * settled reply would jump 100 px narrower when the card is replaced.
+ * 14.5px 下的 760px 行宽约合 52 个全角字符，超出舒适阅读带；回合头与"依据"页脚可以
+ * 横跨章节，正文保持更窄的行宽。620px 与请求气泡的最大行宽同尺，约合 43 字，请求与回答
+ * 用同一把尺阅读；流式文字也套同一上限，否则回合落定时会横向跳窄 100px。 */
+.log-step .log-reply,
+.log-step .clone-text { max-width: 620px; }
 .log-reply .md-heading { font-size: 14.5px; }
 .log-reply .md-list-line { grid-template-columns: 19px minmax(0, 1fr); }
 .log-reply .md-inline { font-size: 12.5px; }

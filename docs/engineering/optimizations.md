@@ -110,6 +110,95 @@ file keeps every attempt, including the ones that did not work.
   carries a network grant; replace the hand-written server if a maintained MCP
   SDK or a sandboxed exec domain arrives.
 
+### 2026-11-20 — The conversation starts sooner, reads quieter, and offers the known effort levels
+
+- **Goal / hypothesis:** the owner's 2026-11-19 screenshot showed three
+  near-identical failure cards occupying 205 px of the 1080 px window before the
+  conversation began, and a 强度 picker with only 使用模型默认 / low / high / max.
+  The owner said the conversation still felt "a little uncomfortable" and asked
+  for more effort choices. The hypothesis: collapse the failure backlog into a
+  summary row, demote the routine status word, narrow the prose measure, and
+  surface the levels the gateway actually accepts — all display-layer changes
+  with no runtime contract change.
+- **Trade-off:** [the effort picker offers the known vocabulary](../architecture/trade-offs.md#2026-11-20--the-effort-picker-offers-the-known-vocabulary-marked-by-what-the-model-declared);
+  [a backlog of failed follow-ups is one row](../architecture/trade-offs.md#2026-11-20--a-backlog-of-failed-follow-ups-is-one-row-not-a-wall);
+  [the conversation reads as one quiet voice](../architecture/trade-offs.md#2026-11-20--the-conversation-reads-as-one-quiet-voice).
+- **Change:** `apps/desktop/ui/app.js` — `effortLevelGroupsFor` /
+  `effortOptionsMarkup` / the closed-state caveat and direct-save
+  `saveComposerChoice`; `opportunitiesMarkup` / `opportunityCardMarkup` /
+  `toggleOpportunities` with `aria-expanded` + `aria-controls` and an in-place
+  `hidden` flip; `logEntryMarkup` puts the author, status and time into one
+  left-side byline. `apps/desktop/ui/components.css` — the summary row and
+  failure-card scroll area, the 25 px pill composer controls with an 11 px value,
+  the 14 px request bubble with its overline hidden, the 620 px prose measure
+  shared with the request bubble and applied to the live `.clone-text`, and the
+  green completion kept in the left byline. `apps/desktop/ui/index.html` — the
+  `composer-effort-caveat` and its `aria-describedby`. `src/desktop/ui-locale.ts`
+  — level labels, group labels and the mapped note in both locales.
+  `test/ui-structure.test.ts` — four new tests. No server, ledger or
+  provider-contract change.
+- **Eval:** `node --experimental-strip-types --test test/ui-structure.test.ts`
+  against the HEAD UI files in `/tmp/clone-ui-head` (same updated test file):
+  **26/32**, red on the four new tests plus two existing assertions that now
+  read the new caveat id and CSS. Against the working tree: **32/32**. `npm
+  test`: **957/957**. `npm run typecheck`: exit 0. `npm run gate`: **PASS**,
+  baseline unchanged. Visual eval: a static fixture at 1468×1080 linking the
+  real working-tree UI against the live `/api` payloads with a mocked fetch
+  (dashboard, the owner's conversation, config, gateways, options,
+  opportunities). Before/after: `.opportunity-strip` **205 → 50 px**
+  (summary 40 px), `.conversation` top **279 → 124 px** (155 px reclaimed),
+  request bubble **61 → 45 px**, effort options **4 → 10** (three declared,
+  six other, one default), reply measure **760 → 620 px**, composer value
+  **10.5 px native → 11 px pill in a 25 px control**. The screenshots are
+  `/tmp/clone-ui-fixture/before-full.png`, `after-full.png`,
+  `before-composer.png` and `after-composer.png` (scratch, not committed).
+- **Benchmark run:** none — a deterministic UI contract and a local visual
+  check; no provider, model, dataset, split, seed or scoring parameter. The
+  evidence probe was six `POST /v1/chat/completions` calls with `max_tokens` 1
+  against `deepseek/deepseek-v4.1-flash` (`reasoning_effort` =
+  `medium/minimal/xhigh/ultra/none/off`), all HTTP 200; recorded in the
+  trade-off entry, not a benchmark.
+- **Execution chain:** one session plus one Workflow (`clone-ui-review`, three
+  design lenses + a critic). (1) Captured the live `/api` payloads with the
+  companion token and built a static fixture that runs the working-tree UI
+  against them; (2) read the turn/opportunity/composer code and the existing
+  trade-offs; (3) the Workflow's reading, hierarchy and composer lenses returned
+  measured proposals — the reading lens rendered 620/660 px reply variants, the
+  hierarchy lens proposed the summary row, the composer lens proposed the
+  grouped vocabulary and the closed-state caveat; (4) integrated their shared
+  conclusions inline and wrote the tests; (5) captured before/after with
+  `playwright-core` + system Chrome, waiting on the app's own ready marker and
+  the 420 ms startup fade. **Failures / retries:** plain headless Chrome
+  intermittently captured the startup overlay (switched to an explicit opacity
+  wait); the first summary test counted the `opportunity-cards` wrapper as a
+  card (`opportunity-card(?!s)` fixed it); cross-realm `deepEqual` on the vm's
+  arrays was replaced by joined strings; the first attempt at the effort
+  vocabulary left `offeredEffortLevelsFor` unused, then the composer lens's
+  direct-save rule removed it. Duration ≈1.5 h, including ≈45 min of design
+  Workflow: **4 agents, 246 tool calls, 602,367 subagent tokens, 45.1 min**. The
+  critic returned and kept the summary row, the 620 px measure, the left byline,
+  the 25 px pill row and the card-copy cleanup; it dropped the gray-completion
+  and footer-size proposals.
+- **Pros:** one reversible display pass; the summary row keeps every action and
+  keyboard focus; the tests pin both the new markup and its CSS; the before/
+  after fixture uses the owner's real conversation and the same viewport for
+  both sides; no server or runtime behavior moved.
+- **Cons / next time:** the visual judgment is the working agent's, not the
+  owner's; the owner should confirm in the rebuilt app, especially the custom
+  pill chevron in the macOS window. The expanded failure cards still print the
+  run id and a why-line in the backend's wording; the display helper only
+  recognises the documented shapes and keeps anything else as written, and the
+  ISO-to-local conversion depends on the system timezone (no test pins the exact
+  output). The Workflow was heavy for a CSS pass (three lenses + critic, 45 min /
+  602k subagent tokens); next time use one lens for a change this contained. The
+  fixture is a mock of the `/api` surface, so it proves the CSS/markup against
+  real payloads, not the running sidecar.
+- **Reversal condition:** see the three trade-off entries. In short: restore the
+  declared-only effort list if mapped levels degrade turns; show the newest
+  failure card beside the summary if owners miss failures; adjust the 620 px
+  measure or the status treatment if the owner finds the reply too narrow or the
+  left byline too quiet.
+
 ### 2026-11-20 — A verification failure says why, once
 
 - **Goal / hypothesis:** the audit found the composite summary duplicated
@@ -159,7 +248,6 @@ file keeps every attempt, including the ones that did not work.
   category/root field instead of parsing prose. If statting outside paths becomes
   acceptable, report existence precisely. If a consumer relies on the duplicated
   prefix, keep a structured summary.
-
 
 ### 2026-11-19 — A provider stop is a failure, not a completed answer
 

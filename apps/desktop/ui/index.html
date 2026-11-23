@@ -46,7 +46,7 @@
             <button class="stop" id="stop-turn" type="button" aria-label="停止本次回答" data-i18n="stop-turn" data-i18n-attr="aria-label" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
             <div class="composer-options">
               <label class="composer-option"><span data-i18n="composer-model">模型</span><select id="composer-model" aria-label="模型" data-i18n="composer-model" data-i18n-attr="aria-label"></select></label>
-              <label class="composer-option"><span data-i18n="composer-effort">强度</span><select id="composer-effort" aria-label="推理强度" data-i18n="composer-effort" data-i18n-attr="aria-label"></select></label>
+              <label class="composer-option"><span data-i18n="composer-effort">强度</span><select id="composer-effort" aria-label="推理强度" aria-describedby="composer-effort-caveat" data-i18n="composer-effort" data-i18n-attr="aria-label"></select><span class="composer-effort-caveat" id="composer-effort-caveat" data-i18n="effort-mapped-note" hidden>Provider 可能映射</span></label>
               <span class="composer-option-note" data-i18n="composer-choice-note">随对话保存</span>
             </div>
           </form>

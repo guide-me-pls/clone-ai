@@ -12,12 +12,17 @@ The native worker can now search a repository (`search_text`, `find_files`), ins
 
 原生 Worker 现在可以通过随 clone-ai 发布的 `agent-tools` MCP 服务器检索仓库（`search_text`、`find_files`）、查看 `git_status`/`git_diff`/`git_log`、读取 `current_time`，并抓取一个 HTTP(S) URL（`fetch_url`）；用 `scripts/install-agent-tools.mjs` 安装。每个工具都通过 `mcp.json` 选择启用并声明风险：`fetch_url` 是 `network`，只提供给带网络 Scope 的步骤；没有声明写工具或 shell 工具。服务器在遍历前解析路径、跳过受保护根与符号链接目录、关闭仓库配置的 Git diff 助手与 fsmonitor、拒绝私有/回环抓取目标并限制结果。`browser-mcp.ts` 现在与新安装器共用 `mcp.json` 合并函数。新文档：`docs/usage/agent-tools-mcp.md` 及其中文版。`npm test` 974/974，typecheck 0，gate PASS。
 
+### The conversation starts sooner, and the effort picker offers more levels
+
+Three or more failed follow-ups collapse into one 40 px summary row above the conversation (count + newest failure, expandable in place); a single failure keeps its card, and non-failure opportunities stay visible. The conversation now begins 155 px earlier at 1468×1080. The reply prose is capped at a 620 px measure shared with the request bubble, the request bubble loses its "你" overline and sits at 14 px / 1.7, the turn's author, status and time become one left-side byline instead of a status stranded at the right edge, and the composer's model and effort pickers become 25 px pills. The effort picker offers the known gateway vocabulary in two groups — levels the model declares, then other known levels the provider may map — with Chinese labels plus the exact provider spelling and a "Provider 可能映射" note when a mapped level is selected. An undeclared level is saved as chosen instead of silently cleared; failed cards drop their repeated source prefix, turn a raw ISO stamp into local time, and drop a trailing sentence only when it exactly repeats the title. No server, ledger or provider contract changed.
+
+三条及以上的失败跟进收成对话上方 40px 的摘要行（条数 + 最新失败，原地展开）；单条失败保留卡片，非失败机会始终可见。1468×1080 下对话因此提前 155px 开始。正文行宽限制在 620px，与请求气泡共用同一把尺；请求气泡去掉“你”的眉线并排到 14px / 1.7；回合的作者、状态与时间在左侧排成一条署名，而不是把状态孤零零挂在右缘；输入框的模型与强度选择器变成 25px 药丸。强度选择器按两组提供网关已知词汇——模型声明的档位在前，其余 Provider 可能映射的已知档位在后——中文含义加真实 Provider 写法，选中映射档位时显示“Provider 可能映射”。未声明档位按选择原样保存，不再被悄悄清空；失败卡去掉重复的来源前缀，把原始 ISO 时间换成本地时间，并且只有在结尾句与标题完全相同时才删除复述。服务端、台账与 Provider 契约均未改动。
+
 ### A verification failure names its cause once
 
 A failed verification now says whether a promised path is missing, a directory, unreadable, or outside the roots this step may verify; the summary carries a single "Verification failed." prefix. The existing unscoped-write expectation was updated to the outside-roots message.
 
 验证失败现在说明被承诺的路径是缺失、目录、不可读，还是在步骤可验证的根之外；摘要只带一个 "Verification failed." 前缀。原有的“无 Scope 写入”断言已更新为根外文案。
-
 
 ### A provider's blocked or abnormal stop is a failure
 
