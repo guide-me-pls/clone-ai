@@ -22,6 +22,7 @@ import type {
   OwnerDecisionNotice,
   OwnerDecisionNotifier,
   PolicyDecision,
+  PolicyJudge,
   SubagentRun,
   SubagentVerificationResult,
   SubagentWorkOrder,
@@ -92,6 +93,13 @@ export interface CloneRuntimeOptions {
    * 抛错的通知器被忽略。
    */
   ownerDecisionNotifier?: OwnerDecisionNotifier;
+  /**
+   * Appeal port for a step the policy engine denied. Absent means the owner
+   * decides; a thrown error or an unparsable answer also becomes `ask`.
+   * 被 Policy 引擎拒绝的步骤的上诉端口。缺失表示由所有者决定；抛错或无法解析的回答也变成
+   * `ask`。
+   */
+  policyJudge?: PolicyJudge;
   /** Workspace supervised by this Runtime. 工作本次 Runtime 监督的 Workspace。 */
   workspacePath?: string;
   /**
@@ -234,6 +242,7 @@ export class CloneRuntime {
   readonly #knownAgentIds?: () => Set<string>;
   readonly #artifactJudge?: (input: ArtifactJudgeInput) => Promise<ArtifactJudgeResult>;
   readonly #ownerDecisionNotifier?: OwnerDecisionNotifier;
+  readonly #policyJudge?: PolicyJudge;
   /** One notice per run/step/kind, so re-entering waiting_approval does not repeat it. 每个 Run/步骤/类型一条，重复进入等待不会重复通知。 */
   readonly #decisionNotices = new Set<string>();
   #state: RuntimeProjection = emptyProjection();
@@ -251,6 +260,7 @@ export class CloneRuntime {
     this.#knownAgentIds = options.knownAgentIds;
     this.#artifactJudge = options.artifactJudge;
     this.#ownerDecisionNotifier = options.ownerDecisionNotifier;
+    this.#policyJudge = options.policyJudge;
     this.#capacityGate = options.capacityGate ?? new CapacityGate();
     this.#workspacePath = options.workspacePath === undefined ? undefined : resolve(options.workspacePath);
     this.#workspaceLockFile = options.workspaceLockFile === undefined ? undefined : resolve(options.workspaceLockFile);
@@ -599,9 +609,60 @@ export class CloneRuntime {
       const decision = this.#policy.evaluate({ run, task, step, approved });
       await this.record({ type: "policy.decided", taskId: task.id, runId: run.id, payload: { stepId: step.id, decision } });
 
+      let policyOverride = false;
       if (decision.outcome === "denied") {
-        await this.changeStatus(run.id, "failed", step.id, decision.reason);
-        return { run: this.requireRun(run.id), status: "failed" };
+        if (approved) {
+          // The owner already approved this exact step: that is the last
+          // authority, so a hard denial is overridden for this step.
+          // 所有者已经批准了这一步：那是最后权威，因此本步骤的硬拒绝被覆盖。
+          policyOverride = true;
+        } else {
+          const judged = this.#policyJudge === undefined
+            ? { decision: "ask" as const, reason: "No execution judge is configured; the owner decides.", unavailable: true }
+            : await this.#policyJudge({ objective: task.objective, taskTitle: task.title, step, reason: decision.reason });
+          if (judged.decision === "deny") {
+            await this.changeStatus(run.id, "failed", step.id, `AI judge denied: ${judged.reason}`);
+            return { run: this.requireRun(run.id), status: "failed" };
+          }
+          if (judged.decision === "ask") {
+            await this.record({
+              type: "approval.requested",
+              taskId: task.id,
+              runId: run.id,
+              payload: {
+                stepId: step.id,
+                channel: "desktop",
+                judge: "model",
+                judgeReason: judged.reason,
+                requestedAt: new Date().toISOString(),
+              },
+            });
+            this.#notifyOwnerDecision(
+              { kind: "approval", title: task.title, detail: `${step.title}：${judged.reason}` },
+              `${run.id}:${step.id}:approval`,
+            );
+            await this.changeStatus(run.id, "waiting_approval", step.id);
+            return { run: this.requireRun(run.id), status: "waiting_approval" };
+          }
+          // ALLOW: record the judge's approval before dispatch. The
+          // approval-before-execution invariant sees it like an owner grant.
+          // ALLOW：在派发前记录裁判审批。执行前必须有审批的不变量会像看待所有者批准
+          // 一样看待它。
+          await this.record({
+            type: "approval.granted",
+            taskId: task.id,
+            runId: run.id,
+            payload: {
+              id: randomUUID(),
+              runId: run.id,
+              stepId: step.id,
+              grantedAt: new Date().toISOString(),
+              grantedBy: "model_judge" as const,
+              note: judged.reason,
+            },
+          });
+          policyOverride = true;
+        }
       }
       if (decision.outcome === "approval_required") {
         this.#notifyOwnerDecision(
@@ -641,9 +702,9 @@ export class CloneRuntime {
 
       try {
         if (step.subagents !== undefined) {
-          await this.executeSubagents({ run, task, step, agents, policyDecision: decision });
+          await this.executeSubagents({ run, task, step, agents, policyDecision: decision, ...(policyOverride ? { policyOverride: true } : {}) });
         } else {
-          await this.executeSingleAgent({ run, task, step, agents, policyDecision: decision });
+          await this.executeSingleAgent({ run, task, step, agents, policyDecision: decision, ...(policyOverride ? { policyOverride: true } : {}) });
         }
       } catch (error: unknown) {
         // A work order produced an answer but not its promised artifact, and the
@@ -893,7 +954,7 @@ export class CloneRuntime {
     return this.#workspaceLockFile === undefined ? {} : { lockFile: this.#workspaceLockFile };
   }
 
-  private async executeSingleAgent(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry; policyDecision: PolicyDecision }): Promise<void> {
+  private async executeSingleAgent(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry; policyDecision: PolicyDecision; policyOverride?: boolean }): Promise<void> {
     const release = await this.#capacityGate.acquire();
     try {
       if (this.#workspacePath === undefined) {
@@ -905,7 +966,7 @@ export class CloneRuntime {
     }
   }
 
-  private async executeSingleAgentUnlocked(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry; policyDecision: PolicyDecision }): Promise<void> {
+  private async executeSingleAgentUnlocked(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry; policyDecision: PolicyDecision; policyOverride?: boolean }): Promise<void> {
     const agentId = input.step.agentId;
     if (agentId === undefined) {
       throw new Error(`Plan step ${input.step.id} has no executor.`);
@@ -935,6 +996,7 @@ export class CloneRuntime {
         ...(input.policyDecision.unrestrictedDomains === undefined || input.policyDecision.unrestrictedDomains.length === 0
           ? {}
           : { unrestrictedDomains: input.policyDecision.unrestrictedDomains }),
+        ...(input.policyOverride === true ? { policyOverride: true } : {}),
         ...this.assignmentWorkspaceFields(workspace),
       };
       const executionAuthorization = evidenceAuthorization(capabilities);
@@ -986,7 +1048,7 @@ export class CloneRuntime {
     });
   }
 
-  private async executeSubagents(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry; policyDecision: PolicyDecision }): Promise<void> {
+  private async executeSubagents(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry; policyDecision: PolicyDecision; policyOverride?: boolean }): Promise<void> {
     const orders = input.step.subagents ?? [];
     let outstanding = orders.filter((order) => !this.workOrderHasCompletedEvidence(input.run.id, order.id));
 
@@ -1004,7 +1066,7 @@ export class CloneRuntime {
     return (order.dependsOn ?? []).every((dependencyId) => this.workOrderHasCompletedEvidence(runId, dependencyId));
   }
 
-  private async dispatchSubagent(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry; policyDecision: PolicyDecision }): Promise<void> {
+  private async dispatchSubagent(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry; policyDecision: PolicyDecision; policyOverride?: boolean }): Promise<void> {
     // One slot per subagent, so a wide dependency wave cannot exceed what the
     // machine can take. The slot is held through the workspace lock too: a
     // waiting subagent must not hold a capacity slot while it queues for the
@@ -1022,7 +1084,7 @@ export class CloneRuntime {
     }
   }
 
-  private async dispatchSubagentUnlocked(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry; policyDecision: PolicyDecision }): Promise<void> {
+  private async dispatchSubagentUnlocked(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry; policyDecision: PolicyDecision; policyOverride?: boolean }): Promise<void> {
     const existing = this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)];
     if (existing?.status === "completed") {
       const contract = await this.ensureWorkOrderVerified(input, existing.agentId);
@@ -1067,6 +1129,7 @@ export class CloneRuntime {
       ...(input.policyDecision.unrestrictedDomains === undefined || input.policyDecision.unrestrictedDomains.length === 0
         ? {}
         : { unrestrictedDomains: input.policyDecision.unrestrictedDomains }),
+      ...(input.policyOverride === true ? { policyOverride: true } : {}),
     };
     let adapterCapabilities = await adapter.capabilities();
     let allowedEvidenceKinds = evidenceAuthorization(adapterCapabilities);

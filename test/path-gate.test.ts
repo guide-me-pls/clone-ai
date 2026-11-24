@@ -144,6 +144,28 @@ test("the forbidden-root check ignores case on a case-insensitive volume", async
     assert.equal(isForbiddenPath(join(home, ".SSH", "id_ed25519"), home), true);
   }
 });
+
+test("an override grants a protected scope and skips the write guards", async (t) => {
+  const { workspace } = await scratch(t);
+  const home = await mkdtemp(join(tmpdir(), "clone-gate-override-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await mkdir(join(home, ".ssh"), { recursive: true });
+  await writeFile(join(home, ".ssh", "config"), "Host x", "utf8");
+  const scope = { domain: "files" as const, resource: join(home, ".ssh", "config"), access: "write" as const };
+  const grants = resolveGrants([scope], { workspace, home, overrideProtection: true });
+  assert.equal(grants.dropped.length, 0);
+  assert.equal(grants.writeRoots.length, 1);
+  assert.equal(decideTool({ risk: "write", grants, workspace, path: join(home, ".ssh", "config"), home, overrideProtection: true }).allowed, true);
+  // Without the override the same grant and write are refused. 没有覆盖时，同样的授权与写入被拒绝。
+  const refusedGrant = resolveGrants([scope], { workspace, home });
+  assert.equal(refusedGrant.writeRoots.length, 0);
+  assert.equal(decideTool({ risk: "write", grants: refusedGrant, workspace, path: join(home, ".ssh", "config"), home }).allowed, false);
+  // `.git` follows the same override. `.git` 遵循同一个覆盖。
+  const gitGrant = resolveGrants([], { workspace, home, includeWorkspace: true, overrideProtection: true });
+  assert.equal(decideTool({ risk: "write", grants: gitGrant, workspace, path: ".git/config", home, overrideProtection: true }).allowed, true);
+  assert.equal(decideTool({ risk: "write", grants: gitGrant, workspace, path: ".git/config", home }).allowed, false);
+});
+
 test("the clone home is protected except the Kernel's isolated sandbox", async (t) => {
   const { workspace } = await scratch(t);
   const home = await mkdtemp(join(tmpdir(), "clone-gate-clonehome-"));

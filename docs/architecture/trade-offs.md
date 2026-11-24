@@ -62,6 +62,80 @@ during the handshake, disable the probe and require an owner-supplied
 the owner asks the agent to install tools, remove the protected-root denial only
 together with a Kernel approval record.
 
+## 2026-11-24 — Every Kernel denial is an AI appeal; the owner is the last authority
+
+**Decision.** The deterministic policy engine keeps returning `denied`, but the
+Runtime no longer ends a run there. On a denial it asks a bounded model judge —
+one short prompt to the configured Main Agent endpoint, 1,024 output tokens,
+minimal effort, a 20 s timeout — for one word: `ALLOW`, `DENY`, or `ASK`.
+
+- `ALLOW` records an `approval.granted` with `grantedBy: "model_judge"` and
+  executes the step with a per-step override that bypasses the in-process
+  protected-path, `.git`, `.rsi` and grant-gateway drops. The judge's reason is
+  the note.
+- `ASK`, an unparsable answer, an unreachable endpoint, or no judge wired
+  records an `approval.requested` with the judge's reason and settles the run as
+  `waiting_approval`; the approval card lists the step's scopes and the refusal
+  reason, a macOS notification fires, and the sidebar row turns red. An owner
+  approval then executes the step with the same override.
+- `DENY` fails the run with the judge's reason.
+
+This applies at every autonomy level and to every policy denial, including
+protected locations and credentials: the owner chose "全部交给 AI（含凭据）".
+The policy engine itself is unchanged, so `benchmark/gate` still pins the
+deterministic denials; the override is a Runtime decision with its own audit.
+
+**Why it won.** The owner asked for the whole agent to prefer automatic
+execution and trust AI: every place that currently refuses should become an AI
+decision on whether to execute, and only genuinely undecidable cases should go
+to a human. The sidebar must show those cases with a red dot or a color change.
+Keeping the Kernel's determinism but adding a model appeal is the smallest
+change that honors both: the refusal and the appeal are recorded, and the owner
+is still reachable.
+
+**Alternatives rejected.**
+
+- *Delete the hard denials and trust the planning model only.* No separate
+  judgment, no reason trail, and a prompt-injected plan is the only authority.
+- *Keep protected locations hard-denied.* The owner explicitly chose to include
+  credentials.
+- *Let the judge open the agent's own control plane without any human path.*
+  `DENY` and `ASK` keep a human in the loop when the judge is unsure.
+- *Have the worker prompt per tool call.* The native worker has no approval
+  callback; the step is the existing decision unit.
+- *Bypass the policy engine for the audit too.* Then the gate and the run record
+  would disagree about what was denied; the judge must be an appeal, not a
+  rewrite.
+
+**Evidence.** The owner's answer: "全部交给 AI（含凭据）" to the scope
+question, after the card and notification work. `AuthorityPolicyEngine.#judge`
+returns `denied` for forbidden paths, unenforced domains and the observe ladder;
+`resolveGrants` drops protected and too-broad scopes; `decideTool` refuses
+protected reads and writes, `.git` and `.rsi`; the policy gate pins all of it.
+The new `test/policy-judge.test.ts` pins the prompt and parser;
+`test/authority.test.ts` adds allow/ask/deny runtime paths and checks
+`checkJournalInvariants`; `test/path-gate.test.ts` pins the override through
+`resolveGrants`/`decideTool`. The full run and gate are recorded in
+`docs/engineering/optimizations.md`.
+
+**What it costs.** The endpoint key, provider keys and `mcp.json` credentials
+become reachable if a plan and the judge both decide to read them; a
+prompt-injected plan can argue for itself, and the judge is the only barrier.
+Each denial costs one model call and up to 20 s. The repair lane is the one
+exception: its worktree has no owner watching, so the factory does not wire the
+judge there and a denial fails as before. The agent-exec MCP server keeps its
+own allowlist and Seatbelt profile, so shell commands still cannot reach those
+paths even when the judge allows a step; that second gate is unchanged. The
+approval card now must list scopes and the reason, or the owner cannot judge an
+ASK.
+
+**Reversal condition.** If any judge ALLOW reads or writes a credential the
+owner did not intend, restore the hard denial for that category (or require an
+owner confirmation even on ALLOW) before touching anything else. If judge
+latency dominates a run, cache a verdict per run/step/scope and only re-ask
+after a plan change. If owners routinely approve everything, tighten the judge
+prompt or remove the appeal for that category.
+
 ## 2026-11-24 — Child agents run automatically; the desktop tells the owner only when a decision is needed
 
 **Decision.** The 子 Agent 边界 card no longer says 默认禁止. The only child

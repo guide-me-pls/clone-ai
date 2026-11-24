@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { createConfiguredAgentRegistry } from "../workers/configured-worker-registry.ts";
 import { workCapabilitiesForRole } from "../workers/capabilities.ts";
-import type { AgentRegistry, MemoryCandidate, OwnerDecisionNotifier, PlanStep, TriggerKind } from "../core/contracts.ts";
+import type { AgentRegistry, MemoryCandidate, OwnerDecisionNotifier, PlanStep, PolicyJudge, TriggerKind } from "../core/contracts.ts";
 import { createRuntimeAssembly } from "../core/runtime-factory.ts";
 import type { CloneRuntime, DispatchResult } from "../core/runtime.ts";
 import type { JournalStore } from "../core/journal.ts";
@@ -45,6 +45,13 @@ export interface QueryWorkflowOptions {
    * 当 Run 因审批或复核停下时面向所有者的通知。调度器与桌面请求路由传入守护进程通知器；
    * 测试不设置。
    */
+  ownerDecisionNotifier?: OwnerDecisionNotifier;
+  /**
+   * Test seam: replace the model appeal against a policy denial. Production
+   * leaves it unset and the assembly uses the configured endpoint.
+   * 测试切口：替换对 Policy 拒绝的模型上诉。生产不设置，组装使用已配置端点。
+   */
+  policyJudge?: PolicyJudge;
   /**
    * Test seam and future desktop setting: select an explicit planner.
    * 测试切口与未来桌面端设置：选择一个明确的 Planner。
@@ -111,6 +118,7 @@ export async function runQuery(
     dataDirectory,
     ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
     ...(options.ownerDecisionNotifier === undefined ? {} : { ownerDecisionNotifier: options.ownerDecisionNotifier }),
+    ...(options.policyJudge === undefined ? {} : { policyJudge: options.policyJudge }),
   });
   // Every exit from this workflow must release the journal handle: the caller
   // owns the clone home and may move or delete it the moment we return.

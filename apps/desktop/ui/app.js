@@ -662,8 +662,8 @@ function restoreSidebarWidth() { const saved = Number(localStorage.getItem("clon
 // Evidence kinds the runtime records, in the owner's language. 运行时记录的证据类型，用所有者的语言。
 const EVIDENCE_KIND = { artifact: "产物", observation: "观察", tool_result: "工具结果", receipt: "回执", test: "测试" };
 const statusMeta = (status) => {
-  if (status === "waiting_approval") return { label: t("status-waiting"), className: "waiting", dot: "waiting" };
-  if (status === "waiting_review") return { label: t("status-review"), className: "waiting", dot: "waiting" };
+  if (status === "waiting_approval") return { label: t("status-waiting"), className: "waiting", dot: "owner" };
+  if (status === "waiting_review") return { label: t("status-review"), className: "waiting", dot: "owner" };
   if (status === "completed") return { label: t("status-completed"), className: "completed", dot: "completed" };
   if (status === "failed" || status === "cancelled") return { label: t("status-needs-attention"), className: "needs-attention", dot: "needs-attention" };
   return { label: t("status-running"), className: "running", dot: "running" };
@@ -2503,7 +2503,16 @@ function approvalMarkup(session) {
     const step = typeof approval.title === "string" && approval.title.length > 0 && approval.title !== session.title
       ? `<p class="approval-step">步骤：${escape(approval.title)}</p>`
       : "";
-    return `<div class="approval-item"><b>${escape(session.title)}</b>${step}<p>${escape(approval.description || "下一步会影响外部系统，需要你的确认。")}</p><div class="approval-actions"><button class="approve" type="button" data-approve="${escape(approval.runId)}">确认并继续</button><button class="secondary" type="button" data-reject="${escape(approval.runId)}">拒绝</button></div></div>`;
+    // The owner cannot judge a scope they cannot see. The Kernel's refusal and
+    // the AI judge's reason are part of the decision, not the audit page.
+    // 所有者无法判断看不见的 Scope。Kernel 的拒绝与 AI 裁判的理由是决定的一部分，
+    // 不应只藏在审计页。
+    const scopes = (approval.scopes || []).map((scope) =>
+      `<li><code>${escape(scope.domain)}:${escape(scope.access)}</code> ${escape(scope.resource)}</li>`).join("");
+    const reason = typeof approval.reason === "string" && approval.reason.length > 0
+      ? `<p class="approval-reason">${escape(approval.reason)}</p>`
+      : "";
+    return `<div class="approval-item"><b>${escape(session.title)}</b>${step}<p>${escape(approval.description || "下一步需要你的确认后才能继续。")}</p>${reason}${scopes.length > 0 ? `<ul class="approval-scopes">${scopes}</ul>` : ""}<div class="approval-actions"><button class="approve" type="button" data-approve="${escape(approval.runId)}">确认并继续</button><button class="secondary" type="button" data-reject="${escape(approval.runId)}">拒绝</button></div></div>`;
   }).join("")}</section>`;
 }
 function reviewMarkup(session) {

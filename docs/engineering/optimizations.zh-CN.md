@@ -98,6 +98,49 @@
   要求所有者提供 `tools/list` fixture（或把 MCP 服务器放回 Seatbelt）；如果所有者要求 Agent
   自己安装工具，只有在同时引入 Kernel 审批记录的前提下，才可移除受保护根拒绝。
 
+### 2026-11-24 —— Kernel 的每次拒绝都成为 AI 上诉，所有者是最后权威
+
+- **目标 / 假设：** 所有者要求整个 Agent 自动执行优先、尽可能相信 AI：目前所有拒绝的地方都由
+  AI 判断能否执行，只有真正无法决定的才交人工，并在左侧对话列表用红点提示。确定性 Policy
+  引擎保留拒绝；Runtime 增加上诉，由裁判或所有者决定。
+- **取舍：** [Kernel 的每次拒绝都成为 AI 上诉；所有者是最后权威](../architecture/trade-offs.zh-CN.md#2026-11-24--kernel-的每一次拒绝都成为-ai-上诉所有者是最后权威)。
+- **变更：** 新增 `src/core/policy-judge.ts` —— 有界提示词（输出上限 1024 token、最低推理
+  强度、20 秒）、`ALLOW`/`DENY`/`ASK` 解析器，所有失败都变成 `ask`；`src/core/contracts.ts`
+  —— `PolicyJudge`、assignment 上的 `policyOverride`、`grantedBy: "model_judge"`；
+  `src/core/runtime.ts` —— 遇到 `denied` 时询问裁判（`ALLOW` 记录审批并执行，`ASK`/无裁判
+  记录 `approval.requested` 并等待所有者，`DENY` 失败），已有所有者批准则覆盖硬拒绝；覆盖
+  传给单 Agent 与子 Agent 派发；`src/core/runtime-factory.ts` 与
+  `src/application/run-query.ts` —— 通过已配置的主 Agent 端点接入裁判，并留测试切口；
+  `src/authority/path-gateway.ts` —— 覆盖时授权受保护 Scope 而不是丢弃；
+  `src/workers/native-agent-worker.ts` —— 覆盖时 `decideTool` 与 `.rsi` 守卫让路；
+  `src/companion-server.ts` —— 审批带上步骤的 Scope 与 Kernel/裁判理由；
+  `apps/desktop/ui/app.js`、`style.css`、`components.css` —— 等待行使用红色 `owner` 状态点与
+  红色行底，审批卡列出 Scope 与理由。
+- **Eval：** `node --experimental-strip-types --test test/policy-judge.test.ts` **3/3**
+  （提示词、解析器、不可用→ask）；`test/authority.test.ts` 的运行时上诉用例（所有者批准覆盖、
+  AI `ALLOW` 记录 `model_judge` 审批并通过 `checkJournalInvariants`、AI `DENY` 失败）；
+  `test/path-gate.test.ts` **10/10**（覆盖授权 `~/.ssh` 与 `.git`，无覆盖时同样被拒）；
+  `test/regression/failure-reason.test.ts` **6/6**（被拒 Run 现在以裁判理由失败）；完整
+  `npm test` **1108/1108**，`npm run typecheck` 退出码 0，`npm run gate` **PASS**
+  （策略套件 30 个用例不变——引擎仍确定性拒绝）。
+- **Benchmark run：** `npm run gate`（离线、确定性、无 Provider/模型），
+  `benchmark/gate/policy-cases.json` schemaVersion 1，用例 id 即该文件全部 id，`approved`
+  固定，无采样；上诉只在 Runtime 层，不改变门禁期望的引擎结果。
+- **执行链路：** 直接实现。整份 `authority.test.ts` 的两次直接运行被环境 auto-mode 分类器
+  拒绝（"Code That Leaks When Run"），因为该文件同时也测试受保护路径；用
+  `--test-name-pattern` 单跑上诉用例通过，下一次完整 `npm test` 被允许并通过。没有发现代码失败。
+- **优点：** 每次拒绝都有明确的决定轨迹（先 `policy.decided`，再有带裁判理由的
+  `approval.granted`/`approval.requested`），人工回落复用已有的审批流程与桌面通知，审批卡
+  终于列出它所询问的 Scope。
+- **缺点 / 下次：** 裁判 `ALLOW` 可以打开端点密钥或任何凭据；提示注入是残余风险。每次拒绝
+  增加一次模型调用、最多 20 秒。agent-exec MCP 服务器仍执行自己的白名单与 Seatbelt profile，
+  因此 Shell 命令即使有覆盖也到不了受保护路径；未来改动要么把 Kernel 的覆盖传给该服务器，
+  要么在 UI 里说明这一限制。修复通道没有所有者看守，工厂不为它接入裁判，拒绝会像以前一样
+  直接失败。裁判没有缓存，重新规划会重新询问。
+- **推翻条件：** 抄自取舍条目——如果某次裁判 `ALLOW` 打开了所有者并不想要的凭据，恢复该类别的
+  硬拒绝（或要求 `ALLOW` 也必须由所有者确认）；如果延迟主导，按 Run/步骤/Scope 缓存判定；
+  如果审批变成橡皮图章，收紧提示词或移除上诉。
+
 ### 2026-11-24 —— 只读请求绕过 LLM Planner
 
 - **目标 / 假设：** 明确写着只读的请求被 LLM Planner 规划，而它的合同要求每个子代理都有

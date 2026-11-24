@@ -200,7 +200,7 @@ export interface ApprovalGrant {
   runId: string;
   stepId: string;
   grantedAt: string;
-  grantedBy: "user" | "standing_policy";
+  grantedBy: "user" | "standing_policy" | "model_judge";
   note?: string;
 }
 
@@ -515,6 +515,14 @@ export interface ExecutionAssignment {
    * network；受保护路径仍在其工具闸门处停下。
    */
   unrestrictedDomains?: Domain[];
+  /**
+   * The owner or the model judge overrode a Kernel denial for this step. The
+   * worker skips its protected-path, `.git` and `.rsi` checks; the override and
+   * the approval that justifies it are in the journal.
+   * 所有者或模型裁判为这一步覆盖了 Kernel 的拒绝。Worker 跳过受保护路径、`.git` 与
+   * `.rsi` 检查；覆盖与批准它的授权都在 Journal 里。
+   */
+  policyOverride?: boolean;
   workspacePath?: string;
   /**
    * Present when this assignment is not allowed to touch the owner's live tree.
@@ -653,6 +661,36 @@ export interface PolicyDecision {
 export interface PolicyEngine {
   evaluate(input: { run: Run; task: Task; step: PlanStep; approved: boolean }): PolicyDecision;
 }
+
+/**
+ * One appeal against a Kernel denial. The judge sees only the owner's request,
+ * the step and the refusal; it returns one word. Every failure becomes `ask`
+ * so the owner can still decide.
+ * 对 Kernel 拒绝的一次上诉。裁判只看所有者的请求、步骤与拒绝理由；它返回一个词。
+ * 所有失败都变成 `ask`，使所有者仍能决定。
+ */
+export interface PolicyJudgeInput {
+  /** The owner's request or task objective, bounded by the judge. 所有者的请求或任务目标，由裁判自行截断。 */
+  objective: string;
+  /** The task title, for context. 任务标题，供上下文。 */
+  taskTitle: string;
+  /** The step the Kernel refused. Kernel 拒绝的步骤。 */
+  step: PlanStep;
+  /** The deterministic refusal reason. 确定性的拒绝理由。 */
+  reason: string;
+}
+
+export type PolicyJudgeDecision = "allow" | "deny" | "ask";
+
+export interface PolicyJudgeResult {
+  decision: PolicyJudgeDecision;
+  /** One short factual line, kept in the journal and the approval card. 一行简短事实，写入 Journal 与审批卡。 */
+  reason: string;
+  /** True when the judge could not be asked at all. 裁判根本无法被询问时为 true。 */
+  unavailable?: boolean;
+}
+
+export type PolicyJudge = (input: PolicyJudgeInput) => Promise<PolicyJudgeResult>;
 
 export interface Verifier {
   verify(input: { run: Run; plan: WorkPlan; evidence: Evidence[] }): Promise<VerificationResult>;

@@ -2,7 +2,7 @@ import { join } from "node:path";
 
 import { resolveClonePaths, prepareCloneHome, type ClonePathOptions, type ClonePaths } from "../config/clone-home.ts";
 import { loadOutcomeCatalog, type OutcomeCatalog } from "./failure-analysis.ts";
-import type { Evidence, OwnerDecisionNotifier } from "./contracts.ts";
+import type { Evidence, OwnerDecisionNotifier, PolicyJudge } from "./contracts.ts";
 import type { JournalStore } from "./journal.ts";
 import { createJournalStore } from "./sqlite-journal.ts";
 import { AuthorityPolicyEngine } from "../authority/policy-engine.ts";
@@ -21,6 +21,7 @@ import { WorkerSettingsStore } from "../config/worker-settings.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { CapacityGate, sampleCapacity } from "./capacity.ts";
 import { judgeArtifactContract } from "./artifact-judge.ts";
+import { judgePolicyDenial } from "./policy-judge.ts";
 import { completeWithNativeEndpoint } from "../memory/synthesized-recall.ts";
 import { readPersistedMainAgentEndpoint } from "../main-agent/native-runtime.ts";
 
@@ -141,6 +142,13 @@ export interface RuntimeAssemblyOptions extends ClonePathOptions {
    * 当 Run 因审批或复核停下时面向所有者的通知。面向所有者的组装传入 macOS 通知器；
    * 测试与修复通道不设置。
    */
+  ownerDecisionNotifier?: OwnerDecisionNotifier;
+  /**
+   * Override for the execution judge. Absent means the configured Main Agent
+   * endpoint; tests can inject a deterministic judge.
+   * 执行裁判的覆盖。缺失表示已配置的主 Agent 端点；测试可注入确定性裁判。
+   */
+  policyJudge?: PolicyJudge;
 }
 
 export async function createRuntimeAssembly(options: RuntimeAssemblyOptions = {}): Promise<RuntimeAssembly> {
@@ -258,6 +266,22 @@ export async function createRuntimeAssembly(options: RuntimeAssemblyOptions = {}
         const fallback = await readPersistedMainAgentEndpoint(paths.dataDirectory);
         return judgeArtifactContract(input, (prompt) => completeWithNativeEndpoint(prompt, { maxTokens: 1024, timeoutMs: 20_000, effort: "minimal", fallback }));
       },
+      // Every policy denial becomes an appeal: the same configured endpoint
+      // decides allow / deny / ask. An unavailable judge becomes ask, so the
+      // owner is always reachable. The repair lane is the exception: its
+      // worktree has no owner watching, so a denial fails there instead of
+      // waiting forever for an approval nobody will give.
+      // 每次 Policy 拒绝都成为上诉：同一个已配置端点决定放行 / 拒绝 / 交给所有者。
+      // 裁判不可用就交给所有者，所有者永远可达。修复通道是例外：它的 worktree 没有所有者
+      // 在看守，因此拒绝会直接失败，而不是永远等待一个不会到来的批准。
+      ...(options.policyJudge === undefined && options.workspaceWritable === true
+        ? {}
+        : {
+            policyJudge: options.policyJudge ?? (async (input) => {
+              const fallback = await readPersistedMainAgentEndpoint(paths.dataDirectory);
+              return judgePolicyDenial(input, (prompt) => completeWithNativeEndpoint(prompt, { maxTokens: 1024, timeoutMs: 20_000, effort: "minimal", fallback }));
+            }),
+          }),
       // Recall comes from the governed store only: promoted memories, never raw
       // candidates. 召回只来自受治理的 Store：只有已提升的记忆，绝不包含原始候选。
       memorySource: new GovernedMemorySource(paths.dataDirectory, 4, journal),

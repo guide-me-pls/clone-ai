@@ -22,6 +22,14 @@ The tools tab can now install a stdio MCP server from an npm package. "探测工
 
 工具页现在可以从 npm 包安装一个 stdio MCP 服务器。「探测工具」用 `npx --yes <package> <args>` 启动包，完成 MCP 握手并列出它暴露的工具；每个工具从 `external`（拒绝）开始，所有者为它指定读取/写入/网络，也可一键预设。「安装」会先确认、重新探测，在包暴露了请求未声明的工具时拒绝，并把一条启用条目原子写入 `mcp.json`（权限 0600），不影响其他服务器与未知字段。每个服务器有「移除」按钮，删除一条条目。所有失败都发生在写入之前，Agent 仍然装不了：`~/.clone` 仍是受保护根，exec 沙箱也会重新拒绝它。路由：`POST /api/tools/probe`、`POST /api/tools/install`、`DELETE /api/tools/mcp/:id`。定向测试：`test/mcp-installer.test.ts` 8/8、`test/tools-install-api.test.ts` 6/6。`npm test` 1103/1103，gate PASS。
 
+### Every Kernel denial is an AI appeal; the owner is the last authority
+
+A plan step the deterministic policy engine refuses no longer ends the run. The Runtime asks a bounded model judge (1,024 output tokens, minimal effort, 20 s) for one word: `ALLOW` records a `model_judge` approval and executes the step with a per-step override of the protected-path, `.git` and `.rsi` gates; `ASK`, an unparsable answer, an unreachable endpoint or no judge records an `approval.requested` with the judge's reason, waits for you, notifies the computer, and turns the sidebar row red; `DENY` fails with the judge's reason. Your approval of an appealed step executes with the same override. The approval card now lists the step's scopes and the Kernel/judge reason. This includes protected locations and credentials, as you chose. The agent-exec MCP server keeps its own command allowlist and Seatbelt profile. `test/policy-judge.test.ts` 3/3; `npm test` 1108/1108, typecheck 0, gate PASS.
+
+### Kernel 的每次拒绝都成为 AI 上诉；所有者是最后权威
+
+被确定性 Policy 引擎拒绝的计划步骤不再直接结束 Run。Runtime 询问一个有界模型裁判（输出上限 1024 token、最低推理强度、20 秒），只要求一个词：`ALLOW` 记录 `model_judge` 审批，并带仅限该步骤的受保护路径/`.git`/`.rsi` 覆盖执行；`ASK`、无法解析的回答、端点不可达或没有裁判时记录带裁判理由的 `approval.requested`，等待你决定，发电脑通知，并把侧栏行变红；`DENY` 以裁判理由失败。你批准被上诉的步骤后，也带同一覆盖执行。审批卡现在列出步骤的 Scope 与 Kernel/裁判理由。按你的选择，这包括受保护位置与凭据。agent-exec MCP 服务器仍保留自己的命令白名单与 Seatbelt profile。`test/policy-judge.test.ts` 3/3；`npm test` 1108/1108，typecheck 0，gate PASS。
+
 ### The UI uses the macOS system typeface
 
 The app's body and display text now use the macOS system face (SF Pro, with PingFang SC for Chinese) instead of Avenir Next/Inter, and monospace uses SF Mono. Font weights are normalized to 400/500/600/700, heading tracking is relaxed to at most -.025em, and the 14px/1.5 body size is unchanged — removing the synthesized weights and the cramped Chinese display type. `npm test` 1104/1104, typecheck 0, gate PASS.

@@ -5,6 +5,7 @@ import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, OwnerDecisionNotifier, Run, Task, VerificationResult } from "./core/contracts.ts";
+import type { Scope } from "./authority/scope.ts";
 import { EFFORT_LEVELS, MAX_EFFORT_LENGTH, normalizeEffort } from "./workers/effort.ts";
 import { describeFailureForOwner } from "./core/failure-display.ts";
 import { appendWorkUpdate, describeWorkUpdate, readWorkUpdates } from "./main-agent/work-updates.ts";
@@ -3089,7 +3090,14 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
   // 任务记录时也能读到。
   const turnChoices = await readTurnChoices(dataDirectory);
 
-  const approvals = mainConversationApprovals(visibleRuns, tasks);
+  const approvalDetails = new Map<string, { scopes: Scope[]; reason?: string }>();
+  for (const run of visibleRuns) {
+    const plan = run.planId === undefined ? undefined : state.plans[run.planId];
+    const step = plan?.steps.find((candidate) => candidate.id === run.activeStepId);
+    const reason = run.activeStepId === undefined ? undefined : approvalReasonFor(events, run.id, run.activeStepId);
+    approvalDetails.set(run.id, { scopes: step?.scopes ?? [], ...(reason === undefined ? {} : { reason }) });
+  }
+  const approvals = mainConversationApprovals(visibleRuns, tasks, approvalDetails);
   const active = visibleRuns
     .filter((run) => ["planning", "queued", "running", "verifying"].includes(run.status))
     .slice(0, 4)
@@ -3876,6 +3884,7 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
   // 只有 Main Agent 提案的 Run 才有可显示的派发者。桌面请求创建的任务没有 Main Agent 对话。
   const dispatchedBy = triggerPayload.source === "main-agent" ? conversationId : undefined;
   const activeStep = run.activeStepId === undefined ? undefined : plan?.steps.find((step) => step.id === run.activeStepId);
+  const approvalReason = run.activeStepId === undefined ? undefined : approvalReasonFor(events, run.id, run.activeStepId);
   const approvals = run.status === "waiting_approval" && run.activeStepId !== undefined
     ? [{
         runId: run.id,
@@ -3884,6 +3893,8 @@ async function buildSession(dataDirectory: string, runId: string, settings: { ag
         description: activeStep?.risk === "external_side_effect" || activeStep?.risk === "irreversible"
           ? "这一步会影响外部系统；确认后才会继续。"
           : "下一步需要你的确认才会继续。",
+        scopes: activeStep?.scopes ?? [],
+        ...(approvalReason === undefined ? {} : { reason: approvalReason }),
       }]
     : [];
   const resultByRun = runResultByRun(events);
@@ -4149,9 +4160,35 @@ export interface MainConversationApproval {
   stepId: string;
   title: string;
   description: string;
+  scopes: Scope[];
+  /** The Kernel refusal and the AI judge's reason, when recorded. Kernel 拒绝与 AI 裁判理由（有记录时）。 */
+  reason?: string;
 }
 
 type ApprovalRun = Pick<Run, "id" | "status" | "activeStepId" | "taskId">;
+
+/**
+ * The Kernel refusal and the judge's reason behind one pending approval. The
+ * owner cannot judge a scope they cannot see; both strings are bounded journal
+ * content, not model-authored labels.
+ * 一次待审批背后的 Kernel 拒绝与裁判理由。所有者无法判断看不见的 Scope；两段文本都是有界
+ * 的 Journal 内容，不是模型自拟的标签。
+ */
+function approvalReasonFor(events: readonly JournalEvent[], runId: string, stepId: string): string | undefined {
+  const decided = [...events].reverse().find((event) => event.type === "policy.decided"
+    && event.runId === runId
+    && asRecord(event.payload).stepId === stepId);
+  const refusal = asRecord(asRecord(decided?.payload).decision).reason;
+  const requested = [...events].reverse().find((event) => event.type === "approval.requested"
+    && event.runId === runId
+    && asRecord(event.payload).stepId === stepId);
+  const judged = asRecord(requested?.payload).judgeReason;
+  const parts = [
+    typeof refusal === "string" && refusal.length > 0 ? refusal : undefined,
+    typeof judged === "string" && judged.length > 0 ? `AI 裁判：${judged}` : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length === 0 ? undefined : parts.join(" · ").slice(0, 900);
+}
 
 /**
  * Every waiting run that needs the owner, keyed by the run id the decision must
@@ -4163,15 +4200,21 @@ type ApprovalRun = Pick<Run, "id" | "status" | "activeStepId" | "taskId">;
 export function mainConversationApprovals(
   runs: ReadonlyArray<ApprovalRun>,
   tasks: Record<string, Pick<Task, "title">>,
+  details?: ReadonlyMap<string, { scopes: Scope[]; reason?: string }>,
 ): MainConversationApproval[] {
   return runs
     .filter((run) => run.status === "waiting_approval" && run.activeStepId !== undefined)
-    .map((run) => ({
-      runId: run.id,
-      stepId: run.activeStepId!,
-      title: tasks[run.taskId]?.title ?? "Unnamed work",
-      description: "The next step can affect an external system and needs your approval.",
-    }));
+    .map((run) => {
+      const detail = details?.get(run.id);
+      return {
+        runId: run.id,
+        stepId: run.activeStepId!,
+        title: tasks[run.taskId]?.title ?? "Unnamed work",
+        description: "The next step needs your approval before it can continue.",
+        ...(detail === undefined ? { scopes: [] } : { scopes: detail.scopes }),
+        ...(detail?.reason === undefined ? {} : { reason: detail.reason }),
+      };
+    });
 }
 
 export interface MainConversationReview {
@@ -4599,7 +4642,7 @@ function parsePort(value: string | undefined, fallback: number): number {
 interface DashboardView {
   generatedAt: string;
   counts: { approvals: number; active: number; completed: number };
-  approvals: Array<{ runId: string; title: string; stepId: string; description: string }>;
+  approvals: Array<{ runId: string; title: string; stepId: string; description: string; scopes?: Scope[]; reason?: string }>;
   active: Array<{ runId: string; title: string; status: string; updatedAt: string }>;
   subagents: Array<{ runId: string; title: string; agentId: string; role: string; status: string; summary?: string; updatedAt: string }>;
   completed: Array<{ runId: string; title: string; status: string; updatedAt: string; evidenceCount: number }>;
@@ -4652,7 +4695,7 @@ interface SessionView extends SessionSummary {
     steps: Array<{ id: string; title: string; risk: string; delegated: boolean; agentId?: string }>;
   };
   subagents: Array<{ runId: string; id: string; title: string; agentId: string; role: string; providerId: string; status: string; summary?: string; evidence?: Array<{ kind: string; summary: string; locator?: string }>; review?: { runId: string; summary: string; unverifiedCriteria: string[] }; updatedAt: string }>;
-  approvals: Array<{ runId: string; stepId: string; title?: string; description: string }>;
+  approvals: Array<{ runId: string; stepId: string; title?: string; description: string; scopes?: Scope[]; reason?: string }>;
   reviews?: Array<{ runId: string; title: string; verification: VerificationResult; result?: string }>;
   verification?: import("./core/contracts.ts").VerificationResult;
   messages: ConversationMessage[];

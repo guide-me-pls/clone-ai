@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -33,22 +33,32 @@ test("failed runs surface their policy or verification reason to readers", async
   const directory = await mkdtemp(join(tmpdir(), "clone-failure-reason-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
 
-  await t.test("policy denial is journaled and replayed", async () => {
+  await t.test("policy denial is journaled, appealed and replayed", async () => {
     const journal = new JsonlJournalStore(join(directory, "policy.jsonl"));
     const store = new StandingPolicyStore(join(directory, "authority"), journal);
     await store.load();
     const policy = new AuthorityPolicyEngine({ config: () => store.snapshot(), home: directory });
-    const runtime = new CloneRuntime({ journal, policy, verifier: new EvidenceVerifier(), memory: new MemoryPipeline(journal) });
+    const runtime = new CloneRuntime({
+      journal,
+      policy,
+      verifier: new EvidenceVerifier(),
+      memory: new MemoryPipeline(journal),
+      // The appeal answers DENY, so the run still fails and the reason is the
+      // judge's — the new owner of a policy denial.
+      // 上诉回答拒绝，因此 Run 仍然失败，理由是裁判的——Policy 拒绝的新归属。
+      policyJudge: async () => ({ decision: "deny", reason: "The request does not justify a protected path." }),
+    });
     const { run } = await runtime.acceptTrigger({ kind: "query", summary: "Write a file", payload: {} });
-    const step = { id: "write", title: "Write", instructions: "Write the file", risk: "reversible_write" as const, acceptanceCriteria: ["file exists"], agentId: "draft-maker", requiredCapabilities: ["drafting"], scopes: [{ domain: "files" as const, resource: join(directory, "output.md"), access: "write" as const }] };
+    const step = { id: "write", title: "Write", instructions: "Write the file", risk: "reversible_write" as const, acceptanceCriteria: ["file exists"], agentId: "draft-maker", requiredCapabilities: ["drafting"], scopes: [{ domain: "files" as const, resource: join(directory, ".ssh", "output.md"), access: "write" as const }] };
     await runtime.attachPlan(run.id, { summary: "Write a file", steps: [step] });
     const result = await runtime.execute(run.id, createScriptedAgentRegistry());
     assert.equal(result.status, "failed");
-    const reason = "The files domain is observe-only; raise its autonomy to allow write.";
     const events = await journal.list();
+    const decision = events.find((event) => event.type === "policy.decided" && event.runId === run.id);
+    assert.match((decision?.payload as { decision?: { reason?: string } }).decision?.reason ?? "", /protected location that no policy can open/);
     const changed = events.filter((event) => event.runId === run.id && event.type === "run.status_changed").at(-1);
-    assert.match((changed?.payload as { reason?: string }).reason ?? "", /The files domain is observe-only; raise its autonomy to allow write\./);
-    assert.ok(runtime.getRun(run.id).failureReason?.includes(reason));
+    assert.match((changed?.payload as { reason?: string }).reason ?? "", /AI judge denied/);
+    assert.match(runtime.getRun(run.id).failureReason ?? "", /AI judge denied/);
   });
 
   await t.test("verification failure reaches replay and status information", async (t) => {
@@ -69,10 +79,18 @@ test("failed runs surface their policy or verification reason to readers", async
   });
 
   await t.test("runQuery returns the denied write reason", async () => {
-    const result = await runQuery(join(directory, "query"), "Write a report", {}, undefined, {
+    const data = join(directory, "query");
+    // The default is 全部放行, which allows an unscoped write. Pin this case to
+    // act_auto so the "name a target" denial is still what it tests.
+    // 默认是「全部放行」，未声明目标的写入会被允许。把本用例钉在 act_auto，继续测试
+    // "必须点名目标"的拒绝理由。
+    await mkdir(data, { recursive: true });
+    await writeFile(join(data, "policies.json"), '{"version":1,"domains":{"files":"act_auto"},"policies":[]}\n', "utf8");
+    const result = await runQuery(data, "Write a report", {}, undefined, {
       agents: createScriptedAgentRegistry(), workspacePath: directory,
+      policyJudge: async () => ({ decision: "deny", reason: "The request does not name a target." }),
     });
     assert.equal(result.status, "failed");
-    assert.match((result as typeof result & { failureReason?: string }).failureReason ?? "", /names no write scope/);
+    assert.match((result as typeof result & { failureReason?: string }).failureReason ?? "", /AI judge denied/);
   });
 });

@@ -44,6 +44,58 @@
 提供 `tools/list` fixture，或把 MCP 服务器放回 Seatbelt profile；如果所有者要求 Agent 自己
 安装工具，只有在同时引入 Kernel 审批记录的前提下，才可移除受保护根拒绝。
 
+## 2026-11-24 —— Kernel 的每一次拒绝都成为 AI 上诉；所有者是最后权威
+
+**决定。** 确定性 Policy 引擎仍然返回 `denied`，但 Runtime 不再就此结束 Run。遇到拒绝时，
+它会询问一个有界的模型裁判——向已配置的主 Agent 端点发送一段短提示，输出上限 1024 token，
+最低推理强度，超时 20 秒——只要求一个词：`ALLOW`、`DENY` 或 `ASK`。
+
+- `ALLOW` 记录一条 `approval.granted`（`grantedBy: "model_judge"`），并带一个仅限该步骤的
+  override 执行：跳过进程内的受保护路径、`.git`、`.rsi` 检查与授权网关的丢弃。裁判理由写入
+  note。
+- `ASK`、无法解析的回答、端点不可达，或没有接入裁判，都会记录一条带裁判理由的
+  `approval.requested`，把 Run 结算为 `waiting_approval`；审批卡列出该步骤的 Scope 与拒绝理由，
+  发 macOS 通知，侧栏行变红。所有者批准后，同一条 override 执行该步骤。
+- `DENY` 让 Run 以裁判理由失败。
+
+这适用于所有档位与所有 Policy 拒绝，包括受保护位置与凭据：所有者选择了"全部交给 AI（含凭据）"。
+Policy 引擎本身不变，因此 `benchmark/gate` 仍钉住确定性拒绝；override 是带独立审计的 Runtime
+决定。
+
+**为什么胜出。** 所有者要求整个 Agent 以自动执行为先、尽可能相信 AI：目前所有拒绝的地方都应
+由 AI 判断能否执行，只有真正无法决定的才交人工；侧栏必须用红点或颜色变化标出这些情况。保留
+Kernel 的确定性、再加一个模型上诉，是同时满足两者的最小改动：拒绝与上诉都有记录，所有者仍然
+可达。
+
+**被否决的备选。**
+
+- *删掉硬拒绝，只相信计划模型。* 没有独立判断，没有理由轨迹，被注入的计划就是唯一权威。
+- *保留受保护位置硬拒绝。* 所有者明确选择了包含凭据。
+- *让裁判无人工路径地打开 Agent 自己的控制面。* `DENY` 与 `ASK` 在裁判不确定时保留人工。
+- *让 Worker 每次工具调用都询问。* 原生 Worker 没有审批回调；步骤是现有的决定单位。
+- *对审计也绕过 Policy 引擎。* 那样门禁与 Run 记录会对"什么被拒绝"给出不同答案；裁判必须是
+  上诉，而不是改写。
+
+**证据。** 所有者对范围问题的回答："全部交给 AI（含凭据）"，这是在卡片与通知改动之后。
+`AuthorityPolicyEngine.#judge` 对禁区、未实现强制的域与 observe 阶梯返回 `denied`；
+`resolveGrants` 丢弃受保护与过宽的 Scope；`decideTool` 拒绝受保护读写、`.git` 与 `.rsi`；
+门禁钉住全部行为。新增 `test/policy-judge.test.ts` 钉住提示词与解析器；
+`test/authority.test.ts` 新增 allow/ask/deny 运行时路径并检查 `checkJournalInvariants`；
+`test/path-gate.test.ts` 钉住 override 穿过 `resolveGrants`/`decideTool`。全量运行与门禁记录在
+`docs/engineering/optimizations.md`。
+
+**代价。** 如果计划与裁判都决定读取，端点密钥、Provider 密钥与 `mcp.json` 凭据将变得可达；
+被注入的计划可以为自己辩护，裁判是唯一防线。每次拒绝增加一次模型调用，最多 20 秒。
+修复通道是唯一例外：它的 worktree 没有所有者看守，因此工厂不为它接入裁判，拒绝会像以前一样
+直接失败。agent-exec MCP 服务器保留自己的白名单与 Seatbelt profile，因此即使裁判放行步骤，
+Shell 命令仍到不了那些路径；第二道闸门不变。审批卡现在必须列出 Scope 与理由，否则所有者
+无法判断一次 `ASK`。
+
+**推翻条件。** 如果任何一次裁判 `ALLOW` 读取或写入了所有者并不想要的凭据，先恢复该类别的硬
+拒绝（或要求 `ALLOW` 也必须由所有者确认），再谈其他。如果裁判延迟主导了 Run，按 Run/步骤/
+Scope 缓存判定，只在计划变化后重新询问。如果所有者习惯性批准一切，收紧裁判提示词或移除该类
+别的上诉。
+
 ## 2026-11-24 —— 子 Agent 自动执行；真正需要决定时桌面通知所有者
 
 **决定。** 「子 Agent 边界」卡片不再显示"默认禁止"。唯一的子执行器是进程内的原生 Worker，

@@ -38,6 +38,21 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--所有者确认的-mcp-安装先探测包再展示工具最后写-mcpjson)；
   [执行链路](optimizations.zh-CN.md#2026-11-24--所有者确认的-mcp-安装探测展示再写-mcpjson)。
 
+## 2026-11-24 —— Kernel 的每次拒绝都成为 AI 上诉；所有者是最后权威
+
+- **主张：** 被确定性 Policy 引擎拒绝的步骤不再直接结束 Run。一个有界模型裁判回答
+  `ALLOW`、`DENY` 或 `ASK`；`ALLOW` 记录 `model_judge` 审批，并带受保护路径/`.git`/`.rsi`
+  覆盖执行；`ASK`（或裁判不可用）让所有者决定，审批卡列出 Scope 与理由，侧栏行显示红点；
+  `DENY` 以裁判理由失败。所有者对被上诉步骤的批准同样带覆盖执行。
+- **证据：** `test/policy-judge.test.ts` **3/3**（提示词、解析器、所有失败→ask）；
+  `test/authority.test.ts` 的运行时上诉用例（所有者批准覆盖、AI 放行记录 `model_judge` 审批
+  并通过 `checkJournalInvariants`、AI 拒绝失败）；`test/path-gate.test.ts` **10/10**
+  （覆盖授权 `~/.ssh` 与 `.git`，无覆盖时被拒）；`test/regression/failure-reason.test.ts`
+  **6/6**；`npm test` **1108/1108**，`npm run typecheck` 退出码 0，`npm run gate` **PASS**
+  （30 个策略用例不变）。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--kernel-的每一次拒绝都成为-ai-上诉所有者是最后权威)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--kernel-的每次拒绝都成为-ai-上诉所有者是最后权威)。
+
 ## 2026-11-24 —— 只读请求不再因产物合同失败
 
 - **主张：** 明确写着只读的请求由确定性规划器处理，Worker 读取文件并回答；Run 不再以

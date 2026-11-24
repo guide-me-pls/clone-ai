@@ -62,6 +62,14 @@ export function resolveGrants(
      * 打开网络。工具闸门仍拒绝受保护位置、`.git` 与 `.rsi` 写入。
      */
     unrestrictedDomains?: readonly Domain[];
+    /**
+     * A model judge (or the owner) overrode a Kernel denial for this step. The
+     * scope is granted even when it names a protected location, `/` or the
+     * home directory; the approval is in the journal.
+     * 模型裁判（或所有者）为这一步覆盖了 Kernel 的拒绝。即使 Scope 点名受保护位置、
+     * `/` 或家目录，也会被授权；批准记录在 Journal 里。
+     */
+    overrideProtection?: boolean;
   },
 ): EffectiveGrants {
   const home = options.home ?? homedir();
@@ -81,7 +89,7 @@ export function resolveGrants(
       // otherwise trigger.
       // Kernel 的隔离沙箱位于受保护的 clone home 下；它是 Worker 唯一可用的子树，
       // 因此跳过禁区检查与因 `.clone` 触发的"过宽"检查。
-      if (!pathWithin(cloneSandboxRoot(home), path)) {
+      if (options.overrideProtection !== true && !pathWithin(cloneSandboxRoot(home), path)) {
         if (isForbiddenPath(scope.resource, home)) {
           dropped.push({ scope, reason: "protected location" });
           continue;

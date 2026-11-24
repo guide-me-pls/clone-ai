@@ -47,6 +47,25 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--owner-confirmed-mcp-install-probe-the-package-show-the-tools-then-write-mcpjson);
   [execution chain](optimizations.md#2026-11-24--owner-confirmed-mcp-install-probe-show-then-write-mcpjson).
 
+## 2026-11-24 — Every Kernel denial is an AI appeal; the owner is the last authority
+
+- **Claim:** a step the deterministic policy engine refuses no longer ends the
+  run. A bounded model judge answers `ALLOW`, `DENY`, or `ASK`; `ALLOW` records a
+  `model_judge` approval and executes the step with a protected-path/`.git`/`.rsi`
+  override, `ASK` (or an unavailable judge) waits for the owner with the scopes
+  and reason on the approval card and a red dot on the sidebar row, and `DENY`
+  fails with the judge's reason. An owner approval of an appealed step also
+  executes with the override.
+- **Evidence:** `test/policy-judge.test.ts` **3/3** (prompt, parser, every
+  failure→ask); the runtime appeal case in `test/authority.test.ts` (owner
+  approval overrides, AI allow records a `model_judge` approval and passes
+  `checkJournalInvariants`, AI deny fails); `test/path-gate.test.ts` **10/10**
+  (the override grants `~/.ssh` and `.git`, without it the same is refused);
+  `test/regression/failure-reason.test.ts` **6/6**; `npm test` **1108/1108**,
+  `npm run typecheck` exit 0, `npm run gate` **PASS** (30 policy cases unchanged).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--every-kernel-denial-is-an-ai-appeal-the-owner-is-the-last-authority);
+  [execution chain](optimizations.md#2026-11-24--every-kernel-denial-is-an-ai-appeal-and-the-owner-is-the-last-authority).
+
 ## 2026-11-24 — A read-only request no longer fails with an artifact contract
 
 - **Claim:** a request that explicitly says read-only is planned by the

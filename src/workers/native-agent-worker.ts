@@ -111,6 +111,14 @@ export function decideTool(input: {
   workspace: string;
   /** Home directory for the protected-location check; injectable for tests. 受保护位置检查所用的家目录；测试可注入。 */
   home?: string;
+  /**
+   * A model judge or the owner overrode a Kernel denial for this step. The
+   * protected-location, `.git` and `.rsi` checks are skipped; the approval is
+   * in the journal.
+   * 模型裁判或所有者为这一步覆盖了 Kernel 的拒绝。跳过受保护位置、`.git` 与 `.rsi`
+   * 检查；批准记录在 Journal 里。
+   */
+  overrideProtection?: boolean;
 }): ToolDecision {
   if (input.risk === "external") return { allowed: false, reason: "External side effects require a governed action connector; this worker cannot perform them." };
   if (input.risk === "network" && !input.grants.network) return { allowed: false, reason: "The step was not granted a network scope." };
@@ -133,7 +141,7 @@ export function decideTool(input: {
       // the model a path.
       // 所有者的电脑就是可读范围；只有受保护位置保持关闭。它们在任何 Scope 或审批之前检查，
       // 因此 Worker 不能通过把路径交给模型来读取密钥或 Clone AI 自己的审计轨迹。
-      if (isForbiddenPath(target, input.home)) {
+      if (input.overrideProtection !== true && isForbiddenPath(target, input.home)) {
         return { allowed: false, reason: `The path ${target} is a protected location; a worker may not read it.` };
       }
       return { allowed: true };
@@ -144,7 +152,7 @@ export function decideTool(input: {
     // recorded the approval.
     // 写入只落在步骤获得的写入根内；工作区不会被隐式加入。即使「全部放行」把 `/` 变成
     // 写入根，受保护位置仍被拒绝；除非裁判/所有者覆盖并记录了批准。
-    if (isForbiddenPath(target, input.home)) {
+    if (input.overrideProtection !== true && isForbiddenPath(target, input.home)) {
       return { allowed: false, reason: `The path ${target} is a protected location; a worker may not write it.` };
     }
     const roots = input.grants.writeRoots.map((grantRoot) => realTarget(resolve(root, grantRoot)));
@@ -156,7 +164,7 @@ export function decideTool(input: {
     // writes are no longer anchored to one folder.
     // 仓库的 `.git` 是提交机制；写入它可以改动或新增检出中的提交，而步骤本应不碰那个检出。
     // 写入不再锚定一个文件夹，因此保护跟随每个授权的写入根，而不只是工作区。
-    if (target.split(sep).includes(".git")) {
+    if (target.split(sep).includes(".git") && input.overrideProtection !== true) {
       return { allowed: false, reason: `The path ${target} is inside a repository's .git directory, which a worker may not write.` };
     }
   }
@@ -236,6 +244,12 @@ export class NativeAgentWorker implements RuntimeAdapter {
    */
   async *execute(input: ExecutionAssignment): AsyncIterable<ExecutionEvent> {
     const workspace = resolve(input.workspacePath ?? process.cwd());
+    // A judge or the owner overrode a Kernel denial for this step. The
+    // protected-path, .git and .rsi gates stand aside; the approval that
+    // justifies it is in the journal.
+    // 裁判或所有者为这一步覆盖了 Kernel 的拒绝。受保护路径、.git 与 .rsi 闸门让路；
+    // 批准它的授权在 Journal 里。
+    const overrideProtection = input.policyOverride === true;
     const grants = resolveGrants(input.step.scopes, {
       workspace,
       // The isolated copy is the Kernel's sandbox, not the owner's tree, so it
@@ -277,7 +291,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
     // 都不该写。
     const evidenceRoot = realTarget(join(workspace, ".rsi"));
     const offered = this.#config.tools.filter(
-      (tool) => stepAllows(tool.risk) && decideTool({ risk: tool.risk, grants, workspace }).allowed,
+      (tool) => stepAllows(tool.risk) && decideTool({ risk: tool.risk, grants, workspace, ...(overrideProtection ? { overrideProtection: true } : {}) }).allowed,
     );
     const sessionId = randomUUID();
     yield { type: "session_started", sessionId };
@@ -355,7 +369,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
             if (tool.pathOf !== undefined && (typeof path !== "string" || path.length === 0)) {
               return { behavior: "deny" as const, reason: `The ${tool.name} call did not name a readable path.` };
             }
-            if (tool.risk === "write" && typeof path === "string" && containsPath(evidenceRoot, realTarget(resolve(workspace, path)))) {
+            if (!overrideProtection && tool.risk === "write" && typeof path === "string" && containsPath(evidenceRoot, realTarget(resolve(workspace, path)))) {
               return { behavior: "deny" as const, reason: `${path} is repair evidence and is read-only.` };
             }
             const decision = decideTool({
@@ -363,6 +377,7 @@ export class NativeAgentWorker implements RuntimeAdapter {
               grants,
               workspace,
               ...(path === undefined ? {} : { path }),
+              ...(overrideProtection ? { overrideProtection: true } : {}),
             });
             return decision.allowed
               ? { behavior: "allow" as const }

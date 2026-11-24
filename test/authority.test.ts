@@ -455,21 +455,92 @@ test("the Runtime turns a scoped write under observe into a waiting approval, th
   } finally { await f.cleanup(); }
 });
 
+test("a Kernel denial is an appeal: the owner approval or an AI allow overrides it", async () => {
+  const { CloneRuntime } = await import("../src/core/runtime.ts");
+  const { EvidenceVerifier } = await import("../src/core/verification.ts");
+  const { MemoryPipeline } = await import("../src/memory/memory-pipeline.ts");
+  const { checkJournalInvariants } = await import("../src/core/invariants.ts");
+  const { createScriptedAgentRegistry } = await import("./fixtures/scripted-adapter.ts");
+  const f = await fixture();
+  try {
+    // An unenforced domain is denied by the engine; the appeal keeps the same
+    // runtime path as a protected location without naming the owner's keys.
+    // 未实现强制的域会被引擎拒绝；这条上诉走与受保护位置相同的运行时路径，但不点名
+    // 所有者的密钥。
     const runtime = new CloneRuntime({ journal: f.journal, policy: f.engine, verifier: new EvidenceVerifier(), memory: new MemoryPipeline(f.journal) });
     const { run } = await runtime.acceptTrigger({ kind: "query", summary: "s", payload: {} });
     await runtime.attachPlan(run.id, {
       summary: "s",
-      steps: [{ ...step([{ domain: "files", resource: join(f.home, ".ssh", "id_rsa"), access: "read" }], "read_only"), agentId: "operator", requiredCapabilities: ["general"] }],
+      steps: [{ ...step([{ domain: "mail", resource: "inbox", access: "read" }], "read_only"), agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
     });
-    const result = await runtime.execute(run.id, createScriptedAgentRegistry());
-    assert.equal(result.status, "failed");
+    const first = await runtime.execute(run.id, createScriptedAgentRegistry());
+    assert.equal(first.status, "waiting_approval", "a hard denial is an appeal, not a dead end");
     const decided = (await f.journal.list()).find((event) => event.type === "policy.decided");
     assert.equal((decided?.payload as { decision: { outcome: string; scopeVerdicts?: unknown[] } }).decision.outcome, "denied");
     assert.equal(((decided?.payload as { decision: { scopeVerdicts?: unknown[] } }).decision.scopeVerdicts ?? []).length, 1);
+
+    await runtime.grantApproval(run.id, "s1");
+    const second = await runtime.execute(run.id, createScriptedAgentRegistry());
+    assert.notEqual(second.status, "waiting_approval");
+    const events = await f.journal.list();
+    assert.equal(events.some((event) => event.type === "approval.granted" && (event.payload as { grantedBy?: string }).grantedBy === "user"), true);
+    assert.deepEqual(checkJournalInvariants(events), []);
+
     await assert.rejects(runtime.attachPlan((await runtime.acceptTrigger({ kind: "query", summary: "x", payload: {} })).run.id, {
       summary: "s", steps: [{ ...step([{ domain: "files", resource: "relative", access: "read" } as Scope]), agentId: "operator", requiredCapabilities: ["general"] }],
     }), /absolute/);
   } finally { await f.cleanup(); }
+
+  const g = await fixture();
+  try {
+    const runtime = new CloneRuntime({
+      journal: g.journal,
+      policy: g.engine,
+      verifier: new EvidenceVerifier(),
+      memory: new MemoryPipeline(g.journal),
+      // An AI ALLOW executes the denied step and records who allowed it.
+      // AI 放行会执行被拒步骤，并记录是谁允许的。
+      policyJudge: async () => ({ decision: "allow", reason: "The owner asked for this calendar read." }),
+    });
+    const { run } = await runtime.acceptTrigger({ kind: "query", summary: "读取日历", payload: {} });
+    await runtime.attachPlan(run.id, {
+      summary: "s",
+      steps: [{
+        id: "read",
+        title: "读取日历",
+        instructions: "Read today's calendar.",
+        risk: "read_only",
+        acceptanceCriteria: ["x"],
+        agentId: "draft-maker",
+        requiredCapabilities: ["drafting"],
+        scopes: [{ domain: "calendar", resource: "primary", access: "read" }],
+      }],
+    });
+    const result = await runtime.execute(run.id, createScriptedAgentRegistry());
+    assert.notEqual(result.status, "waiting_approval", "the judge's ALLOW executes without the owner");
+    const events = await g.journal.list();
+    assert.equal(events.some((event) => event.type === "approval.granted" && (event.payload as { grantedBy?: string }).grantedBy === "model_judge"), true);
+    assert.deepEqual(checkJournalInvariants(events), []);
+  } finally { await g.cleanup(); }
+
+  const h = await fixture();
+  try {
+    const runtime = new CloneRuntime({
+      journal: h.journal,
+      policy: h.engine,
+      verifier: new EvidenceVerifier(),
+      memory: new MemoryPipeline(h.journal),
+      policyJudge: async () => ({ decision: "deny", reason: "The request does not justify this app action." }),
+    });
+    const { run } = await runtime.acceptTrigger({ kind: "query", summary: "s", payload: {} });
+    await runtime.attachPlan(run.id, {
+      summary: "s",
+      steps: [{ ...step([{ domain: "apps", resource: "com.example.app", access: "write" }], "read_only"), agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+    });
+    const result = await runtime.execute(run.id, createScriptedAgentRegistry());
+    assert.equal(result.status, "failed");
+    assert.match(runtime.getRun(run.id).failureReason ?? "", /AI judge denied/);
+  } finally { await h.cleanup(); }
 });
 
 test("two stores writing the same file cannot resurrect a revoked policy", async (t) => {

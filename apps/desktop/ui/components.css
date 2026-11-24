@@ -408,6 +408,7 @@ textarea:focus-visible {
 .session-meta { color: var(--muted); }
 .status-dot.running { background: var(--accent); box-shadow: 0 0 0 3px rgba(35, 104, 79, .1); }
 .status-dot.waiting { background: #b67d36; box-shadow: 0 0 0 3px #f3e7d5; }
+.status-dot.owner { background: var(--danger); box-shadow: 0 0 0 3px rgba(181, 62, 70, .12); }
 .status-dot.completed { background: var(--success); }
 .status-dot.needs-attention { background: var(--danger); }
 .sidebar-owner { border-top-color: var(--line); }
@@ -969,6 +970,7 @@ body { color: #202020; }
 .status-dot { width: 6px; height: 6px; margin-top: 5px; }
 .status-dot.running { background: #555; box-shadow: none; }
 .status-dot.waiting { background: #bd8b42; box-shadow: none; }
+.status-dot.owner { background: #b85b5b; box-shadow: 0 0 0 3px rgba(184, 91, 91, .12); }
 .status-dot.completed { background: #4d9669; }
 .status-dot.needs-attention { background: #b85b5b; }
 .session-title { color: #333; font-size: 12.5px; font-weight: 500; line-height: 1.3; }

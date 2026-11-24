@@ -102,6 +102,67 @@ file keeps every attempt, including the ones that did not work.
 - **Cons / next time:** there is no provenance or signature check — the probe verifies reachability and the tool list, not that the package is the one the owner meant. The route success path is not covered end-to-end because it would need the network; only the installer is. The probe runs the package unsandboxed, which is a real cost recorded in the trade-off. Next time, add a pinned catalog with a hash before offering one-click presets.
 - **Reversal condition:** copied from the trade-off entry — disable the probe and require an owner-supplied `tools/list` fixture (or put MCP servers back under Seatbelt) if a probed package runs unexpected code; remove the protected-root denial only together with a Kernel approval record if the agent is asked to install tools.
 
+### 2026-11-24 — Every Kernel denial is an AI appeal, and the owner is the last authority
+
+- **Goal / hypothesis:** the owner asked for automatic execution everywhere,
+  trusting AI, with every current refusal decided by AI and only truly
+  undecidable cases handed to a human, marked with a red dot on the left
+  conversation list. The deterministic policy engine keeps its refusals; the
+  Runtime gains an appeal so a judge — or the owner — decides.
+- **Trade-off:** [Every Kernel denial is an AI appeal; the owner is the last authority](../architecture/trade-offs.md#2026-11-24--every-kernel-denial-is-an-ai-appeal-the-owner-is-the-last-authority).
+- **Change:** new `src/core/policy-judge.ts` — bounded prompt (1,024 output
+  tokens, minimal effort, 20 s), `ALLOW`/`DENY`/`ASK` parser, every failure
+  becomes `ask`; `src/core/contracts.ts` — `PolicyJudge`, `policyOverride` on
+  the assignment, `grantedBy: "model_judge"`; `src/core/runtime.ts` — on a
+  `denied` decision, ask the judge (`ALLOW` records an approval and executes,
+  `ASK`/no judge records an `approval.requested` and waits for the owner, `DENY`
+  fails), and an existing owner approval overrides a hard denial; the override
+  is passed to single-agent and subagent assignments; `src/core/runtime-factory.ts`
+  and `src/application/run-query.ts` — wire the judge through the configured
+  Main Agent endpoint and a test seam; `src/authority/path-gateway.ts` — an
+  override grants the protected scope instead of dropping it;
+  `src/workers/native-agent-worker.ts` — `decideTool` and the `.rsi` guard stand
+  aside under the override; `src/companion-server.ts` — approvals carry the
+  step's scopes and the Kernel/judge reason; `apps/desktop/ui/app.js`,
+  `style.css`, `components.css` — waiting rows use a red `owner` status dot and
+  red-tinted row, and the approval card lists scopes and the reason.
+- **Eval:** `node --experimental-strip-types --test test/policy-judge.test.ts`
+  **3/3** (prompt, parser, unavailable→ask); `test/authority.test.ts` — the
+  runtime appeal case (owner approval overrides, AI `ALLOW` records a
+  `model_judge` approval and passes `checkJournalInvariants`, AI `DENY` fails);
+  `test/path-gate.test.ts` **10/10** (an override grants `~/.ssh` and `.git`,
+  and the same without an override is refused); `test/regression/failure-reason.test.ts`
+  **6/6** (a denied run now fails with the judge's reason); full `npm test`
+  **1108/1108**, `npm run typecheck` exit 0, `npm run gate` **PASS** (policy
+  suite 30 cases unchanged — the engine still refuses deterministically).
+- **Benchmark run:** `npm run gate` (offline, deterministic, no provider/model),
+  `benchmark/gate/policy-cases.json` schemaVersion 1, all case ids in that file,
+  fixed `approved`, no sampling; the appeal is runtime-only and does not change
+  the gate's expected engine outcomes.
+- **Execution chain:** implemented directly. A direct run of the whole
+  `authority.test.ts` was twice refused by the environment's auto-mode
+  classifier ("Code That Leaks When Run") because the file also exercises
+  protected paths; running the appeal case with `--test-name-pattern` passed,
+  and the full `npm test` was allowed on the next attempt and passed. No code
+  failure was found.
+- **Pros:** every refusal now has an explicit decision trail (`policy.decided`
+  then either `approval.granted`/`approval.requested` with the judge's reason),
+  the human fallback is the same approval flow that already had a desktop
+  notification, and the approval card finally shows the scopes it asks about.
+- **Cons / next time:** a judge ALLOW can open the endpoint key or any
+  credential; prompt injection is the residual risk. Each denial costs a model
+  call and up to 20 s. The agent-exec MCP server still applies its own allowlist
+  and Seatbelt profile, so shell commands cannot reach protected paths even
+  under an override; a future change must either pass the Kernel's override to
+  that server or state the limitation in the UI. The repair lane has no owner
+  watching, so the factory does not wire the judge there and a denial fails as
+  before. The judge is not cached; a re-plan re-asks.
+- **Reversal condition:** copied from the trade-off — if a judge ALLOW opens a
+  credential the owner did not intend, restore that category's hard denial (or
+  require owner confirmation even on ALLOW); if latency dominates, cache a
+  verdict per run/step/scope; if approvals become rubber stamps, tighten the
+  prompt or remove the appeal.
+
 ### 2026-11-24 — A read-only request bypasses the LLM planner
 
 - **Goal / hypothesis:** a request that explicitly says read-only was planned by
