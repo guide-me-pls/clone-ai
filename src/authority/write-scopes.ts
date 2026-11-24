@@ -43,16 +43,36 @@ const PATH_PATTERN = /(?:^|[\s"'`(（])((?:~\/|\/)[^\s"'`）)，,。；;：]+)/g
  * 只有正向写入线索之后的路径才是写入目标。"读取 /etc/hosts 并写一份摘要"不应把
  * `/etc/hosts` 当成写入目标；"写"之后出现的路径才是所有者要求创建的。
  */
-const WRITE_CUE = /(?:写到|写入|保存到|保存成|输出到|生成|创建|新建|形成|交付|write|save|create|output|generate|export|deliver)/iu;
+const WRITE_CUE = /(?:写到|写入|保存到|保存成|输出到|生成|创建|新建|形成|交付|write|save|create|output|generate|export|deliver)/giu;
 const CLAUSE_SPLIT = /[。；;!?！？\n]+/u;
+/**
+ * A write cue inside a prohibition is not a grant. "Do not write X" and
+ * "不要写 X" name a boundary, not a target; treating them as scopes would make
+ * the brief's own restriction enforceable against the worker it protects.
+ * 禁令里的写入线索不是授权。"Do not write X" 与"不要写 X"点名的是边界，不是目标；
+ * 把它们当成 Scope，会让简报自己的限制反过来能作用于它保护的文件。
+ */
+const NEGATED_WRITE_CUE = /(?:\b(?:do not|don't|never|without|not)\b[^.;,，\n]{0,40}|(?:不要|不得|不能|不可|禁止|只读|仅读|不写|别)[^。；;，,\n]{0,40})$/iu;
 
 /** Explicit write targets in `text`, in order, bounded and de-duplicated. `text` 中按顺序出现、有界且去重的显式写入目标。 */
 export function declaredWriteTargets(text: string): string[] {
   const targets: string[] = [];
   const seen = new Set<string>();
   for (const clause of text.split(CLAUSE_SPLIT)) {
-    const cue = clause.match(WRITE_CUE);
-    if (cue?.index === undefined) continue;
+    // Find the first cue that is not inside a prohibition. A clause may contain
+    // both ("Do not write X, but write Y"); the positive cue is the one that
+    // grants a target.
+    // 找到第一个不在禁令里的线索。同一分句可能两者都有（"不要写 X，但写 Y"）；只有
+    // 正向线索才授予目标。
+    WRITE_CUE.lastIndex = 0;
+    let cue: RegExpExecArray | null = null;
+    for (let match = WRITE_CUE.exec(clause); match !== null; match = WRITE_CUE.exec(clause)) {
+      if (!NEGATED_WRITE_CUE.test(clause.slice(0, match.index))) {
+        cue = match;
+        break;
+      }
+    }
+    if (cue === null) continue;
     for (const match of clause.slice(cue.index).matchAll(PATH_PATTERN)) {
       // A sentence-ending full stop or ASCII period is punctuation, not part
       // of the path; an interior dot (an extension) is kept.
@@ -90,7 +110,13 @@ function withWriteScope(step: PlanStep, defaults: WriteScopeDefaults): PlanStep 
   const scopes = step.scopes ?? [];
   if (scopes.some((scope) => scope.domain === "files" && scope.access !== "read")) return step;
 
-  const named = declaredWriteTargets([step.title, step.instructions, defaults.requestText ?? ""].join("\n"));
+  // The Main Agent's worker brief is part of the step: a target named only
+  // there is still a target the owner asked to write. A subagent order's brief
+  // is scanned too, because the step's scopes cover its orders.
+  // 主 Agent 的 Worker 简报属于步骤的一部分：只写在简报里的目标仍是所有者要求写入的目标。
+  // 子 Agent 工作单的简报也要扫描，因为步骤的 Scope 覆盖它的工作单。
+  const briefs = [step.workerBrief ?? "", ...(step.subagents ?? []).map((order) => order.workerBrief ?? "")].join("\n");
+  const named = declaredWriteTargets([step.title, step.instructions, briefs, defaults.requestText ?? ""].join("\n"));
   // No target named means no scope. A default folder here is exactly the
   // implicit permission the owner removed; the policy engine will deny the
   // step instead of a folder being invented for it.

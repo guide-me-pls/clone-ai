@@ -38,6 +38,21 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--只读请求永远不经过-llm-planner)；
   [执行链路](optimizations.zh-CN.md#2026-11-24--只读请求绕过-llm-planner)。
 
+## 2026-11-24 —— Worker 收到主 Agent 的任务，而不是通用模板
+
+- **主张：** 主 Agent 现在编写每个 Worker 的完整 `workerBrief`；Worker 的 system 提示词就是
+  这份简报加固定的执行契约，user 消息只携带 Kernel 解析出的事实。`dispatch_task` 的简报到达
+  主执行工作单，按步骤的简报到达其工作单，只写在简报里的写入目标也会被纳入 Scope。没有简报时
+  沿用原模板。
+- **证据：** `node --experimental-strip-types --test test/worker-brief.test.ts` **15/15**；
+  `npm test` **1025/1025**，0 失败；`npm run typecheck` 退出 0；`npm run gate` **PASS**，
+  基线不变。`79780a6` 上的变更前后提示词探针：旧 system 首行
+  `You are a worker inside Clone AI...`；新 system 首行
+  `Write out/report.md. Read README.md first. Stop after the write is verified.`，
+  新 user 首行 `Runtime facts (resolved by the Kernel...)`。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--主-agent-编写-worker-简报kernel-只追加事实)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--主-agent-编写-worker-简报)。
+
 ## 2026-11-24 —— 设置页展示 MCP 工具与技能，每个服务器都有加载按钮
 
 - **主张：** 桌面设置页现在有 **工具与技能** 分区，列出 clone home 的 `mcp.json` 中每个

@@ -46,6 +46,24 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--a-read-only-request-never-goes-through-the-llm-planner);
   [execution chain](optimizations.md#2026-11-24--a-read-only-request-bypasses-the-llm-planner).
 
+## 2026-11-24 — The worker receives the Main Agent's task, not a generic template
+
+- **Claim:** the Main Agent now writes each worker's complete `workerBrief`; the
+  worker's system prompt is that brief plus a fixed execution contract, and the
+  user message carries only Kernel-resolved facts. A `dispatch_task` brief
+  reaches the primary execution order, a per-step brief reaches its order, and
+  a write target named only in the brief is scoped. Without a brief the previous
+  template is unchanged.
+- **Evidence:** `node --experimental-strip-types --test test/worker-brief.test.ts`
+  **15/15**; `npm test` **1025/1025**, 0 fail; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**, baseline unchanged. Before/after prompt probe on
+  `79780a6`: old system first line `You are a worker inside Clone AI...`; new
+  system first line `Write out/report.md. Read README.md first. Stop after the
+  write is verified.` and new user first line `Runtime facts (resolved by the
+  Kernel...)`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--the-main-agent-writes-the-worker-brief-the-kernel-appends-only-facts);
+  [execution chain](optimizations.md#2026-11-24--the-main-agent-writes-the-worker-brief).
+
 ## 2026-11-24 — Settings shows MCP tools and skills, and each server has a load toggle
 
 - **Claim:** the desktop settings page now has a **工具与技能** tab that lists

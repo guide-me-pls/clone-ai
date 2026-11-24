@@ -8,6 +8,7 @@ import type { CloneRuntime, DispatchResult } from "../core/runtime.ts";
 import type { JournalStore } from "../core/journal.ts";
 import { GovernedMemorySource } from "../memory/md-memory-store.ts";
 import { buildFallbackPlan, isReadOnlyRequest } from "../planning/fallback-planner.ts";
+import { attachMainAgentBrief, normalizeWorkerBrief } from "../planning/worker-brief.ts";
 import { reconcileCommitments } from "../state/commitment-reconciler.ts";
 import { createEnvironmentWorkPlanner, type PlanningAgent, type WorkPlanner } from "../planning/llm-planner.ts";
 import { defaultWorkerProfiles, type CloneSettings, type WorkerProfile } from "../config/worker-settings.ts";
@@ -73,6 +74,15 @@ export interface QueryWorkflowOptions {
 }
 
 /**
+ * Runs the current Query-to-outcome path: durable trigger, memory recall,
+ * planning, Runtime execution, verification, then asynchronous memory work.
+ * The function coordinates components; it never lets a planner or worker own
+ * the parent Run.
+ *
+ * 运行当前从 Query 到结果的主链路：持久化触发、记忆召回、规划、Runtime 执行、验证，最后
+ * 才异步处理记忆。这个函数只负责协调组件，不会让 Planner 或 Worker 拥有父 Run 的控制权。
+ */
+/**
  * Read-only requests are planned deterministically. The LLM planner requires a
  * required artifact for every subagent, so it cannot express a request that
  * forbids writing; the deterministic planner has a dedicated read-only step.
@@ -83,15 +93,6 @@ export function shouldUseDeterministicPlanner(query: string, workerBrief?: strin
   return isReadOnlyRequest(query) || (workerBrief !== undefined && isReadOnlyRequest(workerBrief));
 }
 
-/**
- * Runs the current Query-to-outcome path: durable trigger, memory recall,
- * planning, Runtime execution, verification, then asynchronous memory work.
- * The function coordinates components; it never lets a planner or worker own
- * the parent Run.
- *
- * 运行当前从 Query 到结果的主链路：持久化触发、记忆召回、规划、Runtime 执行、验证，最后
- * 才异步处理记忆。这个函数只负责协调组件，不会让 Planner 或 Worker 拥有父 Run 的控制权。
- */
 export async function runQuery(
   dataDirectory: string,
   query: string,
@@ -211,8 +212,14 @@ async function runQueryWithin(
   // 并明确说明它为何选择当前任务图。
   let plan;
   try {
-    const workerBrief = typeof trigger.payload?.workerBrief === "string" ? trigger.payload.workerBrief : undefined;
-    if (planner === undefined || shouldUseDeterministicPlanner(query, workerBrief)) {
+    // The Main Agent's brief travels in the trigger payload. It is normalized
+    // before planning so a malformed or oversized brief is rejected here rather
+    // than reaching a worker.
+    // 主 Agent 的简报随触发载荷传递。规划前先归一化，使畸形或超长的简报在这里被拒绝，
+    // 而不是抵达 Worker。
+    const workerBrief = normalizeWorkerBrief(trigger.payload?.workerBrief);
+    const deterministicPlanner = shouldUseDeterministicPlanner(query, workerBrief);
+    if (planner === undefined || deterministicPlanner) {
       plan = buildFallbackPlan(query, new Set(routableAgents.map((agent) => agent.id)), recalledMemories);
     } else {
       const started = Date.now();
@@ -221,6 +228,7 @@ async function runQueryWithin(
           query,
           recalledMemories,
           availableAgents: planningAgents(routableAgents),
+          ...(workerBrief === undefined ? {} : { workerBrief }),
         });
       } finally {
         await recordUsage(dataDirectory, planner.takeUsage?.() ?? {
@@ -229,6 +237,12 @@ async function runQueryWithin(
         });
       }
     }
+    // The Main Agent's brief wins over the planner's own text. The planner may
+    // have composed a different task graph; the brief still describes the task
+    // the owner asked for.
+    // 主 Agent 的简报优先于 planner 自己的文本。planner 可能组成了不同的任务图；
+    // 简报描述的仍是所有者请求的任务。
+    if (workerBrief !== undefined) plan = { ...plan, steps: attachMainAgentBrief(plan.steps, workerBrief) };
   } catch (error: unknown) {
     // A planner that throws would otherwise leave the Run in `planning` with
     // nothing to pick it up: the queue only claims `queued`, and the owner

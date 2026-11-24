@@ -106,6 +106,45 @@
   必需产物，就在后置校验闸门之后把只读请求交给它；如果只读请求在标记之外仍必须产出文件，
   就要求点名的目标。
 
+### 2026-11-24 —— 主 Agent 编写 Worker 简报
+
+- **目标 / 假设：** Worker 提示词现在有两位作者，谁都无法完整表达任务：主 Agent 提供
+  `instructions` 或 `objective`，固定模板提供边界，`buildInstructions` 再追加事实。给主
+  Agent 一个 `workerBrief` 并让它成为 Worker 的任务提示词，应当关闭“具体构建请求到 Worker
+  只剩‘只在本地准备可修改、可回退的结果’”这类通用模板失败，并让一位作者写清目标、方法、
+  路径、边界、证据与停止条件。
+- **取舍：** [主 Agent 编写 Worker 简报，Kernel 只追加事实](../architecture/trade-offs.zh-CN.md#2026-11-24--主-agent-编写-worker-简报kernel-只追加事实)。
+- **变更：** `src/core/contracts.ts` 为 `PlanStep` 与 `SubagentWorkOrder` 增加
+  `workerBrief`；`src/planning/worker-brief.ts` 负责归一化，并把它放到 maker/写能力
+  工作单上；运行时把它放到主执行工作单；`dispatch_task` 与 `propose_work_plan` 暴露它；
+  `src/workers/native-worker-prompt.ts` 把它作为 system 提示词，`buildInstructions`
+  只输出 Runtime 事实；`src/authority/write-scopes.ts` 从简报里扫描写入目标并忽略被否定
+  的线索；`src/core/verification.ts` 从简报里读取文件预期；`src/core/runtime.ts` 校验它；
+  `src/main-agent/prompt.ts` 重写 charter（v8；并行加入的每日摘要指引使当前树为 9）。
+- **Eval：** `node --experimental-strip-types --test test/worker-brief.test.ts` —
+  **15/15**。变更前，在 `79780a6` 上，同一张工作单得到
+  `OLD system first line: You are a worker inside Clone AI...` 与
+  `OLD user first line: Write out/report.md.`；变更后得到
+  `NEW system first line: Write out/report.md. Read README.md first. Stop after
+  the write is verified.` 与 `NEW user first line: Runtime facts (resolved by
+  the Kernel...)`。`npm test` — **1025/1025**；`npm run typecheck` 退出 0；
+  `npm run gate` **PASS**，baseline 未变。
+- **Benchmark run：** 无——确定性契约测试加一次两版本提示词探针；没有 Provider、模型、数据集、
+  切分、种子或评分参数。
+- **执行链路：** 阅读提示词编译器、Worker、planner、派发与写 Scope 路径；写双语取舍；增加契约
+  与辅助模块；更新两个 planner、派发工具、Worker 提示词与 charter；增加测试；运行 typecheck、
+  聚焦测试、全量测试与 gate；用 `79780a6` 的临时 worktree 捕获变更前后的提示词。随后三路独立
+  审查发现四个重要缺陷——验证器不读简报、简报可能落到只读研究员、简报路径只显示工作单标准而
+  不是步骤标准、被否定的写入目标变成授权；四个都已修复并有测试覆盖。审查的 verify 阶段因脚本
+  bug（`lens is not defined`）失败，因此发现由人工核验。
+- **优点：** 任务提示词只有一位作者；边界仍由 `decideTool` 强制，并仍在执行契约里写明；没有
+  简报的调用方沿用旧模板。
+- **缺点 / 下次：** 简报是自由文本，质量取决于主 Agent；漏写目标的简报比模板更弱。
+  `dispatch_task` 的简报会覆盖主工作单上 planner 的文本，因此按步骤的 planner 简报只能通过
+  `propose_work_plan` 使用。中文取舍是翻译，不是独立评审。
+- **推翻条件：** 如果主 Agent 编写的简报相比固定模板，与更多的边界违规调用、更多缺失工件的
+  失败，或更多“结束时没有所需证据”的 Run 相关，则恢复固定边界，只保留任务特有的简报。
+
 ### 2026-11-24 —— 设置页列出 MCP 服务器、工具与技能，并给每个 MCP 一个加载按钮
 
 - **目标 / 假设：** 设置页此前没有 MCP 或技能入口，所有者只能手改 `mcp.json` 来加载或卸载

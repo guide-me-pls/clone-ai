@@ -28,10 +28,16 @@ Memory can help the Planner understand preference or history. It cannot grant
 permission, change policy, or silently cause an external action.
 
 Recall happens a second time at dispatch: the Kernel compiles a scoped memory
-packet per assignment, keyed on the work order's objective, and injects it
-through the single shared worker prompt. Every provider therefore receives the
-same owner-reviewed context, and each packet is journaled with the step and
-work order it reached.
+packet per assignment, keyed on the work order's objective, and appends it to
+the Runtime facts the worker receives alongside the Main Agent's brief. Every
+provider therefore receives the same owner-reviewed context, and each packet is
+journaled with the step and work order it reached.
+
+When a plan carries one, the worker's task prompt is the Main Agent's
+`workerBrief`; without one, the previous template is used. The Kernel appends
+only the execution contract (tool names, the gate, the stop condition) and the
+facts it resolved after planning: workspace, objective, required inputs,
+evidence contract, memory packet, refused scopes, and acceptance criteria.
 
 ### 3. The Planner proposes a bounded plan
 

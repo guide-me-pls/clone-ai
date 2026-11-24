@@ -180,8 +180,34 @@ test("the worker is told the required evidence contract", () => {
   assert.match(observation, /context-note \[observation, durable locator required\]/);
 });
 
-test("a Kernel-rejected plan closes its run instead of freezing in planning", async (t) => {
+test("the Kernel rejects a blank worker brief before any worker starts", async (t) => {
   const directory = await workspace(t);
+  await assert.rejects(
+    runQuery(directory, "Write a report.", {}, undefined, {
+      workspacePath: directory,
+      planner: {
+        async plan() {
+          return {
+            summary: "Write the report.",
+            steps: [{
+              id: "write",
+              title: "Write",
+              instructions: "Write the report.",
+              risk: "reversible_write" as const,
+              acceptanceCriteria: ["done"],
+              workerBrief: "   ",
+              agentId: "native",
+              requiredCapabilities: ["filesystem_write"],
+            }],
+          };
+        },
+      },
+    }),
+    /workerBrief must be a non-empty string/,
+  );
+});
+
+test("a Kernel-rejected plan closes its run instead of freezing in planning", async (t) => {  const directory = await workspace(t);
   await assert.rejects(
     runQuery(directory, "Research one fact and write a report to out/report.md.", {}, undefined, {
       workspacePath: directory,

@@ -114,6 +114,62 @@ file keeps every attempt, including the ones that did not work.
   route read-only through it behind a post-validation gate; if a read-only
   request must produce a file despite the marker, require a named target.
 
+### 2026-11-24 — The Main Agent writes the worker brief
+
+- **Goal / hypothesis:** the worker prompt has two authors and neither can state
+  the task completely: the Main Agent supplies `instructions` or `objective`, a
+  fixed template supplies the boundary, and `buildInstructions` appends facts.
+  Giving the Main Agent a `workerBrief` and making it the worker's task prompt
+  should stop the generic-template failure (a concrete build request reaching
+  the worker as “只在本地准备可修改、可回退的结果”) and let one author state the
+  objective, approach, paths, boundary, evidence and stop condition.
+- **Trade-off:** [The Main Agent writes the worker brief; the Kernel appends only facts](../architecture/trade-offs.md#2026-11-24--the-main-agent-writes-the-worker-brief-the-kernel-appends-only-facts).
+- **Change:** `src/core/contracts.ts` adds `workerBrief` to `PlanStep` and
+  `SubagentWorkOrder`; `src/planning/worker-brief.ts` normalizes it and places
+  it on the maker/write-capable order; the runtime places it on the primary
+  execution order for both planner paths; `dispatch_task` and
+  `propose_work_plan` expose it; `src/workers/native-worker-prompt.ts` makes it
+  the system prompt and `buildInstructions` emits only Runtime facts;
+  `src/authority/write-scopes.ts` scans it for write targets and ignores a
+  negated cue; `src/core/verification.ts` reads it for file expectations;
+  `src/core/runtime.ts` validates it; `src/main-agent/prompt.ts` rewrites the
+  charter (v8; the daily-digest guidance added in parallel takes the current
+  tree to 9).
+- **Eval:** `node --experimental-strip-types --test test/worker-brief.test.ts`
+  — **15/15**. Before, on `79780a6`, the same work order produced
+  `OLD system first line: You are a worker inside Clone AI...` and
+  `OLD user first line: Write out/report.md.` After:
+  `NEW system first line: Write out/report.md. Read README.md first. Stop after
+  the write is verified.` and `NEW user first line: Runtime facts (resolved by
+  the Kernel...)`. `npm test` — **1025/1025**; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**, baseline unchanged.
+- **Benchmark run:** none — deterministic contract tests and a two-revision
+  prompt probe; no provider, model, dataset, split, seed or scoring parameter.
+- **Execution chain:** read the prompt compiler, worker, planner, dispatch and
+  write-scope paths; wrote the bilingual trade-off; added the contract and
+  helper; updated both planners, the dispatch tool, the worker prompt and the
+  charter; added the test; ran typecheck, the focused test, the full suite and
+  the gate; captured the before/after prompt with a temporary worktree at
+  `79780a6`. A three-lens independent review then found four important defects
+  — the verifier ignored the brief, the brief could land on a read-only
+  researcher, the brief path showed the work order's criteria instead of the
+  step's, and a negated write target became a grant; all four are fixed and
+  covered by tests. The review's verify stage failed on a script bug
+  (`lens is not defined`), so its findings were verified by hand.
+- **Pros:** the task prompt has one author; the boundary is still enforced by
+  `decideTool` and still stated in the execution contract; the legacy template
+  remains for callers without a brief.
+- **Cons / next time:** the brief is free-form, so its quality is the Main
+  Agent's; a brief that omits the objective sends a weaker prompt than the
+  template. A `dispatch_task` brief overrides the planner's text on the primary
+  order, so per-step planner briefs are reachable only through
+  `propose_work_plan`. The Chinese trade-off is a translation, not an
+  independent review.
+- **Reversal condition:** if main-agent-authored briefs correlate with more
+  boundary-violating tool calls, more missing-artifact failures, or more runs
+  that finish without the required evidence than the fixed template, restore the
+  fixed boundary and keep only the task-specific brief.
+
 ### 2026-11-24 — Settings lists MCP servers, their tools and skills, with a load toggle
 
 - **Goal / hypothesis:** the settings page had no MCP or skill surface, so the

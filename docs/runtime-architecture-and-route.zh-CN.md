@@ -29,7 +29,7 @@ Main Agent 可以是持久的对话 Agent，但 Worker 不是。Worker 为一个
 ```text
 WorkOrder
   -> 策略 / 能力 / 审批
-  -> 有作用域 Prompt + 记忆包 + Workspace
+  -> 主 Agent 简报（或模板） + Kernel 事实 + Workspace
   -> BlackBoxCliWorker
        环境白名单 · 预算 · 硬截止 · 终止
        执行前快照 -> 子进程 -> 执行后快照

@@ -123,6 +123,58 @@ read-only through it behind a post-validation gate. If a read-only request must
 produce a file despite the marker, require a named target; the detector already
 lets a named write target win.
 
+## 2026-11-24 — The Main Agent writes the worker brief; the Kernel appends only facts
+
+**Decision.** A `PlanStep` and a `SubagentWorkOrder` gain an optional
+`workerBrief`. When it is present, the Main Agent's text is the worker's task
+prompt: the worker's system message is the brief plus a short, fixed execution
+contract (tool names, the gate, the stop condition), and the user message
+contains only the facts the Kernel resolved after planning — workspace,
+objective, required inputs, evidence contract, memory packet, refused scopes,
+and acceptance criteria. When it is absent, the previous template is used
+unchanged. `dispatch_task` gains `workerBrief`; the deterministic fallback
+planner and the LLM planner both carry it onto the primary execution step or
+work order, and the planner's own text cannot override the Main Agent's.
+`MAIN_AGENT_CHARTER_VERSION` moves to 8; the daily-digest guidance added in
+parallel takes the current tree to 9. The charter is reorganised around the
+reply / `dispatch_task` / `propose_work_plan` decision and the brief contract.
+
+**Why it won.** The 2026-11-17 Forbidden City trade-off records the failure
+this closes: both natural attempts produced zero artifacts because
+`dispatch_task` → `runQuery` → `buildFallbackPlan` replaced the Main Agent's
+task with a generic `local-draft` objective, and `buildInstructions` passes the
+work-order objective, so the worker received “只在本地准备可修改、可回退的结果”
+instead of the task. The worker prompt is also split today: the boundary is
+restated in `native-worker-prompt.ts` and again in `buildInstructions`, while
+the Main Agent can state task-specific constraints only in `instructions` or
+`objective` and cannot reach the worker's system prompt at all. Letting the
+Main Agent write the brief gives one author for the task prompt and leaves the
+Kernel only the facts it alone can know. The tool gate is code (`decideTool`),
+so moving task prose out of the fixed template does not move enforcement; a
+refused call still returns its reason to the worker.
+
+**Alternatives rejected.**
+
+- *Add `workerBrief` as a suffix under the existing template.* Rejected: the
+  brief would still be buried under generic prose, and the two layers would
+  keep disagreeing about the boundary and the stop condition.
+- *Let the Main Agent write the evidence contract and the memory packet too.*
+  Rejected: those are Kernel-resolved after planning. A stale copy would be
+  worse than none, and the memory packet must be journaled with the step that
+  received it.
+- *Remove the execution contract along with the template.* Rejected: the tool
+  list is the calling convention, not task content. A worker that does not know
+  which tools exist or that a refusal is final wastes rounds and may loop.
+- *Apply the brief only to `dispatch_task`.* Rejected: `propose_work_plan` is
+  the path that carries a full plan, and both paths must share one contract or
+  the worker prompt depends on which tool the Main Agent chose.
+
+**Reversal condition.** If main-agent-authored briefs correlate with more
+boundary-violating tool calls, more missing-artifact failures, or more runs
+that finish without the required evidence than the fixed template, restore the
+fixed boundary and keep only the task-specific brief. Compare on the Forbidden
+City natural variant and the native-worker regression suite.
+
 ## 2026-11-24 — The settings page lists MCP servers, their tools and skills, with a load toggle
 
 **Decision.** Add a read-only catalog API (`GET /api/tools`) and a narrow

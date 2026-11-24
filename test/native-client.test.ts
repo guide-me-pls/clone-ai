@@ -241,7 +241,10 @@ test("write_file replaces an existing file by default, because ordinary tasks re
 
 test("the system prompt names the offered tools and the boundary", () => {
   const tools: NativeToolSpec[] = fileTools();
-  const prompt = systemPrompt("do it", tools);
+  // `undefined` is the no-brief path; a brief would make the main-agent text
+  // the first thing the worker reads.
+  // `undefined` 是无简报路径；有简报时主 Agent 的文本会成为 Worker 读到的第一段内容。
+  const prompt = systemPrompt(undefined, tools);
   assert.match(prompt, /read_file, list_directory, write_file/);
   assert.match(prompt, /Reads may reach any readable location/);
   assert.match(prompt, /write is refused unless the path is inside a write root granted/);

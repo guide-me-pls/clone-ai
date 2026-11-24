@@ -53,6 +53,7 @@ import { extractFileExpectations } from "./verification.ts";
 import { CLONE_DIRECTORY_NAME } from "../config/clone-home.ts";
 import { parseScope } from "../authority/scope.ts";
 import { ensureWriteScopes } from "../authority/write-scopes.ts";
+import { WORKER_BRIEF_MAX_CHARS } from "../planning/worker-brief.ts";
 
 const ORPHANED_PLANNING_THRESHOLD_MS = 15 * 60 * 1000;
 
@@ -1905,6 +1906,7 @@ function assertPlanIsExecutable(steps: PlanStep[], knownAgentIds?: Set<string>):
     assertNonEmpty(step.id, "Plan step id");
     assertNonEmpty(step.title, `Plan step ${step.id} title`);
     assertNonEmpty(step.instructions, `Plan step ${step.id} instructions`);
+    assertWorkerBrief(step.workerBrief, `Plan step ${step.id}`);
     if (!riskClasses.has(step.risk)) {
       throw new Error(`Plan step ${step.id} has an invalid risk class.`);
     }
@@ -1975,6 +1977,7 @@ function assertSubagentOrders(
     assertNonEmpty(order.id, `Work order id in step ${stepId}`);
     assertNonEmpty(order.title, `Work order ${order.id} title`);
     assertNonEmpty(order.objective, `Work order ${order.id} objective`);
+    assertWorkerBrief(order.workerBrief, `Work order ${order.id}`);
     if (
       !Array.isArray(order.acceptanceCriteria)
       || order.acceptanceCriteria.length === 0
@@ -2170,6 +2173,21 @@ function assertBudget(order: SubagentWorkOrder): void {
 
 function assertNonEmpty(value: string, label: string): void {
   if (typeof value !== "string" || value.trim().length === 0) throw new Error(`${label} cannot be empty.`);
+}
+
+/**
+ * A brief is optional, but when present it must be bounded text. An empty or
+ * oversized brief is a proposal error, not a worker task.
+ * 简报可选，存在时必须有界。空简报或超长简报是提案错误，不是 Worker 任务。
+ */
+function assertWorkerBrief(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${label} workerBrief must be a non-empty string when present.`);
+  }
+  if (value.trim().length > WORKER_BRIEF_MAX_CHARS) {
+    throw new Error(`${label} workerBrief is too long; keep it under ${WORKER_BRIEF_MAX_CHARS.toLocaleString("en-US")} characters.`);
+  }
 }
 
 const riskClasses = new Set(["read_only", "reversible_write", "external_side_effect", "irreversible"]);

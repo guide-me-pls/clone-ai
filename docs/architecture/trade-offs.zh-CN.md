@@ -88,6 +88,42 @@ workspace-watch 时序抖动测试；它单独运行 3/3 通过，重跑全量�
 产出必需产物，就在一个后置校验闸门之后把只读请求交给它。如果只读请求在标记之外仍必须产出
 文件，就要求点名的目标；检测器已经让点名的写入目标优先。
 
+## 2026-11-24 —— 主 Agent 编写 Worker 简报，Kernel 只追加事实
+
+**决定。** `PlanStep` 与 `SubagentWorkOrder` 增加可选的 `workerBrief`。存在时，主 Agent
+的文本就是 Worker 的任务提示词：Worker 的 system 消息是这份简报加一小段固定的执行契约
+（工具名、闸门、停止条件），user 消息只包含 Kernel 在规划之后解析出的事实——工作区、
+目标、必需输入、证据合同、记忆包、被拒绝的 Scope 与验收标准。不存在时，沿用原来的模板，
+行为不变。`dispatch_task` 增加 `workerBrief`；确定性的 fallback planner 与 LLM planner 都会
+把它带到主执行步骤或工作单上，且 planner 自己的文本不能覆盖主 Agent 的版本。
+`MAIN_AGENT_CHARTER_VERSION` 升到 8；并行加入的每日摘要指引使当前树为 9。charter 围绕
+“直接回答 / `dispatch_task` / `propose_work_plan`”的选择与简报契约重新组织。
+
+**为什么胜出。** 2026-11-17 的故宫取舍记录了本次要关闭的失败：两次自然变体都产出 0 个
+工件，因为 `dispatch_task` → `runQuery` → `buildFallbackPlan` 把主 Agent 的任务替换成了
+通用的 `local-draft` 目标，而 `buildInstructions` 传递的是工作单目标，于是 Worker 收到的是
+“只在本地准备可修改、可回退的结果”，而不是任务本身。Worker 提示词目前也是分裂的：边界在
+`native-worker-prompt.ts` 里写一遍，在 `buildInstructions` 里又写一遍；主 Agent 只能在
+`instructions` 或 `objective` 里表达任务特有的约束，根本够不到 Worker 的 system 消息。
+让主 Agent 写简报，任务提示词就只有一位作者，Kernel 只保留它独有的事实。工具闸门是代码
+（`decideTool`），所以把任务正文移出固定模板不会移动强制边界；被拒绝的调用仍会把理由返回
+给 Worker。
+
+**被否决的备选。**
+
+- *在现有模板后面追加 `workerBrief`。* 否决：简报仍会被通用文案淹没，两层仍会在边界与
+  停止条件上互相矛盾。
+- *让主 Agent 连证据合同与记忆包一起写。* 否决：这些是 Kernel 在规划之后解析的。过期的
+  副本比没有更糟，而且记忆包必须与收到它的步骤一起写入 Journal。
+- *连执行契约一起删掉。* 否决：工具表是调用约定，不是任务内容。不知道有哪些工具、不知道
+  拒绝是最终结果的 Worker 会浪费轮次，甚至打转。
+- *只给 `dispatch_task` 加简报。* 否决：`propose_work_plan` 才是承载完整计划的路径；两条
+  路径必须共享同一份契约，否则 Worker 提示词取决于主 Agent 选了哪个工具。
+
+**推翻条件。** 如果主 Agent 编写的简报相比固定模板，与更多的边界违规调用、更多缺失工件
+的失败，或更多“结束时没有所需证据”的 Run 相关，则恢复固定边界，只保留任务特有的简报。
+在故宫自然变体与原生 Worker 回归套件上对比。
+
 ## 2026-11-24 —— 设置页列出 MCP 服务器、工具与技能，并给每个 MCP 一个加载按钮
 
 **决定。** 为本地 companion 增加一个只读目录接口（`GET /api/tools`）与一个很窄的

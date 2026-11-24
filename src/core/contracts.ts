@@ -52,6 +52,14 @@ export interface PlanStep {
   risk: RiskClass;
   acceptanceCriteria: string[];
   /**
+   * The Main Agent's complete brief for this step's executor. When present it
+   * is the worker's task prompt; the Kernel appends only the execution
+   * contract and the facts it resolved after planning.
+   * 主 Agent 为这一步的执行者编写的完整简报。存在时它就是 Worker 的任务提示词；
+   * Kernel 只追加执行契约与规划之后才解析出的事实。
+   */
+  workerBrief?: string;
+  /**
    * A single bounded executor for this step. Mutually exclusive with subagents.
    * 该步骤的单个有边界执行者；不能与 subagents 同时存在。
    */
@@ -140,6 +148,13 @@ export interface SubagentWorkOrder {
   role: "researcher" | "maker" | "reviewer" | "custom";
   title: string;
   objective: string;
+  /**
+   * The Main Agent's complete brief for this work order. When present it is
+   * the worker's task prompt; `objective` remains the one-line record.
+   * 主 Agent 为这张工作单编写的完整简报。存在时它就是 Worker 的任务提示词；
+   * `objective` 仍是一行记录。
+   */
+  workerBrief?: string;
   inputs: WorkOrderInput[];
   requiredCapabilities: string[];
   expectedArtifacts: ArtifactContract[];

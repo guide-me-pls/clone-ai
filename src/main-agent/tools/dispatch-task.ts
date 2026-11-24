@@ -16,6 +16,7 @@
  */
 import { runQuery } from "../../application/run-query.ts";
 import { defaultWorkerProfiles, type CloneSettings } from "../../config/worker-settings.ts";
+import { WORKER_BRIEF_MAX_CHARS } from "../../planning/worker-brief.ts";
 import type { PlainKernelTool } from "./kernel-tools.ts";
 import { Type } from "typebox";
 
@@ -45,6 +46,14 @@ export interface DispatchTaskOptions {
 export interface DispatchTaskInput {
   objective: string;
   acceptanceCriteria: string[];
+  /**
+   * The Main Agent's complete brief for the worker. When present it is the
+   * worker's task prompt; the Kernel appends only facts it resolves after
+   * planning.
+   * 主 Agent 为 Worker 编写的完整简报。存在时它就是 Worker 的任务提示词；Kernel
+   * 只追加规划之后才解析出的事实。
+   */
+  workerBrief?: string;
 }
 
 /**
@@ -66,7 +75,22 @@ export function validateDispatchTask(input: unknown): { ok: true; task: Dispatch
     : typeof raw === "string" && raw.trim().length > 0 ? [raw.trim()] : [];
   if (criteria.length === 0) return { ok: false, error: "The task needs at least one acceptance criterion." };
   if (criteria.length > 12) return { ok: false, error: "Keep acceptance criteria to 12 or fewer." };
-  return { ok: true, task: { objective, acceptanceCriteria: criteria } };
+  const rawBrief = record.workerBrief;
+  if (rawBrief !== undefined && typeof rawBrief !== "string") {
+    return { ok: false, error: "The worker brief must be a string." };
+  }
+  const workerBrief = typeof rawBrief === "string" ? rawBrief.trim() : "";
+  if (workerBrief.length > WORKER_BRIEF_MAX_CHARS) {
+    return { ok: false, error: `The worker brief is too long; keep it under ${WORKER_BRIEF_MAX_CHARS.toLocaleString("en-US")} characters.` };
+  }
+  return {
+    ok: true,
+    task: {
+      objective,
+      acceptanceCriteria: criteria,
+      ...(workerBrief.length === 0 ? {} : { workerBrief }),
+    },
+  };
 }
 
 /** The tool the Main Agent calls to start bounded work. 主 Agent 启动有界工作的工具。 */
@@ -79,12 +103,17 @@ export function dispatchTaskTool(options: DispatchTaskOptions): PlainKernelTool 
       + "for a build expected to take more than a minute, use propose_work_plan so the work is queued. "
       + "Answer conversation directly when no files change. "
       + "The objective is the outcome, not the method; acceptance criteria are what the Kernel verifies. "
+      + "Write workerBrief as the worker's complete prompt: the objective, the approach, the exact absolute paths to read or write, "
+      + "the boundary, the evidence that proves completion, and when to stop. The runtime appends only facts you cannot know. "
       + "The Kernel owns planning, authority, budgets and completion. Returns runId, final status and a short summary.",
     parameters: Type.Object({
       objective: Type.String({ description: "The outcome the work must achieve, in one or two sentences." }),
       acceptanceCriteria: Type.Array(Type.String(), {
         description: "Checkable criteria the Kernel can verify; at least one.",
       }),
+      workerBrief: Type.Optional(Type.String({
+        description: "The complete brief the worker receives. Self-contained: objective, approach, exact paths, boundary, evidence, stop condition.",
+      })),
     }),
     execute: async (_toolCallId, params) => {
       const validated = validateDispatchTask(params);
@@ -103,6 +132,7 @@ export function dispatchTaskTool(options: DispatchTaskOptions): PlainKernelTool 
             payload: {
               source: "main-agent",
               acceptanceCriteria: validated.task.acceptanceCriteria,
+              ...(validated.task.workerBrief === undefined ? {} : { workerBrief: validated.task.workerBrief }),
               ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
             },
           },

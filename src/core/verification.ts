@@ -71,7 +71,13 @@ export function extractFileExpectations(step: PlanStep): FileExpectation[] {
   ]);
   const fileIntent = /\b(?:file|exists|exist|create|write|save|output|update|add)\b|文件|存在|创建|写入|保存|生成|产出|更新/i;
 
-  for (const assertion of [step.instructions, ...step.acceptanceCriteria]) {
+  // The Main Agent's brief is part of the step's contract: a deliverable named
+  // only there is still a file the Kernel must open and check. A subagent
+  // order's brief is scanned too, because the step verifies its orders.
+  // 主 Agent 的简报属于步骤契约：只写在简报里的交付物仍是 Kernel 必须打开检查的文件。
+  // 子 Agent 工作单的简报也要扫描，因为步骤要验证它的工作单。
+  const briefs = [step.workerBrief ?? "", ...(step.subagents ?? []).map((order) => order.workerBrief ?? "")];
+  for (const assertion of [step.instructions, ...briefs, ...step.acceptanceCriteria]) {
     // A period inside a filename is not a sentence boundary.
     // 文件名中的点不是句子边界。
     for (const sentence of assertion.split(/\n|(?<=[。！？；])|(?<=[.!?;])(?=\s|$)/)) {

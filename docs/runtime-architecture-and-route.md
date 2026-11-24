@@ -31,7 +31,7 @@ and MCPs, but its provider session is never the Clone AI memory store.
 ```text
 WorkOrder
   -> policy / capability / approval
-  -> scoped prompt + memory packet + workspace
+  -> Main Agent brief (or template) + Kernel facts + workspace
   -> BlackBoxCliWorker
        environment allowlist · budget · deadline · termination
        snapshot(before) -> child process -> snapshot(after)
