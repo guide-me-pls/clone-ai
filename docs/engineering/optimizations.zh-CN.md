@@ -26,6 +26,46 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-24 —— 所有者确认的 MCP 安装：探测、展示、再写 mcp.json
+
+- **目标 / 假设：** 缺少工具的所有者应能在设置页直接获取，而不必手工编辑 `mcp.json`；
+  安装前应展示将要运行的确切内容。假设是：探测包并为每个工具指定风险，能填上"页面只能切换
+  已有服务器"与"运行时能跑任何服务器"之间的缺口。
+- **取舍：** [所有者确认的 MCP 安装：先探测包、再展示工具、最后写 mcp.json](../architecture/trade-offs.zh-CN.md#2026-11-24--所有者确认的-mcp-安装先探测包再展示工具最后写-mcpjson)。
+- **变更：** `src/mcp/mcp-installer.ts` 新增 `probeMcpPackage`（启动
+  `npx --yes <spec> <args>`、完成 MCP 握手、返回 `tools/list`、一定关闭进程）、
+  `probeNpmPackage`、`installMcpServer`（确认闸门、包名/id/参数/工具校验、重新探测、
+  未声明工具拒绝、保留文档其余部分的原子写入）与 `removeMcpServer`。
+  `src/companion-server.ts` 新增 `POST /api/tools/probe`、`POST /api/tools/install` 与
+  `DELETE /api/tools/mcp/:id`。设置页新增安装卡片（`apps/desktop/ui/index.html`）、
+  探测/安装/移除处理器与每个服务器的移除按钮（`apps/desktop/ui/app.js`）、
+  `tools-install-*` 文案（`src/desktop/ui-locale.ts`）与卡片样式
+  （`apps/desktop/ui/style.css`）。`docs/usage/tools-settings.md` 与其中文版现在描述安装流。
+- **Eval：** `node --experimental-strip-types --test test/mcp-installer.test.ts test/tools-install-api.test.ts`
+  —— **14/14**（8 个 installer + 6 个路由用例）。变更前两个文件都不存在，`/api/tools` 下
+  唯一的写入是 `POST /api/tools/mcp/:id/enabled`。变更后：`npm test` **1103/1103**，
+  `npm run gate` **PASS**（回归 13 个用例 · 9 个判定 · 100% · falsePass 0 · falseFail 0；
+  策略 30 · 100% · 不安全放行 0 · 误拦截 0；审计 5 · 4 · 100% · 0 · 0；
+  记忆 31 · 100% · 0 · 0）。`npm run typecheck` 当前报一个错误：
+  `src/companion-server.ts:2689` 的 `ownerDecisionNotifier` 不在作用域内，来自并发会话的
+  未提交改动；新文件没有类型错误。
+- **Benchmark run：** 未跑。Eval 是确定性测试，按 AGENTS.md 第 5 条省略此块。
+- **执行链路：** 先跑两个只读侦察 Workflow——6 个 Agent 的能力审计（工具面、权威模型、
+  覆盖面、获取、技能、对抗验证）与 5 个 Agent 的约定扫描（路由、UI、测试、安装器、文档）
+  ——然后一次性完成变更：取舍条目、模块、路由、UI、测试、文档。11 个子 Agent，约 93 万
+  子 Agent token，约 11 分钟墙钟，无失败 Agent。全量套件跑了两遍：第一遍有 3 个失败
+  （`bilingual-documentation`、`run-query-routing`、`worker-evidence-contract`），三者单独
+  运行都通过，第二遍 1103/1103，因此它们是围绕并发会话 `createRuntimeAssembly` 改动的跨文件
+  环境竞争，不是本次变更。
+- **优点：** 探测让供应链漂移在服务器启用前可见；所有失败都发生在写入之前；安装卡片复用了
+  既有确认对话框、`announce`、卡片与风险药丸，没有另造 UI。
+- **缺点 / 下次：** 没有来源或签名校验——探测验证的是可达性与工具表，不是"这个包就是所有者
+  想要的那个"。路由成功路径没有端到端覆盖，因为需要网络；只有 installer 被覆盖。探测无沙箱
+  运行包，这是取舍条目记录的真实代价。下次在做一键预设之前，先加一份带哈希的固定清单。
+- **推翻条件：** 从取舍条目复制——如果发现被探测的包运行了意料之外的代码，关闭探测并改为
+  要求所有者提供 `tools/list` fixture（或把 MCP 服务器放回 Seatbelt）；如果所有者要求 Agent
+  自己安装工具，只有在同时引入 Kernel 审批记录的前提下，才可移除受保护根拒绝。
+
 ### 2026-11-24 —— 只读请求绕过 LLM Planner
 
 - **目标 / 假设：** 明确写着只读的请求被 LLM Planner 规划，而它的合同要求每个子代理都有

@@ -11,6 +11,20 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-24 —— 设置页可以完成所有者确认的 MCP 安装
+
+- **主张：** 工具页可以从 npm 包安装一个 stdio MCP 服务器：探测包、为每个工具展示风险
+  选择（默认 `external`，Worker 永远拒绝）、确认；安装会重新探测，在包暴露了未声明工具时
+  拒绝，并把一条启用条目原子写入 `mcp.json`（权限 0600），不影响其他服务器与未知字段。
+  每个服务器的 **移除** 删除一条条目。Agent 仍然装不了：`~/.clone` 是受保护根，exec 沙箱
+  也会重新拒绝它。
+- **证据：** `node --experimental-strip-types --test test/mcp-installer.test.ts test/tools-install-api.test.ts`
+  **14/14**（8 个 installer + 6 个路由）。`npm test` **1103/1103**，
+  `npm run gate` **PASS**。`npm run typecheck` 报一个来自并发会话未提交改动的既有错误
+  （`src/companion-server.ts:2689`），新文件没有类型错误。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--所有者确认的-mcp-安装先探测包再展示工具最后写-mcpjson)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--所有者确认的-mcp-安装探测展示再写-mcpjson)。
+
 ## 2026-11-24 —— 只读请求不再因产物合同失败
 
 - **主张：** 明确写着只读的请求由确定性规划器处理，Worker 读取文件并回答；Run 不再以

@@ -418,6 +418,16 @@ body { background: var(--canvas); color: var(--text); font-family: Inter, "SF Pr
 .tool-warning { border-color: #f0d9a8; background: #fffaf0; }
 .tool-rejected { margin-top: 10px; color: #8a5a13; font-size: 12px; }
 .tool-rejected ul { margin: 6px 0 0; padding-left: 16px; }
+.tool-install-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 10px; }
+.tool-install-fields label { display: grid; gap: 4px; color: #657183; font-size: 11.5px; }
+.tool-install-fields input { padding: 7px 9px; border: 1px solid #dce2ea; border-radius: 8px; color: #344052; background: #fbfcfe; font-size: 12px; }
+.tool-install-fields input:focus { border-color: #9fb4e6; outline: none; background: #fff; }
+.tool-install-actions { justify-content: flex-end; margin: 10px 0 0; }
+.tool-install-tools { display: grid; gap: 6px; margin-top: 10px; }
+.tool-install-presets { justify-content: flex-start; }
+.tool-install-row select { padding: 3px 6px; border: 1px solid #dce2ea; border-radius: 6px; color: #344052; background: #fff; font-size: 11.5px; }
+.tool-server-actions { display: flex; gap: 6px; }
+.tool-server-remove { color: #8a3b3b; }
 .settings-profile { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 12px; align-items: center; padding: 14px; border: 1px solid #dce5fb; border-radius: 11px; background: linear-gradient(120deg, #f5f8ff, #fff); }
 .settings-profile .avatar { width: 42px; height: 42px; font-size: 13px; }
 .settings-profile b { display: block; color: #344052; font-size: 13px; }

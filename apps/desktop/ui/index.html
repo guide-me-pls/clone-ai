@@ -98,6 +98,20 @@
               <h3 data-i18n="tools-title">工具与技能</h3>
               <p data-i18n="tools-lead">当前 MCP 服务器、每个服务器的工具，以及技能目录中发现的技能。加载/停用写入 mcp.json，下一次 Worker 运行时生效。</p>
               <div class="memory-tool-row tools-toolbar"><span class="agent-runtime-note" id="tools-summary"></span><button class="secondary" type="button" data-tools-refresh data-i18n="tools-refresh">刷新</button></div>
+              <div class="settings-card tool-install" id="tool-install-card">
+                <h4 data-i18n="tools-install-title">安装 MCP 服务器</h4>
+                <p data-i18n="tools-install-lead">从 npm 下载并运行一个 MCP 服务器。先探测它暴露的工具，再为每个工具指定风险；未指定风险的工具一律拒绝。</p>
+                <div class="tool-install-fields">
+                  <label><span data-i18n="tools-install-id">服务器 ID</span><input id="tool-install-id" placeholder="filesystem" autocomplete="off" spellcheck="false"/></label>
+                  <label><span data-i18n="tools-install-package">npm 包</span><input id="tool-install-package" placeholder="@modelcontextprotocol/server-filesystem@0.6.2" autocomplete="off" spellcheck="false"/></label>
+                  <label><span data-i18n="tools-install-args">参数（空格分隔，可留空）</span><input id="tool-install-args" placeholder="--root /path/to/folder" autocomplete="off" spellcheck="false"/></label>
+                </div>
+                <div class="memory-tool-row tool-install-actions">
+                  <button class="secondary" type="button" id="tool-install-probe" data-i18n="tools-install-probe">探测工具</button>
+                  <button class="primary" type="button" id="tool-install-confirm" disabled data-i18n="tools-install-confirm">安装</button>
+                </div>
+                <div class="tool-install-tools" id="tool-install-tools"></div>
+              </div>
               <div class="tools-catalog" id="tools-catalog"><p class="memory-empty" data-i18n="tools-loading">正在读取 MCP 与技能…</p></div>
             </section>
             <section class="settings-panel" id="settings-panel-mobile" role="tabpanel" aria-labelledby="settings-tab-mobile" data-settings-panel="mobile" hidden>

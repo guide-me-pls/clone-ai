@@ -6,6 +6,62 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-24 — Owner-confirmed MCP install: probe the package, show the tools, then write mcp.json
+
+**Decision.** The tools settings tab gains an owner-confirmed install flow for
+stdio MCP servers. `POST /api/tools/probe` spawns `npx --yes <package> <args>`,
+performs the MCP handshake and returns `tools/list`; `POST /api/tools/install`
+requires `acknowledgeInstall: true`, re-probes the package, refuses when the
+package exposes a tool the request did not declare, and merges one entry into
+the owner's `mcp.json` with `enabled: true` and the owner-assigned risk per
+tool; `DELETE /api/tools/mcp/:id` removes one entry. Every tool starts at
+`external` (always refused) until the owner assigns a risk, so an install grants
+nothing by itself. The agent still cannot install: `~/.clone` is a protected
+root and the exec sandbox re-denies it, so installation stays an owner action.
+
+**Why it won.** The owner asked whether a missing tool can be downloaded with
+human confirmation ("如果缺少工具能否自动下载获取，比如由人工确认下载加载"),
+then said "做安装流". The alternative — hand-editing `mcp.json` or running
+`scripts/install-*.mjs` — is the current, unconfirmed path; the page could only
+toggle `enabled` on an entry that already existed.
+
+**Alternatives rejected.**
+- *Ship a curated marketplace of pinned third-party servers.* No provenance or
+  signature infrastructure exists; a wrong pin fails closed, but a curated list
+  would claim review the project has not done. The probe verifies the package
+  at install time instead.
+- *Let the agent install a tool.* A tool that writes `mcp.json` would let the
+  model grant itself capabilities; the protected-root denial and the exec
+  sandbox are the reason it cannot, and they stay.
+- *Trust the declared tool list without probing.* A package can add or rename
+  tools between versions; the probe is the only place that drift is visible
+  before the server is enabled.
+- *Default every probed tool to `read`.* Risk is the owner's declaration;
+  defaulting to read silently grants access. The UI starts every tool at
+  `external` so the owner must choose.
+
+**Evidence.** Before: no route under `/api/tools` writes a server — the only
+mutation is `POST /api/tools/mcp/:id/enabled` (`src/companion-server.ts:1708`).
+After: `src/mcp/mcp-installer.ts` (probe, install, remove), three routes, and
+the settings card; `test/mcp-installer.test.ts` pins the confirm gate, spec
+validation, duplicate ids, undeclared-tool refusal, the written document and
+mode, removal, and the probe against a real stdio server;
+`test/tools-install-api.test.ts` pins the route validation. The before/after
+command and counts are in `docs/engineering/optimizations.md`.
+
+**What it costs.** Installing runs a package from npm with the owner's
+privileges, unsandboxed — MCP servers are spawned directly, not through
+Seatbelt. The probe is a download, so an install needs the network and can be
+slow; a failed probe writes nothing. Risk is still declared in `mcp.json`, so a
+server that changes its tools after install is filtered by the same gate as
+before.
+
+**Reversal condition.** If a probed package is found to run unexpected code
+during the handshake, disable the probe and require an owner-supplied
+`tools/list` fixture, or put MCP servers back under the Seatbelt profile; if
+the owner asks the agent to install tools, remove the protected-root denial only
+together with a Kernel approval record.
+
 ## 2026-11-24 — A read-only request never goes through the LLM planner
 
 **Decision.** Export `isReadOnlyRequest(query)` from the deterministic fallback

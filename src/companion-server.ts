@@ -73,6 +73,7 @@ import { CloneConfigStore } from "./config/clone-config.ts";
 import { uiStrings } from "./desktop/ui-locale.ts";
 import { readConnectorSettings, writeConnectorSettings } from "./connectors/connector-registry.ts";
 import { readToolCatalog, setMcpServerEnabled } from "./mcp/mcp-catalog.ts";
+import { installMcpServer, probeNpmPackage, removeMcpServer } from "./mcp/mcp-installer.ts";
 import { compileBriefing } from "./main-agent/situation-briefing.ts";
 import { buildFallbackPlan } from "./planning/fallback-planner.ts";
 import { reconcileCommitments } from "./state/commitment-reconciler.ts";
@@ -1648,6 +1649,63 @@ async function handleRequest(
       ));
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not update the MCP server." });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/tools/probe") {
+    // Probe only: spawn the package, return its tools, write nothing. The
+    // settings page shows the result so the owner can assign a risk per tool
+    // before anything is installed.
+    // 只探测：启动包、返回工具、不写任何东西。设置页展示结果，让所有者在安装前为每个工具指定风险。
+    const body = await readJsonBody(request);
+    try {
+      sendJson(response, 200, {
+        tools: await probeNpmPackage({
+          package: typeof body.package === "string" ? body.package : "",
+          args: body.args,
+          workspacePath: context.workspacePath,
+        }),
+      });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not probe the MCP package." });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/tools/install") {
+    // Installation is owner-confirmed: `acknowledgeInstall` comes from the
+    // settings dialog, and the install re-probes so a package that changed its
+    // tools cannot be installed behind the tool list the owner approved.
+    // 安装由所有者确认：`acknowledgeInstall` 来自设置对话框，且安装会重新探测，使改变工具表的包
+    // 无法绕过所有者批准的工具清单。
+    const body = await readJsonBody(request);
+    try {
+      sendJson(response, 200, await installMcpServer({
+        dataDirectory: context.dataDirectory,
+        workspacePath: context.workspacePath,
+        id: typeof body.id === "string" ? body.id : "",
+        package: typeof body.package === "string" ? body.package : "",
+        args: body.args,
+        tools: body.tools,
+        acknowledgeInstall: body.acknowledgeInstall === true,
+      }));
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not install the MCP server." });
+    }
+    return;
+  }
+
+  const mcpServerMatch = url.pathname.match(/^\/api\/tools\/mcp\/([^/]+)$/);
+  if (request.method === "DELETE" && mcpServerMatch !== null) {
+    try {
+      sendJson(response, 200, await removeMcpServer(
+        context.dataDirectory,
+        context.workspacePath,
+        decodeURIComponent(mcpServerMatch[1]!),
+      ));
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not remove the MCP server." });
     }
     return;
   }

@@ -41,6 +41,7 @@ const state = {
   settings: null,
   toolsCatalog: null,
   toolsLoading: false,
+  toolsProbe: [],
   gateways: [],
   gatewayLoading: false,
   situation: null,
@@ -822,7 +823,7 @@ function renderToolsCatalog(catalog) {
     return `<div class="settings-card tool-server" data-tool-server="${escape(server.id)}">
       <div class="tool-server-heading">
         <div><h4>${escape(server.id)}</h4><p>${escape(server.transport)} · ${tools.length} ${escape(t("tools-tools"))} · ${escape(status)}</p></div>
-        <button class="provider-install" type="button" data-tool-toggle="${escape(server.id)}" data-tool-enabled="${server.enabled ? "false" : "true"}">${escape(action)}</button>
+        <div class="tool-server-actions"><button class="provider-install" type="button" data-tool-toggle="${escape(server.id)}" data-tool-enabled="${server.enabled ? "false" : "true"}">${escape(action)}</button><button class="provider-install tool-server-remove" type="button" data-tool-remove="${escape(server.id)}">${escape(t("tools-install-remove"))}</button></div>
       </div>
       <details class="tool-list"${server.enabled ? " open" : ""}><summary>${escape(t("tools-tools"))} (${tools.length})</summary><ul>${rows}</ul></details>
     </div>`;
@@ -864,6 +865,136 @@ async function toggleMcpServer(id, enabled) {
     announce(`${enabled ? t("tools-loaded-msg") : t("tools-unloaded-msg")} ${id}`);
   } catch (error) {
     if (button) button.disabled = false;
+    announce(error.message, true);
+  }
+}
+// A JSON array keeps arguments with spaces intact; anything else splits on
+// whitespace, because a shell-style string is what an owner will type.
+// JSON 数组保留带空格的参数；其余按空白切分，因为所有者会按 Shell 风格输入。
+function parseArgsInput(value) {
+  const text = String(value ?? "").trim();
+  if (text.length === 0) return [];
+  if (text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) return parsed;
+    } catch {
+      // A bracket that is not JSON is still a plausible argument; fall through.
+      // 不是 JSON 的方括号仍是可能的参数；继续按空白切分。
+    }
+  }
+  return text.split(/\s+/).filter((item) => item.length > 0);
+}
+function renderProbeTools() {
+  const host = $("tool-install-tools");
+  const confirm = $("tool-install-confirm");
+  if (!host) return;
+  const tools = state.toolsProbe;
+  if (tools.length === 0) {
+    host.innerHTML = `<p class="memory-empty">${escape(t("tools-install-no-tools"))}</p>`;
+    if (confirm) confirm.disabled = true;
+    return;
+  }
+  const presets = ["read", "write", "network"]
+    .map((risk) => `<button class="secondary" type="button" data-install-preset="${risk}">${escape(t(`tools-${risk}`))}</button>`)
+    .join("");
+  const options = ["external", "read", "write", "network"]
+    .map((risk) => `<option value="${risk}">${escape(t(`tools-${risk}`))}</option>`)
+    .join("");
+  const rows = tools.map((tool) => `<div class="tool-row tool-install-row"><code>${escape(tool.name)}</code><select data-install-risk="${escape(tool.name)}" aria-label="${escape(tool.name)}">${options}</select><span class="tool-description">${escape(tool.description || "")}</span></div>`).join("");
+  host.innerHTML = `<div class="memory-tool-row tool-install-presets"><span>${escape(t("tools-install-risk"))}</span>${presets}</div>${rows}`;
+  // Every tool starts at `external` (refused); the owner must choose a risk.
+  // 每个工具从 `external`（拒绝）开始；风险必须由所有者选择。
+  for (const select of host.querySelectorAll("[data-install-risk]")) select.value = "external";
+  if (confirm) confirm.disabled = false;
+}
+async function probeInstall() {
+  const spec = $("tool-install-package")?.value.trim() ?? "";
+  if (spec.length === 0) {
+    announce(t("tools-install-missing"), true);
+    return;
+  }
+  const button = $("tool-install-probe");
+  const host = $("tool-install-tools");
+  if (button) button.disabled = true;
+  if (host) host.innerHTML = `<p class="memory-empty">${escape(t("tools-install-probing"))}</p>`;
+  try {
+    const result = await api("/api/tools/probe", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ package: spec, args: parseArgsInput($("tool-install-args")?.value) }),
+    });
+    state.toolsProbe = Array.isArray(result.tools) ? result.tools : [];
+    renderProbeTools();
+  } catch (error) {
+    state.toolsProbe = [];
+    if (host) host.innerHTML = `<p class="memory-empty">${escape(error.message)}</p>`;
+    const confirm = $("tool-install-confirm");
+    if (confirm) confirm.disabled = true;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+function resetInstallForm() {
+  state.toolsProbe = [];
+  for (const id of ["tool-install-id", "tool-install-package", "tool-install-args"]) {
+    const input = $(id);
+    if (input) input.value = "";
+  }
+  const host = $("tool-install-tools");
+  if (host) host.innerHTML = "";
+  const confirm = $("tool-install-confirm");
+  if (confirm) confirm.disabled = true;
+}
+async function installMcpServerFromUi() {
+  const id = $("tool-install-id")?.value.trim() ?? "";
+  const spec = $("tool-install-package")?.value.trim() ?? "";
+  if (id.length === 0 || spec.length === 0) {
+    announce(t("tools-install-missing"), true);
+    return;
+  }
+  const selects = [...document.querySelectorAll("[data-install-risk]")];
+  if (selects.length === 0) {
+    announce(t("tools-install-probe-first"), true);
+    return;
+  }
+  const tools = selects.map((select) => ({ name: select.dataset.installRisk, risk: select.value }));
+  const external = tools.filter((tool) => tool.risk === "external").length;
+  const message = t("tools-install-confirm-body")
+    .replace("{package}", spec)
+    .replace("{count}", String(tools.length))
+    .replace("{external}", String(external));
+  if (!(await confirmDialog(message, t("tools-install-confirm")))) return;
+  const button = $("tool-install-confirm");
+  if (button) button.disabled = true;
+  try {
+    const catalog = await api("/api/tools/install", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id,
+        package: spec,
+        args: parseArgsInput($("tool-install-args")?.value),
+        tools,
+        acknowledgeInstall: true,
+      }),
+    });
+    renderToolsCatalog(catalog);
+    resetInstallForm();
+    announce(`${t("tools-install-success")} ${id}`);
+  } catch (error) {
+    announce(error.message, true);
+    if (button) button.disabled = false;
+  }
+}
+async function removeMcpServerFromUi(id) {
+  const message = t("tools-install-remove-body").replace("{id}", id);
+  if (!(await confirmDialog(message, t("tools-install-remove")))) return;
+  try {
+    const catalog = await api(`/api/tools/mcp/${encodeURIComponent(id)}`, { method: "DELETE" });
+    renderToolsCatalog(catalog);
+    announce(`${t("tools-install-removed")} ${id}`);
+  } catch (error) {
     announce(error.message, true);
   }
 }
@@ -3084,6 +3215,27 @@ $("settings-panel-tools")?.addEventListener("click", (event) => {
   const toggle = event.target.closest("[data-tool-toggle]");
   if (toggle) {
     void toggleMcpServer(toggle.dataset.toolToggle, toggle.dataset.toolEnabled === "true");
+    return;
+  }
+  const remove = event.target.closest("[data-tool-remove]");
+  if (remove) {
+    void removeMcpServerFromUi(remove.dataset.toolRemove);
+    return;
+  }
+  if (event.target.closest("#tool-install-probe")) {
+    void probeInstall();
+    return;
+  }
+  if (event.target.closest("#tool-install-confirm")) {
+    void installMcpServerFromUi();
+    return;
+  }
+  const preset = event.target.closest("[data-install-preset]");
+  if (preset) {
+    // A preset assigns one risk to every probed tool; the owner can still
+    // change a single row afterwards.
+    // 预设把同一个风险赋给每个探测到的工具；所有者之后仍可单独修改某一行。
+    for (const select of document.querySelectorAll("[data-install-risk]")) select.value = preset.dataset.installPreset;
     return;
   }
   if (event.target.closest("[data-tools-refresh]")) void refreshToolsCatalog();

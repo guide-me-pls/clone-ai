@@ -15,6 +15,22 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-24 — Owner-confirmed MCP install works from the settings page
+
+- **Claim:** the tools tab installs a stdio MCP server from an npm package:
+  probe the package, show every tool with a risk select (default `external`,
+  which the worker always refuses), confirm, and the install re-probes, refuses
+  a package that exposes an undeclared tool, and writes one enabled entry into
+  `mcp.json` atomically (mode 0600) without disturbing other servers or unknown
+  fields. A per-server **移除** deletes one entry. The agent still cannot
+  install: `~/.clone` is a protected root and the exec sandbox re-denies it.
+- **Evidence:** `node --experimental-strip-types --test test/mcp-installer.test.ts test/tools-install-api.test.ts`
+  **14/14** (8 installer + 6 route). `npm test` **1103/1103**, `npm run gate`
+  **PASS**. `npm run typecheck` reports one pre-existing error from a concurrent
+  uncommitted change (`src/companion-server.ts:2689`), none in the new files.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--owner-confirmed-mcp-install-probe-the-package-show-the-tools-then-write-mcpjson);
+  [execution chain](optimizations.md#2026-11-24--owner-confirmed-mcp-install-probe-show-then-write-mcpjson).
+
 ## 2026-11-24 — A read-only request no longer fails with an artifact contract
 
 - **Claim:** a request that explicitly says read-only is planned by the
