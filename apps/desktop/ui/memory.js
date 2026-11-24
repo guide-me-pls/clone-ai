@@ -1,20 +1,16 @@
 /*
- * Memory library: classified, layered, disclosed on demand.
+ * Memory library: search-first, flat, disclosed on demand.
  *
- * Level 1 — a category header per kind of memory (commitments and boundaries,
- * preferences, decisions, procedures, facts) with its count and how often its
- * memories have been used.
- * Level 2 — the rows inside a category: summary, status, sensitivity, recalls.
- * Level 3 — one opened memory: body, provenance, and the runs that actually
- * recalled it, from the journal.
- * Level 4 — editing, inside the opened row.
+ * The default view is one flat list ordered by last use, with a search box and
+ * a type filter. Classification is a machine signal (budget, recall, conflict)
+ * and an inline chip, not a browsing tree: with a handful of memories five
+ * collapsible groups hide more than they explain.
  *
- * 记忆库：先分类，再分层，按需披露。
+ * 记忆库：搜索优先、平铺、按需披露。
  *
- * 第 1 层——按记忆种类分组（承诺与边界、偏好、决定、流程、事实），显示条数与被使用次数；
- * 第 2 层——组内的条目：摘要、状态、敏感度、召回次数；
- * 第 3 层——展开的那一条：正文、来源，以及 Journal 里真正召回它的 Run；
- * 第 4 层——编辑，位于展开行内。
+ * 默认视图是一份按最近使用排序的平铺列表，配搜索框与类型筛选。分类是机器信号（预算、
+ * 召回、冲突）与行内标签，而不是浏览树：记忆只有几条时，五个可折叠分组藏起来的比说
+ * 明的更多。
  */
 (() => {
   const CATEGORIES = [
@@ -25,12 +21,15 @@
     ["fact", "事实", "关于你的稳定事实与背景。"],
   ];
   const SENS = { private: "私有", public: "公开", secret: "机密" };
-  const state = { query: "", status: "active", open: new Set(), openGroups: new Set(), details: new Map(), editing: new Set(), painted: null, paintedAt: null };
+  const TYPE_LABELS = Object.fromEntries(CATEGORIES.map(([key, label]) => [key, label]));
+  const state = { query: "", status: "active", type: "all", open: new Set(), details: new Map(), editing: new Set(), painted: null, paintedAt: null };
 
   const host = () => document.getElementById("memory-root");
   const day = (value) => (value ? new Date(value).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }) : "—");
   const stamp = (value) => (value ? new Date(value).toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
   const badge = (text, tone) => `<span class="mem-badge mem-${tone}">${escape(text)}</span>`;
+  /** An unknown stored type is displayed and filtered as a fact. 未知的存储类型按事实显示与筛选。 */
+  const typeOf = (item) => (TYPE_LABELS[item.type] === undefined ? "fact" : item.type);
 
   function ensureHost() {
     if (host()) return host();
@@ -43,26 +42,25 @@
     return node;
   }
 
-  function filtered(memories) {
+  /** Search and status apply to every count; the type filter is the last step. 搜索与状态作用于所有计数；类型筛选是最后一步。 */
+  function filtered(memories, type = state.type) {
     const q = state.query.trim().toLowerCase();
     return memories.filter((item) => {
       if (state.status !== "all" && item.status !== state.status) return false;
+      if (type !== "all" && typeOf(item) !== type) return false;
       if (!q) return true;
       return `${item.summary} ${item.content ?? ""} ${item.id}`.toLowerCase().includes(q);
     });
   }
 
-  /** Group into the fixed category order; an unknown type falls under facts. 按固定顺序分组；未知类型归入事实。 */
-  function grouped(memories) {
-    const buckets = new Map(CATEGORIES.map(([key]) => [key, []]));
-    for (const item of memories) {
-      const key = buckets.has(item.type) ? item.type : "fact";
-      buckets.get(key).push(item);
-    }
-    for (const list of buckets.values()) list.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
-    return CATEGORIES
-      .map(([key, label, hint]) => ({ key, label, hint, items: buckets.get(key) }))
-      .filter((group) => group.items.length > 0);
+  /** Default order: last used first, falling back to the last edit. 默认顺序：最近使用的在前，其次看最近编辑。 */
+  function ordered(memories) {
+    const time = (value) => {
+      const parsed = Date.parse(String(value ?? ""));
+      return Number.isNaN(parsed) ? 0 : parsed;
+    };
+    const last = (item) => Math.max(time(item.updatedAt), time(item.lastAccessedAt));
+    return memories.slice().sort((left, right) => last(right) - last(left));
   }
 
   function editor(item) {
@@ -77,7 +75,7 @@
         <button type="button" class="mem-btn mem-btn-primary" data-save-library="${escape(item.id)}">保存</button>
         <button type="button" class="mem-btn" data-mem-edit="${escape(item.id)}">取消</button>
       </div>
-      <small>分类决定它出现在哪一组；保存会同时改写对应的 .md 文件。</small></div>`;
+      <small>分类影响上下文预算与召回排序；保存会同时改写对应的 .md 文件。</small></div>`;
   }
 
   /** A body identical to the summary is not worth saying twice. 正文与摘要相同的，不必重复说一遍。 */
@@ -149,7 +147,7 @@
     return `<details class="mem-row" data-mem-row="${escape(item.id)}"${open ? " open" : ""}>
       <summary class="mem-head">
         <span class="mem-title">${escape(item.summary)}</span>
-        <span class="mem-tags">${item.status === "archived" ? badge("已归档", "muted") : ""}${badge(SENS[item.sensitivity] ?? item.sensitivity, sensitive ? "secret" : item.sensitivity === "public" ? "public" : "private")}</span>
+        <span class="mem-tags">${badge(TYPE_LABELS[typeOf(item)], "type")}${item.status === "archived" ? badge("已归档", "muted") : ""}${badge(SENS[item.sensitivity] ?? item.sensitivity, sensitive ? "secret" : item.sensitivity === "public" ? "public" : "private")}</span>
         <span class="mem-meta">召回 ${item.accessCount || 0}${used} · ${day(item.updatedAt)}</span>
       </summary>
       <div class="mem-body">
@@ -167,23 +165,6 @@
             : `<button type="button" class="mem-btn" data-mem-status="${escape(item.id)}" data-mem-next="archived">归档</button>`}
         </div>
       </div>
-    </details>`;
-  }
-
-  function groupBlock(group, searching) {
-    const used = group.items.reduce((sum, item) => sum + (item.accessCount || 0), 0);
-    const archived = group.items.filter((item) => item.status === "archived").length;
-    // Before the owner has opened anything, the first grouping level stays visible;
-    // opening a category is remembered so a refresh never collapses what was read.
-    // 所有者还没展开过任何分组时，第一层分组保持可见；展开状态会被记住，刷新不会把它收起。
-    const open = searching || state.openGroups.has(group.key) || state.openGroups.size === 0;
-    return `<details class="mem-group" data-mem-group="${escape(group.key)}"${open ? " open" : ""}>
-      <summary class="mem-group-head">
-        <span class="mem-group-name">${escape(group.label)}</span>
-        <span class="mem-group-hint">${escape(group.hint)}</span>
-        <span class="mem-group-count">${group.items.length} 条${used ? ` · 召回 ${used}` : ""}${archived ? ` · ${archived} 已归档` : ""}</span>
-      </summary>
-      <div class="mem-group-body">${group.items.map(row).join("")}</div>
     </details>`;
   }
 
@@ -216,18 +197,35 @@
     }
     const library = state.library;
     const memories = library.memories || [];
+    const inScope = filtered(memories, "all");
     const visible = filtered(memories);
-    const groups = grouped(visible);
-    const searching = state.query.trim().length > 0;
+    // Chip counts follow the search and status filters but not the type filter,
+    // so the owner can see what switching to another type would show.
+    // chip 计数跟随搜索与状态筛选，但不跟随类型筛选，使所有者能看到切到另一类会显示什么。
+    const counts = new Map(CATEGORIES.map(([key]) => [key, inScope.filter((item) => typeOf(item) === key).length]));
+    const chips = [["all", "全部", inScope.length], ...CATEGORIES.map(([key, label]) => [key, label, counts.get(key) ?? 0])]
+      .filter(([key, , count]) => key === "all" || count > 0 || state.type === key)
+      .map(([key, label, count]) => `<button type="button" class="mem-type-chip" data-mem-type="${key}" aria-pressed="${state.type === key ? "true" : "false"}">${escape(label)}<small>${count}</small></button>`)
+      .join("");
+    const empty = memories.length === 0
+      ? "记忆库还是空的。写下一条你希望分身长期记住的偏好、边界或事实——它会成为一个你随时可以打开和修改的 .md 文件。"
+      : state.status === "archived"
+        ? "没有已归档的记忆。归档会让记忆退出召回，但文件仍保留——随时可以恢复或删除。"
+        : state.query.trim().length > 0
+          ? "没有符合筛选的记忆。"
+          : state.type !== "all"
+            ? `没有“${TYPE_LABELS[state.type]}”类的记忆。`
+            : "没有符合筛选的记忆。";
     const conflicts = (library.conflicts || []).map((item) => `<article class="mem-row mem-conflict"><div class="mem-head"><span class="mem-title">磁盘上的改动与已验证版本冲突</span><span class="mem-meta">${escape(item.summary)}</span></div><div class="mem-body"><div class="mem-actions"><button type="button" class="mem-btn" data-memory-conflict="${escape(item.id)}">保留文件版本</button></div></div></article>`).join("");
     const markup = `
       <div class="mem-toolbar">
         <input class="mem-search" type="search" placeholder="搜索摘要或正文" value="${escape(state.query)}" data-mem-query aria-label="搜索记忆"/>
         <select data-mem-status aria-label="按状态筛选"><option value="active"${state.status === "active" ? " selected" : ""}>使用中</option><option value="archived"${state.status === "archived" ? " selected" : ""}>已归档</option><option value="all"${state.status === "all" ? " selected" : ""}>全部</option></select>
-        <span class="mem-count">${visible.length}/${memories.length} 条 · ${groups.length} 组</span>
+        <span class="mem-count">${visible.length}/${memories.length} 条</span>
       </div>
+      <div class="mem-type-filters" role="group" aria-label="按类型筛选">${chips}</div>
       ${conflicts}
-      <div class="mem-groups">${groups.length ? groups.map((group) => groupBlock(group, searching)).join("") : `<div class="mem-empty">${memories.length ? (state.status === "archived" ? "没有已归档的记忆。归档会让记忆退出召回，但文件仍保留——随时可以恢复或删除。" : "没有符合筛选的记忆。") : "记忆库还是空的。写下一条你希望分身长期记住的偏好、边界或事实——它会成为一个你随时可以打开和修改的 .md 文件。"}</div>`}</div>`;
+      <div class="mem-list">${visible.length ? ordered(visible).map(row).join("") : `<div class="mem-empty">${empty}</div>`}</div>`;
     // Handing the same library back to this view must not touch the DOM: a real
     // innerHTML assignment replaces the whole subtree, detaching the input the
     // owner is typing into and discarding an unsaved edit. Only a changed picture
@@ -268,11 +266,6 @@
   document.addEventListener("toggle", (event) => {
     const node = event.target;
     if (!(node instanceof HTMLDetailsElement) || !host()?.contains(node)) return;
-    if (node.matches("[data-mem-group]")) {
-      if (node.open) state.openGroups.add(node.dataset.memGroup);
-      else state.openGroups.delete(node.dataset.memGroup);
-      return;
-    }
     if (!node.matches("[data-mem-row]")) return;
     const id = node.dataset.memRow;
     if (node.open) {
@@ -310,6 +303,7 @@
     if (!(t instanceof Element) || !host()?.contains(t)) return;
     const pick = (selector) => t.closest(selector);
     let el;
+    if ((el = pick("[data-mem-type]"))) { state.type = el.dataset.memType; render(); return; }
     if ((el = pick("[data-mem-edit]"))) {
       const id = el.dataset.memEdit;
       if (state.editing.has(id)) state.editing.delete(id); else state.editing.add(id);

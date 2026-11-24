@@ -92,6 +92,19 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--自动执行成为默认档位自动执行意味着模型判断)；
   [执行链路](optimizations.zh-CN.md#2026-11-24--自动执行成为默认由模型判断)。
 
+## 2026-11-24 —— 所有者手写的记忆是常驻上下文
+
+- **主张：** 所有者手写的、活跃且非机密的记忆会以有界常驻段进入每个主 Agent 回合，
+  不依赖查询是否与它共享词。它们以 `standing: true` 记入 Journal；机密的所有者记忆与
+  非所有者记忆不包含。
+- **证据：** `node --experimental-strip-types --test test/memory-context.test.ts test/synthesized-recall.test.ts`
+  **21/21**；新测试用"继续总结"（与"我是jiaoxiangyu,我的工作内容以此为展开"无重叠）
+  推送，在提示词中找到所有者便签、在 `memoryIds` 中找到其 id、在 Journal 中找到
+  `standing: true`，而机密与非所有者便签不出现。`npm test` **1053/1053**，0 失败；
+  `npm run typecheck` 退出码 0；`npm run gate` **PASS**，基线未变。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--所有者亲手写的记忆是常驻上下文而不只是词面命中)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--所有者亲手写的记忆是常驻上下文)。
+
 ## 2026-11-24 —— 失败的子 Agent 在所有者提问的地方解释自己
 
 - **主张：** 主对话里的子 Agent 行原地展开，显示记录的摘要、最多五条证据，以及确定性的

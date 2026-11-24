@@ -984,4 +984,23 @@ export class GovernedMemorySource {
       (ownedJournal as { close?: () => void } | undefined)?.close?.();
     }
   }
+
+  /**
+   * Active memories the owner wrote by hand, newest first. They are standing
+   * context: a note the owner wrote once should not depend on a future query
+   * sharing a word with it. Secret entries never cross this boundary.
+   * 所有者手写的活跃记忆，新的在前。它们是常驻上下文：所有者写过一次的便签不应依赖未来
+   * 查询恰好共享某个词。机密条目永不越过这个边界。
+   */
+  async ownerAuthored(max = 5): Promise<MemoryEntry[]> {
+    const store = new MdMemoryStore({ dataDirectory: this.#dataDirectory });
+    try {
+      const entries = await store.list({ status: "active" });
+      return entries
+        .filter((entry) => entry.sourceRunId === "owner" && entry.sensitivity !== "secret")
+        .slice(0, Math.max(1, max));
+    } finally {
+      await store.close();
+    }
+  }
 }

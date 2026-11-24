@@ -50,19 +50,12 @@
 .mem-conflict { border-color: #e7c9a8; background: #fffaf3; }
 .mem-content-same { color: var(--muted, #8791a1); font-size: 12px; }
 
-/* Category layer: one collapsible block per kind of memory. 分类层：每种记忆一个可折叠区块。 */
-.mem-groups { display: grid; gap: 10px; }
-.mem-group { border: 1px solid var(--line, #e3e7ee); border-radius: 12px; background: var(--surface, #fff); overflow: hidden; }
-.mem-group-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; padding: 11px 14px; cursor: pointer; list-style: none; background: rgba(0,0,0,.022); }
-.mem-group-head::-webkit-details-marker { display: none; }
-.mem-group-head::before { content: "›"; color: var(--muted, #8791a1); font-size: 15px; line-height: 1; transition: transform .15s ease; display: inline-block; }
-.mem-group[open] > .mem-group-head::before { transform: rotate(90deg); }
-.mem-group-name { font-weight: 650; font-size: 13.5px; color: var(--text, #20242c); }
-.mem-group-hint { flex: 1; min-width: 120px; color: var(--muted, #8791a1); font-size: 11.5px; }
-.mem-group-count { color: var(--subtle, #5c6675); font-size: 11.5px; white-space: nowrap; }
-.mem-group-body { display: grid; gap: 8px; padding: 9px 10px 10px; }
-.mem-group-body .mem-row { border-radius: 9px; }
-.mem-group-body .mem-body { padding-left: 30px; }
+/* Type filter: classification stays a machine signal and an inline chip. 类型筛选：分类仍是机器信号与行内标签。 */
+.mem-type-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.mem-type-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--line, #e3e7ee); border-radius: 99px; background: var(--surface, #fff); color: var(--subtle, #5c6675); font: inherit; font-size: 12px; cursor: pointer; }
+.mem-type-chip:hover { background: var(--surface-hover, #f1f4f9); }
+.mem-type-chip[aria-pressed="true"] { background: #20242c; border-color: #20242c; color: #fff; }
+.mem-type-chip small { font-variant-numeric: tabular-nums; opacity: .7; }
 /* Usage layer: which runs actually recalled this memory. 使用层：真正召回它的 Run。 */
 .mem-subhead { margin: 14px 0 6px; color: var(--subtle, #5c6675); font-size: 11.5px; font-weight: 600; }
 .mem-subhead small { margin-left: 4px; color: var(--muted, #8791a1); font-weight: 400; }

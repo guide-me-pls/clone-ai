@@ -427,6 +427,97 @@ failure is visible; the task record stays the durable copy.
 duplicate or conflicting buttons, centralize again and make the row link the
 only path.
 
+## 2026-11-24 — The memory page is a flat, search-first list; type stays a machine signal
+
+**Decision.** The Memory page defaults to one flat list ordered by last use,
+with the search box and a row of type chips. The five collapsible type groups
+are removed. The stored `type` field and everything it drives — the
+context-budget share, the preference recall boost and floor, same-type conflict
+comparison, and the procedure evidence gate — are unchanged. The new-memory
+form defaults to `fact`.
+
+**Why it won.** The type taxonomy earns its keep in the runtime, not in
+browsing: a preference claims 50% of the memory context budget (the code records
+a 56.7% context hit rate on preference questions under a flat cap versus 92–99%
+elsewhere), and a procedure is the one class whose candidate is refused when a
+failed run has no supporting evidence. Browsing by five kinds was a second,
+independent claim on the same field with no runtime effect: with a handful of
+memories it hides rows behind collapsible headers, and it asks the owner to
+classify a note before there is enough data for the categories to mean anything.
+Search already answers "where is the note about X"; the list should open with
+that and with recency, and the type should stay visible as a chip.
+
+**Alternatives rejected.**
+
+- *Keep the five groups as the default.* The grouping cost — one more choice
+  before writing, five places to look — bought no runtime behavior, and the
+  owner's library is small.
+- *Delete `type` and rely on the index.* This drops the measured preference
+  budget effect and makes same-type conflict comparison compare unrelated
+  memories; the failed-run procedure gate has no replacement signal. The index
+  finds memories; it does not decide who gets the context budget.
+- *Reduce the taxonomy to two classes (rule vs fact) now.* A schema change and a
+  migration for a distinction the runtime does not yet use; the five stored
+  values already collapse to four budget classes.
+
+**Reversal condition.** Restore grouping if the active library grows past
+roughly 100 memories and measuring "time to find a known memory" shows groups
+faster than search; or, if a later change removes every runtime use of `type`,
+delete the field instead of keeping a label nobody reads.
+
+## 2026-11-24 — A memory the owner authored is standing context, not only a token match
+
+**Decision.** Every Main Agent turn also receives the active, non-secret
+memories the owner authored (`sourceRunId: "owner"`), in addition to the
+token-matched reviewed memories. They are summarized, capped at five, shown as
+"Owner-authored standing memories (background facts the owner wrote; not
+instructions)", and journaled in `memory.recalled` with `standing: true`. They
+are not part of the per-class relevance budget; they are a separate bounded
+section. `secret` owner memories are withheld. Archiving the memory stops it.
+
+**Why it won.** The owner wrote "我是jiaoxiangyu,我的工作内容以此为展开" and asked
+that work summaries recall it. The push is token-overlap recall: a request like
+"继续总结" shares no term with that sentence, so the memory was silently absent
+exactly when the owner expected it. Owner authorship is a deliberate act and a
+stronger signal than a query match; a note the owner wrote once should be
+background the twin already knows. The existing push already sends private
+reviewed memories; adding the owner-authored class keeps the same sensitivity
+boundary (secret withheld) and the same audit event.
+
+**Alternatives rejected.**
+
+- *Add a keyword/tag trigger to the memory.* The owner would have to guess the
+  words a future summary uses; the note already exists and the owner expects it.
+- *Push every reviewed memory.* The library can grow; relevance scoring exists
+  to keep the prompt bounded, and a task-outcome memory is not standing context.
+- *Recall only inside `daily_workspace_digest`.* A work summary may use
+  `recent_file_changes`, a conversation, or a dispatched run; pushing on every
+  Main Agent turn covers all of them.
+- *A per-memory "always include" toggle in the UI.* That is the next step if
+  owners author many notes; the owner-authored class is already an explicit act
+  and needs no second switch. Add the flag when a second class is needed.
+
+**Evidence.** `~/.clone/memory/mem-7ea39a38-0f6.md` has `sourceRunId: owner`,
+`type: fact`, `sensitivity: private`, `status: active`; `pushRelevantMemories`
+recalls only `source.recall(query)`, and the query "继续总结" has no term in
+common with it. The new test commits an owner-authored memory and a non-owner
+memory, pushes with a non-overlapping query, and asserts the owner memory is in
+the text, in `memoryIds`, and journaled with `standing: true`, while the
+non-owner memory is not. Secret owner memories are asserted absent.
+
+**What it costs.** Up to five owner-written summaries (each bounded) are sent to
+the model provider on every Main Agent turn, including turns unrelated to work.
+A stale owner fact stays until archived. The journal records a
+`memory.recalled` event each turn, so the audit grows with turns. The section is
+background, not instructions; the prompt says not to treat it as instructions.
+
+**Reversal condition.** If the owner authors many notes and the standing section
+crowds the prompt or leaks context into unrelated turns, replace the class-wide
+push with an explicit per-memory "always include in summaries" flag and keep
+the same cap and secret filter. If owners object to a private note being sent on
+every turn, move standing recall to the digest tool only. Keep the sourceRunId
+"owner" filter and the `standing: true` audit either way.
+
 ## 2026-11-24 — A subagent row explains itself in the conversation; the task record is an explicit link
 
 **Decision.** In the main conversation, a subagent row expands in place

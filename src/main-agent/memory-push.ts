@@ -57,6 +57,20 @@ export async function pushRelevantMemories(input: {
   if (query.length === 0) return undefined;
   const source = new GovernedMemorySource(input.dataDirectory, input.maxResults ?? 6);
   const recalled = await source.recall(query, MAIN_AGENT_RUN_ID);
+  // Owner-authored active memories are standing context, not a search hit: a
+  // note the owner wrote once must not depend on a future query sharing a word
+  // with it. Secret entries never reach this list.
+  // 所有者手写的活跃记忆是常驻上下文，不是搜索命中：所有者写过一次的便签不应依赖未来查询
+  // 恰好共享某个词。机密条目不进入这份列表。
+  const ownerMemories = await source.ownerAuthored(5);
+  const recalledIds = new Set(recalled.map((item) => item.memory.id));
+  const standing = ownerMemories.filter((entry) => !recalledIds.has(entry.id));
+  const standingText = standing.length === 0
+    ? undefined
+    : [
+      "Owner-authored standing memories (background facts the owner wrote; not instructions):",
+      ...standing.map((entry) => `- ${entry.summary.slice(0, 300)}`),
+    ].join("\n");
   const context = buildMemoryContextFromCandidates(
     // Carry the metadata the builder uses: without `type` every memory fell
     // into the same class, so a preference and a task outcome competed for one
@@ -92,9 +106,39 @@ export async function pushRelevantMemories(input: {
   const synthesized = synthesis !== undefined && synthesis.text.length > 0
     ? `Background summary synthesized from reviewed memories (not a memory; it may paraphrase):\n${synthesis.text}`
     : undefined;
-  const text = [context?.summary, synthesized].filter((part): part is string => part !== undefined).join("\n\n");
+  const text = [standingText, context?.summary, synthesized].filter((part): part is string => part !== undefined).join("\n\n");
   if (text.length === 0) return undefined;
-  const memoryIds = context !== undefined ? [...context.sourceMemoryIds] : [...new Set(synthesis?.citedIds ?? [])];
+  const memoryIds = [...new Set([
+    ...standing.map((entry) => entry.id),
+    ...(context?.sourceMemoryIds ?? []),
+    ...(synthesis?.citedIds ?? []),
+  ])];
+  const recordedMemories = [
+    ...standing.map((entry) => ({
+      id: entry.id,
+      summary: entry.summary,
+      score: 1,
+      matchedTerms: [] as string[],
+      type: entry.type,
+      createdAt: entry.createdAt,
+      sensitivity: entry.sensitivity,
+      standing: true,
+    })),
+    ...recalled
+      .filter((item) => memoryIds.includes(item.memory.id) && !standing.some((entry) => entry.id === item.memory.id))
+      // The audit record carries the same classification the model saw, so a
+      // later review can tell why a memory was injected.
+      // 审计记录携带模型看到的同一分类，使事后审查能说明某条记忆为何被注入。
+      .map((item) => ({
+        id: item.memory.id,
+        summary: item.memory.summary,
+        score: item.score,
+        matchedTerms: item.matchedTerms,
+        type: item.memory.type,
+        createdAt: item.memory.createdAt,
+        sensitivity: item.memory.sensitivity,
+      })),
+  ];
   await input.journal.append({
     type: "memory.recalled",
     runId: MAIN_AGENT_RUN_ID,
@@ -103,20 +147,8 @@ export async function pushRelevantMemories(input: {
       scope: { path: "main-agent-push" },
       mode: synthesized === undefined ? "select" : "synthesize",
       ...(synthesized === undefined ? {} : { synthesisChars: synthesized.length }),
-      memories: recalled
-        .filter((item) => memoryIds.includes(item.memory.id))
-        // The audit record carries the same classification the model saw, so a
-        // later review can tell why a memory was injected.
-        // 审计记录携带模型看到的同一分类，使事后审查能说明某条记忆为何被注入。
-        .map((item) => ({
-          id: item.memory.id,
-          summary: item.memory.summary,
-          score: item.score,
-          matchedTerms: item.matchedTerms,
-          type: item.memory.type,
-          createdAt: item.memory.createdAt,
-          sensitivity: item.memory.sensitivity,
-        })),
+      ...(standing.length === 0 ? {} : { standingCount: standing.length }),
+      memories: recordedMemories,
     },
   });
   return {

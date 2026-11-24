@@ -52,6 +52,22 @@ A completed subagent that supplies observation evidence but not every promised a
 
 完成的子 Agent 给出了观察证据、但没有满足每一项承诺产物时，不再以死掉的失败结束。一个有界的产物裁判——向已配置的主 Agent 端点发送一段短提示，输出上限 1024 token（最低推理强度）、超时 20 秒——判断证据或完成摘要是否回答了工作单；ACCEPT 记录缺失产物并继续，REVIEW、无法解析的回答或端点不可达则把 Run 结算为等待所有者。主对话的子 Agent 行随即显示摘要、缺失标准、"继续（接受观察证据）"与"判为失败"；任务记录保留同一份复核。完全没有证据的 Worker 仍然失败；受保护路径与无 Scope 写入仍由权限引擎决定。`npm test` 1062/1062，typecheck 0，gate PASS。
 
+### The memory page is a flat, search-first list
+
+The Memory page now opens on one flat list ordered by last use, with the search box and a row of type chips; the five collapsible type groups are gone. The stored type is unchanged and still drives the context budget, the preference recall boost, same-type conflict comparison and the procedure evidence gate — it now appears as an inline chip and a filter instead of a browsing tree. A new memory defaults to 事实 instead of 偏好. `npm test` 1055/1055, typecheck 0, gate PASS.
+
+### 记忆页是搜索优先的平铺列表
+
+记忆页现在以一份按最近使用排序的平铺列表开场，配搜索框与一行类型 chip；五个可折叠的类型分组被移除。存储的类型不变，仍驱动上下文预算、偏好召回加分、同类冲突比较与流程证据闸门——它现在以行内 chip 和筛选器的形式出现，而不是浏览树。新建记忆默认"事实"而不是"偏好"。`npm test` 1055/1055，typecheck 0，gate PASS。
+
+### A memory the owner wrote is always standing context
+
+Active, non-secret memories the owner authored are now pushed into every Main Agent turn as a bounded "Owner-authored standing memories" section, independent of whether the request shares a word with them. Previously the push only recalled by token overlap, so a note like "我是jiaoxiangyu,我的工作内容以此为展开" was silently absent from a summary request such as "继续总结". The section carries at most five summaries (300 characters each), never includes `secret` entries, joins the turn's `memoryIds`, and is journaled in `memory.recalled` with `standing: true` and `standingCount`. The relevance-budgeted list and synthesized recall are unchanged. `npm test` 1053/1053, typecheck 0, gate PASS.
+
+### 所有者手写的记忆是常驻上下文
+
+所有者手写的、活跃且非机密的记忆，现在会以有界的“Owner-authored standing memories”段进入每个主 Agent 回合，不依赖请求是否与它共享词。此前推送只按词重叠召回，因此像“我是jiaoxiangyu,我的工作内容以此为展开”这样的便签，在“继续总结”这类请求里会悄悄缺席。该段最多五条摘要（每条 300 字），绝不包含 `secret` 条目，其 id 加入本回合的 `memoryIds`，并以 `standing: true` 与 `standingCount` 记入 `memory.recalled`。按相关性预算的列表与合成召回不变。`npm test` 1053/1053，typecheck 0，gate PASS。
+
 ### A failed subagent explains itself instead of jumping to a task record
 
 A subagent row in the main conversation now expands in place. The panel shows the worker's recorded summary, up to five evidence rows for that work order, and a deterministic "要修改什么" hint: an unsatisfied artifact contract says to make the request read-only or name the exact file, an interrupted run says to inspect possible side effects, and a generic failure points at the evidence and the task record. Clicking the row no longer navigates away; the full execution trace stays behind an explicit 「打开任务记录查看完整轨迹」 link, and the agent-list header counts failed subagents as 需要处理. `npm test` 1052/1052, typecheck 0, gate PASS.

@@ -112,6 +112,21 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--automatic-execution-is-the-default-and-act_auto-means-the-model-judges);
   [execution chain](optimizations.md#2026-11-24--automatic-execution-is-the-default-judged-by-the-model).
 
+## 2026-11-24 — A memory the owner wrote is standing context
+
+- **Claim:** active, non-secret memories the owner authored are pushed into
+  every Main Agent turn as a bounded standing section, independent of whether
+  the query shares a word with them. They are journaled with `standing: true`;
+  secret owner memories and non-owner memories are not included.
+- **Evidence:** `node --experimental-strip-types --test test/memory-context.test.ts test/synthesized-recall.test.ts`
+  **21/21**; the new test pushes with "继续总结" (no overlap with
+  "我是jiaoxiangyu,我的工作内容以此为展开") and finds the owner note in the
+  prompt, its id in `memoryIds`, and `standing: true` in the journal, while the
+  secret and non-owner notes stay out. `npm test` **1053/1053**, 0 fail;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline unchanged.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--a-memory-the-owner-authored-is-standing-context-not-only-a-token-match);
+  [execution chain](optimizations.md#2026-11-24--a-memory-the-owner-authored-is-standing-context).
+
 ## 2026-11-24 — A failed subagent explains itself where the owner asked
 
 - **Claim:** a subagent row in the main conversation expands in place with its

@@ -274,6 +274,35 @@ test("an unrelated data change during the poll keeps the unsaved editor", async 
   assert.equal(textarea.value, "未保存的正文改动", "a changed poll overwrote the unsaved edit");
 });
 
+test("the default memory list is flat, newest first, with type chips that filter it", async () => {
+  const panel = openMemoryPanel();
+  await panel.poll(library);
+  const painted = panel.paints.at(-1) ?? "";
+  // There is no category layer any more: rows are direct children of the flat list.
+  // 不再有分类层：行是平铺列表的直接子元素。
+  assert.doesNotMatch(painted, /data-mem-group/);
+  assert.match(painted, /class="mem-list"/);
+  assert.ok(
+    painted.indexOf('data-mem-row="mem-2"') >= 0
+      && painted.indexOf('data-mem-row="mem-2"') < painted.indexOf('data-mem-row="mem-1"'),
+    "the newest memory must come first",
+  );
+  // The type is visible on the row and offered as a chip, not as a place to browse.
+  // 类型显示在行上，并以 chip 提供筛选，而不是作为浏览的位置。
+  assert.match(painted, /mem-type[^>]*>承诺与边界/);
+  assert.match(painted, /data-mem-type="procedure"/);
+
+  // Click the procedure chip: only the procedure row remains and the chip reads pressed.
+  // 点击"流程" chip：只剩流程行，且 chip 显示为按下。
+  const chip = Object.create(panel.FakeElement.prototype);
+  chip.closest = (selector: string) => (selector === "[data-mem-type]" ? { dataset: { memType: "procedure" } } : null);
+  await panel.dispatch("click", { target: chip });
+  const filtered = panel.paints.at(-1) ?? "";
+  assert.match(filtered, /提前一天确认发布窗口/);
+  assert.doesNotMatch(filtered, /不接受未经确认的对外邮件/);
+  assert.match(filtered, /data-mem-type="procedure" aria-pressed="true"/);
+});
+
 test("clicking the archived count filters the panel and marks that card pressed", async () => {
   const panel = openMemoryPanel();
   const mixed = makeLibrary([

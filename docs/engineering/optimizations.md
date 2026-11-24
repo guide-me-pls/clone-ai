@@ -383,6 +383,80 @@ file keeps every attempt, including the ones that did not work.
   it.
 - **Reversal condition:** as the two trade-off entries.
 
+### 2026-11-24 — The memory page becomes a flat, search-first list
+
+- **Goal / hypothesis:** the owner asked whether five memory types were worth
+  classifying at all, and whether an index would serve better. The type is
+  load-bearing in the runtime (preferences claim 50% of the context budget, with
+  a measured 56.7% preference-question hit rate under a flat cap versus 92–99%
+  elsewhere; same-type conflict comparison; the failed-run procedure gate), while
+  the five-way browsing tree has no runtime effect and hides rows in a small
+  library. Keep the field, flatten the view.
+- **Trade-off:** [The memory page is a flat, search-first list; type stays a machine signal](../architecture/trade-offs.md#2026-11-24--the-memory-page-is-a-flat-search-first-list-type-stays-a-machine-signal).
+- **Change:** `apps/desktop/ui/memory.js` — grouping and `openGroups` removed;
+  one `mem-list` ordered by `max(updatedAt, lastAccessedAt)`; a type-chip row
+  whose counts follow search and status but not the type filter; rows carry a
+  type badge; the editor hint says classification affects budget and recall.
+  `apps/desktop/ui/memory.css` — chip styles replace the group layer.
+  `apps/desktop/ui/index.html` — the new-memory type defaults to `fact`.
+- **Eval:** `node --experimental-strip-types --test test/regression/memory-refresh-focus.test.ts test/ui-structure.test.ts`
+  — **41/41**. The new case asserts a flat list with no `data-mem-group`, newest
+  first, a visible type badge, and that the procedure chip filters the list and
+  reads pressed; a second case asserts the new-memory select defaults to `fact`.
+  Before the change the regression case fails (the paint has `data-mem-group`
+  and no `data-mem-type`). `npm test` **1055/1055**, `npm run typecheck` exit 0,
+  `npm run gate` **PASS** with baseline unchanged.
+- **Benchmark run:** none — deterministic UI structure tests; no provider calls.
+- **Execution chain:** one session. Read `memory.js`, `memory.css`, the panel
+  markup and the regression harness; wrote the trade-off before code; changed
+  the view and the default; added the two tests; ran the focused tests, the full
+  suite, typecheck and gate. No workers, no model calls.
+- **Pros:** the default view answers two common questions — "where is the note
+  about X" (search) and "what did I touch last" (ordered list) — without a
+  classification decision; the type stays visible and filterable, and no stored
+  data or runtime behaviour changed.
+- **Cons / next time:** a misclassified memory filters under the wrong chip even
+  though its row shows its own label. If the library grows past roughly 100
+  active memories, revisit grouping with a measured search-versus-group
+  comparison (the reversal condition).
+- **Reversal condition:** as the trade-off entry.
+
+### 2026-11-24 — A memory the owner authored is standing context
+
+- **Goal / hypothesis:** the owner wrote "我是jiaoxiangyu,我的工作内容以此为展开" and
+  asked that work summaries recall it. `pushRelevantMemories` only recalls by
+  token overlap, so a request like "继续总结" shares no term with the note and
+  the memory is silently absent. Owner-authored memories should be standing
+  background, independent of a query match.
+- **Trade-off:** [A memory the owner authored is standing context, not only a token match](../architecture/trade-offs.md#2026-11-24--a-memory-the-owner-authored-is-standing-context-not-only-a-token-match).
+- **Change:** `src/memory/md-memory-store.ts` — `GovernedMemorySource.ownerAuthored`
+  lists active, non-secret, `sourceRunId: "owner"` memories. `src/main-agent/memory-push.ts`
+  — a bounded "Owner-authored standing memories" section (five summaries, 300
+  characters each) is prepended to the pushed text, the ids join `memoryIds`, and
+  the `memory.recalled` event records each with `standing: true` and
+  `standingCount`. `test/memory-context.test.ts` — a non-overlapping query still
+  carries the owner note; a secret owner note and a non-owner note stay out.
+- **Eval:** `node --experimental-strip-types --test test/memory-context.test.ts test/synthesized-recall.test.ts`
+  — **21/21**. `npm test` **1053/1053**, 0 fail; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**, baseline unchanged.
+- **Benchmark run:** none — deterministic test-only eval.
+- **Execution chain:** one session. Read the owner's new memory file and index
+  (`mem-7ea39a38-0f6`, `sourceRunId: owner`), then `pushRelevantMemories` and the
+  context builder. Added the standing list and test; the first test edit
+  accidentally replaced the next test's header, caught by inspection and
+  restored. No workers, no model calls.
+- **Pros:** a note the owner wrote once is present when they summarize work
+  without depending on wording; secret memories stay out; the audit says which
+  memories were standing.
+- **Cons / next time:** up to five owner summaries are sent on every Main Agent
+  turn, including unrelated turns; a stale note stays until archived; the
+  journal grows one `memory.recalled` event per turn. Next time: add a per-memory
+  "always include" flag if owners author many notes.
+- **Reversal condition:** copied from the trade-off entry — switch to an explicit
+  per-memory flag or digest-only recall if the standing section crowds the
+  prompt or leaks context into unrelated turns; keep the owner filter, cap and
+  secret filter.
+
 ### 2026-11-24 — A subagent row explains itself in the conversation
 
 - **Goal / hypothesis:** the owner clicked "准备交付产物" in the main conversation

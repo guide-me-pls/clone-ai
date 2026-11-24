@@ -300,6 +300,62 @@
   才考虑"接受后继续"。
 - **推翻条件：** 同两条取舍条目。
 
+### 2026-11-24 —— 记忆页变成搜索优先的平铺列表
+
+- **目标 / 假设：** 所有者问五种记忆类型是否值得分类，索引是否更好。类型在运行时是有
+  分量的（偏好占上下文预算 50%，统一上限下偏好题实测命中率 56.7%、其他类型 92–99%；
+  同类冲突比较；失败 Run 的流程闸门），而五路浏览树没有运行时效果，在记忆很少时还会把行
+  藏起来。保留字段，压平视图。
+- **取舍：** [记忆页是搜索优先的平铺列表，类型仍是机器信号](../architecture/trade-offs.zh-CN.md#2026-11-24--记忆页是搜索优先的平铺列表类型仍是机器信号)。
+- **变更：** `apps/desktop/ui/memory.js` —— 移除分组与 `openGroups`；一份按
+  `max(updatedAt, lastAccessedAt)` 排序的 `mem-list`；类型 chip 行，计数跟随搜索与状态、
+  不跟随类型筛选；行上带类型徽标；编辑器提示改为"分类影响上下文预算与召回排序"。
+  `apps/desktop/ui/memory.css` —— chip 样式取代分组层。`apps/desktop/ui/index.html` ——
+  新建记忆的类型默认 `fact`。
+- **Eval：** `node --experimental-strip-types --test test/regression/memory-refresh-focus.test.ts test/ui-structure.test.ts`
+  —— **41/41**。新用例断言平铺列表没有 `data-mem-group`、最新的在前、类型徽标可见、
+  点击"流程" chip 后只剩流程行且 chip 显示按下；第二个用例断言新建记忆默认 `fact`。
+  变更前该回归用例失败（绘制结果有 `data-mem-group`、没有 `data-mem-type`）。
+  `npm test` **1055/1055**，`npm run typecheck` 退出码 0，`npm run gate` **PASS**，
+  基线未变。
+- **Benchmark run：** 无——确定性 UI 结构测试；无 Provider 调用。
+- **执行链路：** 单个会话。读 `memory.js`、`memory.css`、面板标记与回归测试桩；先写取舍
+  再改代码；修改视图与默认值；新增两个测试；跑定向测试、全量套件、typecheck 与 gate。
+  没有 Worker，没有模型调用。
+- **优点：** 默认视图回答两个常见问题——"关于 X 的便签在哪"（搜索）与"我最近改了什么"
+  （有序列表）——不需要先做分类决定；类型仍可见、可筛选，存储数据与运行时行为都没变。
+- **缺点 / 下次：** 分错的记忆会落到错误的 chip 下，尽管行上显示的是它自己的标签。如果
+  活跃记忆超过约 100 条，用实测的搜索与分组对比重新考虑分组（即推翻条件）。
+- **推翻条件：** 同取舍条目。
+
+### 2026-11-24 —— 所有者亲手写的记忆是常驻上下文
+
+- **目标 / 假设：** 所有者写了"我是jiaoxiangyu,我的工作内容以此为展开"，并要求工作总结
+  召回它。`pushRelevantMemories` 只按词重叠召回，因此"继续总结"与便签没有共同词，记忆
+  悄悄缺席。所有者写的记忆应当成为常驻背景，不依赖查询命中。
+- **取舍：** [所有者亲手写的记忆是常驻上下文，而不只是词面命中](../architecture/trade-offs.zh-CN.md#2026-11-24--所有者亲手写的记忆是常驻上下文而不只是词面命中)。
+- **变更：** `src/memory/md-memory-store.ts` —— `GovernedMemorySource.ownerAuthored`
+  列出活跃、非机密、`sourceRunId: "owner"` 的记忆。`src/main-agent/memory-push.ts`
+  —— 在推送文本前加入有界的"Owner-authored standing memories"段（最多五条摘要，每条
+  300 字），id 进入 `memoryIds`，`memory.recalled` 事件以 `standing: true` 与
+  `standingCount` 记录。`test/memory-context.test.ts` —— 不重叠的查询仍带上所有者便签；
+  机密便签与非所有者便签不出现。
+- **Eval：** `node --experimental-strip-types --test test/memory-context.test.ts test/synthesized-recall.test.ts`
+  —— **21/21**。`npm test` **1053/1053**，0 失败；`npm run typecheck` 退出码 0；
+  `npm run gate` **PASS**，基线未变。
+- **Benchmark run：** 无——确定性测试 eval。
+- **执行链路：** 单个会话。先读所有者新增的记忆文件与索引（`mem-7ea39a38-0f6`，
+  `sourceRunId: owner`），再读 `pushRelevantMemories` 与上下文构建器。加入常驻列表与
+  测试；第一次编辑测试时误覆盖了下一个测试的标题，检查时发现并恢复。没有 Worker、没有
+  模型调用。
+- **优点：** 所有者写过一次的便签在总结工作时总在场，不依赖措辞；机密记忆不出现；审计能
+  说明哪些记忆是常驻的。
+- **缺点 / 下次：** 每个主 Agent 回合（包括无关回合）都会发送最多五条所有者摘要；过期便签
+  会留到归档；Journal 每回合多一条 `memory.recalled`。下次：若所有者写很多条，加逐条
+  "总是包含"开关。
+- **推翻条件：** 同取舍条目——常驻段挤占提示词或把上下文泄漏到无关回合时，改用逐条开关或
+  仅 digest 召回；保留所有者过滤、上限与 secret 过滤。
+
 ### 2026-11-24 —— 子 Agent 行在主对话里原地解释自己
 
 - **目标 / 假设：** 所有者点击主对话里的"准备交付产物"后被带到任务记录，对话丢了，行里

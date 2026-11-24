@@ -251,6 +251,65 @@ test("one long memory cannot consume the whole context budget", async () => {
   assert.equal(context.sourceMemoryIds.includes("small"), true, "a later memory still fits");
 });
 
+test("an owner-authored memory is standing context even when the query shares no words", async () => {
+  const { pushRelevantMemories } = await import("../src/main-agent/memory-push.ts");
+  const { createJournalStore } = await import("../src/core/sqlite-journal.ts");
+  const { MdMemoryStore } = await import("../src/memory/md-memory-store.ts");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const directory = await mkdtemp(join(tmpdir(), "clone-memory-standing-"));
+  const journal = createJournalStore(directory);
+  const store = new MdMemoryStore({ dataDirectory: directory });
+  try {
+    const owner = await store.commit({
+      summary: "我是jiaoxiangyu,我的工作内容以此为展开",
+      content: "我是jiaoxiangyu,我的工作内容以此为展开",
+      type: "fact",
+      confidence: "high",
+      sensitivity: "private",
+      sourceRunId: "owner",
+    });
+    const secret = await store.commit({
+      summary: "owner secret work note",
+      content: "owner secret work note",
+      type: "fact",
+      confidence: "high",
+      sensitivity: "secret",
+      sourceRunId: "owner",
+    });
+    const other = await store.commit({
+      summary: "周报用要点列表",
+      content: "周报用要点列表",
+      type: "preference",
+      confidence: "high",
+      sensitivity: "private",
+      sourceRunId: "run-1",
+    });
+
+    // "继续总结" shares no term with the owner note: only the standing rule
+    // can put it in the prompt.
+    // “继续总结”与所有者便签没有共同词：只有常驻规则能把它放进提示词。
+    const pushed = await pushRelevantMemories({ dataDirectory: directory, query: "继续总结", journal });
+    assert.ok(pushed);
+    assert.match(pushed.text, /Owner-authored standing memories/);
+    assert.match(pushed.text, /jiaoxiangyu/);
+    assert.doesNotMatch(pushed.text, /owner secret work note/);
+    assert.doesNotMatch(pushed.text, /周报用要点列表/);
+    assert.equal(pushed.memoryIds.includes(owner.id), true);
+    assert.equal(pushed.memoryIds.includes(secret.id), false);
+    assert.equal(pushed.memoryIds.includes(other.id), false);
+
+    const recalled = (await journal.list()).find((event) => event.type === "memory.recalled");
+    const memories = (recalled?.payload as { memories?: Array<{ id: string; standing?: boolean }> }).memories ?? [];
+    assert.equal(memories.find((item) => item.id === owner.id)?.standing, true);
+  } finally {
+    await store.close();
+    (journal as { close?: () => void }).close?.();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a pushed memory keeps the type and time the builder classifies by", async () => {
   // The push mapped recalled memories down to {id, summary, score}, so the
   // builder could not classify by type or order supersedes by createdAt.

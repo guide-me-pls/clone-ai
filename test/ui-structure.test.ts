@@ -22,6 +22,15 @@ const read = (name: string): Promise<string> => readFile(join(ui, name), "utf8")
 /** Ids created at runtime by the view modules themselves. 由视图模块在运行时自行创建的 id。 */
 const RUNTIME_IDS = new Set(["memory-root", "probe-panel", "probe"]);
 
+test("a new memory defaults to fact instead of preference", async () => {
+  const html = await read("index.html");
+  const start = html.indexOf('id="library-new-type"');
+  assert.ok(start >= 0, "the new-memory type select must exist");
+  const select = html.slice(start, html.indexOf("</select>", start));
+  assert.match(select, /<option value="fact"[^>]*selected/);
+  assert.doesNotMatch(select, /<option value="preference"[^>]*selected/);
+});
+
 test("the shell is internally consistent: ids, assets, and strings", async () => {
   const html = await read("index.html");
   const app = await read("app.js");
