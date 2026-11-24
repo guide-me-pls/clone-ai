@@ -292,6 +292,38 @@
   绿色结论仅限于定向套件。
 - **推翻条件：** 同取舍条目。
 
+### 2026-11-24 —— 只读复核不是外部动作
+
+- **目标 / 假设：** 所有者问：为什么"只读审查 doc_translate 那 9 个未提交的文件"被
+  "外部执行 Agent 已关闭"拒绝，而设置页说工作角色全部启用。假设：一个假的外部动作线索，
+  加上规划器里一个指向已不存在 profile 的分支。
+- **取舍：** ["未提交"是状态，不是外部动作](../architecture/trade-offs.zh-CN.md#2026-11-24--未提交是状态不是外部动作外部角色不是一个开关)。
+- **变更：** `src/planning/fallback-planner.ts` —— `hasExternalActionCue` 把 `提交`
+  在"未提交/已提交"中当作状态词；在显式只读标记下，只有点名了具体目标（PR、表单、申请、
+  报告）才算动作；明确的动词仍然算数。连接器不可用时的错误改为"连接器尚未实现"并给出本地
+  替代，而不是"请在设置中启用它"。`src/desktop/ui-locale.ts` 与
+  `apps/desktop/ui/app.js` —— 启用徽章由四个 profile 计算，Agent 页说明外部动作不在其中、
+  没有开关。测试：`test/fallback-planner.test.ts`（5 个新用例）、
+  `test/ui-structure.test.ts`、`test/ui-locale.test.ts`、`test/desktop-shell.test.ts`。
+- **Eval：** `node --experimental-strip-types --test test/fallback-planner.test.ts`
+  —— **17/17**。五个新用例：未提交文件的只读复核、引用报错、无只读标记的状态词、真实外部
+  请求（新错误文案）、只读复核后的点名提交目标。变更前前两个会抛错。
+  `node --experimental-strip-types --test test/ui-structure.test.ts test/ui-locale.test.ts`
+  —— **41/41**；`npm test` **1073/1073**，`npm run typecheck` 退出码 0，
+  `npm run gate` **PASS**，基线未变。
+- **Benchmark run：** 无——确定性规划器与 UI 测试；无 Provider 调用。
+- **执行链路：** 一个四 Agent 的 Workflow（三条并行追踪：设置默认值、拒绝路径、规划线索；
+  一个对抗性核验）确认了诊断。工作的 Agent 随后修改规划器与 Agent 页。这次规划器修复没有
+  走修复通道：所有者直接问的是原因，且变更是一条确定性启发式加本地测试。第一次全量套件运行
+  有两个断言固定了旧字面量 `t("workers-enabled")`，都已改成条件表达式。取舍条目写在规划器
+  草稿之后、最终测试之前；这个顺序是流程缺陷。
+- **优点：** 只读请求能正常规划并运行；真实外部请求得到准确、可执行的提示；设置页不再暗示
+  一个不存在的开关；徽章不会对四个 profile 说谎。
+- **缺点 / 下次：** 线索表仍是文本启发式；不寻常的提交措辞可能漏判或误判。外部连接器仍未
+  实现，`settings.json` 里遗留的 `external-operator` 条目仍被静默忽略；下一步是在设置页
+  显示被忽略的 profile。再下一步：受治理的连接器与真实 profile、开关。
+- **推翻条件：** 同取舍条目。
+
 ### 2026-11-24 —— 缺失的交付物问裁判，再问所有者，而不是直接失败
 
 - **目标 / 假设：** 终结所有者三次报告的产物合同死路。完成的 Worker 有观察证据但没有承诺
@@ -483,6 +515,76 @@
   步骤仍需提高域档位。下次：在加逐文件决策前，先把步骤的写 Scope 放进审批卡。
 - **推翻条件：** 同取舍条目——单步批准变成橡皮图章时移除 observe 豁免；在加逐次通道前先
   加目标清单；受保护路径与无 Scope 写入永久拒绝。
+
+### 2026-11-24 —— 修复通道重试 2：只读 artifact 复核（因 Worker 超时失败）
+
+- **目标 / 假设：** 第三次尝试修复 artifact 死路，决定说明在上次唯一的失败点后追加了
+  双语注释规则。要求的行为不变：只读请求产生 observation 证据后结算为 `waiting_review`；
+  真正的写入仍失败其 artifact 契约。
+- **轨迹 / 决定：** `c03c7cea`、`663b45b5`、`cd74804b`；决定说明
+  `.automation/repair-decisions/subagent-readonly-artifact-review-bilingual.md`；
+  自动化目录 `.automation/repair-retry2`。
+- **结果：** 在 `kernel` 闸门**失败**。阶段 1 写出
+  `test/regression/read-only-artifact-contract-review.test.ts` 并验证为红（1 个失败
+  断言）。阶段 2（`fixRunId 37769d39`）在 1,200,009 毫秒后被 `native-worker-timeout`
+  取消（"Agent execution failed: The turn was cancelled."），共 51 次模型调用、
+  1,987,210 输入与 150,781 输出 token。只留下部分补丁：`src/core/contracts.ts`
+  （+8：`SubagentVerificationResult` 上的 `needsReview` 与 `unverifiedCriteria`）与
+  `src/core/runtime.ts`（+20：一个 `ArtifactContractReviewRequired` 错误类）；没有
+  检测、没有证据转换、没有抛出点，回归用例不可能通过。Worker 读过
+  `fallback-planner.ts`，但没有修改它。分支 `rsi/auto-fix-20261124T0744`，worktree
+  `.claude/worktrees/rsi-20261124T0744` 保留；**未合并**。
+- **按 AGENTS.md 第 4 条：** 记录并停止。没有手工补全部分补丁，也没有合并。
+- **下一步：** 三次尝试以三种不同方式失败（无效补丁、双语注释、超时）。由所有者决定：
+  是用更小的修复步骤再跑一次通道，还是把 planner 问题（只读请求不应被规划成携带
+  artifact 的写入）作为独立优化来修——决定说明刻意把它排除在外。
+
+### 2026-11-24 —— 修复通道重试：只读 artifact 复核（因双语注释失败）
+
+- **目标 / 假设：** 用更窄的、仅运行时的决定重跑 artifact 死路：只读请求产生了
+  observation 证据但没有承诺的 artifact 时，应结算为 `waiting_review` 且回答可见；
+  真正的写入请求仍必须失败其 artifact 契约。
+- **轨迹 / 决定：** `c03c7cea`、`663b45b5`、`cd74804b`；决定说明
+  `.automation/repair-decisions/subagent-readonly-artifact-review.md`（仅运行时；
+  不要碰 planner、请求分类、Scope 或脱敏函数）。
+- **结果：** 在 `suite` 闸门**失败**，但功能工作是通过的。通道只改了
+  `src/core/runtime.ts`（+57/−2），并新增
+  `test/regression/read-only-artifact-review.test.ts`。补丁加入
+  `hasReadOnlyIntent`、私有的 `isReadOnlyArtifactGap`（步骤与工作单都是
+  `reversible_write`、只读意图、只有 observation/tool_result 证据、缺失的必需
+  artifact 全是 `artifact`），把完成摘要记成 observation 证据，抛出私有
+  `ReadOnlyArtifactReview`，并把验证转成 `passed:false, needsReview:true`，使 Run
+  进入 `waiting_review`。回归测试覆盖真实写入（仍以 artifact 契约原因失败）与三个
+  只读目标（waiting_review、observation 证据、接受/拒绝结局）。变更后回归：绿（1/1）；
+  typecheck 退出码 0；全量套件 **1000/1001**，唯一失败在
+  `test/bilingual-documentation.test.ts`：通道新增的测试只有英文解释注释。分支
+  `rsi/auto-fix-20261124T0737`，worktree `.claude/worktrees/rsi-20261124T0737`
+  保留；**未合并**。
+- **按 AGENTS.md 第 4 条：** 记录并停止。没有手改通道的测试注释，也没有合并。
+- **下一步：** 在决定说明中加入"新增或修改文件中的每条解释性注释都必须有中文翻译"
+  （唯一闸门失败）后重跑，或停下。功能补丁本身符合决定。
+
+### 2026-11-24 —— 修复通道尝试：只读 artifact 死路（失败）
+
+- **目标 / 假设：** 修复所有者报告的死路：只读请求被规划成要求 artifact 证据的
+  `reversible_write` draft；Worker 只产出 observation 证据，Run 以
+  "Subagent draft did not satisfy its artifact contract." 失败，任务记录显示 0/1，
+  没有产物，也没有接受/拒绝/重试动作。
+- **轨迹 / 决定：** 轨迹 `c03c7cea`、`663b45b5`、`cd74804b`；决定说明
+  `.automation/repair-decisions/subagent-artifact-dead-end.md`（只读请求不得携带
+  artifact 契约；完成但只有 observation 证据的 subagent 进入 `waiting_review`，
+  回答可见并使用现有接受/拒绝界面；真正的 artifact 契约仍然严格）。
+- **结果：** 在 `regression-still-red` 闸门**失败**。通道写了
+  `test/regression/read-only-artifact-review.test.ts`，修改了
+  `src/core/runtime.ts` / `src/planning/fallback-planner.ts`。生成的 `runtime.ts`
+  补丁语法无效：第 2280 行重复了一段脱敏片段（`$1=[REDACTED]");`），回归测试甚至
+  无法导入模块。变更前：红（对未修改代码有 1 个失败断言）。变更后：仍红。分支
+  `rsi/auto-fix-20261124T0647`，worktree
+  `.claude/worktrees/rsi-20261124T0647` 保留供检查；**未合并**。
+- **按 AGENTS.md 第 4 条：** 工作的 Agent 记录失败并停止。没有手写补丁，也没有合并
+  分支。
+- **下一步：** 由所有者决定：用更窄的决定重跑通道（只改运行时的复核状态，不动 planner），
+  还是把权限模型（模型自动判断写入 + 所有者二次确认）作为独立优化来做。
 
 ### 2026-11-24 —— Daemon 记录 FSEvents 操作，噪声不进每日摘要
 

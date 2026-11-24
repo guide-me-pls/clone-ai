@@ -1056,6 +1056,7 @@ function renderAgentPage() {
       meta: `${ui.badge(agentRoleLabel(agent.role), "neutral")}<span>${escape(purpose)}</span>`,
     });
   }).join("");
+  const allEnabled = settings.agents.length > 0 && settings.agents.every((agent) => agent.enabled);
   host.innerHTML = `<div class="agent-page">
     ${ui.sectionHeader({
       eyebrow: t("agent-page-eyebrow"),
@@ -1065,8 +1066,9 @@ function renderAgentPage() {
     })}
     <div class="c-stat-grid agent-overview">${ui.stat({ label: "Main Agent", value: "内置", detail: "Clone AI 原生工具循环", tone: "success" })}${ui.stat({ label: t("stat-gateway"), value: gateway?.running ? t("online") : t("offline"), detail: gateway?.modelCount ? `${exposedModels.length} ${t("gateway-models-usable")}` : "等待模型端点", tone: gateway?.running && exposedModels.length ? "success" : "warning" })}</div>
     ${gatewayCard}
-    <div class="agent-section-head"><div><h3>${t("roles-bindings")}</h3><p>${t("roles-section-lead")}</p></div><div class="c-segmented">${ui.badge(t("workers-enabled"), "success", { dot: true })}</div></div>
+    <div class="agent-section-head"><div><h3>${t("roles-bindings")}</h3><p>${t("roles-section-lead")}</p></div><div class="c-segmented">${ui.badge(t(allEnabled ? "workers-enabled" : "workers-some-disabled"), allEnabled ? "success" : "neutral", { dot: true })}</div></div>
     <div id="agent-settings-list" class="c-list agent-role-list">${agentRows}</div>
+    <p class="agent-role-note">${escape(t("workers-external-note"))}</p>
     <p class="agent-role-note">${escape(t("agents-note"))}</p>
   </div>`;
 }

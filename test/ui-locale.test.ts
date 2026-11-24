@@ -56,7 +56,7 @@ test("the Agent page shows the detected gateway and a read-only worker catalog",
   // 每个 Worker 都已启用，因此没有 Provider 绑定或启用开关可渲染。
   assert.doesNotMatch(js, /data-agent-provider|data-agent-toggle/);
   assert.match(js, /const agentRows = settings\.agents\.map/);
-  assert.match(js, /t\("workers-enabled"\)/);
+  assert.match(js, /t\(allEnabled \? "workers-enabled" : "workers-some-disabled"\)/);
   assert.match(js, /t\("gateway-refresh"\)/);
   // Model count, gateway version and API paths are diagnostics, not choices;
   // the model picker already names what the gateway serves.

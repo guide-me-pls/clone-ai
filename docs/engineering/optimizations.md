@@ -369,6 +369,50 @@ file keeps every attempt, including the ones that did not work.
   the focused suites.
 - **Reversal condition:** as the trade-off entry.
 
+### 2026-11-24 — A read-only review is not an external action
+
+- **Goal / hypothesis:** the owner asked why "只读审查 doc_translate 那 9 个未提交的
+  文件" was rejected with "外部执行 Agent 已关闭" while Settings said all roles were
+  enabled. Hypothesis: a false external-action cue plus a planner branch for a
+  profile that no longer exists.
+- **Trade-off:** ["未提交" is a state, not an external action](../architecture/trade-offs.md#2026-11-24--未提交-is-a-state-not-an-external-action-the-external-role-is-not-a-switch).
+- **Change:** `src/planning/fallback-planner.ts` — `hasExternalActionCue` treats
+  `提交` as a state word in "未提交/已提交", and under an explicit read-only
+  marker only counts a named target (PR/form/application/report); the clear
+  verbs still count. The unavailable-connector message now says the connector
+  is not implemented and offers a local alternative, instead of "enable it in
+  Settings". `src/desktop/ui-locale.ts` and `apps/desktop/ui/app.js` — the
+  enabled badge is computed from the four profiles, and the Agent page states
+  that external actions are not among them and have no switch. Tests:
+  `test/fallback-planner.test.ts` (5 new), `test/ui-structure.test.ts`,
+  `test/ui-locale.test.ts`, `test/desktop-shell.test.ts`.
+- **Eval:** `node --experimental-strip-types --test test/fallback-planner.test.ts`
+  — **17/17**. The five new cases: uncommitted-file read-only review, quoted
+  error, state word without a marker, genuine external request (new message),
+  named submission target after a read-only review. Before the change the first
+  two throw. `node --experimental-strip-types --test test/ui-structure.test.ts test/ui-locale.test.ts`
+  — **41/41**; `npm test` **1073/1073**, `npm run typecheck` exit 0,
+  `npm run gate` **PASS** with baseline unchanged.
+- **Benchmark run:** none — deterministic planner and UI tests; no provider.
+- **Execution chain:** a Workflow of four agents (three parallel traces: settings
+  defaults, denial path, planner cue; one adversarial verifier) confirmed the
+  diagnosis. The working agent then changed the planner and the Agent page. The
+  repair lane was not run for this planner fix: the owner asked for the cause
+  directly, and the change is a deterministic heuristic with a local test. The
+  first full-suite run failed two assertions that pinned the old literal
+  `t("workers-enabled")`; both were updated to the conditional. The trade-off
+  entry was written after the planner draft, before the final test pass; that
+  ordering is a process defect.
+- **Pros:** the read-only request plans and runs; a genuine external request
+  gets an accurate, actionable message; Settings no longer implies a
+  nonexistent switch; the badge cannot lie about the four profiles.
+- **Cons / next time:** the cue list is still text heuristics; an unusual
+  submission phrasing can be missed or misread. The external connector remains
+  unimplemented, and a stale `external-operator` entry in `settings.json` is
+  still silently ignored; surfacing ignored profiles in Settings is the next
+  step. Next: a governed connector with a real profile and switch.
+- **Reversal condition:** as the trade-off entry.
+
 ### 2026-11-24 — A missing deliverable asks a judge, then the owner, instead of failing
 
 - **Goal / hypothesis:** end the artifact-contract dead end the owner reported
@@ -632,6 +676,96 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry — remove the observe
   exemption if one-step approvals become a rubber stamp; add a target list
   before any per-call channel; keep protected paths and unscoped writes denied.
+
+### 2026-11-24 — Repair lane retry 2: read-only artifact review (failed on a worker timeout)
+
+- **Goal / hypothesis:** retry the artifact dead end a third time, with the
+  bilingual-comment rule appended to the decision after the previous attempt
+  failed only there. The required behaviour is unchanged: a read-only request
+  with observation evidence settles as `waiting_review`; a genuine write still
+  fails its artifact contract.
+- **Traces / decision:** `c03c7cea`, `663b45b5`, `cd74804b`; decision
+  `.automation/repair-decisions/subagent-readonly-artifact-review-bilingual.md`;
+  automation home `.automation/repair-retry2`.
+- **Result:** **failed** at the `kernel` gate. Phase 1 wrote
+  `test/regression/read-only-artifact-contract-review.test.ts` and verified it
+  red (one failing assertion). Phase 2 (`fixRunId 37769d39`) was cancelled after
+  1,200,009 ms with `native-worker-timeout` ("Agent execution failed: The turn
+  was cancelled.") after 51 model calls, 1,987,210 input and 150,781 output
+  tokens. It left a partial patch only: `src/core/contracts.ts` (+8:
+  `needsReview` and `unverifiedCriteria` on `SubagentVerificationResult`) and
+  `src/core/runtime.ts` (+20: an `ArtifactContractReviewRequired` error class);
+  there is no detection, no evidence conversion and no throw site, so the
+  regression case cannot pass. The worker read `fallback-planner.ts` but did not
+  modify it. Branch `rsi/auto-fix-20261124T0744`, worktree
+  `.claude/worktrees/rsi-20261124T0744` kept; **not merged**.
+- **Per AGENTS.md rule 4:** recorded and stopped. No hand completion of the
+  partial patch and no merge.
+- **Next:** the three attempts failed in three different ways (invalid patch,
+  bilingual comment, timeout). The owner decides whether to spend a fourth lane
+  run with a smaller fix step, or to fix the planner issue — a read-only request
+  should not be planned as an artifact-bearing write — as a separate
+  optimization, which the decision deliberately excluded.
+
+### 2026-11-24 — Repair lane retry: read-only artifact review (failed on a bilingual comment)
+
+- **Goal / hypothesis:** retry the artifact dead end with a narrower, runtime-only
+  decision: a read-only request that produced observation evidence but no
+  promised artifact should settle as `waiting_review` with its answer visible;
+  a genuine write request must still fail its artifact contract.
+- **Traces / decision:** `c03c7cea`, `663b45b5`, `cd74804b`; decision
+  `.automation/repair-decisions/subagent-readonly-artifact-review.md` (runtime
+  only; do not touch the planner, request classification, scopes or the
+  redaction helpers).
+- **Result:** **failed** at the `suite` gate, but the functional work is green.
+  The lane changed only `src/core/runtime.ts` (+57/−2) and added
+  `test/regression/read-only-artifact-review.test.ts`. The patch adds
+  `hasReadOnlyIntent`, a private `isReadOnlyArtifactGap` (step and work order
+  both `reversible_write`, read-only intent, only observation/tool_result
+  evidence, all missing required artifacts are `artifact`), records the
+  completion summary as observation evidence, throws a private
+  `ReadOnlyArtifactReview`, and converts the verification to
+  `passed:false, needsReview:true` so the run enters `waiting_review`. The
+  regression test covers a genuine write (still fails with the artifact-contract
+  reason) and three read-only objectives (waiting_review, observation evidence,
+  accept/reject outcomes). RegressionAfter: green (1/1); typecheck exit 0; the
+  full suite is **1000/1001**, with the only failure at
+  `test/bilingual-documentation.test.ts`: the lane's new test has an English-only
+  explanatory comment. Branch `rsi/auto-fix-20261124T0737`, worktree
+  `.claude/worktrees/rsi-20261124T0737` kept; **not merged**.
+- **Per AGENTS.md rule 4:** recorded and stopped. No hand edit of the lane's
+  test comment and no merge.
+- **Next:** rerun with the decision adding "every explanatory comment in new or
+  changed files must include a Chinese translation" (the only gate failure), or
+  stop. The functional patch itself matched the decision.
+
+### 2026-11-24 — Repair lane attempt: read-only artifact dead end (failed)
+
+- **Goal / hypothesis:** fix the dead-end reported by the owner: a read-only
+  request is planned as a `reversible_write` draft whose work order requires
+  artifact evidence; the worker produces observation evidence, the run fails
+  "Subagent draft did not satisfy its artifact contract.", and the task record
+  shows 0/1 with no artifact and no accept/reject/retry action.
+- **Trace / decision:** traces `c03c7cea`, `663b45b5`, `cd74804b`; decision
+  `.automation/repair-decisions/subagent-artifact-dead-end.md` (read-only
+  requests must not carry artifact contracts; a completed observation-only
+  subagent becomes `waiting_review` with its answer and the existing
+  accept/reject UI; genuine artifact contracts stay strict).
+- **Result:** **failed** at the `regression-still-red` gate. The lane wrote
+  `test/regression/read-only-artifact-review.test.ts` and changed
+  `src/core/runtime.ts` / `src/planning/fallback-planner.ts`. The generated
+  `runtime.ts` patch is syntactically invalid: a redaction fragment
+  (`$1=[REDACTED]");`) was duplicated at line 2280, so the regression test
+  cannot even import the module. Eval before: red (one failing assertion
+  against the unmodified code). Regression after: still red. Branch
+  `rsi/auto-fix-20261124T0647`, worktree
+  `.claude/worktrees/rsi-20261124T0647` kept for inspection; **not merged**.
+- **Per AGENTS.md rule 4:** the working agent records this failure and stops. No
+  hand-written patch was produced, and the branch was not merged.
+- **Next:** the owner decides whether to retry the lane with a narrower decision
+  (runtime-only review state, without the planner change) or to change the
+  authority model (model-judged auto writes with an owner second confirmation)
+  as a separate optimization.
 
 ### 2026-11-24 — The daemon records FSEvents operations, and noise stays out of the daily digest
 

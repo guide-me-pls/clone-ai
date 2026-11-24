@@ -47,7 +47,7 @@ test("the native desktop app is the only product entry", async () => {
   // 原生 Provider 一起移除。Magpie 端点由应用动作发现，而不是手填表单。
   assert.match(appSource, /const agentRows = settings\.agents\.map/);
   assert.match(appSource, /t\("roles-bindings"\)/);
-  assert.match(appSource, /t\("workers-enabled"\)/);
+  assert.match(appSource, /t\(allEnabled \? "workers-enabled" : "workers-some-disabled"\)/);
   assert.doesNotMatch(appSource, /data-agent-provider|data-agent-toggle/);
   assert.doesNotMatch(appSource, /config-base-url|config-api-key/);
   assert.match(auditSource, /"\/api\/reporting\/bad-cases"/);

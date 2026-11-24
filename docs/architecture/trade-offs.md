@@ -393,6 +393,47 @@ input is not structured, add a structured field on the server for that tool
 rather than teaching the formatter more heuristics; if owners stop needing the
 exact arguments, the raw toggle can go.
 
+## 2026-11-24 — "未提交" is a state, not an external action; the external role is not a switch
+
+**Decision.** The fallback planner's external-cue detection treats `提交` as an
+action only when it is not a state phrase (`未提交/已提交的文件`) and, under an
+explicit read-only marker, only when it names a concrete target (`提交 PR`,
+表单, 申请, 报告). A quoted error that merely contains the word no longer turns a
+read-only review into an external step; the clear verbs (`发送`, `发布`,
+`上传`) still count. When an external action is genuinely requested and no
+connector exists, the error says the connector is not implemented and offers a
+local alternative, instead of "enable it in Settings". The Settings agent page
+computes its enabled badge from the four profiles and states that external
+actions are not among them and have no switch.
+
+**Why it won.** The owner's request — "只读审查 doc_translate 那 9 个未提交的
+ToolBox 文件" plus a quoted "再提交这个外部动作" — was planned as an external
+action and rejected before approval because the fallback planner matches
+`提交` as a substring anywhere in the request. The profile it looked for
+(`external-operator`) was deleted in `6ca928e` when the black-box CLI workers
+were removed; the native provider does not support external actions, and the
+settings normalizer drops the stale `external-operator` entry the owner still
+has in `settings.json`. The old message pointed at a switch that does not exist
+(the PATCH route returns 400 for that id). A read-only request must not be
+blocked by a state word or by an error it quotes.
+
+**Alternatives rejected.**
+
+- *Remove `提交` from the cue list.* Genuine submissions ("提交 PR") would be
+  missed.
+- *Suppress every external cue under a read-only marker.* "只读审查后发给团队"
+  genuinely asks for a send; the clear verbs must keep counting.
+- *Add an `external-operator` profile.* There is no governed action connector
+  or provider for it; a profile would let a worker claim external actions
+  without a real action path.
+- *Keep the "enable it in Settings" message.* It is unactionable: the profile
+  does not exist and the API rejects the id.
+
+**Reversal condition.** When a governed action connector ships, add a real
+external profile and switch, route external steps to it, and remove the
+special-casing; if a genuine submission phrased without a named target is
+missed, extend the target list rather than dropping the read-only guard.
+
 ## 2026-11-24 — An artifact-contract gap asks a model judge, then the owner, instead of failing
 
 **Decision.** When a completed subagent has recorded observation evidence but

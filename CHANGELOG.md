@@ -44,6 +44,14 @@ The audit's Main Agent turn log and worker tool list now render each tool input 
 
 审计的主 Agent 回合日志与 Worker 工具列表现在把每条工具输入渲染成一句话、带标签字段与列表，原始 JSON 放在"原始参数"开关之后。已知工具有专属标题（`dispatch_task` 显示目标，`daily_workspace_digest` 显示路径、日期、是否含 diff 与上限）；未知工具得到带标签的通用视图。被旧 2,000 字符上限截断的记录会补全未闭合的字符串与括号，并标注已截断；上限现在是 8,000。定向测试：`test/tool-format.test.ts` 6/6、`test/ui-structure.test.ts` 42/42。全量套件当前有 3 个失败，来自并发的策略默认值变更，不是这次 UI 变更。
 
+### A read-only review of uncommitted files is not an external action
+
+The fallback planner no longer treats `提交` as an external-action cue when it is part of a state phrase ("未提交/已提交的文件") or a quoted error; under an explicit read-only marker only a named submission target (`提交 PR`, 表单, 申请, 报告) counts. A read-only review of 9 uncommitted files therefore plans as one read-only step instead of being rejected with "外部执行 Agent 已关闭". A genuine external request with no connector now says the governed connector is not implemented and suggests a local alternative. The Agent settings page computes its "all enabled" badge from the four worker profiles and states that external actions are not among them and have no switch. `npm test` 1073/1073, typecheck 0, gate PASS.
+
+### 只读审查"未提交的文件"不再被当成外部动作
+
+回退规划器不再把状态短语（"未提交/已提交的文件"）或引用报错里的 `提交` 当作外部动作线索；在显式只读标记下，只有点名了提交目标（`提交 PR`、表单、申请、报告）才算数。因此"只读审查 9 个未提交文件"会规划成一步只读，而不是被"外部执行 Agent 已关闭"拒绝。没有连接器时，真实的外部请求会说明受治理的连接器尚未实现，并给出本地替代。Agent 设置页的"全部启用"徽章由四个 Worker profile 计算，并说明外部动作不在其中、没有开关。`npm test` 1073/1073，typecheck 0，gate PASS。
+
 ### Automatic execution is the default and the model judges its scope
 
 Files, shell and network now default to 自动执行 (`act_auto`) when `policies.json` does not name them, and `act_auto` no longer requires a covering standing policy: the step's declared scope is the judgment, so the owner no longer authors a policy per resource. The hard boundaries are unchanged — protected locations, unscoped writes, unenforced domains, and external/irreversible steps still stop; an absent `policies.json` uses the default, and a corrupt one (invalid JSON, an invalid level, or a non-array `policies`) fails closed to `observe` instead of silently arming every domain. The whole clone home is now one protected location (endpoint key, provider keys, `mcp.json` credentials, memory, conversations, journal, traces), with the Kernel's isolated sandbox as the only exception. Standing policies stay in Settings under 高级：常设策略（可选） as an optional narrowing; when several cover one scope, the lowest ceiling wins, so an explicit restriction is never defeated by a broader grant. The gate policy suite is 24 cases at 100% agreement with 0 unsafe allows (before: 78% agreement, 5 over-blocks). `npm test` 1073/1073, typecheck 0, gate PASS.

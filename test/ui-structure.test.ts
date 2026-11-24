@@ -31,6 +31,19 @@ test("a new memory defaults to fact instead of preference", async () => {
   assert.doesNotMatch(select, /<option value="preference"[^>]*selected/);
 });
 
+test("the worker list says the external role has no switch and computes its badge", async () => {
+  const app = await read("app.js");
+  const locale = await readFile(join(process.cwd(), "src", "desktop", "ui-locale.ts"), "utf8");
+  // The badge is derived from the four profiles, not a hardcoded claim, and the
+  // page explains why an external role cannot be enabled.
+  // 徽章由四个 profile 推导，而不是写死的声明；页面说明外部角色为什么无法启用。
+  assert.match(app, /settings\.agents\.every\(\(agent\) => agent\.enabled\)/);
+  assert.match(app, /workers-some-disabled/);
+  assert.match(app, /workers-external-note/);
+  assert.match(locale, /workers-external-note/);
+  assert.match(locale, /workers-some-disabled/);
+});
+
 test("the audit renders tool inputs as readable fields with raw JSON behind a toggle", async () => {
   const html = await read("index.html");
   const audit = await read("audit.js");
