@@ -4,7 +4,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, Run, Task, VerificationResult } from "./core/contracts.ts";
+import type { JournalEvent, MemoryCandidate, MemorySensitivity, MemoryType, OwnerDecisionNotifier, Run, Task, VerificationResult } from "./core/contracts.ts";
 import { EFFORT_LEVELS, MAX_EFFORT_LENGTH, normalizeEffort } from "./workers/effort.ts";
 import { describeFailureForOwner } from "./core/failure-display.ts";
 import { appendWorkUpdate, describeWorkUpdate, readWorkUpdates } from "./main-agent/work-updates.ts";
@@ -52,6 +52,7 @@ import { expandHome } from "./authority/scope.ts";
 import { describeExport, EXPORT_EXCLUDES, exportOwnerData } from "./config/export.ts";
 import { OpportunityService } from "./opportunity/opportunity-service.ts";
 import { RunQueueConsumer } from "./application/run-queue.ts";
+import { createOwnerDecisionNotifier } from "./application/owner-notifier.ts";
 import { createRuntimeAssembly } from "./core/runtime-factory.ts";
 import { createConfiguredAgentRegistry } from "./workers/configured-worker-registry.ts";
 import { DailyReportRunner, type DailyReportSettings } from "./reporting/daily-report-runner.ts";
@@ -491,7 +492,8 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   // sequences and stale reads appear.
   // 本进程内所有模块共用一个 Runtime 组装，因而共用一本 Journal。针对同一文件建多个
   // Store，每个都持有自己的 sequence 计数器和缓存视图——重复 sequence 与陈旧读数正是这么来的。
-  const assembly = await createRuntimeAssembly({ dataDirectory, workspacePath });
+  const ownerDecisionNotifier = createOwnerDecisionNotifier();
+  const assembly = await createRuntimeAssembly({ dataDirectory, workspacePath, ownerDecisionNotifier });
   const journal = assembly.journal;
   /**
    * Close aborts background waits that have no acquisition deadline: the
@@ -529,7 +531,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
           scheduleKind: schedule.kind,
           scheduleDescription: describeSchedule(schedule),
         },
-      }, await agentSettings.get(), { workspacePath, memorySignal: shutdown.signal });
+      }, await agentSettings.get(), { workspacePath, memorySignal: shutdown.signal, ownerDecisionNotifier });
     },
   });
   // The opportunity plane and the daily bad-case report share the same
@@ -827,6 +829,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         runtime: queueRuntime,
         runQueue,
         authority: assembly.authority,
+        ownerDecisionNotifier,
         refreshCapacityPin: assembly.refreshCapacityPin,
       });
     } catch (error: unknown) {
@@ -967,6 +970,8 @@ async function handleRequest(
     runtime: CloneRuntime;
     runQueue: RunQueueConsumer;
     authority: StandingPolicyStore;
+    /** Owner notification for approvals/reviews; macOS-only and optional. 审批/复核的所有者通知；仅 macOS，可选。 */
+    ownerDecisionNotifier?: OwnerDecisionNotifier;
     /** Re-reads the owner's pinned worker concurrency after a settings change. 设置变更后重新读取所有者固定的 Worker 并发上限。 */
     refreshCapacityPin: () => Promise<void>;
   },
@@ -2604,7 +2609,7 @@ async function handleRequest(
       query,
       {},
       await context.agentSettings.get(),
-      { workspacePath: context.workspacePath },
+      { workspacePath: context.workspacePath, ownerDecisionNotifier: context.ownerDecisionNotifier },
     );
     sendJson(response, 201, result);
     return;

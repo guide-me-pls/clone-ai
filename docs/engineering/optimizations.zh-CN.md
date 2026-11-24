@@ -26,6 +26,38 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-24 —— 子 Agent 自动执行，需要决定时桌面通知
+
+- **目标 / 假设：** 去掉「子 Agent 边界」卡片上不实的"默认禁止"（原生 Worker 本来就自动
+  执行），并补上"Run 停下等待决定"与"所有者没在看窗口"之间的缺口：进入
+  `waiting_approval` 或 `waiting_review` 时，守护进程应只发一条 macOS 通知。
+- **取舍：** [子 Agent 自动执行；真正需要决定时桌面通知所有者](../architecture/trade-offs.zh-CN.md#2026-11-24--子-agent-自动执行真正需要决定时桌面通知所有者)。
+- **变更：** `src/core/contracts.ts` —— `OwnerDecisionNotice`/`OwnerDecisionNotifier`；
+  `src/core/runtime.ts` —— 可选通知器、Run/步骤/类型去重键，并在审批、子 Agent 复核与最终
+  验证的转移点调用，抛错的通知器被吞掉；`src/core/runtime-factory.ts`、
+  `src/application/run-query.ts` 与 `src/companion-server.ts` —— 把通知器接入守护进程组装、
+  调度器与 `/api/requests`；新增 `src/application/owner-notifier.ts` —— 仅以 `argv` 传参的
+  `osascript` 脚本、有界单行正文、仅 macOS、所有失败被忽略；`apps/desktop/ui/index.html`
+  与 `src/desktop/ui-locale.ts` —— 子 Agent 边界卡片改为自动执行、需要时通知；外部动作
+  卡片的值改为按档位。
+- **Eval：** 新增 `test/owner-notifier.test.ts` **3/3**（仅 argv 的 AppleScript、有界正文、
+  非 macOS/不抛出的执行器）；`test/authority.test.ts` 新增运行时用例：注入会抛错的通知器
+  仍得到 `waiting_approval`，随后复核 Runtime 收到 `review` 通知；`npm test`
+  **1103/1103**，`npm run typecheck` 退出码 0，`npm run gate` **PASS**（策略 30 个用例不变——
+  本次没有触碰 Policy 引擎）。
+- **Benchmark run：** 无；这是确定性的契约变更，没有 Provider 调用，门禁的策略/验证套件
+  就是相关 eval。
+- **执行链路：** 直接实现。第一版只把通知器接到 setup 作用域的组装；typecheck 发现
+  `/api/requests` 通过请求上下文创建自己的组装，于是把通知器加入 context 类型与对象。
+  没有测试失败。
+- **优点：** 设置页不再描述不存在的闸门；通知覆盖交互、派发与定时 Run 的审批与复核
+  （两个 runQuery 调用点都传入）；去重与吞掉失败使它不影响执行。
+- **缺点 / 下次：** 仅 macOS；`osascript` 通知可能需要授权且没有点击动作；机器休眠会丢失
+  瞬时通知，Run 仍在等待。未来的通道（原生 `UNUserNotificationCenter`、手机）应复用同一
+  Runtime 钩子。
+- **推翻条件：** 抄自取舍条目——如果通知被拦截或漏掉，改用 Swift 外壳的
+  `UNUserNotificationCenter` 或增加通道设置；如果太吵，加免打扰时段而不是移除钩子。
+
 ### 2026-11-24 —— 所有者确认的 MCP 安装：探测、展示、再写 mcp.json
 
 - **目标 / 假设：** 缺少工具的所有者应能在设置页直接获取，而不必手工编辑 `mcp.json`；

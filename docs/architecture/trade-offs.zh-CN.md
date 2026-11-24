@@ -44,6 +44,46 @@
 提供 `tools/list` fixture，或把 MCP 服务器放回 Seatbelt profile；如果所有者要求 Agent 自己
 安装工具，只有在同时引入 Kernel 审批记录的前提下，才可移除受保护根拒绝。
 
+## 2026-11-24 —— 子 Agent 自动执行；真正需要决定时桌面通知所有者
+
+**决定。** 「子 Agent 边界」卡片不再显示"默认禁止"。唯一的子执行器是进程内的原生 Worker，
+它本来就自动执行；旧标签是黑盒 CLI 路径的遗留，该路径已被移除。卡片现在写着它按步骤风险
+自动执行，只有决定确实属于所有者时才停下。当 Kernel 真的停下——`waiting_approval` 或
+`waiting_review`——守护进程通过 `osascript` 发一条 macOS 用户通知：标题是任务，正文是步骤
+与原因，两者都通过 `argv` 传入（绝不拼进 AppleScript）。Runtime 每个 Run/步骤/类型最多
+调用一次通知器，即发即忘；失败的通知器不能改变 Run 的结果。通知只是告知：审批/复核仍在
+App 内完成。
+
+**为什么胜出。** 所有者说"默认禁止"这个标签"感觉不太好"，要求自动判断执行，实在不行再由
+人工确认，并且需要人工确认时要在电脑上通知。该标签事实上是错的——没有任何代码闸门阻止原生
+Worker；而唯一的面向所有者界面是 App（现有的 `/api/approvals/pending` 路由服务于手机桥）。
+通知正是"Run 停下了"与"所有者没在看窗口"之间缺的一环。
+
+**被否决的备选。**
+
+- *保留"默认禁止"卡片。* 它描述一条已不存在的路径；一个说错行为的设置页不值得信任。
+- *只从网页 UI 通知。* 只在窗口打开时有效，会漏掉定时任务与最小化的 App。
+- *只从手机桥通知。* 所有者要的是电脑；手机路由还需要配置桥。
+- *现在就写原生 `UNUserNotificationCenter` 助手。* 为同样的可见结果引入授权提示与 bundle
+  身份等机制；`osascript` 不增加守护进程依赖就能发通知。若 macOS 拦截再改。
+- *每次轮询都通知。* Runtime 的 Run/步骤/类型键已杜绝重复；轮询 UI 会在等待期间重复。
+
+**证据。** `src/workers/provider-catalog.ts` 记录黑盒 CLI 配方已移除；原生 Worker 是守护
+进程 Agent 列表里唯一的执行器。设置卡片的值正是"默认禁止"，背后没有任何运行时检查。转移点
+是 `executeOwned` 的 `approval_required`、`SubagentReviewRequired` 捕获与最终的
+`waiting_review` 状态。`test/authority.test.ts` 注入一个会抛错的通知器，Run 仍进入
+`waiting_approval`；随后一个复核 Runtime 为 `waiting_review` 发出通知；
+`test/owner-notifier.test.ts` 钉住仅以 argv 传递的 AppleScript 与有界正文。全量运行与
+门禁记录在 `docs/engineering/optimizations.md`。
+
+**代价。** 仅 macOS；`osascript` 通知可能要求所有者允许 Script Editor/osascript 的通知，
+且没有动作按钮（点击不会打开任何东西）。机器休眠时会丢失瞬时通知；Run 仍在 App 的等待状态。
+将来任何新的决定面都必须走 Runtime 钩子，否则仍然静默。
+
+**推翻条件。** 如果通知被拦截或漏掉，改用 Swift 外壳的 `UNUserNotificationCenter`
+（带点击打开动作），或增加通道设置。如果所有者觉得吵，加免打扰时段，而不是移除钩子。
+如果子 Agent 卡片再次说错，让状态从实际执行器列表推导，而不是静态文案。
+
 ## 2026-11-24 —— 只读请求永远不经过 LLM Planner
 
 **决定。** 从确定性兜底规划器导出 `isReadOnlyRequest(query)`——它请规划器给出计划并检查

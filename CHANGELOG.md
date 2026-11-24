@@ -6,6 +6,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Child agents run automatically; the desktop notifies you when a decision is truly needed
+
+The 子 Agent 边界 card no longer says 默认禁止. The only child executor is the in-process native worker, which already ran automatically; the label was left over from the removed black-box CLI path. The card now says it runs at the step's risk and stops only when a decision is genuinely yours. When the Kernel does stop — `waiting_approval` or `waiting_review` — the daemon posts one macOS notification with the task title and the step/reason. The text is passed as `argv` to `osascript`, never interpolated into AppleScript; the Runtime notifies at most once per run/step/kind, a failing notifier cannot change the run, and the approval or review still happens in the app. macOS may require allowing notifications for Script Editor/osascript, and a notification has no click action. `test/owner-notifier.test.ts` 3/3; `npm test` 1103/1103, typecheck 0, gate PASS.
+
+### 子 Agent 自动执行；真正需要决定时桌面通知
+
+「子 Agent 边界」卡片不再显示"默认禁止"。唯一的子执行器是进程内的原生 Worker，它本来就自动执行；该标签是被移除的黑盒 CLI 路径的遗留。卡片现在写着按步骤风险自动执行，只有决定确实属于所有者时才停下。当 Kernel 真的停下——`waiting_approval` 或 `waiting_review`——守护进程发一条 macOS 通知，带任务标题与步骤/原因。文本以 `argv` 传给 `osascript`，绝不拼进 AppleScript；Runtime 每个 Run/步骤/类型最多通知一次，失败的通知器不能改变 Run，审批/复核仍在 App 内完成。macOS 可能要求允许 Script Editor/osascript 的通知，通知没有点击动作。`test/owner-notifier.test.ts` 3/3；`npm test` 1103/1103，typecheck 0，gate PASS。
+
 ### Owner-confirmed MCP install from the tools settings page
 
 The tools tab can now install a stdio MCP server from an npm package. "探测工具" spawns `npx --yes <package> <args>`, performs the MCP handshake and lists the tools the package exposes; each tool starts at `external` (always refused) and the owner assigns read/write/network, with one-click presets. "安装" asks for confirmation, re-probes, refuses when the package exposes a tool the request did not declare, and writes one enabled entry into `mcp.json` atomically (mode 0600) without disturbing other servers or unknown fields. A per-server "移除" button deletes one entry. Every failure happens before the write, and the agent still cannot install: `~/.clone` stays a protected root and the exec sandbox re-denies it. Routes: `POST /api/tools/probe`, `POST /api/tools/install`, `DELETE /api/tools/mcp/:id`. Focused tests: `test/mcp-installer.test.ts` 8/8, `test/tools-install-api.test.ts` 6/6. `npm test` 1103/1103, gate PASS.

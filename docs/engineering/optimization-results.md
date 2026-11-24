@@ -15,6 +15,22 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-24 — Child agents run automatically and the desktop notifies when a decision is needed
+
+- **Claim:** the 子 Agent 边界 card no longer claims 默认禁止; the in-process
+  native worker runs at the step's risk and stops only for a decision that is
+  genuinely the owner's. When a run enters `waiting_approval` or
+  `waiting_review`, the daemon posts one macOS notification (task title, step
+  and reason, argv-only AppleScript); a failing or absent notifier cannot change
+  the run's outcome.
+- **Evidence:** `test/owner-notifier.test.ts` **3/3** (argv-only script, bounded
+  body, non-macOS and throwing executor paths); `test/authority.test.ts` injects
+  a throwing notifier and still gets `waiting_approval`, then a review runtime
+  receives a `review` notice; `npm test` **1103/1103**, `npm run typecheck` exit
+  0, `npm run gate` **PASS** (policy suite unchanged).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--child-agents-run-automatically-the-desktop-tells-the-owner-only-when-a-decision-is-needed);
+  [execution chain](optimizations.md#2026-11-24--child-agents-run-automatically-and-the-desktop-notifies-the-owner-when-a-decision-is-needed).
+
 ## 2026-11-24 — Owner-confirmed MCP install works from the settings page
 
 - **Claim:** the tools tab installs a stdio MCP server from an npm package:

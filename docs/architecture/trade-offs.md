@@ -62,6 +62,65 @@ during the handshake, disable the probe and require an owner-supplied
 the owner asks the agent to install tools, remove the protected-root denial only
 together with a Kernel approval record.
 
+## 2026-11-24 — Child agents run automatically; the desktop tells the owner only when a decision is needed
+
+**Decision.** The 子 Agent 边界 card no longer says 默认禁止. The only child
+executor is the in-process native worker, and it already runs automatically;
+the old label was left over from the black-box CLI path that was removed. The
+card now says it runs at the step's risk and stops only when a decision is
+genuinely the owner's. When the Kernel does stop — `waiting_approval` or
+`waiting_review` — the daemon posts a macOS user notification through
+`osascript`: title is the task, body is the step and reason, both passed as
+`argv` (never interpolated into AppleScript). The Runtime calls the notifier at
+most once per run/step/kind, fire-and-forget; a failing notifier cannot change
+the run's outcome. The notification is informational: the approval or review
+still happens in the app.
+
+**Why it won.** The owner said the 默认禁止 label "感觉不太好" and asked for auto
+judgment with human confirmation only as a fallback, plus a computer notification
+when that confirmation is needed. The label was factually wrong — no code gate
+blocks the native worker — and the only owner-facing surface was the app (the
+existing `/api/approvals/pending` route serves the phone bridge). A notification
+is the missing link between "the run stopped" and "the owner is not looking at
+the window".
+
+**Alternatives rejected.**
+
+- *Keep the "blocked by default" card.* It describes a path that no longer
+  exists; a settings page that misstates behavior cannot be trusted.
+- *Notify only from the web UI.* It works only while the window is open, and
+  misses scheduled runs and a minimized app.
+- *Notify from the phone bridge only.* The owner asked for the computer; the
+  phone route also needs the bridge to be configured.
+- *A native `UNUserNotificationCenter` helper now.* More machinery (authorization
+  prompt, bundle identity) for the same user-visible result; `osascript` posts a
+  notification without a new daemon dependency. Revisit if macOS blocks it.
+- *Notify on every poll.* The Runtime's per-run/step/kind key makes repeats
+  impossible; a polling UI would repeat while the run waits.
+
+**Evidence.** `src/workers/provider-catalog.ts` records that the black-box CLI
+recipes were removed; the native worker is the only executor in the daemon's
+agent list. The settings card's value was exactly the string 默认禁止 with no
+runtime check behind it. The transition points are `executeOwned`'s
+`approval_required`, the `SubagentReviewRequired` catch and the final
+`waiting_review` status. `test/authority.test.ts` injects a throwing notifier
+and still gets `waiting_approval`, then a review runtime that notifies for
+`waiting_review`; `test/owner-notifier.test.ts` pins the argv-only AppleScript
+and the bounded body. The full run and gate are recorded in
+`docs/engineering/optimizations.md`.
+
+**What it costs.** macOS only; `osascript` notifications may require the owner
+to allow notifications for Script Editor/osascript, and they carry no action
+button (clicking opens nothing). A sleeping machine loses the transient
+notification; the run stays in the app's waiting state. Every future decision
+surface must use the Runtime hook or it will still be silent.
+
+**Reversal condition.** If notifications are blocked or missed, move to the
+Swift shell's `UNUserNotificationCenter` (with a click-to-open action) or add a
+setting to choose the channel. If owners find them noisy, add a quiet-hours
+setting rather than removing the hook. If the child card is ever wrong again,
+make the status derive from the actual executor list instead of static copy.
+
 ## 2026-11-24 — A read-only request never goes through the LLM planner
 
 **Decision.** Export `isReadOnlyRequest(query)` from the deterministic fallback

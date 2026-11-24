@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { AuthorityPolicyEngine } from "../src/authority/policy-engine.ts";
 import { canonicalPath, isForbiddenPath, parseScope, scopeCovers, type Scope } from "../src/authority/scope.ts";
 import { StandingPolicyStore } from "../src/authority/standing-policy-store.ts";
-import type { PlanStep } from "../src/core/contracts.ts";
+import type { OwnerDecisionNotice, PlanStep } from "../src/core/contracts.ts";
 import { createJournalStore } from "../src/core/sqlite-journal.ts";
 
 const NOW = new Date("2026-11-03T00:00:00.000Z");
@@ -230,6 +230,74 @@ test("全部放行 records a standing-policy approval before an external step ru
     const started = events.find((event) => event.type === "execution.started");
     assert.ok((started?.sequence ?? 0) > approvalSequence, "the policy approval precedes execution");
     assert.deepEqual(checkJournalInvariants(events), []);
+  } finally { await f.cleanup(); }
+});
+
+test("the Runtime notifies the owner for an approval and for a review", async () => {
+  const { CloneRuntime } = await import("../src/core/runtime.ts");
+  const { MemoryPipeline } = await import("../src/memory/memory-pipeline.ts");
+  const { createScriptedAgentRegistry } = await import("./fixtures/scripted-adapter.ts");
+  const f = await fixture();
+  try {
+    await f.store.setDomainLevel("files", "observe");
+    const notices: OwnerDecisionNotice[] = [];
+    const runtime = new CloneRuntime({
+      journal: f.journal,
+      policy: f.engine,
+      verifier: { verify: async () => ({ runId: "x", passed: false, needsReview: true, summary: "x", checkedEvidenceIds: [], createdAt: new Date().toISOString() }) } as never,
+      memory: new MemoryPipeline(f.journal),
+      // A throwing notifier must never change the run's outcome.
+      // 抛错的通知器绝不能改变 Run 的结果。
+      ownerDecisionNotifier: (notice) => { notices.push(notice); throw new Error("notification failed"); },
+    });
+    const { run } = await runtime.acceptTrigger({ kind: "query", summary: "写入报告", payload: {} });
+    await runtime.attachPlan(run.id, {
+      summary: "s",
+      steps: [{
+        id: "write",
+        title: "写入报告",
+        instructions: "Write the report.",
+        risk: "reversible_write",
+        acceptanceCriteria: ["x"],
+        agentId: "draft-maker",
+        requiredCapabilities: ["drafting"],
+        scopes: [{ domain: "files", resource: join(f.home, "Documents", "out.md"), access: "write" }],
+      }],
+    });
+    const first = await runtime.execute(run.id, createScriptedAgentRegistry());
+    assert.equal(first.status, "waiting_approval");
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0]?.kind, "approval");
+    assert.match(notices[0]?.detail ?? "", /observe-only/i);
+
+    // The review path: the final verification asks the owner.
+    // 复核路径：最终验证把决定交给所有者。
+    const { CloneRuntime: Runtime2 } = await import("../src/core/runtime.ts");
+    const g = await fixture();
+    try {
+      const reviews: OwnerDecisionNotice[] = [];
+      const verifier = {
+        verify: async (input: { run: { id: string } }) => ({
+          runId: input.run.id, passed: false, needsReview: true, summary: "结果需要你复核", checkedEvidenceIds: [], createdAt: new Date().toISOString(),
+        }),
+      };
+      const reviewRuntime = new Runtime2({
+        journal: g.journal,
+        policy: g.engine,
+        verifier: verifier as never,
+        memory: new MemoryPipeline(g.journal),
+        ownerDecisionNotifier: (notice) => reviews.push(notice),
+      });
+      const { run: reviewRun } = await reviewRuntime.acceptTrigger({ kind: "query", summary: "读一下", payload: {} });
+      await reviewRuntime.attachPlan(reviewRun.id, {
+        summary: "s",
+        steps: [{ id: "read", title: "读取", instructions: "Read.", risk: "read_only", acceptanceCriteria: ["x"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+      });
+      const result = await reviewRuntime.execute(reviewRun.id, createScriptedAgentRegistry());
+      assert.equal(result.status, "waiting_review");
+      assert.equal(reviews.length, 1);
+      assert.equal(reviews[0]?.kind, "review");
+    } finally { await g.cleanup(); }
   } finally { await f.cleanup(); }
 });
 

@@ -18,6 +18,8 @@ import type {
   RuntimeAdapter,
   RuntimeCapabilities,
   ModelUsage,
+  OwnerDecisionNotice,
+  OwnerDecisionNotifier,
   PolicyDecision,
   SubagentRun,
   SubagentWorkOrder,
@@ -80,6 +82,13 @@ export interface CloneRuntimeOptions {
   memorySource?: WorkerMemorySource;
   /** Owner-editable failure taxonomy used for diagnostics. 所有者可编辑的失败分类目录。 */
   failureCatalog?: OutcomeCatalog;
+  /**
+   * Owner-facing notification when a run stops for an approval or a review.
+   * The Kernel calls it once per run/step/kind; a throwing notifier is ignored.
+   * 当 Run 因审批或复核停下时面向所有者的通知。Kernel 每个 Run/步骤/类型只调用一次；
+   * 抛错的通知器被忽略。
+   */
+  ownerDecisionNotifier?: OwnerDecisionNotifier;
   /** Workspace supervised by this Runtime. 工作本次 Runtime 监督的 Workspace。 */
   workspacePath?: string;
   /**
@@ -195,6 +204,9 @@ export class CloneRuntime {
   readonly #workspaceCheckpoints?: WorkspaceCheckpointStore;
   readonly #isolatedWorkspaceRoot: string;
   readonly #knownAgentIds?: () => Set<string>;
+  readonly #ownerDecisionNotifier?: OwnerDecisionNotifier;
+  /** One notice per run/step/kind, so re-entering waiting_approval does not repeat it. 每个 Run/步骤/类型一条，重复进入等待不会重复通知。 */
+  readonly #decisionNotices = new Set<string>();
   #state: RuntimeProjection = emptyProjection();
   #hydrated = false;
   readonly #executionGuards = new Map<string, ExecutionGuard>();
@@ -208,6 +220,7 @@ export class CloneRuntime {
     this.#memorySource = options.memorySource;
     this.#failureCatalog = options.failureCatalog ?? BUILT_IN_CATALOG;
     this.#knownAgentIds = options.knownAgentIds;
+    this.#ownerDecisionNotifier = options.ownerDecisionNotifier;
     this.#capacityGate = options.capacityGate ?? new CapacityGate();
     this.#workspacePath = options.workspacePath === undefined ? undefined : resolve(options.workspacePath);
     this.#workspaceLockFile = options.workspaceLockFile === undefined ? undefined : resolve(options.workspaceLockFile);
@@ -521,6 +534,22 @@ export class CloneRuntime {
     return this.withExecutionGuard(runId, guard, () => this.executeOwned(runId, agents));
   }
 
+  /**
+   * Fire-and-forget owner notice. A notification is not authority: a failing
+   * notifier must never change the run's outcome.
+   * 即发即忘的所有者通知。通知不是权限：失败的通知器绝不能改变 Run 的结果。
+   */
+  #notifyOwnerDecision(notice: OwnerDecisionNotice, key: string): void {
+    if (this.#decisionNotices.has(key)) return;
+    this.#decisionNotices.add(key);
+    try {
+      this.#ownerDecisionNotifier?.(notice);
+    } catch {
+      // A notification is a courtesy, not part of the execution contract.
+      // 通知是礼貌，不是执行契约的一部分。
+    }
+  }
+
   private async executeOwned(runId: string, agents: AgentRegistry): Promise<DispatchResult> {
     await this.hydrate();
     let run = this.requireRun(runId);
@@ -545,6 +574,10 @@ export class CloneRuntime {
         return { run: this.requireRun(run.id), status: "failed" };
       }
       if (decision.outcome === "approval_required") {
+        this.#notifyOwnerDecision(
+          { kind: "approval", title: task.title, detail: `${step.title}：${decision.reason}` },
+          `${run.id}:${step.id}:approval`,
+        );
         await this.changeStatus(run.id, "waiting_approval", step.id);
         return { run: this.requireRun(run.id), status: "waiting_approval" };
       }
@@ -611,6 +644,12 @@ export class CloneRuntime {
       evidence: this.#state.evidenceByRun[run.id] ?? [],
     });
     const status: RunStatus = verification.needsReview ? "waiting_review" : verification.passed ? "completed" : "failed";
+    if (status === "waiting_review") {
+      this.#notifyOwnerDecision(
+        { kind: "review", title: task.title, detail: verification.summary.slice(0, 240) },
+        `${run.id}:verification:review`,
+      );
+    }
     const evidence = this.#state.evidenceByRun[run.id] ?? [];
     await this.recordBatch([
       { type: "verification.completed", taskId: task.id, runId: run.id, payload: verification },

@@ -31,6 +31,49 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-24 — Child agents run automatically, and the desktop notifies the owner when a decision is needed
+
+- **Goal / hypothesis:** remove the false 默认禁止 label from the 子 Agent 边界
+  card (the native worker already runs automatically) and close the gap between
+  a run stopping for a decision and the owner not looking at the window: the
+  daemon should post a macOS notification, once, when `waiting_approval` or
+  `waiting_review` begins.
+- **Trade-off:** [Child agents run automatically; the desktop tells the owner only when a decision is needed](../architecture/trade-offs.md#2026-11-24--child-agents-run-automatically-the-desktop-tells-the-owner-only-when-a-decision-is-needed).
+- **Change:** `src/core/contracts.ts` — `OwnerDecisionNotice`/`OwnerDecisionNotifier`;
+  `src/core/runtime.ts` — an optional notifier, a per-run/step/kind dedupe key,
+  and calls at the approval, subagent-review and final-verification transitions,
+  with a throwing notifier swallowed; `src/core/runtime-factory.ts`,
+  `src/application/run-query.ts` and `src/companion-server.ts` — thread the
+  notifier through the daemon assembly, the scheduler and `/api/requests`;
+  new `src/application/owner-notifier.ts` — `osascript` argv-only script, bounded
+  one-line body, macOS only, all failures ignored;
+  `apps/desktop/ui/index.html` and `src/desktop/ui-locale.ts` — the child
+  boundary card says it runs automatically and notifies when needed; the
+  external-action card value follows the level.
+- **Eval:** new `test/owner-notifier.test.ts` **3/3** (argv-only AppleScript,
+  bounded body, non-macOS/no throwing executor); `test/authority.test.ts` gains
+  a runtime case that injects a throwing notifier and still gets
+  `waiting_approval`, then a review runtime that receives a `review` notice;
+  `npm test` **1103/1103**, `npm run typecheck` exit 0, `npm run gate` **PASS**
+  (policy 30 cases unchanged — this change does not touch the policy engine).
+- **Benchmark run:** none; this is a deterministic contract change with no
+  provider call, so the gate's policy/verdict suites remain the relevant eval.
+- **Execution chain:** implemented directly. The first wiring put the notifier
+  only on the setup-scope assembly; typecheck caught that `/api/requests`
+  builds its own assembly through a request context, so the notifier had to be
+  added to the context type and object. No test failures.
+- **Pros:** the settings page no longer states a gate that does not exist; the
+  notification covers approvals and reviews from interactive, dispatched and
+  scheduled runs (both runQuery call sites pass it); dedupe and swallowed
+  failures keep it from affecting execution.
+- **Cons / next time:** macOS only; `osascript` notifications may need a
+  permission grant and have no click action; a sleeping machine loses the
+  transient notice while the run stays waiting. A future channel (native
+  `UNUserNotificationCenter`, phone) should use the same Runtime hook.
+- **Reversal condition:** copied from the trade-off — if notifications are
+  blocked or missed, move to the Swift shell's `UNUserNotificationCenter` or
+  add a channel setting; if noisy, add quiet hours instead of removing the hook.
+
 ### 2026-11-24 — Owner-confirmed MCP install: probe, show, then write mcp.json
 
 - **Goal / hypothesis:** an owner who is missing a tool should be able to

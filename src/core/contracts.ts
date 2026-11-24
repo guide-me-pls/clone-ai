@@ -204,6 +204,18 @@ export interface ApprovalGrant {
   note?: string;
 }
 
+/** One owner-facing notice: the Kernel has stopped and needs a decision. 一条面向所有者的通知：Kernel 已停下，需要决定。 */
+export interface OwnerDecisionNotice {
+  kind: "approval" | "review";
+  /** Task title, so a notification is answerable without opening the app. 任务标题，使通知无需打开 App 就能回答。 */
+  title: string;
+  /** Step title and reason. 步骤标题与原因。 */
+  detail: string;
+}
+
+/** Fire-and-forget owner notification; errors are swallowed by the Kernel. 即发即忘的所有者通知；错误由 Kernel 吞掉。 */
+export type OwnerDecisionNotifier = (notice: OwnerDecisionNotice) => void;
+
 export interface Evidence {
   id: string;
   runId: string;

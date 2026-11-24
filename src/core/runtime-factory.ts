@@ -2,7 +2,7 @@ import { join } from "node:path";
 
 import { resolveClonePaths, prepareCloneHome, type ClonePathOptions, type ClonePaths } from "../config/clone-home.ts";
 import { loadOutcomeCatalog, type OutcomeCatalog } from "./failure-analysis.ts";
-import type { Evidence } from "./contracts.ts";
+import type { Evidence, OwnerDecisionNotifier } from "./contracts.ts";
 import type { JournalStore } from "./journal.ts";
 import { createJournalStore } from "./sqlite-journal.ts";
 import { AuthorityPolicyEngine } from "../authority/policy-engine.ts";
@@ -131,6 +131,13 @@ export interface RuntimeAssemblyOptions extends ClonePathOptions {
    * 绝不用于所有者的活树。
    */
   workspaceWritable?: boolean;
+  /**
+   * Owner-facing notification when a run stops for an approval or a review.
+   * Owner-facing assemblies pass the macOS notifier; tests and the repair lane
+   * leave it unset.
+   * 当 Run 因审批或复核停下时面向所有者的通知。面向所有者的组装传入 macOS 通知器；
+   * 测试与修复通道不设置。
+   */
 }
 
 export async function createRuntimeAssembly(options: RuntimeAssemblyOptions = {}): Promise<RuntimeAssembly> {
@@ -235,6 +242,7 @@ export async function createRuntimeAssembly(options: RuntimeAssemblyOptions = {}
         : new DiffFileVerifier({ workspacePath: paths.workspacePath }),
       memory,
       failureCatalog,
+      ...(options.ownerDecisionNotifier === undefined ? {} : { ownerDecisionNotifier: options.ownerDecisionNotifier }),
       // Recall comes from the governed store only: promoted memories, never raw
       // candidates. 召回只来自受治理的 Store：只有已提升的记忆，绝不包含原始候选。
       memorySource: new GovernedMemorySource(paths.dataDirectory, 4, journal),

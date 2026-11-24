@@ -11,6 +11,19 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-24 —— 子 Agent 自动执行，需要决定时桌面通知
+
+- **主张：** 「子 Agent 边界」卡片不再声称"默认禁止"；进程内的原生 Worker 按步骤风险自动
+  执行，只有决定确实属于所有者时才停下。Run 进入 `waiting_approval` 或 `waiting_review`
+  时，守护进程发一条 macOS 通知（任务标题、步骤与原因，仅以 argv 传参的 AppleScript）；
+  失败或缺失的通知器不能改变 Run 的结果。
+- **证据：** `test/owner-notifier.test.ts` **3/3**（仅 argv 的脚本、有界正文、非 macOS 与
+  抛错执行器路径）；`test/authority.test.ts` 注入会抛错的通知器仍得到 `waiting_approval`，
+  随后复核 Runtime 收到 `review` 通知；`npm test` **1103/1103**，`npm run typecheck`
+  退出码 0，`npm run gate` **PASS**（策略套件不变）。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--子-agent-自动执行真正需要决定时桌面通知所有者)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--子-agent-自动执行需要决定时桌面通知)。
+
 ## 2026-11-24 —— 设置页可以完成所有者确认的 MCP 安装
 
 - **主张：** 工具页可以从 npm 包安装一个 stdio MCP 服务器：探测包、为每个工具展示风险
