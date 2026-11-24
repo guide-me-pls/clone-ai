@@ -15,6 +15,24 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-24 — Settings shows MCP tools and skills, and each server has a load toggle
+
+- **Claim:** the desktop settings page now has a **工具与技能** tab that lists
+  every MCP server in the clone home's `mcp.json` with each declared tool and
+  risk, plus the skills under the clone-home and workspace skill roots. Each
+  server has a 加载/停用 button that rewrites only its `enabled` field, so the
+  next worker run loads or unloads it. The catalog never exposes `env`,
+  `command`, `args` or `url`; skills are read-only.
+- **Evidence:** `test/mcp-settings.test.ts` **6/6**;
+  `test/companion-config-api.test.ts` **23/23**; `test/ui-structure.test.ts`
+  **34/34**; `npm test` **1038/1038**, 0 fail; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**, baseline unchanged. On the rebuilt app, live
+  `GET /api/tools` returns `playwright` (10 tools), `agent-tools` (7) and
+  `agent-exec` (2), zero skills and only `~/.clone/skills` as the root; the
+  served HTML contains the new tab and catalog host.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--the-settings-page-lists-mcp-servers-their-tools-and-skills-with-a-load-toggle);
+  [execution chain](optimizations.md#2026-11-24--settings-lists-mcp-servers-their-tools-and-skills-with-a-load-toggle).
+
 ## 2026-11-23 — The worker can run allowlisted tests and typecheck under a sandbox
 
 - **Claim:** the native worker can now run the project's own `test`, `typecheck`,

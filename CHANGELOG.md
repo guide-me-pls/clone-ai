@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The settings page lists MCP tools and skills, and each server can be loaded
+
+The desktop settings gain a **工具与技能** tab: every MCP server in the clone home's `mcp.json` is listed with its declared tools and risks, every skill under `<clone home>/skills` and `<workspace>/.clone/skills` is listed read-only, and each server has a 加载/停用 button that rewrites only its `enabled` field for the next worker run. The catalog never returns `env`, `command`, `args` or `url`; the toggle is atomic and 0600, and preserves every other field. `GET /api/tools` and `POST /api/tools/mcp/:id/enabled` back the tab. `npm test` 1038/1038, typecheck 0, gate PASS.
+
+桌面设置新增 **工具与技能** 分区：列出 clone home 的 `mcp.json` 中每个 MCP 服务器及其已声明工具与风险；只读列出 `<clone home>/skills` 与 `<workspace>/.clone/skills` 下的技能；每个服务器都有 加载/停用 按钮，只改写它的 `enabled` 字段，供下一次 Worker 运行使用。目录从不返回 `env`、`command`、`args` 或 `url`；切换是原子的、权限 0600，并保留其他所有字段。`GET /api/tools` 与 `POST /api/tools/mcp/:id/enabled` 支撑该分区。`npm test` 1038/1038，typecheck 0，gate PASS。
+
 ### The worker can run allowlisted tests inside a sandbox
 
 The native worker gains `agent-exec`: `list_commands` and `run_command` run only the commands the owner lists in `agent-exec.json` — the installer seeds `test`, `typecheck`, `lint`, `check`, `gate` and `build` scripts, or pytest/go/cargo/mvn/gradle when detected — without a shell or model-supplied argv. On macOS every command runs under a Seatbelt profile: writes stay in the workspace, temp and package caches; network is off; protected locations and the workspace `.git` are read-only. The default timeout is 240 s (600 max), output keeps a 50 KB tail per stream, and the runner refuses unsandboxed execution unless the owner explicitly opts out. `run_command` is a write-risk tool for reversible-write steps. New docs: `docs/usage/agent-exec-mcp.md` and its Chinese pair. `npm test` 991/991, typecheck 0, gate PASS.

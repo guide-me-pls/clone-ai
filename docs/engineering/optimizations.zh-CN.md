@@ -26,6 +26,47 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-24 —— 设置页列出 MCP 服务器、工具与技能，并给每个 MCP 一个加载按钮
+
+- **目标 / 假设：** 设置页此前没有 MCP 或技能入口，所有者只能手改 `mcp.json` 来加载或卸载
+  服务器。一个基于声明的目录加逐服务器开关，应当让已安装服务器及其工具可见、让所有者逐个
+  加载或卸载，并展示 clone home 与工作区根目录下的技能，同时不暴露凭据、也不从设置请求里
+  启动服务器。
+- **取舍：** [设置页列出 MCP 服务器、工具与技能，并给每个 MCP 一个加载按钮](../architecture/trade-offs.zh-CN.md#2026-11-24--设置页列出-mcp-服务器工具与技能并给每个-mcp-一个加载按钮)。
+- **变更：** `src/mcp/mcp-catalog.ts` —— `mcp.json` 的安全投影（不含
+  `env`/`command`/`args`/`url`）、技能发现与原子 `setMcpServerEnabled`。
+  `src/companion-server.ts` —— `GET /api/tools` 与
+  `POST /api/tools/mcp/:id/enabled`。`apps/desktop/ui/index.html`、`app.js`、
+  `style.css` —— **工具与技能** 分区、服务器卡片、工具风险、技能列表与加载/停用按钮。
+  `src/desktop/ui-locale.ts` —— 两种语言的新文案。`test/mcp-settings.test.ts`（6 个用例）、
+  `test/companion-config-api.test.ts`（路由用例）与 `test/ui-structure.test.ts`（分区与渲染
+  用例）。`docs/usage/tools-settings.md` 及其中文版。
+- **Eval：** `node --experimental-strip-types --test test/mcp-settings.test.ts` —— **6/6**；
+  `test/companion-config-api.test.ts` —— **23/23**；`test/ui-structure.test.ts` ——
+  **34/34**。`npm test` —— **1038/1038**，0 失败；`npm run typecheck` 退出 0；
+  `npm run gate` **PASS**，基线不变。重建后的应用上，真实 `GET /api/tools` 返回
+  `playwright`（10 个工具）、`agent-tools`（7）、`agent-exec`（2）、0 个技能与 clone home
+  技能根；服务出的 HTML 含 `settings-tab-tools` 与 `id="tools-catalog"`。
+- **Benchmark run：** 无——确定性测试与本地 API 探测；没有 Provider、模型、数据集、切分、
+  种子或评分参数。
+- **执行链路：**（1）读设置页 markup 与渲染路径、companion 路由、`workerTools`、技能加载器与
+  语言文件；（2）写取舍条目；（3）实现目录、路由、界面、语言与样式，再写测试与文档；
+  （4）失败与重试：配置 API 的凭据正则匹配到了新 `tools-risk-*` 语言键里的 `sk-`——把键改名为
+  `tools-read`/`tools-write`/…；UI VM 测试只切了 `renderToolsCatalog`，漏掉
+  `toolsRiskLabel`——改为两者一起切；第一次真实探测发现由 Finder 启动的工作区是 `/`，于是显示
+  `/.clone/skills`——`skillRootsFor` 现在省略根工作区，并用测试钉住；全量套件还发现另一个任务
+  的未跟踪文件 `src/main-agent/workspace-ledger.ts` 有一条纯英文注释，于是补了中文翻译
+  （该文件不属于本次变更）；（5）用 `--replace --app-only` 重建 `dist/Clone AI.app`，重启
+  应用并重跑真实探测；（6）跑全量套件、typecheck 与 gate。
+- **优点：** 现有声明仍是唯一风险权威；切换保留所有不属于它的字段；真实探测在发布前抓到一个
+  真实路径 Bug；目录从不发送凭据。
+- **缺点 / 下次：** 目录是声明视图，不是服务器真实探测；`enabled` 按 clone home 而不是按
+  工作区；技能只读；安装服务器仍需要安装器。真实探测需要读取持久化的 token 文件，自动化起来
+  很别扭；给运行中的应用做一个一等测试助手会简化它。
+- **推翻条件：** 如果声明与服务器实际提供的能力漂移，增加有超时上限的“测试连接”；如果需要从
+  界面添加服务器，做经过审查的安装流程；如果技能被接进 Main Agent 回合，加技能开关；如果
+  服务器需要按工作区区分，增加工作区级配置并显示作用域。
+
 ### 2026-11-23 —— 沙箱化的 agent-exec 服务器给 Worker 一个测试回路
 
 - **目标 / 假设：** 原生 Worker 能编辑项目，却跑不了测试或类型检查；修复通道只在 Worker 停下

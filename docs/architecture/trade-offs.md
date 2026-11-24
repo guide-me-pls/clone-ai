@@ -6,6 +6,94 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-24 — The settings page lists MCP servers, their tools and skills, with a load toggle
+
+**Decision.** Add a read-only catalog API (`GET /api/tools`) and a narrow
+enable/disable endpoint (`POST /api/tools/mcp/:id/enabled`) to the local
+companion, plus a **工具与技能** settings tab. The tab shows every server in the
+clone home's `mcp.json` — id, transport, enabled state, and each declared tool
+with its risk and description — and a **加载 / 停用** button per server. It also
+shows the skills found under `<clone home>/skills` and
+`<workspace>/.clone/skills`, with unparseable skills reported separately. The
+catalog never returns `env`, `command`, `args`, or any credential; the toggle
+rewrites only the selected server's `enabled` field in `mcp.json`, atomically
+and with the existing 0600 mode, preserving every other field and server.
+
+**Why it won.** The settings page had no MCP or skill surface at all — a search
+of `apps/desktop/ui` and `companion-server.ts` for `mcp`/`skill` returns
+nothing — so the owner had to edit `mcp.json` by hand to load or unload a
+server. `workerTools` reads `mcp.json` when it builds a worker adapter
+(`src/workers/provider-catalog.ts`), so `enabled` is the real load switch and the
+next worker run sees the change; no runtime restart is needed. The declaration is
+also the authority `mcpToolSpecs` uses for risk, so showing declared tools is
+showing what the worker can actually be offered. The skill loader already
+scans `<root>/<name>/SKILL.md` (`src/skills/skill-loader.ts`) but had no UI;
+listing its result is a read-only view, not a new skill authority. The current
+clone home makes the need concrete: `playwright` (10 tools), `agent-tools`
+(7 tools) and `agent-exec` (2 tools) are installed, and every one of them is
+otherwise invisible in the app.
+
+**Alternatives rejected.**
+
+- *Spawn each server and call `tools/list` from the settings API.* Rejected: a
+  settings read would start child processes, duplicate the MCP client and its
+  gate, and let a broken server hang the page. The `mcp.json` declaration is the
+  risk authority the worker already trusts; a live probe can be a separate
+  "test connection" action later.
+- *Let the browser edit `mcp.json` itself.* Rejected: the window has no
+  filesystem access, and the write must be atomic and 0600; the sidecar owns
+  configuration writes.
+- *Return the full server entry, including `env`, `command` and `args`.*
+  Rejected: `env` may hold credentials and `args` may include tokens. The
+  catalog exposes only id, transport, enabled and the declared tool metadata.
+- *Restart the runtime after a toggle.* Rejected: `workerTools` builds the tool
+  table per run; a restart would interrupt the open conversation for no gain.
+  The UI says the change applies to the next worker run.
+- *Add install buttons for bundled or third-party servers now.* Deferred: the
+  browser installer needs a workspace and port, and third-party servers need a
+  command/args/env review. A load button controls an installed server; adding a
+  server remains an owner install action.
+- *Add skill enable/disable toggles.* Deferred: the skill loader has no
+  production `skillRoots` caller yet; wiring skills into the Main Agent turn is
+  its own change. The catalog is read-only for skills.
+- *Build a MCP marketplace.* Deferred: it needs signature/provenance and a
+  review surface for the command, args and environment a server would receive.
+
+**What was given up.** The catalog describes declarations, not live server
+health: a server whose declared tools drift from what it actually offers will
+look stale until a live-probe action exists, and the worker still only sees the
+declared tools. The load button changes the owner's `mcp.json`; the file remains
+the source of truth. Skills are listed but cannot be toggled. `enabled` is per
+clone home, so the same server list is used by every workspace; only the skill
+roots are workspace-aware. Installing a server still requires its installer or a
+hand-edited `mcp.json`.
+
+**Evidence.** The installed `mcp.json` on 2026-11-24 has `playwright` with 10
+tools, `agent-tools` with 7 and `agent-exec` with 2; `rg -i "mcp|skill"` over
+`apps/desktop/ui` and `companion-server.ts` found no settings surface.
+`workerTools` loads `mcp.json` per adapter (`provider-catalog.ts`), and
+`loadSkills` returns parsed skills and rejected files. `test/mcp-settings.test.ts`
+is **6/6**: the safe projection (no `env`/`command`/`args`), the atomic toggle
+preserving other servers and fields, invalid ids and bodies, skill discovery and
+rejected skills, and the root-workspace guard. The route test in
+`test/companion-config-api.test.ts` (`23/23`) covers the live catalog, the
+credential-blind response and the load/unload endpoint; `test/ui-structure.test.ts`
+(`34/34`) pins the tab, the panel, the `/api/tools` call and the
+`data-tool-toggle` hooks. `npm test` is **1038/1038**, `npm run typecheck` exits
+0 and `npm run gate` is **PASS** with the baseline unchanged. On the rebuilt app,
+`GET /api/tools` returned the three servers (10/7/2 tools), zero skills and the
+clone-home root; the first live probe exposed a Finder-launched workspace of
+`/`, which would have shown `/.clone/skills`; `skillRootsFor` now omits a root
+workspace, and the test asserts it.
+
+**Reversal condition.** If declared tools routinely disagree with what a server
+offers, add a timeout-bounded "test connection" action that starts the server
+through the same MCP client. If the owner needs to add servers from the UI, add a
+reviewed install flow rather than letting the model or the page supply argv. If
+skills become wired into the Main Agent turn, add a skill toggle to this tab. If
+servers must differ per workspace, add a workspace-scoped config and show the
+scope in the card.
+
 ## 2026-11-23 — A sandboxed, allowlisted command runner gives the worker a test loop
 
 **Decision.** Add a second bundled stdio MCP server, `agent-exec`, with two

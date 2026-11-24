@@ -72,6 +72,7 @@ import {
 import { CloneConfigStore } from "./config/clone-config.ts";
 import { uiStrings } from "./desktop/ui-locale.ts";
 import { readConnectorSettings, writeConnectorSettings } from "./connectors/connector-registry.ts";
+import { readToolCatalog, setMcpServerEnabled } from "./mcp/mcp-catalog.ts";
 import { compileBriefing } from "./main-agent/situation-briefing.ts";
 import { buildFallbackPlan } from "./planning/fallback-planner.ts";
 import { reconcileCommitments } from "./state/commitment-reconciler.ts";
@@ -1615,6 +1616,38 @@ async function handleRequest(
       sendJson(response, 200, { connectors: await writeConnectorSettings(context.dataDirectory, entries) });
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "Invalid connector declaration." });
+    }
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/tools") {
+    // Declarations only. The projection drops env, command, args and url, so a
+    // credential in mcp.json cannot reach the settings page.
+    // 只返回声明。投影会丢弃 env、command、args 与 url，因此 mcp.json 里的凭据到不了设置页。
+    try {
+      sendJson(response, 200, await readToolCatalog(context.dataDirectory, context.workspacePath));
+    } catch (error: unknown) {
+      sendJson(response, 500, { error: error instanceof Error ? error.message : "Could not read the MCP catalog." });
+    }
+    return;
+  }
+
+  const mcpToggleMatch = url.pathname.match(/^\/api\/tools\/mcp\/([^/]+)\/enabled$/);
+  if (request.method === "POST" && mcpToggleMatch !== null) {
+    const body = await readJsonBody(request);
+    if (typeof body.enabled !== "boolean") {
+      sendJson(response, 400, { error: "enabled must be a boolean." });
+      return;
+    }
+    try {
+      sendJson(response, 200, await setMcpServerEnabled(
+        context.dataDirectory,
+        context.workspacePath,
+        decodeURIComponent(mcpToggleMatch[1]!),
+        body.enabled,
+      ));
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not update the MCP server." });
     }
     return;
   }

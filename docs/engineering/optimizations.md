@@ -31,6 +31,62 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-24 — Settings lists MCP servers, their tools and skills, with a load toggle
+
+- **Goal / hypothesis:** the settings page had no MCP or skill surface, so the
+  owner had to hand-edit `mcp.json` to load or unload a server. A declaration-
+  based catalog plus a per-server toggle should make the installed servers and
+  their tools visible, let the owner load or unload each one, and show the
+  skills under the clone home and workspace roots without exposing credentials
+  or starting a server from the settings request.
+- **Trade-off:** [The settings page lists MCP servers, their tools and skills, with a load toggle](../architecture/trade-offs.md#2026-11-24--the-settings-page-lists-mcp-servers-their-tools-and-skills-with-a-load-toggle).
+- **Change:** `src/mcp/mcp-catalog.ts` — safe projection of `mcp.json` (no
+  `env`/`command`/`args`/`url`), skill discovery and the atomic
+  `setMcpServerEnabled`. `src/companion-server.ts` — `GET /api/tools` and
+  `POST /api/tools/mcp/:id/enabled`. `apps/desktop/ui/index.html`,
+  `app.js`, `style.css` — the **工具与技能** tab, server cards, tool risks,
+  skill list and load/unload buttons. `src/desktop/ui-locale.ts` — the new
+  strings in both locales. `test/mcp-settings.test.ts` (6 cases),
+  `test/companion-config-api.test.ts` (the route case) and
+  `test/ui-structure.test.ts` (the tab and render case). `docs/usage/tools-settings.md`
+  and its zh-CN pair.
+- **Eval:** `node --experimental-strip-types --test test/mcp-settings.test.ts`
+  — **6/6**; `test/companion-config-api.test.ts` — **23/23**;
+  `test/ui-structure.test.ts` — **34/34**. `npm test` — **1038/1038**, 0 fail;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline unchanged. The
+  rebuilt app's live `GET /api/tools` returned `playwright` (10 tools),
+  `agent-tools` (7), `agent-exec` (2), zero skills and the clone-home skills
+  root; the served HTML contains `settings-tab-tools` and `id="tools-catalog"`.
+- **Benchmark run:** none — deterministic tests and a local API probe; no
+  provider, model, dataset, split, seed or scoring parameter.
+- **Execution chain:** (1) read the settings markup and render path, the
+  companion routes, `workerTools`, the skill loader and the locale file;
+  (2) wrote the trade-off; (3) implemented the catalog, routes, UI, locale and
+  styles, then the tests and docs; (4) failures and retries: the config API's
+  credential regex matched `sk-` inside the new `tools-risk-*` locale keys —
+  renamed the keys to `tools-read`/`tools-write`/…; the UI VM test sliced only
+  `renderToolsCatalog` and missed `toolsRiskLabel` — sliced both; the first live
+  probe reported a Finder-launched workspace of `/` and therefore
+  `/.clone/skills` — `skillRootsFor` now omits a root workspace and a test pins
+  it; the full suite also flagged an English-only comment in an untracked
+  `src/main-agent/workspace-ledger.ts` from another task, so a Chinese
+  translation was added there (that file is not part of this change);
+  (5) rebuilt `dist/Clone AI.app` with `--replace --app-only`, restarted the app
+  and re-ran the live probe; (6) ran the full suite, typecheck and gate.
+- **Pros:** the existing declaration remains the single risk authority; the
+  toggle preserves every field it does not own; the live probe caught a real
+  path bug before the feature shipped; the catalog never sends credentials.
+- **Cons / next time:** the catalog is a declaration view, not a live server
+  probe; `enabled` is per clone home, not per workspace; skills are read-only;
+  installing a server still needs its installer. The live probe needs the
+  persisted token file, which is awkward to automate; a first-class test helper
+  for the running app would simplify it.
+- **Reversal condition:** if declarations drift from what a server offers, add
+  a timeout-bounded "test connection"; if servers need to be added from the UI,
+  add a reviewed install flow; if skills become wired into the Main Agent turn,
+  add a skill toggle; if servers must differ per workspace, add a workspace-
+  scoped config and show the scope.
+
 ### 2026-11-23 — A sandboxed agent-exec server gives the worker a test loop
 
 - **Goal / hypothesis:** the native worker can edit a project but cannot run

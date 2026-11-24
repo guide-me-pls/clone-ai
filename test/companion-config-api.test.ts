@@ -344,6 +344,55 @@ test("the owner can change the locale, but there is no workspace setting", async
   assert.equal(empty.status, 400);
 });
 
+test("the tools catalog is credential-blind and the owner can load and unload a server", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  await writeFile(join(dataDirectory, "mcp.json"), JSON.stringify({
+    servers: [{
+      id: "alpha",
+      enabled: true,
+      command: "node",
+      args: ["--token", "x"],
+      env: { SECRET_TOKEN: "sk-live" },
+      tools: [{ name: "read", risk: "read", description: "Read a thing." }],
+    }],
+  }, null, 2), "utf8");
+
+  const listed = await companionFetch(url, token, "/api/tools");
+  assert.equal(listed.status, 200);
+  const catalog = await listed.json() as {
+    servers: Array<{ id: string; enabled: boolean; tools: Array<{ name: string; risk: string }> }>;
+    skills: unknown[];
+  };
+  assert.deepEqual(catalog.servers.map((server) => [server.id, server.enabled, server.tools.length]), [["alpha", true, 1]]);
+  assert.equal(JSON.stringify(catalog).includes("sk-live"), false);
+  assert.equal(JSON.stringify(catalog).includes('"command"'), false);
+  assert.equal(JSON.stringify(catalog).includes('"args"'), false);
+  assert.equal(JSON.stringify(catalog).includes('"env"'), false);
+
+  const toggled = await companionFetch(url, token, "/api/tools/mcp/alpha/enabled", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled: false }),
+  });
+  assert.equal(toggled.status, 200);
+  const after = await toggled.json() as { servers: Array<{ id: string; enabled: boolean }> };
+  assert.equal(after.servers[0]?.enabled, false);
+
+  const badBody = await companionFetch(url, token, "/api/tools/mcp/alpha/enabled", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled: "yes" }),
+  });
+  assert.equal(badBody.status, 400);
+
+  const unknown = await companionFetch(url, token, "/api/tools/mcp/nope/enabled", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal(unknown.status, 400);
+});
+
 test("the owner can persist an endpoint, and the key is never read back", async (t) => {
   const { url, token } = await companion(t);
 

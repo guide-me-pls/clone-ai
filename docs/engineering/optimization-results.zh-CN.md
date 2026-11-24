@@ -11,6 +11,21 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-24 —— 设置页展示 MCP 工具与技能，每个服务器都有加载按钮
+
+- **主张：** 桌面设置页现在有 **工具与技能** 分区，列出 clone home 的 `mcp.json` 中每个
+  MCP 服务器、每个已声明工具及其风险，以及 clone home 与工作区技能根目录下的技能。每个
+  服务器都有 加载/停用 按钮，只改写它的 `enabled` 字段，下一次 Worker 运行就会加载或卸载它。
+  目录从不暴露 `env`、`command`、`args` 或 `url`；技能只读。
+- **证据：** `test/mcp-settings.test.ts` **6/6**；
+  `test/companion-config-api.test.ts` **23/23**；`test/ui-structure.test.ts` **34/34**；
+  `npm test` **1038/1038**，0 失败；`npm run typecheck` 退出 0；`npm run gate` **PASS**，
+  基线不变。在重建后的应用上，真实 `GET /api/tools` 返回 `playwright`（10 个工具）、
+  `agent-tools`（7）与 `agent-exec`（2）、0 个技能，且根目录只有 `~/.clone/skills`；服务出的
+  HTML 含新分区与目录宿主。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--设置页列出-mcp-服务器工具与技能并给每个-mcp-一个加载按钮)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--设置页列出-mcp-服务器工具与技能并给每个-mcp-一个加载按钮)。
+
 ## 2026-11-23 —— Worker 可以在沙箱里运行允许的测试与类型检查
 
 - **主张：** 原生 Worker 现在可以运行项目自己的 `test`、`typecheck`、`lint`、`check`、`gate`

@@ -5,6 +5,67 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-24 —— 设置页列出 MCP 服务器、工具与技能，并给每个 MCP 一个加载按钮
+
+**决定。** 为本地 companion 增加一个只读目录接口（`GET /api/tools`）与一个很窄的
+启用/停用接口（`POST /api/tools/mcp/:id/enabled`），并增加 **工具与技能** 设置分区。
+分区列出 clone home 的 `mcp.json` 中每个服务器——id、传输方式、启用状态，以及每个已声明
+工具的风险与说明——并为每个服务器提供 **加载 / 停用** 按钮。它还列出
+`<clone home>/skills` 与 `<workspace>/.clone/skills` 下发现的技能，无法解析的技能单独报告。
+目录从不返回 `env`、`command`、`args` 或任何凭据；切换只原子地改写被选中服务器的 `enabled`
+字段，沿用现有的 0600 模式，保留其他字段与服务器。
+
+**为什么这样更好。** 设置页此前完全没有 MCP 或技能入口——在 `apps/desktop/ui` 与
+`companion-server.ts` 中搜索 `mcp`/`skill` 没有任何结果——所有者只能手改 `mcp.json` 来
+加载或卸载服务器。`workerTools` 在构建 Worker Adapter 时读取 `mcp.json`
+（`src/workers/provider-catalog.ts`），因此 `enabled` 就是真正的加载开关，下一次 Worker 运行
+即可看到变化，不需要重启运行时。声明也是 `mcpToolSpecs` 判定风险的权威，所以展示已声明工具
+就是展示 Worker 实际能拿到的工具。技能加载器早已扫描 `<root>/<name>/SKILL.md`
+（`src/skills/skill-loader.ts`）却没有界面；列出它的结果只是只读视图，不是新的技能权威。
+当前 clone home 让需求变得具体：`playwright`（10 个工具）、`agent-tools`（7 个）与
+`agent-exec`（2 个）都已安装，但在应用里全都不可见。
+
+**被否决的备选方案。**
+
+- *由设置接口启动每个服务器并调用 `tools/list`。* 否决：设置页的一次读取会启动子进程、复制
+  MCP 客户端及其闸门，而且一个坏服务器可以卡住页面。`mcp.json` 声明本来就是 Worker 信任的
+  风险权威；真实探测可以日后做成单独的"测试连接"动作。
+- *让浏览器直接改 `mcp.json`。* 否决：窗口没有文件系统访问，而且写入必须原子且 0600；配置
+  写入归 sidecar。
+- *返回完整服务器条目，包括 `env`、`command` 与 `args`。* 否决：`env` 可能保存凭据，`args`
+  可能含 token。目录只暴露 id、传输方式、启用状态与已声明工具元数据。
+- *切换后重启运行时。* 否决：`workerTools` 每次运行都会重建工具表；重启只会中断正在进行的
+  对话，没有收益。界面会说明变更在下一次 Worker 运行时生效。
+- *现在就为内置或第三方服务器加安装按钮。* 延后：浏览器安装器需要工作区与端口，第三方服务器
+  需要审查 command/args/env。加载按钮控制已安装的服务器；添加服务器仍是所有者的安装动作。
+- *给技能加启用/停用开关。* 延后：技能加载器还没有生产环境的 `skillRoots` 调用方；把技能接进
+  Main Agent 回合是另一项变更。目录对技能只读。
+- *做 MCP 市场。* 延后：它需要签名/来源与一个审查 command、args、环境变量的界面。
+
+**放弃了什么。** 目录描述的是声明，不是服务器实时健康：声明工具与实际提供的工具漂移时，卡片
+会显得过期，直到有真实探测动作；Worker 仍只看已声明工具。加载按钮改的是所有者的
+`mcp.json`；文件仍是事实来源。技能可以列出但不能开关。`enabled` 按 clone home 而不是按
+工作区，因此所有工作区共用同一份服务器列表；只有技能根目录与工作区相关。安装服务器仍需要
+安装器或手改 `mcp.json`。
+
+**证据。** 2026-11-24 安装的 `mcp.json` 中 `playwright` 有 10 个工具、`agent-tools` 7 个、
+`agent-exec` 2 个；`rg -i "mcp|skill"` 在 `apps/desktop/ui` 与 `companion-server.ts` 中
+没有找到设置入口。`workerTools` 按 Adapter 加载 `mcp.json`（`provider-catalog.ts`），
+`loadSkills` 返回已解析技能与被拒绝的文件。`test/mcp-settings.test.ts` **6/6**：安全投影
+（不含 `env`/`command`/`args`）、原子切换保留其他服务器与字段、非法 id 与请求体、技能发现与
+被拒绝技能，以及根工作区保护。`test/companion-config-api.test.ts` 中的路由测试（**23/23**）
+覆盖真实目录、无凭据响应与加载/停用接口；`test/ui-structure.test.ts`（**34/34**）钉住分区、
+面板、`/api/tools` 调用与 `data-tool-toggle` 钩子。`npm test` **1038/1038**，
+`npm run typecheck` 退出 0，`npm run gate` **PASS** 且基线不变。在重建后的应用上，
+`GET /api/tools` 返回三个服务器（10/7/2 个工具）、0 个技能与 clone home 根目录；第一次真实
+探测发现由 Finder 启动的工作区是 `/`，会显示 `/.clone/skills`；`skillRootsFor` 现在会省略根
+工作区，测试对此有断言。
+
+**推翻条件。** 如果声明工具经常与实际提供的工具不一致，增加一个有超时上限的"测试连接"动作，
+用同一个 MCP 客户端启动服务器。如果所有者需要在界面里添加服务器，做一条经过审查的安装流程，
+而不是让模型或页面提供 argv。如果技能被接进 Main Agent 回合，在这个分区加技能开关。如果
+服务器需要按工作区区分，增加工作区级配置并在卡片里显示作用域。
+
 ## 2026-11-23 —— 沙箱内、白名单式的命令执行器给 Worker 一个测试回路
 
 **决定。** 增加第二个随仓库发布的 stdio MCP 服务器 `agent-exec`，提供两个工具：

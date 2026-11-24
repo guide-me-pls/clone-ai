@@ -79,6 +79,7 @@
           <nav class="settings-nav" role="tablist" aria-label="设置导航" data-i18n="settings-nav" data-i18n-attr="aria-label">
             <button type="button" role="tab" id="settings-tab-audit" data-settings-section="audit" aria-selected="false" aria-current="false" aria-controls="settings-panel-audit" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16M4 12h16M4 19h11"/><path d="m17 17 2 2 3-4"/></svg><span data-i18n="nav-audit">审计与轨迹</span></button>
             <button type="button" role="tab" id="settings-tab-agents" data-settings-section="agents" aria-selected="true" aria-current="true" aria-controls="settings-panel-agents" tabindex="0" aria-current="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4.5"/></svg><span data-i18n="nav-agents">Agent</span></button>
+            <button type="button" role="tab" id="settings-tab-tools" data-settings-section="tools" aria-selected="false" aria-current="false" aria-controls="settings-panel-tools" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="7" cy="7" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="17" cy="17" r="1.5"/></svg><span data-i18n="nav-tools">工具与技能</span></button>
             <button type="button" role="tab" id="settings-tab-mobile" data-settings-section="mobile" aria-selected="false" aria-current="false" aria-controls="settings-panel-mobile" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/></svg><span>手机通道</span></button>
             <button type="button" role="tab" id="settings-tab-memory" data-settings-section="memory" aria-selected="false" aria-current="false" aria-controls="settings-panel-memory" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3h8a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4Z"/><path d="M8 9h8M8 13h5"/></svg><span data-i18n="nav-memory">记忆与数据</span></button>
             <button type="button" role="tab" id="settings-tab-context" data-settings-section="context" aria-selected="false" aria-current="false" aria-controls="settings-panel-context" tabindex="-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/><path d="M8 10h8M8 14h4"/></svg><span data-i18n="nav-context">上下文</span></button>
@@ -92,6 +93,12 @@
             </section>
             <section class="settings-panel" id="settings-panel-agents" role="tabpanel" aria-labelledby="settings-tab-agents" data-settings-panel="agents">
               <div id="agent-page" class="agent-page"></div>
+            </section>
+            <section class="settings-panel" id="settings-panel-tools" role="tabpanel" aria-labelledby="settings-tab-tools" data-settings-panel="tools" hidden>
+              <h3 data-i18n="tools-title">工具与技能</h3>
+              <p data-i18n="tools-lead">当前 MCP 服务器、每个服务器的工具，以及技能目录中发现的技能。加载/停用写入 mcp.json，下一次 Worker 运行时生效。</p>
+              <div class="memory-tool-row tools-toolbar"><span class="agent-runtime-note" id="tools-summary"></span><button class="secondary" type="button" data-tools-refresh data-i18n="tools-refresh">刷新</button></div>
+              <div class="tools-catalog" id="tools-catalog"><p class="memory-empty" data-i18n="tools-loading">正在读取 MCP 与技能…</p></div>
             </section>
             <section class="settings-panel" id="settings-panel-mobile" role="tabpanel" aria-labelledby="settings-tab-mobile" data-settings-panel="mobile" hidden>
               <h3>连接手机</h3>

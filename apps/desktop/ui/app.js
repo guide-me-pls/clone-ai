@@ -39,6 +39,8 @@ const state = {
   // 一堆失败跟进在所有者展开前显示为一行摘要；该标记跨越 3 秒刷新保留。
   opportunitiesExpanded: false,
   settings: null,
+  toolsCatalog: null,
+  toolsLoading: false,
   gateways: [],
   gatewayLoading: false,
   situation: null,
@@ -789,6 +791,81 @@ function renderGateways(gateways) {
   state.gateways = gateways;
   renderAgentPage();
   renderComposerChoice();
+}
+function toolsRiskLabel(risk) {
+  return ({
+    read: t("tools-read"),
+    write: t("tools-write"),
+    network: t("tools-network"),
+    external: t("tools-external"),
+  }[risk] || risk);
+}
+function renderToolsCatalog(catalog) {
+  state.toolsCatalog = catalog;
+  const host = $("tools-catalog");
+  if (!host) return;
+  const servers = Array.isArray(catalog?.servers) ? catalog.servers : [];
+  const skills = Array.isArray(catalog?.skills) ? catalog.skills : [];
+  const enabledCount = servers.filter((server) => server.enabled).length;
+  const summary = $("tools-summary");
+  if (summary) summary.textContent = `${t("tools-loaded")} ${enabledCount}/${servers.length} · ${skills.length} ${t("tools-skills")}`;
+  const errors = Array.isArray(catalog?.mcpErrors) && catalog.mcpErrors.length
+    ? `<div class="settings-card tool-warning"><h4>${escape(t("tools-mcp-errors"))}</h4>${catalog.mcpErrors.map((error) => `<p><code>${escape(error)}</code></p>`).join("")}</div>`
+    : "";
+  const serverCards = servers.map((server) => {
+    const tools = Array.isArray(server.tools) ? server.tools : [];
+    const status = server.enabled ? t("tools-loaded") : t("tools-not-loaded");
+    const action = server.enabled ? t("tools-unload") : t("tools-load");
+    const rows = tools.length
+      ? tools.map((tool) => `<li class="tool-row"><code>${escape(server.id)}.${escape(tool.name)}</code><span class="tool-risk tool-risk-${escape(tool.risk)}">${escape(toolsRiskLabel(tool.risk))}</span>${tool.description ? `<span class="tool-description">${escape(tool.description)}</span>` : ""}</li>`).join("")
+      : `<li class="tool-description">${escape(t("tools-empty"))}</li>`;
+    return `<div class="settings-card tool-server" data-tool-server="${escape(server.id)}">
+      <div class="tool-server-heading">
+        <div><h4>${escape(server.id)}</h4><p>${escape(server.transport)} · ${tools.length} ${escape(t("tools-tools"))} · ${escape(status)}</p></div>
+        <button class="provider-install" type="button" data-tool-toggle="${escape(server.id)}" data-tool-enabled="${server.enabled ? "false" : "true"}">${escape(action)}</button>
+      </div>
+      <details class="tool-list"${server.enabled ? " open" : ""}><summary>${escape(t("tools-tools"))} (${tools.length})</summary><ul>${rows}</ul></details>
+    </div>`;
+  }).join("");
+  const roots = (Array.isArray(catalog?.skillRoots) ? catalog.skillRoots : []).map((root) => `<code>${escape(root)}</code>`).join(" ");
+  const skillRows = skills.length
+    ? skills.map((skill) => `<div class="tool-skill"><strong>${escape(skill.name)}</strong><p>${escape(skill.description)}</p><code>${escape(skill.path)}</code></div>`).join("")
+    : `<p class="memory-empty">${escape(t("tools-no-skills"))}</p>`;
+  const rejected = Array.isArray(catalog?.rejectedSkills) && catalog.rejectedSkills.length
+    ? `<details class="tool-rejected"><summary>${escape(t("tools-rejected"))} (${catalog.rejectedSkills.length})</summary><ul>${catalog.rejectedSkills.map((entry) => `<li><code>${escape(entry.path)}</code> ${escape(entry.reason)}</li>`).join("")}</ul></details>`
+    : "";
+  const skillsCard = `<div class="settings-card tool-skills-card"><h4>${escape(t("tools-skills"))} (${skills.length})</h4><p class="agent-runtime-note">${escape(t("tools-skill-roots"))}: ${roots}</p>${skillRows}${rejected}</div>`;
+  const empty = servers.length ? "" : `<div class="settings-card"><p class="memory-empty">${escape(t("tools-empty"))}</p></div>`;
+  host.innerHTML = `${errors}${empty}${serverCards}${skillsCard}<p class="agent-runtime-note">${escape(t("tools-next-run"))}</p>`;
+}
+async function refreshToolsCatalog() {
+  if (state.toolsLoading) return;
+  state.toolsLoading = true;
+  const host = $("tools-catalog");
+  if (host && state.toolsCatalog === null) host.innerHTML = `<p class="memory-empty">${escape(t("tools-loading"))}</p>`;
+  try {
+    renderToolsCatalog(await api("/api/tools"));
+  } catch (error) {
+    if (host) host.innerHTML = `<p class="memory-empty">${escape(error.message)}</p>`;
+  } finally {
+    state.toolsLoading = false;
+  }
+}
+async function toggleMcpServer(id, enabled) {
+  const button = document.querySelector(`[data-tool-toggle="${CSS.escape(id)}"]`);
+  if (button) button.disabled = true;
+  try {
+    const catalog = await api(`/api/tools/mcp/${encodeURIComponent(id)}/enabled`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    renderToolsCatalog(catalog);
+    announce(`${enabled ? t("tools-loaded-msg") : t("tools-unloaded-msg")} ${id}`);
+  } catch (error) {
+    if (button) button.disabled = false;
+    announce(error.message, true);
+  }
 }
 function renderAgentPage() {
   const host = $("agent-page");
@@ -2949,6 +3026,7 @@ function selectSettingsSection(section, forceReset = false, options = {}) {
   }
   notifyDesktopNavigation(section === "agents" ? "agents" : section === "memory" ? "memory" : "settings");
   if (section === "agents" && !state.gatewayLoading) void refreshGateways();
+  if (section === "tools") void refreshToolsCatalog();
   if (section === "safety" && state.authority === null && !state.authorityLoading) void refreshAuthority();
 }
 function settingsTabs() { return [...document.querySelectorAll("[data-settings-section]")]; }
@@ -3001,6 +3079,14 @@ document.querySelector(".settings-nav")?.addEventListener("keydown", (event) => 
 document.querySelector(".settings-nav")?.addEventListener("click", (event) => {
   const tab = event.target.closest("[data-settings-section]");
   if (tab) tab.focus();
+});
+$("settings-panel-tools")?.addEventListener("click", (event) => {
+  const toggle = event.target.closest("[data-tool-toggle]");
+  if (toggle) {
+    void toggleMcpServer(toggle.dataset.toolToggle, toggle.dataset.toolEnabled === "true");
+    return;
+  }
+  if (event.target.closest("[data-tools-refresh]")) void refreshToolsCatalog();
 });
 document.querySelector(".settings-content")?.addEventListener("scroll", (event) => {
   const content = event.currentTarget;

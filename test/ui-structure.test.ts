@@ -65,6 +65,60 @@ test("the shell is internally consistent: ids, assets, and strings", async () =>
   assert.deepEqual(untranslated, [], `markup points at missing strings: ${untranslated.join(", ")}`);
 });
 
+test("the settings tools section lists MCP servers with load controls and skill roots", async () => {
+  const html = await read("index.html");
+  const app = await read("app.js");
+  assert.match(html, /data-settings-section="tools"/);
+  assert.match(html, /data-settings-panel="tools"/);
+  assert.match(html, /id="tools-catalog"/);
+  assert.match(html, /data-tools-refresh/);
+  assert.match(app, /\/api\/tools/);
+  assert.match(app, /data-tool-toggle/);
+  assert.match(app, /data-tool-enabled/);
+  assert.match(app, /renderToolsCatalog/);
+  assert.match(app, /refreshToolsCatalog/);
+  assert.match(app, /tools-next-run/);
+});
+
+test("renderToolsCatalog shows each server's tools and a load or unload action", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("function toolsRiskLabel");
+  const end = app.indexOf("async function refreshToolsCatalog", start);
+  assert.ok(start >= 0 && end > start, "renderToolsCatalog must exist");
+  const host = { innerHTML: "" };
+  const summary = { textContent: "" };
+  const render = runInNewContext(
+    `const state = { toolsCatalog: null };
+     ${app.slice(start, end)};
+     renderToolsCatalog`,
+    {
+      state: { toolsCatalog: null },
+      $: (id: string) => (id === "tools-catalog" ? host : id === "tools-summary" ? summary : null),
+      escape: (value: unknown) => String(value ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
+      t: (key: string) => key,
+    },
+  ) as (catalog: unknown) => void;
+  render({
+    servers: [
+      { id: "alpha", enabled: true, transport: "stdio", tools: [{ name: "read", risk: "read", description: "Read a thing." }] },
+      { id: "beta", enabled: false, transport: "stdio", tools: [] },
+    ],
+    mcpErrors: [],
+    skills: [{ name: "demo", description: "A demo skill.", path: "/skills/demo/SKILL.md" }],
+    skillRoots: ["/home/owner/.clone/skills"],
+    rejectedSkills: [],
+  });
+  assert.match(host.innerHTML, /data-tool-toggle="alpha"/);
+  assert.match(host.innerHTML, /data-tool-toggle="alpha" data-tool-enabled="false"/);
+  assert.match(host.innerHTML, /data-tool-toggle="beta" data-tool-enabled="true"/);
+  assert.match(host.innerHTML, /alpha\.read/);
+  assert.match(host.innerHTML, /Read a thing\./);
+  assert.match(host.innerHTML, /A demo skill\./);
+  assert.match(host.innerHTML, /\/home\/owner\/\.clone\/skills/);
+  assert.match(summary.textContent, /1\/2/);
+});
+
 test("the main conversation is a pinned row with a fixed name and no hide control", async () => {
   const app = await read("app.js");
   const start = app.indexOf("function sessionMarkup");
