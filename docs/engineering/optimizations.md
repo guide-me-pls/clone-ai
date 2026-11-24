@@ -326,6 +326,41 @@ file keeps every attempt, including the ones that did not work.
   Seatbelt profile, never by shrinking the root. If owners rely on union-of-grants,
   add an explicit grant marker instead of restoring `max()` aggregation.
 
+### 2026-11-24 — The UI switches to the macOS system typeface
+
+- **Goal / hypothesis:** the owner says the app's type feels odd and not as
+  crisp as Claude Code desktop. Hypothesis: the body uses Avenir Next (not the
+  system face), with synthesized intermediate weights and tight tracking on
+  Chinese headings.
+- **Trade-off:** [The UI uses the macOS system typeface, four weights and normal tracking](../architecture/trade-offs.md#2026-11-24--the-ui-uses-the-macos-system-typeface-four-weights-and-normal-tracking).
+- **Change:** `apps/desktop/ui/components.css` (both palettes) and `style.css`
+  switch the UI and display stacks from Avenir Next/Inter to
+  `-apple-system`/SF Pro with PingFang SC; `--font-mono` uses SF Mono. All
+  `font-weight` declarations collapse to 400/500/600/700, and tracking tighter
+  than -.025em is relaxed (most headings now -.01em). Body size stays 14px/1.5.
+  `test/ui-structure.test.ts` pins the family, the four weights and the tracking
+  floor.
+- **Eval:** Playwright computed styles before: `"Avenir Next", "SF Pro Text",
+  "PingFang SC", …`, 14px/21px, smoothed; after:
+  `-apple-system, "system-ui", "SF Pro Text", "PingFang SC", …`, same size and
+  line height. A 2× screenshot of the audit view before and after is the visual
+  eval (paths under `.playwright-mcp/`). `test/ui-structure.test.ts` **39/39**;
+  `npm test` **1104/1104**, `npm run typecheck` exit 0, `npm run gate` **PASS**
+  with baseline unchanged.
+- **Benchmark run:** none — typography is a UI change; the eval is the computed
+  style, the screenshot pair and the structure test.
+- **Execution chain:** one session. Read the palette variables and every
+  `font-family`/weight/tracking declaration; used Playwright to read the actual
+  computed face (Avenir Next); swapped the stacks, relaxed tracking above
+  -.03em, normalized the weights, and compared 2× screenshots. No model calls.
+- **Pros:** the UI now has the platform's native texture; Latin and Chinese share
+  one family; four weights plus size and color give a clearer hierarchy; no
+  layout, size or color changed.
+- **Cons / next time:** the brand wordmark loses Avenir's distinctiveness; system
+  font metrics vary by OS, and the Windows/Linux fallback is untested. If more
+  polish is wanted, the next pass is spacing and palette, not more font tricks.
+- **Reversal condition:** as the trade-off entry.
+
 ### 2026-11-24 — The audit reads tool calls in words, with JSON behind a toggle
 
 - **Goal / hypothesis:** the owner reported the audit's tool rows as unreadable

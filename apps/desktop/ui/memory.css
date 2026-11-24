@@ -15,7 +15,7 @@
 .mem-head::-webkit-details-marker { display: none; }
 .mem-head::before { content: "›"; color: var(--muted, #8791a1); font-size: 15px; line-height: 1; transition: transform .15s ease; display: inline-block; }
 .mem-row[open] > .mem-head::before { transform: rotate(90deg); }
-.mem-title { flex: 1; min-width: 160px; color: var(--text, #20242c); font-weight: 560; }
+.mem-title { flex: 1; min-width: 160px; color: var(--text, #20242c); font-weight: 500; }
 .mem-tags { display: inline-flex; gap: 5px; }
 .mem-badge { padding: 1px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; line-height: 18px; white-space: nowrap; }
 .mem-type { background: rgba(52, 104, 246, .11); color: #3468f6; }

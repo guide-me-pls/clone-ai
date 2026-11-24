@@ -22,6 +22,14 @@ The tools tab can now install a stdio MCP server from an npm package. "探测工
 
 工具页现在可以从 npm 包安装一个 stdio MCP 服务器。「探测工具」用 `npx --yes <package> <args>` 启动包，完成 MCP 握手并列出它暴露的工具；每个工具从 `external`（拒绝）开始，所有者为它指定读取/写入/网络，也可一键预设。「安装」会先确认、重新探测，在包暴露了请求未声明的工具时拒绝，并把一条启用条目原子写入 `mcp.json`（权限 0600），不影响其他服务器与未知字段。每个服务器有「移除」按钮，删除一条条目。所有失败都发生在写入之前，Agent 仍然装不了：`~/.clone` 仍是受保护根，exec 沙箱也会重新拒绝它。路由：`POST /api/tools/probe`、`POST /api/tools/install`、`DELETE /api/tools/mcp/:id`。定向测试：`test/mcp-installer.test.ts` 8/8、`test/tools-install-api.test.ts` 6/6。`npm test` 1103/1103，gate PASS。
 
+### The UI uses the macOS system typeface
+
+The app's body and display text now use the macOS system face (SF Pro, with PingFang SC for Chinese) instead of Avenir Next/Inter, and monospace uses SF Mono. Font weights are normalized to 400/500/600/700, heading tracking is relaxed to at most -.025em, and the 14px/1.5 body size is unchanged — removing the synthesized weights and the cramped Chinese display type. `npm test` 1104/1104, typecheck 0, gate PASS.
+
+### 界面改用 macOS 系统字体
+
+应用的正文与展示文字现在使用 macOS 系统字体（SF Pro，中文回退 PingFang SC），不再用 Avenir Next/Inter；等宽使用 SF Mono。字重归一化为 400/500/600/700，标题字距放宽到不紧于 -.025em，正文保持 14px/1.5——去掉了合成字重与被挤紧的中文展示文字。`npm test` 1104/1104，typecheck 0，gate PASS。
+
 ### A read-only request stays read-only
 
 A request that explicitly says 只读/仅读取/不要修改任何文件 is no longer sent through the LLM planner, whose contract requires a required artifact for every subagent. `runQuery` now uses the deterministic read-only plan — also when the Main Agent's brief is read-only — so the worker reads the file and answers instead of failing with "Subagent draft did not satisfy its artifact contract." The LLM planner remains for delivery requests; two planner-failure tests now use delivery queries to keep their intent. `npm test` 1103/1103, typecheck 0, gate PASS.

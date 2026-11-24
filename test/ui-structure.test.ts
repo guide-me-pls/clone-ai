@@ -55,6 +55,22 @@ test("the audit renders tool inputs as readable fields with raw JSON behind a to
   assert.match(css, /\.au-tool-fields\s*\{/);
 });
 
+test("the UI uses the macOS system typeface with a four-step weight scale", async () => {
+  const css = (await read("style.css")) + (await read("components.css")) + (await read("audit.css")) + (await read("memory.css"));
+  // Avenir's geometric Latin next to PingFang was the odd texture; the system
+  // stack is what the OS and Claude Code desktop use.
+  // Avenir 的几何拉丁与 PingFang 并排正是那种"怪"的质感；系统字体栈才是 OS 与
+  // Claude Code desktop 使用的。
+  assert.doesNotMatch(css, /Avenir Next|Inter,/);
+  assert.match(css, /--font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text"/);
+  const weights = [...css.matchAll(/font-weight:\s*(\d+)/g)].map((match) => Number(match[1]));
+  assert.deepEqual([...new Set(weights)].sort((left, right) => left - right), [400, 500, 600, 700]);
+  // Chinese display type must not be tracked tighter than the Latin headings.
+  // 中文展示文字的字距不得比拉丁标题更紧。
+  const tracking = [...css.matchAll(/letter-spacing:\s*(-\.[0-9]+)em/g)].map((match) => Number(match[1]));
+  assert.ok(tracking.every((value) => value >= -0.025), `tracking is too tight: ${Math.min(...tracking)}`);
+});
+
 test("the shell is internally consistent: ids, assets, and strings", async () => {
   const html = await read("index.html");
   const app = await read("app.js");

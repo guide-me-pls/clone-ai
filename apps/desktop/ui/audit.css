@@ -30,7 +30,7 @@
 .au-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .au-stat { padding: 12px 14px; border: 1px solid var(--line, #e3e7ee); border-radius: 12px; background: var(--surface, #fff); display: grid; gap: 2px; }
 .au-stat span { font-size: 11px; color: var(--subtle, #5c6675); }
-.au-stat strong { font-size: 24px; letter-spacing: -.03em; line-height: 1.15; }
+.au-stat strong { font-size: 24px; letter-spacing: -.01em; line-height: 1.15; }
 .au-stat small { font-size: 11px; color: var(--muted, #8791a1); }
 .au-stat-bad strong { color: var(--au-bad); } .au-stat-warn strong { color: var(--au-warn); }
 .au-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
@@ -173,7 +173,7 @@ body.empty-conversation .welcome { padding-bottom: 0; }
 
 /* Task assembly: what the model was given before it dispatched. 任务组装：模型在派发之前拿到了什么。 */
 .au-assembly { margin: 8px 0 10px; border: 1px solid var(--line, #e3e7ee); border-radius: 10px; background: var(--surface-soft, #f7f8fa); }
-.au-assembly summary { cursor: pointer; padding: 8px 11px; color: var(--subtle, #5c6675); font-size: 12px; font-weight: 640; }
+.au-assembly summary { cursor: pointer; padding: 8px 11px; color: var(--subtle, #5c6675); font-size: 12px; font-weight: 600; }
 .au-assembly-grid { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 4px 10px; margin: 0; padding: 0 11px 8px; font-size: 12px; }
 .au-assembly-grid dt { color: var(--muted, #8791a1); }
 .au-assembly-grid dd { margin: 0; color: var(--text, #20242c); overflow-wrap: anywhere; }
@@ -200,7 +200,7 @@ body.empty-conversation .welcome { padding-bottom: 0; }
 .au-turns { display: grid; gap: 14px; }
 .au-turn { display: grid; gap: 10px; }
 .au-turn-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
-.au-turn-who { color: var(--text, #20242c); font-size: 12px; font-weight: 720; letter-spacing: .02em; }
+.au-turn-who { color: var(--text, #20242c); font-size: 12px; font-weight: 700; letter-spacing: .02em; }
 .au-turn-head .au-badge { margin-left: auto; }
 .au-turn-head small { color: var(--muted, #8791a1); font-size: 11px; }
 .au-turn-exchange { display: grid; gap: 12px; margin-top: 2px; }
@@ -214,7 +214,7 @@ body.empty-conversation .welcome { padding-bottom: 0; }
   background: #f4f5f7;
 }
 .au-turn-answer { justify-self: start; width: 100%; max-width: min(92ch, 100%); }
-.au-turn-role { display: block; margin-bottom: 4px; color: var(--muted, #8791a1); font-size: 10px; font-weight: 720; letter-spacing: .1em; }
+.au-turn-role { display: block; margin-bottom: 4px; color: var(--muted, #8791a1); font-size: 10px; font-weight: 700; letter-spacing: .1em; }
 #audit-root .au-turn-query pre,
 #audit-root .au-turn-answer pre { margin: 0; padding: 0; border: 0; background: transparent; max-height: 360px; }
 #audit-root .au-turn-answer pre { padding: 9px 11px; border: 1px solid #e8eaee; border-radius: 10px; background: #fafbfc; }

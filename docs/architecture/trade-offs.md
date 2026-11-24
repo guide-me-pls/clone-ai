@@ -361,6 +361,38 @@ to both protection lists and the Seatbelt profile; do not shrink the root. If
 owners rely on union-of-grants, add an explicit grant marker instead of
 restoring `max()` aggregation. If owners report that the
 
+## 2026-11-24 — The UI uses the macOS system typeface, four weights and normal tracking
+
+**Decision.** Body and display text use `-apple-system`/SF Pro with PingFang SC
+for Chinese; monospace uses SF Mono. Font weights collapse to 400/500/600/700,
+and letter-spacing is never tighter than -.025em (most headings use -.01em).
+The 14px/1.5 body size is unchanged.
+
+**Why it won.** The computed body font was Avenir Next, not the system face.
+Avenir's geometric Latin next to PingFang's Chinese produced the uneven
+"not quite HD" texture; the UI also used about eighteen distinct weights
+(520–760) and up to -.06em tracking on Chinese headings, which synthesized
+weights and cramped the glyphs. Claude Code desktop uses the macOS system face;
+matching the platform is the highest-leverage change and touches no layout.
+The existing `-webkit-font-smoothing: antialiased` also behaves consistently
+once the family is the system font.
+
+**Alternatives rejected.**
+
+- *Keep Avenir Next for a distinctive brand.* A real display face can stay on
+  the Latin wordmark only; body text should be the system face. A geometric
+  face without Chinese forces a fallback that clashes.
+- *Bundle Inter.* A web font adds a load and still is not the native macOS
+  texture; the system face is already the reference.
+- *Keep the fine-grained weights.* Avenir has four faces; 520–760 mostly
+  synthesize or snap to the nearest face, so the hierarchy is mushy. Four steps
+  plus size and color is clearer.
+
+**Reversal condition.** If a deliberate brand display face is wanted, apply it
+only to the Latin wordmark and keep the system body; if the app ships on
+Windows or Linux, extend the fallback stack (Segoe UI, Noto Sans) and re-check
+the weight mapping.
+
 ## 2026-11-24 — Audit tool calls read as sentences and labeled fields
 
 **Decision.** The audit's Main Agent turn log and worker tool list render each

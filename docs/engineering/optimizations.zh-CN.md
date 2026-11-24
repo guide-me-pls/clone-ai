@@ -261,6 +261,31 @@
   Seatbelt profile，不要缩小受保护根。如果所有者依赖授权并集，加显式授权标记，而不是恢复
   `max()` 聚合。
 
+### 2026-11-24 —— 界面改用 macOS 系统字体
+
+- **目标 / 假设：** 所有者觉得应用的字体怪、不够清晰，不如 Claude Code desktop。假设：
+  正文用的是 Avenir Next（不是系统字体），并叠加了合成字重与中文标题的紧字距。
+- **取舍：** [界面使用 macOS 系统字体、四档字重与正常字距](../architecture/trade-offs.zh-CN.md#2026-11-24--界面使用-macos-系统字体四档字重与正常字距)。
+- **变更：** `apps/desktop/ui/components.css`（两套调色板）与 `style.css` 把界面与展示
+  字体从 Avenir Next/Inter 换成 `-apple-system`/SF Pro（中文回退 PingFang SC）；
+  `--font-mono` 使用 SF Mono。所有 `font-weight` 收敛为 400/500/600/700，紧于 -.025em
+  的字距放宽（多数标题现在 -.01em）。正文仍为 14px/1.5。`test/ui-structure.test.ts` 固定
+  字体栈、四档字重与字距下限。
+- **Eval：** Playwright 计算样式变更前：`"Avenir Next", "SF Pro Text", "PingFang SC", …`，
+  14px/21px；变更后：`-apple-system, "system-ui", "SF Pro Text", "PingFang SC", …`，字号与
+  行高不变。审计视图的 2× 前后截图是视觉 eval（路径在 `.playwright-mcp/`）。
+  `test/ui-structure.test.ts` **39/39**；`npm test` **1104/1104**，
+  `npm run typecheck` 退出码 0，`npm run gate` **PASS**，基线未变。
+- **Benchmark run：** 无——字体是 UI 变更；eval 是计算样式、前后截图与结构测试。
+- **执行链路：** 单个会话。读调色板变量与所有 `font-family`/字重/字距声明；用 Playwright
+  读取实际计算字体（Avenir Next）；替换字体栈、把紧于 -.03em 的字距放宽、归一化字重，并
+  对比 2× 截图。没有模型调用。
+- **优点：** 界面获得平台原生质感；拉丁与中文共用一套字体；四档字重加大小与颜色让层级更
+  清楚；布局、字号与颜色都没变。
+- **缺点 / 下次：** 品牌字标失去 Avenir 的独特性；系统字体度量因 OS 而异，Windows/Linux
+  回退未测试。如果需要更多打磨，下一轮是间距与调色板，而不是继续玩字体。
+- **推翻条件：** 同取舍条目。
+
 ### 2026-11-24 —— 审计把工具调用读成人话，JSON 留在一键之后
 
 - **目标 / 假设：** 所有者报告审计里的工具行是读不懂的 JSON（`dispatch_task`、
