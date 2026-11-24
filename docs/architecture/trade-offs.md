@@ -575,6 +575,64 @@ remove it and show only the raw failure plus the task-record link; if inline
 rows become noisy, collapse failed subagents into one summary card in the main
 conversation. Keep the explicit task-record link in every variant.
 
+## 2026-11-24 — The composer's model and effort are saved with the conversation, not the page origin
+
+**Decision.** The model and effort a conversation keeps are stored in
+`<clone home>/turn-choices.json`, one entry per conversation id, and served to
+the desktop on the dashboard and through `GET`/`PUT /api/main-agent/turn-choice`.
+The composer reads the daemon's entry first; browser local storage stays only as
+a cache for a new request that has no conversation id yet. The stream and query
+handlers also save the choice a turn actually ran with. Two empty fields remove
+the entry, so "follow Settings" is an absence, not an override.
+
+**Why it won.** The composer used local storage keyed by conversation id, and
+the app loads the daemon at an ephemeral `127.0.0.1:<port>` origin. Local
+storage is scoped to the origin, not the conversation id, so every daemon
+restart (a new port) silently dropped the choice. The UI already said "随对话
+保存"; the storage was page-scoped, not conversation-scoped. The daemon's clone
+home is the one store that survives a port change and is already the owner's
+data.
+
+**Alternatives rejected.**
+
+- *Pin the daemon to a fixed port.* A fixed port collides with a second runtime
+  and with whatever else the owner runs; the port was made ephemeral for that
+  reason.
+- *Store the choice in the turn ledger or the transcript.* The ledger is the
+  record of what was said and done; a picker preference is neither, and writing
+  it there would make it look like history the model should read.
+- *Use a browser cookie.* A cookie has the same origin scope as local storage.
+- *Use a Tauri/webview store.* The window navigates to the daemon's HTTP origin,
+  not the bundled asset origin, so the origin problem returns unless the app
+  stops loading from the daemon.
+- *Keep local storage only and re-pick after a restart.* That is the bug the
+  owner reported: the choice was lost when the daemon restarted.
+
+**Evidence.** `apps/desktop/ui/app.js` defined `TURN_CHOICE_STORAGE` and read
+`localStorage` keyed by conversation id; the daemon endpoint changed
+`127.0.0.1:50708` → `127.0.0.1:57575` across restarts on this machine, and the
+composer showed "默认模型 / 使用模型默认" after the restart. The new
+`src/main-agent/turn-choice-store.ts` is pinned by
+`test/turn-choice-store.test.ts` (write, partial update, clear, malformed file,
+owner-only file); `test/companion-config-api.test.ts` covers the GET/PUT route
+and clearing; `test/ui-structure.test.ts` proves the composer prefers the
+daemon's entry and falls back to local storage only when the daemon has none.
+
+**What it costs.** A new owner-data file (`turn-choices.json`, mode 0600) and a
+slightly larger dashboard session payload. Entries are capped at 500 by
+last-update time; a deleted conversation can leave a stale entry until the cap
+prunes it. A model id that later disappears from the catalog still appears as
+the "current choice" option (the existing outside-catalog behavior). The
+desktop keeps local storage as a cache, so a new request made before routing
+still has a choice.
+
+**Reversal condition.** If the app later serves its UI from a stable origin (for
+example a bundled asset origin) and no longer depends on the daemon's port,
+local storage alone is simpler; remove the server store if no other surface
+needs it. If `turn-choices.json` grows or carries deleted conversations, prune
+by the live conversation list instead of only the 500-entry cap. Keep the
+daemon store as the source of truth while the port is ephemeral.
+
 ## 2026-11-24 — A scoped reversible write under an observe-only files domain asks the owner once
 
 **Decision.** A `reversible_write` step that declares a `files` write scope and

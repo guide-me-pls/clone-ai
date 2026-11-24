@@ -57,6 +57,9 @@ const state = {
   modelOptions: [],
   modelOptionsLoaded: false,
   modelOptionsLoading: false,
+  // The model/effort saved with each conversation, as served by the daemon.
+  // 守护进程返回的、每个对话保存的模型/强度。
+  turnChoices: {},
   memories: [],
   settingsSection: "agents",
   locale: "zh-CN",
@@ -1728,6 +1731,15 @@ function activeConversationId() {
 }
 
 function readTurnChoice(conversationId) {
+  // The daemon's per-conversation record is the source of truth: localStorage
+  // is scoped to the ephemeral 127.0.0.1 port and disappears when the daemon
+  // restarts. It stays only as a cache for a request not yet bound to a chat.
+  // 守护进程的每对话记录是事实来源：localStorage 按临时 127.0.0.1 端口隔离，Daemon 重启
+  // 就会消失。它只作为尚未绑定对话的新请求的缓存。
+  const served = conversationId ? state.turnChoices[conversationId] : undefined;
+  if (served && (served.model || served.effort)) {
+    return { model: served.model || "", effort: served.effort || "" };
+  }
   try {
     const stored = JSON.parse(localStorage.getItem(`${TURN_CHOICE_STORAGE}${conversationId || "new"}`) || "{}");
     return {
@@ -1743,6 +1755,28 @@ function writeTurnChoice(conversationId, choice) {
   const key = `${TURN_CHOICE_STORAGE}${conversationId || "new"}`;
   if (!choice.model && !choice.effort) localStorage.removeItem(key);
   else localStorage.setItem(key, JSON.stringify({ model: choice.model || "", effort: choice.effort || "" }));
+  if (!conversationId) return;
+  if (choice.model || choice.effort) state.turnChoices[conversationId] = { model: choice.model || "", effort: choice.effort || "" };
+  else delete state.turnChoices[conversationId];
+  void api("/api/main-agent/turn-choice", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ conversationId, model: choice.model || "", effort: choice.effort || "" }),
+  }).catch(() => undefined);
+}
+
+/** Fill a missing choice from the daemon when a conversation is opened directly. 直接打开对话时从守护进程补齐缺失的选择。 */
+async function hydrateTurnChoice(conversationId) {
+  if (!conversationId || state.turnChoices[conversationId]) return;
+  try {
+    const result = await api(`/api/main-agent/turn-choice?conversationId=${encodeURIComponent(conversationId)}`);
+    if (result.choice && (result.choice.model || result.choice.effort)) {
+      state.turnChoices[conversationId] = result.choice;
+      renderComposerChoice();
+    }
+  } catch {
+    // The composer falls back to its local cache. 输入框回退到本地缓存。
+  }
 }
 
 /** The effort select's full option list. A saved level outside the offered groups still appears as the current choice. 强度选择器的完整选项列表；已保存但不在提供范围内的档位仍作为当前选择出现。 */
@@ -2717,7 +2751,7 @@ function dispatchSourceMarkup(session) {
   return `<div class="dispatch-source"><span>所属对话</span><button type="button" class="dispatch-source-open" data-open-conversation="${escape(parentId)}" title="${escape(parentId)}">${escape(label)}</button></div>`;
 }
 function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || !sessionHasContent(session)); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } const conversation = session.kind === "conversation"; const conversationLog = conversation ? turnLogMarkup(session) : ""; const showWelcome = conversation && conversationLog.length === 0; content.innerHTML = showWelcome ? `${decisionDock(session)}${welcomeMarkup()}` : `<div class="day-divider">${day(session.updatedAt)}</div>${dispatchSourceMarkup(session)}${decisionDock(session)}${conversation ? conversationLog : session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); revealAgentFocus(session.id); requestAnimationFrame(updateScrollBottom); }
-async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; state.newConversationId = null; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); syncComposer(); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
+async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; state.newConversationId = null; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); syncComposer(); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); void hydrateTurnChoice(activeConversationId()); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
 async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) {
   if (state.routing) return;
   // A selection is being read; its chips and the next paint matter more than a
@@ -2736,7 +2770,7 @@ async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) {
   // 慢的一次刷新不能与下一次重叠：两条刷新链会在同一主线程上重复十二个请求及其渲染。
   if (state.refreshing) return;
   state.refreshing = true;
-  const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; const selectedIsConversation = state.selectedId === MAIN_CONVERSATION_ID || (state.selectedId?.startsWith("conversation-") ?? false) || (state.selectedId?.startsWith("whatsapp:") ?? false); if (!state.composingNew && (!state.selectedId || (!sessions.some((session) => session.id === state.selectedId) && !selectedIsConversation))) state.selectedId = sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } finally { state.refreshing = false; } }
+  const epoch = state.sessionEpoch; if (preserveScroll) { rememberCurrentScroll(); rememberDisclosureScrolls(); } try { const [dashboard, schedules, settings, candidates, situation, config, connectors, library, context, opportunities, mobile] = await Promise.all([api("/api/dashboard"), api("/api/schedules"), api("/api/settings"), api("/api/memory/candidates"), api("/api/situation"), api("/api/config"), api("/api/connectors"), api("/api/memory/governed"), api("/api/context"), api("/api/opportunities"), api("/api/mobile/whatsapp")]); if (epoch !== state.sessionEpoch) return; state.dashboard = dashboard; const servedChoices = {}; for (const session of dashboard.sessions || []) { const choiceId = session.kind === "conversation" ? session.id : (session.conversationId || session.parentId); if (choiceId && session.turnChoice) servedChoices[choiceId] = session.turnChoice; } state.turnChoices = servedChoices; applyChrome(config.ui?.locale || config.config?.locale || "zh-CN", config.ui?.strings); renderSchedules(schedules.schedules || [], schedules.occurrences || [], schedules.reportDeliveries || [], schedules.reportError === true); renderSettings(settings); renderAudit(dashboard.sessions || []); renderLibrary(library); renderOpportunities(opportunities.opportunities || []); renderContext(context); renderMemoryCandidates(candidates.candidates || []); renderSituation(situation, config); renderWhatsApp(mobile.status); renderConnectors(connectors.connectors || []); if (!state.modelOptionsLoaded && !state.modelOptionsLoading) void loadModelOptions(); if (!state.gateways.length && !state.gatewayLoading) void refreshGateways(); const sessions = state.dashboard.sessions || []; const selectedIsConversation = state.selectedId === MAIN_CONVERSATION_ID || (state.selectedId?.startsWith("conversation-") ?? false) || (state.selectedId?.startsWith("whatsapp:") ?? false); if (!state.composingNew && (!state.selectedId || (!sessions.some((session) => session.id === state.selectedId) && !selectedIsConversation))) state.selectedId = sessions[0]?.id ?? null; renderSessions(sessions); if (state.composingNew) { state.selectedId = null; renderSession(null); } else if (state.selectedId) await selectSession(state.selectedId, { quiet: true, scrollToBottom, epoch }); else renderSession(null); requestAnimationFrame(() => { $("startup-screen").classList.add("ready"); document.querySelector(".app-shell").classList.add("ready"); }); } catch (error) { announce(error.message, true); const startupTip = document.querySelector("#startup-screen .startup-card span"); if (startupTip && !$("startup-screen").classList.contains("ready")) startupTip.textContent = `连接本地运行时失败：${error.message}（自动重试中…）`; } finally { state.refreshing = false; } }
 function currentStream() {
   // The stream is keyed by the conversation, not by a task record opened from
   // it, so a child task and its parent share one send slot.

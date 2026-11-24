@@ -498,6 +498,50 @@ file keeps every attempt, including the ones that did not work.
   full trace, remove the hint if it misleads, or collapse failures into a
   summary card; keep the explicit task-record link.
 
+### 2026-11-24 — The composer's model and effort follow the conversation
+
+- **Goal / hypothesis:** the owner's choice of model and effort disappeared
+  when the daemon restarted. The composer stored it in browser local storage
+  keyed by conversation id; local storage is scoped to the daemon's ephemeral
+  `127.0.0.1:<port>` origin, so a new port looked like a new page. Persisting the
+  pair in the clone home, per conversation, should survive restarts and match
+  the "随对话保存" label.
+- **Trade-off:** [The composer's model and effort are saved with the conversation, not the page origin](../architecture/trade-offs.md#2026-11-24--the-composers-model-and-effort-are-saved-with-the-conversation-not-the-page-origin).
+  *Process note:* this entry was written after the first code draft, not before
+  it as rule 1 requires. The miss is recorded here; the decision and its
+  evidence are unchanged.
+- **Change:** `src/main-agent/turn-choice-store.ts` — per-conversation
+  `{model, effort}` in `turn-choices.json` (0600, atomic, partial updates,
+  clear-on-empty, 500-entry cap). `src/companion-server.ts` — GET/PUT
+  `/api/main-agent/turn-choice`, dashboard session `turnChoice`, and persistence
+  of the choice a stream/query turn actually ran with.
+  `apps/desktop/ui/app.js` — the composer reads the daemon entry first,
+  hydrates a directly opened conversation, and keeps local storage only as the
+  new-request cache. Tests: `test/turn-choice-store.test.ts` (3),
+  `test/companion-config-api.test.ts` (route), `test/ui-structure.test.ts`
+  (server-over-local preference).
+- **Eval:** `node --experimental-strip-types --test test/turn-choice-store.test.ts test/companion-config-api.test.ts test/ui-structure.test.ts`
+  — **3/3 store, 62/62 across the three files**. `npm test` **1052/1052**, 0
+  fail; `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline unchanged.
+- **Benchmark run:** none — deterministic test-only eval.
+- **Execution chain:** one session. Traced `TURN_CHOICE_STORAGE` in `app.js`,
+  the conversation id resolution and the daemon endpoint ports; the live daemon
+  had changed ports across restarts (50708 → 57575), and the composer showed
+  the defaults. Implemented the store, routes, dashboard field and UI reads;
+  the UI VM test initially compared objects across VM contexts and failed on
+  prototype identity, so its assertions now compare fields. No workers, no
+  model calls.
+- **Pros:** the pair survives daemon restarts and is stored with the owner's
+  data; the dashboard needs no extra request; local storage still covers a new
+  request before it has an id.
+- **Cons / next time:** a deleted conversation can leave a stale entry until the
+  500-entry cap; the dashboard payload grows slightly; a model id that leaves
+  the catalog shows as the outside-catalog current option. Next time: prune by
+  the live conversation list, and write the trade-off before the code.
+- **Reversal condition:** copied from the trade-off entry — remove the server
+  store if the UI gains a stable origin; prune by live conversations if the file
+  grows; keep the daemon as the source while the port is ephemeral.
+
 ### 2026-11-24 — A scoped reversible write under observe asks the owner once
 
 - **Goal / hypothesis:** the owner asked for Claude Code auto-like write handling:

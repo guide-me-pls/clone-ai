@@ -385,6 +385,39 @@
 - **推翻条件：** 同取舍条目——为完整轨迹加抽屉、提示误导时删掉、或把失败收进摘要卡；
   任何变体都保留显式任务记录链接。
 
+### 2026-11-24 —— 输入框的模型与强度跟着对话走
+
+- **目标 / 假设：** Daemon 重启后，所有者选择的模型与强度消失。输入框把它按对话 id 存在
+  浏览器 local storage；local storage 按 Daemon 临时 `127.0.0.1:<port>` origin 隔离，
+  新端口看起来就是新页面。把这对值按对话存进 clone home，应当跨重启保留，并与"随对话
+  保存"的标签一致。
+- **取舍：** [输入框的模型与强度跟着对话走，而不是跟着页面 origin 走](../architecture/trade-offs.zh-CN.md#2026-11-24--输入框的模型与强度跟着对话走而不是跟着页面-origin-走)。
+  *过程备注：* 本条目是在第一版代码之后补写的，而不是规则 1 要求的之前。该疏漏记录在此；
+  决定与证据不变。
+- **变更：** `src/main-agent/turn-choice-store.ts` —— 每对话
+  `{model, effort}` 存于 `turn-choices.json`（0600、原子写、部分更新、空值清除、
+  500 条上限）。`src/companion-server.ts` —— GET/PUT
+  `/api/main-agent/turn-choice`、Dashboard 会话的 `turnChoice`，以及把 stream/query
+  回合实际使用的选择持久化。`apps/desktop/ui/app.js` —— 输入框优先读守护进程条目，
+  直接打开对话时补齐缺失项，local storage 只作为新请求的缓存。测试：
+  `test/turn-choice-store.test.ts`（3）、`test/companion-config-api.test.ts`（路由）、
+  `test/ui-structure.test.ts`（服务端优先于 localStorage）。
+- **Eval：** `node --experimental-strip-types --test test/turn-choice-store.test.ts test/companion-config-api.test.ts test/ui-structure.test.ts`
+  —— **store 3/3，三个文件合计 62/62**。`npm test` **1052/1052**，0 失败；
+  `npm run typecheck` 退出码 0；`npm run gate` **PASS**，基线未变。
+- **Benchmark run：** 无——确定性测试 eval。
+- **执行链路：** 单个会话。先追踪 `app.js` 的 `TURN_CHOICE_STORAGE`、对话 id 解析与
+  Daemon 端点端口；线上 Daemon 跨重启换过端口（50708 → 57575），输入框显示默认值。
+  实现存储、路由、Dashboard 字段与 UI 读取；UI VM 测试最初跨 VM 上下文比较对象，因原型
+  身份不同失败，改为逐字段断言。没有 Worker、没有模型调用。
+- **优点：** 这对值跨 Daemon 重启保留，并存在所有者数据里；Dashboard 不需要额外请求；
+  新请求在拿到对话 id 之前仍由 local storage 兜底。
+- **缺点 / 下次：** 被删除的对话可能留下过期条目直到 500 条上限；Dashboard 载荷略增；
+  离开目录的模型 id 会作为目录外当前选项出现。下次：按活跃对话列表清理，并在写代码之前
+  先写取舍条目。
+- **推翻条件：** 同取舍条目——界面获得稳定 origin 时移除服务端存储；文件变大时按活跃对话
+  清理；端口仍临时时保留守护进程作为事实来源。
+
 ### 2026-11-24 —— observe 下带 Scope 的可逆写入向所有者请求一次确认
 
 - **目标 / 假设：** 所有者要求类似 Claude Code auto 的写入处理：Worker 的模型在已声明

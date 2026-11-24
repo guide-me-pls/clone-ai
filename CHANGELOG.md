@@ -76,6 +76,14 @@ A subagent row in the main conversation now expands in place. The panel shows th
 
 主对话里的子 Agent 行现在原地展开。面板显示 Worker 记录的摘要、该工作单最多五条证据，以及确定性的「要修改什么」提示：artifact 契约未满足时提示改成只读或点名文件；执行被中断时提示先检查可能的副作用；一般失败指向证据与任务记录。点击整行不再导航离开；完整执行轨迹留在显式的「打开任务记录查看完整轨迹」链接后面，Agent 列表标题把失败项计为"需要处理"。`npm test` 1052/1052，typecheck 0，gate PASS。
 
+### The composer's model and effort are saved with the conversation
+
+The model and effort a conversation keeps are now stored in `<clone home>/turn-choices.json` (one entry per conversation id) and restored when the conversation is opened, instead of living only in the window's local storage. The window loads the daemon at an ephemeral `127.0.0.1:<port>` origin; local storage is scoped to that origin, so every daemon restart silently reset the pickers to the defaults. `GET`/`PUT /api/main-agent/turn-choice` read and write the record; the dashboard carries each conversation's choice; a stream or query turn also saves the choice it ran with. Empty model and effort remove the entry, so "follow Settings" stays an absence. Local storage remains only as a cache for a new request that has no conversation id yet. The file is owner-only (0600), atomic, capped at 500 entries. `npm test` 1052/1052, typecheck 0, gate PASS.
+
+### 输入框的模型与强度按对话保存
+
+一个对话保留的模型与强度现在存放在 `<clone home>/turn-choices.json`（每个对话 id 一条），打开该对话时恢复，而不是只存在窗口的 local storage 里。窗口从 Daemon 的临时 `127.0.0.1:<port>` origin 加载，而 local storage 按 origin 隔离，因此每次 Daemon 重启都会把选择器悄悄重置为默认值。`GET`/`PUT /api/main-agent/turn-choice` 读写这条记录；Dashboard 携带每个对话的选择；stream 或 query 回合也会保存它实际使用的选择。模型与强度都为空时删除条目，因此"跟随设置"保持为缺失。local storage 只作为尚无对话 id 的新请求的缓存。文件仅所有者可读（0600）、原子写、上限 500 条。`npm test` 1052/1052，typecheck 0，gate PASS。
+
 ### A scoped write under observe asks the owner once; auto stays automatic
 
 A `reversible_write` step that declares a `files` write scope no longer fails outright while the files domain is observe-only. The policy returns `approval_required`, the run enters `waiting_approval`, and the existing approval card lets the owner allow this exact step once or deny it; the approval is keyed to the run and step and leaves the domain observe-only for everything else. The automatic path is unchanged: set the files domain to `自动执行` (act_auto) with a covering standing policy and the worker's scoped writes proceed without a per-step confirmation. Protected locations, unscoped writes, shell/network domains and irreversible steps keep their hard gates. The regression-gate policy baseline changes one intended case (`files-write-observe-denied` becomes `files-write-observe-asks-approval` plus `files-write-observe-approved`). `npm test` 1047/1047, typecheck 0, gate PASS.

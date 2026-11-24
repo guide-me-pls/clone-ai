@@ -117,6 +117,17 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--子-agent-行在主对话里原地解释任务记录成为一个显式链接)；
   [执行链路](optimizations.zh-CN.md#2026-11-24--子-agent-行在主对话里原地解释自己)。
 
+## 2026-11-24 —— 输入框的模型与强度跨 Daemon 重启保留
+
+- **主张：** 一个对话保留的模型与强度按对话保存在 clone home，打开该对话时恢复，即使
+  Daemon 在新端口上重启。local storage 只作为尚无对话 id 的新请求的缓存。
+- **证据：** `node --experimental-strip-types --test test/turn-choice-store.test.ts test/companion-config-api.test.ts test/ui-structure.test.ts`
+  **3/3 + 62/62**；API 测试通过 Daemon 保存、读取并清除一个对话的选择；UI 测试证明
+  守护进程条目优先于过期的 local storage 值。`npm test` **1052/1052**，0 失败；
+  `npm run typecheck` 退出码 0；`npm run gate` **PASS**，基线未变。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--输入框的模型与强度跟着对话走而不是跟着页面-origin-走)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--输入框的模型与强度跟着对话走)。
+
 ## 2026-11-24 —— observe 下带 Scope 的写入现在请求一次确认，而不是直接死掉
 
 - **主张：** 当 files 域为 observe 时，一个声明了 `files` 写 Scope 的

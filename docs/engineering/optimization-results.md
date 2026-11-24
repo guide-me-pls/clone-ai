@@ -142,6 +142,20 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--a-subagent-row-explains-itself-in-the-conversation-the-task-record-is-an-explicit-link);
   [execution chain](optimizations.md#2026-11-24--a-subagent-row-explains-itself-in-the-conversation).
 
+## 2026-11-24 — The composer's model and effort survive a daemon restart
+
+- **Claim:** the model and effort a conversation keeps are stored in the clone
+  home per conversation and restored when the conversation is opened, even
+  after the daemon restarts on a new port. Local storage remains only the cache
+  for a new request that has no conversation id yet.
+- **Evidence:** `node --experimental-strip-types --test test/turn-choice-store.test.ts test/companion-config-api.test.ts test/ui-structure.test.ts`
+  **3/3 + 62/62**; the API test saves, reads and clears a conversation's choice
+  through the daemon; the UI test proves the daemon entry wins over a stale
+  local-storage value. `npm test` **1052/1052**, 0 fail; `npm run typecheck`
+  exit 0; `npm run gate` **PASS**, baseline unchanged.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--the-composers-model-and-effort-are-saved-with-the-conversation-not-the-page-origin);
+  [execution chain](optimizations.md#2026-11-24--the-composers-model-and-effort-follow-the-conversation).
+
 ## 2026-11-24 — A scoped write under observe now asks once instead of dead-ending
 
 - **Claim:** a `reversible_write` step that declares a `files` write scope under

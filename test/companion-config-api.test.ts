@@ -55,6 +55,35 @@ test("the config endpoint reports where the owner's data lives", async (t) => {
   assert.doesNotMatch(JSON.stringify(body), /sk-|api[_-]?key["']?\s*[:=]\s*["'][^"']+/i);
 });
 
+test("a conversation keeps its composer model and effort across daemon restarts", async (t) => {
+  const { url, token } = await companion(t);
+  const saved = await companionFetch(url, token, "/api/main-agent/turn-choice", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ conversationId: "conversation-test", model: "deepseek-v4.1-flash", effort: "max" }),
+  });
+  assert.equal(saved.status, 200);
+
+  // The page's local storage is scoped to the ephemeral port; this read is the
+  // record a new origin uses to restore the pickers.
+  // 页面的 local storage 按临时端口隔离；新 origin 用这条记录恢复选择器。
+  const read = await companionFetch(url, token, "/api/main-agent/turn-choice?conversationId=conversation-test");
+  assert.equal(read.status, 200);
+  const body = await read.json() as { choice: { model: string; effort: string } | null };
+  assert.deepEqual(body.choice && { model: body.choice.model, effort: body.choice.effort }, {
+    model: "deepseek-v4.1-flash",
+    effort: "max",
+  });
+
+  const cleared = await companionFetch(url, token, "/api/main-agent/turn-choice", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ conversationId: "conversation-test", model: "", effort: "" }),
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(((await cleared.json()) as { choice: unknown }).choice, null);
+});
+
 test("the model options endpoint exposes only credential-blind selectable references", async (t) => {
   const { url, token } = await companion(t);
 

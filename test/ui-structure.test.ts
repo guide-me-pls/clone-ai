@@ -1477,6 +1477,26 @@ test("a completed turn keeps its byline on the left, while a failure keeps its c
   assert.match(css, /\.log-entry-meta\s*\{[^}]*margin-left:\s*0/);
 });
 
+test("the composer prefers the daemon's per-conversation choice over local storage", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("const TURN_CHOICE_STORAGE");
+  const end = app.indexOf("function writeTurnChoice", start);
+  assert.ok(start >= 0 && end > start, "readTurnChoice must exist");
+  const readChoice = runInNewContext(
+    `${app.slice(start, end)}; readTurnChoice`,
+    {
+      state: { turnChoices: { "conversation-1": { model: "served-model", effort: "high" } } },
+      localStorage: { getItem: () => JSON.stringify({ model: "stale-model", effort: "low" }) },
+    },
+  ) as (id: string) => { model: string; effort: string };
+  const served = readChoice("conversation-1");
+  assert.equal(served.model, "served-model");
+  assert.equal(served.effort, "high");
+  const fallback = readChoice("conversation-2");
+  assert.equal(fallback.model, "stale-model", "local storage is the fallback cache");
+  assert.equal(fallback.effort, "low");
+});
+
 test("the user's bubble says who spoke by placement, not by an overline", async () => {
   const css = await read("components.css");
   assert.match(css, /\.turn-query-who\s*\{[^}]*display:\s*none/);

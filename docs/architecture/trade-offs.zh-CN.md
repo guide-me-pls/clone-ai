@@ -407,6 +407,48 @@ artifact contract."）已经在会话载荷里，证据在 Run 投影里。原�
 误导，删掉它、只显示原始失败与任务记录链接；如果原地展开变得嘈杂，把失败子 Agent 收进
 主对话的一张摘要卡。任何变体都保留显式任务记录链接。
 
+## 2026-11-24 —— 输入框的模型与强度跟着对话走，而不是跟着页面 origin 走
+
+**决定。** 一个对话保留的模型与强度保存在 `<clone home>/turn-choices.json`，每个对话 id
+一条，通过 Dashboard 与 `GET`/`PUT /api/main-agent/turn-choice` 交给桌面端。输入框优先
+读取守护进程的记录；浏览器 local storage 只作为"尚未绑定对话的新请求"的缓存。stream 与
+query 处理器也会保存这一回合实际使用的选择。两个字段都为空时删除条目，因此"跟随设置"是
+缺失，而不是空串覆盖。
+
+**为什么胜出。** 输入框过去用按对话 id 索引的 local storage，而应用从守护进程的临时
+`127.0.0.1:<port>` origin 加载。local storage 按 origin 隔离，不按对话 id 隔离，因此每次
+Daemon 重启（新端口）都会悄悄丢掉选择。界面早就写着"随对话保存"，但存储是页面级而不是
+对话级。守护进程的 clone home 是唯一能跨端口变化存活、且本来就是所有者数据的存储。
+
+**被否决的备选。**
+
+- *把 Daemon 固定到一个端口。* 固定端口会与第二个 runtime 及所有者运行的其他东西冲突；
+  端口本来就是临时分配。
+- *把选择写进回合台账或转录。* 台账记录的是说过和做过什么；选择器偏好两者都不是，写进去
+  会让它看起来像模型该读的历史。
+- *用浏览器 cookie。* cookie 与 local storage 有相同的 origin 范围。
+- *用 Tauri/WebView store。* 窗口导航到守护进程的 HTTP origin，而不是打包资源的 origin，
+  除非应用不再从守护进程加载，否则 origin 问题依旧。
+- *只保留 local storage，重启后重选。* 这正是所有者报告的 bug：Daemon 重启后选择丢了。
+
+**证据。** `apps/desktop/ui/app.js` 定义 `TURN_CHOICE_STORAGE` 并按对话 id 读
+`localStorage`；本机守护进程端点跨重启从 `127.0.0.1:50708` 变为 `127.0.0.1:57575`，
+重启后输入框显示"默认模型 / 使用模型默认"。新的
+`src/main-agent/turn-choice-store.ts` 由 `test/turn-choice-store.test.ts` 钉住（写入、
+部分更新、清除、损坏文件、仅所有者可读）；`test/companion-config-api.test.ts` 覆盖
+GET/PUT 路由与清除；`test/ui-structure.test.ts` 证明输入框优先使用守护进程条目，只有
+守护进程没有时才回退到 local storage。
+
+**代价。** 新增一份所有者数据文件（`turn-choices.json`，权限 0600）与略大的 Dashboard 会话
+载荷。条目按最后更新时间截到 500 条；被删除的对话可能留下过期条目，直到截断清理。之后从
+目录消失的模型 id 仍会作为"当前选择"选项出现（既有的目录外行为）。桌面端仍保留 local
+storage 作为缓存，因此路由前的新请求也有选择。
+
+**推翻条件。** 如果应用之后从稳定的 origin 提供界面（例如打包资源 origin），不再依赖
+守护进程端口，只留 local storage 更简单；如果没有其他界面需要，删除服务端存储。如果
+`turn-choices.json` 变大或留着已删除对话，按活跃对话列表清理，而不是只靠 500 条上限。
+在端口仍是临时的时候，保留守护进程存储作为事实来源。
+
 ## 2026-11-24 —— observe 的 files 域里，带 Scope 的可逆写入向所有者请求一次确认
 
 **决定。** 一个 `reversible_write` 步骤声明了 `files` 写 Scope，而 `files` 域仍处于

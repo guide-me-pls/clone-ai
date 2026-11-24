@@ -62,6 +62,7 @@ import { MdMemoryStore, GovernedMemorySource } from "./memory/md-memory-store.ts
 import { knownOwnerFolders } from "./main-agent/known-folders.ts";
 import { captureWorkspaceLedger } from "./main-agent/workspace-ledger.ts";
 import { WorkspaceWatcher } from "./main-agent/workspace-watch.ts";
+import { readTurnChoice, readTurnChoices, writeTurnChoice } from "./main-agent/turn-choice-store.ts";
 import type { JournalStore } from "./core/journal.ts";
 import type { CloneRuntime } from "./core/runtime.ts";
 import { logJson } from "./observability/json-log.ts";
@@ -2316,6 +2317,53 @@ async function handleRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/main-agent/turn-choice") {
+    const parsed = parseConversationId(url.searchParams.get("conversationId") ?? undefined);
+    if (!parsed.ok) {
+      sendJson(response, 400, { error: parsed.error });
+      return;
+    }
+    const choice = await readTurnChoice(context.dataDirectory, parsed.id);
+    sendJson(response, 200, { choice: choice ?? null });
+    return;
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/main-agent/turn-choice") {
+    const body = await readJsonBody(request);
+    const parsed = parseConversationId(body.conversationId);
+    if (!parsed.ok) {
+      sendJson(response, 400, { error: parsed.error });
+      return;
+    }
+    if (body.model !== undefined && typeof body.model !== "string") {
+      sendJson(response, 400, { error: "model must be a string (empty clears it)." });
+      return;
+    }
+    if (body.effort !== undefined && typeof body.effort !== "string") {
+      sendJson(response, 400, { error: "effort must be a string (empty clears it)." });
+      return;
+    }
+    const model = typeof body.model === "string" ? body.model.trim() : undefined;
+    if (model !== undefined && model.length > 200) {
+      sendJson(response, 400, { error: "model must be at most 200 characters." });
+      return;
+    }
+    let effort = typeof body.effort === "string" ? body.effort.trim() : undefined;
+    if (effort !== undefined && effort.length > 0) {
+      effort = normalizeEffort(effort);
+      if (effort === undefined) {
+        sendJson(response, 400, { error: "effort must be a name of a known level." });
+        return;
+      }
+    }
+    const choice = await writeTurnChoice(context.dataDirectory, parsed.id, {
+      ...(model === undefined ? {} : { model }),
+      ...(effort === undefined ? {} : { effort }),
+    });
+    sendJson(response, 200, { choice: choice ?? null });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/main-agent/stream") {
     const body = await readJsonBody(request);
     const overrides = parseTurnModelAndEffort(body);
@@ -2327,6 +2375,17 @@ async function handleRequest(
     if (!conversation.ok) {
       sendJson(response, 400, { error: conversation.error });
       return;
+    }
+    // A turn that actually runs with an explicit pick becomes the
+    // conversation's saved choice, even if the picker's own save call never
+    // reached the server. Absent fields keep the stored value.
+    // 真正带着显式选择运行的回合会成为该对话保存的选择，即使选择器自己的保存请求没有到达
+    // 服务端。缺省字段保留已存值。
+    if (overrides.model !== undefined || overrides.effort !== undefined) {
+      void writeTurnChoice(context.dataDirectory, conversation.id, {
+        ...(overrides.model === undefined ? {} : { model: overrides.model }),
+        ...(overrides.effort === undefined ? {} : { effort: overrides.effort }),
+      }).catch(() => undefined);
     }
     const attachments = parseAttachments(body.attachments);
     if (!attachments.ok) {
@@ -2470,6 +2529,17 @@ async function handleRequest(
     if (!conversation.ok) {
       sendJson(response, 400, { error: conversation.error });
       return;
+    }
+    // A turn that actually runs with an explicit pick becomes the
+    // conversation's saved choice, even if the picker's own save call never
+    // reached the server. Absent fields keep the stored value.
+    // 真正带着显式选择运行的回合会成为该对话保存的选择，即使选择器自己的保存请求没有到达
+    // 服务端。缺省字段保留已存值。
+    if (overrides.model !== undefined || overrides.effort !== undefined) {
+      void writeTurnChoice(context.dataDirectory, conversation.id, {
+        ...(overrides.model === undefined ? {} : { model: overrides.model }),
+        ...(overrides.effort === undefined ? {} : { effort: overrides.effort }),
+      }).catch(() => undefined);
     }
     const attachments = parseAttachments(body.attachments);
     if (!attachments.ok) {
@@ -3003,6 +3073,11 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
   // 旧版本在所有者每次接受同一张失败任务卡时都会新建 Run。把相同失败聚合起来，
   // 让侧栏显示真正需要处理的那个问题，而不是一墙副本。
   const groupedSessions = groupDuplicateFailures(allSessions);
+  // The composer's saved model/effort, read once per dashboard build. A task
+  // row inherits its conversation's choice so the row can be opened directly.
+  // 输入框保存的模型/强度，每次构建 Dashboard 读一次。任务行继承其对话的选择，使直接打开
+  // 任务记录时也能读到。
+  const turnChoices = await readTurnChoices(dataDirectory);
 
   const approvals = mainConversationApprovals(visibleRuns, tasks);
   const active = visibleRuns
@@ -3055,7 +3130,14 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
     subagents,
     completed,
     memories,
-    sessions: capSessionRows(groupedSessions, 40).map(({ updatedAtMs: _updatedAtMs, duplicateCount: _duplicateCount, ...summary }) => summary),
+    sessions: capSessionRows(groupedSessions, 40).map(({ updatedAtMs: _updatedAtMs, duplicateCount: _duplicateCount, ...summary }) => {
+      const choiceId = summary.kind === "conversation" ? summary.id : summary.conversationId ?? summary.parentId;
+      const choice = choiceId === undefined ? undefined : turnChoices[choiceId];
+      return {
+        ...summary,
+        ...(choice === undefined ? {} : { turnChoice: { model: choice.model, effort: choice.effort } }),
+      };
+    }),
     deletedConversations: (await sessions.deletedConversations())
       .map((entry) => {
         const latest = turns
@@ -4533,6 +4615,8 @@ interface SessionSummary {
   /** On the conversation: how many task runs belong to it. 对话上：属于它的任务数。 */
   childCount?: number;
   kind?: "conversation";
+  /** The model and effort the composer kept for this conversation. 输入框为该对话保留的模型与强度。 */
+  turnChoice?: { model: string; effort: string };
 }
 
 interface ConversationMessage {
