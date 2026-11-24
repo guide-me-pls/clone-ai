@@ -361,6 +361,129 @@ to both protection lists and the Seatbelt profile; do not shrink the root. If
 owners rely on union-of-grants, add an explicit grant marker instead of
 restoring `max()` aggregation. If owners report that the
 
+## 2026-11-24 — An artifact-contract gap asks a model judge, then the owner, instead of failing
+
+**Decision.** When a completed subagent has recorded observation evidence but
+not every required artifact, the runtime asks a bounded artifact judge — one
+short prompt to the configured Main Agent endpoint, capped at 1,024 output
+tokens with minimal reasoning and a 20 s timeout — whether the evidence or the
+completion summary satisfies
+the work order. `ACCEPT` records the verification as passed with the missing
+artifact noted and the run continues. `REVIEW`, an unparsable answer, or an
+unreachable endpoint records the verification as `needsReview`, settles the run
+as `waiting_review`, and shows the accept/reject pair in the main conversation's
+subagent row (and the task record). A work order with no evidence at all still
+fails — there is no answer to review. Protected paths and unscoped writes remain
+the policy engine's decision, never the judge's.
+
+**Why it won.** The owner reported the same dead end three times: "准备交付物"
+completes with a read-only answer, the artifact contract rejects it, and the
+task ends as a failed card with no accept, reject, or retry. A phrase list
+("只读", "不要修改") is brittle and was the previous lane's approach; a model
+judge reads the actual request and evidence. The owner explicitly said
+observation evidence and written files are both acceptable, and that a human
+must be able to continue when the judge cannot decide. `waiting_review` is the
+existing mechanism; the changes are who may enter it and where the buttons
+appear.
+
+**Alternatives rejected.**
+
+- *Keep the hard failure and make the owner rewrite the request.* This is the
+  behavior the owner rejected; it discards a completed answer.
+- *Always accept observation evidence.* A genuine write request could then
+  silently skip its deliverable.
+- *A separate judge model setting now.* The configured endpoint already runs a
+  small model; a one-word prompt and a 1,024-token cap keep the cost bounded. Add a
+  setting only if owners want to tune the judge independently.
+- *Detect read-only intent with phrases.* The previous lane's approach; wording
+  varies and a genuine write can contain "read" too.
+
+**Reversal condition.** If a real run records a false accept for a missing
+artifact of kind `artifact`, tighten the prompt or route every `artifact` gap to
+the owner; if the judge adds more than ~5 s per work order or is unreachable in
+most runs, drop it and default to review.
+
+## 2026-11-24 — A work-order review is decided in the main conversation
+
+**Decision.** When a subagent's artifact contract needs review, the main
+conversation's subagent row carries the summary, the missing criteria,
+"继续（接受观察证据）" and "判为失败". Accept settles the run as completed, reject
+as failed, through the existing review API. The task record keeps its copy of
+the review, and the full trace link now says it opens a read-only audit.
+
+**Why it won.** The owner said "在这里由人工确认继续执行" while looking at the
+main conversation, and previously reported that clicking through to the task
+record did not explain what the page was for. The decision belongs where the
+failure is visible; the task record stays the durable copy.
+
+**Alternatives rejected.**
+
+- *Only the task record may decide.* It forces a navigation the owner does not
+  understand; the previous behavior is what produced this report.
+- *No inline decision, only a link.* The link alone was reported as unclear and
+  leaves the run dead in the owner's view.
+
+**Reversal condition.** If the two decision surfaces drift or owners report
+duplicate or conflicting buttons, centralize again and make the row link the
+only path.
+
+## 2026-11-24 — A subagent row explains itself in the conversation; the task record is an explicit link
+
+**Decision.** In the main conversation, a subagent row expands in place
+(`<details>`) and no longer navigates to the run's task record when clicked. The
+panel shows the worker's summary, up to five evidence rows for that work order,
+and a deterministic "what to change" hint derived from the recorded failure
+(an unsatisfied artifact contract → make the request read-only or name the exact
+file; an interrupted/replay-unsafe run → inspect possible side effects; a
+generic failure → open the evidence or task record, supply the missing input or
+narrow the scope). A separate "打开任务记录查看完整轨迹" button keeps the old
+navigation for the full 21-row trace. The agent-list header counts failed
+subagents as "需要处理".
+
+**Why it won.** The owner clicked "准备交付产物" in the main conversation and was
+taken to an unrelated-looking task record; the conversation lost its place and
+the row did not say what to fix. The summary needed for the hint
+("Subagent draft did not satisfy its artifact contract.") is already in the
+session payload, and the evidence is in the run projection. Explaining in place
+keeps the request, the answer, the failure and the next action in one view.
+
+**Alternatives rejected.**
+
+- *A separate sidebar session per subagent.* It would duplicate the run's task
+  record, split one audited run into two places, and still make the owner
+  navigate. If a full per-subagent workspace is needed later, add a drawer fed
+  by the task record rather than a second session.
+- *Keep navigating to the task record.* That is the reported failure: the
+  conversation is lost and the fix is not stated.
+- *Put the full execution trace inline.* Twenty-one rows per subagent would
+  flood the conversation; the explicit task-record link keeps the trace one
+  click away.
+- *Let a model write the hint.* A deterministic mapping from the recorded
+  failure is auditable, free, and cannot invent a cause. The raw summary stays
+  visible above the hint.
+
+**Evidence.** `apps/desktop/ui/app.js` `agentsMarkup` rendered every openable
+row as `<button data-open-agent-run>` and the click handler called
+`selectSession(runId)`; the comment in the same function says a subagent is a
+work order inside its run, not a session. The screenshot shows the jump and the
+generic "需要处理" row. The session payload already carries each subagent's
+`title`, `status`, `agentId` and `summary`; `state.evidenceByRun` carries the
+run's evidence with `workOrderId`/`stepId`. The new UI test pins the details
+markup, the hint text, and the absence of `agent-row--open`; the evidence
+mapping is covered by typecheck and the existing session-view tests.
+
+**What it costs.** The row is taller when expanded, and the evidence list is
+capped at five; the hint is a mapping for known failure shapes and ends with a
+generic fallback, not a diagnosis. The full trace still requires the explicit
+task-record link. The `agentFocus` scroll behavior now belongs to that link, not
+the row.
+
+**Reversal condition.** If owners need the full trace without leaving the
+conversation, add a drawer that loads the task record; if the hint misleads,
+remove it and show only the raw failure plus the task-record link; if inline
+rows become noisy, collapse failed subagents into one summary card in the main
+conversation. Keep the explicit task-record link in every variant.
+
 ## 2026-11-24 — A scoped reversible write under an observe-only files domain asks the owner once
 
 **Decision.** A `reversible_write` step that declares a `files` write scope and

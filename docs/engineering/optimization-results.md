@@ -112,6 +112,21 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--automatic-execution-is-the-default-and-act_auto-means-the-model-judges);
   [execution chain](optimizations.md#2026-11-24--automatic-execution-is-the-default-judged-by-the-model).
 
+## 2026-11-24 — A failed subagent explains itself where the owner asked
+
+- **Claim:** a subagent row in the main conversation expands in place with its
+  recorded summary, up to five evidence rows, and a deterministic "what to
+  change" hint; it no longer navigates to the task record by default. The full
+  execution trace stays behind an explicit "打开任务记录查看完整轨迹" link, and the
+  agent-list header counts failed subagents as "需要处理".
+- **Evidence:** `node --experimental-strip-types --test test/ui-structure.test.ts`
+  **35/35**, including the rewritten subagent test (details markup, artifact
+  hint, evidence, explicit link, no `agent-row--open` / row button).
+  `npm test` **1052/1052**, 0 fail; `npm run typecheck` exit 0; `npm run gate`
+  **PASS**, baseline unchanged.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--a-subagent-row-explains-itself-in-the-conversation-the-task-record-is-an-explicit-link);
+  [execution chain](optimizations.md#2026-11-24--a-subagent-row-explains-itself-in-the-conversation).
+
 ## 2026-11-24 — A scoped write under observe now asks once instead of dead-ending
 
 - **Claim:** a `reversible_write` step that declares a `files` write scope under

@@ -20,6 +20,9 @@ import { GovernedMemorySource } from "../memory/md-memory-store.ts";
 import { WorkerSettingsStore } from "../config/worker-settings.ts";
 import { CloneConfigStore } from "../config/clone-config.ts";
 import { CapacityGate, sampleCapacity } from "./capacity.ts";
+import { judgeArtifactContract } from "./artifact-judge.ts";
+import { completeWithNativeEndpoint } from "../memory/synthesized-recall.ts";
+import { readPersistedMainAgentEndpoint } from "../main-agent/native-runtime.ts";
 
 /**
  * One measured worker budget per clone home, shared by every assembly built
@@ -243,6 +246,18 @@ export async function createRuntimeAssembly(options: RuntimeAssemblyOptions = {}
       memory,
       failureCatalog,
       ...(options.ownerDecisionNotifier === undefined ? {} : { ownerDecisionNotifier: options.ownerDecisionNotifier }),
+      // A one-word judge, capped so it cannot spend the run's budget: when the
+      // evidence does not literally satisfy a work order, it decides whether
+      // the owner is needed instead of failing the run outright. The endpoint
+      // is read from Settings on each call, so a Finder-launched daemon and a
+      // settings change both reach the provider the Main Agent uses.
+      // 一次单词裁判，带上限，因此花不掉 Run 的预算：当证据没有字面满足工作单时，它决定
+      // 是否需要所有者，而不是直接让 Run 失败。端点每次调用都从设置读取，使 Finder 启动的
+      // Daemon 与设置变更都能到达主 Agent 使用的 Provider。
+      artifactJudge: async (input) => {
+        const fallback = await readPersistedMainAgentEndpoint(paths.dataDirectory);
+        return judgeArtifactContract(input, (prompt) => completeWithNativeEndpoint(prompt, { maxTokens: 1024, timeoutMs: 20_000, effort: "minimal", fallback }));
+      },
       // Recall comes from the governed store only: promoted memories, never raw
       // candidates. 召回只来自受治理的 Store：只有已提升的记忆，绝不包含原始候选。
       memorySource: new GovernedMemorySource(paths.dataDirectory, 4, journal),

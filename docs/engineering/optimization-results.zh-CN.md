@@ -92,6 +92,18 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--自动执行成为默认档位自动执行意味着模型判断)；
   [执行链路](optimizations.zh-CN.md#2026-11-24--自动执行成为默认由模型判断)。
 
+## 2026-11-24 —— 失败的子 Agent 在所有者提问的地方解释自己
+
+- **主张：** 主对话里的子 Agent 行原地展开，显示记录的摘要、最多五条证据，以及确定性的
+  "要修改什么"提示；默认不再跳转到任务记录。完整执行轨迹留在显式的
+  「打开任务记录查看完整轨迹」链接后面，Agent 列表标题把失败项计为"需要处理"。
+- **证据：** `node --experimental-strip-types --test test/ui-structure.test.ts`
+  **35/35**，包含重写的子 Agent 测试（details 结构、artifact 提示、证据、显式链接、
+  无 `agent-row--open`/整行按钮）。`npm test` **1052/1052**，0 失败；
+  `npm run typecheck` 退出码 0；`npm run gate` **PASS**，基线未变。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--子-agent-行在主对话里原地解释任务记录成为一个显式链接)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--子-agent-行在主对话里原地解释自己)。
+
 ## 2026-11-24 —— observe 下带 Scope 的写入现在请求一次确认，而不是直接死掉
 
 - **主张：** 当 files 域为 observe 时，一个声明了 `files` 写 Scope 的

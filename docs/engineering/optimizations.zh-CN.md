@@ -261,6 +261,74 @@
   Seatbelt profile，不要缩小受保护根。如果所有者依赖授权并集，加显式授权标记，而不是恢复
   `max()` 聚合。
 
+### 2026-11-24 —— 缺失的交付物问裁判，再问所有者，而不是直接失败
+
+- **目标 / 假设：** 终结所有者三次报告的产物合同死路。完成的 Worker 有观察证据但没有承诺
+  产物时，不应结算为死掉的 `failed`；有界的模型裁判判断证据是否回答了请求，裁判无法决定时，
+  所有者在主对话里接受或拒绝这个回答。
+- **取舍：** [产物合同缺口先问模型裁判，再由所有者决定](../architecture/trade-offs.zh-CN.md#2026-11-24--产物合同缺口先问模型裁判再由所有者决定而不是直接失败)；
+  [工作单复核在主对话里决定](../architecture/trade-offs.zh-CN.md#2026-11-24--工作单复核在主对话里决定)。
+- **变更：** `src/core/artifact-judge.ts` —— 提示词、单词解析器，以及"所有失败都变成
+  `review`"的裁判调用；`src/core/runtime.ts` —— `ensureWorkOrderVerified` 现在返回
+  passed/review/failed，接受模型判定，记录 `needsReview` 并抛出 `SubagentReviewRequired`，
+  执行循环把它结算为 `waiting_review`（running → verifying → waiting_review），并中止同级
+  工作单；`src/core/contracts.ts` —— 子 Agent 验证上的可选裁判字段；
+  `src/core/runtime-factory.ts` 与 `src/memory/synthesized-recall.ts` —— 裁判复用已配置
+  端点，输出上限 1024 token（最低推理强度）、超时 20 秒；`src/companion-server.ts` —— 对话的子 Agent 行带上
+  Run 级复核；`apps/desktop/ui/app.js` 与 `components.css` —— 继续/判为失败的复核块、
+  "需要复核"计数，以及明确标注只读的审计链接。
+- **Eval：** `node --experimental-strip-types --test test/artifact-judge.test.ts test/artifact-review.test.ts test/agent-review-view.test.ts`
+  —— **7/7**（提示词/解析器/失败路径、运行时复核与裁判接受、对话载荷）。
+  `test/ui-structure.test.ts` —— **36/36**，包含行内复核块与新链接文案。变更前运行时用例
+  无法通过：`ensureWorkOrderVerified` 返回 false，Run 结算为 `failed`，没有复核。
+  `npm test` **1062/1062**，`npm run typecheck` 退出码 0，`npm run gate` **PASS**，
+  基线未变。
+- **Benchmark run：** 无——确定性 Adapter 与假裁判；eval 中没有 Provider 调用。生产里的裁判
+  调用已配置的主 Agent 端点，输出上限 1024 token（最低推理强度）。
+- **执行链路：** 单个会话。修复通道失败了三次（无效补丁、双语注释、Worker 超时）；按所有者
+  指示，这次变更由工作的 Agent 作为优化实现，而不是再跑第四次通道。第一版运行时草稿写在
+  取舍条目之前；取舍在测试之前补上，这是流程缺陷，不是设计缺陷。第一版上限是 24 token；
+  已配置的推理模型把额度耗在推理上、返回空内容，裁判因此退回复核。改成 1024 token、最低
+  推理强度后，两次实测都给出了判定（REVIEW、ACCEPT）；空内容路径仍退回复核。测试用脚本化
+  的"只观察"Adapter 编写；第一版测试桩先后触发计划验收标准检查与"只读/产物"守卫，改成
+  带 Scope 的可逆写入后通过。验证期间没有 Worker、没有模型调用。
+- **优点：** 死失败消失；真正足够的观察回答无需所有者花时间；不确定时在失败可见处一键决定；
+  裁判不能扩大权限，裁判不可用会退化为复核而不是失败。
+- **缺点 / 下次：** 裁判复用主端点，成本调节需要独立设置；存在错误接受的可能（审计保留裁判
+  理由与被替代的产物）；接受复核会结束 Run，而不是继续剩余步骤；三个通道分支仍未合并。
+  下次：在真实运行上测量裁判延迟与误接受；成本重要时加裁判模型设置；只有多步计划确实需要时
+  才考虑"接受后继续"。
+- **推翻条件：** 同两条取舍条目。
+
+### 2026-11-24 —— 子 Agent 行在主对话里原地解释自己
+
+- **目标 / 假设：** 所有者点击主对话里的"准备交付产物"后被带到任务记录，对话丢了，行里
+  只有"需要处理"。带记录摘要、工作单证据与确定性"要修改什么"提示的原地展开，应把请求、
+  失败与下一步留在同一视图；完整轨迹仍是一个显式链接。
+- **取舍：** [子 Agent 行在主对话里原地解释；任务记录成为一个显式链接](../architecture/trade-offs.zh-CN.md#2026-11-24--子-agent-行在主对话里原地解释任务记录成为一个显式链接)。
+- **变更：** `src/companion-server.ts` —— 会话视图的 `subagents` 现在携带该工作单最多
+  五条证据（按 `workOrderId`/`stepId` 匹配）。`apps/desktop/ui/app.js` ——
+  `agentsMarkup` 渲染 `<details>` 行，含摘要、证据与 `agentFixHint`；行不再导航，旧的
+  `agent-row--open` 按钮移除。标题把失败项计为"需要处理"；`agentFocus` 仍通过显式
+  任务记录链接打开并定位该行。`apps/desktop/ui/components.css` —— details/summary、
+  证据与提示样式。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts`
+  —— **35/35**，包含重写的子 Agent 测试（details 结构、提示、证据、显式链接、无整行
+  按钮）。`npm test` **1052/1052**，0 失败；`npm run typecheck` 退出码 0；
+  `npm run gate` **PASS**，基线未变。
+- **Benchmark run：** 无——确定性 UI/契约 eval。
+- **执行链路：** 单个会话。先读 `agentsMarkup`、点击处理器与 `revealAgentFocus`；发现旧
+  行是 `<button data-open-agent-run>`，调用 `selectSession(runId)`。改为 `<details>`；
+  加入确定性提示（artifact 契约 → 只读或点名文件；中断 → 检查副作用；一般失败 → 证据/
+  任务记录）；在会话视图映射每工作单证据。既有 UI 测试断言旧按钮而失败，因此重写为新行为；
+  更新后的 UI 文件 35/35。没有 Worker、没有模型调用。
+- **优点：** 失败、证据与修改提示留在请求旁边；默认不导航；完整轨迹仍差一次显式点击；
+  提示是确定性映射，不是模型猜测。
+- **缺点 / 下次：** 证据最多五条；未知失败形状只有一般提示；展开时行更高；完整轨迹仍需
+  任务记录。下次：如果所有者需要不离开对话看轨迹，加一个由任务记录供数的抽屉。
+- **推翻条件：** 同取舍条目——为完整轨迹加抽屉、提示误导时删掉、或把失败收进摘要卡；
+  任何变体都保留显式任务记录链接。
+
 ### 2026-11-24 —— observe 下带 Scope 的可逆写入向所有者请求一次确认
 
 - **目标 / 假设：** 所有者要求类似 Claude Code auto 的写入处理：Worker 的模型在已声明

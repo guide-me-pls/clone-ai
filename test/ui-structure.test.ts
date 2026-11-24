@@ -675,10 +675,10 @@ test("a plan step names its risk instead of promising a confirmation", async () 
   assert.doesNotMatch(markup, /需确认/);
 });
 
-test("a subagent row outside its record opens the task record that owns it", async () => {
+test("a failed subagent row explains itself in place and links the task record explicitly", async () => {
   const app = await read("app.js");
   const css = (await read("style.css")) + (await read("components.css"));
-  const start = app.indexOf("function agentsMarkup(session)");
+  const start = app.indexOf("function agentFixHint");
   const end = app.indexOf("function approvalMarkup", start);
   assert.ok(start >= 0 && end > start, "agentsMarkup must exist");
   const markupFor = (session: unknown, agentFocus: { runId: string; agentId: string } | null = null) => runInNewContext(
@@ -690,6 +690,7 @@ test("a subagent row outside its record opens the task record that owns it", asy
       statusMeta: (status: string) => ({ label: status, dot: status }),
       displayAgentTitle: (agent: { title: string }) => agent.title,
       displayAgentDetail: (agent: { summary?: string }) => agent.summary ?? "",
+      providerLabel: (id: string) => id,
       state: { agentFocus },
       sessionParam: session,
     },
@@ -701,36 +702,60 @@ test("a subagent row outside its record opens the task record that owns it", asy
     status: "failed",
     providerId: "native",
     summary: "Subagent draft did not satisfy its artifact contract.",
+    evidence: [{ kind: "observation", summary: "read_file read README.md", locator: "README.md" }],
   };
-  // In the conversation the subagent belongs to another record: the row is the
-  // button that opens it, and the title is the hover affordance.
-  // 对话中的子 Agent 属于另一条记录：整行是打开它的按钮，标题是悬停提示。
+  // The row expands in place: status, summary, evidence and the fix hint, with
+  // the full trace behind an explicit link instead of the row's default click.
+  // 行原地展开：状态、摘要、证据与修改提示；完整轨迹在显式链接后面，而不是整行的默认点击。
   const conversation = markupFor({ id: "main-agent-conversation", status: "running", subagents: [agent] });
-  assert.match(conversation, /<button class="agent-row agent-row--open" type="button" data-open-agent-run="run-1" data-agent-id="agent-1"/);
+  assert.match(conversation, /<details class="agent-row-details"/);
   assert.match(conversation, /<strong>准备本地交付物<\/strong>/);
-  assert.match(conversation, /title="打开这个子 Agent 所属的任务记录"/);
-  // Inside the record the row is already where the click would land: it keeps
-  // the same information without an affordance.
-  // 记录内的行已经在目的地：保留同样信息，但不做成可点击。
-  const record = markupFor({ id: "run-1", status: "failed", subagents: [agent] });
-  assert.match(record, /<div class="agent-row" data-agent-id="agent-1">/);
-  assert.doesNotMatch(record, /data-open-agent-run/);
-  // A click asks for one row; the target record opens its card and marks that
-  // row so the reveal can scroll to it.
-  // 点击要求查看某一行；目标记录展开卡片并标出该行，供 reveal 滚动到它。
+  assert.match(conversation, /要修改什么/);
+  assert.match(conversation, /artifact contract/);
+  assert.match(conversation, /把请求改成只读回答/);
+  assert.match(conversation, /read_file read README\.md/);
+  assert.match(conversation, /data-open-agent-run="run-1"/);
+  assert.match(conversation, /打开审计查看完整轨迹（只读，不会重跑）/);
+  assert.match(conversation, /1 需要处理/);
+  assert.doesNotMatch(conversation, /agent-row--open/);
+  assert.doesNotMatch(conversation, /<button class="agent-row/);
+
+  // A work-order review carries the decision here: the missing criterion and the
+  // accept/reject pair, without opening the task record.
+  // 工作单复核把决定带到这里：缺失标准与接受/拒绝，无需打开任务记录。
+  const reviewAgent = {
+    ...agent,
+    status: "completed",
+    review: {
+      runId: "run-1",
+      summary: "The worker's answer is available, but the promised artifact is missing: summary.md. The owner decides.",
+      unverifiedCriteria: ["summary.md"],
+    },
+  };
+  const reviewCard = markupFor({ id: "main-agent-conversation", status: "waiting_review", subagents: [reviewAgent] });
+  assert.match(reviewCard, /需要你确认/);
+  assert.match(reviewCard, /summary\.md/);
+  assert.match(reviewCard, /data-review="run-1" data-review-decision="accept"/);
+  assert.match(reviewCard, /data-review="run-1" data-review-decision="reject"/);
+  assert.match(reviewCard, /继续（接受观察证据）/);
+  assert.match(reviewCard, /判为失败/);
+  assert.match(reviewCard, /0\/1 已完成 · 1 需要复核/);
+  assert.doesNotMatch(reviewCard, /要修改什么/);
+  assert.match(css, /\.agent-review\s*\{/);
+
+  // A click on the explicit link asks for one row; the target record opens the
+  // card and marks that row so the reveal can scroll to it and open it.
+  // 点击显式链接要求查看某一行；目标记录展开卡片并标出该行，供 reveal 滚到它并展开。
   const focused = markupFor({ id: "run-1", status: "completed", subagents: [agent] }, { runId: "run-1", agentId: "agent-1" });
   assert.match(focused, /data-disclosure="agents" open/);
-  assert.match(focused, /data-agent-focus="true"/);
-  // The click handler and the one-shot reveal are wired, and the row's title
-  // underlines on hover.
-  // 点击处理器与一次性 reveal 已接线，行的标题在悬停时显示下划线。
+  assert.match(focused, /data-agent-focus="true" open/);
   assert.match(app, /event\.target\.closest\("\[data-open-agent-run\]"\)/);
   assert.match(app, /state\.agentFocus = \{ runId: agentRun\.dataset\.openAgentRun, agentId: agentRun\.dataset\.agentId \}/);
   assert.match(app, /void selectSession\(agentRun\.dataset\.openAgentRun\)/);
   assert.match(app, /function revealAgentFocus\(id\)/);
   assert.match(app, /revealAgentFocus\(session\.id\)/);
-  assert.match(css, /button\.agent-row:hover strong\s*\{[^}]*text-decoration:\s*underline/);
-  assert.match(css, /button\.agent-row:focus-visible\s*\{[^}]*outline:/);
+  assert.match(css, /\.agent-row-details > summary\.agent-row:hover strong\s*\{[^}]*text-decoration:\s*underline/);
+  assert.match(css, /\.agent-detail-hint\s*\{/);
 });
 
 test("invocation rows keep selection and deletion as sibling controls", async () => {

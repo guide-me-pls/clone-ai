@@ -44,6 +44,22 @@ Files, shell and network now default to 自动执行 (`act_auto`) when `policies
 
 `policies.json` 没有点名某个域时，文件、Shell 与网络现在默认「自动执行」（`act_auto`），且 `act_auto` 不再要求有覆盖的常设策略：步骤声明的 Scope 就是判断，所有者不必再逐资源写策略。硬边界不变——受保护位置、无 Scope 写入、未实现强制的域、外部与不可逆步骤仍会停下；`policies.json` 不存在时使用默认值，损坏时（非法 JSON、非法档位，或 `policies` 不是数组）fail closed 到只观察，而不是悄悄把每个域都设成自动。整个 clone home 现在是一个受保护位置（端点密钥、Provider 密钥、`mcp.json` 凭据、记忆、对话、Journal、轨迹），唯一例外是 Kernel 的隔离沙箱。常设策略保留在设置的「高级：常设策略（可选）」里，作为进一步收紧的手段；同一 Scope 被多条策略覆盖时，最低上限生效，显式限制不会被更宽的授权推翻。门禁策略套件 24 个用例，一致率 100%，0 个不安全放行（变更前 78%、5 个误拦截）。`npm test` 1073/1073，typecheck 0，gate PASS。
 
+### A missing deliverable asks a judge, then the owner
+
+A completed subagent that supplies observation evidence but not every promised artifact no longer ends as a dead failure. A bounded artifact judge — one short prompt to the configured Main Agent endpoint, 1,024 output tokens with minimal reasoning, a 20 s timeout — decides whether the evidence or the completion summary answers the work order; ACCEPT records the missing artifact and continues, while REVIEW, an unparsable answer or an unreachable endpoint settles the run as waiting for the owner. The main conversation's subagent row then shows the summary, the missing criterion, "继续（接受观察证据）" and "判为失败"; the task record keeps the same review. A worker with no evidence at all still fails, and protected or unscoped writes remain the policy engine's decision. `npm test` 1062/1062, typecheck 0, gate PASS.
+
+### 缺失的交付物先问裁判，再问所有者
+
+完成的子 Agent 给出了观察证据、但没有满足每一项承诺产物时，不再以死掉的失败结束。一个有界的产物裁判——向已配置的主 Agent 端点发送一段短提示，输出上限 1024 token（最低推理强度）、超时 20 秒——判断证据或完成摘要是否回答了工作单；ACCEPT 记录缺失产物并继续，REVIEW、无法解析的回答或端点不可达则把 Run 结算为等待所有者。主对话的子 Agent 行随即显示摘要、缺失标准、"继续（接受观察证据）"与"判为失败"；任务记录保留同一份复核。完全没有证据的 Worker 仍然失败；受保护路径与无 Scope 写入仍由权限引擎决定。`npm test` 1062/1062，typecheck 0，gate PASS。
+
+### A failed subagent explains itself instead of jumping to a task record
+
+A subagent row in the main conversation now expands in place. The panel shows the worker's recorded summary, up to five evidence rows for that work order, and a deterministic "要修改什么" hint: an unsatisfied artifact contract says to make the request read-only or name the exact file, an interrupted run says to inspect possible side effects, and a generic failure points at the evidence and the task record. Clicking the row no longer navigates away; the full execution trace stays behind an explicit 「打开任务记录查看完整轨迹」 link, and the agent-list header counts failed subagents as 需要处理. `npm test` 1052/1052, typecheck 0, gate PASS.
+
+### 失败的子 Agent 原地解释自己，而不是跳转到任务记录
+
+主对话里的子 Agent 行现在原地展开。面板显示 Worker 记录的摘要、该工作单最多五条证据，以及确定性的「要修改什么」提示：artifact 契约未满足时提示改成只读或点名文件；执行被中断时提示先检查可能的副作用；一般失败指向证据与任务记录。点击整行不再导航离开；完整执行轨迹留在显式的「打开任务记录查看完整轨迹」链接后面，Agent 列表标题把失败项计为"需要处理"。`npm test` 1052/1052，typecheck 0，gate PASS。
+
 ### A scoped write under observe asks the owner once; auto stays automatic
 
 A `reversible_write` step that declares a `files` write scope no longer fails outright while the files domain is observe-only. The policy returns `approval_required`, the run enters `waiting_approval`, and the existing approval card lets the owner allow this exact step once or deny it; the approval is keyed to the run and step and leaves the domain observe-only for everything else. The automatic path is unchanged: set the files domain to `自动执行` (act_auto) with a covering standing policy and the worker's scoped writes proceed without a per-step confirmation. Protected locations, unscoped writes, shell/network domains and irreversible steps keep their hard gates. The regression-gate policy baseline changes one intended case (`files-write-observe-denied` becomes `files-write-observe-asks-approval` plus `files-write-observe-approved`). `npm test` 1047/1047, typecheck 0, gate PASS.

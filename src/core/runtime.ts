@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import type {
   AgentRegistry,
   ApprovalGrant,
+  ArtifactContract,
   Evidence,
   ExecutionAssignment,
   JournalEvent,
@@ -22,6 +23,7 @@ import type {
   OwnerDecisionNotifier,
   PolicyDecision,
   SubagentRun,
+  SubagentVerificationResult,
   SubagentWorkOrder,
   Task,
   Trigger,
@@ -30,6 +32,7 @@ import type {
   WorkPlan,
   WorkerMemorySource,
 } from "./contracts.ts";
+import type { ArtifactJudgeInput, ArtifactJudgeResult } from "./artifact-judge.ts";
 import type { JournalStore } from "./journal.ts";
 import { approvalKey, assertTransition, emptyProjection, reduceEvent, subagentKey, type RuntimeProjection } from "./run-state.ts";
 import { CapacityGate, type CapacitySnapshot } from "./capacity.ts";
@@ -140,6 +143,14 @@ export interface CloneRuntimeOptions {
    * 取用。省略表示不限制（不关心容量的测试）。
    */
   capacityGate?: CapacityGate;
+  /**
+   * Optional model judge for a work order whose evidence does not literally
+   * satisfy its artifact contract. When absent or unsure, the run stops for
+   * the owner's review instead of failing.
+   * 可选：证据未字面满足产物合同时的模型裁判。缺省或无法确定时，Run 停下来等待所有者
+   * 复核，而不是失败。
+   */
+  artifactJudge?: (input: ArtifactJudgeInput) => Promise<ArtifactJudgeResult>;
 }
 
 export interface DispatchResult {
@@ -186,6 +197,23 @@ export class WorkerFailure extends Error {
   }
 }
 
+/**
+ * A subagent produced an answer but not every promised artifact, and the judge
+ * could not settle it. The run stops as `waiting_review`; the owner accepts the
+ * evidence or rejects the result. It is not a worker failure.
+ * 子 Agent 给出了回答，但缺少承诺的产物，且裁判无法裁决。Run 以 `waiting_review` 停下；
+ * 所有者接受证据或拒绝结果。这不是 Worker 失败。
+ */
+export class SubagentReviewRequired extends Error {
+  readonly verification: SubagentVerificationResult;
+
+  constructor(verification: SubagentVerificationResult) {
+    super(verification.summary);
+    this.name = "SubagentReviewRequired";
+    this.verification = verification;
+  }
+}
+
 export class CloneRuntime {
   readonly #journal: JournalStore;
   readonly #policy: PolicyEngine;
@@ -204,6 +232,7 @@ export class CloneRuntime {
   readonly #workspaceCheckpoints?: WorkspaceCheckpointStore;
   readonly #isolatedWorkspaceRoot: string;
   readonly #knownAgentIds?: () => Set<string>;
+  readonly #artifactJudge?: (input: ArtifactJudgeInput) => Promise<ArtifactJudgeResult>;
   readonly #ownerDecisionNotifier?: OwnerDecisionNotifier;
   /** One notice per run/step/kind, so re-entering waiting_approval does not repeat it. 每个 Run/步骤/类型一条，重复进入等待不会重复通知。 */
   readonly #decisionNotices = new Set<string>();
@@ -220,6 +249,7 @@ export class CloneRuntime {
     this.#memorySource = options.memorySource;
     this.#failureCatalog = options.failureCatalog ?? BUILT_IN_CATALOG;
     this.#knownAgentIds = options.knownAgentIds;
+    this.#artifactJudge = options.artifactJudge;
     this.#ownerDecisionNotifier = options.ownerDecisionNotifier;
     this.#capacityGate = options.capacityGate ?? new CapacityGate();
     this.#workspacePath = options.workspacePath === undefined ? undefined : resolve(options.workspacePath);
@@ -616,6 +646,42 @@ export class CloneRuntime {
           await this.executeSingleAgent({ run, task, step, agents, policyDecision: decision });
         }
       } catch (error: unknown) {
+        // A work order produced an answer but not its promised artifact, and the
+        // judge asked for the owner. `running -> verifying -> waiting_review` is
+        // the existing transition path; the review API reads the run-level
+        // verification recorded here. It is deliberately not an `execution.failed`.
+        // 工作单给出了回答但缺少承诺的产物，裁判请所有者决定。`running -> verifying ->
+        // waiting_review` 是现有转换路径；复核 API 读取这里记录的 Run 级验证。它刻意不是
+        // `execution.failed`。
+        if (error instanceof SubagentReviewRequired) {
+          this.#notifyOwnerDecision(
+            { kind: "review", title: task.title, detail: `${step.title}：需要你决定是否接受已有证据` },
+            `${run.id}:${step.id}:review`,
+          );
+          await this.changeStatus(run.id, "verifying", step.id);
+          const verification: VerificationResult = {
+            runId: run.id,
+            passed: false,
+            needsReview: true,
+            unverifiedCriteria: error.verification.unverifiedCriteria ?? [],
+            summary: error.verification.summary,
+            checkedEvidenceIds: error.verification.checkedEvidenceIds,
+            createdAt: new Date().toISOString(),
+          };
+          await this.record({
+            type: "verification.completed",
+            taskId: task.id,
+            runId: run.id,
+            payload: verification,
+          });
+          await this.changeStatus(run.id, "waiting_review", step.id);
+          // Stop sibling work orders that may still be running: the run is
+          // waiting for the owner, and further writes would change the record
+          // being reviewed.
+          // 停止可能仍在运行的同级工作单：Run 正在等待所有者，继续写入会改变正在复核的记录。
+          this.#cancellationControllers.get(run.id)?.abort();
+          return { run: this.requireRun(run.id), status: "waiting_review", verification };
+        }
         // Persist why the step stopped, including the failure category when a
         // worker supplied one. "failed" without a reason is not actionable.
         // 持久化步骤停止的真实原因，并在 Worker 提供时保留失败分类；
@@ -959,9 +1025,10 @@ export class CloneRuntime {
   private async dispatchSubagentUnlocked(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry; policyDecision: PolicyDecision }): Promise<void> {
     const existing = this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)];
     if (existing?.status === "completed") {
-      if (await this.ensureWorkOrderVerified(input, existing.agentId)) {
-        return;
-      }
+      const contract = await this.ensureWorkOrderVerified(input, existing.agentId);
+      if (contract.status === "passed") return;
+      if (contract.status === "review") throw new SubagentReviewRequired(contract.verification);
+      throw new Error(`Subagent ${input.workOrder.id} did not satisfy its artifact contract.`);
     }
     if (existing?.status === "cancelled") {
       throw new Error(`Subagent ${input.workOrder.id} was cancelled.`);
@@ -1014,9 +1081,7 @@ export class CloneRuntime {
         ? previousAttempt
         : previousAttempt + 1;
     let sessionId = existing?.sessionId;
-    let lastError: unknown = existing?.status === "completed"
-      ? new Error(`Subagent ${input.workOrder.id} did not satisfy its artifact contract.`)
-      : undefined;
+    let lastError: unknown;
 
     // A running/failed record after a process restart is not permission to
     // blindly rerun. First arbitrate the Workspace side effects against the
@@ -1102,7 +1167,9 @@ export class CloneRuntime {
           runId: input.run.id,
           payload: { workOrderId: input.workOrder.id, summary: redactAuditText(completion) },
         });
-        if (!(await this.ensureWorkOrderVerified(input, adapter.id))) {
+        const contract = await this.ensureWorkOrderVerified(input, adapter.id, completion);
+        if (contract.status === "review") throw new SubagentReviewRequired(contract.verification);
+        if (contract.status === "failed") {
           throw new Error(`Subagent ${input.workOrder.id} did not satisfy its artifact contract.`);
         }
         await this.settleIsolatedWorkspace({
@@ -1524,7 +1591,9 @@ export class CloneRuntime {
       runId: input.run.id,
       payload: { workOrderId: input.workOrder.id, summary: "Reconciled observed Workspace artifacts after an interrupted black-box session." },
     });
-    if (!(await this.ensureWorkOrderVerified(input, producedBy))) {
+    const contract = await this.ensureWorkOrderVerified(input, producedBy);
+    if (contract.status === "review") throw new SubagentReviewRequired(contract.verification);
+    if (contract.status === "failed") {
       const failure = this.recoveryFailure(input, adapter, {
         ...assessment,
         decision: "blocked",
@@ -1608,15 +1677,17 @@ export class CloneRuntime {
   private async ensureWorkOrderVerified(
     input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder },
     producedBy: string,
-  ): Promise<boolean> {
+    completionSummary?: string,
+  ): Promise<{ status: "passed" | "review" | "failed"; verification: SubagentVerificationResult }> {
     const key = subagentKey(input.run.id, input.workOrder.id);
     const existing = this.#state.subagentVerificationByKey[key];
-    if (existing?.passed === true) return true;
+    if (existing?.passed === true) return { status: "passed", verification: existing };
+    if (existing?.needsReview === true) return { status: "review", verification: existing };
 
     const evidence = (this.#state.evidenceByRun[input.run.id] ?? []).filter(
       (item) => item.workOrderId === input.workOrder.id,
     );
-    const failures: string[] = [];
+    const missing: ArtifactContract[] = [];
     const usedEvidenceIds = new Set<string>();
     for (const artifact of input.workOrder.expectedArtifacts.filter((item) => item.required)) {
       const match = evidence.find((item) => (
@@ -1625,30 +1696,90 @@ export class CloneRuntime {
         && (!artifact.locatorRequired || (item.locator !== undefined && item.locator.length > 0))
       ));
       if (match === undefined) {
-        failures.push(artifact.id);
+        missing.push(artifact);
       } else {
         usedEvidenceIds.add(match.id);
       }
     }
-    const verification = {
+    const base = {
       id: randomUUID(),
       runId: input.run.id,
       stepId: input.step.id,
       workOrderId: input.workOrder.id,
-      passed: failures.length === 0 && evidence.length > 0,
-      summary: failures.length === 0
-        ? `${producedBy} supplied the required evidence contract.`
-        : `Missing required artifact evidence: ${failures.join(", ")}.`,
       checkedEvidenceIds: evidence.map((item) => item.id),
       createdAt: new Date().toISOString(),
     };
-    await this.record({
-      type: "subagent.verified",
-      taskId: input.task.id,
-      runId: input.run.id,
-      payload: verification,
+    const save = async (verification: SubagentVerificationResult): Promise<SubagentVerificationResult> => {
+      await this.record({
+        type: "subagent.verified",
+        taskId: input.task.id,
+        runId: input.run.id,
+        payload: verification,
+      });
+      return verification;
+    };
+
+    // The literal contract is satisfied. 字面合同已满足。
+    if (missing.length === 0) {
+      const verification = await save({
+        ...base,
+        passed: evidence.length > 0,
+        summary: evidence.length > 0
+          ? `${producedBy} supplied the required evidence contract.`
+          : "The subagent supplied no evidence.",
+      });
+      return { status: verification.passed ? "passed" : "failed", verification };
+    }
+    // No evidence at all is still a hard failure: there is no answer to review.
+    // 完全没有证据仍是硬失败：没有可复核的回答。
+    if (evidence.length === 0) {
+      const verification = await save({
+        ...base,
+        passed: false,
+        summary: `The subagent supplied no evidence; missing: ${missing.map((item) => item.id).join(", ")}.`,
+      });
+      return { status: "failed", verification };
+    }
+
+    const criteria = missing.map((item) => item.description ?? item.id);
+    const verdict: ArtifactJudgeResult = this.#artifactJudge === undefined
+      ? { decision: "review", reason: "No artifact judge is configured.", unavailable: true }
+      : await this.#artifactJudge({
+        objective: input.workOrder.objective,
+        title: input.workOrder.title,
+        missing: missing.map((item) => ({
+          id: item.id,
+          kind: item.kind,
+          description: item.description,
+        })),
+        evidence: evidence.slice(-8).map((item) => ({
+          kind: item.kind,
+          summary: item.summary,
+          ...(item.locator === undefined ? {} : { locator: item.locator }),
+        })),
+        ...(completionSummary === undefined ? {} : { completion: completionSummary }),
+      });
+    if (verdict.decision === "accept") {
+      const verification = await save({
+        ...base,
+        passed: true,
+        judgedBy: "model",
+        judgeReason: verdict.reason,
+        deviatedArtifacts: missing.map((item) => item.id),
+        summary: `The artifact judge accepted the evidence in place of: ${criteria.join(", ")}.`,
+      });
+      return { status: "passed", verification };
+    }
+    const verification = await save({
+      ...base,
+      passed: false,
+      needsReview: true,
+      unverifiedCriteria: criteria,
+      judgeReason: verdict.reason,
+      ...(verdict.unavailable === true ? {} : { judgedBy: "model" as const }),
+      summary: `The worker's answer is available, but the promised artifact is missing: ${criteria.join(", ")}. The owner decides.`,
     });
-    return verification.passed;
+    return { status: "review", verification };
   }
 
   private async consumeExecutionEvents(

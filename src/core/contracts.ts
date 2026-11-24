@@ -266,6 +266,20 @@ export interface SubagentVerificationResult {
   stepId: string;
   workOrderId: string;
   passed: boolean;
+  /**
+   * True when the evidence did not literally satisfy the artifact contract and
+   * the owner must decide whether to accept it. 当证据没有字面满足产物合同、必须由所有者
+   * 决定是否接受时为 true。
+   */
+  needsReview?: boolean;
+  /** The missing acceptance criteria, in human-readable terms. 缺失的验收标准，用人可读的措辞。 */
+  unverifiedCriteria?: string[];
+  /** Set when a model judge accepted the evidence in place of the missing artifacts. 模型裁判接受证据替代缺失产物时设置。 */
+  judgedBy?: "model";
+  /** The judge's one-line reason, kept for the audit. 裁判的一行理由，供审计。 */
+  judgeReason?: string;
+  /** The artifact ids the judge accepted in place of. 裁判接受替代的产物 id。 */
+  deviatedArtifacts?: string[];
   summary: string;
   checkedEvidenceIds: string[];
   createdAt: string;

@@ -326,6 +326,104 @@ file keeps every attempt, including the ones that did not work.
   Seatbelt profile, never by shrinking the root. If owners rely on union-of-grants,
   add an explicit grant marker instead of restoring `max()` aggregation.
 
+### 2026-11-24 — A missing deliverable asks a judge, then the owner, instead of failing
+
+- **Goal / hypothesis:** end the artifact-contract dead end the owner reported
+  three times. A completed worker with observation evidence but no promised
+  artifact should not settle as a dead `failed`; a bounded model judge decides
+  whether the evidence answers the request, and when it cannot, the owner
+  accepts or rejects the answer in the main conversation.
+- **Trade-offs:** [An artifact-contract gap asks a model judge, then the owner](../architecture/trade-offs.md#2026-11-24--an-artifact-contract-gap-asks-a-model-judge-then-the-owner-instead-of-failing);
+  [A work-order review is decided in the main conversation](../architecture/trade-offs.md#2026-11-24--a-work-order-review-is-decided-in-the-main-conversation).
+- **Change:** `src/core/artifact-judge.ts` — prompt, one-word parser, and a
+  judge call whose every failure becomes `review`; `src/core/runtime.ts` —
+  `ensureWorkOrderVerified` now returns passed/review/failed, accepts a model
+  verdict, records `needsReview` and throws `SubagentReviewRequired`, which the
+  execution loop settles as `waiting_review` (running → verifying →
+  waiting_review) and aborts sibling work orders; `src/core/contracts.ts` —
+  optional judge fields on the subagent verification; `src/core/runtime-factory.ts`
+  and `src/memory/synthesized-recall.ts` — the judge reuses the configured
+  endpoint with a 1,024-token cap, minimal reasoning and a 20 s timeout; `src/companion-server.ts` —
+  the conversation's subagent rows carry the run-level review; `apps/desktop/ui/app.js`
+  and `components.css` — the review block with 继续/判为失败, the 需要复核 count,
+  and an explicit read-only audit label.
+- **Eval:** `node --experimental-strip-types --test test/artifact-judge.test.ts test/artifact-review.test.ts test/agent-review-view.test.ts`
+  — **7/7** (judge prompt/parser/failure paths, runtime review and judge accept,
+  conversation payload). `test/ui-structure.test.ts` — **36/36** including the
+  inline review block and the new link label. Before the change the runtime case
+  cannot pass: `ensureWorkOrderVerified` returns false and the run settles
+  `failed` with no review. `npm test` **1062/1062**, `npm run typecheck` exit 0,
+  `npm run gate` **PASS** with baseline unchanged.
+- **Benchmark run:** none — deterministic adapters and a fake judge; no provider
+  calls in the eval. The production judge calls the configured Main Agent
+  endpoint, capped at 1,024 output tokens with minimal reasoning.
+- **Execution chain:** one session. The repair lane failed three times (invalid
+  patch, bilingual comment, worker timeout); at the owner's direction this change
+  was implemented by the working agent as an optimization rather than a fourth
+  lane run. The first runtime draft was written before the trade-off entries;
+  they were added before the tests, and that ordering is a process defect, not
+  a design one. The first cap was 24 tokens; the configured reasoning model
+  returned empty content because the reasoning consumed the cap, so the judge
+  fell back to review. A 1,024-token cap with minimal reasoning produced a
+  verdict in two live checks (REVIEW, ACCEPT); the empty-content path still
+  degrades to review. Tests were written against a scripted observation-only
+  adapter; the first harness failed the plan's acceptance-criteria check, then
+  the plan's read-only/artifact guard, and was corrected to a scoped reversible
+  write. No workers, no model calls during verification.
+- **Pros:** the dead failure is gone; a genuinely sufficient observation answer
+  is accepted without owner time; an uncertain one is a one-click decision where
+  the failure is visible; the judge cannot widen authority, and a judge outage
+  degrades to review rather than failure.
+- **Cons / next time:** the judge reuses the main endpoint, so cost tuning needs
+  a separate setting; a false accept is possible (the audit keeps the judge's
+  reason and the deviated artifacts); accepting a review ends the run instead of
+  resuming remaining steps; the three lane branches remain unmerged. Next:
+  measure judge latency and false accepts on real runs; add a judge-model setting
+  if the cost matters; revisit resume-after-accept only if multi-step plans need
+  it.
+- **Reversal condition:** as the two trade-off entries.
+
+### 2026-11-24 — A subagent row explains itself in the conversation
+
+- **Goal / hypothesis:** the owner clicked "准备交付产物" in the main conversation
+  and was taken to a task record, losing the conversation, and the row only said
+  "需要处理". An inline expansion with the recorded summary, the work order's
+  evidence and a deterministic "what to change" hint should keep the request,
+  the failure and the next action in one view; the full trace stays an explicit
+  link.
+- **Trade-off:** [A subagent row explains itself in the conversation; the task record is an explicit link](../architecture/trade-offs.md#2026-11-24--a-subagent-row-explains-itself-in-the-conversation-the-task-record-is-an-explicit-link).
+- **Change:** `src/companion-server.ts` — the session view's `subagents` now
+  carry up to five evidence rows for their work order (matched by
+  `workOrderId`/`stepId`). `apps/desktop/ui/app.js` — `agentsMarkup` renders a
+  `<details>` row with the summary, evidence and `agentFixHint`; the row no
+  longer navigates, and the old `agent-row--open` button is gone. The header
+  counts failed subagents as "需要处理"; `agentFocus` still opens the explicit
+  task-record link and reveals the row. `apps/desktop/ui/components.css` — the
+  details/summary, evidence and hint styles.
+- **Eval:** `node --experimental-strip-types --test test/ui-structure.test.ts`
+  — **35/35**, including the rewritten subagent test (details markup, hint,
+  evidence, explicit link, no row button). `npm test` **1052/1052**, 0 fail;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline unchanged.
+- **Benchmark run:** none — deterministic UI/contract eval.
+- **Execution chain:** one session. Read `agentsMarkup`, the click handler and
+  `revealAgentFocus`; found the old row was a `<button data-open-agent-run>`
+  calling `selectSession(runId)`. Replaced it with `<details>`; added the
+  deterministic hint (artifact contract → read-only or name the file;
+  interrupted → inspect side effects; generic → evidence/task record); mapped
+  per-work-order evidence in the session view. The existing UI test asserted the
+  old button and failed, so it was rewritten to the new behavior; the updated
+  UI file is 35/35. No workers, no model calls.
+- **Pros:** the failure, its evidence and the fix hint stay beside the request;
+  no navigation by default; the full trace remains one explicit click away; the
+  hint is a deterministic mapping, not a model guess.
+- **Cons / next time:** evidence is capped at five; the hint is generic for
+  unknown failure shapes; the row is taller when expanded; the full trace still
+  needs the task record. Next time: add a drawer fed by the task record if
+  owners need the trace without leaving.
+- **Reversal condition:** copied from the trade-off entry — add a drawer for the
+  full trace, remove the hint if it misleads, or collapse failures into a
+  summary card; keep the explicit task-record link.
+
 ### 2026-11-24 — A scoped reversible write under observe asks the owner once
 
 - **Goal / hypothesis:** the owner asked for Claude Code auto-like write handling:

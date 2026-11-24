@@ -179,8 +179,27 @@ export function synthesisCandidates(matches: ReadonlyArray<{ entry: MemoryEntry;
  * 默认补全：向主 Agent 使用的同一端点发起一次无工具的 chat 调用，因此合成无需第二份配置。
  * 端点缺失是"合成被拒绝"，而不是"召回损坏"。
  */
-export async function completeWithNativeEndpoint(prompt: string): Promise<string> {
-  const { endpoint, missing } = readNativeMainAgentEndpoint();
+/**
+ * One completion against the configured Main Agent endpoint. The optional cap
+ * and timeout exist for single-word judgments: the artifact judge must not be
+ * able to hold a Run for the full synthesis budget. `fallback` is the endpoint
+ * saved in Settings, so a Finder-launched daemon with no environment still
+ * reaches the same provider as a Main Agent turn.
+ * 对已配置主 Agent 端点的一次补全。可选的上限与超时服务于单词判定：产物裁判不能像合成
+ * 那样占住 Run 整个预算。`fallback` 是设置里保存的端点，使没有环境变量的 Finder 启动
+ * Daemon 也能到达与主 Agent 回合相同的 Provider。
+ */
+export async function completeWithNativeEndpoint(
+  prompt: string,
+  options: {
+    maxTokens?: number;
+    timeoutMs?: number;
+    /** The provider's reasoning effort; the judge uses "low" to keep a verdict cheap. Provider 的推理强度；裁判用 "low" 让判定便宜。 */
+    effort?: string;
+    fallback?: { model?: string; baseUrl?: string; apiKey?: string };
+  } = {},
+): Promise<string> {
+  const { endpoint, missing } = readNativeMainAgentEndpoint(process.env, options.fallback ?? {});
   if (endpoint === undefined) throw new Error(`the endpoint is not configured (${missing.join(", ")})`);
   const response = await fetch(`${endpoint.baseUrl}/v1/chat/completions`, {
     method: "POST",
@@ -192,8 +211,10 @@ export async function completeWithNativeEndpoint(prompt: string): Promise<string
       model: endpoint.model,
       messages: [{ role: "user", content: prompt }],
       stream: false,
+      ...(options.maxTokens === undefined ? {} : { max_tokens: options.maxTokens }),
+      ...(options.effort === undefined ? {} : { reasoning_effort: options.effort }),
     }),
-    signal: AbortSignal.timeout(endpoint.timeoutMs ?? 60_000),
+    signal: AbortSignal.timeout(options.timeoutMs ?? endpoint.timeoutMs ?? 60_000),
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");

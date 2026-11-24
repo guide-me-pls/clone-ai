@@ -2024,27 +2024,40 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
   .turn-log ~ .activity-card .activity-summary::after { transition: none; }
 }
 
-/* A subagent row outside its own record opens that record: the whole row is
- * the button, the title underlines on hover, and focus draws a ring. A row
- * inside its record keeps the same look without the affordance.
- * 不在自身记录中的子 Agent 行可打开该记录：整行是按钮，悬停时标题下划线，聚焦时画焦点环。
- * 记录内的行保持同样外观，但没有可点击提示。 */
-button.agent-row {
-  width: 100%;
-  border-left-width: 0;
-  border-right-width: 0;
-  border-bottom-width: 0;
-  border-radius: 0;
-  color: inherit;
-  background: transparent;
-  font: inherit;
-  text-align: left;
+/* A subagent row expands in place: the summary keeps the row look and toggles
+ * the panel; the panel carries the recorded summary, the evidence and a
+ * fact-only fix hint. The full task record is an explicit link, not the row's
+ * default click.
+ * 子 Agent 行原地展开：摘要保持行的外观并切换面板；面板带记录的摘要、证据与只含事实的
+ * 修改提示。完整任务记录是显式链接，而不是整行的默认点击。 */
+.agent-row-details { border-top: 1px solid var(--line); }
+.agent-list > .agent-row-details:first-child { border-top: 0; }
+.agent-row-details > summary.agent-row {
+  border-top: 0;
   cursor: pointer;
+  list-style: none;
 }
-button.agent-row:hover strong { text-decoration: underline; text-underline-offset: 2px; }
-button.agent-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, white); outline-offset: -2px; border-radius: 4px; }
+.agent-row-details > summary.agent-row::-webkit-details-marker { display: none; }
+.agent-row-details > summary.agent-row:hover strong { text-decoration: underline; text-underline-offset: 2px; }
+.agent-row-details > summary.agent-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, white); outline-offset: -2px; border-radius: 4px; }
+.agent-row-details.is-revealed > summary.agent-row { animation: agent-row-reveal 1.4s ease-out; }
 .agent-row-text { display: block; min-width: 0; }
-.agent-row.is-revealed { animation: agent-row-reveal 1.4s ease-out; }
+.agent-detail { padding: 2px 12px 12px 23px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.agent-detail-summary { margin: 0 0 6px; }
+.agent-detail-hint { margin: 6px 0; padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--text); }
+.agent-detail-hint b { color: var(--text); }
+.agent-detail-evidence { margin: 6px 0 8px; padding-left: 18px; }
+.agent-detail-evidence li { margin: 2px 0; }
+.agent-detail-evidence code { font-size: 11px; }
+.agent-run-link { padding: 2px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--surface-raised); font: inherit; font-size: 11px; cursor: pointer; }
+.agent-run-link:hover { border-color: var(--line-strong); }
+/* The owner's decision on a work-order review, where the failure is visible. 工作单复核中的所有者决定，位于失败可见处。 */
+.agent-review { margin: 8px 0; padding: 10px 12px; border: 1px solid #e7c9a8; border-radius: 8px; background: #fffaf3; color: var(--text); }
+.agent-review > b { display: block; margin-bottom: 4px; }
+.agent-review p { margin: 0 0 6px; }
+.agent-review-criteria { margin: 0 0 6px; padding-left: 18px; }
+.agent-review-note { color: var(--muted); }
+.agent-review .approval-actions { margin-top: 8px; }
 @keyframes agent-row-reveal {
   from { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   to { background: transparent; }

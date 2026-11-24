@@ -3627,21 +3627,51 @@ async function buildMainAgentConversation(
       && (isMainConversation || conversationRunIds.has(subagent.runId)))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, 8)
-    .map((subagent) => ({
-      // The record this row belongs to. A conversation aggregates subagents
-      // from several runs; without the run id the UI cannot open the one whose
-      // record explains a failure. 这一行所属的记录。对话会聚合多个 Run 的子 Agent；
-      // 没有 Run id，界面无法打开解释失败的记录。
-      runId: subagent.runId,
-      id: subagent.id,
-      title: subagent.title,
-      agentId: subagent.agentId,
-      role: subagent.role,
-      providerId: subagent.providerId ?? "unknown",
-      status: subagent.status,
-      ...(subagent.summary === undefined ? {} : { summary: subagent.summary }),
-      updatedAt: subagent.updatedAt,
-    }));
+    .map((subagent) => {
+      // The evidence this work order produced, so the row can explain itself
+      // without opening the run's task record. Capped: the panel is a summary,
+      // not the full trace. 该工作单产出的证据，使行无需打开 Run 的任务记录就能解释自己。
+      // 有上限：面板是摘要，不是完整轨迹。
+      const evidence = (state.evidenceByRun[subagent.runId] ?? [])
+        .filter((item) => item.workOrderId === subagent.workOrderId || item.stepId === subagent.stepId)
+        .slice(-5)
+        .map((item) => ({
+          kind: item.kind,
+          summary: item.summary,
+          ...(item.locator === undefined ? {} : { locator: item.locator }),
+        }));
+      // The decision belongs where the failure is visible. A work order that
+      // needs the owner carries the run-level verification so the conversation
+      // can show accept/reject without opening the task record.
+      // 决定属于失败可见的地方。需要所有者的工作单带上 Run 级验证，使对话无需打开任务记录
+      // 就能显示接受/拒绝。
+      const run = state.runs[subagent.runId];
+      const verification = state.verificationByRun[subagent.runId];
+      const review = run?.status === "waiting_review" && verification?.needsReview === true
+        ? {
+            runId: subagent.runId,
+            summary: verification.summary,
+            unverifiedCriteria: verification.unverifiedCriteria ?? [],
+          }
+        : undefined;
+      return {
+        // The record this row belongs to. A conversation aggregates subagents
+        // from several runs; without the run id the UI cannot open the one whose
+        // record explains a failure. 这一行所属的记录。对话会聚合多个 Run 的子 Agent；
+        // 没有 Run id，界面无法打开解释失败的记录。
+        runId: subagent.runId,
+        id: subagent.id,
+        title: subagent.title,
+        agentId: subagent.agentId,
+        role: subagent.role,
+        providerId: subagent.providerId ?? "unknown",
+        status: subagent.status,
+        ...(subagent.summary === undefined ? {} : { summary: subagent.summary }),
+        ...(evidence.length === 0 ? {} : { evidence }),
+        ...(review === undefined ? {} : { review }),
+        updatedAt: subagent.updatedAt,
+      };
+    });
   const finalSummary = approvals.length === 0 && reviews.length === 0
     ? sessionSummary
     : {
@@ -4527,7 +4557,7 @@ interface SessionView extends SessionSummary {
     summary: string;
     steps: Array<{ id: string; title: string; risk: string; delegated: boolean; agentId?: string }>;
   };
-  subagents: Array<{ runId: string; id: string; title: string; agentId: string; role: string; providerId: string; status: string; summary?: string; updatedAt: string }>;
+  subagents: Array<{ runId: string; id: string; title: string; agentId: string; role: string; providerId: string; status: string; summary?: string; evidence?: Array<{ kind: string; summary: string; locator?: string }>; review?: { runId: string; summary: string; unverifiedCriteria: string[] }; updatedAt: string }>;
   approvals: Array<{ runId: string; stepId: string; title?: string; description: string }>;
   reviews?: Array<{ runId: string; title: string; verification: VerificationResult; result?: string }>;
   verification?: import("./core/contracts.ts").VerificationResult;

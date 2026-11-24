@@ -2404,29 +2404,57 @@ function sessionHasContent(session) {
 function displayAgentTitle(agent) { return agent.title; }function displayAgentDetail(agent) { const provider = agent.providerId ? `${providerLabel(agent.providerId)} · ` : ""; return provider + (agent.status === "completed" ? "已提交可验证证据" : (agent.summary || "正在按任务边界推进")); }
 function disclosureOpen(session, name, fallback = false) { return state.openDisclosures.get(session.id)?.get(name) ?? fallback; }
 function planMarkup(session) { if (!session.plan) return ""; const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status); const open = disclosureOpen(session, "plan", fallback) ? " open" : ""; return `<details class="activity-card plan-card" data-disclosure="plan"${open}><summary class="activity-summary">${icon("spark")}<b>执行计划</b><span>${session.plan.steps.length} 步</span></summary><p class="plan-summary">${escape(session.plan.summary)}</p><div class="plan-steps">${session.plan.steps.map((step, index) => `<div class="plan-step"><span class="plan-step-index">${index + 1}</span><b>${escape(step.title)}</b>${step.agentId ? `<em class="plan-step-worker">由 ${escape(step.agentId)} 执行</em>` : ""}<span>${step.delegated ? "委派执行" : step.risk === "read_only" ? "直接处理" : step.risk === "reversible_write" ? "本地写入" : step.risk === "external_side_effect" ? "外部动作" : step.risk === "irreversible" ? "不可逆" : escape(step.risk)}</span></div>`).join("")}</div></details>`; }
+/** A fact-only next step derived from the recorded failure; it never invents a cause. 由已记录失败推导的、只含事实的下一步；绝不编造原因。 */
+function agentFixHint(agent) {
+  const summary = String(agent.summary || "").toLowerCase();
+  if (agent.status === "failed") {
+    if (summary.includes("artifact contract")) return "这一步要求交付文件，但 Worker 只给出了观察证据。把请求改成只读回答，或在请求里明确要写的文件与路径。";
+    if (summary.includes("interrupted") || summary.includes("replay-safety")) return "这次执行被中断，且没有安全重放保证。先检查工作区是否已有部分写入，再决定是否重试。";
+    return "Worker 没有完成这一步。查看下面的证据或在任务记录里看失败原因，补上缺失的输入或缩小范围后重试。";
+  }
+  if (agent.status === "cancelled") return "这一步被取消，没有产生结果；需要时重新发起。";
+  return "";
+}
 function agentsMarkup(session) {
   if (!session.subagents.length) return "";
-  const completed = session.subagents.filter((agent) => agent.status === "completed").length;
+  const completed = session.subagents.filter((agent) => agent.status === "completed" && !agent.review).length;
+  const review = session.subagents.filter((agent) => agent.review).length;
+  const failed = session.subagents.filter((agent) => agent.status === "failed" && !agent.review).length;
   const focusId = state.agentFocus?.runId === session.id ? state.agentFocus.agentId : undefined;
   const fallback = session.status === "waiting_approval" || !["completed", "failed", "cancelled"].includes(session.status);
   const open = disclosureOpen(session, "agents", fallback) || focusId !== undefined ? " open" : "";
-  // A subagent is a work order inside its run, not a session of its own: the
-  // record that explains it — its evidence, its failure, its retry — is the
-  // run's task record. A row outside that record opens it; a row inside it is
-  // already where the click would land, so it stays plain text. The title
-  // underlines on hover, the same affordance the dispatched child runs use.
-  // 子 Agent 是 Run 内的工作单，不是独立会话：解释它的记录——证据、失败、重试——是
-  // 该 Run 的任务记录。记录之外的行打开它；记录之内的行已经在目的地，保持纯文本。
-  // 悬停时标题显示下划线，与"派发"中的子 Run 一致。
+  // A subagent row explains itself in place: its status, its recorded summary,
+  // its evidence and a deterministic "what to change" hint. A work order whose
+  // artifact contract needs the owner carries the decision here, where the
+  // failure is visible; the full execution trace stays behind an explicit,
+  // clearly labelled audit link.
+  // 子 Agent 行原地解释自己：状态、记录的摘要、证据，以及确定性的"要修改什么"提示。产物
+  // 合同需要所有者的工作单把这个决定带到这里——失败可见的地方；完整执行轨迹留在显式且
+  // 标注清楚的审计链接后面。
   const rows = session.subagents.map((agent) => {
     const status = statusMeta(agent.status);
     const focused = agent.id === focusId ? ' data-agent-focus="true"' : "";
-    const body = `<span class="status-dot ${status.dot}"></span><span class="agent-row-text"><strong>${escape(displayAgentTitle(agent))}</strong><small>${escape(displayAgentDetail(agent))}</small></span><span class="agent-status">${escape(status.label)}</span>`;
+    const body = `<span class="status-dot ${status.dot}"></span><span class="agent-row-text"><strong>${escape(displayAgentTitle(agent))}</strong><small>${escape(displayAgentDetail(agent))}</small></span><span class="agent-status">${escape(agent.review ? "需要复核" : status.label)}</span>`;
+    const hint = agent.review ? "" : agentFixHint(agent);
+    const evidence = (agent.evidence || []).map((item) => `<li><b>${escape(item.kind)}</b> ${escape(item.summary)}${item.locator ? ` · <code>${escape(item.locator)}</code>` : ""}</li>`).join("");
+    const reviewBlock = agent.review ? `<div class="agent-review">
+      <b>需要你确认</b>
+      <p>${escape(agent.review.summary)}</p>
+      ${(agent.review.unverifiedCriteria || []).length ? `<ul class="agent-review-criteria">${agent.review.unverifiedCriteria.map((item) => `<li>${escape(item)}</li>`).join("")}</ul>` : ""}
+      <p class="agent-review-note">接受会保留 Worker 的回答并结束这次运行；拒绝会判为失败。</p>
+      <div class="approval-actions"><button class="approve" type="button" data-review="${escape(agent.review.runId)}" data-review-decision="accept">继续（接受观察证据）</button><button class="secondary" type="button" data-review="${escape(agent.review.runId)}" data-review-decision="reject">判为失败</button></div>
+    </div>` : "";
     const openable = typeof agent.runId === "string" && agent.runId.length > 0 && agent.runId !== session.id;
-    if (!openable) return `<div class="agent-row" data-agent-id="${escape(agent.id)}"${focused}>${body}</div>`;
-    return `<button class="agent-row agent-row--open" type="button" data-open-agent-run="${escape(agent.runId)}" data-agent-id="${escape(agent.id)}"${focused} title="打开这个子 Agent 所属的任务记录">${body}</button>`;
+    const panel = `<div class="agent-detail">
+      ${agent.summary ? `<p class="agent-detail-summary">${escape(agent.summary)}</p>` : ""}
+      ${reviewBlock}
+      ${hint ? `<p class="agent-detail-hint"><b>要修改什么</b> ${escape(hint)}</p>` : ""}
+      ${evidence ? `<ul class="agent-detail-evidence">${evidence}</ul>` : ""}
+      ${openable ? `<button class="agent-run-link" type="button" data-open-agent-run="${escape(agent.runId)}" data-agent-id="${escape(agent.id)}" title="审计页展示这次运行的全部工具调用与证据，只读，不会重跑">打开审计查看完整轨迹（只读，不会重跑）</button>` : ""}
+    </div>`;
+    return `<details class="agent-row-details" data-agent-id="${escape(agent.id)}"${focused}${agent.id === focusId ? " open" : ""}><summary class="agent-row">${body}</summary>${panel}</details>`;
   }).join("");
-  return `<details class="activity-card" data-disclosure="agents"${open}><summary class="activity-summary">${icon("spark")}<b>Agent 协作</b><span>${completed}/${session.subagents.length} 已完成</span></summary><div class="agent-list">${rows}</div></details>`;
+  return `<details class="activity-card" data-disclosure="agents"${open}><summary class="activity-summary">${icon("spark")}<b>Agent 协作</b><span>${completed}/${session.subagents.length} 已完成${review === 0 ? "" : ` · ${review} 需要复核`}${failed === 0 ? "" : ` · ${failed} 需要处理`}</span></summary><div class="agent-list">${rows}</div></details>`;
 }
 function approvalMarkup(session) {
   const approvals = session.approvals || [];
