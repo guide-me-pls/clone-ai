@@ -38,6 +38,35 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--只读请求永远不经过-llm-planner)；
   [执行链路](optimizations.zh-CN.md#2026-11-24--只读请求绕过-llm-planner)。
 
+## 2026-11-24 —— 一天现在记录操作，生成文件不进答案
+
+- **主张：** 常驻 Daemon 运行期间，每个已学会文件夹通过递归 FSEvents 监听；创建、修改或
+  删除的文件变成一条带时间戳的操作记录，即使它的内容没活到下一次采集。构建产物、缓存、
+  系统/编辑器垃圾与仓库自己的 gitignore 路径会从台账、监听器与摘要中过滤，并报告跳过数量。
+  Mac 休眠/关机仍会丢事件；下一次采集的 mtime 回填会补上它能补的部分。
+- **证据：** `node --experimental-strip-types --test test/workspace-noise.test.ts test/workspace-watch.test.ts test/workspace-ledger.test.ts test/daily-digest.test.ts`
+  **30/30**。监听器测试为一次保存记录一条 `created`，丢弃 `.DS_Store` / `debug.log` /
+  `state.tmp` / `node_modules/pkg.md` 与被 gitignore 的 `draft.md`；摘要输出
+  `Operations (watcher): 1 recorded` 与过滤计数。`npm test` **1046/1046**，0 失败；
+  `npm run typecheck` 退出码 0；`npm run gate` **PASS**，基线未变。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--常驻-daemon-记录-fsevents生成文件不进台账)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--daemon-记录-fsevents-操作噪声不进每日摘要)。
+
+## 2026-11-24 —— 一天的工作读成内容级 diff，而不是一串文件名
+
+- **主张：** 分身可以靠一份有界的每日台账回答"这一天发生了什么"：文本文件对存储的基线
+  给出 unified 风格 diff，每个仓库提供当天提交与当前状态，当天的回合、Run、验证与
+  记忆文档写入被合并进来。台账没有覆盖的文件夹回退到现有 mtime 读取，并明确标注没有
+  内容基线，而不是被呈现成完整的一天。
+- **证据：** `node --experimental-strip-types --test test/workspace-ledger.test.ts test/daily-digest.test.ts`
+  **22/22**。digest 测试在同一份夹具上钉住前后对比：旧的按天读取（`collectFolderReport`）
+  返回 `plan.md` 与时间戳；`collectDailyDigest` 返回 `--- a/plan.md` / `+++ b/plan.md`
+  以及 `-第二行`、`+改过的第二行`、`+第三行`，并带上 `Turns: 1 completed` 与记忆行。
+  `npm test` **1038/1038**，0 失败；`npm run typecheck` 退出码 0；`npm run gate`
+  **PASS**，基线未变。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--有界的每日台账让工作区可以按天做内容级-diff)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--有界的每日台账让工作区可以按天做内容级-diff)。
+
 ## 2026-11-24 —— Worker 收到主 Agent 的任务，而不是通用模板
 
 - **主张：** 主 Agent 现在编写每个 Worker 的完整 `workerBrief`；Worker 的 system 提示词就是

@@ -19,7 +19,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 
 import { canonicalPath, isForbiddenPath } from "../authority/scope.ts";
 import { createJournalStore } from "../core/sqlite-journal.ts";
-import { readMainAgentTurnRecords } from "./turn-audit.ts";
+import { readMainAgentTurnRecords, type MainAgentTurnRecord } from "./turn-audit.ts";
 
 export interface KnownFolder {
   /** Canonical directory the twin remembers. 分身记住的规范目录。 */
@@ -176,6 +176,12 @@ export interface KnownFolderOptions {
    * 目标同样是使用记录：是所有者要求的，即使路径是主 Agent 写进任务而不是聊天消息里的。
    */
   events?: readonly FolderUsageEvent[];
+  /**
+   * Turn records already read by the caller, so a digest that also renders the
+   * day's turns does not read the same ledger twice.
+   * 调用方已经读出的回合记录，使同时渲染当天回合的摘要不必重复读取同一份台账。
+   */
+  records?: readonly MainAgentTurnRecord[];
 }
 
 /** The part of a journal event that can name a folder. 能点名文件夹的那部分 Journal 事件。 */
@@ -219,7 +225,7 @@ export async function knownOwnerFolders(
 ): Promise<KnownFolder[]> {
   const home = options.home ?? homedir();
   const limit = Math.max(1, Math.min(20, options.limit ?? 5));
-  const records = await readMainAgentTurnRecords(dataDirectory).catch(() => []);
+  const records = options.records ?? await readMainAgentTurnRecords(dataDirectory).catch(() => []);
   const remembered = new Map<string, KnownFolder>();
 
   const consider = (text: string, at: string): void => {

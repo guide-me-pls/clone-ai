@@ -106,6 +106,104 @@
   必需产物，就在后置校验闸门之后把只读请求交给它；如果只读请求在标记之外仍必须产出文件，
   就要求点名的目标。
 
+### 2026-11-24 —— Daemon 记录 FSEvents 操作，噪声不进每日摘要
+
+- **目标 / 假设：** 所有者要求加上 FSEvents 并过滤没用的信息。30 分钟采集只能看到净内容
+  变化：两次采集之间创建又删除的文件什么都不留，操作时间也丢了。常驻 Daemon 里的递归
+  `fs.watch`（macOS 上即 FSEvents）应以内核级成本记录操作；共享的噪声过滤器应把构建产物、
+  缓存、系统/编辑器垃圾与 gitignore 路径挡在台账和摘要之外。
+- **取舍：** [常驻 Daemon 记录 FSEvents，生成文件不进台账](../architecture/trade-offs.zh-CN.md#2026-11-24--常驻-daemon-记录-fsevents生成文件不进台账)。
+- **变更：** `src/main-agent/workspace-noise.ts` —— 目录列表、文件模式，以及用只读 git
+  参数构建并缓存的 `.gitignore` 索引。`src/main-agent/workspace-watch.ts` —— 每个已学会
+  文件夹一条递归监听、事件分类、按路径去重、噪声跳过，以及监听回合台账以发现新文件夹。
+  `src/main-agent/workspace-ledger.ts` —— 每日事件文件（`<day>.events.jsonl`）、读写函数、
+  覆盖信息里的 `filtered`、采集期间的噪声过滤与事件文件清理。
+  `src/main-agent/tools/daily-digest.ts` —— 合并操作并报告跳过数量。
+  `src/companion-server.ts` —— 启动/关闭监听器。`src/main-agent/tools/recent-changes.ts`
+  —— 共用噪声过滤器并报告 `filtered`。测试：`test/workspace-noise.test.ts`（3）、
+  `test/workspace-watch.test.ts`（3），以及 `test/workspace-ledger.test.ts`（16）与
+  `test/daily-digest.test.ts`（8）中的新用例。
+- **Eval：** `node --experimental-strip-types --test test/workspace-noise.test.ts test/workspace-watch.test.ts test/workspace-ledger.test.ts test/daily-digest.test.ts`
+  —— **30/30**。监听器测试创建 `notes.md` 得到一条 `created` 记录；`.DS_Store`、
+  `debug.log`、`state.tmp`、`node_modules/pkg.md` 与被 gitignore 的 `draft.md` 都不进
+  日志；摘要输出 `Operations (watcher): 1 recorded` 与过滤计数，且不出现噪声路径。
+  `npm test` **1046/1046**，0 失败；`npm run typecheck` 退出码 0；`npm run gate`
+  **PASS**，基线未变。
+- **Benchmark run：** 无——确定性测试 eval，无 Provider 调用。
+- **执行链路：** 单个会话。先检查桌面运行时：Daemon 已是 KeepAlive launchd LaunchAgent，
+  且正从已安装 App 运行，因此"窗口关闭"不需要第二个代理；实机探测确认递归 `fs.watch` 在
+  本机报告创建/删除路径。取舍条目在代码之前写。随后加入噪声模块、监听器、事件文件与摘要
+  合并。双语注释测试抓到两处只有英文的注释；测试运行抓到覆盖字面量缺少 `filtered`；
+  类型检查没有其他问题。没有 Worker、没有模型调用。并行的系统提示词/工具会话仍在编辑其他
+  文件；本次没有触碰它的文件。
+- **优点：** 操作以 FSEvents 成本记录，且不读取内容；采集、监听器与回退共用同一套过滤，
+  跳过数量可见；`.gitignore` 让所有者自己的"生成物"定义成为决定性依据；监听器会从回合台账
+  学会新文件夹。
+- **缺点 / 下次：** 事件日志只有操作（瞬态文件没有内容）；只在 Daemon 运行时存在，Mac 休眠
+  会丢事件；内置模式可能藏起手工编辑的 `.log`；gitignore 索引依赖 git，缓存五分钟；每个新
+  文件夹与每文件夹的首个事件都会跑 `findRepositories`，在超大树上可感知。下次：显式监听
+  `.gitignore` 以更快失效；如果所有者需要瞬态文件正文，考虑在 `created` 时读取内容。
+- **推翻条件：** 同取舍条目——事件量明显时提高去重或只监听最近点名的文件夹；事件日志制造的
+  困惑多于解释时删掉它；被过滤路径被报告为工作时加入窄白名单（不是文件夹设置）。保留
+  `.gitignore` 过滤。
+
+### 2026-11-24 —— 有界的每日台账让工作区可以按天做内容级 diff
+
+- **目标 / 假设：** 所有者要求把一天的工作读成 diff（"每一天都可以当作 diff，查看具体的
+  操作内容"），并要求 Git 之外的记录。`recent_file_changes` 只读文件名、mtime 与 Git，
+  说明不了一份文档内部改了什么；不在 Git 里的文件夹也没有内容记录。由守护进程采集的增量、
+  内容寻址台账，加上一个只读摘要工具，应当能在不拖慢回合的前提下，用内容 diff 与分身自己
+  的记录回答一天。
+- **取舍：** [有界的每日台账让工作区可以按天做内容级 diff](../architecture/trade-offs.zh-CN.md#2026-11-24--有界的每日台账让工作区可以按天做内容级-diff)。
+- **变更：** `src/main-agent/workspace-ledger.ts` —— 每文件夹状态表、每天的
+  `(路径, 之前, 之后, 时间)` JSONL、内容寻址文本块、本地天窗口、有界单 hunk diff、
+  限流的增量采集与 90 天清理。`src/main-agent/tools/daily-digest.ts` ——
+  `daily_workspace_digest`，合并台账 diff、Git 提交/状态、回合、工作更新、验证与记忆文档
+  写入，并给出显式覆盖段。`src/main-agent/tools/recent-changes.ts` —— 导出共用的扫描/Git
+  原语（`scanFiles`、带边界参数的 `walkFiles`、`findRepositories`、`readRepository`）并
+  增加 `--until`。`src/companion-server.ts` —— 维护循环最多每 30 分钟采集一次，且与维护轮
+  解耦。`src/main-agent/prompt.ts` —— 一行 charter；`MAIN_AGENT_CHARTER_VERSION` 8 → 9。
+  测试：`test/workspace-ledger.test.ts`（15 例）、`test/daily-digest.test.ts`（7 例），
+  并更新 prompt-snapshot 工具表与 worker-brief 的 charter 版本断言。
+- **Eval：** `node --experimental-strip-types --test test/workspace-ledger.test.ts test/daily-digest.test.ts`
+  —— **22/22**。digest 测试钉住前后对比：同一份夹具上，旧的按天读取
+  （`collectFolderReport`）只返回 `plan.md` 与时间戳；变更后 `collectDailyDigest` 输出
+  `--- a/plan.md` / `+++ b/plan.md` 以及 `-第二行`、`+改过的第二行`、`+第三行`，并带上
+  当天的 Run、验证与记忆行。`npm test` **1038/1038**，0 失败；`npm run typecheck` 退出码 0；
+  `npm run gate` **PASS**，基线未变。
+- **Benchmark run：** 无——确定性测试 eval，无 Provider 调用。
+- **执行链路：** 单个会话。先读 `recent-changes`、`clone-home`、`workspace-evidence`、
+  Journal/contracts、记忆治理、回合台账、工作更新与维护循环；两次实机 `mdfind` 探测确认
+  本机接受 `$time.iso(<时间戳>)` 与 `$time.today(-N)`。取舍条目在代码之前写。实现后
+  类型检查抓到一个引号不匹配；第一次测试运行抓到天边界竞争（`end = now` 的排他上界会漏掉
+  同一毫秒写入的文件），改为下一个本地午夜；全量套件抓到在途 worker-brief 测试钉住的
+  `MAIN_AGENT_CHARTER_VERSION = 8`，现为 9 并注明新增行。随后四视角对抗评审发现：已学会
+  文件夹可能包含受保护根（`Library/Keychains`）；`.env` 等凭据形态文件被读入块；
+  `workspace-history` 不在取舍条目声称的受保护根里；伪造的日文件可让哈希解析到块存储之外；
+  git 没有使用 `agent-tools` 已有的只读参数；Spotlight 的 2,000 候选上限是静默的，且会包含
+  隐藏工具目录；跨午夜的间隔使用 8 秒回合遍历并把截断标记永久固定；2 万条目状态表每 30 分钟
+  全量重写；轮出已学会集合的文件夹状态永远占住块；digest 重复读 Journal 与回合台账，并可能
+  启动约 300 个 git 进程。除每月清理的开销与崩溃后块预算少计外，本次都已修复（逐文件受保护
+  检查、凭据名拒绝、台账路径加入两份受保护清单、哈希/路径校验、
+  `--no-optional-locks`/`--no-pager`/`core.fsmonitor=false`/`log.showSignature=false`、
+  上限与隐藏目录处理、跨午夜间隔的深遍历、小检查文件 + 条件写状态表、过期状态删除、单次
+  Journal/回合读取与每文件夹仓库上限）。没有 Worker、没有模型调用；评审工作流剩余的两个
+  视角在同侪已返回上述发现后停止。
+- **优点：** 采集不在回合路径上，基线之后是增量的；存储有界（2 万文件、每个文本块 512 KB、
+  总量 512 MB、90 天）；摘要如实说明看不到什么，而不是把一天拼得看起来完整；扫描与 Git
+  读取现在与 `recent_file_changes` 共用，而不是复制一份；受保护根、凭据名与不可信内容都在
+  使用点检查，而不只是文件夹根。
+- **缺点 / 下次：** 首次基线在后台每个文件夹最长 60 秒；每天 5,000 条变更上限会丢弃剩余
+  部分，只标记截断；diff 是前后缀裁掉的单 hunk，不是最小编辑脚本；`scanFiles` 的 Spotlight
+  查询仍只覆盖"今天"，因此应用关闭数天期间新建、之后未再改动的文件，在回退遍历撞到边界时
+  可能漏掉；只验证了 macOS；每月清理会在共享锁下解析整份保留台账，而崩溃可能让块预算少计
+  直到该清理重算。下次：精确时间戳的 Spotlight 查询或 FSEvents、Windows 实跑、所有者要求
+  更精确输出时的双 hunk diff，以及清理停顿变得明显时的增量清理。
+- **推翻条件：** 同取舍条目——如果所有者报告某天有实际工作却因应用关闭或文件夹超过 2 万
+  文件而缺失，把采集移到操作系统级监听或提高上限；如果存储或 stat 开销变得明显，提高间隔
+  或只采集点名的文件夹；如果内容进入了所有者没有要求过的上下文，停止保存内容并要求按天
+  显式请求。
+
 ### 2026-11-24 —— 主 Agent 编写 Worker 简报
 
 - **目标 / 假设：** Worker 提示词现在有两位作者，谁都无法完整表达任务：主 Agent 提供

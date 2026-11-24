@@ -46,6 +46,42 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--a-read-only-request-never-goes-through-the-llm-planner);
   [execution chain](optimizations.md#2026-11-24--a-read-only-request-bypasses-the-llm-planner).
 
+## 2026-11-24 — A day now records operations, and generated files stay out of the answer
+
+- **Claim:** while the resident daemon runs, each learned folder is watched
+  through recursive FSEvents; a created, modified or removed file becomes one
+  dated operation record even when its content did not survive to the next
+  capture. Build output, caches, OS/editor junk and the repository's own
+  gitignored paths are filtered from the ledger, the watcher and the digest,
+  and the skipped count is reported. Mac sleep/off still loses events; the
+  next capture's mtime backfill covers what it can.
+- **Evidence:** `node --experimental-strip-types --test test/workspace-noise.test.ts test/workspace-watch.test.ts test/workspace-ledger.test.ts test/daily-digest.test.ts`
+  **30/30**. The watcher test records one `created` for a saved file, drops
+  `.DS_Store` / `debug.log` / `state.tmp` / `node_modules/pkg.md` and a
+  gitignored `draft.md`; the digest prints `Operations (watcher): 1 recorded`
+  and the filtered count. `npm test` **1046/1046**, 0 fail; `npm run typecheck`
+  exit 0; `npm run gate` **PASS**, baseline unchanged.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--the-resident-daemon-records-fsevents-and-generated-files-stay-out-of-the-ledger);
+  [execution chain](optimizations.md#2026-11-24--the-daemon-records-fsevents-operations-and-noise-stays-out-of-the-daily-digest).
+
+## 2026-11-24 — A day of work reads as a content-level diff, not a list of file names
+
+- **Claim:** the twin can answer "what happened on this day" from a bounded daily
+  ledger: text files get a unified-style diff against a stored baseline, each
+  repository contributes its commits and current status, and the day's turns,
+  runs, verifications and memory-document writes are merged in. A folder the
+  ledger did not capture falls back to the existing mtime read and is labelled
+  as having no content baseline, instead of being presented as a complete day.
+- **Evidence:** `node --experimental-strip-types --test test/workspace-ledger.test.ts test/daily-digest.test.ts`
+  **22/22**. The digest test pins the before/after on one fixture: the previous
+  day-scoped read (`collectFolderReport`) returns `plan.md` with a timestamp;
+  `collectDailyDigest` returns `--- a/plan.md` / `+++ b/plan.md` with
+  `-第二行`, `+改过的第二行`, `+第三行`, plus `Turns: 1 completed` and the
+  memory row. `npm test` **1038/1038**, 0 fail; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**, baseline unchanged.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--a-bounded-daily-ledger-gives-the-workspace-a-content-level-day-diff);
+  [execution chain](optimizations.md#2026-11-24--a-bounded-daily-ledger-gives-the-workspace-a-content-level-day-diff).
+
 ## 2026-11-24 — The worker receives the Main Agent's task, not a generic template
 
 - **Claim:** the Main Agent now writes each worker's complete `workerBrief`; the

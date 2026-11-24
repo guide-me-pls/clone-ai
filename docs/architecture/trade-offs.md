@@ -123,6 +123,187 @@ read-only through it behind a post-validation gate. If a read-only request must
 produce a file despite the marker, require a named target; the detector already
 lets a named write target win.
 
+## 2026-11-24 — The resident daemon records FSEvents, and generated files stay out of the ledger
+
+**Decision.** The companion daemon — already a resident launchd LaunchAgent
+(`ai.clone.companion`, KeepAlive) — watches every learned folder with Node's
+recursive `fs.watch`, which macOS implements on FSEvents. Each event is
+classified (`created` / `modified` / `removed`), filtered, deduplicated per path
+for 30 seconds, and appended to `workspace-history/days/<key>/<day>.events.jsonl`.
+The 30-minute content capture stays as it is; the event file records *that* an
+operation happened and *when*, and the daily digest merges it with content
+diffs, Git, turns, runs, verifications and memory writes. The same noise filter
+is applied at capture and in the digest's mtime fallback: hidden and generated
+directory names, generated-file patterns, and the repository's own `.gitignore`
+(untracked ignored paths). The number of skipped generated files is reported,
+not silently dropped.
+
+**Why it won.** The owner asked for FSEvents and for useless information to be
+filtered. A 30-minute poll only sees net content changes: a file created and
+removed between polls leaves nothing, and the exact operation time is lost.
+FSEvents while the daemon runs gives the operation stream at kernel cost. The
+window-closed case is already covered because the runtime is a launchd agent,
+not the window; FSEvents adds latency and transient visibility, not a new
+"closed" guarantee. Mac sleep/off cannot be covered by any user-space watcher
+(FSEvents does not replay while the process is dead), so the existing
+mtime-based backfill on the next capture remains the answer for that gap.
+
+**Alternatives rejected.**
+
+- *Install a second launchd agent for the watcher.* The daemon is already the
+  resident agent; a second one duplicates the ledger lock, the folder list and
+  the shutdown path.
+- *Run a full capture on every event.* A build burst would stat 20,000 files
+  every few seconds. The event append is O(changed paths); content stays on the
+  capture cadence.
+- *Read and store content on the event.* The file may already be gone when the
+  event is handled; reading it synchronously in the listener would block the
+  watcher. The capture stores content for what survives; the event log honestly
+  records the operation that left no file.
+- *Filter only by directory name.* `.DS_Store`, `*.log`, `*.tsbuildinfo`, source
+  maps and build outputs inside ordinary folders would still flood the digest;
+  file patterns and the repository's `.gitignore` are required.
+- *Exclude every dotfile.* `.gitignore`, `.editorconfig` and other meaningful
+  dotfiles are work; the filter names known tool/OS junk instead.
+- *Use `chokidar` or the `fsevents` package.* Node's recursive `fs.watch` is
+  FSEvents-backed on macOS and adds no dependency; the 30-minute capture covers
+  any events the watcher misses.
+- *Only record events, drop the content capture.* The owner's original ask is a
+  content-level daily diff; events say when, the capture says what.
+
+**Evidence.** `src/desktop/daemon-supervisor.ts` renders a KeepAlive LaunchAgent
+and `~/Library/LaunchAgents/ai.clone.companion.plist` exists on this machine;
+`ps` shows the bundled `desktop-sidecar.ts` running from the installed app, so
+closing the window does not stop the daemon. A live probe on this machine
+(Node 24, macOS) showed recursive `fs.watch` reporting `sub/x.md` on create and
+delete. `src/main-agent/tools/recent-changes.ts` currently filters directory
+names only; `.DS_Store`, generated files and gitignored outputs pass through.
+`test/workspace-noise.test.ts` (patterns and `.gitignore`), `test/workspace-watch.test.ts`
+(event classification, dedupe, noise skip) and `test/daily-digest.test.ts`
+(event merge) pin the behavior.
+
+**What it costs.** One recursive watcher per learned folder (at most five), with
+the kernel's FSEvents stream; a shallow turn-ledger watch refreshes the folder
+set when a new folder is learned. The event file is capped at 5,000 records per
+folder per day and pruned with the day files. Gitignored sets are cached for
+five minutes and invalidated by a `.gitignore` event. Events during Mac sleep
+are lost; content of a file created and deleted between the event and the
+capture is lost. The filter can hide a generated-looking path the owner
+considers work (a `*.log` they edit by hand); the file stays on disk and the
+digest's coverage line says how many paths were filtered.
+
+**Reversal condition.** If event volume or watcher CPU becomes noticeable, raise
+the dedupe window or watch only the folders named in the last day's requests; if
+the event log confuses more than it explains, remove it and keep the 30-minute
+capture; if owners report a filtered path as work, add a narrow allowlist (not a
+folder setting) with the report as the evidence. Keep the `.gitignore` filter:
+it is the owner's own definition of generated output.
+
+## 2026-11-24 — A bounded daily ledger gives the workspace a content-level day diff
+
+**Decision.** The twin keeps its own change ledger for the folders it has learned,
+in `<clone home>/workspace-history`: a content-addressed text blob per changed
+version, a per-day JSONL record of `(path, before, after, time)`, and a per-folder
+state map of each file's current identity. The daemon's maintenance loop captures
+incrementally at most every 30 minutes — stat the known files, ask Spotlight for
+new ones, and pay a bounded full walk only for the first baseline. A new read-only Kernel
+tool, `daily_workspace_digest`, renders one local day as: file changes with
+unified diffs for text files, each repository's commits and status for that day,
+the day's runs, verifications and memory-document writes, and a coverage section
+that names what it could not see. The tool never starts a ledger capture inside
+a turn; when no ledger covers the day it reuses the existing bounded
+Spotlight-or-walk read and reports the answer as mtime-only.
+`recent_file_changes` stays the cheap live list for "what changed today / in the
+last N hours".
+
+This supersedes the 2026-11-19 scope "The tool reads file names and Git status,
+never file contents" for learned folders, and only through this ledger and its
+caps.
+
+**Why it won.** The 2026-11-19 entry chose metadata only, so the owner's answer
+in the 2026-11-24 screenshot can name files and commits but cannot show what
+inside a document changed; a folder outside Git has no content record at all.
+The owner asked for the workspace to be readable "每天当作 diff，查看具体的操作内容"
+and for records beyond Git. A content diff needs a before state, and the
+filesystem offers none for arbitrary folders (see rejected alternatives), so
+the twin has to record its own baseline. Putting capture in the maintenance
+loop keeps the 5.2 s pruned walk of a 130 GB tree (2026-11-19 measurement) off
+the turn path: the first capture pays it once, and later captures only stat
+known files plus Spotlight's new-file query.
+
+**Alternatives rejected.**
+
+- *Keep names + mtimes + Git and add another search.* The missing thing is
+  content, not another index: `search_history` already reaches every conversation
+  and `recall_memory` every reviewed note. Another search over the same file
+  names still cannot answer "what changed inside this document".
+- *Snapshot the whole tree each turn or each day.* The 2026-11-19 entry measured
+  a pruned walk at 5.2 s on this machine; paying it per turn makes every
+  "what did I do today" question cost seconds before it can answer, and a full
+  manifest every ten minutes would be mostly duplicated bytes. The state map
+  carries the same information at the price of one stat pass.
+- *Use Git as the diff engine by committing into the owner's repositories.*
+  The twin must not create commits in the owner's work, most personal documents
+  are not in a repository, and the 2026-11-19 write entry removed any implicit
+  write root. Git stays a read-only extra stream inside the digest.
+- *Depend on Time Machine/APFS local snapshots or IDE local history.* (Assumption,
+  not measured.) Local snapshots exist only where a backup tool configured them,
+  browsing them needs `tmutil` and elevated access, and VS Code/JetBrains history
+  is per-IDE and has no documented interface. The ledger must work on folders
+  where none of these exist.
+- *Store one full manifest per day.* A 20k-entry manifest is about 3 MB; one per
+  folder per day is about 1 GB per year for five folders. Day deltas store only
+  the changes, which is exactly what the digest reads.
+- *Store a full file copy per change, like the checkpoint store.* A checkpoint
+  keeps copies for one dispatch; a daily ledger would keep every version of
+  every document forever. Content-addressed blobs, 90-day pruning and a 512 MB
+  cap bound it.
+- *Let `daily_workspace_digest` capture on demand.* It would put the baseline's
+  60 s per-folder walk inside a turn, and capturing at read time still cannot
+  invent a before-state for a past day. Capture belongs to the daemon; the tool
+  reads, and falls back to the existing bounded mtime read when the ledger has
+  no coverage.
+
+**Evidence.** `src/main-agent/tools/recent-changes.ts` (`statFile`, `readRepository`) reads
+only metadata and Git; the 2026-11-19 trade-off states "The tool reads file
+names and Git status, never file contents." Spotlight accepts both
+`$time.iso(<timestamp>)` and `$time.today(-N)` (verified on this machine on
+2026-11-24: a future ISO cutoff returned no matches, a 400-day cutoff returned
+files), and the existing Spotlight path answered `~/work` in 0.13 s. The existing
+`snapshotWorkspace` already bounds a walk at 20,000 files and hashes files ≤2 MB,
+so the same limits carry over. `test/workspace-ledger.test.ts` and
+`test/daily-digest.test.ts` pin capture, day windows, diffs, fallback coverage,
+protected refusal and the merged activity sections.
+
+**What it costs.** The clone home now stores private file content. `~/.clone`
+is a protected location for workers — `workspace-history` is added to the
+protected roots — so no worker can read the ledger; the digest
+returns excerpts to the Main Agent only when the owner asks for a day. A
+learned folder may contain a protected root (a home folder contains
+`Library/Keychains`), so every content read is checked against the protected
+list, not only the folder root; credential-shaped files (`.env`, `.npmrc`,
+keys) are tracked by identity but never read into a blob and never diffed.
+Caps: 5 learned folders, 20,000 files per folder, 512 KB per text blob, 512 MB
+total blobs, 5,000 change rows per folder per day, 90-day retention. Binaries and
+larger files are identified by `meta:size:mtime` only — listed as changed, never
+diffed. Nothing is recorded while the app is closed, while a folder is over the
+cap, or before the first baseline capture; the digest says so in a coverage
+section instead of claiming a complete day. The first capture reads up to 20,000
+small text files once; later captures stat the known files and ask Spotlight for
+new ones at most every 30 minutes. A capture that is not aborted writes its
+check file every time but rewrites the full state map only when the map
+changed. A crash between a blob write and the usage write can undercount the
+budget until the monthly prune recomputes it.
+
+**Reversal condition.** If the owner reports days with real work missing because
+the app was closed or the folder exceeds 20,000 files, move capture to an OS-level
+watcher (FSEvents/launchd) or raise the caps, and record the measured coverage
+gap. If blob storage or the stat pass becomes noticeable, raise the interval or
+capture only folders named in the request; do not keep the 30-minute cadence by
+default. If any file's content reaches a context the owner did not ask for
+(a symlink escaping a learned folder), stop storing content, keep hashes, and
+require an explicit per-day content request.
+
 ## 2026-11-24 — The Main Agent writes the worker brief; the Kernel appends only facts
 
 **Decision.** A `PlanStep` and a `SubagentWorkOrder` gain an optional

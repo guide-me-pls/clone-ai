@@ -20,11 +20,25 @@ A request that explicitly says 只读/仅读取/不要修改任何文件 is no l
 
 明确写着 只读/仅读取/不要修改任何文件 的请求不再交给 LLM Planner——它的合同要求每个子代理都有必需产物。`runQuery` 现在改用确定性的只读计划（Main Agent 简报为只读时也一样），Worker 读取文件并回答，而不是以 "Subagent draft did not satisfy its artifact contract." 失败。LLM Planner 仍负责交付类请求；两个 Planner 失败测试改用交付类查询以保留原意。`npm test` 1103/1103，typecheck 0，gate PASS。
 
+### The daemon records file operations, and generated files are filtered out
+
+While the resident daemon runs, each learned folder is watched through recursive `fs.watch` (FSEvents on macOS). A created, modified or removed file becomes one dated operation record in `<clone home>/workspace-history/days/<key>/<day>.events.jsonl`, deduplicated per path for 30 seconds and capped at 5,000 records / 2 MB per day; the digest merges these operations with content diffs and marks paths that changed with no net content difference. The same noise filter now runs in the watcher, the content capture and the digest's mtime fallback: generated directory names (build, dist, target, caches, `node_modules`, …), generated file patterns (`.DS_Store`, `*.log`, `*.tmp`, swap/backup files, `*.tsbuildinfo`, source maps, …) and the repository's own `.gitignore` (untracked ignored paths, read with `--no-optional-locks`/`--no-fsmonitor`). The skipped count is reported per folder instead of silently dropping files. A new folder is watched as soon as the turn ledger learns it. Mac sleep/off still loses events; the next capture's mtime backfill remains. The window being closed does not stop the daemon — it is already a launchd LaunchAgent. `npm test` 1046/1046, typecheck 0, gate PASS.
+
+### 常驻 Daemon 记录文件操作，生成文件被过滤
+
+常驻 Daemon 运行期间，每个已学会文件夹通过递归 `fs.watch`（macOS 上即 FSEvents）监听。创建、修改或删除的文件在 `<clone home>/workspace-history/days/<key>/<day>.events.jsonl` 中变成一条带时间戳的操作记录；按路径 30 秒去重，每天上限 5,000 条 / 2 MB；摘要把这些操作与内容 diff 合并，并标出"改过但没有净内容差异"的路径。同一套噪声过滤器现在运行在监听器、内容采集和摘要的 mtime 回退中：生成目录名（build、dist、target、各类缓存、`node_modules` 等）、生成文件模式（`.DS_Store`、`*.log`、`*.tmp`、交换/备份文件、`*.tsbuildinfo`、source map 等）以及仓库自己的 `.gitignore`（未跟踪且被忽略的路径，用 `--no-optional-locks`/`--no-fsmonitor` 读取）。每个文件夹会报告被跳过的数量，而不是静默丢弃。新文件夹在回合台账学到它之后立即开始监听。Mac 休眠/关机仍会丢事件；下一次采集的 mtime 回填继续兜底。窗口关闭不会停掉 Daemon——它本来就是 launchd LaunchAgent。`npm test` 1046/1046，typecheck 0，gate PASS。
+
 ### The settings page lists MCP tools and skills, and each server can be loaded
 
 The desktop settings gain a **工具与技能** tab: every MCP server in the clone home's `mcp.json` is listed with its declared tools and risks, every skill under `<clone home>/skills` and `<workspace>/.clone/skills` is listed read-only, and each server has a 加载/停用 button that rewrites only its `enabled` field for the next worker run. The catalog never returns `env`, `command`, `args` or `url`; the toggle is atomic and 0600, and preserves every other field. `GET /api/tools` and `POST /api/tools/mcp/:id/enabled` back the tab. `npm test` 1038/1038, typecheck 0, gate PASS.
 
 桌面设置新增 **工具与技能** 分区：列出 clone home 的 `mcp.json` 中每个 MCP 服务器及其已声明工具与风险；只读列出 `<clone home>/skills` 与 `<workspace>/.clone/skills` 下的技能；每个服务器都有 加载/停用 按钮，只改写它的 `enabled` 字段，供下一次 Worker 运行使用。目录从不返回 `env`、`command`、`args` 或 `url`；切换是原子的、权限 0600，并保留其他所有字段。`GET /api/tools` 与 `POST /api/tools/mcp/:id/enabled` 支撑该分区。`npm test` 1038/1038，typecheck 0，gate PASS。
+
+### A day of work reads as a content-level diff, and the twin's own records join it
+
+The Main Agent gains `daily_workspace_digest`: it reads one local day as the files that changed in the learned folders (with unified diffs for text files that have a stored baseline), each repository's commits and current status, and the day's turns, runs, verifications and memory-document writes. The daemon keeps a bounded daily ledger in `<clone home>/workspace-history`: a per-folder state map, a per-day change file, and content-addressed text blobs, captured incrementally at most every 30 minutes and never inside a turn. Caps: 5 folders, 20,000 files per folder, 512 KB per text blob, 512 MB of blobs, 5,000 change rows per folder per day, 90-day retention. A day without ledger coverage falls back to the existing mtime read and is labelled as having no content baseline; binaries and larger files are listed without a diff. Credential-shaped files are tracked by identity but never read; a protected root inside a learned folder is skipped. The ledger directory is itself protected from workers. `MAIN_AGENT_CHARTER_VERSION` moves to 9. `npm test` 1038/1038, typecheck 0, gate PASS.
+
+主 Agent 新增 `daily_workspace_digest`：把一个本地日历日读成已学会文件夹中的文件变更（有存储基线的文本文件给出 unified diff）、每个仓库的提交与当前状态，以及当天的回合、Run、验证与记忆文档写入。守护进程在 `<clone home>/workspace-history` 维护有界每日台账：每文件夹状态表、每天一份变更文件、内容寻址的文本块；最多每 30 分钟增量采集一次，绝不在回合内采集。上限：5 个文件夹、每文件夹 2 万文件、每个文本块 512 KB、块总量 512 MB、每文件夹每天 5,000 条变更、保留 90 天。没有台账覆盖的一天回退到现有 mtime 读取，并明确标注没有内容基线；二进制与更大的文件只列出、不给 diff。凭据形态的文件只跟踪身份、绝不读取；已学会文件夹内部的受保护根会被跳过。台账目录本身也受保护，Worker 无法读取。`MAIN_AGENT_CHARTER_VERSION` 升到 9。`npm test` 1038/1038，typecheck 0，gate PASS。
 
 ### The Main Agent writes the worker brief
 

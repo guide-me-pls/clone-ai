@@ -122,6 +122,7 @@ test("every registered Kernel tool is visible to provenance", async (t) => {
 
   const names = registered.map((tool) => tool.name).sort();
   assert.deepEqual(names, [
+    "daily_workspace_digest",
     "get_authority",
     "get_capacity",
     "get_run_status",

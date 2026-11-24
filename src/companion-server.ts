@@ -58,6 +58,9 @@ import { DailyReportRunner, type DailyReportSettings } from "./reporting/daily-r
 import { BadCaseLog } from "./reporting/bad-case-log.ts";
 import { readJsonFile } from "./config/json-file.ts";
 import { MdMemoryStore, GovernedMemorySource } from "./memory/md-memory-store.ts";
+import { knownOwnerFolders } from "./main-agent/known-folders.ts";
+import { captureWorkspaceLedger } from "./main-agent/workspace-ledger.ts";
+import { WorkspaceWatcher } from "./main-agent/workspace-watch.ts";
 import type { JournalStore } from "./core/journal.ts";
 import type { CloneRuntime } from "./core/runtime.ts";
 import { logJson } from "./observability/json-log.ts";
@@ -600,6 +603,35 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
    * `memory.candidate.requested` 转成可审核的候选（未配置时则记录为零候选提炼）。这两件事
    * 正是“分身会注意到事情、会学习”的来源，因此它们属于定时器，而不是属于某个用户动作。
    */
+  /**
+   * The workspace ledger's capture cadence. The attempt is checked on every
+   * maintenance tick, and the library itself skips a folder captured within
+   * the last 30 minutes, so a slow or sleeping daemon cannot turn this into a
+   * per-tick scan. The first attempt is deliberately one tick after start, not
+   * at start: a daemon that is still being connected to (or a test that opens
+   * and closes a home within a second) must not have a background writer
+   * racing its cleanup, and a daily ledger loses nothing by waiting five
+   * minutes. Capture is after the first-paint work: the owner's opportunity
+   * cards must not wait for a 130 GB folder's baseline.
+   * 工作区台账的采集节奏。每次维护 tick 都检查尝试，库本身又会跳过 30 分钟内已采集的
+   * 文件夹，因此守护进程卡顿或休眠都不会把它变成每 tick 一次扫描。首次尝试刻意安排在启动
+   * 后的下一个 tick，而不是启动时：仍在建立连接的守护进程（或在 1 秒内打开又关闭 home 的
+   * 测试）不能有后台写入者与清理竞争；每日台账晚五分钟也不会丢失任何东西。采集排在首屏
+   * 工作之后：所有者的机会卡不能等一个 130 GB 文件夹的基线。
+   */
+  let lastLedgerCaptureAttemptAt = Date.now();
+  let ledgerCaptureInFlight: Promise<void> | undefined;
+  const LEDGER_CAPTURE_ATTEMPT_INTERVAL_MS = 5 * 60_000;
+  // The daemon is already the resident launchd agent, so this watcher runs
+  // whether or not the window is open. It records operations only; content
+  // stays on the capture cadence. 守护进程本身就是常驻 launchd 代理，因此无论窗口是否
+  // 打开，这个监听器都在运行。它只记录操作；内容仍按采集节奏走。
+  const workspaceWatcher = new WorkspaceWatcher({
+    dataDirectory,
+    onError: (message, error) => logJson("error", message, {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  });
   const runMaintenance = async (): Promise<void> => {
     if (shutdown.signal.aborted) return;
     // The reconcile pass runs before the scan and settles what landed since
@@ -658,6 +690,31 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       logJson("error", "Memory expiry sweep failed", { error: error instanceof Error ? error.message : String(error) });
     });
     await badCaseLog.appendNew(await journal.list()).catch(() => undefined);
+    // The daily ledger is recording, not work: a failure is logged and retried
+    // on the next tick, and it must never be the reason a turn or a run waits.
+    // 每日台账是"记录"，不是"工作"：失败只记日志并在下一次 tick 重试，绝不能让某个回合
+    // 或 Run 因为它而等待。
+    if (!shutdown.signal.aborted && ledgerCaptureInFlight === undefined && Date.now() - lastLedgerCaptureAttemptAt >= LEDGER_CAPTURE_ATTEMPT_INTERVAL_MS) {
+      lastLedgerCaptureAttemptAt = Date.now();
+      // Detached from the pass: a 130 GB folder's first baseline must not keep
+      // the owner's opportunity cards and memory drain waiting. The per-folder
+      // lock and the 30-minute interval keep overlapping attempts benign.
+      // 与维护轮解耦：130 GB 文件夹的首次基线不能拖住所有者的机会卡与记忆排空。每文件夹
+      // 锁与 30 分钟间隔使重叠尝试保持无害。
+      ledgerCaptureInFlight = (async () => {
+        const folders = await knownOwnerFolders(dataDirectory, { limit: 5 }).catch(() => []);
+        await captureWorkspaceLedger({
+          dataDirectory,
+          folders: folders.map((folder) => folder.path),
+          now: new Date(),
+          signal: shutdown.signal,
+        });
+      })().catch((error: unknown) => {
+        logJson("error", "Workspace ledger capture failed; it will retry", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }).finally(() => { ledgerCaptureInFlight = undefined; });
+    }
     if (shutdown.signal.aborted) return;
     // Drain every pending job: a completed run must not wait for the next tick
     // to become something the owner can review, and a job with no miner must
@@ -800,6 +857,11 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   // 窗口现在可以连接了。周期性工作会收敛分身状态，可能耗时、也可能等锁；因此它在已发布的
   // 端点之后运行，而不是挡在它前面。
   void startMaintenance().catch(noteMaintenanceFailure);
+  void workspaceWatcher.start().catch((error: unknown) => {
+    logJson("error", "Workspace watcher failed to start", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
   void whatsappSetup.initialize().catch((error: unknown) => {
     logJson("error", "WhatsApp bridge initialization failed", {
       error: error instanceof Error ? error.message : String(error),
@@ -831,7 +893,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       // 永远阻塞关停。队列停止后销毁空闲与活动连接。
       await scheduler.stop();
       await runQueue.stop();
-      await Promise.allSettled([maintenanceInFlight, reportInFlight]);
+      await Promise.allSettled([maintenanceInFlight, reportInFlight, ledgerCaptureInFlight, workspaceWatcher.close()]);
       server.closeAllConnections?.();
       await serverClosed;
       await clearCompanionEndpointIfOwned(dataDirectory, endpointStartedAt);

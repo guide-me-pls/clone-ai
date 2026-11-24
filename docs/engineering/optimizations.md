@@ -114,6 +114,146 @@ file keeps every attempt, including the ones that did not work.
   route read-only through it behind a post-validation gate; if a read-only
   request must produce a file despite the marker, require a named target.
 
+### 2026-11-24 — The daemon records FSEvents operations, and noise stays out of the daily digest
+
+- **Goal / hypothesis:** the owner asked to add FSEvents and to filter useless
+  information. The 30-minute capture sees only net content changes: a file
+  created and removed between captures leaves nothing, and the operation time
+  is lost. A recursive `fs.watch` (FSEvents on macOS) in the resident daemon
+  should record operations at kernel cost, and a shared noise filter should
+  keep build output, caches, OS/editor junk and gitignored paths out of both
+  the ledger and the digest.
+- **Trade-off:** [The resident daemon records FSEvents, and generated files stay out of the ledger](../architecture/trade-offs.md#2026-11-24--the-resident-daemon-records-fsevents-and-generated-files-stay-out-of-the-ledger).
+- **Change:** `src/main-agent/workspace-noise.ts` — directory list, file
+  patterns, and a cached `.gitignore` index built with read-only git flags.
+  `src/main-agent/workspace-watch.ts` — one recursive watch per learned folder,
+  event classification, dedupe per path, noise skip, and a turn-ledger watch
+  that learns new folders. `src/main-agent/workspace-ledger.ts` — day event
+  files (`<day>.events.jsonl`), read/record functions, coverage `filtered`,
+  noise filtering during capture and pruning of event files.
+  `src/main-agent/tools/daily-digest.ts` — merges operations and reports the
+  skipped count. `src/companion-server.ts` — starts/closes the watcher.
+  `src/main-agent/tools/recent-changes.ts` — shares the noise filter and
+  reports `filtered`. Tests: `test/workspace-noise.test.ts` (3),
+  `test/workspace-watch.test.ts` (3), plus new cases in
+  `test/workspace-ledger.test.ts` (16) and `test/daily-digest.test.ts` (8).
+- **Eval:** `node --experimental-strip-types --test test/workspace-noise.test.ts test/workspace-watch.test.ts test/workspace-ledger.test.ts test/daily-digest.test.ts`
+  — **30/30**. The watcher test creates `notes.md` and gets one `created`
+  record; `.DS_Store`, `debug.log`, `state.tmp`, `node_modules/pkg.md` and a
+  gitignored `draft.md` never reach the log; the digest prints
+  `Operations (watcher): 1 recorded` and the filtered count, and no noise
+  paths. `npm test` **1046/1046**, 0 fail; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**, baseline unchanged.
+- **Benchmark run:** none — deterministic test-only eval, no provider calls.
+- **Execution chain:** one session. First checked the desktop runtime: the
+  daemon is already a KeepAlive launchd LaunchAgent and was running from the
+  installed app, so the "window closed" case did not need a second agent; a
+  live probe confirmed recursive `fs.watch` reports create/delete paths on this
+  machine. The trade-off entry was written before the code. Implementation then
+  added the noise module, the watcher, event files and digest merging. A
+  bilingual-comment check caught two English-only comments; a test run caught
+  the missing `filtered` on coverage literals; typecheck caught nothing else.
+  No workers, no model calls. The concurrent system-prompt/tools session kept
+  editing other files; this change touched none of its files.
+- **Pros:** operations are recorded at FSEvents cost without reading content;
+  the same filter is used by capture, watcher and fallback, and the skipped
+  count is visible; `.gitignore` makes the owner's own generated-output
+  definition decisive; the watcher learns new folders from the turn ledger.
+- **Cons / next time:** the event log is operation-only (no content for a
+  transient file); it exists only while the daemon runs, and Mac sleep loses
+  events; the built-in pattern list can hide a hand-edited `.log`; the gitignore
+  index needs git and is cached for five minutes; `findRepositories` runs on
+  each new folder and on the first event per folder, which is noticeable on a
+  very large tree. Next time: watch `.gitignore` explicitly for faster
+  invalidation, and consider a content read on `created` if owners ask for
+  transient-file bodies.
+- **Reversal condition:** copied from the trade-off entry — raise dedupe or
+  watch only recently named folders if event volume is noticeable; remove the
+  event log if it confuses more than it explains; add a narrow allowlist (not a
+  folder setting) if a filtered path is reported as work. Keep the `.gitignore`
+  filter.
+
+### 2026-11-24 — A bounded daily ledger gives the workspace a content-level day diff
+
+- **Goal / hypothesis:** the owner asked for a day of work to be readable as a
+  diff ("每一天都可以当作 diff，查看具体的操作内容") and for records beyond Git.
+  `recent_file_changes` reads only names, mtimes and Git, so it cannot show what
+  changed inside a document and a non-Git folder has no content record. An
+  incremental content-addressed ledger captured by the daemon, plus a read-only
+  digest tool, should answer a day with content diffs and the twin's own records
+  without adding seconds to a turn.
+- **Trade-off:** [A bounded daily ledger gives the workspace a content-level day diff](../architecture/trade-offs.md#2026-11-24--a-bounded-daily-ledger-gives-the-workspace-a-content-level-day-diff).
+- **Change:** `src/main-agent/workspace-ledger.ts` — per-folder state map, per-day
+  JSONL of `(path, before, after, at)`, content-addressed text blobs, local day
+  windows, a bounded single-hunk diff, throttled incremental capture and 90-day
+  pruning. `src/main-agent/tools/daily-digest.ts` — `daily_workspace_digest`,
+  merging ledger diffs, Git commits/status, turns, work updates, verifications
+  and memory-document writes, with an explicit coverage section.
+  `src/main-agent/tools/recent-changes.ts` — exports the shared scan/Git
+  primitives (`scanFiles`, `walkFiles` with bounds, `findRepositories`,
+  `readRepository`) and adds `--until`. `src/companion-server.ts` — maintenance
+  captures at most every 30 minutes, detached from the pass. `src/main-agent/prompt.ts`
+  — one charter line; `MAIN_AGENT_CHARTER_VERSION` 8 → 9. Tests:
+  `test/workspace-ledger.test.ts` (15 cases), `test/daily-digest.test.ts` (7 cases),
+  prompt-snapshot tool list and the worker-brief charter pin updated.
+- **Eval:** `node --experimental-strip-types --test test/workspace-ledger.test.ts test/daily-digest.test.ts`
+  — **22/22**. The digest test pins the before/after: on the same fixture the
+  old day-scoped read (`collectFolderReport`) returns `plan.md` with a timestamp;
+  after the change `collectDailyDigest` prints `--- a/plan.md` / `+++ b/plan.md`
+  with `-第二行`, `+改过的第二行`, `+第三行`, plus the day's run, verification
+  and memory rows. `npm test` **1038/1038**, 0 fail; `npm run typecheck` exit 0;
+  `npm run gate` **PASS**, baseline unchanged.
+- **Benchmark run:** none — deterministic test-only eval, no provider calls.
+- **Execution chain:** one session. Scouting reads over `recent-changes`,
+  `clone-home`, `workspace-evidence`, the journal/contracts, memory governance,
+  turn audit, work updates and the maintenance loop; two live `mdfind` probes
+  confirmed `$time.iso(<timestamp>)` and `$time.today(-N)` are accepted on this
+  machine. The trade-off entry was written before the code. Implementation then
+  typecheck caught one mismatched quote; the first test run caught a day-boundary
+  race (an exclusive `end = now` dropped a file written in the same millisecond),
+  fixed by making the window end the next local midnight; the full suite caught
+  the in-flight worker-brief test pinning `MAIN_AGENT_CHARTER_VERSION = 8`, now 9
+  with a comment naming the new line. A four-lens adversarial review then found:
+  a learned folder can contain a protected root (`Library/Keychains`); `.env` and
+  other credential dotfiles were read into blobs; `workspace-history` was not in
+  the protected roots the trade-off claimed; a crafted day file could make a hash
+  resolve outside the blob store; git ran without the read-only flags
+  `agent-tools` uses; Spotlight's 2,000-candidate cap was silent and included
+  hidden tooling trees; a gap crossing midnight used the 8 s turn walk and pinned
+  truncation forever; the 20k state map was rewritten every 30 minutes; states of
+  folders rotated out of the learned set pinned blobs; the digest read the
+  journal and turn ledger twice and could spawn ~300 git processes. All but the
+  monthly prune's cost and a crash-undercounted blob budget were fixed in the
+  change (per-file protected check, credential-name refusal, the ledger path in
+  both protected lists, hash/path validation, `--no-optional-locks`/`--no-pager`/
+  `core.fsmonitor=false`/`log.showSignature=false`, cap and hidden-dir handling,
+  a deep walk for cross-midnight gaps, a small check file plus conditional state
+  writes, stale-state deletion, one journal/turn read and a per-folder repository
+  cap). No workers, no model calls; the review workflow's two remaining lenses
+  were stopped after their peers returned the findings above.
+- **Pros:** capture is off the turn path and incremental after one baseline;
+  storage is bounded (20k files, 512 KB per text blob, 512 MB total, 90 days);
+  the digest states what it cannot see instead of padding the day; the scanner
+  and Git readers are now shared with `recent_file_changes` rather than copied;
+  protected roots, credential names and untrusted content are checked at the
+  point of use, not only at the folder root.
+- **Cons / next time:** the first baseline can take up to 60 s per folder in the
+  background; the 5,000-changes-per-day cap drops the remainder and only marks
+  truncation; the diff is a prefix/suffix single hunk, not a minimal edit script;
+  `scanFiles`'s Spotlight query still covers only "today", so a new file created
+  while the app was closed for several days can be missed if the fallback walk
+  hits its bounds; macOS only was exercised; the monthly prune parses the whole
+  retained ledger under the shared lock and a crash can undercount the blob
+  budget until that prune recomputes it. Next time: an exact-timestamp Spotlight
+  query or FSEvents, a Windows run, a two-hunk diff if owners ask for more
+  precise output, and an incremental prune if its pause becomes noticeable.
+- **Reversal condition:** copied from the trade-off entry — if the owner reports
+  days with real work missing because the app was closed or the folder exceeds
+  20,000 files, move capture to an OS-level watcher or raise the caps; if storage
+  or the stat pass becomes noticeable, raise the interval or capture only named
+  folders; if content reaches a context the owner did not ask for, stop storing
+  content and require an explicit per-day request.
+
 ### 2026-11-24 — The Main Agent writes the worker brief
 
 - **Goal / hypothesis:** the worker prompt has two authors and neither can state

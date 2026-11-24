@@ -17,34 +17,19 @@
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { promisify } from "node:util";
 
 import { Type } from "typebox";
 
 import { canonicalPath, isForbiddenPath } from "../../authority/scope.ts";
+import { isNoiseFile, NOISE_DIRECTORIES } from "../workspace-noise.ts";
 import type { PlainKernelTool } from "./kernel-tools.ts";
 import { knownOwnerFolders, type KnownFolder } from "../known-folders.ts";
 
 const execFileAsync = promisify(execFile);
 
-const IGNORED_DIRECTORIES = new Set([
-  ".git",
-  ".clone",
-  ".clone-ai",
-  ".idea",
-  ".next",
-  ".pytest_cache",
-  ".venv",
-  "__pycache__",
-  "build",
-  "coverage",
-  "dist",
-  "node_modules",
-  "out",
-  "target",
-  "venv",
-]);
+export const IGNORED_DIRECTORIES = NOISE_DIRECTORIES;
 
 const MAX_MDFIND_FILES = 2_000;
 const WALK_DEADLINE_MS = 8_000;
@@ -81,15 +66,19 @@ export interface FolderReport {
   files: RecentFile[];
   totalFiles: number;
   truncated: boolean;
+  /** Generated/ignored files the scan skipped. 扫描跳过的生成/忽略文件。 */
+  filtered: number;
   source: "spotlight" | "walk";
   repos: RepoReport[];
   error?: string;
 }
 
-interface RecentFileScan {
+export interface RecentFileScan {
   files: RecentFile[];
   total: number;
   truncated: boolean;
+  /** Generated/ignored files the scan skipped. 扫描跳过的生成/忽略文件。 */
+  filtered: number;
   source: "spotlight" | "walk";
 }
 
@@ -117,14 +106,22 @@ function localStamp(value: string | Date): string {
 }
 
 function ignoredPath(path: string, root: string): boolean {
-  if (relative(root, path).split(/[\\/]/).some((segment) => IGNORED_DIRECTORIES.has(segment))) return true;
-  return basename(path).startsWith(".git");
+  const parts = relative(root, path).split(/[\\/]/);
+  if (parts.length === 0 || parts[0] === "..") return true;
+  const base = parts[parts.length - 1] ?? "";
+  if (base.startsWith(".git")) return true;
+  // The walk skips hidden *directories* but keeps hidden files (`.env`,
+  // `.gitignore`). Spotlight returns both, so the directory segments are
+  // checked here; otherwise a `.cache/` tree consumes the candidate cap.
+  // 遍历跳过隐藏*目录*但保留隐藏文件（`.env`、`.gitignore`）。Spotlight 两者都会返回，
+  // 因此这里检查目录段；否则 `.cache/` 树会吃满候选取上限。
+  return parts.slice(0, -1).some((segment) => segment.startsWith(".") || IGNORED_DIRECTORIES.has(segment));
 }
 
-async function statFile(path: string, sinceMs: number): Promise<RecentFile | undefined> {
+async function statFile(path: string, sinceMs: number, untilMs = Number.POSITIVE_INFINITY): Promise<RecentFile | undefined> {
   try {
     const info = await fs.stat(path);
-    if (!info.isFile() || info.mtimeMs < sinceMs) return undefined;
+    if (!info.isFile() || info.mtimeMs < sinceMs || info.mtimeMs >= untilMs) return undefined;
     return { path, modifiedAt: new Date(info.mtimeMs).toISOString() };
   } catch {
     return undefined;
@@ -138,13 +135,13 @@ async function statFile(path: string, sinceMs: number): Promise<RecentFile | und
  * macOS 的 Spotlight 在毫秒级回答"今天改过"的查询；遍历 130 GB 的目录树要数秒。目录遍历
  * 仍作为未建索引的文件夹或其他平台上的诚实回退。
  */
-async function spotlightCandidates(folder: string): Promise<string[] | undefined> {
+async function spotlightCandidates(folder: string, signal?: AbortSignal): Promise<string[] | undefined> {
   if (process.platform !== "darwin") return undefined;
   try {
     const { stdout } = await execFileAsync(
       "mdfind",
       ["-onlyin", folder, "kMDItemFSContentChangeDate >= $time.today"],
-      { timeout: 8_000, maxBuffer: 8 * 1024 * 1024 },
+      { timeout: 8_000, maxBuffer: 8 * 1024 * 1024, ...(signal === undefined ? {} : { signal }) },
     );
     return stdout.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
   } catch {
@@ -152,31 +149,64 @@ async function spotlightCandidates(folder: string): Promise<string[] | undefined
   }
 }
 
-async function spotFiles(folder: string, sinceMs: number, limit: number): Promise<RecentFileScan | undefined> {
-  const candidates = await spotlightCandidates(folder);
+async function spotFiles(
+  folder: string,
+  sinceMs: number,
+  limit: number,
+  untilMs = Number.POSITIVE_INFINITY,
+  signal?: AbortSignal,
+): Promise<RecentFileScan | undefined> {
+  const candidates = await spotlightCandidates(folder, signal);
   if (candidates === undefined) return undefined;
+  const usable = candidates.filter((candidate) => !ignoredPath(candidate, folder));
+  const scanned = usable.slice(0, MAX_MDFIND_FILES);
   const files: RecentFile[] = [];
   let total = 0;
-  for (const candidate of candidates.slice(0, MAX_MDFIND_FILES)) {
-    if (ignoredPath(candidate, folder)) continue;
-    const file = await statFile(candidate, sinceMs);
+  let filtered = 0;
+  for (const candidate of scanned) {
+    if (signal?.aborted === true) break;
+    const file = await statFile(candidate, sinceMs, untilMs);
     if (file === undefined) continue;
+    if (isNoiseFile(file.path)) {
+      filtered += 1;
+      continue;
+    }
     total += 1;
     if (files.length < limit) files.push(file);
   }
   files.sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt));
-  return { files, total, truncated: total > files.length, source: "spotlight" };
+  // Hitting the candidate cap is truncation even when every statted file fits
+  // the caller's limit; otherwise the ledger advances its watermark and the
+  // dropped paths are never visited again.
+  // 撞到候选取上限就是截断，即使每个被 stat 的文件都在调用方上限之内；否则台账会推进
+  // 水位线，被丢弃的路径再也不会被访问。
+  return {
+    files,
+    total,
+    filtered,
+    truncated: total > files.length || usable.length > scanned.length,
+    source: "spotlight",
+  };
 }
 
-async function walkFiles(folder: string, sinceMs: number, limit: number): Promise<RecentFileScan> {
-  const deadline = Date.now() + WALK_DEADLINE_MS;
+export async function walkFiles(
+  folder: string,
+  sinceMs: number,
+  limit: number,
+  options: { deadlineMs?: number; maxDirectories?: number; untilMs?: number; signal?: AbortSignal } = {},
+): Promise<RecentFileScan> {
+  const deadline = Date.now() + (options.deadlineMs ?? WALK_DEADLINE_MS);
+  const maxDirectories = options.maxDirectories ?? WALK_MAX_DIRECTORIES;
+  const untilMs = options.untilMs ?? Number.POSITIVE_INFINITY;
+  const signal = options.signal;
   const files: RecentFile[] = [];
   let total = 0;
+  let filtered = 0;
   let visited = 0;
   let truncated = false;
   const stack: string[] = [folder];
   while (stack.length > 0) {
-    if (visited >= WALK_MAX_DIRECTORIES || Date.now() > deadline) {
+    if (signal?.aborted === true || visited >= maxDirectories || Date.now() > deadline) {
       truncated = true;
       break;
     }
@@ -190,6 +220,10 @@ async function walkFiles(folder: string, sinceMs: number, limit: number): Promis
       continue;
     }
     for (const entry of entries) {
+      if (signal?.aborted) {
+        truncated = true;
+        break;
+      }
       const absolute = join(directory, entry.name);
       if (entry.isDirectory()) {
         // Hidden directories are tooling, not work; hidden files (`.env`,
@@ -200,8 +234,12 @@ async function walkFiles(folder: string, sinceMs: number, limit: number): Promis
         continue;
       }
       if (!entry.isFile()) continue;
-      const file = await statFile(absolute, sinceMs);
+      const file = await statFile(absolute, sinceMs, untilMs);
       if (file === undefined) continue;
+      if (isNoiseFile(file.path)) {
+        filtered += 1;
+        continue;
+      }
       total += 1;
       if (files.length < limit) files.push(file);
       if (Date.now() > deadline) {
@@ -211,20 +249,27 @@ async function walkFiles(folder: string, sinceMs: number, limit: number): Promis
     }
   }
   files.sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt));
-  return { files, total, truncated: truncated || total > files.length, source: "walk" };
+  return { files, total, filtered, truncated: truncated || total > files.length, source: "walk" };
 }
 
-async function scanFiles(folder: string, sinceMs: number, limit: number, now: Date): Promise<RecentFileScan> {
+export async function scanFiles(
+  folder: string,
+  sinceMs: number,
+  limit: number,
+  now: Date,
+  untilMs = Number.POSITIVE_INFINITY,
+  signal?: AbortSignal,
+): Promise<RecentFileScan> {
   // Spotlight only knows "today"; an older cutoff goes through the bounded walk.
   // Spotlight 只知道"今天"；更早的截止时间走有界遍历。
   const spotlight = sinceMs >= localMidnight(now).getTime()
-    ? await spotFiles(folder, sinceMs, limit)
+    ? await spotFiles(folder, sinceMs, limit, untilMs, signal)
     : undefined;
   if (spotlight !== undefined && spotlight.total > 0) return spotlight;
-  return walkFiles(folder, sinceMs, limit);
+  return walkFiles(folder, sinceMs, limit, { untilMs, ...(signal === undefined ? {} : { signal }) });
 }
 
-async function findRepositories(folder: string): Promise<string[]> {
+export async function findRepositories(folder: string): Promise<string[]> {
   const repositories: string[] = [];
   const stack: Array<{ directory: string; depth: number }> = [{ directory: folder, depth: 0 }];
   while (stack.length > 0 && repositories.length < MAX_REPOSITORIES) {
@@ -253,22 +298,34 @@ async function findRepositories(folder: string): Promise<string[]> {
 
 async function git(repository: string, args: string[]): Promise<string | undefined> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", repository, ...args], {
-      timeout: 4_000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
+    // A repository found under a learned folder may not be the owner's: a
+    // cloned or downloaded checkout can set log.showSignature with a gpg
+    // program, or core.fsmonitor, which git would spawn. The same flags the
+    // read-only agent-tools server uses keep repository-local config from
+    // running as code, and --no-optional-locks keeps `status` from rewriting
+    // the index during what the digest calls a read.
+    // 已学会文件夹里的仓库未必属于所有者：克隆或下载来的检出可以设置 log.showSignature
+    // 加一个 gpg 程序，或设置 core.fsmonitor，让 git 去启动它。只读 agent-tools 服务器
+    // 使用的同一组参数阻止仓库本地配置被当作代码执行，--no-optional-locks 则让 `status`
+    // 不会在摘要称之为"读取"的过程中改写索引。
+    const { stdout } = await execFileAsync(
+      "git",
+      ["-C", repository, "--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "log.showSignature=false", ...args],
+      { timeout: 4_000, maxBuffer: 4 * 1024 * 1024 },
+    );
     return stdout.trimEnd();
   } catch {
     return undefined;
   }
 }
 
-async function readRepository(repository: string, since: Date): Promise<RepoReport> {
+export async function readRepository(repository: string, since: Date, until?: Date): Promise<RepoReport> {
   const branch = await git(repository, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const status = await git(repository, ["status", "--porcelain=v1"]);
   const log = await git(repository, [
     "log",
     `--since=${since.toISOString()}`,
+    ...(until === undefined ? [] : [`--until=${until.toISOString()}`]),
     "--pretty=format:%h%x09%ad%x09%s",
     "--date=format-local:%H:%M",
     "-n", "20",
@@ -298,6 +355,7 @@ export async function collectFolderReport(
     files: [],
     totalFiles: 0,
     truncated: false,
+    filtered: 0,
     source: "walk",
     repos: [],
     error,
@@ -320,6 +378,7 @@ export async function collectFolderReport(
     files: scan.files,
     totalFiles: scan.total,
     truncated: scan.truncated,
+    filtered: scan.filtered,
     source: scan.source,
     repos: reports,
   };
@@ -334,6 +393,7 @@ export function formatFolderReport(report: FolderReport, folderNote?: string): s
   }
   const shown = report.files.length;
   lines.push(`Files whose content changed: ${report.totalFiles}${report.totalFiles > shown ? ` (listing the newest ${shown})` : ""}${report.source === "walk" ? " (directory walk; Spotlight unavailable or unindexed)" : ""}`);
+  if (report.filtered > 0) lines.push(`Generated or gitignored files omitted: ${report.filtered}`);
   for (const file of report.files) {
     lines.push(`- ${relative(report.folder, file.path)} — ${localStamp(file.modifiedAt)}`);
   }

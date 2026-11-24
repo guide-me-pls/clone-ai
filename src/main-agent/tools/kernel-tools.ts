@@ -29,6 +29,7 @@ import type { RegisteredToolSnapshot } from "../prompt-snapshot.ts";
 import { sampleCapacity, type CapacitySnapshot } from "../../core/capacity.ts";
 import { CloneConfigStore } from "../../config/clone-config.ts";
 import { recentFileChangesTool } from "./recent-changes.ts";
+import { dailyWorkspaceDigestTool } from "./daily-digest.ts";
 
 export interface KernelToolsOptions {
   dataDirectory: string;
@@ -694,6 +695,12 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
   });
 
   register(recentFileChangesTool({
+    dataDirectory: options.dataDirectory,
+    ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+    ...(options.query === undefined ? {} : { query: options.query }),
+  }));
+
+  register(dailyWorkspaceDigestTool({
     dataDirectory: options.dataDirectory,
     ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
     ...(options.query === undefined ? {} : { query: options.query }),
