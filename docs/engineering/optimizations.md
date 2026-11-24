@@ -326,6 +326,49 @@ file keeps every attempt, including the ones that did not work.
   Seatbelt profile, never by shrinking the root. If owners rely on union-of-grants,
   add an explicit grant marker instead of restoring `max()` aggregation.
 
+### 2026-11-24 — The audit reads tool calls in words, with JSON behind a toggle
+
+- **Goal / hypothesis:** the owner reported the audit's tool rows as unreadable
+  JSON (`dispatch_task`, `daily_workspace_digest`). The audit should answer
+  "what did the agent do" in words; the raw arguments are a debugging fallback.
+- **Trade-off:** [Audit tool calls read as sentences and labeled fields](../architecture/trade-offs.md#2026-11-24--audit-tool-calls-read-as-sentences-and-labeled-fields).
+- **Change:** `apps/desktop/ui/tool-format.js` (new) — parses the recorded input,
+  renders a tool-specific headline, labeled fields, lists, and a raw-arguments
+  toggle; a truncated record is repaired by closing the open string and
+  brackets. `apps/desktop/ui/audit.js` uses it in both the Main Agent turn log
+  and the worker tool list; `audit.css` styles the block; `index.html` loads the
+  module; `src/companion-server.ts` serves `/tool-format.js` and
+  `src/companion-auth.ts` keeps it unauthenticated like the other UI assets;
+  `src/main-agent/turn-audit.ts` raises the recorded input cap from 2,000 to
+  8,000 characters. Tests: `test/tool-format.test.ts` (6), the turn-card case in
+  `test/ui-structure.test.ts`, and the asset list in `test/companion-auth.test.ts`.
+- **Eval:** `node --experimental-strip-types --test test/tool-format.test.ts`
+  — **6/6**; `test/ui-structure.test.ts` — **42/42**. A live check against the
+  daemon rendered 71 tool inputs on the turn log, and the exact `dispatch_task`
+  row now reads "派发任务：对 /Users/user/work/doc_translate …" with its
+  acceptance criteria as bullets and a truncation note. The full suite is
+  **1077 pass / 3 fail**, and the gate fails on policy cases; all three failures
+  and the policy baseline change come from another session's in-flight
+  "automatic execution is the default" change (confirmed by its CHANGELOG
+  entry), not from this UI change. The focused audits above pass.
+- **Benchmark run:** none — deterministic formatter/UI tests; no provider.
+- **Execution chain:** one session. Read `audit.js`, the turn/worker renderers
+  and the asset route; added the formatter. The first live load returned 401 for
+  `/tool-format.js`; the asset route and the auth allowlist were extended and
+  the asset test updated. The first render still showed a raw JSON row because
+  the stored input was cut at 2,000 characters; the formatter now repairs a
+  truncated object, and the cap was raised for new turns. The screenshot was
+  re-taken after both fixes.
+- **Pros:** the audit is readable without losing the exact arguments; one
+  formatter serves both views; unknown tools still get a labeled generic view;
+  truncated records degrade to a readable partial summary with a note.
+- **Cons / next time:** the headline map and field labels are UI heuristics; a
+  new tool gets the generic "调用 <name>" view until it is mapped. The repair
+  cannot recover fields that were never recorded. The full suite/gate are red
+  from the concurrent policy change, so this entry's green claim is limited to
+  the focused suites.
+- **Reversal condition:** as the trade-off entry.
+
 ### 2026-11-24 — A missing deliverable asks a judge, then the owner, instead of failing
 
 - **Goal / hypothesis:** end the artifact-contract dead end the owner reported

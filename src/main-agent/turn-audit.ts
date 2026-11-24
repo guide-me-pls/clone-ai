@@ -85,7 +85,7 @@ export interface MainAgentTurnContext {
 
 /** Caps keep one long answer from dominating the journal; the full text stays in the Pi session file. 上限避免一次长回答撑大 Journal；全文仍在 Pi 会话文件中。 */
 export const TURN_TEXT_LIMIT = 20_000;
-export const TOOL_INPUT_LIMIT = 2_000;
+export const TOOL_INPUT_LIMIT = 8_000;
 
 export function mainAgentTurnFile(dataDirectory: string): string {
   return join(dataDirectory, "main-agent-turns.jsonl");

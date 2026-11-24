@@ -223,6 +223,19 @@ body.empty-conversation .welcome { padding-bottom: 0; }
 .au-turn-tools li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--line, #eef1f5); }
 .au-turn-tools em { color: var(--muted, #8791a1); font-style: normal; font-size: 11px; }
 .au-turn-tools span { color: var(--subtle, #5c6675); overflow-wrap: anywhere; }
+/* A tool call reads as a sentence and labeled fields; raw JSON stays behind a toggle. 工具调用以一句话与带标签字段呈现；原始 JSON 留在一键之后。 */
+.au-tool-input { flex-basis: 100%; min-width: 0; color: var(--text, #20242c); }
+.au-tool-headline { margin: 0 0 5px; line-height: 1.55; overflow-wrap: anywhere; }
+.au-tool-subhead { margin: 4px 0 2px; color: var(--muted, #8791a1); font-size: 11px; font-weight: 600; }
+.au-tool-list { margin: 2px 0 6px; padding-left: 18px; display: grid; gap: 2px; }
+.au-tool-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 10px; margin: 4px 0 2px; }
+.au-tool-fields dt { color: var(--muted, #8791a1); }
+.au-tool-fields dd { margin: 0; overflow-wrap: anywhere; }
+.au-tool-raw { margin-top: 4px; }
+.au-tool-note { margin: 2px 0 4px; color: #b45309; font-size: 11px; }
+.au-tool-raw summary { color: var(--muted, #8791a1); font-size: 11px; cursor: pointer; }
+.au-tool-raw pre,
+.au-tool-text { margin: 4px 0 0; max-height: 240px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: rgba(0, 0, 0, .035); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .au-turn .au-assembly { margin: 2px 0 0; }
 @media (max-width: 720px) {
   .au-turn-query { max-width: 96%; }

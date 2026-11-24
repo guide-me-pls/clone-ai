@@ -36,6 +36,14 @@ The permissions ladder is now 批准 / 自动执行 / 全部放行, and 全部�
 
 权限档位现在是批准 / 自动执行 / 全部放行，且「全部放行」（`allow_all`）是文件、Shell 与网络的默认值。该档位下可逆写入不再需要声明的 Scope，读取覆盖整机，声明的 Scope 全在全部放行的外部/不可逆步骤不再询问；Runtime 在派发前记录一条策略审批，因此 `approval-before-external-execution` 仍成立，审计能指名授权来源。受保护位置（整个 clone home）、未实现强制的域、`.git`/`.rsi` 写入与 agent-exec 命令白名单仍是硬边界。覆盖策略的低上限仍会收紧 Scope；只要存在收紧写策略，全域授权就被撤回，未声明目标的步骤会失败，而不是绕过限制。`observe`/`prepare` 只对旧配置和损坏文件的 fail-closed 值有效，UI 不再提供。门禁策略套件 30 个用例，一致率 100%，0 个不安全放行。`npm test` 1083/1083，typecheck 0，gate PASS。
 
+### The audit reads tool calls in words, with JSON behind a toggle
+
+The audit's Main Agent turn log and worker tool list now render each tool input as a sentence, labeled fields and lists, with the raw JSON behind a "原始参数" toggle. Known tools get a headline (`dispatch_task` shows its objective; `daily_workspace_digest` shows path, date, diff switch and limit); unknown tools get a labeled generic view. A record cut at the old 2,000-character cap is repaired by closing the open string and brackets and is marked as truncated; the cap is now 8,000. Focused tests: `test/tool-format.test.ts` 6/6, `test/ui-structure.test.ts` 42/42. The full suite currently has 3 failures from a concurrent policy-default change, not from this UI change.
+
+### 审计把工具调用读成人话，JSON 留在一键之后
+
+审计的主 Agent 回合日志与 Worker 工具列表现在把每条工具输入渲染成一句话、带标签字段与列表，原始 JSON 放在"原始参数"开关之后。已知工具有专属标题（`dispatch_task` 显示目标，`daily_workspace_digest` 显示路径、日期、是否含 diff 与上限）；未知工具得到带标签的通用视图。被旧 2,000 字符上限截断的记录会补全未闭合的字符串与括号，并标注已截断；上限现在是 8,000。定向测试：`test/tool-format.test.ts` 6/6、`test/ui-structure.test.ts` 42/42。全量套件当前有 3 个失败，来自并发的策略默认值变更，不是这次 UI 变更。
+
 ### Automatic execution is the default and the model judges its scope
 
 Files, shell and network now default to 自动执行 (`act_auto`) when `policies.json` does not name them, and `act_auto` no longer requires a covering standing policy: the step's declared scope is the judgment, so the owner no longer authors a policy per resource. The hard boundaries are unchanged — protected locations, unscoped writes, unenforced domains, and external/irreversible steps still stop; an absent `policies.json` uses the default, and a corrupt one (invalid JSON, an invalid level, or a non-array `policies`) fails closed to `observe` instead of silently arming every domain. The whole clone home is now one protected location (endpoint key, provider keys, `mcp.json` credentials, memory, conversations, journal, traces), with the Kernel's isolated sandbox as the only exception. Standing policies stay in Settings under 高级：常设策略（可选） as an optional narrowing; when several cover one scope, the lowest ceiling wins, so an explicit restriction is never defeated by a broader grant. The gate policy suite is 24 cases at 100% agreement with 0 unsafe allows (before: 78% agreement, 5 over-blocks). `npm test` 1073/1073, typecheck 0, gate PASS.

@@ -43,6 +43,14 @@
   const stamp = (value) => (value ? new Date(value).toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—");
   const badge = (text, tone = "mute") => `<span class="au-badge au-${tone}">${esc(text)}</span>`;
   const statusBadge = (status) => { const [label, tone] = STATUS[status] ?? [status, "mute"]; return badge(label, tone); };
+  /**
+   * Tool inputs are rendered by the shared formatter; a missing module falls
+   * back to the recorded text rather than hiding the call.
+   * 工具输入由共享格式化器渲染；模块缺失时退回记录文本，而不是隐藏调用。
+   */
+  const toolInput = (name, summary) => (typeof summary !== "string" || summary.length === 0
+    ? ""
+    : window.CloneToolFormat?.toolInputMarkup(name, summary) ?? `<span>${esc(summary.slice(0, 180))}</span>`);
 
   async function load() {
     state.loading = true; state.error = null; render();
@@ -327,7 +335,7 @@
    */
   function toolCalls(tools) {
     if (!tools || !tools.length) return "";
-    const rows = tools.map((call) => `<li><code>${esc(call.tool)}</code>${call.isError ? badge("错误", "bad") : ""}${call.durationMs !== undefined ? `<em>${ms(call.durationMs)}</em>` : ""}${call.inputSummary ? `<span>${esc(call.inputSummary.slice(0, 180))}</span>` : ""}</li>`).join("");
+    const rows = tools.map((call) => `<li><code>${esc(call.tool)}</code>${call.isError ? badge("错误", "bad") : ""}${call.durationMs !== undefined ? `<em>${ms(call.durationMs)}</em>` : ""}${toolInput(call.tool, call.inputSummary)}</li>`).join("");
     return `<details class="au-tools"><summary>工具调用 ${tools.length} 次</summary><ul class="au-turn-tools">${rows}</ul></details>`;
   }
 
@@ -586,7 +594,7 @@
       const label = turn.status === "completed" ? "完成" : turn.status === "failed" ? "失败" : turn.status === "interrupted" ? "中断" : "进行中";
       const usage = turn.usage ? `<span>${num(turn.usage.totalTokens ?? 0)} tokens</span>${turn.usage.costUsd !== undefined ? `<span>${usd(turn.usage.costUsd)}</span>` : ""}` : "";
       const tools = turn.toolCalls.length
-        ? `<ul class="au-turn-tools">${turn.toolCalls.map((call) => `<li><code>${esc(call.name)}</code>${call.isError ? badge("错误", "bad") : ""}${call.durationMs !== undefined ? `<em>${ms(call.durationMs)}</em>` : ""}${call.inputSummary ? `<span>${esc(call.inputSummary.slice(0, 400))}</span>` : ""}</li>`).join("")}</ul>`
+        ? `<ul class="au-turn-tools">${turn.toolCalls.map((call) => `<li><code>${esc(call.name)}</code>${call.isError ? badge("错误", "bad") : ""}${call.durationMs !== undefined ? `<em>${ms(call.durationMs)}</em>` : ""}${toolInput(call.name, call.inputSummary)}</li>`).join("")}</ul>`
         : `<p class="au-empty">本轮没有调用工具。</p>`;
       // The owner's request and the twin's answer read as one exchange: the
       // request is a right-aligned bubble, the answer is the left column, and

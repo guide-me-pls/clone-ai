@@ -31,6 +31,17 @@ test("a new memory defaults to fact instead of preference", async () => {
   assert.doesNotMatch(select, /<option value="preference"[^>]*selected/);
 });
 
+test("the audit renders tool inputs as readable fields with raw JSON behind a toggle", async () => {
+  const html = await read("index.html");
+  const audit = await read("audit.js");
+  const css = await read("audit.css");
+  assert.match(html, /src="\.\/tool-format\.js"/);
+  assert.match(audit, /window\.CloneToolFormat\?\.toolInputMarkup/);
+  assert.match(audit, /toolInput\(call\.name, call\.inputSummary\)/);
+  assert.match(audit, /toolInput\(call\.tool, call\.inputSummary\)/);
+  assert.match(css, /\.au-tool-fields\s*\{/);
+});
+
 test("the shell is internally consistent: ids, assets, and strings", async () => {
   const html = await read("index.html");
   const app = await read("app.js");
@@ -1123,6 +1134,8 @@ test("the audit turn card keeps the tool calls the conversation dropped", async 
   const start = audit.indexOf("function turnsView()");
   const end = audit.indexOf("function invocationsView", start);
   assert.ok(start >= 0 && end > start, "turnsView must exist");
+  const formatWindow: { CloneToolFormat?: { toolInputMarkup: (name: string, summary: string) => string } } = {};
+  runInNewContext(await read("tool-format.js"), { window: formatWindow });
   const turnsView = runInNewContext(`${audit.slice(start, end)}; turnsView`, {
     state: {
       turns: [{
@@ -1141,15 +1154,18 @@ test("the audit turn card keeps the tool calls the conversation dropped", async 
     stamp: () => "11:35",
     usd: () => "$0",
     assemblyBlock: () => "",
+    toolInput: (name: string, summary: string) => formatWindow.CloneToolFormat!.toolInputMarkup(name, summary),
   }) as () => string;
   const html = turnsView();
   // The landed turn is named by id and conversation, and the call the
-  // conversation no longer shows is still here, with its input and duration.
-  // 落点用 id 与对话点名该回合；对话不再显示的调用仍在这里，带着输入与耗时。
+  // conversation no longer shows is still here, with its readable objective,
+  // duration and the raw-argument toggle.
+  // 落点用 id 与对话点名该回合；对话不再显示的调用仍在这里，带着可读的目标、耗时与原始参数开关。
   assert.match(html, /data-au-turn-id="turn-1"/);
   assert.match(html, /data-au-turn-conversation="conversation-a"/);
   assert.match(html, /dispatch_task/);
-  assert.match(html, /"objective":"整理资料"/);
+  assert.match(html, /派发任务：整理资料/);
+  assert.match(html, /原始参数/);
   assert.match(html, /3000 ms/);
   assert.match(html, /已整理。/);
 });

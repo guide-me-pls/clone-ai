@@ -157,6 +157,7 @@ export function isUnauthenticatedCompanionPath(method: string, pathname: string)
       || pathname === "/audit.js"
       || pathname === "/memory.css"
       || pathname === "/memory.js"
+      || pathname === "/tool-format.js"
     )
   ) return true;
   return false;

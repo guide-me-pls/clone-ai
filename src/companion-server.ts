@@ -449,7 +449,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   // 缺少源码已经在调用的函数，第一次点击就以 "Can't find variable" 失败。每次请求重读只花
   // 几次文件读取，却能让窗口显示磁盘上真正的源码。
   const reloadClientAssets = process.env.CLONE_AI_DEV_MODE === "1";
-  const [client, clientCss, componentCss, clientJs, componentJs, auditCss, auditJs, memoryCss, memoryJs] = await Promise.all([
+  const [client, clientCss, componentCss, clientJs, componentJs, auditCss, auditJs, memoryCss, memoryJs, toolFormatJs] = await Promise.all([
     readFile(clientPath, "utf8"),
     readFile(join(clientDirectory, "style.css"), "utf8"),
     readFile(join(clientDirectory, "components.css"), "utf8"),
@@ -459,8 +459,9 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     readFile(join(clientDirectory, "audit.js"), "utf8"),
     readFile(join(clientDirectory, "memory.css"), "utf8"),
     readFile(join(clientDirectory, "memory.js"), "utf8"),
+    readFile(join(clientDirectory, "tool-format.js"), "utf8"),
   ]);
-  const clientAssets = { client, clientCss, componentCss, clientJs, componentJs, auditCss, auditJs, memoryCss, memoryJs };
+  const clientAssets = { client, clientCss, componentCss, clientJs, componentJs, auditCss, auditJs, memoryCss, memoryJs, toolFormatJs };
   const clientPathFor = {
     client: clientPath,
     clientCss: join(clientDirectory, "style.css"),
@@ -471,6 +472,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     auditJs: join(clientDirectory, "audit.js"),
     memoryCss: join(clientDirectory, "memory.css"),
     memoryJs: join(clientDirectory, "memory.js"),
+    toolFormatJs: join(clientDirectory, "tool-format.js"),
   } as const;
   const serveAsset = async (key: keyof typeof clientAssets): Promise<string> => (
     reloadClientAssets ? await readFile(clientPathFor[key], "utf8").catch(() => clientAssets[key]) : clientAssets[key]
@@ -786,6 +788,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
             ...(request.url === "/components.js" ? { componentJs: await serveAsset("componentJs") } : {}),
             ...(request.url === "/audit.js" ? { auditJs: await serveAsset("auditJs") } : {}),
             ...(request.url === "/memory.js" ? { memoryJs: await serveAsset("memoryJs") } : {}),
+            ...(request.url === "/tool-format.js" ? { toolFormatJs: await serveAsset("toolFormatJs") } : {}),
             ...(request.url === "/" ? { client: injectCompanionToken(await serveAsset("client"), token) } : {}),
             ...(request.url === "/style.css" ? { clientCss: await serveAsset("clientCss") } : {}),
             ...(request.url === "/components.css" ? { componentCss: await serveAsset("componentCss") } : {}),
@@ -813,6 +816,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         auditJs,
         memoryCss,
         memoryJs,
+        toolFormatJs,
         ...fresh,
         schedules,
         sessions,
@@ -957,6 +961,7 @@ async function handleRequest(
     auditJs: string;
     memoryCss: string;
     memoryJs: string;
+    toolFormatJs: string;
     schedules: ScheduleStore;
     sessions: SessionStore;
     agentSettings: WorkerSettingsStore;
@@ -1065,6 +1070,11 @@ async function handleRequest(
   if (request.method === "GET" && url.pathname === "/memory.js") {
     response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
     response.end(context.memoryJs);
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/tool-format.js") {
+    response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+    response.end(context.toolFormatJs);
     return;
   }
   if (request.method === "GET" && url.pathname === "/components.js") {

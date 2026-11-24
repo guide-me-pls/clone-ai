@@ -261,6 +261,37 @@
   Seatbelt profile，不要缩小受保护根。如果所有者依赖授权并集，加显式授权标记，而不是恢复
   `max()` 聚合。
 
+### 2026-11-24 —— 审计把工具调用读成人话，JSON 留在一键之后
+
+- **目标 / 假设：** 所有者报告审计里的工具行是读不懂的 JSON（`dispatch_task`、
+  `daily_workspace_digest`）。审计应当用文字回答"分身做了什么"；原始参数是排查用的回退。
+- **取舍：** [审计里的工具调用读成人话与带标签字段](../architecture/trade-offs.zh-CN.md#2026-11-24--审计里的工具调用读成人话与带标签字段)。
+- **变更：** `apps/desktop/ui/tool-format.js`（新增）——解析记录下来的输入，渲染工具专属
+  标题、带标签字段、列表与原始参数开关；被截断的记录通过补全未闭合字符串与括号恢复。
+  `apps/desktop/ui/audit.js` 在主 Agent 回合日志与 Worker 工具列表都使用它；`audit.css`
+  添加样式；`index.html` 加载模块；`src/companion-server.ts` 提供 `/tool-format.js`，
+  `src/companion-auth.ts` 像其他界面资源一样放行；`src/main-agent/turn-audit.ts` 把记录
+  上限从 2,000 提高到 8,000 字符。测试：`test/tool-format.test.ts`（6 个）、
+  `test/ui-structure.test.ts` 的回合卡片用例、`test/companion-auth.test.ts` 的资源列表。
+- **Eval：** `node --experimental-strip-types --test test/tool-format.test.ts`
+  —— **6/6**；`test/ui-structure.test.ts` —— **42/42**。对守护进程的实机检查在回合日志里
+  渲染了 71 条工具输入，那条 `dispatch_task` 现在读作"派发任务：对
+  /Users/user/work/doc_translate …"，验收标准是列表，并带截断提示。全量套件
+  **1077 通过 / 3 失败**，gate 在策略用例上失败；三个失败与策略基线变化都来自另一个会话
+  正在进行的"自动执行成为默认"变更（其 CHANGELOG 条目可证），不是这次 UI 变更。上面的
+  定向审计全部通过。
+- **Benchmark run：** 无——确定性格式化器/UI 测试；无 Provider 调用。
+- **执行链路：** 单个会话。读 `audit.js`、回合/Worker 渲染器与资源路由；加入格式化器。
+  第一次实机加载 `/tool-format.js` 返回 401；扩展资源路由与鉴权放行，并更新资源测试。
+  第一次渲染仍有一条原始 JSON 行，因为已存输入被 2,000 字符截断；格式化器现在修复被截断的
+  对象，新回合的上限也提高了。两处修复后重新截图。
+- **优点：** 审计可读，同时不丢精确参数；一个格式化器服务两个视图；未知工具仍有带标签的
+  通用视图；截断记录退化为可读的部分摘要并注明。
+- **缺点 / 下次：** 标题映射与字段标签是 UI 启发式；新工具在被映射前只有"调用 <name>"的
+  通用视图。修复无法找回从未记录的字段。全量套件/gate 因并发策略变更而红，因此本条目的
+  绿色结论仅限于定向套件。
+- **推翻条件：** 同取舍条目。
+
 ### 2026-11-24 —— 缺失的交付物问裁判，再问所有者，而不是直接失败
 
 - **目标 / 假设：** 终结所有者三次报告的产物合同死路。完成的 Worker 有观察证据但没有承诺

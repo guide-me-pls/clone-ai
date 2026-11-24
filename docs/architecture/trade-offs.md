@@ -361,6 +361,38 @@ to both protection lists and the Seatbelt profile; do not shrink the root. If
 owners rely on union-of-grants, add an explicit grant marker instead of
 restoring `max()` aggregation. If owners report that the
 
+## 2026-11-24 — Audit tool calls read as sentences and labeled fields
+
+**Decision.** The audit's Main Agent turn log and worker tool list render each
+tool input as a sentence headline, labeled fields and lists; the raw JSON sits
+behind a "原始参数" toggle. The recorded input cap rises from 2,000 to 8,000
+characters for new turns, and a stored input that was cut at the old cap is
+repaired by closing the open string and brackets before rendering, with a note
+that the record was truncated.
+
+**Why it won.** The owner reported the audit's `dispatch_task` / `daily_workspace_digest`
+rows as unreadable JSON; the audit exists to answer "what did the agent do",
+and a JSON blob answers it only for a developer. The summary is deterministic
+(no model), the known tools get a sentence, and every input keeps its raw form
+one click away for debugging. The same formatter serves the conversation-level
+turn log and the run-level tool list, so the two views cannot drift.
+
+**Alternatives rejected.**
+
+- *Keep the JSON and ask the owner to read it.* That is the reported problem.
+- *Render only known tools and keep JSON for the rest.* The generic fallback is
+  the same formatter; a tool added tomorrow is still readable.
+- *Drop the raw input entirely.* Debugging a bad tool call needs the exact
+  arguments; hiding them would trade one unreadable view for another.
+- *Repair truncated JSON by guessing missing fields.* The repair only closes
+  open strings and brackets; fields that were never recorded stay missing and
+  the note says so.
+
+**Reversal condition.** If a tool's summary is still unreadable because its
+input is not structured, add a structured field on the server for that tool
+rather than teaching the formatter more heuristics; if owners stop needing the
+exact arguments, the raw toggle can go.
+
 ## 2026-11-24 — An artifact-contract gap asks a model judge, then the owner, instead of failing
 
 **Decision.** When a completed subagent has recorded observation evidence but
