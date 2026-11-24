@@ -5,8 +5,9 @@
 The desktop settings page now has a **工具与技能** / **Tools & skills** tab. It
 lists every MCP server in the clone home's `mcp.json`, every tool that server
 declares, and every skill found under the owner's skill roots. Each server has a
-**加载 / 停用** (Load / Unload) button. Loading writes only that server's
-`enabled` field; the next worker run sees the change.
+**加载 / 停用** (Load / Unload) button, and the page can install a new server
+from an npm package or remove one. Loading writes only that server's `enabled`
+field; the next worker run sees the change.
 
 ## What the tab shows
 
@@ -46,6 +47,27 @@ A loaded server is still filtered per step: a `network` tool such as
 `write` tool offered only to reversible-write steps. Loading a server does not
 grant those scopes.
 
+## Install a server
+
+The **安装 MCP 服务器** card installs a stdio server from an npm package:
+
+1. Enter a server id, the npm spec (`@scope/name@version`), and any arguments
+   (space-separated, or a JSON array when an argument contains a space).
+2. Press **探测工具**. The runtime spawns `npx --yes <spec> <args>`, performs
+   the MCP handshake and lists the tools the package exposes. Nothing is
+   written.
+3. Assign a risk to each tool — or press **读取 / 写入 / 网络** to set them all.
+   Every tool starts at **外部** (`external`), which the worker always refuses.
+4. Press **安装** and confirm. The install re-probes the package, refuses when
+   it exposes a tool the request did not declare, and writes one enabled entry
+   into `mcp.json` atomically with mode 0600. Other servers and unknown
+   top-level fields are preserved.
+
+A **移除** button on each server card deletes that entry. Every failure happens
+before the write, so a refused install leaves `mcp.json` untouched. Installing
+runs the package with the owner's privileges and no OS sandbox; that is the
+cost of the flow, and it is why the agent cannot start one.
+
 ## Add a skill
 
 Create a directory with a `SKILL.md` under one of the roots:
@@ -69,11 +91,14 @@ concept, not the Claude Code skill library; the two do not share a directory.
 
 ## Safety and limits
 
-- The catalog is a declaration view. It does not start a server or call
-  `tools/list`; a server whose real tools drift from `mcp.json` will look stale
-  until a live-probe action exists. The worker only sees the declared tools.
-- The toggle changes the owner's `mcp.json`; the file remains the source of
-  truth. The page cannot install a server, run a command, or read a credential.
+- The catalog is a declaration view. The worker only sees the tools `mcp.json`
+  declares; the install flow's probe is the only place a package's real
+  `tools/list` is read, and it refuses a package that exposes an undeclared
+  tool. A server whose tools drift after install is filtered by the same gate
+  as before.
+- The page can install a server but cannot run a command or read a credential:
+  `~/.clone` is a protected root, and `env`/`command`/`args`/`url` never reach
+  the settings page.
 - `enabled` is per clone home, so the same server list is used by every
   workspace; only the skill roots are workspace-aware.
 - The skills view is read-only. Wiring skills into a Main Agent turn and adding
@@ -83,7 +108,9 @@ concept, not the Claude Code skill library; the two do not share a directory.
 
 The safe projection, atomic toggle, malformed-file reporting, skill discovery
 and rejected-skill reporting are covered by `test/mcp-settings.test.ts`; the
-route is covered by `test/companion-config-api.test.ts`; the tab and its load
-controls are pinned by `test/ui-structure.test.ts`. See
+install flow is covered by `test/mcp-installer.test.ts` and
+`test/tools-install-api.test.ts`; the routes are covered by
+`test/companion-config-api.test.ts`; the tab and its controls are pinned by
+`test/ui-structure.test.ts`. See
 [`docs/engineering/optimizations.md`](../engineering/optimizations.md) under
 2026-11-24 for the eval commands and the execution chain.

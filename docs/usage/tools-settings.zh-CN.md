@@ -4,7 +4,8 @@
 
 桌面设置页现在有 **工具与技能** 分区。它列出 clone home 的 `mcp.json` 中每个 MCP 服务器、
 服务器声明的每个工具，以及所有者技能根目录下发现的技能。每个服务器都有 **加载 / 停用**
-按钮。加载只改写该服务器的 `enabled` 字段；下一次 Worker 运行即可看到变化。
+按钮，页面还可以从 npm 包安装新服务器或移除服务器。加载只改写该服务器的 `enabled` 字段；
+下一次 Worker 运行即可看到变化。
 
 ## 分区里有什么
 
@@ -39,6 +40,23 @@
 `agent-exec.run_command` 是只提供给可逆写入步骤的 `write` 工具。加载服务器不会授予这些
 Scope。
 
+## 安装服务器
+
+**安装 MCP 服务器** 卡片从 npm 包安装一个 stdio 服务器：
+
+1. 填写服务器 ID、npm 规格（`@scope/name@version`）与参数（空格分隔；参数含空格时用
+   JSON 数组）。
+2. 按 **探测工具**。运行时会启动 `npx --yes <spec> <args>`，完成 MCP 握手并列出包暴露的
+   工具。此时不写任何文件。
+3. 为每个工具指定风险，或按 **读取 / 写入 / 网络** 一键全部设定。每个工具从 **外部**
+   （`external`）开始，Worker 永远拒绝该风险。
+4. 按 **安装** 并确认。安装会重新探测包，在包暴露了请求未声明的工具时拒绝，并把一条启用
+   条目原子写入 `mcp.json`（权限 0600）。其他服务器与未知顶层字段都会保留。
+
+每个服务器卡片上的 **移除** 按钮删除该条目。所有失败都发生在写入之前，因此被拒绝的安装不会
+改动 `mcp.json`。安装会以所有者权限、在无 OS 沙箱的情况下运行包；这是该流程的代价，也是
+Agent 无法发起安装的原因。
+
 ## 添加技能
 
 在任一技能根目录下创建一个带 `SKILL.md` 的目录：
@@ -62,9 +80,11 @@ allowed-tools: read_file, search_text
 
 ## 安全与限制
 
-- 目录是声明视图。它不启动服务器，也不调用 `tools/list`；服务器真实提供的工具与 `mcp.json`
-  漂移时，卡片会显得过期，直到有真实探测动作。Worker 仍只看已声明工具。
-- 切换改的是所有者的 `mcp.json`；文件仍是事实来源。页面不能安装服务器、运行命令或读取凭据。
+- 目录是声明视图。Worker 只看 `mcp.json` 声明的工具；安装流的探测是唯一读取包真实
+  `tools/list` 的地方，且它会拒绝暴露未声明工具的包。安装后改变工具表的服务器仍会被同一道
+  闸门过滤。
+- 页面可以安装服务器，但不能运行命令或读取凭据：`~/.clone` 是受保护根，
+  `env`/`command`/`args`/`url` 永远到不了设置页。
 - `enabled` 按 clone home 而不是按工作区，因此所有工作区共用同一份服务器列表；只有技能根目录
   与工作区相关。
 - 技能视图是只读的。把技能接进 Main Agent 回合并加启用/停用开关是另一项变更。
@@ -72,6 +92,7 @@ allowed-tools: read_file, search_text
 ## 状态
 
 安全投影、原子切换、损坏文件报告、技能发现与被拒绝技能由 `test/mcp-settings.test.ts` 覆盖；
-路由由 `test/companion-config-api.test.ts` 覆盖；分区与加载控件由 `test/ui-structure.test.ts`
-钉住。命令与执行链路见
+安装流由 `test/mcp-installer.test.ts` 与 `test/tools-install-api.test.ts` 覆盖；路由由
+`test/companion-config-api.test.ts` 覆盖；分区与控件由 `test/ui-structure.test.ts` 钉住。
+命令与执行链路见
 [`docs/engineering/optimizations.md`](../engineering/optimizations.md) 的 2026-11-24 条目。
