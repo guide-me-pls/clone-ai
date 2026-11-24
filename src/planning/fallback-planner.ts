@@ -122,7 +122,15 @@ export function buildFallbackPlan(
   const analysisOnly = needsResearch && !deliveryRequested;
   const readOnlyRequest = !deliveryRequested && (explicitReadOnly || analysisOnly);
   const needsDelivery = !readOnlyRequest && (deliveryRequested || needsResearch);
-  const needsExternalAction = includesOne(normalized, EXTERNAL_ACTION_TERMS);
+  // "提交" is both an action and a state word ("未提交/已提交的文件"), and a
+  // quoted error can contain it without asking for anything. An explicit
+  // read-only marker therefore suppresses the ambiguous word unless it names a
+  // concrete target ("提交 PR"), while the clear verbs (发送/发布/上传) still
+  // count even in a read-only request.
+  // "提交"既是动作也是状态词（"未提交/已提交的文件"），引用的报错也可能包含它而并不
+  // 请求任何动作。因此显式只读标记会压制这个歧义词，除非它点名了具体目标（"提交 PR"）；
+  // 明确的动词（发送/发布/上传）即使在只读请求里仍然算数。
+  const needsExternalAction = hasExternalActionCue(normalized, explicitReadOnly);
   const isIrreversible = includesOne(normalized, IRREVERSIBLE_ACTION_TERMS);
   const needsReview = (needsResearch && needsDelivery && query.length >= 38) || (needsExternalAction && needsResearch);
   const request = requestSummary(query);
@@ -238,7 +246,7 @@ export function buildFallbackPlan(
 
   if (needsExternalAction) {
     if (!enabledAgentIds.has("external-operator")) {
-      throw new Error("外部执行 Agent 已关闭。请先在设置中启用它，再提交这个外部动作。");
+      throw new Error("外部动作连接器尚未实现，本地 Worker 不能执行这个外部动作。请改成由你确认并手动完成，或把请求改成本地准备（草稿、步骤或检查清单）。");
     }
     steps.push({
       id: "external-commitment",
@@ -299,6 +307,37 @@ function includesOne(query: string, terms: string[]): boolean {
   return terms.some((term) => query.includes(term));
 }
 
+/**
+ * Whether the request asks for an external side effect. `提交` is special: it
+ * is also the state word in "未提交/已提交的文件", and a quoted error can
+ * contain it without asking for anything. Only a clear action (not preceded by
+ * a state marker and not followed by a state noun), or a named target under an
+ * explicit read-only marker, counts.
+ * 请求是否要求外部副作用。`提交`要特别处理：它也是"未提交/已提交的文件"里的状态词，引用
+ * 的报错也可能包含它而并不请求任何动作。只有明确的动作（前面不是状态标记、后面不是状态
+ * 名词），或在显式只读标记下点名了具体目标，才算数。
+ */
+function hasExternalActionCue(query: string, readOnly: boolean): boolean {
+  for (const term of EXTERNAL_ACTION_TERMS) {
+    if (term !== "提交") {
+      if (query.includes(term)) return true;
+      continue;
+    }
+    if (readOnly) {
+      // Under an explicit read-only marker, only a named submission target is
+      // an action; a quoted error that merely contains the word is not.
+      // 在显式只读标记下，只有点名了提交目标才算动作；仅仅包含这个词的引用报错不算。
+      if (/(?<![未已不没勿别])提交\s*(?:pr|pull request|表单|申请|工单|报告|代码|改动|变更)/.test(query)) return true;
+      continue;
+    }
+    // Outside a read-only request, a state phrase ("未提交的文件") is still not
+    // an action; an imperative "提交" (optionally with a target) is.
+    // 非只读请求里，状态短语（"未提交的文件"）仍然不是动作；祈使的"提交"（可带目标）才是。
+    if (/(?<![未已不没勿别])提交(?!的?(?:文件|改动|代码|变更|内容|版本|记录|状态))/.test(query)) return true;
+  }
+  return false;
+}
+
 function describePlan(workerCount: number, needsExternalAction: boolean): string {
   if (workerCount === 0) {
     return "The request can be handled directly with no child-agent delegation.";
@@ -343,4 +382,18 @@ function defaultWorkOrderBudget() {
     maxToolCalls: 200,
     maxAttempts: 2,
   };
+}
+
+/**
+ * True when the deterministic planner classifies the request as a read-only
+ * lookup. The LLM planner's own contract requires a required artifact for every
+ * subagent, so it cannot express a request that forbids writing; this is the
+ * deterministic plan's own verdict, not a second heuristic.
+ * 当确定性规划器把请求归类为只读查看时为真。LLM Planner 自己的合同要求每个子代理都有
+ * 必需产物，因此无法表达禁止写入的请求；这里直接采用确定性计划自己的判定，而不是第二套
+ * 启发式。
+ */
+export function isReadOnlyRequest(query: string): boolean {
+  const plan = buildFallbackPlan(query, new Set(["direct-responder"]));
+  return plan.steps.length === 1 && plan.steps[0]?.id === "read-only-lookup";
 }

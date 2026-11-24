@@ -6,6 +6,12 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### A read-only request stays read-only
+
+A request that explicitly says 只读/仅读取/不要修改任何文件 is no longer sent through the LLM planner, whose contract requires a required artifact for every subagent. `runQuery` now uses the deterministic read-only plan — also when the Main Agent's brief is read-only — so the worker reads the file and answers instead of failing with "Subagent draft did not satisfy its artifact contract." The LLM planner remains for delivery requests; two planner-failure tests now use delivery queries to keep their intent. `npm test` 1103/1103, typecheck 0, gate PASS.
+
+明确写着 只读/仅读取/不要修改任何文件 的请求不再交给 LLM Planner——它的合同要求每个子代理都有必需产物。`runQuery` 现在改用确定性的只读计划（Main Agent 简报为只读时也一样），Worker 读取文件并回答，而不是以 "Subagent draft did not satisfy its artifact contract." 失败。LLM Planner 仍负责交付类请求；两个 Planner 失败测试改用交付类查询以保留原意。`npm test` 1103/1103，typecheck 0，gate PASS。
+
 ### The settings page lists MCP tools and skills, and each server can be loaded
 
 The desktop settings gain a **工具与技能** tab: every MCP server in the clone home's `mcp.json` is listed with its declared tools and risks, every skill under `<clone home>/skills` and `<workspace>/.clone/skills` is listed read-only, and each server has a 加载/停用 button that rewrites only its `enabled` field for the next worker run. The catalog never returns `env`, `command`, `args` or `url`; the toggle is atomic and 0600, and preserves every other field. `GET /api/tools` and `POST /api/tools/mcp/:id/enabled` back the tab. `npm test` 1038/1038, typecheck 0, gate PASS.

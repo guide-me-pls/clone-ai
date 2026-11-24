@@ -1,7 +1,49 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildFallbackPlan } from "../src/planning/fallback-planner.ts";
+import { buildFallbackPlan, isReadOnlyRequest } from "../src/planning/fallback-planner.ts";
+
+/** The four production profiles after the CLI workers were removed. 移除 CLI Worker 后的四个生产 profile。 */
+const PRODUCTION_AGENTS = new Set(["direct-responder", "context-researcher", "draft-maker", "evidence-reviewer"]);
+
+test("a read-only review of uncommitted files is not an external action", () => {
+  // "未提交" contains the external-action term "提交", but it is a state word.
+  // 未提交 含有外部动作词 提交，但它是一个状态词。
+  const plan = buildFallbackPlan("只读审查这 9 个未提交的 ToolBox 文件；不要修改任何文件。", PRODUCTION_AGENTS);
+  assert.equal(plan.steps.length, 1);
+  assert.equal(plan.steps[0]?.risk, "read_only");
+  assert.equal(plan.steps[0]?.agentId, "context-researcher");
+});
+
+test("a quoted external-action error does not make a read-only review external", () => {
+  // The request quotes the old denial verbatim; the quote asks for nothing.
+  // 请求原样引用了旧的拒绝文案；引用并没有请求任何动作。
+  const plan = buildFallbackPlan(
+    "只读审查这 9 个未提交的文件。上次原话：外部执行 Agent 已关闭，请先在设置中启用它，再提交这个外部动作。",
+    PRODUCTION_AGENTS,
+  );
+  assert.equal(plan.steps[0]?.risk, "read_only");
+  assert.equal(plan.steps[0]?.agentId, "context-researcher");
+});
+
+test("a state word without a read-only marker still does not plan an external step", () => {
+  const plan = buildFallbackPlan("看看这些未提交的文件，告诉我有什么风险。", PRODUCTION_AGENTS);
+  assert.ok(plan.steps.every((step) => step.id !== "external-commitment"));
+});
+
+test("a genuine external request names the missing connector", () => {
+  assert.throws(
+    () => buildFallbackPlan("把结论发给团队。", PRODUCTION_AGENTS),
+    /外部动作连接器尚未实现/,
+  );
+});
+
+test("a named submission target after a read-only review is still external", () => {
+  assert.throws(
+    () => buildFallbackPlan("只读审查后提交 PR。", PRODUCTION_AGENTS),
+    /外部动作连接器尚未实现/,
+  );
+});
 
 test("direct requests stay direct instead of creating child agents", () => {
   const plan = buildFallbackPlan("解释一下这个术语是什么意思");
@@ -73,6 +115,16 @@ test("a report verb inside a read-only request does not become a report artifact
   assert.equal(step?.id, "read-only-lookup");
   assert.equal(step?.risk, "read_only");
   assert.equal(step?.subagents, undefined);
+});
+
+test("the read-only classifier follows the deterministic plan", () => {
+  // The classifier is the deterministic plan's own verdict, so the read-only
+  // step id and the boolean cannot drift apart.
+  // 分类器直接采用确定性计划的判定，因此只读步骤 id 与布尔值不会漂移。
+  assert.equal(isReadOnlyRequest("仅读取当前工作区根目录的 README.md，用三句话说明项目；不要修改任何文件。"), true);
+  assert.equal(isReadOnlyRequest("只读审查这个项目的代码，不要修改文件。"), true);
+  assert.equal(isReadOnlyRequest("帮我写一份报告到 out/report.md"), false);
+  assert.equal(isReadOnlyRequest("解释一下这个术语"), false);
 });
 
 test("an analysis request with no deliverable is read-only without a marker", () => {

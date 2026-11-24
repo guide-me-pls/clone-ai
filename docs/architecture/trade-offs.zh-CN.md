@@ -5,6 +5,50 @@
 只有把理由写下来，一个决定才算真正稳定。每条记录都说明决定了什么、依据是什么，以及在
 什么条件下后来者应当推翻它。
 
+## 2026-11-24 —— 只读请求永远不经过 LLM Planner
+
+**决定。** 从确定性兜底规划器导出 `isReadOnlyRequest(query)`——它请规划器给出计划并检查
+`read-only-lookup` 步骤——并在 `runQuery` 中使用：只读查询或只读的 Main Agent 简报，即使
+注入了 LLM Planner，也由 `buildFallbackPlan` 规划。LLM Planner 仍负责交付类请求。
+
+**为什么这样更好。** 失败轨迹 `c03c7cea` 正是这种情况：“仅读取当前工作区根目录
+…/README.md … 不要修改任何文件”。计划是一个 `prepare` 步骤，带一个 draft 子代理，其产物
+合同要求文件；Worker 只产出了 `read_file README.md` 观察，运行时于是报
+“Subagent draft did not satisfy its artifact contract.”。Worker 做的正是请求允许的事；
+计划却索要请求禁止的文件。确定性规划器对同一查询返回单个 `read-only-lookup` 步骤。
+LLM Planner 自己的提示词要求每个子代理都有必需产物，因此它无法表达只读任务；确定性规划器
+可以。
+
+**被否决的备选方案。**
+
+- *把只读规则加进 LLM 提示词。* 只是建议性的：模型已经看到明确的“不要修改任何文件”，仍然
+  提出了 draft。
+- *校验并重试 LLM 计划。* 多一次调用，还可能以同样方式失败；确定性规划器已经有正确分支。
+- *让观察证据满足产物合同。* 这会掩盖规划器缺陷，并削弱每个交付任务的合同。
+- *只在没有配置 LLM Planner 时使用兜底。* 这正是当前的 Bug。
+- *让 Worker 无论如何写文件。* 违反所有者的明确约束。
+
+**放弃了什么。** 只读请求得到确定性计划，针对性较弱；兜底的验收标准是通用的。这些运行不会
+写 Planner 用量记录。需要文件但没有点名目标的只读请求会被归类为只读——这与确定性规划器原本
+的规则一致，点名的写入目标仍然优先。修复通道上一次尝试先因另一个能力路由 Bug 失败
+（`fe5cce8c`：第一阶段写入步骤被路由给缺少 `filesystem_write` 的 `direct-responder`），
+因此本修复由工作的 Agent 应用并做了功能检查；那次通道失败仍保留在它的轨迹里。
+
+**证据。** `~/.clone/failed-traces/c03c7cea-….json`：计划 `prepare`、阶段 `execution`、
+原因 "Subagent draft did not satisfy its artifact contract."、证据只有一条 `README.md`
+观察；`test/fallback-planner.test.ts` 显示 `buildFallbackPlan` 对同一查询返回
+`read-only-lookup`；新测试钉住 `isReadOnlyRequest` 与 `shouldUseDeterministicPlanner`。
+`test/llm-planner.test.ts` 中新增的回归测试注入一个空的脚本化 Planner：修复前运行会抵达
+Planner 并拒绝；修复后 Planner 从未被调用，只读步骤运行。两个既有的 Planner 失败测试改用
+交付类查询，从而仍然走各自的失败路径。Planner 目标测试 **28/28**，受影响套件 **48/48**，
+`npm test` **1103/1103**，`npm run typecheck` 退出 0，`npm run gate` **PASS** 且基线不变。
+应用已重建并重启；`/api/health` 返回 200。全量套件第一次运行撞上一个无关的
+workspace-watch 时序抖动测试；它单独运行 3/3 通过，重跑全量也全绿。
+
+**推翻条件。** 如果 LLM Planner 获得了经过验证的只读模式，并有测试保证它绝不为只读请求
+产出必需产物，就在一个后置校验闸门之后把只读请求交给它。如果只读请求在标记之外仍必须产出
+文件，就要求点名的目标；检测器已经让点名的写入目标优先。
+
 ## 2026-11-24 —— 设置页列出 MCP 服务器、工具与技能，并给每个 MCP 一个加载按钮
 
 **决定。** 为本地 companion 增加一个只读目录接口（`GET /api/tools`）与一个很窄的

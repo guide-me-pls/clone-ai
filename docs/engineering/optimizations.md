@@ -31,6 +31,61 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-24 — A read-only request bypasses the LLM planner
+
+- **Goal / hypothesis:** a request that explicitly says read-only was planned by
+  the LLM planner, whose contract requires a required artifact for every
+  subagent. The draft worker could only read, so the run failed with "Subagent
+  draft did not satisfy its artifact contract." The deterministic planner
+  already returns a single read-only step; using it for these requests should
+  let the worker answer instead of failing.
+- **Trade-off:** [A read-only request never goes through the LLM planner](../architecture/trade-offs.md#2026-11-24--a-read-only-request-never-goes-through-the-llm-planner).
+- **Change:** `src/planning/fallback-planner.ts` exports
+  `isReadOnlyRequest(query)` (the deterministic plan's own `read-only-lookup`
+  verdict); `src/application/run-query.ts` exports
+  `shouldUseDeterministicPlanner(query, workerBrief)` and routes those requests
+  to `buildFallbackPlan` even when an LLM planner is injected.
+  `test/fallback-planner.test.ts` and `test/llm-planner.test.ts` gain the
+  regression cases; `test/run-query-routing.test.ts` and
+  `test/worker-evidence-contract.test.ts` keep their planner-failure paths by
+  using delivery queries instead of read-only ones.
+- **Eval:** the new `test/llm-planner.test.ts` case injects an **empty**
+  `ScriptedPlannerModel`; before the fix the run reaches the planner and
+  rejects, after it the planner is never called and the run is not failed.
+  `test/fallback-planner.test.ts` and `test/llm-planner.test.ts` — **28/28**;
+  the affected suites — **48/48**; `npm test` — **1103/1103**, 0 fail;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**, baseline unchanged. The
+  failed trace `c03c7cea` recorded plan `prepare`, one `README.md`
+  observation and the exact artifact-contract reason. The app was rebuilt and
+  restarted; `/api/health` returned 200.
+- **Benchmark run:** none — deterministic planner tests; no provider, model,
+  dataset, split, seed or scoring parameter.
+- **Execution chain:** (1) exported 28 failed traces with `npm run traces --
+  export`; (2) inspected `c03c7cea` and found `prepare` + draft + one README
+  observation; (3) ran `buildFallbackPlan` on the same query and confirmed it
+  returns `read-only-lookup`, so the LLM plan, not the worker, was wrong;
+  (4) wrote the trade-off and the two-line routing fix; (5) the first full run
+  exposed two tests that used read-only queries to exercise planner failure and
+  Kernel plan rejection — they now use delivery queries, preserving their
+  intent; a bilingual comment in `src/core/runtime.ts` and a concurrent-session
+  typecheck error were handled without touching the other feature; one
+  workspace-watch timing test flaked, passed alone 3/3, and the full rerun was
+  green; (6) rebuilt `dist/Clone AI.app`, restarted it and checked health;
+  (7) ran the full suite, typecheck and gate.
+- **Pros:** the fix uses the deterministic planner's own verdict instead of a
+  second heuristic; the regression test fails on the old code by construction
+  (an empty planner script); the LLM planner still handles delivery requests.
+- **Cons / next time:** the repair lane could not produce this patch: its last
+  attempt (`fe5cce8c`) failed at its own phase-1 capability routing, assigning a
+  `filesystem_write` step to `direct-responder`. The working agent therefore
+  applied and functionally checked the fix directly; that lane failure remains
+  recorded. Read-only requests no longer get an LLM plan, so a more tailored
+  model plan is lost; a future validated read-only mode can restore it.
+- **Reversal condition:** if the LLM planner gains a validated read-only mode
+  with a test that it never emits a required artifact for a read-only request,
+  route read-only through it behind a post-validation gate; if a read-only
+  request must produce a file despite the marker, require a named target.
+
 ### 2026-11-24 — Settings lists MCP servers, their tools and skills, with a load toggle
 
 - **Goal / hypothesis:** the settings page had no MCP or skill surface, so the

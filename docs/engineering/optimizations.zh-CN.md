@@ -26,6 +26,46 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-24 —— 只读请求绕过 LLM Planner
+
+- **目标 / 假设：** 明确写着只读的请求被 LLM Planner 规划，而它的合同要求每个子代理都有
+  必需产物。draft Worker 只能读，于是 Run 以 "Subagent draft did not satisfy its artifact
+  contract." 失败。确定性规划器本来就返回单个只读步骤；对这类请求使用它，Worker 就能回答
+  而不是失败。
+- **取舍：** [只读请求永远不经过 LLM Planner](../architecture/trade-offs.zh-CN.md#2026-11-24--只读请求永远不经过-llm-planner)。
+- **变更：** `src/planning/fallback-planner.ts` 导出 `isReadOnlyRequest(query)`（直接采用
+  确定性计划的 `read-only-lookup` 判定）；`src/application/run-query.ts` 导出
+  `shouldUseDeterministicPlanner(query, workerBrief)`，并在注入了 LLM Planner 时也把这些
+  请求交给 `buildFallbackPlan`。`test/fallback-planner.test.ts` 与
+  `test/llm-planner.test.ts` 增加回归用例；`test/run-query-routing.test.ts` 与
+  `test/worker-evidence-contract.test.ts` 改用交付类查询，保留它们原本的 Planner 失败路径。
+- **Eval：** 新的 `test/llm-planner.test.ts` 用例注入一个**空的**
+  `ScriptedPlannerModel`；修复前运行会抵达 Planner 并拒绝，修复后 Planner 从未被调用且 Run
+  不失败。`test/fallback-planner.test.ts` 与 `test/llm-planner.test.ts` —— **28/28**；
+  受影响套件 —— **48/48**；`npm test` —— **1103/1103**，0 失败；
+  `npm run typecheck` 退出 0；`npm run gate` **PASS**，基线不变。失败轨迹 `c03c7cea`
+  记录了计划 `prepare`、一条 `README.md` 观察与准确的产物合同原因。应用已重建并重启；
+  `/api/health` 返回 200。
+- **Benchmark run：** 无——确定性 Planner 测试；没有 Provider、模型、数据集、切分、种子或
+  评分参数。
+- **执行链路：**（1）用 `npm run traces -- export` 导出 28 条失败轨迹；（2）检查
+  `c03c7cea`，看到 `prepare` + draft + 一条 README 观察；（3）对同一查询运行
+  `buildFallbackPlan`，确认它返回 `read-only-lookup`，所以错的是 LLM 计划，不是 Worker；
+  （4）写取舍条目与两行路由修复；（5）第一次全量运行暴露两个测试用只读查询来验证 Planner
+  失败与 Kernel 拒绝计划——改为交付类查询，保留测试意图；`src/core/runtime.ts` 的一条双语
+  注释与并发会话的 typecheck 错误被处理，没有触碰另一个功能；一个 workspace-watch 时序测试
+  抖动，单独运行 3/3 通过，全量重跑全绿；（6）重建 `dist/Clone AI.app`，重启并检查健康；
+  （7）跑全量套件、typecheck 与 gate。
+- **优点：** 修复采用确定性规划器自己的判定，而不是第二套启发式；回归测试在旧代码上按构造
+  失败（空的 Planner 脚本）；LLM Planner 仍负责交付类请求。
+- **缺点 / 下次：** 修复通道没能产出这个补丁：它上一次尝试（`fe5cce8c`）在自己的第一阶段
+  能力路由上失败，把 `filesystem_write` 步骤指派给了 `direct-responder`。因此工作的 Agent
+  直接应用并做了功能检查；那次通道失败仍保留在记录里。只读请求不再得到 LLM 计划，损失了
+  更有针对性的模型规划；未来经过验证的只读模式可以恢复它。
+- **推翻条件：** 如果 LLM Planner 获得经过验证的只读模式，并有测试保证它绝不为只读请求产出
+  必需产物，就在后置校验闸门之后把只读请求交给它；如果只读请求在标记之外仍必须产出文件，
+  就要求点名的目标。
+
 ### 2026-11-24 —— 设置页列出 MCP 服务器、工具与技能，并给每个 MCP 一个加载按钮
 
 - **目标 / 假设：** 设置页此前没有 MCP 或技能入口，所有者只能手改 `mcp.json` 来加载或卸载

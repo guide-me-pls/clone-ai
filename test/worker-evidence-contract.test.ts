@@ -183,7 +183,7 @@ test("the worker is told the required evidence contract", () => {
 test("a Kernel-rejected plan closes its run instead of freezing in planning", async (t) => {
   const directory = await workspace(t);
   await assert.rejects(
-    runQuery(directory, "Research one fact.", {}, undefined, {
+    runQuery(directory, "Research one fact and write a report to out/report.md.", {}, undefined, {
       workspacePath: directory,
       planner: {
         async plan() {

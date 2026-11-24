@@ -6,6 +6,67 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-24 — A read-only request never goes through the LLM planner
+
+**Decision.** Export `isReadOnlyRequest(query)` from the deterministic fallback
+planner — it asks the planner for its plan and checks for the `read-only-lookup`
+step — and use it in `runQuery`: a read-only query, or a read-only Main Agent
+brief, is planned by `buildFallbackPlan` even when an LLM planner is injected.
+The LLM planner remains the planner for delivery requests.
+
+**Why it won.** Failed trace `c03c7cea` is the exact case: "仅读取当前工作区根目录
+…/README.md … 不要修改任何文件". The plan was a `prepare` step with a draft
+subagent whose artifact contract required a file; the worker produced only a
+`read_file README.md` observation, and the runtime failed with "Subagent draft
+did not satisfy its artifact contract." The worker did exactly what the request
+allowed; the plan demanded a file the request forbade. The deterministic planner
+returns a single `read-only-lookup` step for the same query. The LLM planner's
+own prompt requires a required artifact for every subagent, so it cannot express
+a read-only task; the deterministic planner can.
+
+**Alternatives rejected.**
+
+- *Add the read-only rule to the LLM prompt.* Advisory: the model saw the
+  explicit "不要修改任何文件" and still proposed a draft.
+- *Validate and retry the LLM plan.* Costs another call and can fail the same
+  way; the deterministic planner already has the correct branch.
+- *Let observation evidence satisfy the artifact.* Hides a planner defect and
+  weakens every delivery contract.
+- *Only use the fallback when no LLM planner is configured.* That is the bug.
+- *Ask the worker to write the file anyway.* Violates the owner's explicit
+  constraint.
+
+**What was given up.** Read-only requests get the deterministic plan, which is
+less tailored; the fallback's acceptance criterion is generic. No planner usage
+record is written for those runs. A read-only request that actually needs a file
+but names no target is classified read-only; that is the same rule the
+deterministic planner already used, and a named write target still wins. The
+repair lane's last attempt failed earlier at a different capability-routing bug
+(`fe5cce8c`: its phase-1 write step was routed to `direct-responder`, which
+lacks `filesystem_write`), so this fix was applied by the working agent and
+checked functionally; that lane failure remains recorded in its trace.
+
+**Evidence.** `~/.clone/failed-traces/c03c7cea-….json`: plan `prepare`, stage
+`execution`, reason "Subagent draft did not satisfy its artifact contract.",
+evidence one observation `README.md`; `test/fallback-planner.test.ts` shows
+`buildFallbackPlan` returns `read-only-lookup` for the same query; the new tests
+pin `isReadOnlyRequest` and `shouldUseDeterministicPlanner`. The new regression
+in `test/llm-planner.test.ts` injects an empty scripted planner: before the fix
+the run reaches the planner and rejects; after it, the planner is never called
+and the read-only step runs. The two existing planner-failure tests now use
+delivery queries so they still exercise their failure path. Targeted planner
+tests **28/28**, the affected suites **48/48**, `npm test` **1103/1103**,
+`npm run typecheck` exit 0 and `npm run gate` **PASS** with the baseline
+unchanged. The app was rebuilt and restarted; `/api/health` returned 200. The
+full suite's first run hit an unrelated flaky workspace-watch timing test; it
+passed alone (3/3) and the rerun was green.
+
+**Reversal condition.** If the LLM planner gains a validated read-only mode with
+a test that it never emits a required artifact for a read-only request, route
+read-only through it behind a post-validation gate. If a read-only request must
+produce a file despite the marker, require a named target; the detector already
+lets a named write target win.
+
 ## 2026-11-24 — The settings page lists MCP servers, their tools and skills, with a load toggle
 
 **Decision.** Add a read-only catalog API (`GET /api/tools`) and a narrow

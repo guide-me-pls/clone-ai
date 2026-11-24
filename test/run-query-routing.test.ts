@@ -168,7 +168,7 @@ test("a planner failure closes its run instead of leaving it planning", async (t
   };
 
   await assert.rejects(
-    runQuery(dataDirectory, "调研一下这个库的现状", {}, undefined, {
+    runQuery(dataDirectory, "帮我写一份报告到 out/report.md", {}, undefined, {
       planner,
       agents: createScriptedAgentRegistry(),
       workspacePath: dataDirectory,

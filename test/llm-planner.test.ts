@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { runQuery } from "../src/application/run-query.ts";
+import { runQuery, shouldUseDeterministicPlanner } from "../src/application/run-query.ts";
 import { createJournalStore } from "../src/core/sqlite-journal.ts";
 import { createScriptedAgentRegistry } from "./fixtures/scripted-adapter.ts";
 import { LlmWorkPlanner, OpenAIResponsesPlannerModel, type PlanningAgent, type StructuredPlannerModel } from "../src/planning/llm-planner.ts";
@@ -168,6 +168,28 @@ test("OpenAI Responses planner does not retry a 400", async () => {
     /OpenAI Responses API error \(400\)/,
   );
   assert.equal(calls, 1);
+});
+
+test("a read-only request bypasses the injected LLM planner", async () => {
+  assert.equal(shouldUseDeterministicPlanner("仅读取当前工作区根目录 README.md；不要修改任何文件。"), true);
+  assert.equal(shouldUseDeterministicPlanner("解释这个术语"), false);
+  assert.equal(shouldUseDeterministicPlanner("解释这个术语", "只读取 README，不要修改任何文件。"), true);
+
+  const directory = await mkdtemp(join(tmpdir(), "clone-ai-read-only-planner-"));
+  try {
+    // An empty script throws if the planner is called at all. The run must use
+    // the deterministic read-only step instead.
+    // 空脚本一旦被调用就抛错；运行必须改用确定性的只读步骤。
+    const model = new ScriptedPlannerModel([]);
+    const result = await runQuery(directory, "仅读取当前工作区根目录 README.md，用中文三句话说明项目是什么；不要读取其他文件，也不要修改任何文件。", {}, undefined, {
+      planner: new LlmWorkPlanner(model),
+      agents: createScriptedAgentRegistry(),
+    });
+    assert.equal(model.corrections.length, 0, "the LLM planner must not be called for a read-only request");
+    assert.notEqual(result.status, "failed");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("workflow uses an injected LLM planner before it dispatches an executor", async () => {

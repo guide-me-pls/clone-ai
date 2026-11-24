@@ -11,6 +11,19 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-24 —— 只读请求不再因产物合同失败
+
+- **主张：** 明确写着只读的请求由确定性规划器处理，Worker 读取文件并回答；Run 不再以
+  "Subagent draft did not satisfy its artifact contract." 失败。交付类请求仍交给 LLM
+  Planner。
+- **证据：** 失败轨迹 `c03c7cea` 显示一个带 draft 工作单的 `prepare` 计划、一条
+  `README.md` 观察与产物合同原因；新回归用例注入空 Planner，证明只读查询从未调用它。
+  Planner 测试 **28/28**，受影响套件 **48/48**，`npm test` **1103/1103**，
+  `npm run typecheck` 退出 0，`npm run gate` **PASS** 且基线不变；重建后的应用
+  `/api/health` 返回 200。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--只读请求永远不经过-llm-planner)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--只读请求绕过-llm-planner)。
+
 ## 2026-11-24 —— 设置页展示 MCP 工具与技能，每个服务器都有加载按钮
 
 - **主张：** 桌面设置页现在有 **工具与技能** 分区，列出 clone home 的 `mcp.json` 中每个

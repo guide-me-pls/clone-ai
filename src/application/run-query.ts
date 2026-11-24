@@ -7,7 +7,7 @@ import { createRuntimeAssembly } from "../core/runtime-factory.ts";
 import type { CloneRuntime, DispatchResult } from "../core/runtime.ts";
 import type { JournalStore } from "../core/journal.ts";
 import { GovernedMemorySource } from "../memory/md-memory-store.ts";
-import { buildFallbackPlan } from "../planning/fallback-planner.ts";
+import { buildFallbackPlan, isReadOnlyRequest } from "../planning/fallback-planner.ts";
 import { reconcileCommitments } from "../state/commitment-reconciler.ts";
 import { createEnvironmentWorkPlanner, type PlanningAgent, type WorkPlanner } from "../planning/llm-planner.ts";
 import { defaultWorkerProfiles, type CloneSettings, type WorkerProfile } from "../config/worker-settings.ts";
@@ -70,6 +70,17 @@ export interface QueryWorkflowOptions {
    * 会让关停一直阻塞到 SIGKILL。
    */
   memorySignal?: AbortSignal;
+}
+
+/**
+ * Read-only requests are planned deterministically. The LLM planner requires a
+ * required artifact for every subagent, so it cannot express a request that
+ * forbids writing; the deterministic planner has a dedicated read-only step.
+ * 只读请求由确定性规划器处理。LLM Planner 要求每个子代理都有必需产物，因此无法表达
+ * 禁止写入的请求；确定性规划器有专门的只读步骤。
+ */
+export function shouldUseDeterministicPlanner(query: string, workerBrief?: string): boolean {
+  return isReadOnlyRequest(query) || (workerBrief !== undefined && isReadOnlyRequest(workerBrief));
 }
 
 /**
@@ -200,7 +211,8 @@ async function runQueryWithin(
   // 并明确说明它为何选择当前任务图。
   let plan;
   try {
-    if (planner === undefined) {
+    const workerBrief = typeof trigger.payload?.workerBrief === "string" ? trigger.payload.workerBrief : undefined;
+    if (planner === undefined || shouldUseDeterministicPlanner(query, workerBrief)) {
       plan = buildFallbackPlan(query, new Set(routableAgents.map((agent) => agent.id)), recalledMemories);
     } else {
       const started = Date.now();

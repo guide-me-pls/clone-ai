@@ -15,6 +15,21 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-24 — A read-only request no longer fails with an artifact contract
+
+- **Claim:** a request that explicitly says read-only is planned by the
+  deterministic planner, so the worker reads the file and answers; the run no
+  longer fails with "Subagent draft did not satisfy its artifact contract."
+  Delivery requests still go to the LLM planner.
+- **Evidence:** the failed trace `c03c7cea` showed a `prepare` plan with a draft
+  work order, one `README.md` observation and the artifact-contract reason; the
+  new regression injects an empty planner and proves it is never called on the
+  read-only query. Planner tests **28/28**, affected suites **48/48**,
+  `npm test` **1103/1103**, `npm run typecheck` exit 0, `npm run gate` **PASS**
+  with the baseline unchanged; the rebuilt app returned `/api/health` 200.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--a-read-only-request-never-goes-through-the-llm-planner);
+  [execution chain](optimizations.md#2026-11-24--a-read-only-request-bypasses-the-llm-planner).
+
 ## 2026-11-24 — Settings shows MCP tools and skills, and each server has a load toggle
 
 - **Claim:** the desktop settings page now has a **工具与技能** tab that lists
