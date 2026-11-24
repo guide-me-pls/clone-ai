@@ -6,22 +6,6 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
-### Child agents run automatically; the desktop notifies you when a decision is truly needed
-
-The 子 Agent 边界 card no longer says 默认禁止. The only child executor is the in-process native worker, which already ran automatically; the label was left over from the removed black-box CLI path. The card now says it runs at the step's risk and stops only when a decision is genuinely yours. When the Kernel does stop — `waiting_approval` or `waiting_review` — the daemon posts one macOS notification with the task title and the step/reason. The text is passed as `argv` to `osascript`, never interpolated into AppleScript; the Runtime notifies at most once per run/step/kind, a failing notifier cannot change the run, and the approval or review still happens in the app. macOS may require allowing notifications for Script Editor/osascript, and a notification has no click action. `test/owner-notifier.test.ts` 3/3; `npm test` 1103/1103, typecheck 0, gate PASS.
-
-### 子 Agent 自动执行；真正需要决定时桌面通知
-
-「子 Agent 边界」卡片不再显示"默认禁止"。唯一的子执行器是进程内的原生 Worker，它本来就自动执行；该标签是被移除的黑盒 CLI 路径的遗留。卡片现在写着按步骤风险自动执行，只有决定确实属于所有者时才停下。当 Kernel 真的停下——`waiting_approval` 或 `waiting_review`——守护进程发一条 macOS 通知，带任务标题与步骤/原因。文本以 `argv` 传给 `osascript`，绝不拼进 AppleScript；Runtime 每个 Run/步骤/类型最多通知一次，失败的通知器不能改变 Run，审批/复核仍在 App 内完成。macOS 可能要求允许 Script Editor/osascript 的通知，通知没有点击动作。`test/owner-notifier.test.ts` 3/3；`npm test` 1103/1103，typecheck 0，gate PASS。
-
-### Owner-confirmed MCP install from the tools settings page
-
-The tools tab can now install a stdio MCP server from an npm package. "探测工具" spawns `npx --yes <package> <args>`, performs the MCP handshake and lists the tools the package exposes; each tool starts at `external` (always refused) and the owner assigns read/write/network, with one-click presets. "安装" asks for confirmation, re-probes, refuses when the package exposes a tool the request did not declare, and writes one enabled entry into `mcp.json` atomically (mode 0600) without disturbing other servers or unknown fields. A per-server "移除" button deletes one entry. Every failure happens before the write, and the agent still cannot install: `~/.clone` stays a protected root and the exec sandbox re-denies it. Routes: `POST /api/tools/probe`, `POST /api/tools/install`, `DELETE /api/tools/mcp/:id`. Focused tests: `test/mcp-installer.test.ts` 8/8, `test/tools-install-api.test.ts` 6/6. `npm test` 1103/1103, gate PASS.
-
-### 工具与技能页支持所有者确认的 MCP 安装
-
-工具页现在可以从 npm 包安装一个 stdio MCP 服务器。「探测工具」用 `npx --yes <package> <args>` 启动包，完成 MCP 握手并列出它暴露的工具；每个工具从 `external`（拒绝）开始，所有者为它指定读取/写入/网络，也可一键预设。「安装」会先确认、重新探测，在包暴露了请求未声明的工具时拒绝，并把一条启用条目原子写入 `mcp.json`（权限 0600），不影响其他服务器与未知字段。每个服务器有「移除」按钮，删除一条条目。所有失败都发生在写入之前，Agent 仍然装不了：`~/.clone` 仍是受保护根，exec 沙箱也会重新拒绝它。路由：`POST /api/tools/probe`、`POST /api/tools/install`、`DELETE /api/tools/mcp/:id`。定向测试：`test/mcp-installer.test.ts` 8/8、`test/tools-install-api.test.ts` 6/6。`npm test` 1103/1103，gate PASS。
-
 ### Every Kernel denial is an AI appeal; the owner is the last authority
 
 A plan step the deterministic policy engine refuses no longer ends the run. The Runtime asks a bounded model judge (1,024 output tokens, minimal effort, 20 s) for one word: `ALLOW` records a `model_judge` approval and executes the step with a per-step override of the protected-path, `.git` and `.rsi` gates; `ASK`, an unparsable answer, an unreachable endpoint or no judge records an `approval.requested` with the judge's reason, waits for you, notifies the computer, and turns the sidebar row red; `DENY` fails with the judge's reason. Your approval of an appealed step executes with the same override. The approval card now lists the step's scopes and the Kernel/judge reason. This includes protected locations and credentials, as you chose. The agent-exec MCP server keeps its own command allowlist and Seatbelt profile. `test/policy-judge.test.ts` 3/3; `npm test` 1108/1108, typecheck 0, gate PASS.
@@ -43,6 +27,22 @@ The app's body and display text now use the macOS system face (SF Pro, with Ping
 A request that explicitly says 只读/仅读取/不要修改任何文件 is no longer sent through the LLM planner, whose contract requires a required artifact for every subagent. `runQuery` now uses the deterministic read-only plan — also when the Main Agent's brief is read-only — so the worker reads the file and answers instead of failing with "Subagent draft did not satisfy its artifact contract." The LLM planner remains for delivery requests; two planner-failure tests now use delivery queries to keep their intent. `npm test` 1103/1103, typecheck 0, gate PASS.
 
 明确写着 只读/仅读取/不要修改任何文件 的请求不再交给 LLM Planner——它的合同要求每个子代理都有必需产物。`runQuery` 现在改用确定性的只读计划（Main Agent 简报为只读时也一样），Worker 读取文件并回答，而不是以 "Subagent draft did not satisfy its artifact contract." 失败。LLM Planner 仍负责交付类请求；两个 Planner 失败测试改用交付类查询以保留原意。`npm test` 1103/1103，typecheck 0，gate PASS。
+
+### Child agents run automatically; the desktop notifies you when a decision is truly needed
+
+The 子 Agent 边界 card no longer says 默认禁止. The only child executor is the in-process native worker, which already ran automatically; the label was left over from the removed black-box CLI path. The card now says it runs at the step's risk and stops only when a decision is genuinely yours. When the Kernel does stop — `waiting_approval` or `waiting_review` — the daemon posts one macOS notification with the task title and the step/reason. The text is passed as `argv` to `osascript`, never interpolated into AppleScript; the Runtime notifies at most once per run/step/kind, a failing notifier cannot change the run, and the approval or review still happens in the app. macOS may require allowing notifications for Script Editor/osascript, and a notification has no click action. `test/owner-notifier.test.ts` 3/3; `npm test` 1103/1103, typecheck 0, gate PASS.
+
+### 子 Agent 自动执行；真正需要决定时桌面通知
+
+「子 Agent 边界」卡片不再显示"默认禁止"。唯一的子执行器是进程内的原生 Worker，它本来就自动执行；该标签是被移除的黑盒 CLI 路径的遗留。卡片现在写着按步骤风险自动执行，只有决定确实属于所有者时才停下。当 Kernel 真的停下——`waiting_approval` 或 `waiting_review`——守护进程发一条 macOS 通知，带任务标题与步骤/原因。文本以 `argv` 传给 `osascript`，绝不拼进 AppleScript；Runtime 每个 Run/步骤/类型最多通知一次，失败的通知器不能改变 Run，审批/复核仍在 App 内完成。macOS 可能要求允许 Script Editor/osascript 的通知，通知没有点击动作。`test/owner-notifier.test.ts` 3/3；`npm test` 1103/1103，typecheck 0，gate PASS。
+
+### Owner-confirmed MCP install from the tools settings page
+
+The tools tab can now install a stdio MCP server from an npm package. "探测工具" spawns `npx --yes <package> <args>`, performs the MCP handshake and lists the tools the package exposes; each tool starts at `external` (always refused) and the owner assigns read/write/network, with one-click presets. "安装" asks for confirmation, re-probes, refuses when the package exposes a tool the request did not declare, and writes one enabled entry into `mcp.json` atomically (mode 0600) without disturbing other servers or unknown fields. A per-server "移除" button deletes one entry. Every failure happens before the write, and the agent still cannot install: `~/.clone` stays a protected root and the exec sandbox re-denies it. Routes: `POST /api/tools/probe`, `POST /api/tools/install`, `DELETE /api/tools/mcp/:id`. Focused tests: `test/mcp-installer.test.ts` 8/8, `test/tools-install-api.test.ts` 6/6. `npm test` 1103/1103, gate PASS.
+
+### 工具与技能页支持所有者确认的 MCP 安装
+
+工具页现在可以从 npm 包安装一个 stdio MCP 服务器。「探测工具」用 `npx --yes <package> <args>` 启动包，完成 MCP 握手并列出它暴露的工具；每个工具从 `external`（拒绝）开始，所有者为它指定读取/写入/网络，也可一键预设。「安装」会先确认、重新探测，在包暴露了请求未声明的工具时拒绝，并把一条启用条目原子写入 `mcp.json`（权限 0600），不影响其他服务器与未知字段。每个服务器有「移除」按钮，删除一条条目。所有失败都发生在写入之前，Agent 仍然装不了：`~/.clone` 仍是受保护根，exec 沙箱也会重新拒绝它。路由：`POST /api/tools/probe`、`POST /api/tools/install`、`DELETE /api/tools/mcp/:id`。定向测试：`test/mcp-installer.test.ts` 8/8、`test/tools-install-api.test.ts` 6/6。`npm test` 1103/1103，gate PASS。
 
 ### 全部放行 is the default; scopes and external confirmations stop
 

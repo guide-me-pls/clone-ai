@@ -15,38 +15,6 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
-## 2026-11-24 — Child agents run automatically and the desktop notifies when a decision is needed
-
-- **Claim:** the 子 Agent 边界 card no longer claims 默认禁止; the in-process
-  native worker runs at the step's risk and stops only for a decision that is
-  genuinely the owner's. When a run enters `waiting_approval` or
-  `waiting_review`, the daemon posts one macOS notification (task title, step
-  and reason, argv-only AppleScript); a failing or absent notifier cannot change
-  the run's outcome.
-- **Evidence:** `test/owner-notifier.test.ts` **3/3** (argv-only script, bounded
-  body, non-macOS and throwing executor paths); `test/authority.test.ts` injects
-  a throwing notifier and still gets `waiting_approval`, then a review runtime
-  receives a `review` notice; `npm test` **1103/1103**, `npm run typecheck` exit
-  0, `npm run gate` **PASS** (policy suite unchanged).
-- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--child-agents-run-automatically-the-desktop-tells-the-owner-only-when-a-decision-is-needed);
-  [execution chain](optimizations.md#2026-11-24--child-agents-run-automatically-and-the-desktop-notifies-the-owner-when-a-decision-is-needed).
-
-## 2026-11-24 — Owner-confirmed MCP install works from the settings page
-
-- **Claim:** the tools tab installs a stdio MCP server from an npm package:
-  probe the package, show every tool with a risk select (default `external`,
-  which the worker always refuses), confirm, and the install re-probes, refuses
-  a package that exposes an undeclared tool, and writes one enabled entry into
-  `mcp.json` atomically (mode 0600) without disturbing other servers or unknown
-  fields. A per-server **移除** deletes one entry. The agent still cannot
-  install: `~/.clone` is a protected root and the exec sandbox re-denies it.
-- **Evidence:** `node --experimental-strip-types --test test/mcp-installer.test.ts test/tools-install-api.test.ts`
-  **14/14** (8 installer + 6 route). `npm test` **1103/1103**, `npm run gate`
-  **PASS**. `npm run typecheck` reports one pre-existing error from a concurrent
-  uncommitted change (`src/companion-server.ts:2689`), none in the new files.
-- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--owner-confirmed-mcp-install-probe-the-package-show-the-tools-then-write-mcpjson);
-  [execution chain](optimizations.md#2026-11-24--owner-confirmed-mcp-install-probe-show-then-write-mcpjson).
-
 ## 2026-11-24 — Every Kernel denial is an AI appeal; the owner is the last authority
 
 - **Claim:** a step the deterministic policy engine refuses no longer ends the
@@ -80,6 +48,38 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
   with the baseline unchanged; the rebuilt app returned `/api/health` 200.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--a-read-only-request-never-goes-through-the-llm-planner);
   [execution chain](optimizations.md#2026-11-24--a-read-only-request-bypasses-the-llm-planner).
+
+## 2026-11-24 — Child agents run automatically and the desktop notifies when a decision is needed
+
+- **Claim:** the 子 Agent 边界 card no longer claims 默认禁止; the in-process
+  native worker runs at the step's risk and stops only for a decision that is
+  genuinely the owner's. When a run enters `waiting_approval` or
+  `waiting_review`, the daemon posts one macOS notification (task title, step
+  and reason, argv-only AppleScript); a failing or absent notifier cannot change
+  the run's outcome.
+- **Evidence:** `test/owner-notifier.test.ts` **3/3** (argv-only script, bounded
+  body, non-macOS and throwing executor paths); `test/authority.test.ts` injects
+  a throwing notifier and still gets `waiting_approval`, then a review runtime
+  receives a `review` notice; `npm test` **1103/1103**, `npm run typecheck` exit
+  0, `npm run gate` **PASS** (policy suite unchanged).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--child-agents-run-automatically-the-desktop-tells-the-owner-only-when-a-decision-is-needed);
+  [execution chain](optimizations.md#2026-11-24--child-agents-run-automatically-and-the-desktop-notifies-the-owner-when-a-decision-is-needed).
+
+## 2026-11-24 — Owner-confirmed MCP install works from the settings page
+
+- **Claim:** the tools tab installs a stdio MCP server from an npm package:
+  probe the package, show every tool with a risk select (default `external`,
+  which the worker always refuses), confirm, and the install re-probes, refuses
+  a package that exposes an undeclared tool, and writes one enabled entry into
+  `mcp.json` atomically (mode 0600) without disturbing other servers or unknown
+  fields. A per-server **移除** deletes one entry. The agent still cannot
+  install: `~/.clone` is a protected root and the exec sandbox re-denies it.
+- **Evidence:** `node --experimental-strip-types --test test/mcp-installer.test.ts test/tools-install-api.test.ts`
+  **14/14** (8 installer + 6 route). `npm test` **1103/1103**, `npm run gate`
+  **PASS**. `npm run typecheck` reports one pre-existing error from a concurrent
+  uncommitted change (`src/companion-server.ts:2689`), none in the new files.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--owner-confirmed-mcp-install-probe-the-package-show-the-tools-then-write-mcpjson);
+  [execution chain](optimizations.md#2026-11-24--owner-confirmed-mcp-install-probe-show-then-write-mcpjson).
 
 ## 2026-11-24 — 全部放行 is the default and works without scopes or external prompts
 

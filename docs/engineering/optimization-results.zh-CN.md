@@ -11,33 +11,6 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
-## 2026-11-24 —— 子 Agent 自动执行，需要决定时桌面通知
-
-- **主张：** 「子 Agent 边界」卡片不再声称"默认禁止"；进程内的原生 Worker 按步骤风险自动
-  执行，只有决定确实属于所有者时才停下。Run 进入 `waiting_approval` 或 `waiting_review`
-  时，守护进程发一条 macOS 通知（任务标题、步骤与原因，仅以 argv 传参的 AppleScript）；
-  失败或缺失的通知器不能改变 Run 的结果。
-- **证据：** `test/owner-notifier.test.ts` **3/3**（仅 argv 的脚本、有界正文、非 macOS 与
-  抛错执行器路径）；`test/authority.test.ts` 注入会抛错的通知器仍得到 `waiting_approval`，
-  随后复核 Runtime 收到 `review` 通知；`npm test` **1103/1103**，`npm run typecheck`
-  退出码 0，`npm run gate` **PASS**（策略套件不变）。
-- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--子-agent-自动执行真正需要决定时桌面通知所有者)；
-  [执行链路](optimizations.zh-CN.md#2026-11-24--子-agent-自动执行需要决定时桌面通知)。
-
-## 2026-11-24 —— 设置页可以完成所有者确认的 MCP 安装
-
-- **主张：** 工具页可以从 npm 包安装一个 stdio MCP 服务器：探测包、为每个工具展示风险
-  选择（默认 `external`，Worker 永远拒绝）、确认；安装会重新探测，在包暴露了未声明工具时
-  拒绝，并把一条启用条目原子写入 `mcp.json`（权限 0600），不影响其他服务器与未知字段。
-  每个服务器的 **移除** 删除一条条目。Agent 仍然装不了：`~/.clone` 是受保护根，exec 沙箱
-  也会重新拒绝它。
-- **证据：** `node --experimental-strip-types --test test/mcp-installer.test.ts test/tools-install-api.test.ts`
-  **14/14**（8 个 installer + 6 个路由）。`npm test` **1103/1103**，
-  `npm run gate` **PASS**。`npm run typecheck` 报一个来自并发会话未提交改动的既有错误
-  （`src/companion-server.ts:2689`），新文件没有类型错误。
-- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--所有者确认的-mcp-安装先探测包再展示工具最后写-mcpjson)；
-  [执行链路](optimizations.zh-CN.md#2026-11-24--所有者确认的-mcp-安装探测展示再写-mcpjson)。
-
 ## 2026-11-24 —— Kernel 的每次拒绝都成为 AI 上诉；所有者是最后权威
 
 - **主张：** 被确定性 Policy 引擎拒绝的步骤不再直接结束 Run。一个有界模型裁判回答
@@ -65,6 +38,33 @@
   `/api/health` 返回 200。
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--只读请求永远不经过-llm-planner)；
   [执行链路](optimizations.zh-CN.md#2026-11-24--只读请求绕过-llm-planner)。
+
+## 2026-11-24 —— 子 Agent 自动执行，需要决定时桌面通知
+
+- **主张：** 「子 Agent 边界」卡片不再声称"默认禁止"；进程内的原生 Worker 按步骤风险自动
+  执行，只有决定确实属于所有者时才停下。Run 进入 `waiting_approval` 或 `waiting_review`
+  时，守护进程发一条 macOS 通知（任务标题、步骤与原因，仅以 argv 传参的 AppleScript）；
+  失败或缺失的通知器不能改变 Run 的结果。
+- **证据：** `test/owner-notifier.test.ts` **3/3**（仅 argv 的脚本、有界正文、非 macOS 与
+  抛错执行器路径）；`test/authority.test.ts` 注入会抛错的通知器仍得到 `waiting_approval`，
+  随后复核 Runtime 收到 `review` 通知；`npm test` **1103/1103**，`npm run typecheck`
+  退出码 0，`npm run gate` **PASS**（策略套件不变）。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--子-agent-自动执行真正需要决定时桌面通知所有者)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--子-agent-自动执行需要决定时桌面通知)。
+
+## 2026-11-24 —— 设置页可以完成所有者确认的 MCP 安装
+
+- **主张：** 工具页可以从 npm 包安装一个 stdio MCP 服务器：探测包、为每个工具展示风险
+  选择（默认 `external`，Worker 永远拒绝）、确认；安装会重新探测，在包暴露了未声明工具时
+  拒绝，并把一条启用条目原子写入 `mcp.json`（权限 0600），不影响其他服务器与未知字段。
+  每个服务器的 **移除** 删除一条条目。Agent 仍然装不了：`~/.clone` 是受保护根，exec 沙箱
+  也会重新拒绝它。
+- **证据：** `node --experimental-strip-types --test test/mcp-installer.test.ts test/tools-install-api.test.ts`
+  **14/14**（8 个 installer + 6 个路由）。`npm test` **1103/1103**，
+  `npm run gate` **PASS**。`npm run typecheck` 报一个来自并发会话未提交改动的既有错误
+  （`src/companion-server.ts:2689`），新文件没有类型错误。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--所有者确认的-mcp-安装先探测包再展示工具最后写-mcpjson)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--所有者确认的-mcp-安装探测展示再写-mcpjson)。
 
 ## 2026-11-24 —— 「全部放行」成为默认，免 Scope、免外部确认
 

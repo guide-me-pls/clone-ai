@@ -31,77 +31,6 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
-### 2026-11-24 — Child agents run automatically, and the desktop notifies the owner when a decision is needed
-
-- **Goal / hypothesis:** remove the false 默认禁止 label from the 子 Agent 边界
-  card (the native worker already runs automatically) and close the gap between
-  a run stopping for a decision and the owner not looking at the window: the
-  daemon should post a macOS notification, once, when `waiting_approval` or
-  `waiting_review` begins.
-- **Trade-off:** [Child agents run automatically; the desktop tells the owner only when a decision is needed](../architecture/trade-offs.md#2026-11-24--child-agents-run-automatically-the-desktop-tells-the-owner-only-when-a-decision-is-needed).
-- **Change:** `src/core/contracts.ts` — `OwnerDecisionNotice`/`OwnerDecisionNotifier`;
-  `src/core/runtime.ts` — an optional notifier, a per-run/step/kind dedupe key,
-  and calls at the approval, subagent-review and final-verification transitions,
-  with a throwing notifier swallowed; `src/core/runtime-factory.ts`,
-  `src/application/run-query.ts` and `src/companion-server.ts` — thread the
-  notifier through the daemon assembly, the scheduler and `/api/requests`;
-  new `src/application/owner-notifier.ts` — `osascript` argv-only script, bounded
-  one-line body, macOS only, all failures ignored;
-  `apps/desktop/ui/index.html` and `src/desktop/ui-locale.ts` — the child
-  boundary card says it runs automatically and notifies when needed; the
-  external-action card value follows the level.
-- **Eval:** new `test/owner-notifier.test.ts` **3/3** (argv-only AppleScript,
-  bounded body, non-macOS/no throwing executor); `test/authority.test.ts` gains
-  a runtime case that injects a throwing notifier and still gets
-  `waiting_approval`, then a review runtime that receives a `review` notice;
-  `npm test` **1103/1103**, `npm run typecheck` exit 0, `npm run gate` **PASS**
-  (policy 30 cases unchanged — this change does not touch the policy engine).
-- **Benchmark run:** none; this is a deterministic contract change with no
-  provider call, so the gate's policy/verdict suites remain the relevant eval.
-- **Execution chain:** implemented directly. The first wiring put the notifier
-  only on the setup-scope assembly; typecheck caught that `/api/requests`
-  builds its own assembly through a request context, so the notifier had to be
-  added to the context type and object. No test failures.
-- **Pros:** the settings page no longer states a gate that does not exist; the
-  notification covers approvals and reviews from interactive, dispatched and
-  scheduled runs (both runQuery call sites pass it); dedupe and swallowed
-  failures keep it from affecting execution.
-- **Cons / next time:** macOS only; `osascript` notifications may need a
-  permission grant and have no click action; a sleeping machine loses the
-  transient notice while the run stays waiting. A future channel (native
-  `UNUserNotificationCenter`, phone) should use the same Runtime hook.
-- **Reversal condition:** copied from the trade-off — if notifications are
-  blocked or missed, move to the Swift shell's `UNUserNotificationCenter` or
-  add a channel setting; if noisy, add quiet hours instead of removing the hook.
-
-### 2026-11-24 — Owner-confirmed MCP install: probe, show, then write mcp.json
-
-- **Goal / hypothesis:** an owner who is missing a tool should be able to
-  acquire it from the settings page without hand-editing `mcp.json`, and the
-  install should show exactly what will run before it runs. The hypothesis is
-  that probing the package and assigning a risk per tool closes the gap between
-  "the page can only toggle an existing server" and "the runtime can run any
-  server".
-- **Trade-off:** [Owner-confirmed MCP install: probe the package, show the tools, then write mcp.json](../architecture/trade-offs.md#2026-11-24--owner-confirmed-mcp-install-probe-the-package-show-the-tools-then-write-mcpjson).
-- **Change:** `src/mcp/mcp-installer.ts` adds `probeMcpPackage` (spawn
-  `npx --yes <spec> <args>`, MCP handshake, return `tools/list`, always close),
-  `probeNpmPackage`, `installMcpServer` (confirm gate, package/id/args/tool
-  validation, re-probe, undeclared-tool refusal, atomic write preserving the
-  rest of the document) and `removeMcpServer`. `src/companion-server.ts` adds
-  `POST /api/tools/probe`, `POST /api/tools/install` and
-  `DELETE /api/tools/mcp/:id`. The settings tab gains an install card
-  (`apps/desktop/ui/index.html`), its render/probe/install/remove handlers and a
-  per-server remove button (`apps/desktop/ui/app.js`), the `tools-install-*`
-  strings (`src/desktop/ui-locale.ts`) and the card CSS
-  (`apps/desktop/ui/style.css`). `docs/usage/tools-settings.md` and its zh pair
-  now describe the install flow.
-- **Eval:** `node --experimental-strip-types --test test/mcp-installer.test.ts test/tools-install-api.test.ts` — **14/14** (8 installer + 6 route cases). Before: neither file existed, and the only tools mutation was `POST /api/tools/mcp/:id/enabled`. After: `npm test` **1103/1103**, `npm run gate` **PASS** (regression 13 cases · 9 decided · 100% · falsePass 0 · falseFail 0; policy 30 · 100% · unsafeAllows 0 · overBlocks 0; audit 5 · 4 · 100% · 0 · 0; memory 31 · 100% · 0 · 0). `npm run typecheck` currently reports one error at `src/companion-server.ts:2689` (`ownerDecisionNotifier` is out of scope) from a concurrent uncommitted change; the new files produce no type errors.
-- **Benchmark run:** none. The eval is deterministic tests, so this block is omitted under AGENTS.md §5.
-- **Execution chain:** two read-only reconnaissance workflows first — a 6-agent audit (tool surface, authority, coverage, acquisition, skills, adversarial verify) and a 5-agent convention sweep (routes, UI, tests, installers, docs) — then the change in one pass: trade-off entry, module, routes, UI, tests, docs. 11 subagents, ~930k subagent tokens, ~11 minutes wall clock, no failed agents. The full suite ran twice: the first run showed 3 failures (`bilingual-documentation`, `run-query-routing`, `worker-evidence-contract`); all three pass in isolation and the second full run is 1103/1103, so they are cross-file environment races around a concurrent session's `createRuntimeAssembly` change, not this change.
-- **Pros:** the probe makes supply-chain drift visible before the server is enabled; every failure happens before the write; the install card reuses the existing confirm dialog, `announce`, cards and risk pills instead of inventing new UI.
-- **Cons / next time:** there is no provenance or signature check — the probe verifies reachability and the tool list, not that the package is the one the owner meant. The route success path is not covered end-to-end because it would need the network; only the installer is. The probe runs the package unsandboxed, which is a real cost recorded in the trade-off. Next time, add a pinned catalog with a hash before offering one-click presets.
-- **Reversal condition:** copied from the trade-off entry — disable the probe and require an owner-supplied `tools/list` fixture (or put MCP servers back under Seatbelt) if a probed package runs unexpected code; remove the protected-root denial only together with a Kernel approval record if the agent is asked to install tools.
-
 ### 2026-11-24 — Every Kernel denial is an AI appeal, and the owner is the last authority
 
 - **Goal / hypothesis:** the owner asked for automatic execution everywhere,
@@ -217,6 +146,77 @@ file keeps every attempt, including the ones that did not work.
   with a test that it never emits a required artifact for a read-only request,
   route read-only through it behind a post-validation gate; if a read-only
   request must produce a file despite the marker, require a named target.
+
+### 2026-11-24 — Child agents run automatically, and the desktop notifies the owner when a decision is needed
+
+- **Goal / hypothesis:** remove the false 默认禁止 label from the 子 Agent 边界
+  card (the native worker already runs automatically) and close the gap between
+  a run stopping for a decision and the owner not looking at the window: the
+  daemon should post a macOS notification, once, when `waiting_approval` or
+  `waiting_review` begins.
+- **Trade-off:** [Child agents run automatically; the desktop tells the owner only when a decision is needed](../architecture/trade-offs.md#2026-11-24--child-agents-run-automatically-the-desktop-tells-the-owner-only-when-a-decision-is-needed).
+- **Change:** `src/core/contracts.ts` — `OwnerDecisionNotice`/`OwnerDecisionNotifier`;
+  `src/core/runtime.ts` — an optional notifier, a per-run/step/kind dedupe key,
+  and calls at the approval, subagent-review and final-verification transitions,
+  with a throwing notifier swallowed; `src/core/runtime-factory.ts`,
+  `src/application/run-query.ts` and `src/companion-server.ts` — thread the
+  notifier through the daemon assembly, the scheduler and `/api/requests`;
+  new `src/application/owner-notifier.ts` — `osascript` argv-only script, bounded
+  one-line body, macOS only, all failures ignored;
+  `apps/desktop/ui/index.html` and `src/desktop/ui-locale.ts` — the child
+  boundary card says it runs automatically and notifies when needed; the
+  external-action card value follows the level.
+- **Eval:** new `test/owner-notifier.test.ts` **3/3** (argv-only AppleScript,
+  bounded body, non-macOS/no throwing executor); `test/authority.test.ts` gains
+  a runtime case that injects a throwing notifier and still gets
+  `waiting_approval`, then a review runtime that receives a `review` notice;
+  `npm test` **1103/1103**, `npm run typecheck` exit 0, `npm run gate` **PASS**
+  (policy 30 cases unchanged — this change does not touch the policy engine).
+- **Benchmark run:** none; this is a deterministic contract change with no
+  provider call, so the gate's policy/verdict suites remain the relevant eval.
+- **Execution chain:** implemented directly. The first wiring put the notifier
+  only on the setup-scope assembly; typecheck caught that `/api/requests`
+  builds its own assembly through a request context, so the notifier had to be
+  added to the context type and object. No test failures.
+- **Pros:** the settings page no longer states a gate that does not exist; the
+  notification covers approvals and reviews from interactive, dispatched and
+  scheduled runs (both runQuery call sites pass it); dedupe and swallowed
+  failures keep it from affecting execution.
+- **Cons / next time:** macOS only; `osascript` notifications may need a
+  permission grant and have no click action; a sleeping machine loses the
+  transient notice while the run stays waiting. A future channel (native
+  `UNUserNotificationCenter`, phone) should use the same Runtime hook.
+- **Reversal condition:** copied from the trade-off — if notifications are
+  blocked or missed, move to the Swift shell's `UNUserNotificationCenter` or
+  add a channel setting; if noisy, add quiet hours instead of removing the hook.
+
+### 2026-11-24 — Owner-confirmed MCP install: probe, show, then write mcp.json
+
+- **Goal / hypothesis:** an owner who is missing a tool should be able to
+  acquire it from the settings page without hand-editing `mcp.json`, and the
+  install should show exactly what will run before it runs. The hypothesis is
+  that probing the package and assigning a risk per tool closes the gap between
+  "the page can only toggle an existing server" and "the runtime can run any
+  server".
+- **Trade-off:** [Owner-confirmed MCP install: probe the package, show the tools, then write mcp.json](../architecture/trade-offs.md#2026-11-24--owner-confirmed-mcp-install-probe-the-package-show-the-tools-then-write-mcpjson).
+- **Change:** `src/mcp/mcp-installer.ts` adds `probeMcpPackage` (spawn
+  `npx --yes <spec> <args>`, MCP handshake, return `tools/list`, always close),
+  `probeNpmPackage`, `installMcpServer` (confirm gate, package/id/args/tool
+  validation, re-probe, undeclared-tool refusal, atomic write preserving the
+  rest of the document) and `removeMcpServer`. `src/companion-server.ts` adds
+  `POST /api/tools/probe`, `POST /api/tools/install` and
+  `DELETE /api/tools/mcp/:id`. The settings tab gains an install card
+  (`apps/desktop/ui/index.html`), its render/probe/install/remove handlers and a
+  per-server remove button (`apps/desktop/ui/app.js`), the `tools-install-*`
+  strings (`src/desktop/ui-locale.ts`) and the card CSS
+  (`apps/desktop/ui/style.css`). `docs/usage/tools-settings.md` and its zh pair
+  now describe the install flow.
+- **Eval:** `node --experimental-strip-types --test test/mcp-installer.test.ts test/tools-install-api.test.ts` — **14/14** (8 installer + 6 route cases). Before: neither file existed, and the only tools mutation was `POST /api/tools/mcp/:id/enabled`. After: `npm test` **1103/1103**, `npm run gate` **PASS** (regression 13 cases · 9 decided · 100% · falsePass 0 · falseFail 0; policy 30 · 100% · unsafeAllows 0 · overBlocks 0; audit 5 · 4 · 100% · 0 · 0; memory 31 · 100% · 0 · 0). `npm run typecheck` currently reports one error at `src/companion-server.ts:2689` (`ownerDecisionNotifier` is out of scope) from a concurrent uncommitted change; the new files produce no type errors.
+- **Benchmark run:** none. The eval is deterministic tests, so this block is omitted under AGENTS.md §5.
+- **Execution chain:** two read-only reconnaissance workflows first — a 6-agent audit (tool surface, authority, coverage, acquisition, skills, adversarial verify) and a 5-agent convention sweep (routes, UI, tests, installers, docs) — then the change in one pass: trade-off entry, module, routes, UI, tests, docs. 11 subagents, ~930k subagent tokens, ~11 minutes wall clock, no failed agents. The full suite ran twice: the first run showed 3 failures (`bilingual-documentation`, `run-query-routing`, `worker-evidence-contract`); all three pass in isolation and the second full run is 1103/1103, so they are cross-file environment races around a concurrent session's `createRuntimeAssembly` change, not this change.
+- **Pros:** the probe makes supply-chain drift visible before the server is enabled; every failure happens before the write; the install card reuses the existing confirm dialog, `announce`, cards and risk pills instead of inventing new UI.
+- **Cons / next time:** there is no provenance or signature check — the probe verifies reachability and the tool list, not that the package is the one the owner meant. The route success path is not covered end-to-end because it would need the network; only the installer is. The probe runs the package unsandboxed, which is a real cost recorded in the trade-off. Next time, add a pinned catalog with a hash before offering one-click presets.
+- **Reversal condition:** copied from the trade-off entry — disable the probe and require an owner-supplied `tools/list` fixture (or put MCP servers back under Seatbelt) if a probed package runs unexpected code; remove the protected-root denial only together with a Kernel approval record if the agent is asked to install tools.
 
 ### 2026-11-24 — 全部放行 becomes the default; scopes and external confirmations stop
 
