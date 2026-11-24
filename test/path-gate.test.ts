@@ -7,6 +7,7 @@ import test, { type TestContext } from "node:test";
 
 import { decideTool } from "../src/workers/native-agent-worker.ts";
 import { resolveGrants } from "../src/authority/path-gateway.ts";
+import { buildSeatbeltProfile } from "../src/authority/seatbelt.ts";
 import { isForbiddenPath } from "../src/authority/scope.ts";
 
 /**
@@ -117,6 +118,22 @@ test("a grant on an ancestor of a protected root is refused", async (t) => {
   assert.equal(specific.readRoots.length, 0, "a path inside the protected root is still protected");
 });
 
+test("全部放行 gives / as a write root, but protected paths stay refused", async (t) => {
+  const { workspace, outside } = await scratch(t);
+  const home = await mkdtemp(join(tmpdir(), "clone-gate-allow-all-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await mkdir(join(home, ".ssh"), { recursive: true });
+  await writeFile(join(home, ".ssh", "id_ed25519"), "key", "utf8");
+  const grants = resolveGrants([], { workspace, home, unrestrictedDomains: ["files"] });
+  assert.deepEqual(grants.writeRoots, ["/"]);
+  assert.equal(decideTool({ risk: "write", grants, workspace, path: join(outside, "new.txt"), home }).allowed, true);
+  const protectedWrite = decideTool({ risk: "write", grants, workspace, path: join(home, ".ssh", "id_ed25519"), home });
+  assert.equal(protectedWrite.allowed, false);
+  assert.match(protectedWrite.allowed === false ? protectedWrite.reason : "", /protected location/);
+  const network = resolveGrants([], { workspace, home, unrestrictedDomains: ["network"] });
+  assert.equal(network.network, true);
+});
+
 test("the forbidden-root check ignores case on a case-insensitive volume", async (t) => {
   const home = await mkdtemp(join(tmpdir(), "clone-gate-case-"));
   t.after(() => rm(home, { recursive: true, force: true }));
@@ -127,3 +144,40 @@ test("the forbidden-root check ignores case on a case-insensitive volume", async
     assert.equal(isForbiddenPath(join(home, ".SSH", "id_ed25519"), home), true);
   }
 });
+test("the clone home is protected except the Kernel's isolated sandbox", async (t) => {
+  const { workspace } = await scratch(t);
+  const home = await mkdtemp(join(tmpdir(), "clone-gate-clonehome-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  await mkdir(join(home, ".clone"), { recursive: true });
+  // Every credential/config file under the clone home is protected, not only
+  // the journal and policies: act_auto made a per-file list a live bypass.
+  // clone home 下的每个凭据/配置文件都受保护，不只是 Journal 与策略：act_auto
+  // 让按文件列举的清单变成了可用的绕过。
+  for (const name of ["config.json", "providers.json", "mcp.json", "memory.json", "sessions.json", "agent-exec.json"]) {
+    await writeFile(join(home, ".clone", name), "{}", "utf8");
+    assert.equal(isForbiddenPath(join(home, ".clone", name), home), true, `${name} must be protected`);
+  }
+  const protectedGrant = resolveGrants([{ domain: "files", resource: join(home, ".clone", "config.json"), access: "write" }], { workspace, home });
+  assert.equal(protectedGrant.writeRoots.length, 0);
+  assert.match(protectedGrant.dropped[0]?.reason ?? "", /protected location/);
+  const cloneGrant = resolveGrants([{ domain: "files", resource: join(home, ".clone"), access: "write" }], { workspace, home });
+  assert.equal(cloneGrant.writeRoots.length, 0, "the whole clone home is not grantable");
+
+  // The isolated sandbox inside it stays usable as the step's workspace.
+  // 其中的隔离沙箱仍可作为步骤工作区使用。
+  const sandbox = join(home, ".clone", "isolated-workspaces", "run-1");
+  await mkdir(sandbox, { recursive: true });
+  assert.equal(isForbiddenPath(join(sandbox, "a.txt"), home), false);
+  const sandboxGrant = resolveGrants([{ domain: "files", resource: sandbox, access: "write" }], { workspace, home });
+  assert.equal(sandboxGrant.dropped.length, 0);
+  assert.equal(sandboxGrant.writeRoots.length, 1);
+  assert.equal(decideTool({ risk: "read", grants: sandboxGrant, workspace, path: join(sandbox, "a.txt"), home }).allowed, true);
+  // Seatbelt's protected deny is last-match; the sandbox re-allow must follow
+  // it or the OS sandbox would reject the worker's own workspace.
+  // Seatbelt 的受保护拒绝是最后匹配；沙箱的重新放行必须在其之后，否则 OS 沙箱会拒绝
+  // Worker 自己的工作区。
+  const profile = buildSeatbeltProfile({ grants: sandboxGrant, home });
+  assert.ok(profile.lastIndexOf("(allow file-read* file-write*") > profile.lastIndexOf("(deny file-read* file-write*"), "the sandbox allow must come after the protected deny");
+  assert.ok(profile.includes(sandbox), "the sandbox path is re-allowed");
+});
+

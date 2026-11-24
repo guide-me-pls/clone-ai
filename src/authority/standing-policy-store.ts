@@ -20,6 +20,7 @@ import { readJsonFile, writeJsonAtomic } from "../config/json-file.ts";
 import type { JournalStore } from "../core/journal.ts";
 import {
   DOMAINS,
+  ENFORCED_DOMAINS,
   isAutonomy,
   isDomain,
   parseScope,
@@ -43,12 +44,53 @@ export interface StandingPolicy {
 
 export interface AuthorityConfig {
   version: 1;
-  /** Missing domains are `observe`: nothing is writable until the owner says so. 缺省为 observe：所有者开口之前什么都不可写。 */
+  /**
+   * Owner-set autonomy levels. An absent enforced domain is `allow_all` (see
+   * DEFAULT_DOMAIN_AUTONOMY); an absent reserved domain is never grantable.
+   * 所有者设定的档位。已强制域缺省为 `allow_all`（见 DEFAULT_DOMAIN_AUTONOMY）；
+   * 保留域缺省也不可授予。
+   */
   domains: Partial<Record<Domain, Autonomy>>;
   policies: StandingPolicy[];
 }
 
+/**
+ * The level a domain has when `policies.json` does not name it.
+ *
+ * The owner chose 全部放行 as the standard for files, shell and network: the
+ * model needs no per-target scope, and external/irreversible work does not stop
+ * for a confirmation. Protected locations, unenforced domains and the
+ * `.git`/`.rsi` write guards still hold. `observe` and `prepare` remain valid
+ * for legacy configs and for the corrupt-file fail-closed value, but the UI
+ * does not offer them.
+ *
+ * 当 `policies.json` 没有点名某个域时的自主档位。
+ *
+ * 所有者选择「全部放行」作为 files/shell/network 的标准：模型无需逐目标 Scope，外部与
+ * 不可逆工作也不再停下确认。受保护位置、未实现强制的域、`.git`/`.rsi` 写入守卫仍然有效。
+ * `observe` 与 `prepare` 仍对旧配置和损坏文件的 fail-closed 值有效，但 UI 不再提供。
+ */
+export const DEFAULT_DOMAIN_AUTONOMY: Autonomy = "allow_all";
+
+/** The effective level for a domain: the owner's entry, else the default. 域的有效档位：所有者的显式值，否则默认值。 */
+export function autonomyFor(config: AuthorityConfig, domain: Domain): Autonomy {
+  return config.domains[domain] ?? DEFAULT_DOMAIN_AUTONOMY;
+}
+
+/** No owner-authored policies. A fresh install still has the allow_all domain default. 没有所有者策略；新安装仍使用 allow_all 域默认值。 */
 export const EMPTY_AUTHORITY: AuthorityConfig = { version: 1, domains: {}, policies: [] };
+
+/**
+ * A present but unreadable `policies.json` must fail closed. The default
+ * `allow_all` is for an absent file; corruption is not the owner's silence.
+ * 存在但无法读取的 `policies.json` 必须 fail closed。`allow_all` 默认值只用于文件不存在；
+ * 文件损坏不等于所有者没有表态。
+ */
+const FAIL_CLOSED_AUTHORITY: AuthorityConfig = {
+  version: 1,
+  domains: { files: "observe", shell: "observe", network: "observe" },
+  policies: [],
+};
 
 export function policyIsActive(policy: StandingPolicy, now: Date): boolean {
   if (policy.revokedAt !== undefined) return false;
@@ -81,14 +123,15 @@ export class StandingPolicyStore {
         this.#mtime = mtime;
       }
     } catch (error: unknown) {
-      // A missing file means no authority has ever been granted. A corrupt one must not
-      // silently keep serving the previous, possibly wider, config.
-      // 文件不存在表示从未授权过。文件损坏时不能悄悄继续使用之前可能更宽的配置。
+      // A missing file means the default authority. A corrupt one must not
+      // silently serve the permissive default, so it fails closed to observe.
+      // 文件不存在表示使用默认权限。文件损坏时不能悄悄使用宽松默认，因此 fail closed 到
+      // observe。
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         this.#config = EMPTY_AUTHORITY;
         this.#mtime = -1;
       } else {
-        this.#config = EMPTY_AUTHORITY;
+        this.#config = FAIL_CLOSED_AUTHORITY;
         this.#mtime = -2;
       }
     }
@@ -108,7 +151,7 @@ export class StandingPolicyStore {
     return this.#mutate((current) => ({
       next: { ...current, domains: { ...current.domains, [domain]: level } },
       change: "domain_level_set",
-      detail: { domain, from: current.domains[domain] ?? "observe", to: level },
+      detail: { domain, from: autonomyFor(current, domain), to: level },
     }));
   }
 
@@ -219,15 +262,36 @@ export class StandingPolicyStore {
   }
 }
 
+/**
+ * Parse an owner-written config. It must fail loudly on a semantic problem:
+ * silently dropping an invalid domain or a non-array `policies` used to mean
+ * "observe", but with the `allow_all` default it would mean "unrestricted".
+ * The live snapshot turns a thrown error into FAIL_CLOSED_AUTHORITY; startup
+ * load and owner edits propagate it.
+ * 解析所有者撰写的配置。语义错误必须显式失败：悄悄丢掉非法域或非数组的 `policies`
+ * 过去等于"只观察"，但在 `allow_all` 默认值下会等于"无限制"。运行中的快照会把抛出的
+ * 错误转成 FAIL_CLOSED_AUTHORITY；启动加载与所有者编辑则直接抛出。
+ */
 function normalize(value: Partial<AuthorityConfig> | undefined): AuthorityConfig {
-  const domains: Partial<Record<Domain, Autonomy>> = {};
-  for (const domain of DOMAINS) {
-    const level = value?.domains?.[domain];
-    if (isAutonomy(level)) domains[domain] = level;
+  if (value !== undefined && (typeof value !== "object" || value === null)) {
+    throw new Error("policies.json: the root must be an object.");
   }
-  const policies = Array.isArray(value?.policies)
-    ? value.policies.map((policy, index) => normalizePolicy(policy, index))
-    : [];
+  const rawDomains = value?.domains;
+  const domains: Partial<Record<Domain, Autonomy>> = {};
+  if (rawDomains !== undefined) {
+    if (typeof rawDomains !== "object" || rawDomains === null || Array.isArray(rawDomains)) {
+      throw new Error("policies.json: domains must be an object.");
+    }
+    for (const [domain, level] of Object.entries(rawDomains)) {
+      if (!isDomain(domain)) throw new Error(`policies.json: unknown domain "${domain}".`);
+      if (!isAutonomy(level)) throw new Error(`policies.json: ${domain} has an invalid autonomy level.`);
+      domains[domain] = level;
+    }
+  }
+  if (value?.policies !== undefined && !Array.isArray(value.policies)) {
+    throw new Error("policies.json: policies must be an array.");
+  }
+  const policies = (value?.policies ?? []).map((policy, index) => normalizePolicy(policy, index));
   return { version: 1, domains, policies };
 }
 
@@ -245,10 +309,16 @@ function normalizePolicy(value: StandingPolicy, index: number): StandingPolicy {
 
 /** Plain-text summary shared by the Main Agent tool and the CLI. Main Agent 工具与 CLI 共用的纯文本摘要。 */
 export function describeAuthority(config: AuthorityConfig, now = new Date()): string {
-  const lines = ["Autonomy by domain (observe < prepare < act_with_approval < act_auto):"];
-  for (const domain of DOMAINS) lines.push(`- ${domain}: ${config.domains[domain] ?? "observe"}`);
+  const lines = ["Autonomy by domain (observe < prepare < act_with_approval < act_auto < allow_all; allow_all is the default: no scope requirement and no external confirmation, protected locations stay closed):"];
+  for (const domain of DOMAINS) {
+    const level = (ENFORCED_DOMAINS as readonly Domain[]).includes(domain)
+      ? autonomyFor(config, domain)
+      : config.domains[domain] ?? "observe";
+    lines.push(`- ${domain}: ${level}`);
+  }
+  lines.push("", "Protected locations, unenforced domains and .git/.rsi writes still stop regardless of autonomy.");
   const active = config.policies.filter((policy) => policyIsActive(policy, now));
-  lines.push("", active.length === 0 ? "No active standing policies." : "Active standing policies:");
+  lines.push("", active.length === 0 ? "No active standing policies (optional; not required at 全部放行)." : "Active standing policies (optional; a lower ceiling narrows a scope):");
   for (const policy of active) {
     const scopes = policy.scopes.map((scope) => `${scope.domain}:${scope.access}:${scope.resource}`).join(", ");
     const until = policy.validUntil === undefined ? "" : ` until ${policy.validUntil}`;

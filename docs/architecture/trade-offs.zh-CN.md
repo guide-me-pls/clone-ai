@@ -88,6 +88,185 @@ workspace-watch 时序抖动测试；它单独运行 3/3 通过，重跑全量�
 产出必需产物，就在一个后置校验闸门之后把只读请求交给它。如果只读请求在标记之外仍必须产出
 文件，就要求点名的目标；检测器已经让点名的写入目标优先。
 
+## 2026-11-24 —— 「全部放行」成为默认：免 Scope、免外部确认，但禁区仍关闭
+
+**决定。** 面向所有者的档位变为三档：批准（`act_with_approval`）、自动执行
+（`act_auto`）、全部放行（`allow_all`）。`observe` 与 `prepare` 只保留在 schema 里，
+供旧配置与损坏文件的 fail-closed 值使用；UI 不再提供。缺省域默认 `allow_all`，所有者
+选择它作为三个域的标准。在 `allow_all` 下：
+
+- 文件写入不再要求在计划里点名目标；Worker 获得 `/` 作为写入根，没有声明任何 Scope 的
+  步骤可以写所有者账户能到达的任何路径。外部/不可逆步骤仍在 Kernel 创建的隔离副本中运行，
+  该执行里 `/` 授权被收回，因此「全部放行」不会破坏隔离；网络仍开放；
+- 网络开放；Shell 工具随步骤风险提供；agent-exec 的命令白名单与其 Seatbelt profile 仍是
+  第二道闸门；
+- 当每个声明 Scope 的有效档位都是 `allow_all` 时，`external_side_effect` 与 `irreversible`
+  的基础风险闸门被豁免；Runtime 在派发前记录一条 `approval.granted`
+  （`grantedBy: "standing_policy"`），因此 `approval-before-external-execution` 仍成立，
+  审计知道是谁允许的；
+- 受保护位置（整个 clone home、密钥、浏览器档案）、未实现强制的域、写入 `.git` / `.rsi`
+  仍是硬拒绝；
+- 覆盖策略仍然收紧 Scope（最低上限生效）；如果某个域存在任何生效中的写/执行收紧策略，
+  该域不获得全域授权，因此未声明的步骤会失败，而不是绕过限制。
+
+**为什么胜出。** 所有者先要求只保留四个选项，随后删掉只读："算了直接删掉只读吧，感觉没
+什么用"，并选择全部放行 = "免 Scope，保留禁区"，且以全部放行为标准。`自动执行` 仍要求
+模型点名目标，外部/不可逆仍会先确认；`全部放行` 是他们要的独立最高档。保留受保护位置
+正是他们明确选择的；另一个选择会撤销 2026-11-24 刚修好的凭据保护。
+
+**被否决的备选。**
+
+- *连受保护位置也放行。* 所有者选了"保留禁区"；打开 clone home 会重新引入上一条取舍修好的
+  凭据暴露。
+- *保留 Scope 要求，只去掉外部确认。* 那是"自动执行 + 更少提示"，不是全部放行；所有者明确
+  选择了免 Scope。
+- *在全部放行下仍指望模型总是声明 Scope。* 那样未声明步骤会被工具闸门拒绝，而"免 Scope"
+  的说明就是假的。
+- *授予家目录而不是 `/`。* 对所有者文件的实际可达范围相同，但 `/` 是"全部放行"的字面含义；
+  边界仍由禁区检查承担。
+- *从 schema 里删除 `observe`/`prepare`。* 旧配置在严格解析下会变成非法，损坏文件的
+  fail-closed 值也需要最低档。隐藏它们是诚实的；删除会让 fail-closed 变成报错而不是只读。
+
+**证据。** 所有者对澄清问题的回答："免 Scope，保留禁区（推荐）"与"算了直接删掉只读"。
+`AuthorityPolicyEngine` 过去在读自主档位之前就拒绝无 Scope 的可逆写入；`resolveGrants` 把
+`/` 当作过宽而丢弃；`decideTool` 不对写入应用 `isForbiddenPath`。三处都已修改。门禁新增
+无 Scope 写入、默认全部放行、全部放行下的外部、受保护位置与收紧策略用例；一个 Runtime
+用例断言隐式的 `approval.granted` 让外部步骤通过 `checkJournalInvariants`，
+`test/path-gate.test.ts` 钉住 `/` 写入根与禁区检查。详细前后结果在
+`docs/engineering/optimizations.md`。
+
+**代价。** 默认值现在允许模型声明或未声明的写入到达所有者能访问的任何非受保护路径，
+外部/不可逆步骤不再询问。安全论证依赖三处禁区检查（Policy 引擎、`decideTool` 写入、
+Seatbelt）、`.git`/`.rsi` 拒绝与外部审批记录。将来新增受保护位置时必须同步所有消费者。
+`自动执行` 仍是更安全的中间档；希望有提示的所有者应选它。
+
+**推翻条件。** 如果某个 Run 因全域 `/` 授权写入了所有者并不想要的文件，恢复 `allow_all`
+的 Scope 要求（或把该域降为 `act_auto`）；如果外部动作带着所有者没有预期的隐式策略审批
+执行，去掉风险豁免但保留免 Scope 授权。如果所有者因为默认是全部放行而不再使用批准/自动
+执行，重新考虑默认值是否应回到 `act_auto`。
+
+## 2026-11-24 —— 自动执行成为默认档位，「自动执行」意味着模型判断
+
+**决定。** `policies.json` 没有点名某个域时，`files`、`shell`、`network` 默认为
+`act_auto`；并且 `act_auto` 不再要求有覆盖该 Scope 的常设策略。在 `act_auto` 下，步骤
+声明的 Scope 就是判断本身：带 Scope 的读取、写入或执行无需所有者事先写策略即可放行——
+前提是目标不是受保护位置、域已实现强制、写入点名了目标，且基础风险闸门不要求确认。
+三个下拉里的「自动执行」就是这个意思：模型决定做什么、需要哪个精确 Scope，Kernel 只守
+硬边界——禁区、未实现强制的域、无 Scope 写入、外部与不可逆步骤。`policies.json` 不存在
+表示使用默认；损坏的文件绝不会回落到宽松默认：运行中的快照 fail closed 到 `observe`，
+启动时的 `load()` 则显式失败。常设策略仍然保留，作为可选的收紧手段：覆盖该 Scope、且
+`maxAutonomy` 低于域档位的策略会拉低有效档位；同一 Scope 被多条策略覆盖时，**最低**上限
+生效，显式限制不会被更宽的授权推翻。整个 clone home 是一个受保护位置——`config.json`
+（端点密钥）、`providers.json`、`mcp.json` 凭据、记忆、对话、Journal、检查点与轨迹——
+唯一例外是 Kernel 创建的隔离沙箱。
+
+**为什么胜出。** 所有者要求："都改成自动执行吧，自动执行都变成模型自动判别，不然学习成本
+有点高，这个 agent 变成傻瓜式的好一些。" 旧语义下，`act_auto` 要求所有者为每个资源写一条
+常设策略——只改域下拉对带 Scope 的步骤毫无作用（`No standing policy covers ...` →
+`approval_required`）。所有者自己的 `~/.clone/policies.json` 早已把三个域设为 `act_auto`，
+但为了一个回环地址的读取仍然要写 browser-MCP 那条策略。被拒绝的正是这种逐 Scope 的撰写
+成本。去掉它不会扩大步骤能触碰的范围：Scope 仍由计划模型给出，Kernel 仍执行上面列出的
+边界。
+
+**被否决的备选。**
+
+- *保留「必须有策略」的规则，只改文案。* 所有者已经把三个域都设为 `act_auto`，仍然撞上
+  审批提示；成本来自行为，不是说明。
+- *在 Policy 判定时加一个逐步的 LLM 裁判。* Policy 引擎是同步的，位于执行循环内；每步一次
+  模型调用增加延迟与成本，还会让被注入的计划自己为自己辩护。计划模型本来就产出 Scope；
+  确定性的 Kernel 应当检查它们，而不是再问一个模型。
+- *让 `act_auto` 连外部/不可逆步骤的风险闸门也绕过。* `approval-before-external-execution`
+  是 Kernel 不变量；外部动作与不可逆工作仍会停下来等所有者。所有者指的是三个域，不是
+  取消所有确认。
+- *自动授予家目录或隐式工作区。* 不变且仍被拒绝：写入必须点名目标。本决定回答的是"谁来判断
+  已声明的 Scope"，不是"替它发明一个 Scope"。
+- *只在 UI 里把三个域设成 `act_auto`。* 引擎读成 `observe` 的 UI 默认值是谎言；默认值必须
+  落在 `AuthorityPolicyEngine`。
+- *继续按文件列举受保护位置。* 它保护了 Journal 与策略，却在 `act_auto` 让未覆盖 Scope 自动
+  放行时漏掉了 `~/.clone/config.json`、`providers.json` 与 `mcp.json`；下一个凭据文件还会
+  重犯。clone home 才是正确的单位，只留一个具名例外。
+- *保留覆盖策略的旧 `max()` 并集。* 在"策略是收紧手段"的新含义下，一条上限更高的宽策略会
+  悄悄推翻显式的低上限策略，所有者的限制变得不可达。最低上限是唯一与 UI 承诺一致的聚合。
+
+**证据。** `AuthorityPolicyEngine.#judge` 在 `covering.length === 0` 时返回
+`approval_required`，即使域是 `act_auto`（`src/authority/policy-engine.ts`）；
+`authority.test.ts` 与 `benchmark/gate/policy-cases.json` 钉住了这一行为。所有者本机的配置
+是 `files/shell/network: act_auto`，另有一条为 browser-MCP 预览写的
+`network:read:127.0.0.1` 策略。原生读取闸门本来就放行任何非受保护读取（`decideTool`），
+因此读取策略只增加摩擦、没有增加强制。五个"act_auto 无策略"用例在变更前失败（一致率 78%、
+5 个误拦截），变更后通过；不可逆与受保护路径守卫用例前后都保持。随后的一次对抗性审查发现了
+本条记录现已覆盖的三个后续问题：按文件列举的禁区清单在新默认值下把 `config.json`、
+`providers.json` 与 `mcp.json` 留成了可读写；一条上限更高的宽策略推翻了低上限策略；可解析
+但语义损坏的 `policies.json`（例如 `"files": "Observe"`，或 `policies` 是对象）被悄悄当成
+全部 `act_auto`。三者均已修复并钉住：门禁的
+`overlapping-policies-lowest-ceiling-wins`，以及 `authority.test.ts` / `path-gate.test.ts`
+中的 clone home、损坏配置与跨进程用例。命令与前后结果记录在
+`docs/engineering/optimizations.md`。
+
+**代价。** 新安装无需所有者进入设置页，三个已强制域上的带 Scope 写入与执行就已可用。审计
+仍为每次 `policy.decided` 记录 Scope；所有者仍可把任一个域改回 `observe`，或加一条收紧
+策略——但默认值不再对已声明的 Scope fail closed。整个 clone home 对 Worker 关闭，隔离沙箱
+是唯一例外；将来若有工具确实需要另一个 clone-home 路径，必须按名字同时加入两份保护清单与
+Seatbelt profile。策略只能相对域档位收紧，且最低覆盖上限生效；过去依赖"叠加授权"的所有者
+需要知道：后加的低上限策略现在会起限制作用。损坏的 `policies.json` 在运行中的快照里
+fail closed，在启动时显式失败。
+
+**推翻条件。** 如果某个 Run 因误声明或被注入的 Scope，写入、执行或读取了所有者并不想要的
+东西，把缺省域恢复为 `observe`，并让 `act_auto` 重新要求覆盖策略（2026-11-24 的单步审批
+路径仍是一次性替代）；如果只有某一个域出问题，只下调那一个域。如果确有正当的 Worker 任务
+需要隔离沙箱之外的 clone-home 文件，按名字把该路径加入两份保护清单与 Seatbelt profile，
+不要缩小受保护根。如果所有者依赖授权并集，加一个显式的授权标记，而不是恢复 `max()` 聚合。
+如果所有者报告剩余的外部/不可逆审批打断了日常工作，只能用审批 Journal 里的证据重新审视
+那道闸门，不能靠这条记录推断。
+
+## 2026-11-24 —— observe 的 files 域里，带 Scope 的可逆写入向所有者请求一次确认
+
+**决定。** 一个 `reversible_write` 步骤声明了 `files` 写 Scope，而 `files` 域仍处于
+`observe` 时，不再直接失败。Policy 返回 `approval_required`，Run 进入
+`waiting_approval`，现有审批卡让所有者允许这一步一次或拒绝。批准只解除这一步已声明
+Scope 的 observe 拒绝；它不创建 Scope、不打开受保护路径，也不改变该域——后续步骤仍是
+`observe`。所有者的自动路径不变：把 `files` 设为 `act_auto` 并有覆盖的常设策略时，
+Worker 在 Scope 内的写入无需逐步骤确认。其他域（shell、network）与 external/irreversible
+风险保持现有硬闸门。
+
+**为什么胜出。** 所有者要求类似 Claude Code auto 的行为：Worker 的模型在已声明 Scope 内
+决定写入，拒绝的情况可以由所有者确认。`act_auto` 已经提供自动的一半；缺的另一半是默认
+`observe` 域会让带 Scope 的写入直接失败，所有者没有任何接受/拒绝动作。复用现有步骤级
+审批路由是提供该动作的最小改动：UI、Journal 事件、Run 状态与审批码都已存在。逐次工具
+调用审批会重开 2026-11-19 的决定（原生 Worker 没有审批回调；逐次提示需要新的暂停/恢复
+通道并阻塞循环），而且它给所有者的信息不会比步骤已声明的 Scope 更多。
+
+**被否决的备选。**
+
+- *让模型自行批准写入。* 模型不是权威；被提示注入的 Worker 不得打开路径。本变更只给
+  所有者一个按钮，而且只针对已经点名目标的步骤。
+- *把所有 `observe` 拒绝都变成审批请求。* external 与 irreversible 步骤保持更严格的
+  闸门；observe 的 shell/network 域必须保持拒绝。只有带声明 Scope 的可逆 files 写入
+  可被批准。
+- *逐次工具调用审批通道。* 为边际信息重开 2026-11-19，而且 Worker 的工具循环没有可暂停的
+  回调。步骤是既有审批单位；它的 Scope 在执行前可见。
+- *只加一个 UI 模式开关。* 开关本身救不了当前失败：所有者的域就是 `observe`，Run 在能
+  切换之前已经失败。
+
+**证据。** `AuthorityPolicyEngine.#judge` 在域为 `observe` 时对任何非读 Scope 返回
+`denied`，即使 `approved` 为真；`authority.test.ts` 目前钉住这一点。`executeOwned` 把
+`denied` 变成失败 Run，把 `approval_required` 变成 `waiting_approval`；服务器的
+`/api/runs/:id/approve`、`approveQueryRun` 与审批卡已经用于 `act_with_approval`。
+所有者的 `~/.clone/policies.json` 没有 `files` 域，因此默认是 `observe`。新测试覆盖：
+未批准的带 Scope 写入 → `approval_required`；批准后 → `allowed`；受保护目标即使批准仍
+`denied`；无 Scope 写入仍 `denied`；shell/network Scope 仍 `denied`；`irreversible`
+步骤仍 `denied`；`act_auto` 无需批准。 
+
+**代价。** observe 的 files 域现在可以点一次按钮写入一次，因此 "observe" 不再意味着
+"永远不可能写入"——它意味着"没有所有者明确的单步批准就不能写入"。审批按步骤而不是按
+文件：有多个写 Scope 的步骤整体批准。审批卡尚未列出每个目标；计划与审计里有。批准的键是
+Run + Step id，因此重新规划的步骤需要新的批准。
+
+**推翻条件。** 如果单步批准变成橡皮图章，或被提示注入的 Worker 让所有者批准了没读过的
+Scope，移除 observe 豁免，要求先把域提高到 `act_with_approval`/`act_auto` 才能提出写入。
+如果所有者需要逐文件决定，先给审批卡加目标清单，不要在没有该证据的情况下加逐次通道。
+受保护路径与无 Scope 写入永久保持拒绝。
+
 ## 2026-11-24 —— 常驻 Daemon 记录 FSEvents，生成文件不进台账
 
 **决定。** companion Daemon——已经是常驻 launchd LaunchAgent（`ai.clone.companion`，

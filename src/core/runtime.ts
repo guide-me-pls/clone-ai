@@ -18,6 +18,7 @@ import type {
   RuntimeAdapter,
   RuntimeCapabilities,
   ModelUsage,
+  PolicyDecision,
   SubagentRun,
   SubagentWorkOrder,
   Task,
@@ -548,6 +549,28 @@ export class CloneRuntime {
         return { run: this.requireRun(run.id), status: "waiting_approval" };
       }
 
+      // 全部放行 waives the external/irreversible gate without a prompt. The
+      // invariant still requires an approval grant before execution, so record
+      // the policy's approval explicitly; the audit then says who allowed it.
+      // 「全部放行」免除了外部/不可逆确认。不变量仍要求执行前有审批，因此显式记录
+      // 策略审批；审计因此知道是谁允许的。
+      const needsRiskApproval = step.risk === "external_side_effect" || step.risk === "irreversible";
+      if (needsRiskApproval && !approved && decision.riskWaived === true) {
+        await this.record({
+          type: "approval.granted",
+          taskId: task.id,
+          runId: run.id,
+          payload: {
+            id: randomUUID(),
+            runId: run.id,
+            stepId: step.id,
+            grantedAt: new Date().toISOString(),
+            grantedBy: "standing_policy" as const,
+            note: `Owner autonomy: ${decision.reason}`,
+          },
+        });
+      }
+
       if (this.requireRun(run.id).status !== "running") {
         await this.changeStatus(run.id, "running", step.id);
       }
@@ -555,9 +578,9 @@ export class CloneRuntime {
 
       try {
         if (step.subagents !== undefined) {
-          await this.executeSubagents({ run, task, step, agents });
+          await this.executeSubagents({ run, task, step, agents, policyDecision: decision });
         } else {
-          await this.executeSingleAgent({ run, task, step, agents });
+          await this.executeSingleAgent({ run, task, step, agents, policyDecision: decision });
         }
       } catch (error: unknown) {
         // Persist why the step stopped, including the failure category when a
@@ -765,7 +788,7 @@ export class CloneRuntime {
     return this.#workspaceLockFile === undefined ? {} : { lockFile: this.#workspaceLockFile };
   }
 
-  private async executeSingleAgent(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry }): Promise<void> {
+  private async executeSingleAgent(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry; policyDecision: PolicyDecision }): Promise<void> {
     const release = await this.#capacityGate.acquire();
     try {
       if (this.#workspacePath === undefined) {
@@ -777,7 +800,7 @@ export class CloneRuntime {
     }
   }
 
-  private async executeSingleAgentUnlocked(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry }): Promise<void> {
+  private async executeSingleAgentUnlocked(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry; policyDecision: PolicyDecision }): Promise<void> {
     const agentId = input.step.agentId;
     if (agentId === undefined) {
       throw new Error(`Plan step ${input.step.id} has no executor.`);
@@ -804,6 +827,9 @@ export class CloneRuntime {
         executor: { agentId: adapter.id, providerId: adapter.providerId },
         ...(memoryContext === undefined ? {} : { memoryContext }),
         failureCatalog: this.#failureCatalog,
+        ...(input.policyDecision.unrestrictedDomains === undefined || input.policyDecision.unrestrictedDomains.length === 0
+          ? {}
+          : { unrestrictedDomains: input.policyDecision.unrestrictedDomains }),
         ...this.assignmentWorkspaceFields(workspace),
       };
       const executionAuthorization = evidenceAuthorization(capabilities);
@@ -855,7 +881,7 @@ export class CloneRuntime {
     });
   }
 
-  private async executeSubagents(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry }): Promise<void> {
+  private async executeSubagents(input: { run: Run; task: Task; step: PlanStep; agents: AgentRegistry; policyDecision: PolicyDecision }): Promise<void> {
     const orders = input.step.subagents ?? [];
     let outstanding = orders.filter((order) => !this.workOrderHasCompletedEvidence(input.run.id, order.id));
 
@@ -873,7 +899,7 @@ export class CloneRuntime {
     return (order.dependsOn ?? []).every((dependencyId) => this.workOrderHasCompletedEvidence(runId, dependencyId));
   }
 
-  private async dispatchSubagent(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry }): Promise<void> {
+  private async dispatchSubagent(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry; policyDecision: PolicyDecision }): Promise<void> {
     // One slot per subagent, so a wide dependency wave cannot exceed what the
     // machine can take. The slot is held through the workspace lock too: a
     // waiting subagent must not hold a capacity slot while it queues for the
@@ -891,7 +917,7 @@ export class CloneRuntime {
     }
   }
 
-  private async dispatchSubagentUnlocked(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry }): Promise<void> {
+  private async dispatchSubagentUnlocked(input: { run: Run; task: Task; step: PlanStep; workOrder: SubagentWorkOrder; agents: AgentRegistry; policyDecision: PolicyDecision }): Promise<void> {
     const existing = this.#state.subagents[subagentKey(input.run.id, input.workOrder.id)];
     if (existing?.status === "completed") {
       if (await this.ensureWorkOrderVerified(input, existing.agentId)) {
@@ -932,6 +958,9 @@ export class CloneRuntime {
       dependencyEvidence: this.dependencyEvidence(input.run.id, input.workOrder),
       ...(memoryContext === undefined ? {} : { memoryContext }),
       failureCatalog: this.#failureCatalog,
+      ...(input.policyDecision.unrestrictedDomains === undefined || input.policyDecision.unrestrictedDomains.length === 0
+        ? {}
+        : { unrestrictedDomains: input.policyDecision.unrestrictedDomains }),
     };
     let adapterCapabilities = await adapter.capabilities();
     let allowedEvidenceKinds = evidenceAuthorization(adapterCapabilities);

@@ -5,7 +5,7 @@
  * Run 既可以由用户 Query 发起，也可以由受治理的非 Query 来源发起。Signal 只能请求规划，
  * 绝不会自行授予执行权限。
  */
-import type { Scope } from "../authority/scope.ts";
+import type { Domain, Scope } from "../authority/scope.ts";
 import type { FailureReport, OutcomeCatalog } from "./failure-analysis.ts";
 
 export type TriggerKind = "query" | "schedule" | "signal" | "manual";
@@ -481,6 +481,14 @@ export interface ExecutionAssignment {
   memoryContext?: MemoryContextPacket;
   /** Owner-editable failure taxonomy used only for diagnostics. 所有者可编辑的失败分类，仅用于诊断。 */
   failureCatalog?: OutcomeCatalog;
+  /**
+   * Domains at 全部放行 the Kernel resolved for this step. The worker turns
+   * `files` into a `/` write root and opens network; protected paths still
+   * stop at its tool gate.
+   * Kernel 为这一步解析出的「全部放行」域。Worker 把 `files` 变成 `/` 写入根并打开
+   * network；受保护路径仍在其工具闸门处停下。
+   */
+  unrestrictedDomains?: Domain[];
   workspacePath?: string;
   /**
    * Present when this assignment is not allowed to touch the owner's live tree.
@@ -602,6 +610,16 @@ export interface PolicyDecision {
   reason: string;
   /** Standing policies that justified an automatic allow, for audit. 促成自动放行的常设策略，供审计。 */
   policyIds?: string[];
+  /**
+   * Domains whose owner level is 全部放行 and have no narrowing write/exec
+   * policy. The adapter may grant the whole domain: files gets `/`, network is
+   * opened. Protected locations still stop at the tool gate.
+   * 所有者为「全部放行」且没有收紧写/执行策略的域。Adapter 可获得全域授权：
+   * files 得到 `/`，network 打开。受保护位置仍在工具闸门处拒绝。
+   */
+  unrestrictedDomains?: Domain[];
+  /** True when 全部放行 waived the external/irreversible risk gate. 为 true 表示「全部放行」豁免了外部/不可逆风险闸门。 */
+  riskWaived?: boolean;
   /** Per-scope verdicts behind the outcome, for audit. 结论背后的逐 Scope 判定，供审计。 */
   scopeVerdicts?: Array<{ scope: Scope; outcome: "allowed" | "approval_required" | "denied"; reason: string }>;
 }

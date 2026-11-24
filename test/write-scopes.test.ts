@@ -98,6 +98,7 @@ test("a no-target write is denied, while a named target follows the approval lad
   try {
     const store = new StandingPolicyStore(data, journal);
     await store.load();
+    await store.setDomainLevel("files", "act_with_approval");
     const engine = new AuthorityPolicyEngine({ config: () => store.snapshot(), home });
 
     const [unscoped] = ensureWriteScopes([step()], {});

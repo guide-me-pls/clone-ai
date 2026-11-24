@@ -1,20 +1,24 @@
 /**
  * A plan names intent, not a writable folder.
  *
- * There is no fixed working directory. Every step that can write must carry a
+ * There is no fixed working directory. A step that can write should carry a
  * `files` write scope for the exact targets it will touch, and the policy
- * engine judges that scope like any other: `observe` denies it, `prepare` and
- * `act_with_approval` ask the owner, and only an `act_auto` standing policy
- * allows it without a prompt. When a step names no target of its own, this
- * module adds nothing: the Kernel does not invent a folder, and the authority
- * policy denies a write that named no target.
+ * engine judges that scope: `observe` denies it, `prepare`/`act_with_approval`
+ * ask the owner, `act_auto` allows the declared scope, and `allow_all` — the
+ * default — grants the whole domain and allows a write that names nothing.
+ * Protected locations, unenforced domains and `.git`/`.rsi` writes remain hard
+ * denials. A standing policy is an optional narrowing. When a step names no
+ * target below `allow_all`, this module adds nothing: the Kernel does not
+ * invent a folder, and the authority policy denies the unscoped write.
  *
  * 计划表达的是意图，而不是一个可写文件夹。
  *
- * 没有固定的工作目录。每个可能写入的步骤都必须为它实际触碰的目标携带 `files` 写 Scope，
- * 由权限引擎像其他 Scope 一样判定：`observe` 拒绝，`prepare` 与 `act_with_approval`
- * 询问所有者，只有 `act_auto` 常设策略才无需询问。步骤没有点名目标时，本模块不添加任何
- * Scope：Kernel 不凭空发明文件夹，权限引擎会拒绝没有点名目标的写入。
+ * 没有固定的工作目录。可能写入的步骤应当为它实际触碰的目标携带 `files` 写 Scope，由权限
+ * 引擎判定：`observe` 拒绝，`prepare`/`act_with_approval` 询问所有者，`act_auto` 允许声明
+ * 的 Scope，`allow_all`（默认值）授予整个域，并允许没有点名目标的写入。受保护位置、未实现
+ * 强制的域、`.git`/`.rsi` 写入仍是硬拒绝。常设策略是可选的收紧手段。低于 `allow_all` 时，
+ * 步骤没有点名目标则本模块不添加任何 Scope：Kernel 不凭空发明文件夹，权限引擎会拒绝没有
+ * 点名目标的写入。
  */
 import { isAbsolute } from "node:path";
 

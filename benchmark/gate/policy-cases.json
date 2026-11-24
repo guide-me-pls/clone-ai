@@ -26,9 +26,9 @@
         "acceptanceCriteria": []
       },
       "approved": false,
-      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "authority": { "version": 1, "domains": { "files": "act_auto" }, "policies": [] },
       "expectedOutcome": "denied",
-      "note": "There is no default working directory; a write must name its exact target as a scope."
+      "note": "At act_auto a write must name its target; 全部放行 is the level that removes the requirement."
     },
     {
       "id": "external-needs-approval",
@@ -73,8 +73,8 @@
       "expectedOutcome": "approval_required"
     },
     {
-      "id": "files-write-observe-denied",
-      "title": "A files write is denied while the domain is observe-only",
+      "id": "files-write-observe-asks-approval",
+      "title": "A scoped reversible files write under observe asks the owner once",
       "step": {
         "id": "write-outside",
         "title": "Write outside the workspace",
@@ -84,9 +84,25 @@
         "scopes": [{ "domain": "files", "resource": "~/projects/report.md", "access": "write" }]
       },
       "approved": false,
-      "authority": { "version": 1, "domains": {}, "policies": [] },
-      "expectedOutcome": "denied",
-      "note": "Absence of authority is denial, not permission."
+      "authority": { "version": 1, "domains": { "files": "observe" }, "policies": [] },
+      "expectedOutcome": "approval_required",
+      "note": "The owner may approve this exact scoped write once; a missing scope or a protected path is still denied."
+    },
+    {
+      "id": "files-write-observe-approved",
+      "title": "One owner approval lifts the observe-only denial for the exact step",
+      "step": {
+        "id": "write-outside",
+        "title": "Write outside the workspace",
+        "instructions": "Write to the projects directory.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects/report.md", "access": "write" }]
+      },
+      "approved": true,
+      "authority": { "version": 1, "domains": { "files": "observe" }, "policies": [] },
+      "expectedOutcome": "allowed",
+      "note": "The approval is keyed to this run and step; the files domain remains observe-only for every other step."
     },
     {
       "id": "files-write-act-auto-allowed",
@@ -116,8 +132,8 @@
       "expectedOutcome": "allowed"
     },
     {
-      "id": "files-read-no-policy-needs-approval",
-      "title": "A scoped read without a covering policy needs approval",
+      "id": "files-read-allowed-under-observe",
+      "title": "A scoped read is allowed even though the files domain is observe-only",
       "step": {
         "id": "read-outside",
         "title": "Read outside the workspace",
@@ -127,8 +143,9 @@
         "scopes": [{ "domain": "files", "resource": "~/projects", "access": "read" }]
       },
       "approved": false,
-      "authority": { "version": 1, "domains": {}, "policies": [] },
-      "expectedOutcome": "approval_required"
+      "authority": { "version": 1, "domains": { "files": "observe" }, "policies": [] },
+      "expectedOutcome": "allowed",
+      "note": "Reads are machine-wide except protected locations; the domain level governs writes and exec."
     },
     {
       "id": "files-read-covered-allowed",
@@ -144,7 +161,7 @@
       "approved": false,
       "authority": {
         "version": 1,
-        "domains": {},
+        "domains": { "files": "observe" },
         "policies": [
           {
             "id": "projects-read",
@@ -224,7 +241,7 @@
         "scopes": [{ "domain": "shell", "resource": "git", "access": "exec" }]
       },
       "approved": false,
-      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "authority": { "version": 1, "domains": { "shell": "observe" }, "policies": [] },
       "expectedOutcome": "denied"
     },
     {
@@ -281,6 +298,282 @@
       },
       "expectedOutcome": "denied",
       "note": "Reserved domains fail closed until their enforcement exists."
+    },
+    {
+      "id": "files-write-act-auto-no-policy-allowed",
+      "title": "An act_auto files domain allows a scoped write without any standing policy",
+      "step": {
+        "id": "write-outside",
+        "title": "Write outside the workspace",
+        "instructions": "Write to the projects directory.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects/report.md", "access": "write" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": { "files": "act_auto" }, "policies": [] },
+      "expectedOutcome": "allowed",
+      "note": "act_auto means the model's declared scope is the judgment; no owner-authored policy is needed."
+    },
+    {
+      "id": "files-write-default-domain-allowed",
+      "title": "An absent files domain defaults to 全部放行 and allows the scoped write",
+      "step": {
+        "id": "write-outside",
+        "title": "Write outside the workspace",
+        "instructions": "Write to the projects directory.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects/report.md", "access": "write" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "expectedOutcome": "allowed",
+      "note": "A missing domain entry is the default 全部放行, not observe."
+    },
+    {
+      "id": "files-read-act-auto-no-policy-allowed",
+      "title": "An act_auto files domain allows a scoped read without a policy",
+      "step": {
+        "id": "read-outside",
+        "title": "Read outside the workspace",
+        "instructions": "Read the projects directory.",
+        "risk": "read_only",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects", "access": "read" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": { "files": "act_auto" }, "policies": [] },
+      "expectedOutcome": "allowed"
+    },
+    {
+      "id": "shell-exec-act-auto-no-policy-allowed",
+      "title": "An act_auto shell domain allows a named command without a policy",
+      "step": {
+        "id": "run-git",
+        "title": "Run git",
+        "instructions": "Run git status.",
+        "risk": "read_only",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "shell", "resource": "git", "access": "exec" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": { "shell": "act_auto" }, "policies": [] },
+      "expectedOutcome": "allowed",
+      "note": "Policy-level: a real shell tool (agent-exec run_command) is offered only to a reversible_write-or-higher step and still needs the owner's command allowlist."
+    },
+    {
+      "id": "network-read-act-auto-no-policy-allowed",
+      "title": "An act_auto network domain allows a named host read without a policy",
+      "step": {
+        "id": "fetch-page",
+        "title": "Fetch a page",
+        "instructions": "Read the page at example.com.",
+        "risk": "read_only",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "network", "resource": "example.com", "access": "read" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": { "network": "act_auto" }, "policies": [] },
+      "expectedOutcome": "allowed",
+      "note": "Policy-level: the worker offers network tools only to a step whose risk class reaches external, which keeps the owner's approval."
+    },
+    {
+      "id": "irreversible-act-auto-needs-approval",
+      "title": "act_auto never waives the risk gate for irreversible work",
+      "step": {
+        "id": "delete",
+        "title": "Delete archived data",
+        "instructions": "Delete the archive.",
+        "risk": "irreversible",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects/archive", "access": "write" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": { "files": "act_auto" }, "policies": [] },
+      "expectedOutcome": "approval_required"
+    },
+    {
+      "id": "protected-path-act-auto-denied",
+      "title": "Default act_auto still cannot open a protected location",
+      "step": {
+        "id": "write-ssh",
+        "title": "Write an SSH config",
+        "instructions": "Write the SSH config.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/.ssh/config", "access": "write" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": { "files": "act_auto" }, "policies": [] },
+      "expectedOutcome": "denied",
+      "note": "The forbidden-root check runs before any autonomy level or policy."
+    },
+    {
+      "id": "narrowing-policy-restricts-act-auto",
+      "title": "A lower-ceiling policy still narrows an act_auto domain",
+      "step": {
+        "id": "write-outside",
+        "title": "Write outside the workspace",
+        "instructions": "Write to the projects directory.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects/report.md", "access": "write" }]
+      },
+      "approved": false,
+      "authority": {
+        "version": 1,
+        "domains": { "files": "act_auto" },
+        "policies": [
+          {
+            "id": "projects-observation-only",
+            "label": "Only observe the projects folder",
+            "scopes": [{ "domain": "files", "resource": "~/projects", "access": "write" }],
+            "maxAutonomy": "observe",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "expectedOutcome": "denied",
+      "note": "Standing policies stay available as an optional narrowing, not as a prerequisite; a single lower ceiling restricts."
+    },
+    {
+      "id": "overlapping-policies-lowest-ceiling-wins",
+      "title": "A broad higher-ceiling policy does not defeat an explicit observe-only subtree",
+      "step": {
+        "id": "write-secret",
+        "title": "Write under the restricted subtree",
+        "instructions": "Write to ~/projects/secret.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects/secret/x.md", "access": "write" }]
+      },
+      "approved": false,
+      "authority": {
+        "version": 1,
+        "domains": { "files": "allow_all" },
+        "policies": [
+          {
+            "id": "projects-broad",
+            "label": "Broad projects grant",
+            "scopes": [{ "domain": "files", "resource": "~/projects", "access": "write" }],
+            "maxAutonomy": "act_auto",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          },
+          {
+            "id": "projects-secret-observe",
+            "label": "Only observe the secret subtree",
+            "scopes": [{ "domain": "files", "resource": "~/projects/secret", "access": "write" }],
+            "maxAutonomy": "observe",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "expectedOutcome": "denied",
+      "note": "The lowest ceiling among covering policies wins, so an explicit restriction is never overridden by a broader grant."
+    },
+    {
+      "id": "files-write-unscoped-allow-all-allowed",
+      "title": "全部放行 allows a reversible write that names no target",
+      "step": {
+        "id": "write-anywhere",
+        "title": "Write a file",
+        "instructions": "Write a file.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": []
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": { "files": "allow_all" }, "policies": [] },
+      "expectedOutcome": "allowed",
+      "note": "The whole files domain is the grant; the worker receives / and the protected-path guard."
+    },
+    {
+      "id": "allow-all-external-scoped-allowed",
+      "title": "全部放行 waives the external gate for a declared network scope",
+      "step": {
+        "id": "send",
+        "title": "Post to a host",
+        "instructions": "Post to example.com.",
+        "risk": "external_side_effect",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "network", "resource": "example.com", "access": "write" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": { "network": "allow_all" }, "policies": [] },
+      "expectedOutcome": "allowed",
+      "note": "The Runtime records a standing-policy approval before dispatch; the invariant still holds."
+    },
+    {
+      "id": "allow-all-irreversible-scoped-allowed",
+      "title": "全部放行 waives the irreversible gate for a declared files scope",
+      "step": {
+        "id": "delete",
+        "title": "Delete archived data",
+        "instructions": "Delete the archive.",
+        "risk": "irreversible",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/projects/archive", "access": "write" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": { "files": "allow_all" }, "policies": [] },
+      "expectedOutcome": "allowed"
+    },
+    {
+      "id": "allow-all-external-no-scope-approval",
+      "title": "An external step with no scope keeps its approval at 全部放行",
+      "step": {
+        "id": "send",
+        "title": "Send an email",
+        "instructions": "Send an email.",
+        "risk": "external_side_effect",
+        "acceptanceCriteria": []
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": {}, "policies": [] },
+      "expectedOutcome": "approval_required",
+      "note": "No declared scope names a domain that could justify the waiver."
+    },
+    {
+      "id": "allow-all-protected-path-denied",
+      "title": "全部放行 still cannot open a protected location",
+      "step": {
+        "id": "write-ssh",
+        "title": "Write an SSH config",
+        "instructions": "Write the SSH config.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": [],
+        "scopes": [{ "domain": "files", "resource": "~/.ssh/config", "access": "write" }]
+      },
+      "approved": false,
+      "authority": { "version": 1, "domains": { "files": "allow_all" }, "policies": [] },
+      "expectedOutcome": "denied"
+    },
+    {
+      "id": "allow-all-narrowing-withholds-unscoped",
+      "title": "A narrowing write policy withdraws the whole-domain grant",
+      "step": {
+        "id": "write-anywhere",
+        "title": "Write a file",
+        "instructions": "Write a file.",
+        "risk": "reversible_write",
+        "acceptanceCriteria": []
+      },
+      "approved": false,
+      "authority": {
+        "version": 1,
+        "domains": { "files": "allow_all" },
+        "policies": [
+          {
+            "id": "projects-observation-only",
+            "label": "Only observe the projects folder",
+            "scopes": [{ "domain": "files", "resource": "~/projects", "access": "write" }],
+            "maxAutonomy": "observe",
+            "createdAt": "2026-01-01T00:00:00.000Z"
+          }
+        ]
+      },
+      "expectedOutcome": "denied",
+      "note": "An unscoped write cannot be judged against the narrowing policy, so it fails instead of receiving /."
     }
   ]
 }

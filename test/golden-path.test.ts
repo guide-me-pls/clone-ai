@@ -121,11 +121,11 @@ async function seededHome(t: TestContext): Promise<{
     type: "message", id: "e1", parentId: null, timestamp: new Date().toISOString(),
     message: { role: "user", content: [{ type: "text", text: OWNER_WORDS }] },
   })}\n`, "utf8");
-  // The owner's standing permission for this folder. A write now carries a
-  // scope and is judged by the policy engine; without this the golden path
-  // would be correctly denied under the default observe-only files domain.
-  // 所有者对这个文件夹的常设授权。写入现在携带 Scope 并由权限引擎判定；没有它，黄金路径
-  // 会在默认的 files 只观察档位下被正确拒绝。
+  // An explicit grant for this folder. The default files domain is act_auto
+  // now, so this seed is redundant for the golden path; it stays as the
+  // explicit-grant case the test also exercises.
+  // 这个文件夹的显式授权。files 域现在默认 act_auto，因此这份种子对黄金路径是冗余的；
+  // 保留它是为了同时覆盖显式授权的路径。
   const seedJournal = createJournalStore(dataDirectory);
   try {
     const authority = new StandingPolicyStore(dataDirectory, seedJournal);

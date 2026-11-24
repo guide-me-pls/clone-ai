@@ -154,7 +154,7 @@ turn without a restart.
 1. `npm run desktop:mac:build` then `open "dist/Clone AI.app"` → the window opens.
 2. 设置 → Agent: configure a model, then send one message → the Main Agent replies.
 3. 审计与评估 → 运行记录 shows the run.
-4. 设置 → 权限与安全: confirm every domain is `observe`; raise only what you need.
+4. 设置 → 权限与安全: files, shell and network default to 全部放行 (`allow_all`): a step needs no per-target scope and external/irreversible work does not ask, while protected locations stay closed. Choose 批准 for scoped approvals, or 自动执行 for model-judged scopes with external confirmation.
 5. 设置 → 记忆与数据 → 导出全部数据: export once, inspect `manifest.json`, then
    move the folder somewhere you can keep.
 6. 审计与评估 → 坏案例 starts accumulating failures — that file drives your

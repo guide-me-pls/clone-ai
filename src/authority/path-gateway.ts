@@ -10,7 +10,7 @@
  */
 import { homedir } from "node:os";
 
-import { canonicalPath, forbiddenRoots, isForbiddenPath, pathWithin, type Scope } from "./scope.ts";
+import { canonicalPath, cloneSandboxRoot, forbiddenRoots, isForbiddenPath, pathWithin, type Domain, type Scope } from "./scope.ts";
 
 export interface EffectiveGrants {
   /**
@@ -54,35 +54,52 @@ export function resolveGrants(
      * 所有者的活文件夹。普通步骤必须声明写 Scope。
      */
     includeWorkspace?: boolean;
+    /**
+     * Domains the owner set to 全部放行 with no narrowing policy. `files` adds
+     * `/` as a write root; `network` opens the network. The tool gate still
+     * refuses protected locations, `.git` and `.rsi` writes.
+     * 所有者设为「全部放行」且无收紧策略的域。`files` 把 `/` 加入写入根；`network`
+     * 打开网络。工具闸门仍拒绝受保护位置、`.git` 与 `.rsi` 写入。
+     */
+    unrestrictedDomains?: readonly Domain[];
   },
 ): EffectiveGrants {
   const home = options.home ?? homedir();
   const workspace = canonicalPath(options.workspace, home);
   const readRoots = new Set<string>();
   const writeRoots = new Set<string>(options.includeWorkspace === true ? [workspace] : []);
-  let network = false;
+  let network = options.unrestrictedDomains?.includes("network") === true;
+  if (options.unrestrictedDomains?.includes("files") === true) writeRoots.add("/");
   const dropped: EffectiveGrants["dropped"] = [];
 
   for (const scope of scopes ?? []) {
     if (scope.domain === "files") {
-      if (isForbiddenPath(scope.resource, home)) {
-        dropped.push({ scope, reason: "protected location" });
-        continue;
-      }
       const path = canonicalPath(scope.resource, home);
-      if (path === "/" || path === home) {
-        dropped.push({ scope, reason: "too broad: grant a specific folder, not the root or home directory" });
-        continue;
-      }
-      // A grant on a directory that CONTAINS a protected root opens that root,
-      // even though the granted path itself is not inside one. `~/Library` was
-      // accepted and handed over the Keychains with it.
-      // 覆盖受保护根的授权会把它一起打开，即使被授权的路径本身不在受保护根之内。
-      // `~/Library` 曾被接受，并连带交出了 Keychains。
-      const covering = forbiddenRoots(home).find((root) => pathWithin(path, root));
-      if (covering !== undefined) {
-        dropped.push({ scope, reason: `too broad: this grant contains the protected location ${covering}; grant the specific folder instead` });
-        continue;
+      // The Kernel's isolated sandbox lives under the protected clone home; it
+      // is the one subtree a worker may use, so it bypasses both the
+      // forbidden-root check and the "too broad" check that `.clone` would
+      // otherwise trigger.
+      // Kernel 的隔离沙箱位于受保护的 clone home 下；它是 Worker 唯一可用的子树，
+      // 因此跳过禁区检查与因 `.clone` 触发的"过宽"检查。
+      if (!pathWithin(cloneSandboxRoot(home), path)) {
+        if (isForbiddenPath(scope.resource, home)) {
+          dropped.push({ scope, reason: "protected location" });
+          continue;
+        }
+        if (path === "/" || path === home) {
+          dropped.push({ scope, reason: "too broad: grant a specific folder, not the root or home directory" });
+          continue;
+        }
+        // A grant on a directory that CONTAINS a protected root opens that root,
+        // even though the granted path itself is not inside one. `~/Library` was
+        // accepted and handed over the Keychains with it.
+        // 覆盖受保护根的授权会把它一起打开，即使被授权的路径本身不在受保护根之内。
+        // `~/Library` 曾被接受，并连带交出了 Keychains。
+        const covering = forbiddenRoots(home).find((root) => pathWithin(path, root));
+        if (covering !== undefined) {
+          dropped.push({ scope, reason: `too broad: this grant contains the protected location ${covering}; grant the specific folder instead` });
+          continue;
+        }
       }
       if (scope.access === "read") readRoots.add(path);
       else writeRoots.add(path);

@@ -114,6 +114,223 @@ file keeps every attempt, including the ones that did not work.
   route read-only through it behind a post-validation gate; if a read-only
   request must produce a file despite the marker, require a named target.
 
+### 2026-11-24 — 全部放行 becomes the default; scopes and external confirmations stop
+
+- **Goal / hypothesis:** the owner asked for three levels — 批准, 自动执行, 全部放行
+  — and for 全部放行 as the standard: no per-target scope, no external
+  confirmation, protected locations still closed. `act_auto` still required a
+  scope and asked before external/irreversible work; `allow_all` is the
+  distinct top level.
+- **Trade-off:** [全部放行 is the default: no scope requirement and no external confirmation, protected locations stay closed](../architecture/trade-offs.md#2026-11-24--全部放行-is-the-default-no-scope-requirement-and-no-external-confirmation-protected-locations-stay-closed).
+- **Change:** `src/authority/scope.ts` — `allow_all` above `act_auto`;
+  `src/authority/standing-policy-store.ts` — `DEFAULT_DOMAIN_AUTONOMY = "allow_all"`,
+  `observe`/`prepare` kept only for legacy and fail-closed;
+  `src/authority/policy-engine.ts` — reads are machine-wide at every level,
+  unscoped reversible writes are allowed at 全部放行, the external/irreversible
+  gate is waived when every declared scope's effective level is 全部放行,
+  `unrestrictedDomains` is withheld when a narrowing write policy exists;
+  `src/core/contracts.ts` — `PolicyDecision.unrestrictedDomains`/`riskWaived`
+  and `ExecutionAssignment.unrestrictedDomains`; `src/core/runtime.ts` —
+  records an `approval.granted` (`grantedBy: "standing_policy"`) before an
+  external/irreversible dispatch and passes the unrestricted domains;
+  `src/authority/path-gateway.ts` — `/` becomes a write root for 全部放行;
+  `src/workers/native-agent-worker.ts` — `decideTool` now refuses a protected
+  write even inside a granted root, and an isolated/repair execution drops the
+  `/` grant so 全部放行 does not defeat the Kernel's sandbox; `src/main-agent/prompt.ts` — the Main
+  Agent is told the new default; `apps/desktop/ui/app.js`, `index.html`,
+  `src/desktop/ui-locale.ts` — the three visible levels, the hidden legacy
+  labels, the new default note.
+- **Eval:** `npm run gate` — policy suite **30 cases, agreement 100%,
+  unsafeAllows 0, overBlocks 0, PASS** (before this change: 24 cases, 100%).
+  New cases: `files-write-unscoped-allow-all-allowed`,
+  `allow-all-external-scoped-allowed`, `allow-all-irreversible-scoped-allowed`,
+  `allow-all-external-no-scope-approval`, `allow-all-protected-path-denied`,
+  `allow-all-narrowing-withholds-unscoped`; `files-read-no-policy-needs-approval`
+  became `files-read-allowed-under-observe` (reads are machine-wide);
+  `local-write-without-scope-denied` now pins `act_auto`; the overlapping-policy
+  case moved to an `allow_all` domain. Baseline regenerated with
+  `npm run gate -- --write-baseline` and reviewed; the policy floor rose from
+  24 to 30. `test/authority.test.ts` pins the default, unscoped writes,
+  risk waiver, narrowing withdrawal, the implicit approval before an external
+  step and the readable `checkJournalInvariants` history;
+  `test/path-gate.test.ts` pins `/` as a write root with the protected-write
+  refusal. `npm test` **1083/1083**, `npm run typecheck` exit 0.
+- **Benchmark run:** `npm run gate` (offline, deterministic, no provider/model),
+  `benchmark/gate/policy-cases.json` schemaVersion 1, all case ids in that file,
+  fixed `approved` per case, no sampling, machine-independent temporary home; no
+  `--json` result file.
+- **Execution chain:** implemented directly in one session. Two expected test
+  updates surfaced: the no-scope write case and the `runQuery` failure-reason
+  case had assumed `act_auto`; both now pin that level explicitly. One transient
+  failure came from a concurrent session's in-flight JSON-fallback test edit and
+  passed on the next run; a first full run also hit the FSEvents operation-log
+  test's known timing sensitivity (it passes alone and on rerun). `npm run gate`
+  initially failed with 2 behavior changes and 2 unsafe allows (the old
+  no-scope/read expectations), which is the intended review artifact; the
+  baseline was regenerated only after every new outcome was checked.
+- **Pros:** the owner's requested ladder is visible and the default matches
+  "全部放行 as the standard"; every loosening has a case that fails on the
+  old behavior, and the protected-write check now also covers writes inside a
+  granted root. The external waiver still produces an approval event, so
+  `approval-before-external-execution` and the audit do not lie.
+- **Cons / next time:** the domain-wide `/` grant is the broadest write
+  surface in the system; its safety depends on the forbidden check in the
+  policy engine, `decideTool` and Seatbelt staying in sync. A narrowing policy
+  withdraws the whole-domain grant rather than computing deny roots, so an
+  owner who narrows one subtree loses unscoped writes everywhere in files. The
+  agent-exec allowlist and its Seatbelt network deny remain a separate shell
+  gate. Next time, add a protected location to all three consumers in one
+  commit and run the write-path tests before the gate.
+- **Reversal condition:** copied from the trade-off — if a run writes an
+  unintended non-protected file, restore the scope requirement for 全部放行 or
+  lower the domain to 自动执行/批准; if an external action executes with an
+  implicit approval the owner did not expect, remove the risk waiver while
+  keeping the no-scope grant.
+
+### 2026-11-24 — Automatic execution is the default, judged by the model
+
+- **Goal / hypothesis:** remove the owner's per-resource policy authoring.
+  Setting all three domains to 自动执行 already was not enough: a scoped step
+  still returned `approval_required` without a covering standing policy. Make
+  `act_auto` mean "the model's declared scope is the judgment", and make it the
+  missing-domain default, so a fresh install and the owner's existing config
+  both run without the standing-policy form.
+- **Trade-off:** [Automatic execution is the default, and `act_auto` means the model judges](../architecture/trade-offs.md#2026-11-24--automatic-execution-is-the-default-and-act_auto-means-the-model-judges).
+- **Change:** `src/authority/standing-policy-store.ts` — `DEFAULT_DOMAIN_AUTONOMY`
+  (`act_auto`), `autonomyFor()`, a fail-closed corrupt-file config, strict
+  `normalize()` (an invalid level or a non-array `policies` now throws instead
+  of silently becoming all-`act_auto`), and `describeAuthority` naming the
+  default and the remaining hard boundaries; `src/authority/policy-engine.ts` —
+  the `covering.length === 0` branch allows a scope in an `act_auto` domain
+  (model judgment), the lowest covering policy ceiling wins, and the aggregate
+  reason distinguishes owner approval, model judgment and policy coverage;
+  `src/authority/scope.ts` — the whole clone home is one protected root with the
+  Kernel's isolated sandbox as the named exception (`cloneSandboxRoot`);
+  `src/authority/path-gateway.ts` and `src/authority/seatbelt.ts` — the sandbox
+  exception in the grant gateway and after the Seatbelt protected deny;
+  `src/mcp/agent-tools-server.ts` — the mirrored protected list is `.clone`, and
+  the sandbox exception applies to search/find; `src/main-agent/prompt.ts`
+  — the Main Agent is told the default and that it need not author a policy;
+  `apps/desktop/ui/index.html`, `app.js`, `style.css` — the page defaults all
+  three domains to 自动执行（模型判断）, shows an accurate per-level hint, and
+  moves the standing-policy form under 高级：常设策略（可选）; the new
+  `test/ui-syntax.test.ts` guards the page script's syntax with `node --check`;
+  `src/desktop/ui-locale.ts` — the new note in both languages.
+- **Eval:** `npm run gate` — policy suite **23 cases, agreement 78%,
+  unsafeAllows 0, overBlocks 5** before (exactly the five new act_auto-without-
+  policy cases were refused); after the engine and review fixes **24 cases,
+  agreement 100%, unsafeAllows 0, overBlocks 0, PASS**. New/updated cases:
+  `files-write-act-auto-no-policy-allowed`, `files-write-default-domain-allowed`,
+  `files-read-act-auto-no-policy-allowed`, `shell-exec-act-auto-no-policy-allowed`,
+  `network-read-act-auto-no-policy-allowed`, `irreversible-act-auto-needs-approval`,
+  `protected-path-act-auto-denied`, `narrowing-policy-restricts-act-auto`,
+  `overlapping-policies-lowest-ceiling-wins` (the last returned `allowed` under
+  the pre-fix `max()` union — an unsafe allow — and `denied` after the lowest-
+  ceiling fix; reproduced by the review agent and now pinned by the gate). The
+  existing observe cases got an explicit `files`/`shell: observe` so their intent
+  stays pinned. Baseline regenerated with `npm run gate -- --write-baseline` and
+  reviewed; the diff adds the new entries (the observe-approval entries from the
+  earlier scoped-write change were already in the working baseline); the policy
+  floor was raised from 14 to 24 cases. `node --experimental-strip-types
+  --test test/authority.test.ts test/write-scopes.test.ts test/path-gate.test.ts`
+  **32/32**, including default-auto, overlapping-policy, corrupt-config
+  (syntax + semantic), clone-home protection and sandbox-grant cases; the new
+  `test/ui-syntax.test.ts` runs `node --check` on `apps/desktop/ui/app.js` and
+  passes **1/1**; `npm test` **1073/1073**, `npm run typecheck` exit 0.
+- **Benchmark run:** `npm run gate` (offline, deterministic, no provider/model),
+  fixtures `benchmark/gate/policy-cases.json` schemaVersion 1, all case ids in
+  that file, `approved` per case, no sampling; machine-independent temporary
+  home; result printed by the gate, no `--json` file.
+- **Execution chain:** one read-only workflow of five Explore readers mapped
+  autonomy defaults, second gates, eval mechanics, test pins and the UI surface
+  (432,423 subagent tokens, 236 tool calls, 419 s, no reader errors). The owner's
+  live `~/.clone/policies.json` was inspected (all three domains `act_auto`,
+  one browser-MCP policy). An adversarial review workflow — three lenses, then
+  two skeptics per finding (33 agents, 2,400,119 tokens, 1,181 tool calls, 1,411 s)
+  — confirmed nine findings. Two blockers changed the outcome: the per-file
+  protected list left `~/.clone/config.json`, `providers.json` and `mcp.json`
+  open once an uncovered scope became automatic, and a parseable-but-semantically-
+  corrupt `policies.json` could silently arm all domains. The fixes are the
+  whole clone home with the isolated-sandbox exception (kernel, grant gateway,
+  Seatbelt profile, agent-tools mirror), strict `normalize()`, the lowest covering
+  ceiling, corrected reasons and copy, and a non-vacuous cross-process assertion.
+  The remaining findings were duplicates or pre-existing (the approval card not
+  listing targets is recorded in the 2026-11-24 scoped-write trade-off). One
+  failure besides those: a background `npm test` was refused by the environment's
+  auto-mode classifier, so the suite was rerun in the foreground; no test failed.
+  A dropped parenthesis in the UI revoke dialog was caught by `node --check`
+  after the text-only UI tests had passed.
+- **Pros:** the final gate has 24 policy cases at 100% agreement, 0 unsafe allows
+  and 0 over-blocks; the protected clone home and lowest-ceiling rule are pinned
+  by tests, not prose. The adversarial pass found both blockers before a live
+  daemon could load the change, and every fix has a case that fails on the old
+  behavior. The UI change removes the form from the default path without deleting
+  the capability.
+- **Cons / next time:** the first implementation assumed the protected list
+  covered credentials and that `max()` was a harmless union — both wrong once
+  `act_auto` became the default. Next time, when changing a permission default,
+  audit every `forbiddenRoots` consumer (kernel, gateways, Seatbelt, the MCP
+  mirror) in the same pass and write the multi-policy aggregation case before
+  shipping. Text-only UI tests do not parse the page script; run `node --check
+  apps/desktop/ui/app.js` after editing it. The agent-exec `run_command` allowlist
+  and its fixed network-deny Seatbelt profile remain a second, independent gate
+  for shell work; this change does not touch them.
+- **Reversal condition:** copied from the trade-off — if an injected or
+  mis-declared scope causes an unintended write/exec/read, restore `observe` as
+  the missing-domain default and require a policy for `act_auto` again, or lower
+  the offending domain only. If a legitimate worker task needs a clone-home file
+  outside the isolated sandbox, add it by name to both protection lists and the
+  Seatbelt profile, never by shrinking the root. If owners rely on union-of-grants,
+  add an explicit grant marker instead of restoring `max()` aggregation.
+
+### 2026-11-24 — A scoped reversible write under observe asks the owner once
+
+- **Goal / hypothesis:** the owner asked for Claude Code auto-like write handling:
+  the worker's model decides a write inside its declared scope, and a refusal can
+  be confirmed by the owner. `act_auto` already gives the automatic half; the
+  missing half was that an observe-only files domain failed a scoped write
+  outright, leaving no accept/reject action.
+- **Trade-off:** [A scoped reversible write under an observe-only files domain asks the owner once](../architecture/trade-offs.md#2026-11-24--a-scoped-reversible-write-under-an-observe-only-files-domain-asks-the-owner-once).
+- **Change:** `src/authority/policy-engine.ts` — a `reversible_write` step with a
+  `files` write scope under `observe` returns `approval_required` instead of
+  `denied`; with the run's step approval it returns `allowed`. Protected paths,
+  unscoped writes, other domains and `irreversible` steps still take the old
+  verdicts. `src/companion-server.ts` and `apps/desktop/ui/app.js` — the
+  approval card's description is no longer external-action-specific.
+  Tests: `test/authority.test.ts` (policy cases + a Runtime test where the first
+  execute is `waiting_approval` and the approved re-execute is `allowed`),
+  `benchmark/gate/policy-cases.json` and `baseline.json` (the intended policy
+  verdict change), `test/regression/failure-reason.test.ts` (the denial case now
+  uses a protected target so it still tests a hard failure).
+- **Eval:** `node --experimental-strip-types --test test/authority.test.ts test/regression-gate.test.ts test/regression/failure-reason.test.ts`
+  — **12/12 authority, 13/13 gate/failure-reason**. The Runtime test records
+  `policy.decided` outcomes `approval_required` then `allowed` across the two
+  executes. `npm test` **1047/1047**, 0 fail; `npm run typecheck` exit 0;
+  `npm run gate -- --write-baseline` then `npm run gate` **PASS**. The baseline
+  diff is exactly: `policy/files-write-observe-denied: denied` becomes
+  `policy/files-write-observe-asks-approval: approval_required` plus
+  `policy/files-write-observe-approved: allowed`.
+- **Benchmark run:** none — the gate baseline is the deterministic eval; no
+  provider calls.
+- **Execution chain:** one session. Read the authority engine, Runtime execute
+  loop, approval routes and UI card; wrote the trade-off before code. The first
+  gate run correctly failed on the intended verdict change; regenerated the
+  baseline and reviewed the diff. Two existing tests assumed the old denial:
+  the gate's synthetic unsafe case now uses a protected target, and the
+  failure-reason test now uses a protected target so it still asserts a hard
+  failure. No workers, no model calls.
+- **Pros:** reuses the existing step-level approval route, card and journal
+  events; no per-call channel; the owner's approval is one-shot and keyed to
+  the run/step; `act_auto` remains the automatic mode.
+- **Cons / next time:** approval is per step, not per file; the card does not
+  list every target (the plan and audit do); observe is no longer a strict
+  "no write can ever happen" unless the owner denies; external and irreversible
+  steps still need the domain raised. Next time: include the step's write
+  scopes in the approval card before adding per-file decisions.
+- **Reversal condition:** copied from the trade-off entry — remove the observe
+  exemption if one-step approvals become a rubber stamp; add a target list
+  before any per-call channel; keep protected paths and unscoped writes denied.
+
 ### 2026-11-24 — The daemon records FSEvents operations, and noise stays out of the daily digest
 
 - **Goal / hypothesis:** the owner asked to add FSEvents and to filter useless

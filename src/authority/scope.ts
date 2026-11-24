@@ -36,8 +36,8 @@ export interface Scope {
   access: Access;
 }
 
-/** observe < prepare < act_with_approval < act_auto. 自主阶梯，由低到高。 */
-export const AUTONOMY_LEVELS = ["observe", "prepare", "act_with_approval", "act_auto"] as const;
+/** observe < prepare < act_with_approval < act_auto < allow_all. 自主阶梯，由低到高。 */
+export const AUTONOMY_LEVELS = ["observe", "prepare", "act_with_approval", "act_auto", "allow_all"] as const;
 export type Autonomy = (typeof AUTONOMY_LEVELS)[number];
 
 export function autonomyRank(level: Autonomy): number {
@@ -176,9 +176,22 @@ export function scopeCovers(grant: Scope, wanted: Scope, home = homedir()): bool
 /**
  * Locations no policy can ever open. They are checked before any grant, so a
  * standing policy, an approval, or a sloppy "allow my whole home directory"
- * cannot reach the owner's credentials or Clone AI's own audit trail.
+ * cannot reach the owner's credentials or Clone AI's own control plane.
+ *
+ * The whole clone home is protected, not a list of today's files: it holds the
+ * model endpoint key (`config.json`), provider keys, `mcp.json` credentials,
+ * memory, conversations, the journal, policies, checkpoints and traces. A
+ * per-file list silently missed `config.json`, `providers.json` and `mcp.json`
+ * when `act_auto` became the default. The isolated workspace the Kernel creates
+ * is the one exception, handled by `isForbiddenPath` and the grant gateway.
+ *
  * 任何策略都无法开放的位置。它们先于任何授权被检查，因此常设策略、审批或一句草率的
- * "允许整个家目录"，都碰不到所有者的凭据或 Clone AI 自己的审计轨迹。
+ * "允许整个家目录"，都碰不到所有者的凭据或 Clone AI 自己的控制面。
+ *
+ * 受保护的是整个 clone home，而不是今天的文件清单：其中有模型端点密钥（`config.json`）、
+ * Provider 密钥、`mcp.json` 凭据、记忆、对话、Journal、策略、检查点与轨迹。按文件列举的
+ * 清单在 `act_auto` 成为默认档位时漏掉了 `config.json`、`providers.json` 与 `mcp.json`。
+ * Kernel 创建的隔离工作区是唯一例外，由 `isForbiddenPath` 与授权网关处理。
  */
 export function forbiddenRoots(home = homedir()): string[] {
   const roots = [
@@ -193,18 +206,28 @@ export function forbiddenRoots(home = homedir()): string[] {
     "Library/Application Support/Firefox",
     "Library/Application Support/Microsoft Edge",
     "Library/Safari",
-    ".clone/journal.sqlite3",
-    ".clone/journal.sqlite3-wal",
-    ".clone/journal.sqlite3-shm",
-    ".clone/journal.jsonl",
-    ".clone/policies.json",
-    ".clone/companion.token",
+    ".clone",
   ];
   return roots.map((entry) => canonicalPath(join(home, entry), home));
+}
+
+/**
+ * The one clone-home subtree a worker may use: the isolated sandbox the Kernel
+ * creates for external/irreversible work. It is not the owner's live tree and
+ * not the control plane, so the rest of `.clone` stays closed while this
+ * subtree remains readable and writable as the step's workspace.
+ * 唯一可由 Worker 使用的 clone home 子树：Kernel 为外部/不可逆工作创建的隔离沙箱。
+ * 它不是所有者的活树，也不是控制面，因此 `.clone` 的其余部分保持关闭，而这个子树仍可
+ * 作为步骤工作区读写。
+ */
+export function cloneSandboxRoot(home = homedir()): string {
+  return canonicalPath(join(home, ".clone", "isolated-workspaces"), home);
 }
 
 export function isForbiddenPath(path: string, home = homedir()): boolean {
   const target = canonicalPath(path, home);
   const fold = isCaseSensitive(target) ? (value: string) => value : (value: string) => value.toLowerCase();
+  const sandbox = fold(cloneSandboxRoot(home));
+  if (pathWithin(sandbox, fold(target))) return false;
   return forbiddenRoots(home).some((root) => pathWithin(fold(root), fold(target)));
 }

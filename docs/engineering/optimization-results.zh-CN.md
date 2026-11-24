@@ -38,6 +38,62 @@
 - **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--只读请求永远不经过-llm-planner)；
   [执行链路](optimizations.zh-CN.md#2026-11-24--只读请求绕过-llm-planner)。
 
+## 2026-11-24 —— 「全部放行」成为默认，免 Scope、免外部确认
+
+- **主张：** 可见档位是批准 / 自动执行 / 全部放行，且全部放行是 files、shell、network 的
+  标准。可逆写入无需声明 Scope；声明 Scope 的有效档位全是全部放行的外部/不可逆步骤无需
+  确认即可执行；受保护位置、未实现强制的域、`.git`/`.rsi` 写入仍被拒绝，Runtime 在外部派发前
+  记录一条策略审批，因此 `approval-before-external-execution` 仍成立。存在收紧写策略时，
+  全域授权被撤回。
+- **证据：** `npm run gate` 策略套件 **30 个用例、一致率 100%、不安全放行 0、误拦截 0、
+  PASS**（变更前 24 个用例、100%）。新增用例：`files-write-unscoped-allow-all-allowed`、
+  `allow-all-external-scoped-allowed`、`allow-all-irreversible-scoped-allowed`、
+  `allow-all-external-no-scope-approval`、`allow-all-protected-path-denied`、
+  `allow-all-narrowing-withholds-unscoped`；`files-read-allowed-under-observe` 取代旧的
+  读取审批用例。`test/authority.test.ts` 断言默认值、无 Scope 写入、风险豁免、收紧撤回，
+  以及外部 `execution.started` 之前存在 `grantedBy: "standing_policy"` 的
+  `approval.granted`，且 `checkJournalInvariants` 返回 `[]`。`test/path-gate.test.ts` 断言
+  全部放行下 `/` 是写入根，而受保护写入被拒绝。`npm test` **1083/1083**，
+  `npm run typecheck` 退出码 0。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--全部放行成为默认免-scope免外部确认但禁区仍关闭)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--全部放行成为默认免-scope免外部确认)。
+
+## 2026-11-24 —— 自动执行不再需要逐 Scope 策略
+
+- **主张：** 把文件、Shell 与网络设为「自动执行」现在本身就足够。`act_auto` 域里带 Scope
+  的步骤无需所有者撰写的常设策略即可放行；缺省域默认也是 `act_auto`；受保护位置、无 Scope
+  写入、未实现强制域、外部动作与不可逆步骤仍受闸门。整个 clone home 受保护（端点密钥、
+  Provider 密钥、`mcp.json`、记忆、对话、Journal 与轨迹），唯一例外是 Kernel 的隔离沙箱；
+  更低上限的策略始终起收紧作用，即使另一条更宽的授权也覆盖该 Scope。
+- **证据：** `npm run gate` 策略套件 **24 个用例、一致率 100%、不安全放行 0、误拦截 0、
+  PASS**。引擎变更前同一套件为 **23 个用例、一致率 78%、不安全放行 0、误拦截 5**——正好是
+  `files-write-act-auto-no-policy-allowed`、`files-write-default-domain-allowed`、
+  `files-read-act-auto-no-policy-allowed`、`shell-exec-act-auto-no-policy-allowed` 与
+  `network-read-act-auto-no-policy-allowed`。守卫用例保持
+  （`irreversible-act-auto-needs-approval`：approval_required，
+  `protected-path-act-auto-denied`：denied，`narrowing-policy-restricts-act-auto`：denied）；
+  `overlapping-policies-lowest-ceiling-wins` 在修复前的 `max()` 并集下返回 `allowed`，
+  最低上限修复后返回 `denied`。`test/path-gate.test.ts` 钉住 clone home 保护与隔离沙箱例外；
+  `test/authority.test.ts` 钉住语法与语义损坏配置。`npm test` **1073/1073**，
+  `npm run typecheck` 退出码 0。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--自动执行成为默认档位自动执行意味着模型判断)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--自动执行成为默认由模型判断)。
+
+## 2026-11-24 —— observe 下带 Scope 的写入现在请求一次确认，而不是直接死掉
+
+- **主张：** 当 files 域为 observe 时，一个声明了 `files` 写 Scope 的
+  `reversible_write` 步骤进入 `waiting_approval`；现有审批卡让所有者允许这一步一次或
+  拒绝。批准只解除该步骤 Scope 的 observe 拒绝；域本身仍是 observe。把 files 设为
+  `act_auto` 仍是自动模式；受保护路径、无 Scope 写入、其他域与不可逆步骤保持拒绝。
+- **证据：** `node --experimental-strip-types --test test/authority.test.ts test/regression-gate.test.ts test/regression/failure-reason.test.ts`
+  **12/12 + 13/13**；Runtime 用例记录两次执行的 `approval_required` 后 `allowed`。
+  `npm test` **1047/1047**，0 失败；`npm run typecheck` 退出码 0；`npm run gate`
+  **PASS**。门禁基线差异是有意为之：`files-write-observe-denied` →
+  `files-write-observe-asks-approval`（`approval_required`），加上
+  `files-write-observe-approved`（`allowed`）。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--observe-的-files-域里带-scope-的可逆写入向所有者请求一次确认)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--observe-下带-scope-的可逆写入向所有者请求一次确认)。
+
 ## 2026-11-24 —— 一天现在记录操作，生成文件不进答案
 
 - **主张：** 常驻 Daemon 运行期间，每个已学会文件夹通过递归 FSEvents 监听；创建、修改或

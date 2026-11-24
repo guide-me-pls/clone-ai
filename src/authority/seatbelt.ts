@@ -22,7 +22,7 @@
 import { homedir } from "node:os";
 
 import type { EffectiveGrants } from "./path-gateway.ts";
-import { forbiddenRoots } from "./scope.ts";
+import { cloneSandboxRoot, forbiddenRoots, pathWithin } from "./scope.ts";
 
 export interface SeatbeltOptions {
   grants: EffectiveGrants;
@@ -64,6 +64,16 @@ export function buildSeatbeltProfile(options: SeatbeltOptions): string {
   // Last, so nothing above can re-open them. 放在最后，前面的任何规则都无法重新开放它们。
   const protectedRoots = forbiddenRoots(home);
   lines.push(`(deny file-read* file-write* ${protectedRoots.map(subpath).join(" ")})`);
+  // The isolated sandbox is inside the protected clone home. Re-open it only
+  // when this execution actually holds a grant inside it, and only for those
+  // exact roots.
+  // 隔离沙箱位于受保护的 clone home 内。只有本次执行确实持有其内的授权时，才按精确根
+  // 重新开放。
+  const sandbox = cloneSandboxRoot(home);
+  const sandboxWrites = writes.filter((root) => pathWithin(sandbox, root));
+  if (sandboxWrites.length > 0) {
+    lines.push(`(allow file-read* file-write* ${sandboxWrites.map(subpath).join(" ")})`);
+  }
   return `${lines.join("\n")}\n`;
 }
 

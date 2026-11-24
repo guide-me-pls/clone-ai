@@ -1423,21 +1423,38 @@ function chooseNativeDirectory(purpose, onChoose) {
 }
 
 /* ---------- Authority and owner-data export ---------- */
+const AUTHORITY_DEFAULT_LEVEL = "allow_all";
 const AUTHORITY_DOMAINS = [
   ["files", "文件", "读取或写入文件与目录"],
   ["shell", "Shell 命令", "在本机执行命令前缀，例如 git"],
   ["network", "网络", "访问主机名或 *"],
 ];
 const AUTHORITY_LEVELS = [
-  ["observe", "只观察"],
-  ["prepare", "可准备"],
-  ["act_with_approval", "需批准后执行"],
+  ["act_with_approval", "批准"],
   ["act_auto", "自动执行"],
+  ["allow_all", "全部放行"],
 ];
+// Old configs and the corrupt-file fail-closed value may still hold these; the
+// owner sees them only when one is selected, and can replace it with a visible level.
+// 旧配置与损坏文件的 fail-closed 值仍可能保存它们；只有当前值是其一时才显示，所有者可换成
+// 可见档位。
+const AUTHORITY_LEGACY_LEVELS = [
+  ["observe", "旧配置：只读"],
+  ["prepare", "旧配置：可准备"],
+];
+const AUTHORITY_LEVEL_HINTS = {
+  observe: "旧配置：写入与执行被拒绝；读取不受限。",
+  prepare: "旧配置：写入与执行需要你确认。",
+  act_with_approval: "带 Scope 的写入与执行需要你确认；读取不受限。",
+  act_auto: "模型点名 Scope 后直接执行；受保护位置拒绝，外部/不可逆仍会停下。",
+  allow_all: "不再要求 Scope，外部/不可逆不再确认；受保护位置仍拒绝。",
+};
 const AUTHORITY_ACCESS = [["read", "读取"], ["write", "写入"], ["exec", "执行"]];
 
 function authorityLevelOptions(selected) {
-  return AUTHORITY_LEVELS.map(([value, label]) => `<option value="${value}"${value === selected ? " selected" : ""}>${label}</option>`).join("");
+  const legacy = AUTHORITY_LEGACY_LEVELS.find(([value]) => value === selected);
+  const options = legacy === undefined ? AUTHORITY_LEVELS : [...AUTHORITY_LEVELS, legacy];
+  return options.map(([value, label]) => `<option value="${value}"${value === selected ? " selected" : ""}>${label}</option>`).join("");
 }
 
 function renderAuthority() {
@@ -1445,32 +1462,35 @@ function renderAuthority() {
   if (!host || !state.authority) return;
   const domains = state.authority.domains || {};
   const policies = (state.authority.policies || []).filter((policy) => policy.revokedAt === undefined);
-  const domainRows = AUTHORITY_DOMAINS.map(([domain, title, detail]) =>
-    `<article class="agent-setting"><div><h3>${title}</h3><p>${detail}</p><small>当前：${escape(AUTHORITY_LEVELS.find(([value]) => value === (domains[domain] || "observe"))?.[1] || domains[domain] || "只观察")}</small></div><select data-authority-domain="${domain}" aria-label="${title}的自主档位">${authorityLevelOptions(domains[domain] || "observe")}</select></article>`,
-  ).join("");
+  const domainRows = AUTHORITY_DOMAINS.map(([domain, title, detail]) => {
+    const level = domains[domain] || AUTHORITY_DEFAULT_LEVEL;
+    const label = AUTHORITY_LEVELS.find(([value]) => value === level)?.[1] || level;
+    return `<article class="agent-setting"><div><h3>${title}</h3><p>${detail}</p><small>当前：${escape(label)} · ${escape(AUTHORITY_LEVEL_HINTS[level] || "")}</small></div><select data-authority-domain="${domain}" aria-label="${title}的自主档位">${authorityLevelOptions(level)}</select></article>`;
+  }).join("");
   const policyRows = policies.length
     ? policies.map((policy) => `<article class="memory-card"><div class="memory-meta"><span>${escape(policy.label)}</span><span>最高 ${escape(AUTHORITY_LEVELS.find(([value]) => value === policy.maxAutonomy)?.[1] || policy.maxAutonomy)}</span></div><p class="context-summary">${policy.scopes.map((scope) => `${escape(scope.domain)}:${escape(scope.access)}:${escape(scope.resource)}`).join(" · ")}</p><small>${policy.validUntil ? `有效至 ${escape(policy.validUntil)}` : "长期有效"} · ${escape(policy.id)}</small><div class="memory-tool-row"><button class="secondary" type="button" data-authority-revoke="${escape(policy.id)}">撤销</button></div></article>`).join("")
-    : `<div class="memory-empty">没有常设策略。当前只有按次的审批路径。</div>`;
+    : `<div class="memory-empty">没有常设策略。自动执行不需要策略；常设策略只用于进一步收紧某个 Scope。</div>`;
   const decisions = (state.authorityDecisions || []).slice(0, 20)
     .map((event) => `<li><time>${escape(String(event.occurredAt || "").slice(0, 16).replace("T", " "))}</time><span>${escape(event.type)}</span></li>`).join("");
   host.innerHTML = `<div class="authority-grid">${domainRows}</div>
-    <div class="agent-section-label">常设策略</div>
-    <div class="memory-list">${policyRows}</div>
-    <form id="authority-policy-form" class="authority-form">
-      <h4>新增常设策略</h4>
-      <p class="agent-runtime-note">策略只在它覆盖的 Scope 内授予自主权，且上限不会超过对应域的档位。</p>
-      <div class="memory-tool-row"><input id="authority-policy-label" type="text" placeholder="用途说明，例如：整理下载目录" aria-label="策略用途"/></div>
-      <div class="memory-tool-row">
-        <select id="authority-policy-domain" aria-label="域">${AUTHORITY_DOMAINS.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>
-        <select id="authority-policy-access" aria-label="访问方式">${AUTHORITY_ACCESS.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>
-        <input id="authority-policy-resource" type="text" placeholder="资源：绝对路径 / 命令前缀 / 主机名" aria-label="资源"/>
-      </div>
-      <div class="memory-tool-row">
-        <select id="authority-policy-max" aria-label="最高档位">${authorityLevelOptions("prepare")}</select>
-        <input id="authority-policy-until" type="date" aria-label="有效期至（可选）"/>
-        <button class="primary" type="submit">添加策略</button>
-      </div>
-    </form>
+    <details class="authority-advanced">
+      <summary>高级：常设策略（可选）</summary>
+      <p class="agent-runtime-note">不配置也能正常使用。策略在它覆盖的 Scope 内生效；同一 Scope 被多条策略覆盖时，最低的上限生效。</p>      <div class="memory-list">${policyRows}</div>
+      <form id="authority-policy-form" class="authority-form">
+        <h4>新增常设策略</h4>
+        <div class="memory-tool-row"><input id="authority-policy-label" type="text" placeholder="用途说明，例如：只允许整理下载目录" aria-label="策略用途"/></div>
+        <div class="memory-tool-row">
+          <select id="authority-policy-domain" aria-label="域">${AUTHORITY_DOMAINS.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>
+          <select id="authority-policy-access" aria-label="访问方式">${AUTHORITY_ACCESS.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>
+          <input id="authority-policy-resource" type="text" placeholder="资源：绝对路径 / 命令前缀 / 主机名" aria-label="资源"/>
+        </div>
+        <div class="memory-tool-row">
+          <select id="authority-policy-max" aria-label="最高档位">${authorityLevelOptions("act_with_approval")}</select>
+          <input id="authority-policy-until" type="date" aria-label="有效期至（可选）"/>
+          <button class="primary" type="submit">添加策略</button>
+        </div>
+      </form>
+    </details>
     ${decisions ? `<details class="authority-decisions"><summary>最近的权限判定（${Math.min(state.authorityDecisions.length, 20)} 条）</summary><ul class="au-history">${decisions}</ul></details>` : ""}`;
 }
 
@@ -1504,7 +1524,7 @@ async function setAuthorityDomain(domain, level) {
 }
 
 async function revokeAuthorityPolicy(id) {
-  if (!(await confirmDialog("撤销这条常设策略？撤销后，它覆盖的动作会重新需要审批。", "撤销"))) return;
+  if (!(await confirmDialog("撤销这条常设策略？撤销后，它覆盖的动作回到当前域档位（默认自动执行）。", "撤销"))) return;
   try {
     await api(`/api/authority/policies/${encodeURIComponent(id)}`, { method: "DELETE" });
     announce("策略已撤销。");

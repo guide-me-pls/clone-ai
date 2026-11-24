@@ -123,6 +123,254 @@ read-only through it behind a post-validation gate. If a read-only request must
 produce a file despite the marker, require a named target; the detector already
 lets a named write target win.
 
+## 2026-11-24 — 「全部放行」 is the default: no scope requirement and no external confirmation, protected locations stay closed
+
+**Decision.** The owner-facing ladder becomes three levels: 批准
+(`act_with_approval`), 自动执行 (`act_auto`), and 全部放行 (`allow_all`).
+`observe` and `prepare` stay valid in the schema only for legacy configs and
+the corrupt-file fail-closed value; the UI does not offer them. A missing domain
+defaults to `allow_all`, and the owner chose it as the standard for all three.
+At `allow_all`:
+
+- a files write no longer has to name a target in the plan; the worker receives
+  `/` as a write root, and a step that declares nothing can write any path the
+  owner's account can reach. An external/irreversible step still runs in the
+  isolated copy the Kernel creates, and the `/` grant is withheld there so
+  全部放行 does not defeat isolation; network remains open;
+- network is open and shell tools are offered as the step's risk allows; the
+  agent-exec command allowlist and its Seatbelt profile remain a second gate;
+- the base risk gate for `external_side_effect` and `irreversible` is waived
+  when every declared scope's effective level is `allow_all`; the Runtime
+  records an `approval.granted` with `grantedBy: "standing_policy"` before
+  dispatch so `approval-before-external-execution` still holds and the audit
+  says who allowed it;
+- protected locations (the whole clone home, keys, browser profiles), unenforced
+  domains, and writes into `.git` / `.rsi` remain hard denials;
+- a covering policy with a lower ceiling still narrows a scope (lowest ceiling
+  wins); if any active write/exec policy narrows a domain, that domain gets no
+  domain-wide grant, so an unscoped step fails rather than walking around the
+  restriction.
+
+**Why it won.** The owner asked to keep only four options, then removed 只读:
+"算了直接删掉只读吧，感觉没什么用", and chose 全部放行 = "免 Scope，保留禁区"
+with 全部放行 as the standard. `自动执行` still requires the model to declare a
+target and still asks before external/irreversible work; `全部放行` is the
+distinct top level they asked for. Keeping the protected-location denial is
+what they explicitly chose; the alternative would undo the 2026-11-24
+credential-file protection.
+
+**Alternatives rejected.**
+
+- *Bypass protected locations too.* The owner chose "保留禁区"; opening the
+  clone home reintroduces the credential exposure the previous entry fixed.
+- *Keep the scope requirement and only drop the external confirmation.* That is
+  "自动执行 + fewer prompts", not 全部放行; the owner chose no-scope explicitly.
+- *Trust the model always to declare scopes at 全部放行.* Then an unscoped step
+  is denied by the tool gate and the copy ("免 Scope") is false.
+- *Grant the home directory instead of `/`.* Same reach under the hood for the
+  owner's files, but `/` is the literal meaning of 全部放行; the forbidden-root
+  check is the boundary either way.
+- *Remove `observe`/`prepare` from the schema.* Stored configs would become
+  invalid under the strict parser, and the corrupt-file fail-closed value needs
+  a lowest level. Hidden values are honest; deleting them would fail closed into
+  an error instead of read-only.
+
+**Evidence.** The owner's answer to the clarification: "免 Scope，保留禁区
+(Recommended)" and "算了直接删掉只读". `AuthorityPolicyEngine` previously denied
+a reversible write with no scope before reading autonomy; `resolveGrants` drops
+`/` as too broad; `decideTool` does not apply `isForbiddenPath` to writes. All
+three are changed. The gate gains unscoped-write, default-allow-all,
+allow-all-external, allow-all-protected and narrowing cases; a Runtime test
+asserts the implicit `approval.granted` lets an external step pass
+`checkJournalInvariants`, and `test/path-gate.test.ts` pins the `/` write root
+with the forbidden check. The detailed before/after is in
+`docs/engineering/optimizations.md`.
+
+**What it costs.** The default now lets a model-declared or unscoped write reach
+any non-protected path the owner can, and external/irreversible steps stop
+asking. The safety argument rests on the forbidden-root check in three places
+(policy engine, `decideTool` writes, Seatbelt), the `.git`/`.rsi` denies, and
+the external approval record. A future feature that adds a new protected
+location must add it to every consumer. `自动执行` remains the safer middle
+level; an owner who wants prompts should select it.
+
+**Reversal condition.** If any run writes a file the owner did not intend
+because of the domain-wide `/` grant, restore the scope requirement for
+`allow_all` (or lower the domain to `act_auto`); if an external action executes
+with an implicit policy approval the owner did not expect, remove the risk
+waiver while keeping the no-scope grant. If owners stop using 批准/自动执行
+because 全部放行 is the default, reconsider whether the default should be
+`act_auto` again.
+
+## 2026-11-24 — Automatic execution is the default, and `act_auto` means the model judges
+
+**Decision.** `files`, `shell` and `network` default to `act_auto` when
+`policies.json` does not name them, and `act_auto` no longer requires a covering
+standing policy. At `act_auto` the step's declared scopes are the judgment: a
+scoped read, write or exec is allowed without an owner-authored policy, provided
+the target is not protected, the domain is enforced, a write names its target,
+and the base risk gate does not ask for approval. This is what the owner's three
+dropdowns mean by 自动执行: the model decides what to do and which exact scope it
+needs; the Kernel checks the hard boundaries — forbidden locations, unenforced
+domains, unscoped writes, and external/irreversible steps. An absent
+`policies.json` is the default. A corrupt one never falls back to the permissive
+default: a live snapshot fails closed to `observe`, and startup `load()` fails
+loudly. Standing policies remain available as an optional narrowing: a covering
+policy whose `maxAutonomy` is below the domain level lowers the effective
+autonomy, and when several cover one scope the **lowest** ceiling wins so a
+restriction is never defeated by a broader grant. The whole clone home is one
+protected location — `config.json` (the endpoint key), `providers.json`,
+`mcp.json` credentials, memory, conversations, the journal, checkpoints and
+traces — with the Kernel's isolated sandbox as the only exception.
+
+**Why it won.** The owner asked for "都改成自动执行…自动执行都变成模型自动判别，不然
+学习成本有点高，这个 agent 变成傻瓜式的好一些". The old meaning of `act_auto`
+required the owner to author a standing policy per resource — the domain
+dropdown alone did nothing for a scoped step (`No standing policy covers ...` →
+`approval_required`). The owner's own `~/.clone/policies.json` already sets all
+three domains to `act_auto`, yet the browser-MCP entry was still needed for one
+loopback read. That per-scope authoring is the learning cost being rejected.
+Removing it does not widen what a step may touch: the scope still comes from the
+plan model, and the Kernel still enforces the boundaries listed above.
+
+**Alternatives rejected.**
+
+- *Keep the policy-required rule and only improve the copy.* The owner already
+  set every domain to `act_auto` and still hit approval prompts; the behavior,
+  not the instructions, is what costs.
+- *A per-step LLM judge at policy time.* The policy engine is synchronous and
+  runs inside the execution loop; a model call per step adds latency and cost,
+  and lets a prompt-injected plan argue for itself. The plan model already
+  produces the scopes; the deterministic Kernel should check them, not ask
+  another model.
+- *Let `act_auto` bypass the risk gate for external/irreversible steps too.*
+  `approval-before-external-execution` is a Kernel invariant; external effects
+  and irreversible work still pause for the owner. The owner asked about the
+  three domains, not about removing every confirmation.
+- *Auto-grant the home directory or an implicit workspace.* Unchanged and still
+  rejected: a write must name its target. The default is about who judges a
+  declared scope, not about inventing one.
+- *Make every domain `act_auto` in the UI only.* A UI default the engine reads
+  as `observe` is a lie; the default lives in `AuthorityPolicyEngine`.
+- *Keep the per-file protected list.* It protected the journal and policies but
+  missed `~/.clone/config.json`, `providers.json` and `mcp.json` the moment
+  `act_auto` made an uncovered scope automatic; the next credential file would
+  repeat the bug. The clone home is the correct unit, with one named exception.
+- *Keep the old `max()` union across covering policies.* Under the new meaning
+  of a policy as a narrowing, a broad higher-ceiling policy silently defeats an
+  explicit lower one and the owner's restriction becomes unreachable. The
+  lowest ceiling is the only aggregation consistent with the UI's promise.
+
+**Evidence.** `AuthorityPolicyEngine.#judge` returned `approval_required` when
+`covering.length === 0` even at `act_auto` (`src/authority/policy-engine.ts`),
+and `authority.test.ts` plus `benchmark/gate/policy-cases.json` pinned that
+behavior. The owner's live config is `files/shell/network: act_auto` plus one
+`network:read:127.0.0.1` policy written for the browser-MCP preview. The native
+read gate already admits any non-protected read (`decideTool`), so a read policy
+added friction without an additional enforcement. The five
+act_auto-without-policy cases failed before (78% agreement, 5 over-blocks) and
+pass after; the irreversible and protected-path guard cases held before and
+after. An adversarial review then caught three follow-ups that this entry now
+covers: the per-file protected list left `config.json`, `providers.json` and
+`mcp.json` open under the new default; a broad higher-ceiling policy defeated a
+lower-ceiling one; and a parseable-but-semantically-corrupt `policies.json`
+(e.g. `"files": "Observe"`, or `policies` as an object) silently became
+all-`act_auto`. All three are fixed and pinned: `overlapping-policies-lowest-ceiling-wins`
+in the gate, and the clone-home, corrupt-config and cross-process cases in
+`authority.test.ts` / `path-gate.test.ts`. The command and both outcomes are
+recorded in `docs/engineering/optimizations.md`.
+
+**What it costs.** A fresh install now arms scoped writes and execution on the
+three enforced domains without the owner visiting Settings. The audit still
+records every `policy.decided` with its scopes, and the owner can set any domain
+back to `observe` or add a narrowing policy — but the default no longer fails
+closed for a declared scope. The whole clone home is closed to workers except
+the isolated sandbox; a future tool that legitimately needs another clone-home
+path must add an explicit exception to both protection lists and the Seatbelt
+profile. Policies can only narrow relative to the domain, and the lowest
+covering ceiling wins; an owner who relied on stacking grants should be told
+that a later, lower policy now restricts. Corrupt `policies.json` fails closed
+in the live snapshot and loudly at startup.
+
+**Reversal condition.** If a run writes, executes or reads something the owner
+did not intend because of a mis-declared or injected scope, restore `observe` as
+the missing-domain default and require a covering policy for `act_auto` again
+(the 2026-11-24 observe-approval path remains the one-step alternative); if only
+one domain misbehaves, lower that domain instead. If a legitimate worker task
+needs a clone-home file other than the isolated sandbox, add that path by name
+to both protection lists and the Seatbelt profile; do not shrink the root. If
+owners rely on union-of-grants, add an explicit grant marker instead of
+restoring `max()` aggregation. If owners report that the
+
+## 2026-11-24 — A scoped reversible write under an observe-only files domain asks the owner once
+
+**Decision.** A `reversible_write` step that declares a `files` write scope and
+runs while the `files` domain is still `observe` is no longer a hard failure.
+The policy returns `approval_required`, the run enters `waiting_approval`, and
+the existing approval card lets the owner allow this exact step once or deny
+it. An approval lifts only the observe-only denial for this step's declared
+scopes; it creates no scope, opens no protected path, and leaves the domain at
+`observe` for every later step. The owner's auto path is unchanged: setting
+`files` to `act_auto` with a covering standing policy lets the worker's scoped
+writes proceed without a per-step confirmation. Other domains (shell, network)
+and external or irreversible risks keep their current hard gates.
+
+**Why it won.** The owner asked for Claude Code auto-like behaviour: the
+worker's model decides the write inside its declared scope, and a refusal can
+be confirmed by the owner. `act_auto` already provides the auto half; the
+missing half was that the default `observe` domain failed a scoped write
+outright, so the owner had no accept/reject action. Reusing the existing
+step-level approval route is the smallest change that supplies that action: the
+UI, the journal event, the run status and the approval code already exist. A
+per-tool-call approval would reopen the 2026-11-19 decision (the native worker
+has no approval callback; a per-call prompt needs a new pause/resume channel
+and blocks the loop), and it would not give the owner more information than the
+step's declared scopes.
+
+**Alternatives rejected.**
+
+- *Let the model self-approve writes.* The model is not the authority; a
+  prompt-injected worker must not be able to open a path. This change only
+  gives the owner a button, and only for a step that already names its target.
+- *Turn every `observe` denial into an approval request.* External and
+  irreversible steps keep their stricter gate; an observe-only shell or network
+  domain must stay a denial. Only a reversible files write with a declared scope
+  is approvable.
+- *A per-tool-call approval channel.* Reverses 2026-11-19 for marginal
+  information, and the worker's tool loop has no callback to pause on. The step
+  is the existing approval unit; its scopes are visible before execution.
+- *Only a UI mode switch.* A switch alone would not help the current failure:
+  the owner's domain is `observe`, and the run already failed before any switch
+  could be made.
+
+**Evidence.** `AuthorityPolicyEngine.#judge` returns `denied` for any non-read
+scope while the domain is `observe`, even when `approved` is true; `authority.test.ts`
+pins that today. `executeOwned` turns `denied` into a failed run and
+`approval_required` into `waiting_approval`; the server's
+`/api/runs/:id/approve`, `approveQueryRun` and the approval card are already in
+use for `act_with_approval`. The owner's `~/.clone/policies.json` has no
+`files` domain, so the default is `observe`. The new tests cover: an
+unapproved scoped write → `approval_required`; approved → `allowed`; a
+protected target stays `denied` even when approved; an unscoped write stays
+`denied`; a shell/network scope stays `denied`; an `irreversible` step stays
+`denied`; `act_auto` remains allowed without approval.
+
+**What it costs.** An observe-only files domain can now write once after a
+click, so "observe" no longer means "no write can ever happen" — it means "no
+write without the owner's explicit one-step approval". The approval is per
+step, not per file: a step with several write scopes is approved as a whole.
+The card does not yet list every target; the plan and the audit do. A stale
+approval is keyed to the run and step id, so a re-planned step needs a new
+approval.
+
+**Reversal condition.** If one-step approvals become a rubber stamp, or a
+prompt-injected worker gets the owner to approve a scope the owner did not read,
+remove the observe exemption and require raising the domain to
+`act_with_approval`/`act_auto` before a write can be proposed. If owners need
+per-file decisions, add a target list to the approval card first; do not add a
+per-call channel without that evidence. Keep protected paths and unscoped
+writes permanently denied.
+
 ## 2026-11-24 — The resident daemon records FSEvents, and generated files stay out of the ledger
 
 **Decision.** The companion daemon — already a resident launchd LaunchAgent

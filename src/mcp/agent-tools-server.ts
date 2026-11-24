@@ -60,12 +60,12 @@ export const PROTECTED_RELATIVE_ROOTS = [
   "Library/Application Support/Firefox",
   "Library/Application Support/Microsoft Edge",
   "Library/Safari",
-  ".clone/journal.sqlite3",
-  ".clone/journal.sqlite3-wal",
-  ".clone/journal.sqlite3-shm",
-  ".clone/journal.jsonl",
-  ".clone/policies.json",
-  ".clone/companion.token",
+  // The whole clone home, not a list of today's files: it contains the model
+  // endpoint key, provider keys, mcp.json credentials, memory, conversations,
+  // the journal and traces.
+  // 整个 clone home，而不是今天的文件清单：其中有模型端点密钥、Provider 密钥、
+  // mcp.json 凭据、记忆、对话、Journal 与轨迹。
+  ".clone",
 ] as const;
 
 /** Directories a code search never descends into. 代码检索不会进入的目录。 */
@@ -232,7 +232,7 @@ export function toolDefinitions(): AgentToolDefinition[] {
 
 /** True when `path` is a protected location or inside one. 当 `path` 是受保护位置或位于其内时为真。 */
 export function isProtectedAgentPath(path: string, home = homedir()): boolean {
-  return isProtectedAgainst(path, protectedRootPaths(home));
+  return isProtectedAgainst(path, protectedRootPaths(home), cloneSandboxPath(home));
 }
 
 /** The protected roots, resolved once per tool call. 每次工具调用解析一次的受保护根。 */
@@ -240,18 +240,33 @@ function protectedRootPaths(home: string): string[] {
   return PROTECTED_RELATIVE_ROOTS.map((entry) => canonicalAgentPath(resolve(home, entry)));
 }
 
-function isProtectedAgainst(path: string, roots: readonly string[]): boolean {
+/**
+ * The Kernel's isolated sandbox under the protected clone home. It is the one
+ * subtree a worker may search and read, mirroring the kernel's own exception.
+ * 受保护 clone home 下由 Kernel 创建的隔离沙箱。它是 Worker 唯一可检索、读取的子树，
+ * 与内核的例外保持一致。
+ */
+function cloneSandboxPath(home: string): string {
+  return canonicalAgentPath(resolve(home, join(".clone", "isolated-workspaces")));
+}
+
+function foldedAgentPath(path: string): string {
+  const canonical = canonicalAgentPath(path);
+  return process.platform === "win32" || process.platform === "darwin" ? canonical.toLowerCase() : canonical;
+}
+
+function isWithinAgentPath(root: string, target: string): boolean {
+  const rel = relative(foldedAgentPath(root), foldedAgentPath(target));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function isProtectedAgainst(path: string, roots: readonly string[], sandbox?: string): boolean {
   // Resolve the path the OS would open: a symlink into a protected directory
   // must not pass just because its own name is outside one.
   // 按操作系统实际会打开的路径解析：指向受保护目录的符号链接不能因为自己的名字在外就通过。
   const target = canonicalAgentPath(path);
-  const fold = process.platform === "win32" || process.platform === "darwin"
-    ? (value: string) => value.toLowerCase()
-    : (value: string) => value;
-  return roots.some((root) => {
-    const rel = relative(fold(root), fold(target));
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-  });
+  if (sandbox !== undefined && isWithinAgentPath(sandbox, target)) return false;
+  return roots.some((root) => isWithinAgentPath(root, target));
 }
 
 function canonicalAgentPath(path: string): string {
@@ -313,13 +328,14 @@ async function searchText(args: Record<string, unknown>, cwd: string, home: stri
   const maxResults = clampCount(args.maxResults, 50, 1, 500);
   const glob = stringArg(args.glob);
   const protectedRoots = protectedRootPaths(home);
+  const sandbox = cloneSandboxPath(home);
   const root = resolveInputPath(args.path, cwd, home);
-  if (isProtectedAgainst(root, protectedRoots)) return { text: `Error: ${root} is a protected location.`, isError: true };
+  if (isProtectedAgainst(root, protectedRoots, sandbox)) return { text: `Error: ${root} is a protected location.`, isError: true };
   const info = await fs.stat(root).catch(() => undefined);
   if (info === undefined) return { text: `Error: ${root} does not exist.`, isError: true };
   const rootIsFile = info.isFile();
   const matches: string[] = [];
-  const files = rootIsFile ? singleFile(root) : walkFiles(root, protectedRoots);
+  const files = rootIsFile ? singleFile(root) : walkFiles(root, protectedRoots, sandbox);
   for await (const file of files) {
     if (glob !== undefined && !globMatches(glob, relative(root, file), file)) continue;
     const buffer = await readSmallFile(file);
@@ -346,15 +362,16 @@ async function findFiles(args: Record<string, unknown>, cwd: string, home: strin
   if (pattern === undefined) return { text: "Error: pattern must be a non-empty string.", isError: true };
   const maxResults = clampCount(args.maxResults, 200, 1, 1_000);
   const protectedRoots = protectedRootPaths(home);
+  const sandbox = cloneSandboxPath(home);
   const root = resolveInputPath(args.path, cwd, home);
-  if (isProtectedAgainst(root, protectedRoots)) return { text: `Error: ${root} is a protected location.`, isError: true };
+  if (isProtectedAgainst(root, protectedRoots, sandbox)) return { text: `Error: ${root} is a protected location.`, isError: true };
   const info = await fs.stat(root).catch(() => undefined);
   if (info === undefined) return { text: `Error: ${root} does not exist.`, isError: true };
   const files: string[] = [];
   if (info.isFile()) {
     if (globMatches(pattern, relative(root, root), root)) files.push(root);
   } else {
-    for await (const file of walkFiles(root, protectedRoots)) {
+    for await (const file of walkFiles(root, protectedRoots, sandbox)) {
       if (!globMatches(pattern, relative(root, file), file)) continue;
       files.push(slashPath(relative(root, file)));
       if (files.length >= maxResults) break;
@@ -686,7 +703,7 @@ async function* singleFile(path: string): AsyncGenerator<string> {
   yield path;
 }
 
-async function* walkFiles(root: string, protectedRoots: readonly string[]): AsyncGenerator<string> {
+async function* walkFiles(root: string, protectedRoots: readonly string[], sandbox?: string): AsyncGenerator<string> {
   const stack = [root];
   let visited = 0;
   while (stack.length > 0) {
@@ -705,7 +722,7 @@ async function* walkFiles(root: string, protectedRoots: readonly string[]): Asyn
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
         if (SKIP_DIRECTORIES.has(entry.name)) continue;
-        if (isProtectedAgainst(full, protectedRoots)) continue;
+        if (isProtectedAgainst(full, protectedRoots, sandbox)) continue;
         stack.push(full);
       } else if (entry.isFile()) {
         yield full;

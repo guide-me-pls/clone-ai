@@ -139,8 +139,14 @@ export function decideTool(input: {
       return { allowed: true };
     }
     // A write is allowed only inside a write root the step was granted; the
-    // workspace is not added implicitly.
-    // 写入只落在步骤获得的写入根内；工作区不会被隐式加入。
+    // workspace is not added implicitly. A protected location is refused even
+    // when a 全部放行 grant made `/` a write root, unless a judge/user override
+    // recorded the approval.
+    // 写入只落在步骤获得的写入根内；工作区不会被隐式加入。即使「全部放行」把 `/` 变成
+    // 写入根，受保护位置仍被拒绝；除非裁判/所有者覆盖并记录了批准。
+    if (isForbiddenPath(target, input.home)) {
+      return { allowed: false, reason: `The path ${target} is a protected location; a worker may not write it.` };
+    }
     const roots = input.grants.writeRoots.map((grantRoot) => realTarget(resolve(root, grantRoot)));
     const inside = roots.some((grantRoot) => containsPath(grantRoot, target, { caseSensitive: isCaseSensitive(target) }));
     if (!inside) return { allowed: false, reason: `The path ${target} is outside the step's granted write roots.` };
@@ -239,6 +245,16 @@ export class NativeAgentWorker implements RuntimeAdapter {
       // 隔离副本是 Kernel 的沙箱，不是所有者的树，因此它是唯一无需计划 Scope 即可写的工作区。
       // 组装自身的工作区是沙箱时（修复 worktree）同理；所有者的活树绝不带此标记。
       ...(input.workspaceIsolation === undefined && input.workspaceWritable !== true ? {} : { includeWorkspace: true }),
+      // 全部放行 grants the whole files domain, but an isolated/repair
+      // execution must stay inside the sandbox the Kernel created; handing it
+      // `/` would defeat the isolation. Network is still opened by the
+      // unrestricted domains because it is not a tree boundary.
+      // 「全部放行」授予整个 files 域，但隔离/修复执行必须留在 Kernel 创建的沙箱内；给它
+      // `/` 会破坏隔离。network 不受树边界影响，仍由全域授权打开。
+      ...(input.workspaceIsolation !== undefined || input.workspaceWritable === true || input.unrestrictedDomains === undefined
+        ? {}
+        : { unrestrictedDomains: input.unrestrictedDomains.filter((domain) => domain !== "files") }),
+      ...(overrideProtection ? { overrideProtection: true } : {}),
     });
     // A step's declared risk caps what it may be offered: a read_only step has
     // no business holding a write tool, even though its workspace is writable.

@@ -608,8 +608,12 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .composer .stop:focus-visible { outline: 2px solid #9a5a1e; outline-offset: 2px; }
 .composer .stop[hidden] { display: none; }
 
-/* Authority editor: owner-written autonomy and standing policies. 权限编辑器：所有者撰写的自主档位与常设策略。 */
+/* Authority editor: model-judged autonomy and optional narrowing policies. 权限编辑器：模型判断的自主档位与可选的收紧策略。 */
 .authority-grid { display: grid; border: 1px solid var(--line); border-radius: 11px; padding: 0 12px; background: var(--surface, #fff); }
+.authority-advanced { margin-top: 18px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface, #fff); }
+.authority-advanced summary { cursor: pointer; color: #35404e; font-size: 13px; font-weight: 600; }
+.authority-advanced .agent-runtime-note { margin: 8px 0 10px; }
+.authority-advanced .memory-list { margin-bottom: 12px; }
 .authority-form { margin-top: 14px; padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface, #fff); }
 .authority-form h4 { margin: 0 0 4px; color: #35404e; font-size: 13px; font-weight: 650; }
 .authority-form .memory-tool-row { margin-top: 8px; }

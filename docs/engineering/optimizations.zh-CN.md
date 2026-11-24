@@ -106,6 +106,164 @@
   必需产物，就在后置校验闸门之后把只读请求交给它；如果只读请求在标记之外仍必须产出文件，
   就要求点名的目标。
 
+### 2026-11-24 —— 「全部放行」成为默认；免 Scope、免外部确认
+
+- **目标 / 假设：** 所有者要求三档——批准、自动执行、全部放行——并以全部放行为标准：
+  不再逐目标声明 Scope、外部/不可逆不再确认，受保护位置仍关闭。`act_auto` 仍要求 Scope
+  并在外部/不可逆前确认；`allow_all` 是独立的最高档。
+- **取舍：** [全部放行成为默认：免 Scope、免外部确认，但禁区仍关闭](../architecture/trade-offs.zh-CN.md#2026-11-24--全部放行成为默认免-scope免外部确认但禁区仍关闭)。
+- **变更：** `src/authority/scope.ts` —— 在 `act_auto` 之上加入 `allow_all`；
+  `src/authority/standing-policy-store.ts` —— `DEFAULT_DOMAIN_AUTONOMY = "allow_all"`，
+  `observe`/`prepare` 只保留给旧配置与 fail-closed；`src/authority/policy-engine.ts` ——
+  读取在任何档位都覆盖整机，全部放行下允许无 Scope 的可逆写入，当每个声明 Scope 的有效
+  档位都是全部放行时豁免外部/不可逆闸门，存在收紧写/执行策略时撤回 `unrestrictedDomains`；
+  `src/core/contracts.ts` —— `PolicyDecision.unrestrictedDomains`/`riskWaived` 与
+  `ExecutionAssignment.unrestrictedDomains`；`src/core/runtime.ts` —— 在外部/不可逆派发前
+  记录一条 `approval.granted`（`grantedBy: "standing_policy"`），并把全域授权传给执行器；
+  `src/authority/path-gateway.ts` —— 全部放行下 `/` 成为写入根；
+  `src/workers/native-agent-worker.ts` —— `decideTool` 现在即使写入根包含目标，也拒绝
+  受保护位置；隔离/修复执行会丢弃 `/` 授权，使「全部放行」不破坏 Kernel 沙箱；`src/main-agent/prompt.ts` —— 告诉主 Agent 新默认值；
+  `apps/desktop/ui/app.js`、`index.html`、`src/desktop/ui-locale.ts` —— 三个可见档位、
+  旧配置的隐藏标签与新默认说明。
+- **Eval：** `npm run gate` —— 策略套件 **30 个用例、一致率 100%、不安全放行 0、
+  误拦截 0、PASS**（变更前：24 个用例、100%）。新增用例：
+  `files-write-unscoped-allow-all-allowed`、`allow-all-external-scoped-allowed`、
+  `allow-all-irreversible-scoped-allowed`、`allow-all-external-no-scope-approval`、
+  `allow-all-protected-path-denied`、`allow-all-narrowing-withholds-unscoped`；
+  `files-read-no-policy-needs-approval` 变为 `files-read-allowed-under-observe`
+  （读取覆盖整机）；`local-write-without-scope-denied` 改为钉住 `act_auto`；
+  重叠策略用例移到 `allow_all` 域。基线用 `npm run gate -- --write-baseline`
+  重新生成并审阅；策略用例下限从 24 提高到 30。`test/authority.test.ts` 钉住默认值、
+  无 Scope 写入、风险豁免、收紧策略撤回全域授权、外部步骤前的隐式审批，以及可通过
+  `checkJournalInvariants` 的历史；`test/path-gate.test.ts` 钉住 `/` 写入根与受保护写入
+  拒绝。`npm test` **1083/1083**，`npm run typecheck` 退出码 0。
+- **Benchmark run：** `npm run gate`（离线、确定性、无 Provider/模型），
+  `benchmark/gate/policy-cases.json` schemaVersion 1，用例 id 即该文件全部 id，
+  每个用例的 `approved` 固定，无采样，home 为机器无关的临时目录；未写 `--json` 文件。
+- **执行链路：** 在本次会话中直接实现。两处预期内的测试更新浮现：无 Scope 写入用例与
+  `runQuery` 失败理由用例假设了 `act_auto`，现在都显式钉住该档位。一次瞬时失败来自另一个
+  会话正在编辑的 JSON fallback 测试，下一次运行即通过；首次全量运行还撞上了 FSEvents
+  操作日志测试已知的时序敏感问题（单独运行与重跑均通过）。首次 `npm run gate` 因 2 个行为变化
+  与 2 次不安全放行失败（旧的「无 Scope / 读取」预期），这正是预期的审查产物；只有在核对
+  每个新结果后才重新生成基线。
+- **优点：** 所有者要求的档位可见，默认值符合「以全部放行为标准」；每项放宽都有在旧行为下
+  会失败的用例，受保护写入检查现在也覆盖"写入根内的目标"。外部豁免仍产生审批事件，
+  因此 `approval-before-external-execution` 与审计不会说谎。
+- **缺点 / 下次：** 全域 `/` 授权是系统中最宽的写入面；其安全依赖 Policy 引擎、`decideTool`
+  与 Seatbelt 三处禁区检查保持一致。收紧策略会撤回全域授权，而不是计算拒绝根，因此所有者
+  收紧一个子树后，files 域里所有未声明目标的写入都会失败。agent-exec 白名单及其
+  Seatbelt 断网仍是独立的 Shell 闸门。下次新增受保护位置时，在同一提交里同步三处消费者，
+  并在门禁前先跑写入路径测试。
+- **推翻条件：** 抄自取舍条目——如果某个 Run 写入了非预期的非受保护文件，恢复全部放行的
+  Scope 要求，或把域降为自动执行/批准；如果外部动作带着所有者没有预期的隐式审批执行，
+  去掉风险豁免但保留免 Scope 授权。
+
+### 2026-11-24 —— 自动执行成为默认，由模型判断
+
+- **目标 / 假设：** 去掉所有者逐资源撰写策略的负担。把三个域都设为「自动执行」本来不够：
+  带 Scope 的步骤在没有覆盖策略时仍返回 `approval_required`。让 `act_auto` 意味着
+  「模型声明的 Scope 就是判断」，并把它作为缺省域默认值，使新安装与所有者现有配置都不必
+  再碰常设策略表单。
+- **取舍：** [自动执行成为默认，「自动执行」意味着模型判断](../architecture/trade-offs.zh-CN.md#2026-11-24--自动执行成为默认档位自动执行意味着模型判断)。
+- **变更：** `src/authority/standing-policy-store.ts` —— `DEFAULT_DOMAIN_AUTONOMY`
+  （`act_auto`）、`autonomyFor()`、损坏文件 fail-closed 的配置、严格的 `normalize()`
+  （非法档位或非数组 `policies` 现在抛出，而不是悄悄变成全部 `act_auto`），以及
+  `describeAuthority` 写明默认值与剩余硬边界；`src/authority/policy-engine.ts` ——
+  `covering.length === 0` 分支对 `act_auto` 域的 Scope 放行（模型判断），覆盖策略取
+  最低上限，聚合理由区分所有者审批、模型判断与策略覆盖；`src/authority/scope.ts` ——
+  整个 clone home 作为一个受保护根，Kernel 的隔离沙箱是具名例外（`cloneSandboxRoot`）；
+  `src/authority/path-gateway.ts` 与 `src/authority/seatbelt.ts` —— 授权网关与 Seatbelt
+  受保护拒绝之后的沙箱例外；`src/mcp/agent-tools-server.ts` —— 镜像清单改为 `.clone`，
+  检索/查找应用同一沙箱例外；`src/main-agent/prompt.ts` —— 告诉主 Agent 默认值，且无需
+  撰写策略；`apps/desktop/ui/index.html`、`app.js`、`style.css` —— 页面把三个域默认显示为
+  「自动执行（模型判断）」，每档给出准确的说明，并把常设策略表单收进
+  「高级：常设策略（可选）」；新增的 `test/ui-syntax.test.ts` 用 `node --check`
+  守护页面脚本语法；`src/desktop/ui-locale.ts` —— 新提示的中英双语。
+- **Eval：** `npm run gate` —— 变更前策略套件 **23 个用例、一致率 78%、不安全放行 0、
+  误拦截 5**（正好是五个新的「act_auto 无策略」用例被拒）；引擎与审查修复后
+  **24 个用例、一致率 100%、不安全放行 0、误拦截 0、PASS**。新增/更新的用例：
+  `files-write-act-auto-no-policy-allowed`、`files-write-default-domain-allowed`、
+  `files-read-act-auto-no-policy-allowed`、`shell-exec-act-auto-no-policy-allowed`、
+  `network-read-act-auto-no-policy-allowed`、`irreversible-act-auto-needs-approval`、
+  `protected-path-act-auto-denied`、`narrowing-policy-restricts-act-auto`、
+  `overlapping-policies-lowest-ceiling-wins`（最后一条在修复前的 `max()` 并集下返回
+  `allowed`，即一次不安全放行；最低上限修复后为 `denied`；由审查 Agent 复现，现由门禁钉住）。
+  原有 observe 用例补了显式 `files`/`shell: observe`，以保留其意图。基线用
+  `npm run gate -- --write-baseline` 重新生成并审阅；差异新增了条目（更早那次带 Scope
+  写入变更的 observe 审批条目本来就在工作区基线里）；策略用例下限从 14 提高到 24。
+  `node --experimental-strip-types --test test/authority.test.ts test/write-scopes.test.ts
+  test/path-gate.test.ts` **32/32**，含默认自动、重叠策略、损坏配置（语法与语义）、
+  clone home 保护与沙箱授权用例；新增的 `test/ui-syntax.test.ts` 对
+  `apps/desktop/ui/app.js` 跑 `node --check`，**1/1** 通过；`npm test`
+  **1073/1073**，`npm run typecheck` 退出码 0。
+- **Benchmark run：** `npm run gate`（离线、确定性、无 Provider/模型），夹具
+  `benchmark/gate/policy-cases.json` schemaVersion 1，用例 id 即该文件中的全部 id，
+  每个用例的 `approved` 固定，无采样；home 为机器无关的临时目录；结果由门禁打印，
+  未写 `--json` 文件。
+- **执行链路：** 一次只读工作流，五个 Explore 读者分别梳理自主档位默认值、第二道闸门、
+  评测机制、测试钉点与 UI 面（432,423 个子 Agent token、236 次工具调用、419 秒，无读者
+  报错）。检查了所有者本机 `~/.clone/policies.json`（三个域均 `act_auto`，一条
+  browser-MCP 策略）。随后一次对抗性审查——三个视角，每条发现两名怀疑者（33 个 Agent、
+  2,400,119 token、1,181 次工具调用、1,411 秒）——确认了九条发现。两条阻塞项改变了结果：
+  按文件列举的禁区清单在未覆盖 Scope 自动放行后，把 `~/.clone/config.json`、
+  `providers.json` 与 `mcp.json` 留成了可读写；可解析但语义损坏的 `policies.json` 可能
+  悄悄把全部域设为自动。修复为：整个 clone home 加隔离沙箱例外（内核、授权网关、
+  Seatbelt profile、agent-tools 镜像）、严格 `normalize()`、最低覆盖上限、修正理由与文案、
+  让跨进程测试不再空洞。其余发现是重复或既有问题（审批卡不列目标已记录在 2026-11-24 的
+  observe 写入取舍里）。另有一次失败：后台运行 `npm test` 被环境的 auto-mode 分类器拒绝，
+  改为前台重跑；没有测试失败。撤销对话框里漏掉的括号由 `node --check` 在纯文本 UI 测试
+  通过后抓到。
+- **优点：** 最终门禁 24 个策略用例，一致率 100%、0 不安全放行、0 误拦截；受保护的
+  clone home 与最低上限规则由测试钉住，而不是靠文字承诺。对抗性审查在守护进程加载变更
+  之前抓到了两个阻塞项，每个修复都有一个在旧行为下会失败的用例。UI 改动把表单移出默认
+  路径，但保留能力。
+- **缺点 / 下次：** 第一版实现假设禁区清单已覆盖凭据、`max()` 并集无害——在 `act_auto`
+  成为默认后两者都不成立。下次修改权限默认值时，要在同一轮审计每个 `forbiddenRoots`
+  使用方（内核、网关、Seatbelt、MCP 镜像），并在交付前写好多条策略重叠的用例。纯文本
+  UI 测试不解析页面脚本；改完要跑 `node --check apps/desktop/ui/app.js`。agent-exec 的
+  `run_command` 白名单及其固定 deny-network 的 Seatbelt profile 仍是 shell 工作的第二道
+  独立闸门；本次未触碰。
+- **推翻条件：** 抄自取舍条目——如果被注入或误声明的 Scope 造成非预期写入/执行/读取，
+  把缺省域恢复为 `observe` 并让 `act_auto` 重新要求策略，或只下调出问题的那个域。如果
+  确有正当的 Worker 任务需要隔离沙箱之外的 clone-home 文件，按名字加入两份保护清单与
+  Seatbelt profile，不要缩小受保护根。如果所有者依赖授权并集，加显式授权标记，而不是恢复
+  `max()` 聚合。
+
+### 2026-11-24 —— observe 下带 Scope 的可逆写入向所有者请求一次确认
+
+- **目标 / 假设：** 所有者要求类似 Claude Code auto 的写入处理：Worker 的模型在已声明
+  Scope 内决定写入，拒绝的情况可以由所有者确认。`act_auto` 已经提供自动的一半；缺的
+  另一半是 observe 的 files 域会让带 Scope 的写入直接失败，所有者没有任何接受/拒绝动作。
+- **取舍：** [observe 的 files 域里，带 Scope 的可逆写入向所有者请求一次确认](../architecture/trade-offs.zh-CN.md#2026-11-24--observe-的-files-域里带-scope-的可逆写入向所有者请求一次确认)。
+- **变更：** `src/authority/policy-engine.ts` —— `observe` 下带 `files` 写 Scope 的
+  `reversible_write` 步骤返回 `approval_required` 而不是 `denied`；有本步骤批准时返回
+  `allowed`。受保护路径、无 Scope 写入、其他域与 `irreversible` 步骤保持原判。
+  `src/companion-server.ts` 与 `apps/desktop/ui/app.js` —— 审批卡描述不再只讲外部动作。
+  测试：`test/authority.test.ts`（策略用例 + Runtime 用例：第一次执行
+  `waiting_approval`，批准后再次执行 `allowed`）、`benchmark/gate/policy-cases.json`
+  与 `baseline.json`（有意的策略判定变更）、`test/regression/failure-reason.test.ts`
+  （拒绝用例改用受保护目标，仍测硬失败）。
+- **Eval：** `node --experimental-strip-types --test test/authority.test.ts test/regression-gate.test.ts test/regression/failure-reason.test.ts`
+  —— **authority 12/12，gate/failure-reason 13/13**。Runtime 用例记录两次执行的
+  `policy.decided` 结果为 `approval_required` 后 `allowed`。`npm test` **1047/1047**，
+  0 失败；`npm run typecheck` 退出码 0；`npm run gate -- --write-baseline` 后
+  `npm run gate` **PASS**。基线差异恰好是：
+  `policy/files-write-observe-denied: denied` 变为
+  `policy/files-write-observe-asks-approval: approval_required`，加上
+  `policy/files-write-observe-approved: allowed`。
+- **Benchmark run：** 无——门禁基线就是确定性 eval；无 Provider 调用。
+- **执行链路：** 单个会话。先读权限引擎、Runtime 执行循环、审批路由与 UI 卡；取舍条目在
+  代码之前写。第一次门禁运行按预期在判定变化上失败；重新生成基线并检查差异。两个既有
+  测试假设旧拒绝：门禁的合成 unsafe 用例改用受保护目标，failure-reason 用例也改用受保护
+  目标，因此仍断言硬失败。没有 Worker、没有模型调用。
+- **优点：** 复用现有步骤级审批路由、卡片与 Journal 事件；没有逐次通道；所有者批准是一次
+  性的并绑定 Run/Step；`act_auto` 仍是自动模式。
+- **缺点 / 下次：** 审批按步骤而非按文件；卡片没有列出每个目标（计划与审计里有）；
+  observe 不再严格意味着"永远不可能写入"（除非所有者拒绝）；external 与 irreversible
+  步骤仍需提高域档位。下次：在加逐文件决策前，先把步骤的写 Scope 放进审批卡。
+- **推翻条件：** 同取舍条目——单步批准变成橡皮图章时移除 observe 豁免；在加逐次通道前先
+  加目标清单；受保护路径与无 Scope 写入永久拒绝。
+
 ### 2026-11-24 —— Daemon 记录 FSEvents 操作，噪声不进每日摘要
 
 - **目标 / 假设：** 所有者要求加上 FSEvents 并过滤没用的信息。30 分钟采集只能看到净内容

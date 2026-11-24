@@ -46,6 +46,73 @@ See [`AGENTS.md`](../../AGENTS.md) rule 6.
 - **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--a-read-only-request-never-goes-through-the-llm-planner);
   [execution chain](optimizations.md#2026-11-24--a-read-only-request-bypasses-the-llm-planner).
 
+## 2026-11-24 — 全部放行 is the default and works without scopes or external prompts
+
+- **Claim:** the visible ladder is 批准 / 自动执行 / 全部放行, and 全部放行 is the
+  standard for files, shell and network. A reversible write needs no declared
+  scope, and an external or irreversible step whose scopes are all at 全部放行
+  runs without a prompt; protected locations, unenforced domains and
+  `.git`/`.rsi` writes stay denied, and the Runtime records a standing-policy
+  approval before an external dispatch so `approval-before-external-execution`
+  still holds. A narrowing write policy withdraws the whole-domain grant.
+- **Evidence:** `npm run gate` policy suite **30 cases, agreement 100%,
+  unsafeAllows 0, overBlocks 0, PASS** (24 cases at 100% before this change).
+  New cases: `files-write-unscoped-allow-all-allowed`,
+  `allow-all-external-scoped-allowed`, `allow-all-irreversible-scoped-allowed`,
+  `allow-all-external-no-scope-approval`, `allow-all-protected-path-denied`,
+  `allow-all-narrowing-withholds-unscoped`; `files-read-allowed-under-observe`
+  replaces the old read-approval case. `test/authority.test.ts` asserts the
+  default, the unscoped write, the risk waiver, the narrowing withdrawal and an
+  `approval.granted` with `grantedBy: "standing_policy"` before an external
+  `execution.started`, with `checkJournalInvariants` returning `[]`.
+  `test/path-gate.test.ts` asserts `/` as the 全部放行 write root while a
+  protected write is refused. `npm test` **1083/1083**, `npm run typecheck` exit 0.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--全部放行-is-the-default-no-scope-requirement-and-no-external-confirmation-protected-locations-stay-closed);
+  [execution chain](optimizations.md#2026-11-24--全部放行-becomes-the-default-scopes-and-external-confirmations-stop).
+
+## 2026-11-24 — Automatic execution no longer requires a policy per scope
+
+- **Claim:** setting files, shell and network to 自动执行 is now enough on its
+  own. A scoped step in an `act_auto` domain is allowed without any
+  owner-authored standing policy, the missing-domain default is `act_auto`, and
+  protected locations, unscoped writes, unenforced domains, external actions and
+  irreversible steps stay gated. The whole clone home is protected (the
+  endpoint key, provider keys, `mcp.json`, memory, conversations, journal and
+  traces) except the Kernel's isolated sandbox, and a lower-ceiling policy
+  always narrows even when a broader grant also covers the scope.
+- **Evidence:** `npm run gate` policy suite **24 cases, agreement 100%,
+  unsafeAllows 0, overBlocks 0, PASS**. Before the engine change the same suite
+  was **23 cases, agreement 78%, unsafeAllows 0, overBlocks 5** — exactly
+  `files-write-act-auto-no-policy-allowed`, `files-write-default-domain-allowed`,
+  `files-read-act-auto-no-policy-allowed`, `shell-exec-act-auto-no-policy-allowed`
+  and `network-read-act-auto-no-policy-allowed`. The guard cases hold
+  (`irreversible-act-auto-needs-approval`: approval_required,
+  `protected-path-act-auto-denied`: denied, `narrowing-policy-restricts-act-auto`:
+  denied); `overlapping-policies-lowest-ceiling-wins` returned `allowed` under
+  the pre-fix `max()` union and returns `denied` after the lowest-ceiling fix.
+  `test/path-gate.test.ts` pins the clone-home protection and the isolated-sandbox
+  exception; `test/authority.test.ts` pins corrupt syntax and semantics. `npm test`
+  **1073/1073**, `npm run typecheck` exit 0.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--automatic-execution-is-the-default-and-act_auto-means-the-model-judges);
+  [execution chain](optimizations.md#2026-11-24--automatic-execution-is-the-default-judged-by-the-model).
+
+## 2026-11-24 — A scoped write under observe now asks once instead of dead-ending
+
+- **Claim:** a `reversible_write` step that declares a `files` write scope under
+  an observe-only files domain enters `waiting_approval`; the existing approval
+  card lets the owner allow this exact step once or deny it. The approval lifts
+  only the observe denial for that step's scopes; the domain stays observe-only.
+  Setting files to `act_auto` remains the automatic mode; protected paths,
+  unscoped writes, other domains and irreversible steps stay denied.
+- **Evidence:** `node --experimental-strip-types --test test/authority.test.ts test/regression-gate.test.ts test/regression/failure-reason.test.ts`
+  **12/12 + 13/13**; the Runtime test records `approval_required` then
+  `allowed` across the two executes. `npm test` **1047/1047**, 0 fail;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**. The gate baseline diff is
+  the intended one: `files-write-observe-denied` → `files-write-observe-asks-approval`
+  (`approval_required`) plus `files-write-observe-approved` (`allowed`).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--a-scoped-reversible-write-under-an-observe-only-files-domain-asks-the-owner-once);
+  [execution chain](optimizations.md#2026-11-24--a-scoped-reversible-write-under-observe-asks-the-owner-once).
+
 ## 2026-11-24 — A day now records operations, and generated files stay out of the answer
 
 - **Claim:** while the resident daemon runs, each learned folder is watched
