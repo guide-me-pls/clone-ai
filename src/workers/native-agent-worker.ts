@@ -259,15 +259,24 @@ export class NativeAgentWorker implements RuntimeAdapter {
       // 隔离副本是 Kernel 的沙箱，不是所有者的树，因此它是唯一无需计划 Scope 即可写的工作区。
       // 组装自身的工作区是沙箱时（修复 worktree）同理；所有者的活树绝不带此标记。
       ...(input.workspaceIsolation === undefined && input.workspaceWritable !== true ? {} : { includeWorkspace: true }),
-      // 全部放行 grants the whole files domain, but an isolated/repair
-      // execution must stay inside the sandbox the Kernel created; handing it
-      // `/` would defeat the isolation. Network is still opened by the
-      // unrestricted domains because it is not a tree boundary.
-      // 「全部放行」授予整个 files 域，但隔离/修复执行必须留在 Kernel 创建的沙箱内；给它
-      // `/` 会破坏隔离。network 不受树边界影响，仍由全域授权打开。
+      // 全部放行 grants the whole files domain, so a live execution that
+      // declared no `files` write scope still receives `/` as a write root.
+      // Only an isolated/repair execution must stay inside the sandbox the
+      // Kernel created, and it is kept there by `includeWorkspace` above: handing
+      // it `/` would defeat the isolation. The unrestricted domains used to be
+      // stripped of `files` for live runs too, so `resolveGrants` returned an
+      // empty `writeRoots` and every write of an allow-all step was refused with
+      // "outside the step's granted write roots". The tool gate still refuses
+      // protected locations, `.git` and `.rsi` writes.
+      // 「全部放行」授予整个 files 域，因此没有声明 `files` 写 Scope 的活执行仍然拿到 `/`
+      // 作为写入根。只有隔离/修复执行必须留在 Kernel 创建的沙箱内，由上方的
+      // `includeWorkspace` 保证：给它 `/` 会破坏隔离。过去活执行也会被剔除 `files`，
+      // 于是 `resolveGrants` 返回空的 `writeRoots`，「全部放行」步骤的每次写入都被拒为
+      // "outside the step's granted write roots"。工具闸门仍拒绝受保护位置、`.git` 与
+      // `.rsi` 写入。
       ...(input.workspaceIsolation !== undefined || input.workspaceWritable === true || input.unrestrictedDomains === undefined
         ? {}
-        : { unrestrictedDomains: input.unrestrictedDomains.filter((domain) => domain !== "files") }),
+        : { unrestrictedDomains: input.unrestrictedDomains }),
       ...(overrideProtection ? { overrideProtection: true } : {}),
     });
     // A step's declared risk caps what it may be offered: a read_only step has
