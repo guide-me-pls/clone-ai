@@ -35,7 +35,9 @@ CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main -- --repeat 5
 ```
 
 The native endpoint comes from `CLONE_AI_NATIVE_BASE_URL` (default
-`http://127.0.0.1:3425`). A single sample cannot rank latency: in two one-shot
+`http://127.0.0.1:3425`). The model id is required: `CLONE_AI_BENCH_MAIN_MODEL`
+falls back to `CLONE_AI_NATIVE_MODEL`, and a run without either fails before the
+first request. A single sample cannot rank latency: in two one-shot
 passes the same native plan cell was 45.2s and 11.1s. Prefer the median; use
 `--repeat 1` only for a quick smoke.
 
@@ -44,14 +46,16 @@ passes the same native plan cell was 45.2s and 11.1s. Prefer the median; use
 Seeds 24 completed turns with a needle in the oldest, runs one real native turn
 with `historyChars=4000`, captures the outgoing request, and checks: the summary
 is present, the needle is in it, the newest turn stayed verbatim, the reply
-contains the needle, and there was no error. The report lands under
+contains the needle, and there was no error. The model comes from
+`CLONE_AI_BENCH_MAIN_MODEL` (fallback `CLONE_AI_NATIVE_MODEL`). The report lands under
 `benchmark/results/`.
 
 ## Image validation (`npm run bench:images`)
 
 Generates a solid red PNG, sends it as a data URL through the native Main Agent,
 and checks that the image part reached the endpoint and the model answered red.
-The report lands under `benchmark/results/`.
+The model comes from `CLONE_AI_BENCH_MAIN_MODEL` (fallback
+`CLONE_AI_NATIVE_MODEL`). The report lands under `benchmark/results/`.
 
 ## Regression gate (`npm run gate`)
 

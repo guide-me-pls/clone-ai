@@ -29,19 +29,21 @@ CLONE_AI_NATIVE_MODEL=<model-id> CLONE_AI_NATIVE_BASE_URL=<openai-compatible-url
 CLONE_AI_BENCH_MAIN_MODEL=<model-id> npm run bench:main -- --repeat 5
 ```
 
-原生端点来自 `CLONE_AI_NATIVE_BASE_URL`（默认 `http://127.0.0.1:3425`）。单次样本无法给
-延迟排序：两次单跑中，同一个原生 plan 组合分别是 45.2s 与 11.1s。请使用中位数；
-`--repeat 1` 只用于快速冒烟。
+原生端点来自 `CLONE_AI_NATIVE_BASE_URL`（默认 `http://127.0.0.1:3425`）。模型 ID 为
+必填：`CLONE_AI_BENCH_MAIN_MODEL` 回退到 `CLONE_AI_NATIVE_MODEL`，两者都未设置时在
+第一次请求前失败。单次样本无法给延迟排序：两次单跑中，同一个原生 plan 组合分别是
+45.2s 与 11.1s。请使用中位数；`--repeat 1` 只用于快速冒烟。
 
 ## 长对话验证（`npm run bench:long`）
 
 写入 24 条已完成轮次并把针放在最老一轮，用 `historyChars=4000` 跑一次真实原生回合，
 捕获发出的请求，并检查：摘要存在、摘要含针、最新轮次保持原文、回复含针、没有错误。
-报告位于 `benchmark/results/`。
+模型来自 `CLONE_AI_BENCH_MAIN_MODEL`（回退 `CLONE_AI_NATIVE_MODEL`）。报告位于 `benchmark/results/`。
 
 ## 图片验证（`npm run bench:images`）
 
 生成一张纯红 PNG，以 data URL 经原生主 Agent 发送，检查图片部分到达端点且模型回答红色。
+模型来自 `CLONE_AI_BENCH_MAIN_MODEL`（回退 `CLONE_AI_NATIVE_MODEL`）。
 报告位于 `benchmark/results/`。
 
 ## 回归门禁（`npm run gate`）

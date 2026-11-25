@@ -1868,7 +1868,7 @@ function renderAgentPage() {
         attributes: { id: "gateway-model", "aria-label": t("gateway-model") },
         options: exposedModels.map((model) => ({
           value: model.id,
-          label: `${model.name}${model.provider && model.provider !== "" ? ` · ${model.provider}` : ""}`,
+          label: `${model.name}${model.provider && model.provider !== String(model.id).split("/")[0] ? ` · ${model.provider}` : ""}`,
         })),
       })
     : "";

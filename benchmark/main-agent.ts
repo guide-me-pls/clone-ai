@@ -24,10 +24,11 @@ import { runMainAgentQuery } from "../src/application/run-main-query.ts";
 import { prepareCloneHome, resolveClonePaths } from "../src/config/clone-home.ts";
 import { createJournalStore } from "../src/core/sqlite-journal.ts";
 import { appendMainAgentTurnRecord } from "../src/main-agent/turn-audit.ts";
+import { requiredBenchmarkModel } from "./model-env.ts";
 import { median, percentile } from "./stats.ts";
 
 const resultsDirectory = join(fileURLToPath(new URL(".", import.meta.url)), "results");
-const MODEL = process.env.CLONE_AI_BENCH_MAIN_MODEL ?? "google/gemini-4-argon";
+const MODEL = requiredBenchmarkModel();
 const BASE_URL = (process.env.CLONE_AI_NATIVE_BASE_URL ?? "http://127.0.0.1:3425").replace(/\/$/, "");
 
 function repeatCount(): number {

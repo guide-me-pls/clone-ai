@@ -6,6 +6,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Benchmark runs name their model in the environment
+
+The Main Agent comparison, long-context validation and image validation no longer default to a hard-coded model id: `CLONE_AI_BENCH_MAIN_MODEL` (falling back to `CLONE_AI_NATIVE_MODEL`) names the model the local endpoint serves, and a missing value fails before the first request. The desktop model picker appends a provider suffix only when it differs from the id's own namespace. New `test/benchmark-model-env.test.ts` covers the environment contract; `npm test` 1169/1169; `npm run typecheck` exit 0; `npm run gate` PASS.
+
+### 基准运行在环境变量里指定模型
+
+主 Agent 对比、长上下文验证与图片验证不再硬编码默认模型：由 `CLONE_AI_BENCH_MAIN_MODEL`（回退 `CLONE_AI_NATIVE_MODEL`）指定本地端点提供的模型，两者都未设置时在第一次请求前失败。桌面模型选择器只在 Provider 与 ID 命名空间不同时才追加后缀。新增 `test/benchmark-model-env.test.ts` 覆盖该环境契约；`npm test` 1169/1169；`npm run typecheck` 退出码 0；`npm run gate` PASS。
+
 ### Marketplace cards install in one gesture; a running turn shows its work
 
 Uninstalled marketplace cards now say 安装 instead of 配置. An entry with no required input installs from the card: one confirm, a probe, then every tool at the entry's reviewed default risk (filesystem/memory write, sequential thinking read, Playwright/Chrome DevTools network). An entry that needs a directory opens the install form. An installed card says 管理 and opens the server's tools, load switch and remove control; the header reads "available · installed" so the count matches the cards. A running Main Agent turn now shows its actual activity — elapsed time, tool-call count and the newest call — instead of a frozen "still running" line. `test/mcp-registry.test.ts` 5/5, `test/ui-structure.test.ts` 55/55; typecheck 0; gate PASS. Live: sequential-thinking installed and removed through the same API (HTTP 200 both).

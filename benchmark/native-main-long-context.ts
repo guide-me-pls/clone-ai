@@ -24,9 +24,10 @@ import { prepareCloneHome, resolveClonePaths } from "../src/config/clone-home.ts
 import { appendMainAgentTurnRecord } from "../src/main-agent/turn-audit.ts";
 import { runNativeMainAgentTurn } from "../src/main-agent/native-runtime.ts";
 import { createJournalStore } from "../src/core/sqlite-journal.ts";
+import { requiredBenchmarkModel } from "./model-env.ts";
 
 const resultsDirectory = join(fileURLToPath(new URL(".", import.meta.url)), "results");
-const MODEL = process.env.CLONE_AI_BENCH_MAIN_MODEL ?? "anthropic/claude-sonnet-5-5";
+const MODEL = requiredBenchmarkModel();
 const BASE_URL = (process.env.CLONE_AI_NATIVE_BASE_URL ?? "http://127.0.0.1:3425").replace(/\/$/, "");
 const HISTORY_CHARS = Number(process.env.CLONE_AI_BENCH_HISTORY_CHARS ?? 4_000);
 const SEEDED_TURNS = 24;
