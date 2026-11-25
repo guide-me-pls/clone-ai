@@ -142,7 +142,7 @@ test("capability routing records the concrete executor and retries through the p
   const adapter = new FlakyResumeAdapter();
   const result = await runtime.execute(run.id, new StaticAgentRegistry([adapter]));
 
-  assert.equal(result.status, "waiting_review");
+  assert.equal(result.status, "completed");
   assert.deepEqual(adapter.resumedSessionIds, ["pi-session-1"]);
   assert.equal(runtime.getSubagentsForRun(run.id)[0]?.attempt, 2);
   const evidenceEvent = (await journal.list()).find((event) => event.type === "evidence.recorded");
@@ -231,7 +231,7 @@ test("journal recovery resumes the pinned adapter without consuming a new attemp
   const other = new ScriptedExecutionAdapter("other-researcher", "demo", ["research", "filesystem_read"]);
   const result = await recovered.execute(run.id, new StaticAgentRegistry([other, adapter]));
 
-  assert.equal(result.status, "waiting_review");
+  assert.equal(result.status, "completed");
   assert.deepEqual(adapter.resumedSessionIds, ["pi-session-1"]);
   assert.equal(recovered.getSubagentsForRun(run.id)[0]?.attempt, 1);
 });

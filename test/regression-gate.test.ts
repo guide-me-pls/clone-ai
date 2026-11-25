@@ -92,7 +92,7 @@ function baseline(cases: Record<string, string>, overrides: Partial<GateBaseline
   };
 }
 
-test("the verdict suite separates pass, fail, and owner review", async () => {
+test("the verdict suite separates pass from fail through mechanical checks", async () => {
   const { summary, results } = await runVerdictSuite([
     verdictCase({ id: "good" }),
     verdictCase({ id: "missing", workspace: {}, ownerVerdict: "fail" }),
@@ -103,7 +103,7 @@ test("the verdict suite separates pass, fail, and owner review", async () => {
           id: "step",
           title: "Review",
           instructions: "Review the plan.",
-          risk: "read_only",
+          risk: "reversible_write",
           acceptanceCriteria: ["The plan is sound"],
         }],
       },
@@ -112,12 +112,17 @@ test("the verdict suite separates pass, fail, and owner review", async () => {
   ]);
 
   assert.equal(summary.cases, 3);
-  assert.equal(summary.decided, 2);
+  assert.equal(summary.decided, 3);
   assert.equal(summary.agreement, 1);
   assert.equal(summary.falsePass, 0);
   assert.equal(summary.falseFail, 0);
-  assert.equal(summary.review, 1);
-  assert.deepEqual(results.map((result) => result.actual), ["pass", "fail", "review"]);
+  // Evidence plus mechanical checks now decide every case; prose criteria no
+  // longer route to an owner review. The artifact-contract REVIEW path has its
+  // own suite.
+  // 证据与机械检查现在决定全部用例；文字标准不再转入所有者复核。产物合同的 REVIEW
+  // 路径另有测试。
+  assert.equal(summary.review, 0);
+  assert.deepEqual(results.map((result) => result.actual), ["pass", "fail", "pass"]);
 });
 
 test("a system pass the owner rejects counts as a false pass", async () => {

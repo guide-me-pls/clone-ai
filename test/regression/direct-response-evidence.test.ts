@@ -54,7 +54,7 @@ test("a direct answer supplies evidence without relaxing the gate for other step
   assert.match(ordinary.result.run.failureReason ?? "", /without evidence/i);
 
   const direct = await runStep("direct_response", "direct-response");
-  assert.equal(direct.result.status, "waiting_review");
+  assert.equal(direct.result.status, "completed");
   const evidence = (await journal.list()).filter((event) => event.runId === direct.run.id && event.type === "evidence.recorded");
   assert.equal(evidence.length, 1);
   const row = evidence[0]!.payload as { kind: string; summary: string; locator: string; stepId: string };

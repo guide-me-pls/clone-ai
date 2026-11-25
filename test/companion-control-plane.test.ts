@@ -269,7 +269,7 @@ test("a corrupt email marker is surfaced without blocking the rest of the deskto
   assert.equal((await response.json() as { reportError: boolean }).reportError, true);
 });
 
-test("the owner can review unverified criteria through the authenticated API", async (t) => {
+test("prose criteria complete automatically through the authenticated API", async (t) => {
   const { url, token, dataDirectory } = await companion(t);
   const assembly = await createRuntimeAssembly({ dataDirectory, workspacePath: dataDirectory });
   let runId: string;
@@ -278,9 +278,12 @@ test("the owner can review unverified criteria through the authenticated API", a
     runId = run.id;
     await assembly.runtime.attachPlan(runId, {
       summary: "准备简报",
-      steps: [{ id: "brief", title: "简报", instructions: "整理简报", risk: "read_only", acceptanceCriteria: ["内容准确"], agentId: "evidence-reviewer", requiredCapabilities: ["review"] }],
+      steps: [{ id: "brief", title: "简报", instructions: "整理简报", risk: "reversible_write", acceptanceCriteria: ["内容准确"], agentId: "worker", requiredCapabilities: ["review"] }],
     });
-    assert.equal((await assembly.runtime.execute(runId, createScriptedAgentRegistry())).status, "waiting_review");
+    // Evidence and mechanical checks decide completion; a prose criterion the
+    // Kernel cannot check no longer opens an owner review.
+    // 证据与机械检查决定完成；Kernel 无法检查的文字标准不再打开所有者复核。
+    assert.equal((await assembly.runtime.execute(runId, createScriptedAgentRegistry())).status, "completed");
   } finally {
     assembly.close();
   }
@@ -288,30 +291,27 @@ test("the owner can review unverified criteria through the authenticated API", a
   const session = await companionFetch(url, token, `/api/sessions/${runId}`);
   const view = await session.json() as {
     status: string;
-    verification: { unverifiedCriteria: string[] };
-    reviews?: Array<{ runId: string; title: string; verification: { unverifiedCriteria: string[] } }>;
+    verification: { unverifiedCriteria?: string[] };
+    reviews?: Array<{ runId: string; title: string }>;
   };
-  assert.equal(view.status, "waiting_review");
-  assert.ok(view.verification.unverifiedCriteria.some((item) => item.includes("内容准确")));
-  // The task record owns the review card and its run id. 任务记录拥有复核卡与它的 Run id。
-  assert.equal(view.reviews?.length, 1);
-  assert.equal(view.reviews?.[0]?.runId, runId);
-  assert.ok(view.reviews?.[0]?.verification.unverifiedCriteria.some((item) => item.includes("内容准确")));
+  assert.equal(view.status, "completed");
+  assert.equal(view.verification.unverifiedCriteria, undefined);
+  assert.deepEqual(view.reviews ?? [], []);
   const conversation = await (await companionFetch(url, token, "/api/sessions/main-agent-conversation")).json() as {
     approvals: unknown[];
     reviews?: unknown[];
   };
   assert.deepEqual(conversation.approvals, []);
   assert.deepEqual(conversation.reviews ?? [], []);
+  // The review endpoint stays authenticated and validated; a run that is no
+  // longer waiting for review is refused as a conflict, not silently accepted.
+  // 复核端点仍要求认证与校验；已不在复核中的 Run 会作为冲突被拒绝，而不是被静默接受。
   const path = `/api/runs/${runId}/review`;
   assert.equal((await fetch(`${url}${path}`, { method: "POST" })).status, 401);
   const invalid = await companionFetch(url, token, path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision: "auto" }) });
   assert.equal(invalid.status, 400);
   const accepted = await companionFetch(url, token, path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision: "accept" }) });
-  assert.equal(accepted.status, 200);
-  assert.equal((await accepted.json() as { status: string }).status, "completed");
-  const repeated = await companionFetch(url, token, path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision: "accept" }) });
-  assert.equal(repeated.status, 409);
+  assert.equal(accepted.status, 409);
 });
 
 test("a second Main Agent query is 409 while the session lock is held", async (t) => {

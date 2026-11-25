@@ -113,8 +113,8 @@ test("a supervisor coordinates child agents, resumes after approval, and preserv
 
   await runtime.grantApproval(run.id, "send");
   const secondAttempt = await runtime.execute(run.id, agents);
-  assert.equal(secondAttempt.status, "waiting_review");
-  assert.equal((await runtime.reviewVerification(run.id, "accept")).verification?.passed, true);
+  assert.equal(secondAttempt.status, "completed");
+  assert.equal(secondAttempt.verification?.passed, true);
 
   const candidates = await memory.processNext();
   assert.equal(candidates.length, 1);
@@ -261,7 +261,7 @@ test("an external step runs in an isolated workspace and cannot rewrite the owne
   await runtime.grantApproval(run.id, "send");
   const result = await runtime.execute(run.id, new StaticAgentRegistry([writer]));
 
-  assert.equal(result.status, "waiting_review");
+  assert.equal(result.status, "completed");
   assert.ok(writer.seenWorkspace);
   assert.notEqual(writer.seenWorkspace, workspace);
   assert.equal(writer.seenIsolation?.kind, "directory_copy");

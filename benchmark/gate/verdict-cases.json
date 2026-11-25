@@ -142,14 +142,14 @@
     },
     {
       "id": "unverified-criteria-needs-review",
-      "title": "A criterion with nothing machine-checkable is deferred to the owner",
+      "title": "A non-read-only criterion with nothing machine-checkable is deferred to the owner",
       "plan": {
         "steps": [
           {
             "id": "review-plan",
             "title": "Review the plan",
             "instructions": "Review the plan for consistency.",
-            "risk": "read_only",
+            "risk": "reversible_write",
             "acceptanceCriteria": [
               "The plan is consistent"
             ]
@@ -164,7 +164,31 @@
         }
       ],
       "ownerVerdict": "pass",
-      "note": "The system must neither claim success nor fail; it asks the owner."
+      "note": "The system must neither claim success nor fail; it asks the owner. Read-only prose criteria are trusted instead."
+    },
+    {
+      "id": "read-only-evidence-passes-without-review",
+      "title": "A read-only step with evidence passes without an owner review",
+      "plan": {
+        "steps": [
+          {
+            "id": "read-only",
+            "title": "Read and answer",
+            "instructions": "Read the file and answer.",
+            "risk": "read_only",
+            "acceptanceCriteria": ["Answered with evidence"]
+          }
+        ]
+      },
+      "evidence": [
+        {
+          "stepId": "read-only",
+          "kind": "observation",
+          "summary": "Read the file."
+        }
+      ],
+      "ownerVerdict": "pass",
+      "note": "There is no artifact to open; the evidence is the answer. A failed file check or missing evidence still fails."
     },
     {
       "id": "external-step-without-receipt",

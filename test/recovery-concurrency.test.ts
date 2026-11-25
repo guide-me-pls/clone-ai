@@ -213,7 +213,7 @@ test("a replay-safe adapter reruns only after confirming no Workspace side effec
 
   const result = await runtime.execute(prepared.runId, new StaticAgentRegistry([adapter]));
 
-  assert.equal(result.status, "waiting_review");
+  assert.equal(result.status, "completed");
   assert.equal(adapter.calls, 1);
   assert.match(await readFile(join(prepared.workspace, "out/recovered.md"), "utf8"), /recovered/);
   const events = await runtime.getEventsForRun(prepared.runId);
@@ -237,7 +237,7 @@ test("a deleted file from a replay-safe adapter is restored from checkpoint then
 
   const result = await runtime.execute(prepared.runId, new StaticAgentRegistry([adapter]));
 
-  assert.equal(result.status, "waiting_review");
+  assert.equal(result.status, "completed");
   assert.equal(adapter.calls, 1);
   assert.equal(await readFile(join(prepared.workspace, "out/original.md"), "utf8"), "before");
   const events = await journal.list();
@@ -285,7 +285,7 @@ test("a complete file from a replay-safe adapter is reconciled without a second 
 
   const result = await runtime.execute(prepared.runId, new StaticAgentRegistry([adapter]));
 
-  assert.equal(result.status, "waiting_review");
+  assert.equal(result.status, "completed");
   assert.equal(adapter.calls, 0);
   assert.ok((await runtime.getEventsForRun(prepared.runId)).includes("subagent.verified"));
 });
@@ -347,7 +347,7 @@ test("ready writers sharing one Workspace never overlap", async (t) => {
 
   const result = await runtime.execute(run.id, agents);
 
-  assert.equal(result.status, "waiting_review");
+  assert.equal(result.status, "completed");
   assert.equal(state.maximum, 1);
 });
 

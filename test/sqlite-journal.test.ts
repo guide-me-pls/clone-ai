@@ -151,8 +151,7 @@ test("the runtime completes a supervised run on sqlite without any code changes"
     }],
   });
   const result = await runtime.execute(run.id, createScriptedAgentRegistry());
-  assert.equal(result.status, "waiting_review");
-  assert.equal((await runtime.reviewVerification(run.id, "accept")).status, "completed");
+  assert.equal(result.status, "completed");
 
   // A second runtime hydrated from the same file proves restart recovery.
   // 从同一文件重建的第二个 Runtime 证明重启恢复成立。

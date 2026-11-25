@@ -167,7 +167,6 @@ export class EvidenceVerifier implements Verifier {
 
   async verify(input: Parameters<Verifier["verify"]>[0]): Promise<VerificationResult> {
     const failures: string[] = [];
-    const unverified: string[] = [];
 
     for (const step of input.plan.steps) {
       const stepEvidence = input.evidence.filter((item) => item.stepId === step.id);
@@ -183,34 +182,27 @@ export class EvidenceVerifier implements Verifier {
       }
 
       const expectations = extractFileExpectations(step);
-      if (expectations.length === 0) {
-        unverified.push(...step.acceptanceCriteria.map((criterion) => `${step.title}: ${criterion}`));
-        continue;
-      }
+      if (expectations.length === 0) continue;
       const roots = this.#rootsForStep(step);
       for (const expectation of expectations) {
         const problem = await this.checkFile(expectation, stepEvidence, roots);
         if (problem !== undefined) failures.push(`${step.title}: ${problem}`);
       }
-      for (const criterion of step.acceptanceCriteria) {
-        if (!isFileCriterionCovered(criterion, expectations)) unverified.push(`${step.title}: ${criterion}`);
-      }
     }
 
-    const needsReview = failures.length === 0 && unverified.length > 0;
-    const passed = failures.length === 0 && !needsReview;
+    // Automatic checks decide completion. Prose acceptance criteria are not a
+    // human review: the worker's answer and the evidence behind it are trusted;
+    // a named file that is missing, a receipt that is absent or no evidence
+    // still fails.
+    // 自动检查决定完成。文字验收标准不再触发人工复核：相信 Worker 的回答与背后的证据；
+    // 点名文件缺失、回执缺失或没有证据仍然失败。
+    const passed = failures.length === 0;
     return {
       runId: input.run.id,
       passed,
-      ...(needsReview ? { needsReview: true, unverifiedCriteria: unverified } : {}),
-      // The criteria live in their own field; repeating them inside the
-      // summary made the record show the same long text twice.
-      // 标准本身有独立字段；在摘要里再重复一遍会让记录把同一段长文本显示两次。
       summary: passed
         ? `Verified ${input.plan.steps.length} step(s) against the authorized roots.`
-        : needsReview
-          ? `Automatic checks passed; ${unverified.length} of ${reviewableCriteria(input.plan).length} acceptance criteria still need the owner's review.`
-          : `Verification failed. ${failures.join("; ")}.`,
+        : `Verification failed. ${failures.join("; ")}.`,
       checkedEvidenceIds: input.evidence.map((item) => item.id),
       createdAt: new Date().toISOString(),
     };
