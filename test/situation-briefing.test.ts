@@ -156,6 +156,7 @@ test("background work that finished is in the briefing, with evidence counts", a
 
   const briefing = await compileBriefing({ journal, dataDirectory: directory, workspacePath: directory, now, includeObservations: false });
   assert.match(briefing.text, /Recently finished background work/);
+  assert.match(briefing.text, /history, not tasks/);
   assert.match(briefing.text, /completed: 整理周报并写盘 \(run run-abcd, 1 evidence item/);
 });
 

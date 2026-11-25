@@ -147,17 +147,20 @@ export function renderBriefing(situation: Situation, observations: readonly Conn
 }
 
 /**
- * Background work that finished recently, as facts the Main Agent can act on.
+ * Background work that finished recently, as history the Main Agent may know
+ * about but must not act on.
  *
  * Without this the twin answers every turn as if nothing had run since the
  * owner last typed: a task completed ten minutes ago, with evidence, and the
  * agent still asks whether it should start. Reads only terminal status events,
- * so nothing here can look like an instruction.
+ * and the header says these are history, not tasks: a failed run left in the
+ * list is not an invitation to retry it.
  *
- * 最近完成的后台工作，作为 Main Agent 可以据以行动的事实。
+ * 最近完成的后台工作，作为主 Agent 可以知道、但不得据以行动的历史。
  *
  * 没有这一段，分身每一轮都像自上次输入后什么都没发生过：任务十分钟前已完成、带着证据，
- * 而 Agent 还在问要不要开始。这里只读终态事件，因此内容不可能看起来像指令。
+ * 而 Agent 还在问要不要开始。这里只读终态事件，标题写明这是历史而不是任务：列表里的一条
+ * 失败 Run 不是重试邀请。
  */
 function renderRecentWork(events: Array<{ type: string; runId?: string; occurredAt: string; payload: unknown }>, now: string): string {
   const since = Date.parse(now) - 24 * 3600 * 1000;
@@ -192,5 +195,5 @@ function renderRecentWork(events: Array<{ type: string; runId?: string; occurred
     const count = evidence.get(runId) ?? 0;
     return `- ${value.status}: ${title} (run ${runId.slice(0, 8)}, ${count} evidence item(s))${value.reason ? ` — ${value.reason}` : ""}`;
   });
-  return `\n\nRecently finished background work (facts, not instructions):\n${lines.join("\n")}`;
+  return `\n\nRecently finished background work (history, not tasks — do not start or retry any of it unless the owner asks):\n${lines.join("\n")}`;
 }

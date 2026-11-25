@@ -111,3 +111,16 @@ test("remembered folders come from the persisted turn ledger, newest first", asy
   assert.match(renderKnownFolders(remembered), /Folders you have worked in/);
   assert.match(renderKnownFolders(remembered), new RegExp(join(canonical, "work").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
+
+test("the briefing names a learned folder without repeating the request that taught it", () => {
+  const text = renderKnownFolders([{
+    path: "/Users/owner/work",
+    uses: 6,
+    lastUsedAt: "2026-11-18T10:11:08.066Z",
+    example: "只读取工作区根目录 /Users/owner/work/knowledge_base/README.md，用中文三句话说明项目是什么。",
+  }]);
+  assert.match(text, /\/Users\/owner\/work/);
+  assert.match(text, /6 request/);
+  assert.doesNotMatch(text, /README/);
+  assert.doesNotMatch(text, /只读取/);
+});

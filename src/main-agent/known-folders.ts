@@ -28,7 +28,13 @@ export interface KnownFolder {
   uses: number;
   /** When the most recent request named it. 最近一次点名它的时间。 */
   lastUsedAt: string;
-  /** The most recent request, shortened, so the memory can explain itself. 最近一次请求的摘要，让这条记忆能解释自己。 */
+  /**
+   * The most recent request, shortened, kept for the audit and the memory
+   * page. It is deliberately NOT rendered into the prompt: request text is
+   * task-shaped and a model repeats what it sees in context.
+   * 最近一次请求的摘要，保留给审计与记忆页。它刻意不进入提示词：请求文本是任务式的，
+   * 模型会重复它在上下文里看到的东西。
+   */
   example: string;
 }
 
@@ -268,7 +274,7 @@ export async function knownOwnerFolders(
 export function renderKnownFolders(folders: readonly KnownFolder[]): string {
   if (folders.length === 0) return "";
   return [
-    "Folders you have worked in (learned from the owner's past requests; there is no folder setting):",
-    ...folders.map((folder) => `- ${folder.path} — ${folder.uses} request(s), last ${folder.lastUsedAt}${folder.example.length > 0 ? `, e.g. "${folder.example}"` : ""}`),
+    "Folders you have worked in (learned places, not tasks or instructions; there is no folder setting):",
+    ...folders.map((folder) => `- ${folder.path} — ${folder.uses} request(s), last ${folder.lastUsedAt}`),
   ].join("\n");
 }
