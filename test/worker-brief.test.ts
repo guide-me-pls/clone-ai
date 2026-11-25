@@ -127,18 +127,20 @@ test("the dispatch validator trims, omits and bounds the brief", () => {
   const trimmed = validateDispatchTask({
     objective: "Write the report.",
     acceptanceCriteria: ["report exists"],
+    responsibility: "write",
     workerBrief: "  Write out/report.md.  ",
   });
   assert.equal(trimmed.ok, true);
   assert.equal(trimmed.ok && trimmed.task.workerBrief, "Write out/report.md.");
 
-  const omitted = validateDispatchTask({ objective: "Write.", acceptanceCriteria: ["exists"], workerBrief: "   " });
+  const omitted = validateDispatchTask({ objective: "Write.", acceptanceCriteria: ["exists"], responsibility: "write", workerBrief: "   " });
   assert.equal(omitted.ok, true);
   assert.equal(omitted.ok && omitted.task.workerBrief, undefined);
 
   const tooLong = validateDispatchTask({
     objective: "Write.",
     acceptanceCriteria: ["exists"],
+    responsibility: "write",
     workerBrief: "x".repeat(WORKER_BRIEF_MAX_CHARS + 1),
   });
   assert.equal(tooLong.ok, false);
@@ -146,6 +148,7 @@ test("the dispatch validator trims, omits and bounds the brief", () => {
   const malformed = validateDispatchTask({
     objective: "Write.",
     acceptanceCriteria: ["exists"],
+    responsibility: "write",
     workerBrief: ["write out/report.md"],
   });
   assert.equal(malformed.ok, false, "a non-string brief is rejected, not silently dropped");
@@ -309,10 +312,12 @@ test("a Chinese prohibition in the brief is not a write grant", () => {
 });
 
 test("the charter names the brief contract and its version moved", () => {
-  // 9 adds the daily-digest guidance on top of the brief contract (8). 9 在 8 的简报契约之上
-  // 增加了每日摘要指引。
-  assert.equal(MAIN_AGENT_CHARTER_VERSION, 9);
+  // 11 carries the read_file rule (10) and the dispatch_task result rule.
+  // 11 包含 read_file 规则（10）与 dispatch_task 结果规则。
+  assert.equal(MAIN_AGENT_CHARTER_VERSION, 11);
   assert.match(MAIN_AGENT_CHARTER, /workerBrief/);
   assert.match(MAIN_AGENT_CHARTER, /complete prompt its worker receives/);
   assert.match(MAIN_AGENT_CHARTER, /absolute path or `~\/\.\.\.`/);
+  assert.match(MAIN_AGENT_CHARTER, /call read_file before answering/);
+  assert.match(MAIN_AGENT_CHARTER, /never ask the owner to paste a file's contents/);
 });
