@@ -1,0 +1,156 @@
+{
+  "ranAt": "2026-11-25T02:30:55.603Z",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "endpoint": "http://127.0.0.1:3425",
+  "repeat": 1,
+  "tasks": [
+    {
+      "id": "direct-answer",
+      "prompt": "请只回复两个字：收到。不要提案任何计划。",
+      "expectation": "direct"
+    },
+    {
+      "id": "authority-read",
+      "prompt": "我现在允许在哪些目录写入？请先查一下权限再回答。",
+      "expectation": "authority"
+    },
+    {
+      "id": "plan-proposal",
+      "prompt": "帮我把 README.md 总结成 out/summary.md。这是一个本地可逆任务，请提案一个计划，不要自己执行。",
+      "expectation": "plan"
+    },
+    {
+      "id": "named-file-read",
+      "prompt": "读取文件 {fixture}，只回复它的第一行内容。不要提案计划，也不要修改任何文件。",
+      "expectation": "read"
+    }
+  ],
+  "records": [
+    {
+      "runtime": "native",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "prompt": "请只回复两个字：收到。不要提案任何计划。",
+      "passed": true,
+      "durationMs": 1016,
+      "totalTokens": 7723,
+      "modelCalls": 1,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 2,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "native",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "prompt": "我现在允许在哪些目录写入？请先查一下权限再回答。",
+      "passed": true,
+      "durationMs": 6315,
+      "totalTokens": 16129,
+      "modelCalls": 2,
+      "toolCalls": [
+        "get_authority"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 610,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "native",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "prompt": "帮我把 README.md 总结成 out/summary.md。这是一个本地可逆任务，请提案一个计划，不要自己执行。",
+      "passed": true,
+      "durationMs": 12836,
+      "totalTokens": 18580,
+      "modelCalls": 3,
+      "toolCalls": [
+        "read_file",
+        "get_authority",
+        "get_capacity",
+        "propose_work_plan"
+      ],
+      "runs": 1,
+      "turnStatus": "completed",
+      "replyLength": 438,
+      "journalEvents": 18
+    },
+    {
+      "runtime": "native",
+      "taskId": "named-file-read",
+      "expectation": "read",
+      "prompt": "读取文件 /var/folders/0q/26y2gpq94m531lnxr09n7fsm0000gp/T/clone-ai-main-fixture-E93p1L/named-file.md，只回复它的第一行内容。不要提案计划，也不要修改任何文件。",
+      "passed": true,
+      "durationMs": 2893,
+      "totalTokens": 16122,
+      "modelCalls": 2,
+      "toolCalls": [
+        "read_file"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 21,
+      "journalEvents": 6
+    }
+  ],
+  "cells": [
+    {
+      "runtime": "native",
+      "taskId": "direct-answer",
+      "expectation": "direct",
+      "samples": 1,
+      "passed": 1,
+      "passRate": 1,
+      "medianDurationMs": 1016,
+      "p90DurationMs": 1016,
+      "medianTokens": 7723,
+      "medianModelCalls": 1
+    },
+    {
+      "runtime": "native",
+      "taskId": "authority-read",
+      "expectation": "authority",
+      "samples": 1,
+      "passed": 1,
+      "passRate": 1,
+      "medianDurationMs": 6315,
+      "p90DurationMs": 6315,
+      "medianTokens": 16129,
+      "medianModelCalls": 2
+    },
+    {
+      "runtime": "native",
+      "taskId": "plan-proposal",
+      "expectation": "plan",
+      "samples": 1,
+      "passed": 1,
+      "passRate": 1,
+      "medianDurationMs": 12836,
+      "p90DurationMs": 12836,
+      "medianTokens": 18580,
+      "medianModelCalls": 3
+    },
+    {
+      "runtime": "native",
+      "taskId": "named-file-read",
+      "expectation": "read",
+      "samples": 1,
+      "passed": 1,
+      "passRate": 1,
+      "medianDurationMs": 2893,
+      "p90DurationMs": 2893,
+      "medianTokens": 16122,
+      "medianModelCalls": 2
+    }
+  ],
+  "summary": {
+    "repeat": 1,
+    "native": {
+      "passed": 4,
+      "samples": 4
+    }
+  }
+}

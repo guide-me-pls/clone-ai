@@ -138,6 +138,7 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         let webConfiguration = WKWebViewConfiguration()
         webConfiguration.userContentController.add(self, name: "cloneNavigation")
         webConfiguration.userContentController.add(self, name: "cloneFolderPicker")
+        webConfiguration.userContentController.add(self, name: "cloneClipboardFiles")
         webConfiguration.userContentController.addUserScript(WKUserScript(
             source: """
             window.CloneNative = {
@@ -154,6 +155,58 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
                 action: "openURL",
                 url: url
               }),
+              setClipboardFilePaths: (paths) => {
+                window.CloneNative.clipboardFilePaths = Array.isArray(paths) ? paths : [];
+              },
+              onClipboardFilePaths: (requestId, paths) => {
+                const waiters = window.CloneNativeFileWaiters;
+                const waiter = waiters ? waiters[requestId] : undefined;
+                if (typeof waiter === "function") {
+                  delete waiters[requestId];
+                  waiter(paths ?? []);
+                }
+              },
+              filePathsForPaste: () => new Promise((resolve) => {
+                const requestId = String(Date.now()) + "-" + String(Math.random());
+                const waiters = (window.CloneNativeFileWaiters ??= {});
+                const timer = setTimeout(() => {
+                  delete waiters[requestId];
+                  resolve([]);
+                }, 400);
+                waiters[requestId] = (paths) => {
+                  clearTimeout(timer);
+                  resolve(Array.isArray(paths) ? paths : []);
+                };
+                window.webkit.messageHandlers.cloneClipboardFiles.postMessage({
+                  action: "filePaths",
+                  requestId: requestId
+                });
+              }),
+              onClipboardFilesRead: (requestId, files) => {
+                const waiters = window.CloneNativeFileReaders;
+                const waiter = waiters ? waiters[requestId] : undefined;
+                if (typeof waiter === "function") {
+                  delete waiters[requestId];
+                  waiter(files ?? []);
+                }
+              },
+              readClipboardFiles: () => new Promise((resolve) => {
+                const requestId = String(Date.now()) + "-" + String(Math.random());
+                const waiters = (window.CloneNativeFileReaders ??= {});
+                const timer = setTimeout(() => {
+                  delete waiters[requestId];
+                  resolve([]);
+                }, 15000);
+                waiters[requestId] = (files) => {
+                  clearTimeout(timer);
+                  resolve(Array.isArray(files) ? files : []);
+                };
+                window.webkit.messageHandlers.cloneClipboardFiles.postMessage({
+                  action: "readFiles",
+                  requestId: requestId
+                });
+              }),
+              clipboardFilePaths: [],
               onVideoFrame: (key, dataUrl) => {
                 const waiters = window.CloneNativeVideoWaiters;
                 const waiter = waiters ? waiters[key] : undefined;
@@ -190,6 +243,18 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             forMainFrameOnly: true
         ))
         webView = WKWebView(frame: .zero, configuration: webConfiguration)
+        // Publishing the clipboard's file paths on every activation is what
+        // lets the page intercept a file paste synchronously; the page also
+        // refreshes the cache on focus and on Cmd/Ctrl keydowns.
+        // 每次激活都发布剪贴板的文件路径，页面因此可以同步拦截文件粘贴；页面还会在获得焦点
+        // 与按下 Cmd/Ctrl 时刷新缓存。
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.publishClipboardFilePaths()
+        }
         webView.navigationDelegate = self
         webView.uiDelegate = self
         window = NSWindow(
@@ -396,9 +461,14 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
             handleFolderPickerMessage(message)
             return
         }
+        if message.name == "cloneClipboardFiles" {
+            handleClipboardFilesMessage(message)
+            return
+        }
         guard message.name == "cloneNavigation", let section = message.body as? String else { return }
         if section == "ready" {
             pageReady = true
+            publishClipboardFilePaths()
             var targetIndex = selectedNavigationIndex
             let previewPrefix = "--preview-section="
             if let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix(previewPrefix) }) {
@@ -457,6 +527,104 @@ final class CloneAIDesktop: NSObject, NSApplicationDelegate, WKNavigationDelegat
         guard action == "chooseDirectory" else { return }
         let purpose = (body["purpose"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "workspace"
         chooseDirectory(purpose: purpose)
+    }
+
+    /**
+     * The file URLs on the clipboard, as absolute paths. Only file URLs are
+     * requested, so copied text and a bitmap screenshot never become a path.
+     * 剪贴板上的文件 URL，转成绝对路径。只请求文件 URL，因此复制的文本与位图截图不会
+     * 变成路径。
+     */
+    private func clipboardFilePaths() -> [String] {
+        let objects = NSPasteboard.general.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) ?? []
+        return objects.compactMap { object in
+            if let url = object as? URL, url.isFileURL { return url.path }
+            if let url = object as? NSURL, url.isFileURL { return url.path }
+            return nil
+        }
+    }
+
+    /** The clipboard paths as a JavaScript array literal. 剪贴板路径的 JavaScript 数组字面量。 */
+    private func clipboardFilePathsJSON() -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: clipboardFilePaths()),
+              let json = String(data: data, encoding: .utf8) else { return "[]" }
+        return json
+    }
+
+    /**
+     * Push the current clipboard paths into the page's cache. The page reads
+     * that cache synchronously in its paste handler, which is what keeps WebKit
+     * from inserting the bare file names first.
+     * 把当前剪贴板路径推入页面的缓存。页面在粘贴处理器中同步读取这份缓存，WebKit 因此
+     * 不会先把裸文件名插进去。
+     */
+    private func publishClipboardFilePaths() {
+        guard pageReady, let webView else { return }
+        webView.evaluateJavaScript("window.CloneNative?.setClipboardFilePaths?.(\(clipboardFilePathsJSON()));")
+    }
+
+    /** Reply to one on-demand clipboard query. 回应一次按需的剪贴板查询。 */
+    private func handleClipboardFilesMessage(_ message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any],
+              let action = body["action"] as? String else { return }
+        let requestId = body["requestId"] as? String ?? ""
+        if action == "filePaths" {
+            let idLiteral = javaScriptStringLiteral(requestId)
+            webView.evaluateJavaScript("window.CloneNative?.onClipboardFilePaths?.(\(idLiteral), \(clipboardFilePathsJSON()));")
+            return
+        }
+        guard action == "readFiles" else { return }
+        // The list is read on the main thread because it comes from
+        // NSPasteboard; the file bytes are read off it so a large document does
+        // not block the window.
+        // 列表在主线程读取，因为它来自 NSPasteboard；文件字节在后台读取，大文档因此不会
+        // 卡住窗口。
+        let paths = clipboardFilePaths()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let payloads = Self.clipboardFilePayloads(paths)
+            guard let data = try? JSONSerialization.data(withJSONObject: payloads),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            DispatchQueue.main.async {
+                guard let self, self.pageReady else { return }
+                let idLiteral = self.javaScriptStringLiteral(requestId)
+                self.webView.evaluateJavaScript("window.CloneNative?.onClipboardFilesRead?.(\(idLiteral), \(json));")
+            }
+        }
+    }
+
+    /**
+     * Bytes for the files currently on the clipboard. The list is the
+     * pasteboard's own file URLs, so page JavaScript cannot ask for another
+     * path. A file over 12 MB or a paste over 24 MB is skipped; its path falls
+     * back to text.
+     * 剪贴板当前文件的字节。列表来自剪贴板自身的文件 URL，页面 JavaScript 因此不能索要
+     * 其他路径。单文件超过 12 MB 或单次粘贴超过 24 MB 的文件跳过；它的路径回退为文本。
+     */
+    private static func clipboardFilePayloads(_ paths: [String]) -> [[String: Any]] {
+        var payloads: [[String: Any]] = []
+        var total = 0
+        for path in paths {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue else { continue }
+            guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+                  let size = (attributes[.size] as? NSNumber)?.intValue else { continue }
+            if size < 0 || size > 12 * 1024 * 1024 || total + size > 24 * 1024 * 1024 { continue }
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { continue }
+            total += data.count
+            let url = URL(fileURLWithPath: path)
+            let mimeType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? ""
+            payloads.append([
+                "name": url.lastPathComponent,
+                "path": path,
+                "size": data.count,
+                "mimeType": mimeType,
+                "data": data.base64EncodedString(),
+            ])
+        }
+        return payloads
     }
 
     private func chooseDirectory(purpose: String) {

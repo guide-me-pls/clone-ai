@@ -532,6 +532,7 @@ const PARALLEL_SAFE_KERNEL_TOOLS = new Set([
   "get_run_status",
   "get_situation",
   "read_memory",
+  "read_file",
   "recall_memory",
   "search_history",
 ]);

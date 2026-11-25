@@ -37,8 +37,28 @@ function repeatCount(): number {
 
 const REPEAT = repeatCount();
 
+/**
+ * A fixture outside the clone home: read_file refuses the clone home, so the
+ * task must prove a read by absolute path, not a learned-folder search.
+ * clone home 之外的测试文件：read_file 拒绝 clone home，因此任务必须证明按绝对路径
+ * 读取，而不是搜索已知文件夹。
+ */
+const fixtureDirectory = await mkdtemp(join(tmpdir(), "clone-ai-main-fixture-"));
+const fixturePath = join(fixtureDirectory, "named-file.md");
+await writeFile(fixturePath, "BENCH_READ_MARKER_7Q2\n\nThis fixture exists so the read window and the quoted-data framing are exercised.\n", "utf8");
+/**
+ * The plan task names README.md, so it needs a workspace that actually has one.
+ * Without it the agent either reads this repository's README (Spotlight) or
+ * stops because the named file cannot be found — neither is the planning path
+ * the cell is meant to measure.
+ * 计划任务点名 README.md，因此需要一个真的含有该文件的工作区。没有它，Agent 会读本仓库
+ * 的 README（Spotlight），或因为找不到点名文件而停下——两者都不是这个格要测的规划路径。
+ */
+const fixtureWorkspace = await mkdtemp(join(tmpdir(), "clone-ai-main-workspace-"));
+await writeFile(join(fixtureWorkspace, "README.md"), "# Fixture project\n\nBENCH_PLAN_README\n", "utf8");
+
 type Runtime = "native";
-type Expectation = "direct" | "authority" | "plan";
+type Expectation = "direct" | "authority" | "plan" | "read";
 
 interface MainAgentTask {
   id: string;
@@ -62,12 +82,18 @@ const TASKS: MainAgentTask[] = [
     prompt: "帮我把 README.md 总结成 out/summary.md。这是一个本地可逆任务，请提案一个计划，不要自己执行。",
     expectation: "plan",
   },
+  {
+    id: "named-file-read",
+    prompt: "读取文件 {fixture}，只回复它的第一行内容。不要提案计划，也不要修改任何文件。",
+    expectation: "read",
+  },
 ];
 
 interface TaskResult {
   runtime: Runtime;
   taskId: string;
   expectation: Expectation;
+  prompt: string;
   passed: boolean;
   durationMs: number;
   totalTokens: number;
@@ -95,11 +121,13 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
     process.env.CLONE_AI_NATIVE_MODEL = MODEL;
     process.env.CLONE_AI_NATIVE_BASE_URL = BASE_URL;
     const started = Date.now();
+    const prompt = task.prompt.replaceAll("{fixture}", fixturePath);
     let result: Awaited<ReturnType<typeof runMainAgentQuery>>;
     try {
-      result = await runMainAgentQuery(directory, task.prompt, {
+      result = await runMainAgentQuery(directory, prompt, {
         source: "companion",
         auditHome: join(directory, ".audit"),
+        ...(task.id === "plan-proposal" ? { workspacePath: fixtureWorkspace } : {}),
       });
     } catch (error: unknown) {
       // One bad cell must not abort the whole report: a model absent from a
@@ -110,6 +138,7 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
         runtime,
         taskId: task.id,
         expectation: task.expectation,
+        prompt,
         passed: false,
         durationMs: Date.now() - started,
         totalTokens: 0,
@@ -147,11 +176,14 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
       ? result.error === undefined && result.reply.trim().length > 0 && runs === 0
       : task.expectation === "authority"
         ? result.error === undefined && toolCalls.includes("get_authority")
-        : runs > 0;
+        : task.expectation === "read"
+          ? result.error === undefined && toolCalls.includes("read_file") && result.reply.includes("BENCH_READ_MARKER_7Q2")
+          : runs > 0;
     return {
       runtime,
       taskId: task.id,
       expectation: task.expectation,
+      prompt,
       passed,
       durationMs,
       totalTokens,
@@ -267,4 +299,6 @@ await writeFile(reportPath, `${JSON.stringify({
   summary,
 }, null, 2)}\n`, "utf8");
 console.log(`Report: ${reportPath}`);
+await rm(fixtureDirectory, { recursive: true, force: true }).catch(() => undefined);
+await rm(fixtureWorkspace, { recursive: true, force: true }).catch(() => undefined);
 process.exit(0);

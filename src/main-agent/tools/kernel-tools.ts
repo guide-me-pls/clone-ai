@@ -30,6 +30,7 @@ import { sampleCapacity, type CapacitySnapshot } from "../../core/capacity.ts";
 import { CloneConfigStore } from "../../config/clone-config.ts";
 import { recentFileChangesTool } from "./recent-changes.ts";
 import { dailyWorkspaceDigestTool } from "./daily-digest.ts";
+import { readFileTool } from "./read-file.ts";
 
 export interface KernelToolsOptions {
   dataDirectory: string;
@@ -701,6 +702,12 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
   }));
 
   register(dailyWorkspaceDigestTool({
+    dataDirectory: options.dataDirectory,
+    ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+    ...(options.query === undefined ? {} : { query: options.query }),
+  }));
+
+  register(readFileTool({
     dataDirectory: options.dataDirectory,
     ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
     ...(options.query === undefined ? {} : { query: options.query }),

@@ -67,6 +67,21 @@ test("the native desktop app is the only product entry", async () => {
   assert.match(appSource, /attachmentReports/);
   assert.match(appSource, /addEventListener\("drop"/);
   assert.match(appSource, /dataTransfer\?\.types/);
+  // A Finder copy carries file URLs, not only image data. The page takes the
+  // paths from the native clipboard bridge and inserts them, and the shell
+  // publishes them on activation so the paste handler can decide synchronously.
+  // Finder 复制携带的是文件 URL，而不只是图片数据。页面从原生剪贴板桥接取得路径并插入；
+  // 外壳在激活时发布路径，粘贴处理器因此可以同步决定。
+  assert.match(appSource, /clipboardFileObjects/);
+  assert.match(appSource, /filePathsForPaste/);
+  assert.match(appSource, /readClipboardFiles/);
+  assert.match(appSource, /filesFromNativePayloads/);
+  assert.match(appSource, /insertComposerText/);
+  assert.match(appSource, /text\/uri-list/);
+  assert.match(macShell, /cloneClipboardFiles/);
+  assert.match(macShell, /urlReadingFileURLsOnly/);
+  assert.match(macShell, /publishClipboardFilePaths/);
+  assert.match(macShell, /clipboardFilePayloads/);
   assert.match(macShell, /NSMenu\(title: "视图"\)/);
   assert.match(macShell, /navigationTitles = \["对话", "定时任务", "Agent", "记忆", "设置"\]/);
   assert.match(macShell, /WKUIDelegate/);

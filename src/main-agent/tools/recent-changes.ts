@@ -1,18 +1,20 @@
 /**
  * A read-only window onto what changed on this computer.
  *
- * The Main Agent has no filesystem tool of its own, and a read-only worker
- * needs evidence that a failed dispatch kept turning into silence. "What did I
- * work on today" is a question the Kernel can answer deterministically: list
- * the files whose content changed in the folders the twin has learned, plus
- * each repository's uncommitted changes and commits. Nothing here writes, and
- * every path is checked against the protected list first.
+ * The Main Agent's filesystem access is read-only (read_file and this
+ * recent-changes view), and a read-only worker needs evidence that a failed
+ * dispatch kept turning into silence. "What did I work on today" is a question
+ * the Kernel can answer deterministically: list the files whose content changed
+ * in the folders the twin has learned, plus each repository's uncommitted
+ * changes and commits. Nothing here writes, and every path is checked against
+ * the protected list first.
  *
  * 一扇只读的"本机改了什么"窗口。
  *
- * 主 Agent 自己没有文件系统工具，而只读 Worker 需要证据——一次失败的派发会让它一直沉默。
- * "今天做了什么"是 Kernel 可以确定性回答的问题：列出分身已学会的文件夹中内容发生变化的
- * 文件，以及每个仓库的未提交改动与提交。这里不写任何东西，且每个路径先过受保护清单。
+ * 主 Agent 的文件系统访问是只读的（read_file 与本最近改动视图），而只读 Worker 需要
+ * 证据——一次失败的派发会让它一直沉默。"今天做了什么"是 Kernel 可以确定性回答的问题：
+ * 列出分身已学会的文件夹中内容发生变化的文件，以及每个仓库的未提交改动与提交。这里不写
+ * 任何东西，且每个路径先过受保护清单。
  */
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";

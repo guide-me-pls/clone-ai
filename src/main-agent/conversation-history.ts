@@ -9,10 +9,11 @@
  *
  * That asymmetry is the whole reason this module exists. Without it the twin
  * has a perfect record it cannot read: the file is there, the ability is not.
- * The Main Agent runs with built-in tools disabled — no read, no grep, no bash
- * — because discovery is an ungoverned injection channel. This module is the
- * narrow, governed exception: read-only, scoped to the owner's own session
- * files, returning excerpts rather than handing over a filesystem.
+ * The Main Agent runs without a shell or a write tool — ungoverned discovery is
+ * an injection channel — and its read access is a short list of governed tools
+ * (read_file, recent changes, this history view). This module is one of them:
+ * read-only, scoped to the owner's own session files, returning excerpts rather
+ * than handing over a filesystem.
  *
  * 从磁盘读取 Main Agent 自己的对话历史——包括已经被自动压缩挤出模型上下文的那部分。
  *
@@ -20,9 +21,9 @@
  * 而此前的每一条都原封不动地留在原处。因此在模型再也看不到之后，细节仍然在磁盘上。
  *
  * 这个不对称正是本模块存在的全部理由。没有它，分身就拥有一份自己读不了的完整记录：
- * 文件在，能力不在。Main Agent 运行时禁用了全部内置工具——没有 read、没有 grep、
- * 没有 bash——因为自动发现是不受治理的注入通道。本模块是那个狭窄的、受治理的例外：
- * 只读、只限所有者自己的会话文件、返回摘录而不是交出一个文件系统。
+ * 文件在，能力不在。Main Agent 没有 shell，也没有写入工具——不受治理的自动发现是注入
+ * 通道——它的读取权限是一份很短的受治理工具清单（read_file、最近改动、本历史视图）。
+ * 本模块是其中之一：只读、只限所有者自己的会话文件、返回摘录而不是交出一个文件系统。
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";

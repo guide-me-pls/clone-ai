@@ -587,16 +587,44 @@ async function attachmentsForRequest(items) {
   return { ok: true, attachments: settled.map((result) => result.attachment) };
 }
 
-function clipboardAttachmentFiles(clipboardData) {
+/**
+ * Rebuild File objects from the native clipboard reader. The page never passes
+ * a path: the shell reads the pasteboard's own file URLs, and this helper only
+ * turns the bytes it returned into the same File shape the attachment pipeline
+ * already accepts.
+ * 从原生剪贴板读取器重建 File。页面不传路径：外壳读取剪贴板自身的文件 URL，这里只把它
+ * 返回的字节变成附件管线已经接受的同一种 File。
+ */
+function filesFromNativePayloads(payloads) {
+  const files = [];
+  for (const payload of Array.isArray(payloads) ? payloads : []) {
+    if (typeof payload?.data !== "string" || typeof payload?.name !== "string" || payload.name.length === 0) continue;
+    try {
+      const binary = globalThis.atob(payload.data);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      const file = new File([bytes], payload.name, { type: typeof payload.mimeType === "string" ? payload.mimeType : "" });
+      file.clonePath = typeof payload.path === "string" ? payload.path : "";
+      files.push(file);
+    } catch {
+      // A malformed payload is skipped; its path still falls back to text. 畸形载荷跳过；它的路径仍回退为文本。
+    }
+  }
+  return files;
+}
+
+function clipboardAttachmentFiles(clipboardData, options = {}) {
   if (!clipboardData) return [];
+  const preserve = options?.preserve instanceof Set ? options.preserve : undefined;
   const files = [];
   const add = (file) => {
     if (!file || !/^image\/(png|jpeg|gif|webp)$/.test(file.type)) return;
     const extension = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
-    // Clipboard images often have a generic name. Give each paste a visible,
-    // stable name without rewriting the bytes.
-    // 剪贴板图片通常只有通用文件名；给每次粘贴一个可见、稳定的名称，但不改写图片内容。
-    files.push(new File([file], `剪贴板截图-${files.length + 1}.${extension}`, { type: file.type }));
+    // A clipboard image gets a stable, visible screenshot name; a Finder file
+    // whose path the paste handler already knows keeps its real name.
+    // 剪贴板图片获得稳定、可见的截图名；粘贴处理器已经知道路径的 Finder 文件保留真实名称。
+    const name = preserve?.has(file.name) ? file.name : `剪贴板截图-${files.length + 1}.${extension}`;
+    files.push(new File([file], name, { type: file.type }));
   };
 
   for (let index = 0; index < (clipboardData.items?.length || 0); index += 1) {
@@ -607,6 +635,108 @@ function clipboardAttachmentFiles(clipboardData) {
     for (let index = 0; index < (clipboardData.files?.length || 0); index += 1) add(clipboardData.files[index]);
   }
   return files;
+}
+
+/**
+ * Every File on the clipboard, images and documents alike. The image-only
+ * helper above keeps the screenshot path unchanged; this one exists because a
+ * Finder copy of a .md/.pdf used to fall through to WebKit's default paste,
+ * which inserts the bare file names and no content.
+ * 剪贴板上的所有 File，图片与文档都算。上面的只收图片的助手保持截图路径不变；这一个存在
+ * 是因为 Finder 复制的 .md/.pdf 以前会落到 WebKit 默认粘贴，只插入裸文件名、没有内容。
+ */
+function clipboardFileObjects(clipboardData) {
+  if (!clipboardData) return [];
+  const files = [];
+  const add = (file) => {
+    if (file && !files.includes(file)) files.push(file);
+  };
+  for (let index = 0; index < (clipboardData.items?.length || 0); index += 1) {
+    const item = clipboardData.items[index];
+    if (item?.kind === "file") add(item.getAsFile());
+  }
+  if (files.length === 0) {
+    for (let index = 0; index < (clipboardData.files?.length || 0); index += 1) add(clipboardData.files[index]);
+  }
+  return files;
+}
+
+const IMAGE_PATH_PATTERN = /\.(?:png|jpe?g|gif|webp)$/i;
+
+function basenameOfPath(path) {
+  const parts = String(path).split("/");
+  return parts[parts.length - 1] || String(path);
+}
+
+/**
+ * The native shell publishes the file paths on the clipboard whenever the app
+ * becomes active. Reading that cache synchronously is what lets the paste
+ * handler call preventDefault before any await, so the browser never inserts
+ * the bare names first.
+ * 原生外壳在 App 激活时发布剪贴板中的文件路径。同步读取这份缓存，粘贴处理器才能在任何
+ * await 之前调用 preventDefault，浏览器因此不会先把裸文件名插进去。
+ */
+function cachedClipboardFilePaths() {
+  const cached = window.CloneNative?.clipboardFilePaths;
+  return Array.isArray(cached) ? cached.filter((path) => typeof path === "string" && path.length > 0) : [];
+}
+
+function clearCachedClipboardFilePaths() {
+  if (window.CloneNative) window.CloneNative.clipboardFilePaths = [];
+}
+
+async function refreshClipboardFilePaths() {
+  if (typeof window.CloneNative?.filePathsForPaste !== "function") return;
+  try {
+    const paths = await window.CloneNative.filePathsForPaste();
+    if (Array.isArray(paths)) window.CloneNative.clipboardFilePaths = paths.filter((path) => typeof path === "string" && path.length > 0);
+  } catch {
+    // The browser preview has no native bridge. 浏览器预览没有原生桥接。
+  }
+}
+
+/**
+ * Read the files currently on the native pasteboard as File objects. The shell
+ * only reads the pasteboard's own URLs, so this cannot be turned into a generic
+ * path reader from page JavaScript.
+ * 把原生剪贴板当前的文件读成 File。外壳只读剪贴板自身的 URL，因此页面 JavaScript 无法
+ * 把它变成通用的路径读取器。
+ */
+async function nativeClipboardFiles() {
+  if (typeof window.CloneNative?.readClipboardFiles !== "function") return [];
+  try {
+    return filesFromNativePayloads(await window.CloneNative.readClipboardFiles());
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Insert text at the caret. execCommand keeps the native undo stack; the
+ * setRangeText fallback still delivers the text where the owner was typing.
+ * 在光标处插入文本。execCommand 保留原生撤销栈；setRangeText 回退仍把文本放在所有者打字的位置。
+ */
+function insertComposerText(text) {
+  const query = $("query");
+  if (query === null || text.length === 0) return;
+  const start = query.selectionStart ?? query.value.length;
+  const end = query.selectionEnd ?? start;
+  const before = query.value.slice(0, start);
+  const after = query.value.slice(end);
+  const insertion = `${before.length > 0 && !/\s$/.test(before) ? "\n" : ""}${text}${after.length === 0 || !/^\s/.test(after) ? "\n" : ""}`;
+  query.focus();
+  query.setSelectionRange(start, end);
+  let inserted = false;
+  try {
+    inserted = document.execCommand("insertText", false, insertion);
+  } catch {
+    inserted = false;
+  }
+  if (!inserted) {
+    query.setRangeText(insertion, start, end, "end");
+    query.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  resizeComposer();
 }
 const icon = (name) => name === "spark"
   ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 1.8 7.2L21 11l-7.2 1.8L12 20l-1.8-7.2L3 11l7.2-1.8L12 2Z"/></svg>`
@@ -4049,15 +4179,73 @@ $("composer-model").addEventListener("change", saveComposerChoice);
 $("composer-effort").addEventListener("change", saveComposerChoice);
 $("query").addEventListener("input", resizeComposer);
 $("query").addEventListener("paste", async (event) => {
-  const files = clipboardAttachmentFiles(event.clipboardData);
-  if (files.length === 0) return;
-  event.preventDefault();
-  const added = await addAttachmentFiles(files);
-  if (added > 0) {
-    announce(`已从剪贴板添加 ${added} 张图片。`);
-    $("query").focus();
+  // The decision to take over the paste must be synchronous: an await before
+  // preventDefault lets WebKit insert the clipboard's text (the bare names of
+  // Finder-copied files) before the attachments are built.
+  // 是否接管这次粘贴必须同步决定：在 preventDefault 之前 await，会让 WebKit 先把剪贴板
+  // 文本（Finder 复制文件的裸文件名）插进去，附件随后才构建。
+  const clipboard = event.clipboardData;
+  const allFiles = clipboardFileObjects(clipboard);
+  const cachedPaths = cachedClipboardFilePaths();
+  const plainText = clipboard?.getData("text/plain") ?? "";
+  // A stale cache is worse than no cache: if the clipboard's text names none of
+  // the cached files, the owner copied something else while the app stayed
+  // active, so fall back to the browser's normal paste.
+  // 过期缓存比没有缓存更糟：如果剪贴板文本不含任何缓存文件的名字，说明 App 保持激活时所有者
+  // 复制了别的东西，退回浏览器正常的粘贴。
+  const pathsMatchClipboard = cachedPaths.length > 0
+    && (plainText.trim().length === 0 || cachedPaths.some((path) => plainText.includes(basenameOfPath(path))));
+  const pastedPaths = pathsMatchClipboard ? cachedPaths : [];
+  // A Finder image keeps its real name (its path is known); a screenshot or a
+  // nameless bitmap still gets the stable screenshot name.
+  // Finder 图片保留真实名称（路径已知）；截图或无名位图仍使用稳定的截图名。
+  const imageFiles = clipboardAttachmentFiles(clipboard, { preserve: new Set(pastedPaths.map(basenameOfPath)) });
+  const documentFiles = allFiles.filter((file) => !/^image\//.test(file.type));
+  if (imageFiles.length === 0 && pastedPaths.length === 0 && documentFiles.length === 0) {
+    clearCachedClipboardFilePaths();
+    return;
   }
+  event.preventDefault();
+  clearCachedClipboardFilePaths();
+  // A screenshot or a Finder file WebKit exposed as a File is attached
+  // directly. A Finder copy exposed only as file URLs gets its bytes from the
+  // native reader, so the paste becomes a chip instead of path text. Only a
+  // file that cannot become an attachment keeps its absolute path, which
+  // read_file can open.
+  // 截图或 WebKit 以 File 暴露的 Finder 文件直接作为附件。只以文件 URL 暴露的 Finder 复制
+  // 由原生读取器提供字节，粘贴因此成为 chip 而不是路径文本。只有无法成为附件的文件保留
+  // 绝对路径，供 read_file 打开。
+  const filesToAttach = [...imageFiles, ...documentFiles];
+  if (pastedPaths.length > 0) {
+    const represented = new Set([...allFiles.map((file) => file.name), ...filesToAttach.map((file) => file.name)]);
+    const missing = pastedPaths.filter((path) => !represented.has(basenameOfPath(path)));
+    if (missing.length > 0) {
+      for (const file of await nativeClipboardFiles()) {
+        if (!filesToAttach.some((existing) => existing.name === file.name && existing.size === file.size)) filesToAttach.push(file);
+      }
+    }
+  }
+  const added = filesToAttach.length > 0 ? await addAttachmentFiles(filesToAttach) : 0;
+  const facts = [];
+  if (added > 0) facts.push(`${added} 个附件`);
+  const fallbackPaths = pastedPaths.filter((path) => {
+    const name = basenameOfPath(path);
+    const candidate = filesToAttach.find((file) => file.name === name);
+    if (candidate === undefined) return true;
+    return !state.attachments.some((item) => item.name === candidate.name && item.size === candidate.size);
+  });
+  if (fallbackPaths.length > 0) {
+    insertComposerText(fallbackPaths.join("\n"));
+    facts.push(`${fallbackPaths.length} 个文件路径（无法作为附件读取）`);
+  }
+  if (facts.length > 0) announce(`已从剪贴板添加 ${facts.join("、")}。`);
+  $("query").focus();
 });
+$("query").addEventListener("keydown", (event) => {
+  if (event.metaKey || event.ctrlKey) void refreshClipboardFilePaths();
+}, true);
+window.addEventListener("focus", () => { void refreshClipboardFilePaths(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) void refreshClipboardFilePaths(); });
 $("attach").addEventListener("click", () => $("attachments").click());
 $("attachments").addEventListener("change", (event) => { const input = event.target; const files = Array.from(input.files || []); input.value = ""; void addAttachmentFiles(files); });
 $("attachment-preview").addEventListener("click", (event) => { const remove = event.target.closest("[data-remove-attachment]"); if (!remove) return; const [item] = state.attachments.splice(Number(remove.dataset.removeAttachment), 1); if (item?.livePreview !== true) releaseAttachmentPreview(item); renderAttachments(); });
@@ -4082,13 +4270,41 @@ window.addEventListener("dragleave", (event) => {
   fileDragDepth = Math.max(0, fileDragDepth - 1);
   if (fileDragDepth === 0) document.body.classList.remove("dragging-files");
 });
+function fileURLsFromTransfer(dataTransfer) {
+  const raw = typeof dataTransfer?.getData === "function" ? dataTransfer.getData("text/uri-list") : "";
+  const paths = [];
+  for (const line of String(raw ?? "").split(/\r?\n/)) {
+    const value = line.trim();
+    if (!value.startsWith("file://")) continue;
+    try {
+      const path = decodeURIComponent(new URL(value).pathname);
+      if (path.length > 0 && !paths.includes(path)) paths.push(path);
+    } catch {
+      // A malformed URI is ignored; it cannot address a file. 畸形 URI 直接忽略；它无法寻址文件。
+    }
+  }
+  return paths;
+}
+
 window.addEventListener("drop", (event) => {
   if (!dragCarriesFiles(event)) return;
   event.preventDefault();
   fileDragDepth = 0;
   document.body.classList.remove("dragging-files");
   const dropped = Array.from(event.dataTransfer?.files ?? []);
-  if (dropped.length > 0) void addAttachmentFiles(dropped);
+  if (dropped.length > 0) {
+    void addAttachmentFiles(dropped);
+    return;
+  }
+  // Some platforms expose a file drop only as a URI list. Insert the paths so
+  // the file is still addressable instead of dropping the gesture silently.
+  // 某些平台只把文件拖放暴露为 URI 列表。插入路径，让文件仍然可寻址，而不是静默丢掉这次拖放。
+  const paths = fileURLsFromTransfer(event.dataTransfer);
+  if (paths.length > 0) {
+    insertComposerText(paths.join("\n"));
+    announce(`已拖入 ${paths.length} 个文件路径。`);
+    $("query").focus();
+  }
 });
 window.addEventListener("dragend", () => {
   fileDragDepth = 0;

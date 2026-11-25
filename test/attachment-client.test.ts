@@ -100,7 +100,7 @@ function harness(delay = 0, { nativeBase64 = true, nativeVideoFrame }: { nativeB
   Object.defineProperty(NoNativeBase64.prototype, "toBase64", { value: undefined, configurable: true });
   const api = runInNewContext(`(function () {
 ${app.slice(start, end)}
-return { addAttachmentFiles, attachmentsForRequest, prepareAttachment, releaseAttachmentPreview, mergeRestoredAttachments, releaseReplacedAttachmentPreviews };
+return { addAttachmentFiles, attachmentsForRequest, prepareAttachment, releaseAttachmentPreview, mergeRestoredAttachments, releaseReplacedAttachmentPreviews, filesFromNativePayloads };
 })()`, {
     state,
     announce: (message: string, error = false) => notices.push({ message, error }),
@@ -110,7 +110,10 @@ return { addAttachmentFiles, attachmentsForRequest, prepareAttachment, releaseAt
       createObjectURL: () => `blob:test-${++created}`,
       revokeObjectURL: (url: string) => revoked.push(url),
     },
+    File,
+    Blob,
     FileReader: SlowFileReader,
+    atob: (value: string) => Buffer.from(value, "base64").toString("binary"),
     performance: { now: () => Date.now() },
     ...(nativeBase64 ? {} : { Uint8Array: NoNativeBase64 }),
     ...(nativeVideoFrame === undefined ? {} : { window: { CloneNative: { videoFrame: async () => nativeVideoFrame } } }),
@@ -121,6 +124,7 @@ return { addAttachmentFiles, attachmentsForRequest, prepareAttachment, releaseAt
     releaseAttachmentPreview: (item: Record<string, unknown>) => void;
     mergeRestoredAttachments: (outgoing: Array<Record<string, unknown>>, current: Array<Record<string, unknown>>) => Array<Record<string, unknown>>;
     releaseReplacedAttachmentPreviews: (card: { isConnected: boolean }, items: Array<Record<string, unknown>>) => void;
+    filesFromNativePayloads: (payloads: Array<{ name: string; path: string; size: number; mimeType: string; data: string }>) => Array<File & { clonePath?: string }>;
   };
   return { api, state, host, notices, counts, revoked };
 }
@@ -147,6 +151,28 @@ function pdfBytes(size = 1024): Uint8Array {
 }
 
 const appSource = await readFile(join(process.cwd(), "apps", "desktop", "ui", "app.js"), "utf8");
+
+test("native clipboard payloads become attachable Files", async () => {
+  const { api } = harness();
+  const files = api.filesFromNativePayloads([{
+    name: "notes.md",
+    path: "/tmp/notes.md",
+    size: 5,
+    mimeType: "text/markdown",
+    data: Buffer.from("hello").toString("base64"),
+  }]);
+  assert.equal(files.length, 1);
+  assert.equal(files[0]!.name, "notes.md");
+  assert.equal(files[0]!.type, "text/markdown");
+  assert.equal(files[0]!.clonePath, "/tmp/notes.md");
+  assert.equal(await files[0]!.text(), "hello");
+  // The same File shape feeds the existing pipeline: a native payload can
+  // become a document attachment without a path crossing the wire.
+  // 同一 File 形状进入现有管线：原生载荷无需让路径过线，就能成为文档附件。
+  const prepared = await api.prepareAttachment(files[0]!);
+  assert.equal(prepared.item?.kind, "document");
+  assert.equal(prepared.item?.name, "notes.md");
+});
 
 test("a slow read shows a preparing chip before the file is added", async () => {
   const { api, state, host } = harness(40);
