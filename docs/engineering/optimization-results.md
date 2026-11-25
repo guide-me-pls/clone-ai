@@ -15,6 +15,23 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-25 — A message carries twenty attachments, not four
+
+- **Claim:** selecting more than four files no longer drops the extras. The
+  composer and the server parser accept up to 20 attachments per message — the
+  same per-message cap the Claude apps use — while the per-file limits, the
+  50,000/100,000-character document budgets and the request body still bound the
+  turn. Six selected requirement documents all arrive.
+- **Evidence:** before, `test/attachment-client.test.ts` and
+  `test/attachments.test.ts` pinned four (5 selected → 4 kept, 5 parser items
+  refused); after, 24 selected → exactly 20 kept, 20 parser items accepted and
+  21 refused, and a failed-send restore with 19 present fills the one remaining
+  slot. Targeted suites **29/29**; `npm test` **1162/1162**, exit 0;
+  `npm run typecheck` exit 0; `npm run gate` **PASS**. No provider benchmark was
+  run; the change is deterministic.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--a-message-carries-twenty-attachments-not-four);
+  [execution chain](optimizations.md#2026-11-25--the-attachment-cap-moves-from-four-to-twenty).
+
 ## 2026-11-25 — MCP installs work under launchd; skills install and reach the Main Agent
 
 - **Claim:** a marketplace install now runs in the app's real launch environment.

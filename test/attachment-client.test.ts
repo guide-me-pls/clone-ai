@@ -4,7 +4,7 @@
  * The composer is a plain browser script, so this test evaluates the attachment
  * block from app.js in a VM with a fake FileReader, URL and host. It pins the
  * behavior the optimization relies on: a chip appears before a slow read ends,
- * files are prepared concurrently in input order, the four-attachment and
+ * files are prepared concurrently in input order, the twenty-attachment and
  * 100,000-character caps still apply, image and PDF bytes are read in the
  * background rather than carried as a data URL, and the request payload is
  * accepted by the real server parser.
@@ -13,7 +13,7 @@
  *
  * 输入框是普通浏览器脚本，因此本测试在 VM 中执行 app.js 的附件代码块，并注入假的
  * FileReader、URL 与宿主。它钉住优化依赖的行为：慢读取结束前 chip 已出现、文件按输入
- * 顺序并发准备、四附件与 100,000 字符上限仍然生效、图片与 PDF 的字节在后台读取而不是
+ * 顺序并发准备、二十附件与 100,000 字符上限仍然生效、图片与 PDF 的字节在后台读取而不是
  * 作为 data URL 携带、请求载荷能被真实服务端解析器接受。
  */
 import assert from "node:assert/strict";
@@ -195,22 +195,22 @@ test("files are prepared concurrently but accepted in input order", async () => 
   assert.deepEqual(state.attachments.map((item) => item.name), ["a.txt", "b.txt", "c.txt", "d.txt"]);
 });
 
-test("overlapping batches stay within the global pool and the four-file cap", async () => {
+test("overlapping batches stay within the global pool and the twenty-file cap", async () => {
   const { api, state, counts } = harness(15);
-  const batchA = ["a1.txt", "a2.txt", "a3.txt"].map((name) => textFile(name, name, counts));
-  const batchB = ["b1.txt", "b2.txt", "b3.txt"].map((name) => textFile(name, name, counts));
+  const batchA = Array.from({ length: 12 }, (_, index) => textFile(`a${index}.txt`, `a${index}.txt`, counts));
+  const batchB = Array.from({ length: 12 }, (_, index) => textFile(`b${index}.txt`, `b${index}.txt`, counts));
   await Promise.all([api.addAttachmentFiles(batchA), api.addAttachmentFiles(batchB)]);
-  assert.ok(state.attachments.length <= 4, `saw ${state.attachments.length} attachments`);
+  assert.equal(state.attachments.length, 20);
   assert.equal(state.attachmentsPending.length, 0);
   assert.ok(counts.maxActive <= 3, `the global pool exceeded three readers: ${counts.maxActive}`);
 });
 
-test("the four-attachment cap and the shared character budget still apply", async () => {
+test("the twenty-attachment cap and the shared character budget still apply", async () => {
   const capped = harness();
-  const five = ["1.txt", "2.txt", "3.txt", "4.txt", "5.txt"].map((name) => textFile(name, name, capped.counts));
-  assert.equal(await capped.api.addAttachmentFiles(five), 4);
-  assert.equal(capped.state.attachments.length, 4);
-  assert.ok(capped.notices.some((notice) => notice.message.includes("最多添加 4 个附件")));
+  const beyond = Array.from({ length: 21 }, (_, index) => textFile(`file ${index}`, `${index}.txt`, capped.counts));
+  assert.equal(await capped.api.addAttachmentFiles(beyond), 20);
+  assert.equal(capped.state.attachments.length, 20);
+  assert.ok(capped.notices.some((notice) => notice.message.includes("最多添加 20 个附件")));
 
   const budget = harness();
   const big = "x".repeat(40_000);
@@ -323,9 +323,16 @@ test("a failed send restores the originals first, within the cap", () => {
   const d = { name: "d" };
   const e = { name: "e" };
   assert.deepEqual(Array.from(api.mergeRestoredAttachments([a, b], [c]), (item) => item.name), ["a", "b", "c"]);
-  assert.deepEqual(Array.from(api.mergeRestoredAttachments([a, b], [c, d, e]), (item) => item.name), ["a", "c", "d", "e"]);
+  assert.deepEqual(Array.from(api.mergeRestoredAttachments([a, b], [c, d, e]), (item) => item.name), ["a", "b", "c", "d", "e"]);
   assert.deepEqual(Array.from(api.mergeRestoredAttachments([a, b], [a, c]), (item) => item.name), ["b", "a", "c"]);
   assert.deepEqual(Array.from(api.mergeRestoredAttachments([a, b], [c, d]), (item) => item.name), ["a", "b", "c", "d"]);
+  // At the cap only the remaining room is restored, earliest first.
+  // 达到上限时只恢复剩余空位，靠前的优先。
+  const current = Array.from({ length: 19 }, (_, index) => ({ name: `c${index}` }));
+  const merged = api.mergeRestoredAttachments([a, b, e], current);
+  assert.equal(merged.length, 20);
+  assert.deepEqual(Array.from(merged.slice(0, 2), (item) => item.name), ["a", "c0"]);
+  assert.ok(!merged.includes(b) && !merged.includes(e));
 });
 
 test("a connected card or a restored item keeps its preview URL", () => {

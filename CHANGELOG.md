@@ -6,6 +6,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Twenty attachments per message
+
+Selecting several files at once kept only the first four: `MAX_ATTACHMENTS` was 4 in the composer (`apps/desktop/ui/app.js`) and in the server parser (`src/main-agent/attachments.ts`), so choosing six requirement documents produced four chips and a 3.2-second "最多添加 4 个附件" notice. The per-message cap is now 20 — the limit the Claude apps put on one message (Claude Code's app path caps a message at 20 attachments; claude.ai documents 20 files per chat and 20 images per turn; the CLI itself documents no count and is bounded by its 32 MB request guard). Per-file limits (5 MB image/video, 10 MB PDF/.docx), the 50,000/100,000-character document budgets and the 60,000,000-character request body are unchanged; selecting past the cap still names the limit and drops the extras. `test/attachment-client.test.ts` and `test/attachments.test.ts` 29/29 (24 selected → 20 kept, 20 accepted / 21 refused, restore at the boundary); `npm test` 1162/1162; `npm run typecheck` exit 0; `npm run gate` PASS.
+
+### 每条消息最多 20 个附件
+
+一次选择多个文件时只保留前四个：`MAX_ATTACHMENTS` 在输入框（`apps/desktop/ui/app.js`）与服务端解析器（`src/main-agent/attachments.ts`）里都是 4，因此选择六份需求文档只出现四个 chip，外加一条 3.2 秒的「最多添加 4 个附件」提示。每消息上限现在是 20——Claude 应用对单条消息的限制（Claude Code 的应用路径把单条消息限制为 20 个附件；claude.ai 文档写明每次对话 20 个文件、每回合 20 张图片；CLI 本身不写数量上限，受 32 MB 请求体保护约束）。单文件上限（图片/视频 5 MB、PDF/.docx 10 MB）、50,000/100,000 字符的文档预算与 60,000,000 字符的请求体不变；超出上限时仍提示上限并丢弃多余文件。`test/attachment-client.test.ts` 与 `test/attachments.test.ts` 29/29（选 24 个保留 20 个、20 个接受/21 个拒绝、上限边界的回填）；`npm test` 1162/1162；`npm run typecheck` 退出码 0；`npm run gate` PASS。
+
 ### An install click answers before the probe
 
 The marketplace and manual install buttons used to be disabled until a probe ran. A disabled button swallows the click, so clicking 安装 before 探测工具 looked broken. All install controls (MCP, skills, cloudflared) are now always clickable: with no probed tools the handler answers "请先探测包，再为工具指定风险" / "Probe the package first, then assign a risk to each tool"; while a probe or install runs, a repeated click gets a visible "already running" message instead of a disabled button. `test/ui-structure.test.ts` 46/46; `npm run typecheck` exit 0.

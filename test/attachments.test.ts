@@ -34,7 +34,7 @@ test("a payload that is not an image is refused whatever it claims", () => {
 
 test("non-base64, oversized and too many attachments are refused with reasons", () => {
   assert.equal(parseAttachments([{ data: "!!!not base64!!!" }]).ok, false);
-  assert.equal(parseAttachments(Array.from({ length: 5 }, () => ({ data: png }))).ok, false);
+  assert.equal(parseAttachments(Array.from({ length: 21 }, () => ({ data: png }))).ok, false);
   assert.equal(parseAttachments("nope").ok, false);
 });
 
@@ -57,14 +57,17 @@ test("a document without a declared type falls back to its extension", () => {
   if (result.ok) assert.equal(result.documents[0]!.mimeType, "text/markdown");
 });
 
-test("images and documents share one four-attachment budget", () => {
+test("images and documents share one twenty-attachment budget", () => {
   const mixed = parseAttachments([{ data: png }, document()]);
   assert.equal(mixed.ok, true);
   if (mixed.ok) {
     assert.equal(mixed.images.length, 1);
     assert.equal(mixed.documents.length, 1);
   }
-  const tooMany = parseAttachments([{ data: png }, document(), document({ name: "b.txt" }), { data: png }, document({ name: "c.txt" })]);
+  const atLimit = Array.from({ length: 20 }, (_, index) =>
+    index % 2 === 0 ? { data: png } : document({ name: `note-${index}.txt` }));
+  assert.equal(parseAttachments(atLimit).ok, true);
+  const tooMany = parseAttachments([...atLimit, document({ name: "one-too-many.txt" })]);
   assert.equal(tooMany.ok, false);
 });
 
@@ -108,7 +111,9 @@ test("a binary document with the wrong signature is refused", () => {
 
 test("binary documents count toward the shared attachment budget and name rules", () => {
   const pdf = { kind: "document", name: "paper.pdf", mimeType: "application/pdf", data: Buffer.from("%PDF-1.4").toString("base64") };
-  assert.equal(parseAttachments([pdf, pdf, { data: png }, { data: png }, pdf]).ok, false);
+  const atLimit = [...Array.from({ length: 19 }, () => pdf), { data: png }];
+  assert.equal(parseAttachments(atLimit).ok, true);
+  assert.equal(parseAttachments([...atLimit, { data: png }]).ok, false);
   assert.equal(parseAttachments([{ ...pdf, name: "../paper.pdf" }]).ok, false);
   assert.equal(parseAttachments([{ kind: "document", name: "paper.txt", mimeType: "application/pdf", text: "hello" }]).ok, false);
 });

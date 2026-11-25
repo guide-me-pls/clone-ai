@@ -31,6 +31,51 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-25 — The attachment cap moves from four to twenty
+
+- **Goal / hypothesis:** the composer kept only the first four files of a
+  selection: the owner picked six requirement documents and two disappeared.
+  Match the Claude apps' 20-attachment per-message cap so a full requirement set
+  arrives at once, while the existing per-file, character and body budgets keep
+  bounding the turn.
+- **Trade-off:** [A message carries twenty attachments, not four](../architecture/trade-offs.md#2026-11-25--a-message-carries-twenty-attachments-not-four).
+- **Change:** `apps/desktop/ui/app.js` — `MAX_ATTACHMENTS` 4 → 20 and every
+  comment that named four; `src/main-agent/attachments.ts` — the parser's
+  matching cap (its error now reads "At most 20 attachments per message.");
+  `test/attachment-client.test.ts` and `test/attachments.test.ts` — the cap,
+  restore and parser-budget tests now use 20/21 files and a boundary restore
+  case; `README.md` and `README.zh-CN.md` document 20; trade-off, results and
+  changelog entries.
+- **Eval:** `node --experimental-strip-types --test test/attachment-client.test.ts test/attachments.test.ts`
+  **29/29 pass**; the cap cases changed from 4/5 to 20/21 (overlapping batches:
+  24 selected → exactly 20 kept; parser: 20 accepted, 21 refused; restore with
+  19 present → only the one remaining slot is filled). `npm run typecheck`
+  exit 0; `npm run gate` **PASS** (verdict 14, policy 30, audit 5, memory 31,
+  baseline unchanged); `npm test` **1162/1162**, exit 0.
+- **Benchmark run:** no provider/model benchmark was run. The change is a
+  deterministic limit; the offline tests above are the measurement. No result
+  file is claimed.
+- **Execution chain:** reproduced from the owner's screenshot and the code
+  (`MAX_ATTACHMENTS` in both the composer and the parser); a `claude-code-guide`
+  subagent researched Claude Code and claude.ai with web fetches (49 tool uses,
+  78,197 tokens, 239.6 s) and returned: no documented count in the CLI (32 MB
+  request guard), 20 attachments on the Claude apps' message path and 20 files
+  per chat on claude.ai, API image ceilings 100/600. Wrote the trade-off, edited
+  both caps and their comments, updated four tests, then ran the targeted tests.
+  One run exposed two tests still pinned to four — the failed-send restore and
+  the binary-document budget — both updated; typecheck and gate passed on the
+  next run, and the full suite was green.
+- **Pros:** one number in two places; the tests keep the byte and character
+  budgets and add at-the-limit cases, so the cap cannot drift silently.
+- **Cons / next time:** the 20-file count and the 60,000,000-character body can
+  now disagree for max-size mixes (20 × 10 MB PDFs exceed the body). A
+  client-side total-bytes budget was considered and deferred; the reversal
+  condition covers it. The rebuilt window was not exercised by hand; the VM test
+  runs the real `app.js` attachment block against the real parser.
+- **Reversal condition:** if owners routinely need more than 20 small files, or
+  if max-size mixes start failing at the 60M-character body, add a client-side
+  total-bytes budget and revisit the count.
+
 ### 2026-11-25 — One executor; the Main Agent declares read or write per dispatch
 
 - **Goal / hypothesis:** the four default "workers" were four labels on the same

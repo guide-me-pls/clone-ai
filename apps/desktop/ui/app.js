@@ -98,17 +98,19 @@ const state = {
   skillDetails: new Map(),
   toolsListScroll: 0,
 };
-const MAX_ATTACHMENTS = 4;
+// Matches the server parser and the Claude apps' per-message cap.
+// 与服务端解析器及 Claude 应用的每消息上限一致。
+const MAX_ATTACHMENTS = 20;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
 const MAX_BINARY_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const MAX_DOCUMENT_CHARS = 50_000;
 const MAX_TOTAL_DOCUMENT_CHARS = 100_000;
 // Files are independent; a video frame no longer blocks the images and text
-// behind it. Three readers keep a strong machine busy without decoding four
+// behind it. Three readers keep a strong machine busy without decoding several
 // large photos at once.
 // 文件彼此独立；视频抽帧不再挡住后面的图片与文本。三路读取让强劲的机器保持忙碌，
-// 又不会同时解码四张大照片。
+// 又不会同时解码多张大照片。
 const ATTACHMENT_PREPARE_CONCURRENCY = 3;
 // The chip is 76 px wide and the live card 120 px; 240 px covers both at 2x DPR.
 // chip 宽 76px，实时卡片 120px；240px 在 2x DPR 下同时覆盖两者。
@@ -214,8 +216,8 @@ function releaseReplacedAttachmentPreviews(card, items) {
 
 /**
  * A failed send puts the original attachments back in front of anything the
- * owner attached during the turn, never exceeding the four-file cap.
- * 发送失败时把原附件放回失败回合期间新加附件的前面，且绝不超过四附件上限。
+ * owner attached during the turn, never exceeding the attachment cap.
+ * 发送失败时把原附件放回失败回合期间新加附件的前面，且绝不超过附件上限。
  */
 function mergeRestoredAttachments(outgoing, current) {
   const room = Math.max(0, MAX_ATTACHMENTS - current.length);
@@ -408,9 +410,9 @@ async function prepareAttachment(file) {
 
 /**
  * Starts up to `limit` preparations ahead of the consumer and returns their
- * promises in input order. `stop()` prevents new work once the four-attachment
+ * promises in input order. `stop()` prevents new work once the attachment
  * cap is reached; in-flight reads finish and are released by the caller.
- * 在消费者之前最多启动 `limit` 个准备任务，并按输入顺序返回它们的 Promise。达到四附件
+ * 在消费者之前最多启动 `limit` 个准备任务，并按输入顺序返回它们的 Promise。达到附件
  * 上限后 `stop()` 阻止新任务；在途读取会完成，由调用方释放。
  */
 function prefetchAttachments(files, limit) {
@@ -478,8 +480,8 @@ async function addAttachmentFilesNow(files) {
       if (outcome === undefined) continue;
       if (outcome.rejected !== undefined) { announce(outcome.rejected, true); continue; }
       // Another batch can finish while this one awaited; re-check before the
-      // push so two overlapping selections cannot exceed four.
-      // 另一个批次可能在本批次等待时完成；push 前再检查一次，避免两个重叠的选择超过四个。
+      // push so two overlapping selections cannot exceed the cap.
+      // 另一个批次可能在本批次等待时完成；push 前再检查一次，避免两个重叠的选择超过上限。
       if (state.attachments.length >= MAX_ATTACHMENTS) { announce(`最多添加 ${MAX_ATTACHMENTS} 个附件。`, true); stop(); break; }
       const item = outcome.item;
       if (item.kind === "document" && attachmentDocumentCharacters() + item.text.length > MAX_TOTAL_DOCUMENT_CHARS) {
@@ -3886,10 +3888,10 @@ async function createSession(query) { const button = $("submit"); button.disable
         resizeComposer();
         // A failed send must not also cost the owner the files they chose. Keep any
         // files attached during the failed turn and put the originals first, up
-        // to the same four-attachment cap; the rest stay on the card's preview
+        // to the same attachment cap; the rest stay on the card's preview
         // and are released when it is replaced.
         // 发送失败不应连所有者选好的文件一起丢掉。保留失败回合期间新加的附件，把原附件放在
-        // 前面，仍受四附件上限约束；未恢复的条目留在卡片的预览里，卡片被替换时释放。
+        // 前面，仍受附件上限约束；未恢复的条目留在卡片的预览里，卡片被替换时释放。
         const merged = mergeRestoredAttachments(outgoingAttachments, state.attachments);
         if (merged !== state.attachments) {
           state.attachments = merged;

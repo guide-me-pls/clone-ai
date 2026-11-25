@@ -26,6 +26,39 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-25 —— 附件上限从四个提高到二十个
+
+- **目标 / 假设：** 输入框只保留一次选择中的前四个文件：所有者选了六份需求文档，两份
+  消失。与 Claude 应用的每消息 20 个附件上限对齐，让整套需求一次到达，同时保留现有的
+  单文件、字符与请求体预算来约束回合。
+- **取舍：** [每条消息的附件从 4 个提高到 20 个](../architecture/trade-offs.zh-CN.md#2026-11-25--每条消息的附件从-4-个提高到-20-个).
+- **变更：** `apps/desktop/ui/app.js` —— `MAX_ATTACHMENTS` 4 → 20，并把注释中写死的
+  「四个」改为上限；`src/main-agent/attachments.ts` —— 解析器的同一上限（错误信息现在
+  是 "At most 20 attachments per message."）；`test/attachment-client.test.ts` 与
+  `test/attachments.test.ts` —— 上限、回填与解析器预算测试改用 20/21 个文件，并增加
+  上限边界的回填用例；`README.md` 与 `README.zh-CN.md` 写为 20；取舍、成果与 CHANGELOG
+  条目同步。
+- **Eval：** `node --experimental-strip-types --test test/attachment-client.test.ts test/attachments.test.ts`
+  **29/29 通过**；上限用例由 4/5 改为 20/21（重叠批次：选 24 个恰好保留 20 个；解析器：
+  20 个接受、21 个拒绝；已有 19 个时回填只补剩余空位）。`npm run typecheck` 退出码 0；
+  `npm run gate` **PASS**（verdict 14、policy 30、audit 5、memory 31，基线未变）；
+  `npm test` **1162/1162**，退出码 0。
+- **Benchmark run：** 未跑 Provider/模型 benchmark。这是确定性上限变更，上面的离线测试
+  就是度量。不主张结果文件。
+- **执行链路：** 从所有者的截图与代码复现（输入框与解析器各有一个 `MAX_ATTACHMENTS`）；
+  一个 `claude-code-guide` 子 Agent 用 WebFetch/WebSearch 查证 Claude Code 与
+  claude.ai（49 次工具调用、78,197 tokens、239.6 秒），返回：CLI 不写数量上限（受
+  32 MB 请求体保护），Claude 应用的消息路径为 20 个附件，claude.ai 每次对话 20 个文件，
+  API 图片上限为 100/600。写下取舍，改两处上限与注释，更新四个测试，再跑定向测试。
+  有一轮暴露了两个仍按四个写死的测试——失败发送回填与二进制文档预算——都已更新；下一轮
+  typecheck 与 gate 通过，完整套件全绿。
+- **优点：** 一个数字只在两处；测试保留字节与字符预算并新增上限用例，上限不会悄悄漂移。
+- **缺点 / 下次：** 20 个的数量与 60,000,000 字符的请求体现在可能在最大尺寸混合时打架
+  （20 个 10 MB PDF 会超过请求体）。曾考虑客户端总字节预算并延后；推翻条件覆盖了它。
+  没有手工在重建后的窗口中走一遍；VM 测试执行的是真实 `app.js` 附件代码块与真实解析器。
+- **推翻条件：** 如果所有者经常需要超过 20 个小文件，或最大尺寸的混合附件开始撞上
+  60M 字符的请求体，增加客户端的总字节预算并重新审视数量。
+
 ### 2026-11-25 —— 一个执行者；主 Agent 为每次派发声明读或写
 
 - **目标 / 假设：** 四个默认"Worker"只是同一个原生 Provider 上的四个标签。路由与步骤指派

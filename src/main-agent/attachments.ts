@@ -61,8 +61,8 @@ export type AttachmentResult =
 const MAX_BASE64_CHARACTERS = 7_000_000;
 /** Base64 size ceiling for PDF/Word; roughly 10 MB decoded. PDF/Word 的 base64 上限，约 10 MB 解码后大小。 */
 const MAX_BINARY_CHARACTERS = 14_000_000;
-/** Attachments per message, images and documents together. 每条消息的附件上限，图片与文档合计。 */
-const MAX_ATTACHMENTS = 4;
+/** Attachments per message, images and documents together; 20 is the Claude apps' per-message cap. 每条消息的附件上限，图片与文档合计；20 与 Claude 应用的每消息上限一致。 */
+const MAX_ATTACHMENTS = 20;
 /** One document's character ceiling; about 12,500 tokens at four characters per token. 单个文档的字符上限。 */
 export const MAX_DOCUMENT_CHARACTERS = 50_000;
 /** All documents in one message; about 25,000 tokens, leaving the rest of the 128k window. 单条消息全部文档的字符上限。 */

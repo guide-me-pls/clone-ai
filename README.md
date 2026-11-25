@@ -165,7 +165,7 @@ touches `src/`, `apps/desktop/`, the package manifest, or the macOS build script
 reopen a running window to load the new build. Skip one rebuild with
 `CLONE_AI_SKIP_APP_BUILD=1 git push`.
 
-Composer attachments accept up to 4 files: images and videos (5 MB each), PDF and
+Composer attachments accept up to 20 files: images and videos (5 MB each), PDF and
 `.docx` files (10 MB each), and text documents such as `.md`, `.txt`, `.csv`, `.json`,
 source and config files (50,000 characters each, 100,000 together). Pick them with the
 paperclip or drop them anywhere on the window. PDF and `.docx` text is extracted inside

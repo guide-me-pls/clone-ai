@@ -6,6 +6,40 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-25 — A message carries twenty attachments, not four
+
+**Decision.** Raise the per-message attachment cap from 4 to 20 in both the
+composer (`apps/desktop/ui/app.js`) and the server parser
+(`src/main-agent/attachments.ts`). Nothing else changes: per-file limits (5 MB
+image/video, 10 MB PDF/.docx, 50,000 characters per document, 100,000 across
+documents), the 60,000,000-character request body, and extraction behavior stay.
+A selection over the cap still names the limit and drops the extra files.
+
+**Evidence and alternatives.** The owner selected six requirement documents
+(`toolbox-20261125-*.md`/`.sql`) and the composer kept four — the first four in
+picker order — while the other two vanished behind a 3.2-second toast. The
+four-file cap was ours, not a platform bound. The Claude apps cap one message at
+20 attachments (Claude Code changelog v2.1.287 and v2.1.311 describe the
+20-attachment app path; claude.ai documents up to 20 files per chat, and the
+vision docs state 20 images per turn), while the CLI itself documents no count
+and is bounded by its 32 MB request guard. Twenty therefore matches the
+mainstream path the owner compares against without inventing a new ceiling: the
+60M-character body remains the byte bound for large mixes, and the
+100,000-character document budget remains the context bound.
+
+- *Keep four.* Rejected: it drops files the owner selected for no reason the
+  owner chose, and no mainstream composer behaves that way.
+- *Remove the count cap entirely (CLI parity).* Rejected: the CLI's real bound is
+  request size; without a count, a 50-file selection is queued and only fails at
+  send against the 60M-character body. The 20-file bound is visible and cheap.
+- *Use the API's 100-image (200k-context) or 600-image request ceilings.*
+  Rejected: those are protocol ceilings, not the app path the owner uses; 100
+  attachments hit the request body long before they are accepted.
+
+**Reversal condition.** If owners routinely need more than 20 small files, or if
+max-size mixes start failing at the 60M-character body, add a client-side
+total-bytes budget and revisit the count.
+
 ## 2026-11-25 — Keep one implementation for turn intake and memory completion
 
 **Decision.** Use one Main Agent HTTP intake and execution path while keeping
