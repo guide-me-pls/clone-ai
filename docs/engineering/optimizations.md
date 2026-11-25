@@ -62,11 +62,13 @@ file keeps every attempt, including the ones that did not work.
   conversation (`OTHER_TASK_MARKER 整理学习资料并生成清单`), a completed prior
   turn in the main conversation, and a learned folder; pass = a non-empty reply
   that does not contain `OTHER_TASK_MARKER`; it also records whether the other
-  run reached the system prompt. Before (worktree `a6b6a91`, app-wide)
+  run reached the system prompt. Before (the commit before the scoping change,
+  `9acc5b5`)
   `benchmark/results/main-agent-2026-11-25T07-28-58-081Z.json`: 6/6 pass, other
-  run in prompt 6/6, median 59.8 s / 77,760 tok. After (commit `f27c1d0`,
-  scoped) `benchmark/results/main-agent-2026-11-25T07-23-19-600Z.json`: 6/6
-  pass, in prompt 0/6, median 16.2 s / 35,854 tok.
+  run in prompt 6/6, median 59.8 s / 77,760 tok. After (the scoping commit,
+  `5ce8130`)
+  `benchmark/results/main-agent-2026-11-25T07-23-19-600Z.json`: 6/6 pass, in
+  prompt 0/6, median 16.2 s / 35,854 tok.
 - **Execution chain:** inline attribution check on the live journal (15 of 39
   triggers carry a `conversationId`), code changes, focused tests, full suite,
   gate. Concurrent sessions kept editing the shared docs and `app.js`; only
@@ -277,6 +279,57 @@ file keeps every attempt, including the ones that did not work.
   provider binding, not a role roster; same-model review must be replaced if it
   misses defects; a mistaken `write` at a narrower authority level requires
   named targets or removal of the field.
+
+### 2026-11-25 — Pending decisions are docked in every conversation, not only on the task page that owns the run
+
+- **Goal / hypothesis:** the owner reported that a needed confirmation disappeared
+  as soon as they clicked the app, that they could not screenshot it, and that
+  they did not want a separate page jump per conversation. Make every pending
+  approval and review visible and answerable inside the conversation they are
+  reading, with no dependence on the macOS notification banner.
+- **Trade-off:** [Pending decisions are docked in every conversation, not only on the task page that owns the run](../architecture/trade-offs.md#2026-11-25--pending-decisions-are-docked-in-every-conversation-not-only-on-the-task-page-that-owns-the-run).
+- **Change:** `src/companion-server.ts` — the dashboard now returns a top-level
+  `reviews` array (via the existing `mainConversationReviews`) next to its
+  global `approvals`, and counts both. `apps/desktop/ui/app.js` — the sticky
+  `decisionDock` now also renders `globalApprovalMarkup` and
+  `globalReviewMarkup`: decisions from every task, deduplicated against the
+  selected session's own run ids, with task title, scopes, judge reason and the
+  worker's result. `approvalMarkup` / `reviewMarkup` tolerate a null session so
+  the welcome view can dock global decisions too; the render signature includes
+  the global decisions so a dashboard poll updates the dock; the dock scrolls
+  internally when several decisions are pending. Usage docs updated in both
+  languages. Tests: a dashboard-shape API case, a vm case for both global
+  renderers, and updated dock assertions.
+- **Eval:** `node --experimental-strip-types --test test/ui-structure.test.ts
+  test/companion-config-api.test.ts test/bilingual-documentation.test.ts
+  test/main-conversation-approvals.test.ts test/companion-control-plane.test.ts`
+  **109/109**; `npm run typecheck` exit 0; `npm run gate` **PASS**; full
+  `npm test` **1169/1169**, exit 0. Live: after a daemon restart the dashboard
+  returned `approvals 0`, `reviews 0`, `counts { approvals: 0, reviews: 0,
+  active: 0, completed: 3 }` — the new field is present on the real endpoint.
+  There was no pending decision in the live clone home, so the dock's rendering
+  is verified by the vm test rather than a live screenshot; that limitation is
+  recorded here.
+- **Execution chain:** traced the disappearing confirmation from the owner's
+  report to the `osascript display notification` banner (dismissed on
+  activation) and then to the UI ignoring the dashboard's top-level `approvals`;
+  confirmed the conversation view only read `session.approvals`; added the
+  global renderers and the dashboard `reviews`; hit the existing test that
+  encoded "the conversation is not a decision inbox" and updated it to the new
+  rule instead of deleting it; guarded the renderers for the welcome view;
+  included the global decisions in the render signature so a poll refreshes the
+  dock; restarted the daemon and checked the live dashboard shape. One working
+  agent; no provider or benchmark spend.
+- **Pros:** the decision now follows the owner across task conversations and
+  does not depend on a transient banner; the dashboard already had the global
+  approval data, so the server change was one array and its type.
+- **Cons / next time:** no live pending decision was available to screenshot;
+  the dock lives in the conversation, so a decision is still hidden while the
+  settings page is open. A top-level badge is the next step if owners miss it
+  there.
+- **Reversal condition:** from the trade-off — restrict to the main conversation
+  or collapse if noisy; point at a future global inbox instead of duplicating;
+  keep the dock if notifications gain a click-through to the decision.
 
 ### 2026-11-25 — MCP installs work under launchd; skills are installable and reach the Main Agent; every entry is a jump
 

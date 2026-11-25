@@ -49,10 +49,11 @@
   `http://127.0.0.1:3425`，模型 `deepseek/deepseek-v4.1-flash`，每次全新临时
   clone home。该格种入另一个对话的已完成 Run（`OTHER_TASK_MARKER 整理学习资料并生成
   清单`）、主对话里一条已完成回合，以及一个已学会的文件夹；通过 = 回复非空且不含
-  `OTHER_TASK_MARKER`；同时记录另一个 Run 是否进入系统提示词。改动前（工作树
-  `a6b6a91`，全应用）`benchmark/results/main-agent-2026-11-25T07-28-58-081Z.json`：
-  6/6 通过，提示词含另一 Run 6/6，中位数 59.8 s / 77,760 tok。改动后（提交
-  `f27c1d0`，按对话过滤）
+  `OTHER_TASK_MARKER`；同时记录另一个 Run 是否进入系统提示词。改动前（按对话过滤之前的
+  提交，`9acc5b5`）
+  `benchmark/results/main-agent-2026-11-25T07-28-58-081Z.json`：
+  6/6 通过，提示词含另一 Run 6/6，中位数 59.8 s / 77,760 tok。改动后（按对话过滤的提交，
+  `5ce8130`）
   `benchmark/results/main-agent-2026-11-25T07-23-19-600Z.json`：6/6 通过，含另一
   Run 0/6，中位数 16.2 s / 35,854 tok。
 - **执行链路：** 在线上 Journal 上核对归属（39 个 trigger 里 15 个带 `conversationId`）、
@@ -203,6 +204,39 @@
   记录仍显示运行时的通用标准，而计划显示调用方的标准；7 个并行验证器失败不在本变更范围。
 - **推翻条件：** 从取舍条目复制——第二个 Provider 需要 Provider 绑定而不是角色名单；同模型
   复核若漏掉缺陷就换成独立复核；更窄权限档位下错误的 `write` 需要点名目标或移除该字段。
+
+### 2026-11-25 —— 待决定项固定显示在每个对话里，而不只在拥有该 Run 的任务页
+
+- **目标 / 假设：** 所有者报告：需要确认时，一点进应用确认界面就消失，截不到图，且不希望
+  每个对话都要跳到单独页面。让所有等待中的审批与复核都显示在他正在读的对话里并能直接作答，
+  不依赖 macOS 通知横幅。
+- **取舍：** [待决定项固定显示在每个对话里，而不只在拥有该 Run 的任务页](../architecture/trade-offs.zh-CN.md#2026-11-25--待决定项固定显示在每个对话里而不只在拥有该-run-的任务页)。
+- **变更：** `src/companion-server.ts`——Dashboard 在原有全局 `approvals` 旁新增顶层
+  `reviews`（复用 `mainConversationReviews`），并统计两者。`apps/desktop/ui/app.js`——
+  固定 `decisionDock` 现在同时渲染 `globalApprovalMarkup` 与 `globalReviewMarkup`：来自
+  所有任务的决定，按当前会话已有的 Run id 去重，带任务标题、Scope、裁判理由与 Worker 结果。
+  `approvalMarkup` / `reviewMarkup` 容忍 null 会话，使欢迎页也能固定全局决定；渲染签名包含
+  全局决定，使 Dashboard 轮询能更新固定栏；多个决定时固定栏内部滚动。使用文档双语更新。
+  测试：Dashboard 形状的 API 用例、两个全局渲染器的 vm 用例、更新后的固定栏断言。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts
+  test/companion-config-api.test.ts test/bilingual-documentation.test.ts
+  test/main-conversation-approvals.test.ts test/companion-control-plane.test.ts`
+  **109/109**；`npm run typecheck` 退出 0；`npm run gate` **PASS**；完整 `npm test`
+  **1169/1169**，退出 0。实机：重启守护进程后 Dashboard 返回 `approvals 0`、
+  `reviews 0`、`counts { approvals: 0, reviews: 0, active: 0, completed: 3 }`——新字段在
+  真实端点存在。实机 clone home 没有待决定项，因此固定栏的渲染由 vm 测试验证而非实机截图；
+  这一限制记录在此。
+- **执行链路：** 从所有者报告追到 `osascript display notification` 横幅（激活应用即被关掉），
+  再追到 UI 忽略了 Dashboard 顶层的 `approvals`；确认对话视图只读 `session.approvals`；
+  加入全局渲染器与 Dashboard `reviews`；撞上编码了"对话不是决定收件箱"的旧测试，把它改写为
+  新规则而不是删掉；为欢迎页加 null 守卫；把全局决定纳入渲染签名，使轮询能刷新固定栏；
+  重启守护进程并检查实机 Dashboard 形状。单个工作 Agent；无 Provider 或 benchmark 花费。
+- **优点：** 决定现在跟随所有者跨任务对话，不再依赖短暂横幅；Dashboard 本来就计算了全局
+  审批，服务器改动只是一个数组及其类型。
+- **缺点 / 下次：** 实机没有待决定项可供截图；固定栏在对话里，设置页打开时决定仍不可见。
+  若所有者在那里错过决定，下一步是顶部全局徽章。
+- **推翻条件：** 来自取舍——若嘈杂则限制在主对话或折叠；将来若做全局收件箱，让固定栏指向它
+  而不是复制；若通知支持点击直达决定，固定栏可保留。
 
 ### 2026-11-25 —— MCP 安装在 launchd 下可用；技能可安装并接入 Main Agent；每个条目都是跳转
 
