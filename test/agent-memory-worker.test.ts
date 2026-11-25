@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -176,6 +176,35 @@ test("the default miner fails clearly when the endpoint is not configured", asyn
     if (previous.model !== undefined) process.env.CLONE_AI_NATIVE_MODEL = previous.model;
     if (previous.base !== undefined) process.env.CLONE_AI_NATIVE_BASE_URL = previous.base;
   }
+});
+
+test("the default miner sends a tool-free request using the saved endpoint", async (t) => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-miner-endpoint-"));
+  const keys = ["CLONE_AI_NATIVE_MODEL", "CLONE_AI_NATIVE_BASE_URL", "CLONE_AI_NATIVE_API_KEY"];
+  const previous = keys.map((key) => process.env[key]);
+  for (const key of keys) delete process.env[key];
+  t.after(async () => {
+    for (const [index, key] of keys.entries()) {
+      const value = previous[index];
+      if (value !== undefined) process.env[key] = value;
+    }
+    await rm(dataDirectory, { recursive: true, force: true });
+  });
+  const baseUrl = "http://127.0.0.1:12345";
+  await writeFile(join(dataDirectory, "config.json"), JSON.stringify({ mainAgentModel: "saved-model", mainAgentBaseUrl: baseUrl }));
+  const job = miningJob();
+  const complete = t.mock.method(globalThis, "fetch", async (url: string, options: RequestInit) => {
+    assert.equal(url, `${baseUrl}/v1/chat/completions`);
+    assert.deepEqual(JSON.parse(String(options.body)), {
+      model: "saved-model",
+      messages: [{ role: "user", content: miningPrompt(job) }],
+      stream: false,
+    });
+    assert.ok(options.signal instanceof AbortSignal);
+    return Response.json({ choices: [{ message: { content: "[]" } }] });
+  });
+  assert.deepEqual(await new AgentMemoryWorker({ dataDirectory }).extract(job), []);
+  assert.equal(complete.mock.callCount(), 1);
 });
 
 test("candidates are capped per task", async (t) => {

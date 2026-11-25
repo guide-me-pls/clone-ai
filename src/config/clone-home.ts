@@ -23,7 +23,6 @@ export interface ClonePaths {
   agentsFile: string;
   legacyAgentsFile: string;
   providersFile: string;
-  memoryFile: string;
   schedulesFile: string;
   sessionsFile: string;
   journalJsonlFile: string;
@@ -85,7 +84,6 @@ export function resolveClonePaths(options: ClonePathOptions = {}): ClonePaths {
     agentsFile: join(dataDirectory, "agents.json"),
     legacyAgentsFile: join(dataDirectory, "settings.json"),
     providersFile: join(dataDirectory, "providers.json"),
-    memoryFile: join(dataDirectory, "memory.json"),
     schedulesFile: join(dataDirectory, "schedules.json"),
     sessionsFile: join(dataDirectory, "sessions.json"),
     journalJsonlFile: join(dataDirectory, "journal.jsonl"),

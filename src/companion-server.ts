@@ -2581,15 +2581,40 @@ async function handleRequest(
     }
     const reservation = turnKey(context.dataDirectory, turnId);
     if (inFlightTurns.has(reservation)) {
-      sendJson(response, 409, { error: "This turn is already running." });
+      sendJson(response, 409, {
+        error: "This turn is already running.",
+        ...(streaming ? {} : { deduplicated: true }),
+      });
       return;
+    }
+    // A remote channel can retry after its own timeout. Reusing a terminal
+    // turn id returns the original result instead of running the request again.
+    // 远程通道可能在自身超时后重试；终态回合复用原 id 时返回原结果，而不是再次执行。
+    if (!streaming) {
+      const existingTurn = (await readMainAgentTurnRecords(context.dataDirectory))
+        .find((record) => record.id === turnId && conversationIdOf(record.conversationId) === conversation.id);
+      if (existingTurn?.status === "completed") {
+        sendJson(response, 200, { reply: existingTurn.reply ?? "", newRuns: [], deduplicated: true });
+        return;
+      }
+      if (existingTurn?.status === "failed" || existingTurn?.status === "interrupted") {
+        sendJson(response, 409, {
+          error: existingTurn.error ?? "This turn already ended without a successful reply.",
+          deduplicated: true,
+        });
+        return;
+      }
+      if (existingTurn?.status === "started") {
+        sendJson(response, 409, { error: "This turn is already running.", deduplicated: true });
+        return;
+      }
     }
     const resolvedAttachments = await resolveAttachmentDocuments(attachments);
     if (!resolvedAttachments.ok) {
       sendJson(response, 400, { error: resolvedAttachments.error });
       return;
     }
-    const documents = resolvedAttachments.documents;
+    const { documents, reports } = resolvedAttachments;
     // Delay the SSE headers until the Main Agent lock is held. A busy
     // conversation must remain a readable 409, not an already-open stream. A
     // turn waiting for a capacity slot is not a collision: it waits for another
@@ -2628,29 +2653,31 @@ async function handleRequest(
     try {
       const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
         conversationId: conversation.id,
-        onDelta: (delta) => send("delta", { delta }),
-        onQueued: (info) => {
-          const now = Date.now();
-          if (now - lastQueuedAt < 2_000) return;
-          lastQueuedAt = now;
-          send("queued", info);
-        },
         ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
         ...(documents.length === 0 ? {} : { documents }),
         ...(overrides.model === undefined ? {} : { model: overrides.model }),
         ...(overrides.effort === undefined ? {} : { effort: overrides.effort }),
         ...invocation,
         signal: abortController.signal,
-        onToolEvent: (event) => send("tool", event),
+        ...(streaming ? {
+          onDelta: (delta) => send("delta", { delta }),
+          onQueued: (info) => {
+            const now = Date.now();
+            if (now - lastQueuedAt < 2_000) return;
+            lastQueuedAt = now;
+            send("queued", info);
+          },
+          onToolEvent: (event) => send("tool", event),
+        } : {}),
       });
-      send("done", {
-        ...result,
-        ...(resolvedAttachments.reports.length === 0 ? {} : { attachmentReports: resolvedAttachments.reports }),
-      });
+      const payload = { ...result, ...(reports.length === 0 ? {} : { attachmentReports: reports }) };
+      if (streaming) send("done", payload);
+      else sendJson(response, 200, payload);
     } catch (error: unknown) {
       if (!streamOpen) {
         const busy = error instanceof MainAgentBusyError;
         const capacity = error instanceof MainAgentCapacityError;
+        if (!streaming && !busy && !capacity) throw error;
         sendJson(response, busy ? 409 : capacity ? 503 : 500, {
           error: error instanceof Error ? error.message : "The Main Agent failed.",
         });
@@ -2667,138 +2694,6 @@ async function handleRequest(
       inFlightTurns.delete(reservation);
       response.off("close", abortOnClose);
       if (streamOpen) response.end();
-    }
-    return;
-  }
-
-  if (request.method === "POST" && url.pathname === "/api/main-agent/query") {
-    const body = await readJsonBody(request);
-    const overrides = parseTurnModelAndEffort(body);
-    if (!overrides.ok) {
-      sendJson(response, 400, { error: overrides.error });
-      return;
-    }
-    const conversation = parseConversationId(body.conversationId);
-    if (!conversation.ok) {
-      sendJson(response, 400, { error: conversation.error });
-      return;
-    }
-    // A turn that actually runs with an explicit pick becomes the
-    // conversation's saved choice, even if the picker's own save call never
-    // reached the server. Absent fields keep the stored value.
-    // 真正带着显式选择运行的回合会成为该对话保存的选择，即使选择器自己的保存请求没有到达
-    // 服务端。缺省字段保留已存值。
-    if (overrides.model !== undefined || overrides.effort !== undefined) {
-      void writeTurnChoice(context.dataDirectory, conversation.id, {
-        ...(overrides.model === undefined ? {} : { model: overrides.model }),
-        ...(overrides.effort === undefined ? {} : { effort: overrides.effort }),
-      }).catch(() => undefined);
-    }
-    const attachments = parseAttachments(body.attachments);
-    if (!attachments.ok) {
-      sendJson(response, 400, { error: attachments.error });
-      return;
-    }
-    const text = normalizeMainAgentRequestText(body.text);
-    const turnId = typeof body.turnId === "string" && body.turnId.trim().length > 0
-      ? body.turnId.trim()
-      : randomUUID();
-    const callerKind = typeof request.headers["x-clone-caller"] === "string" ? request.headers["x-clone-caller"] : undefined;
-    const callerSession = typeof request.headers["x-clone-caller-session"] === "string" ? request.headers["x-clone-caller-session"] : undefined;
-    // A request that names no caller is the owner talking through the desktop
-    // app, not an anonymous client. Recording "unknown" made every owner turn
-    // in the audit unreadable.
-    // 未声明调用方的请求就是所有者通过桌面 App 在说话，而不是匿名客户端。记录成 "unknown" 会让
-    // 审计里每一次所有者回合都读不出是谁。
-    const invocation = {
-      surface: callerKind === "whatsapp" ? "mobile" as const : "desktop" as const,
-      caller: {
-        kind: callerKind ?? "desktop",
-        ...(callerSession === undefined ? {} : { sessionId: callerSession }),
-      },
-      // The running workspace, not the daemon's cwd. The prompt, the briefing
-      // and the invocation ledger all belong to the workspace the owner chose.
-      // 运行中的工作区，而不是守护进程的 cwd。Prompt、简报与调用台账都属于所有者选择的工作区。
-      workspacePath: context.workspacePath,
-    };
-    if (text.length === 0 && attachments.images.length === 0 && attachments.documents.length === 0 && attachments.binaryDocuments.length === 0) {
-      sendJson(response, 400, { error: "Please enter a request before sending." });
-      return;
-    }
-    if (await context.sessions.isConversationDeleted(conversation.id)) {
-      sendJson(response, 409, { error: "This conversation was hidden. Restore it before sending." });
-      return;
-    }
-    const reservation = turnKey(context.dataDirectory, turnId);
-    if (inFlightTurns.has(reservation)) {
-      sendJson(response, 409, { error: "This turn is already running.", deduplicated: true });
-      return;
-    }
-    // A remote channel can retry after its own timeout. Reusing a terminal
-    // turn id returns the original result instead of running the request again.
-    // 远程通道可能在自身超时后重试；终态回合复用原 id 时返回原结果，而不是再次执行。
-    const existingTurn = (await readMainAgentTurnRecords(context.dataDirectory))
-      .find((record) => record.id === turnId && conversationIdOf(record.conversationId) === conversation.id);
-    if (existingTurn?.status === "completed") {
-      sendJson(response, 200, {
-        reply: existingTurn.reply ?? "",
-        newRuns: [],
-        deduplicated: true,
-      });
-      return;
-    }
-    if (existingTurn?.status === "failed" || existingTurn?.status === "interrupted") {
-      sendJson(response, 409, {
-        error: existingTurn.error ?? "This turn already ended without a successful reply.",
-        deduplicated: true,
-      });
-      return;
-    }
-    if (existingTurn?.status === "started") {
-      sendJson(response, 409, {
-        error: "This turn is already running.",
-        deduplicated: true,
-      });
-      return;
-    }
-    const resolvedAttachments = await resolveAttachmentDocuments(attachments);
-    if (!resolvedAttachments.ok) {
-      sendJson(response, 400, { error: resolvedAttachments.error });
-      return;
-    }
-    const abortController = new AbortController();
-    const abortOnClose = (): void => {
-      if (!response.writableEnded) abortController.abort(new Error("The client disconnected."));
-    };
-    response.on("close", abortOnClose);
-    inFlightTurns.add(reservation);
-    try {
-      const result = await runRecordedMainAgentTurn(context.dataDirectory, text, turnId, {
-        conversationId: conversation.id,
-        ...(attachments.images.length === 0 ? {} : { images: attachments.images }),
-        ...(resolvedAttachments.documents.length === 0 ? {} : { documents: resolvedAttachments.documents }),
-        ...(overrides.model === undefined ? {} : { model: overrides.model }),
-        ...(overrides.effort === undefined ? {} : { effort: overrides.effort }),
-        ...invocation,
-        signal: abortController.signal,
-      });
-      sendJson(response, 200, {
-        ...result,
-        ...(resolvedAttachments.reports.length === 0 ? {} : { attachmentReports: resolvedAttachments.reports }),
-      });
-    } catch (error: unknown) {
-      if (error instanceof MainAgentBusyError) {
-        sendJson(response, 409, { error: error.message });
-        return;
-      }
-      if (error instanceof MainAgentCapacityError) {
-        sendJson(response, 503, { error: error.message });
-        return;
-      }
-      throw error;
-    } finally {
-      inFlightTurns.delete(reservation);
-      response.off("close", abortOnClose);
     }
     return;
   }

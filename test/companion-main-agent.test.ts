@@ -52,7 +52,7 @@ import { companionFetch } from "./helpers/companion-api.ts";
 // The conversation-driven entry exists and validates input without touching a
 // model; the full chain is covered by the gated live acceptance test.
 // 对话驱动入口存在且不触碰模型就校验输入；完整链路由门控的真实验收测试覆盖。
-test("the companion main-agent route rejects an empty request before any model call", async (t) => {
+test("both Main Agent endpoints reject invalid requests before any model call", async (t) => {
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-ai-companion-"));
   const server = await startCompanionServer({ port: 0, dataDirectory });
   // after-hooks run in registration order, so the server (and the SQLite
@@ -65,14 +65,21 @@ test("the companion main-agent route rejects an empty request before any model c
     await rm(dataDirectory, { recursive: true, force: true });
   });
 
-  const rejected = await companionFetch(server.url, server.token, "/api/main-agent/query", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text: "  " }),
-  });
-  assert.equal(rejected.status, 400);
-  const body = await rejected.json() as { error?: string };
-  assert.match(body.error ?? "", /enter a request/i);
+  for (const [body, error] of [
+    [{ text: "  " }, /enter a request/i],
+    [{ text: "hello", model: 42 }, /model must be a string/i],
+    [{ text: "hello", attachments: "not a list" }, /attachments.*list/i],
+  ] as const) {
+    for (const endpoint of ["query", "stream"]) {
+      const rejected = await companionFetch(server.url, server.token, `/api/main-agent/${endpoint}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      assert.equal(rejected.status, 400, endpoint);
+      assert.match((await rejected.json() as { error: string }).error, error, endpoint);
+    }
+  }
 });
 
 
@@ -279,7 +286,7 @@ test("a first-send no_progress turn streams the owner-facing summary", async (t)
   }
 });
 
-test("a realistic image attachment is accepted instead of failing on the body cap", async (t) => {
+test("a realistic image attachment is accepted and a retried JSON turn replays the reply", async (t) => {
   // The body cap must clear the attachment cap. A 1000x1000 photo is roughly
   // 667 KB of base64, which the old 32 KB body limit rejected outright.
   // 请求体上限必须高于附件上限。1000x1000 的照片约 667 KB base64，旧的 32 KB 上限会直接拒绝。
@@ -314,12 +321,19 @@ test("a realistic image attachment is accepted instead of failing on the body ca
   // 一张真正合法、超过旧 32 KB 请求体上限、但仍在上下文窗口内的 PNG：160x160 噪声，约 100 KB base64。
   const png = bigPng(160).toString("base64");
   assert.ok(png.length > 32_000, `the fixture must exceed the old body cap (got ${png.length})`);
-  const response = await companionFetch(server.url, server.token, "/api/main-agent/query", {
+  const body = JSON.stringify({ turnId: "image-turn", text: "what is this", attachments: [{ mimeType: "image/png", data: png }] });
+  const submit = () => companionFetch(server.url, server.token, "/api/main-agent/query", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text: "what is this", attachments: [{ mimeType: "image/png", data: png }] }),
+    body,
   });
+  const response = await submit();
   assert.equal(response.status, 200, "a realistic image must not hit the request-body cap");
+  const { reply } = await response.json() as { reply: string };
+  assert.equal(reply, "ok");
+  const retry = await submit();
+  assert.equal(retry.status, 200);
+  assert.deepEqual(await retry.json(), { reply, newRuns: [], deduplicated: true });
 });
 
 test("the Main Agent reads its project instructions from the internal base", async (t) => {
@@ -373,7 +387,9 @@ test("the Main Agent reads its project instructions from the internal base", asy
   const system = messages.find((message) => message.role === "system")?.content ?? "";
   assert.match(system, /WORKSPACE_MARKER_ONLY_IN_THE_CONFIGURED_FOLDER/);
   assert.match(system, /This computer is the workspace/);
-  assert.match(system, /no filesystem tool of your own/);
+  assert.match(system, /read_file is your read-only view/);
+  assert.match(system, /never tell the owner to paste a file's contents/i);
+  assert.doesNotMatch(system, /no filesystem tool of your own/i);
   assert.doesNotMatch(system, /Current workspace:/, "the prompt must not name a configured folder");
   assert.doesNotMatch(system, /rules for changing Clone AI/, "the daemon's cwd must not supply the project rules");
 });

@@ -54,6 +54,22 @@ async function library(url: string, token: string): Promise<{ memories: LibraryM
   return await response.json() as never;
 }
 
+test("retired JSON memory settings still return 410 without changing the old file", async (t) => {
+  const { url, token, dataDirectory } = await companion(t);
+  const path = join(dataDirectory, "memory.json");
+  const legacy = '{"settings":{"enabled":true,"maxRecall":4},"memories":[]}\n';
+  await writeFile(path, legacy, "utf8");
+
+  const response = await companionFetch(url, token, "/api/memory/settings", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled: false }),
+  });
+  assert.equal(response.status, 410);
+  assert.match((await response.json() as { error: string }).error, /governed memory library/);
+  assert.equal(await readFile(path, "utf8"), legacy);
+});
+
 test("a memory written in the GUI becomes a file the owner can open", async (t) => {
   const { url, token } = await companion(t);
 

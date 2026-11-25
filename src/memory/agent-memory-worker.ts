@@ -23,9 +23,10 @@
 import { randomUUID } from "node:crypto";
 
 import type { Evidence, MemoryCandidate, MemorySensitivity, MemoryType } from "../core/contracts.ts";
-import { readNativeMainAgentEndpoint, readPersistedMainAgentEndpoint } from "../main-agent/native-runtime.ts";
+import { readPersistedMainAgentEndpoint } from "../main-agent/native-runtime.ts";
 import type { MemoryWorker, PendingMemoryJob } from "./memory-pipeline.ts";
 import { evidenceRecordsFailure, hasDurableMemoryText } from "./memory-hygiene.ts";
+import { completeWithNativeEndpoint } from "./synthesized-recall.ts";
 
 export interface AgentMemoryWorkerOptions {
   /** Injected completion; defaults to the configured native endpoint. 注入的补全；默认使用已配置的原生端点。 */
@@ -45,7 +46,9 @@ export class AgentMemoryWorker implements MemoryWorker {
 
   constructor(options: AgentMemoryWorkerOptions = {}) {
     const dataDirectory = options.dataDirectory;
-    this.#complete = options.complete ?? ((prompt: string) => completeWithNativeEndpoint(prompt, dataDirectory));
+    this.#complete = options.complete ?? (async (prompt) => completeWithNativeEndpoint(prompt, {
+      fallback: dataDirectory === undefined ? {} : await readPersistedMainAgentEndpoint(dataDirectory),
+    }));
     this.#maxCandidates = options.maxCandidates ?? 3;
   }
 
@@ -64,39 +67,6 @@ export class AgentMemoryWorker implements MemoryWorker {
     if (parseJsonArray(source) === undefined) throw new Error("Memory mining produced invalid JSON.");
     return validateCandidates(source, job, this.#maxCandidates);
   }
-}
-
-/**
- * The default completion: a tool-free chat call to the same endpoint the Main
- * Agent uses. A missing endpoint is a mining failure, reported as such.
- * 默认补全：向主 Agent 使用的同一端点发起一次无工具的 chat 调用。端点缺失即为提炼失败，
- * 并如实报告。
- */
-async function completeWithNativeEndpoint(prompt: string, dataDirectory?: string): Promise<string> {
-  const persisted = dataDirectory === undefined ? {} : await readPersistedMainAgentEndpoint(dataDirectory);
-  const { endpoint, missing } = readNativeMainAgentEndpoint(process.env, persisted);
-  if (endpoint === undefined) {
-    throw new Error(`the endpoint is not configured (${missing.join(", ")})`);
-  }
-  const response = await fetch(`${endpoint.baseUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...(endpoint.apiKey === undefined ? {} : { authorization: `Bearer ${endpoint.apiKey}` }),
-    },
-    body: JSON.stringify({
-      model: endpoint.model,
-      messages: [{ role: "user", content: prompt }],
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(endpoint.timeoutMs ?? 60_000),
-  });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(`the endpoint answered ${response.status}: ${detail.slice(0, 300)}`);
-  }
-  const body = await response.json() as { choices?: Array<{ message?: { content?: string | null } }> };
-  return body.choices?.[0]?.message?.content ?? "";
 }
 
 /**
