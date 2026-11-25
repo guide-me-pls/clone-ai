@@ -85,14 +85,14 @@ API still shows the app-wide text.
 **Evidence.** `renderRecentWork` read every terminal run in the last 24h with no
 conversation filter (`src/main-agent/situation-briefing.ts`). 15 of the 39
 triggers in the live journal carry a `conversationId` (12 main conversation, 3
-one task); the rest predate the field or come from the scheduler. A six-sample
+one task); the rest predate the field or come from the scheduler. A ten-sample
 cross-conversation benchmark (`cross-conversation-continuation`) seeded a
 completed run from another conversation with a near-identical title. The
-mechanism changed as intended: the other run was in the system prompt in 6/6
-app-wide samples and 0/6 conversation-scoped samples. No sample in either
+mechanism changed as intended: the other run was in the system prompt in 10/10
+app-wide samples and 0/10 conversation-scoped samples. No sample in either
 condition mentioned the other run, so the feared cross-talk is a design
-rationale, not an observed failure at n=6. Cost did separate: median 77,760
-tokens / 59.8 s app-wide against 35,854 / 16.2 s scoped. The before/after runs
+rationale, not an observed failure at n=10. Cost did separate: median 77,119.5
+tokens / 71.5 s app-wide against 36,597 / 17.4 s scoped. The before/after runs
 are in `docs/engineering/optimizations.md`.
 
 **Reversal condition.** If the scoped list hides work the owner expects the twin

@@ -56,7 +56,7 @@ file keeps every attempt, including the ones that did not work.
   `npm test` 1170/1170; `npm run typecheck` exit 0; `npm run gate` PASS.
 - **Benchmark run:** `CLONE_AI_BENCH_MAIN_MODEL=deepseek/deepseek-v4.1-flash
   node --experimental-strip-types benchmark/main-agent.ts --only
-  cross-conversation-continuation --repeat 6`. Provider native, endpoint
+  cross-conversation-continuation --repeat 10`. Provider native, endpoint
   `http://127.0.0.1:3425`, model `deepseek/deepseek-v4.1-flash`, fresh
   temporary clone home per sample. The cell seeds a completed run in another
   conversation (`OTHER_TASK_MARKER 整理学习资料并生成清单`), a completed prior
@@ -64,11 +64,11 @@ file keeps every attempt, including the ones that did not work.
   that does not contain `OTHER_TASK_MARKER`; it also records whether the other
   run reached the system prompt. Before (the commit before the scoping change,
   `9acc5b5`)
-  `benchmark/results/main-agent-2026-11-25T07-28-58-081Z.json`: 6/6 pass, other
-  run in prompt 6/6, median 59.8 s / 77,760 tok. After (the scoping commit,
+  `benchmark/results/main-agent-2026-11-25T07-57-10-152Z.json`: 10/10 pass, other
+  run in prompt 10/10, median 71.5 s / 77,119.5 tok. After (the scoping commit,
   `5ce8130`)
-  `benchmark/results/main-agent-2026-11-25T07-23-19-600Z.json`: 6/6 pass, in
-  prompt 0/6, median 16.2 s / 35,854 tok.
+  `benchmark/results/main-agent-2026-11-25T08-02-48-706Z.json`: 10/10 pass, in
+  prompt 0/10, median 17.4 s / 36,597 tok.
 - **Execution chain:** inline attribution check on the live journal (15 of 39
   triggers carry a `conversationId`), code changes, focused tests, full suite,
   gate. Concurrent sessions kept editing the shared docs and `app.js`; only
@@ -76,7 +76,7 @@ file keeps every attempt, including the ones that did not work.
 - **Pros:** the mechanism uses data already present (the trigger payload), so
   no event schema change is needed; explicit `search_history` with
   `scope: "all"` remains the deliberate cross-task path.
-- **Cons / next time:** the behavioral pass did not separate — 0/6 samples in
+- **Cons / next time:** the behavioral pass did not separate — 0/10 samples in
   either condition mentioned the other run — so the cell proves the mechanism
   and the cost, not cross-talk. Runs created before the field or by the
   scheduler silently drop out of the per-turn list. Next: make the distractor

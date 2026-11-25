@@ -45,17 +45,17 @@
   `npm run gate` PASS。
 - **Benchmark run：** `CLONE_AI_BENCH_MAIN_MODEL=deepseek/deepseek-v4.1-flash
   node --experimental-strip-types benchmark/main-agent.ts --only
-  cross-conversation-continuation --repeat 6`。Provider 为 native，端点
+  cross-conversation-continuation --repeat 10`。Provider 为 native，端点
   `http://127.0.0.1:3425`，模型 `deepseek/deepseek-v4.1-flash`，每次全新临时
   clone home。该格种入另一个对话的已完成 Run（`OTHER_TASK_MARKER 整理学习资料并生成
   清单`）、主对话里一条已完成回合，以及一个已学会的文件夹；通过 = 回复非空且不含
   `OTHER_TASK_MARKER`；同时记录另一个 Run 是否进入系统提示词。改动前（按对话过滤之前的
   提交，`9acc5b5`）
-  `benchmark/results/main-agent-2026-11-25T07-28-58-081Z.json`：
-  6/6 通过，提示词含另一 Run 6/6，中位数 59.8 s / 77,760 tok。改动后（按对话过滤的提交，
+  `benchmark/results/main-agent-2026-11-25T07-57-10-152Z.json`：
+  10/10 通过，提示词含另一 Run 10/10，中位数 71.5 s / 77,119.5 tok。改动后（按对话过滤的提交，
   `5ce8130`）
-  `benchmark/results/main-agent-2026-11-25T07-23-19-600Z.json`：6/6 通过，含另一
-  Run 0/6，中位数 16.2 s / 35,854 tok。
+  `benchmark/results/main-agent-2026-11-25T08-02-48-706Z.json`：10/10 通过，含另一
+  Run 0/10，中位数 17.4 s / 36,597 tok。
 - **执行链路：** 在线上 Journal 上核对归属（39 个 trigger 里 15 个带 `conversationId`）、
   改代码、定向测试、完整套件、gate。并发会话一直在改共享文档与 `app.js`；只暂存了本次
   变更的 hunk。
