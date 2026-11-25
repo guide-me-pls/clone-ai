@@ -371,13 +371,13 @@ test("the sidebar shows tasks, not one session per conversational turn", async (
     const chat = await assembly.runtime.acceptTrigger({ kind: "query", summary: "你好", payload: {} });
     await assembly.runtime.attachPlan(chat.run.id, {
       summary: "直接回答",
-      steps: [{ id: "reply", title: "直接回答", instructions: "回答", risk: "read_only", acceptanceCriteria: ["已回答"], agentId: "direct-responder", requiredCapabilities: ["direct_response"] }],
+      steps: [{ id: "reply", title: "直接回答", instructions: "回答", risk: "read_only", acceptanceCriteria: ["已回答"], agentId: "worker", requiredCapabilities: ["direct_response"] }],
     });
     // A real task, which must stay visible. 真正的任务必须保留。
     const task = await assembly.runtime.acceptTrigger({ kind: "query", summary: "写一份周报", payload: {} });
     await assembly.runtime.attachPlan(task.run.id, {
       summary: "写周报",
-      steps: [{ id: "draft", title: "起草", instructions: "起草", risk: "reversible_write", acceptanceCriteria: ["草稿存在"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+      steps: [{ id: "draft", title: "起草", instructions: "起草", risk: "reversible_write", acceptanceCriteria: ["草稿存在"], agentId: "worker", requiredCapabilities: ["drafting"] }],
     });
 
     const response = await companionFetch(url, token, "/api/dashboard");
@@ -416,7 +416,7 @@ test("a run's full trace is ordered, readable, and keeps raw data one level down
     const { run } = await assembly.runtime.acceptTrigger({ kind: "query", summary: "整理周报", payload: {} });
     await assembly.runtime.attachPlan(run.id, {
       summary: "整理周报",
-      steps: [{ id: "draft", title: "起草", instructions: "起草", risk: "reversible_write", acceptanceCriteria: ["草稿存在"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+      steps: [{ id: "draft", title: "起草", instructions: "起草", risk: "reversible_write", acceptanceCriteria: ["草稿存在"], agentId: "worker", requiredCapabilities: ["drafting"] }],
     });
     const response = await companionFetch(url, token, `/api/runs/${run.id}/trace`);
     assert.equal(response.status, 200);
@@ -444,7 +444,7 @@ test("a derived task belongs to the conversation, and hiding the chat hides it t
     const { run } = await assembly.runtime.acceptTrigger({ kind: "query", summary: "总结今天的工作", payload: { source: "main-agent" } });
     await assembly.runtime.attachPlan(run.id, {
       summary: "总结今天的工作",
-      steps: [{ id: "scan", title: "扫描", instructions: "扫描", risk: "read_only", acceptanceCriteria: ["完成"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+      steps: [{ id: "scan", title: "扫描", instructions: "扫描", risk: "read_only", acceptanceCriteria: ["完成"], agentId: "worker", requiredCapabilities: ["drafting"] }],
     });
     // The chat summary is projected from the Main Agent's own turn ledger. 对话摘要来自主 Agent 的回合账本。
     await writeFile(join(dataDirectory, "main-agent-turns.jsonl"), `${JSON.stringify({
@@ -504,7 +504,7 @@ test("a conversation row owns its dispatched runs and aggregates their status", 
     });
     await assembly.runtime.attachPlan(first.run.id, {
       summary: "派发一",
-      steps: [{ id: "send", title: "发送", instructions: "发送到外部", risk: "external_side_effect", acceptanceCriteria: ["receipt"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+      steps: [{ id: "send", title: "发送", instructions: "发送到外部", risk: "external_side_effect", acceptanceCriteria: ["receipt"], agentId: "worker", requiredCapabilities: ["drafting"] }],
     });
     const paused = await assembly.runtime.execute(first.run.id, new StaticAgentRegistry([]));
     assert.equal(paused.status, "waiting_approval");
@@ -513,7 +513,7 @@ test("a conversation row owns its dispatched runs and aggregates their status", 
     });
     await assembly.runtime.attachPlan(second.run.id, {
       summary: "派发二",
-      steps: [{ id: "draft", title: "起草", instructions: "起草", risk: "reversible_write", acceptanceCriteria: ["草稿"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+      steps: [{ id: "draft", title: "起草", instructions: "起草", risk: "reversible_write", acceptanceCriteria: ["草稿"], agentId: "worker", requiredCapabilities: ["drafting"] }],
     });
 
     const dashboard = await (await companionFetch(url, token, "/api/dashboard")).json() as {
@@ -547,7 +547,7 @@ test("a failed latest turn stays visible while its child run is active", async (
     const at = new Date().toISOString();
     const step = {
       id: "read", title: "读取", instructions: "只读读取资料", risk: "read_only" as const,
-      acceptanceCriteria: ["读取完成"], agentId: "context-researcher",
+      acceptanceCriteria: ["读取完成"], agentId: "worker",
       requiredCapabilities: ["research", "filesystem_read"],
     };
     await appendMainAgentTurnRecord(dataDirectory, {
@@ -603,7 +603,7 @@ test("a paused run is offered for phone approval and the request is journaled", 
     const { run } = await assembly.runtime.acceptTrigger({ kind: "query", summary: "发送周报", payload: {} });
     await assembly.runtime.attachPlan(run.id, {
       summary: "发送周报",
-      steps: [{ id: "send", title: "发送", instructions: "发送到外部", risk: "external_side_effect", acceptanceCriteria: ["receipt"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+      steps: [{ id: "send", title: "发送", instructions: "发送到外部", risk: "external_side_effect", acceptanceCriteria: ["receipt"], agentId: "worker", requiredCapabilities: ["drafting"] }],
     });
     const executed = await assembly.runtime.execute(run.id, new StaticAgentRegistry([]));
     assert.equal(executed.status, "waiting_approval");
@@ -649,7 +649,7 @@ test("an approval names the step it was issued for, and a mismatch is refused", 
     runId = run.id;
     await assembly.runtime.attachPlan(runId, {
       summary: "发布",
-      steps: [{ id: "publish", title: "发布", instructions: "发送公告", risk: "external_side_effect", acceptanceCriteria: ["已发送"], agentId: "evidence-reviewer", requiredCapabilities: ["review"] }],
+      steps: [{ id: "publish", title: "发布", instructions: "发送公告", risk: "external_side_effect", acceptanceCriteria: ["已发送"], agentId: "worker", requiredCapabilities: ["review"] }],
     });
     const result = await assembly.runtime.execute(runId, createScriptedAgentRegistry());
     assert.equal(result.status, "waiting_approval");
@@ -867,7 +867,7 @@ test("a paused task record carries its own approval and step", async (t) => {
     runId = run.id;
     await assembly.runtime.attachPlan(runId, {
       summary: "发送周报",
-      steps: [{ id: "send", title: "发送", instructions: "发送到外部", risk: "external_side_effect", acceptanceCriteria: ["receipt"], agentId: "draft-maker", requiredCapabilities: ["drafting"] }],
+      steps: [{ id: "send", title: "发送", instructions: "发送到外部", risk: "external_side_effect", acceptanceCriteria: ["receipt"], agentId: "worker", requiredCapabilities: ["drafting"] }],
     });
     assert.equal((await assembly.runtime.execute(runId, new StaticAgentRegistry([]))).status, "waiting_approval");
   } finally {

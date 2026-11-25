@@ -3,8 +3,8 @@ import test from "node:test";
 
 import { buildFallbackPlan, isReadOnlyRequest } from "../src/planning/fallback-planner.ts";
 
-/** The four production profiles after the CLI workers were removed. 移除 CLI Worker 后的四个生产 profile。 */
-const PRODUCTION_AGENTS = new Set(["direct-responder", "context-researcher", "draft-maker", "evidence-reviewer"]);
+/** The one production executor after the worker roster collapsed. 名单收拢后唯一的执行者。 */
+const PRODUCTION_AGENTS = new Set(["worker"]);
 
 test("a read-only review of uncommitted files is not an external action", () => {
   // "未提交" contains the external-action term "提交", but it is a state word.
@@ -12,7 +12,7 @@ test("a read-only review of uncommitted files is not an external action", () => 
   const plan = buildFallbackPlan("只读审查这 9 个未提交的 ToolBox 文件；不要修改任何文件。", PRODUCTION_AGENTS);
   assert.equal(plan.steps.length, 1);
   assert.equal(plan.steps[0]?.risk, "read_only");
-  assert.equal(plan.steps[0]?.agentId, "context-researcher");
+  assert.equal(plan.steps[0]?.agentId, "worker");
 });
 
 test("a quoted external-action error does not make a read-only review external", () => {
@@ -23,7 +23,7 @@ test("a quoted external-action error does not make a read-only review external",
     PRODUCTION_AGENTS,
   );
   assert.equal(plan.steps[0]?.risk, "read_only");
-  assert.equal(plan.steps[0]?.agentId, "context-researcher");
+  assert.equal(plan.steps[0]?.agentId, "worker");
 });
 
 test("a state word without a read-only marker still does not plan an external step", () => {
@@ -49,7 +49,7 @@ test("direct requests stay direct instead of creating child agents", () => {
   const plan = buildFallbackPlan("解释一下这个术语是什么意思");
 
   assert.equal(plan.steps.length, 1);
-  assert.equal(plan.steps[0]?.agentId, "direct-responder");
+  assert.equal(plan.steps[0]?.agentId, "worker");
   assert.equal(plan.steps[0]?.subagents, undefined);
 });
 
@@ -63,7 +63,10 @@ test("drafting requests receive only the preparation role they need", () => {
 });
 
 test("complex external work uses a dependent review and a separate approval step", () => {
-  const plan = buildFallbackPlan("调研三个供应商的报价和风险，比较后形成推荐方案，并发布最终采购结果给团队");
+  // A governed external operator is not part of the default roster; this unit
+  // test supplies one to exercise the plan shape the Kernel would gate.
+  // 受治理的外部执行者不在默认名单中；这个单元测试提供一个，以验证 Kernel 会校验的计划形状。
+  const plan = buildFallbackPlan("调研三个供应商的报价和风险，比较后形成推荐方案，并发布最终采购结果给团队", new Set(["worker", "external-operator"]));
   const orders = plan.steps[0]?.subagents ?? [];
 
   assert.deepEqual(orders.map((order) => order.id), ["context", "draft", "review"]);
@@ -81,14 +84,14 @@ test("an explicit read-only request is one read-only step, not a draft artifact"
   assert.equal(plan.steps.length, 1);
   const step = plan.steps[0]!;
   assert.equal(step.risk, "read_only");
-  assert.equal(step.agentId, "context-researcher");
+  assert.equal(step.agentId, "worker");
   assert.equal(step.subagents, undefined, "a read-only request must not create an artifact-bearing work order");
   assert.match(step.instructions ?? "", /README\.md/);
 });
 
 test("a read-only code review also stays one read-only step", () => {
   const plan = buildFallbackPlan("只读审查这个项目的代码，指出检索链路的优化空间，不要修改文件。");
-  assert.equal(plan.steps[0]?.agentId, "context-researcher");
+  assert.equal(plan.steps[0]?.agentId, "worker");
   assert.equal(plan.steps[0]?.risk, "read_only");
   assert.equal(plan.steps[0]?.subagents, undefined);
 });
@@ -176,5 +179,5 @@ test("a one-line modelling request goes to a worker, not a written answer", () =
   }
   // A genuine question still gets a direct answer.
   // 真正的问题仍然直接回答。
-  assert.equal(buildFallbackPlan("解释一下这个术语是什么意思").steps[0]?.agentId, "direct-responder");
+  assert.equal(buildFallbackPlan("解释一下这个术语是什么意思").steps[0]?.agentId, "worker");
 });

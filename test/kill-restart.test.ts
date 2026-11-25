@@ -42,7 +42,7 @@ const LEASE_MS = 1_500;
 
 /** The successor's worker: fast, and it marks the file as its own. 接替者的 Worker：快，且在文件上留下自己的印记。 */
 class SuccessorWriter implements RuntimeAdapter {
-  readonly id = "draft-maker";
+  readonly id = "worker";
   readonly providerId = "successor";
 
   async capabilities(): Promise<RuntimeCapabilities> {

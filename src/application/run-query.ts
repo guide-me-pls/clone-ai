@@ -2,19 +2,20 @@ import { randomUUID } from "node:crypto";
 
 import { createConfiguredAgentRegistry } from "../workers/configured-worker-registry.ts";
 import { workCapabilitiesForRole } from "../workers/capabilities.ts";
-import type { AgentRegistry, MemoryCandidate, OwnerDecisionNotifier, PlanStep, PolicyJudge, TriggerKind } from "../core/contracts.ts";
+import type { AgentRegistry, MemoryCandidate, OwnerDecisionNotifier, PlanStep, PolicyJudge, TriggerKind, VerificationResult } from "../core/contracts.ts";
 import { createRuntimeAssembly } from "../core/runtime-factory.ts";
 import type { CloneRuntime, DispatchResult } from "../core/runtime.ts";
 import type { JournalStore } from "../core/journal.ts";
 import { GovernedMemorySource } from "../memory/md-memory-store.ts";
-import { buildFallbackPlan, isReadOnlyRequest } from "../planning/fallback-planner.ts";
+import { buildFallbackPlan, buildResponsibilityPlan, isReadOnlyRequest, type DispatchResponsibility } from "../planning/fallback-planner.ts";
+import { readRunResult, type RunResultSummary } from "../core/run-result.ts";
 import { attachMainAgentBrief, normalizeWorkerBrief } from "../planning/worker-brief.ts";
 import { reconcileCommitments } from "../state/commitment-reconciler.ts";
 import { createEnvironmentWorkPlanner, type PlanningAgent, type WorkPlanner } from "../planning/llm-planner.ts";
 import { defaultWorkerProfiles, type CloneSettings, type WorkerProfile } from "../config/worker-settings.ts";
 import { classifyIntent } from "../main-agent/intent-classifier.ts";
 import { routeTask } from "../main-agent/agent-router.ts";
-import { assignWorkersPerStep } from "../main-agent/plan-routing.ts";
+import { assignWorkersPerStep, type StepAssignment } from "../main-agent/plan-routing.ts";
 import { buildMemoryContextFromCandidates } from "../main-agent/memory-context-builder.ts";
 import { describeWorkers } from "../main-agent/worker-descriptors.ts";
 import { JournalDispatchRecorder } from "../main-agent/dispatch-recorder.ts";
@@ -34,6 +35,16 @@ export interface QueryRunResult {
   blocked?: { code: DispatchBlockedCode; reason: string; requestedAgentId?: string };
   /** Which worker the router chose, and why. 路由器选择了哪个 Worker，以及原因。 */
   routing?: { selectedAgentId: string; source: string; usedMemoryIds: readonly string[] };
+  /**
+   * The effective executor of each step or work order. The task-level routing
+   * field names a default; this is what actually ran.
+   * 每个步骤或工作单的实际执行者。任务级路由字段给出的是默认值；这里才是真正运行的。
+   */
+  assignments?: readonly StepAssignment[];
+  /** The run's last durable answer, already redacted. Run 的最后一条持久答复，已脱敏。 */
+  result?: RunResultSummary;
+  /** What the Kernel checked, including criteria it could not check mechanically. Kernel 校验了什么，包括无法机械检查的标准。 */
+  verification?: VerificationResult;
 }
 
 export interface QueryWorkflowOptions {
@@ -107,6 +118,21 @@ export function shouldUseDeterministicPlanner(query: string, workerBrief?: strin
   return isReadOnlyRequest(query) || (workerBrief !== undefined && isReadOnlyRequest(workerBrief));
 }
 
+/**
+ * When the caller supplied settings explicitly, the Kernel's known executors
+ * must be those settings, not the settings file it would otherwise read. The
+ * same list decides what a plan may name; letting the two disagree rejected
+ * plans that named a worker the caller had just supplied.
+ * 调用方显式提供设置时，Kernel 已知的执行者必须来自这份设置，而不是它本来会读的
+ * 设置文件。同一份清单决定计划可以点名谁；两者不一致会拒绝刚刚由调用方提供的 Worker。
+ */
+function declaredExecutors(settings?: CloneSettings): { knownAgentIds: () => Set<string> } | undefined {
+  if (settings === undefined) return undefined;
+  return {
+    knownAgentIds: () => new Set(settings.agents.filter((agent) => agent.enabled).map((agent) => agent.id)),
+  };
+}
+
 export async function runQuery(
   dataDirectory: string,
   query: string,
@@ -119,6 +145,7 @@ export async function runQuery(
     ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
     ...(options.ownerDecisionNotifier === undefined ? {} : { ownerDecisionNotifier: options.ownerDecisionNotifier }),
     ...(options.policyJudge === undefined ? {} : { policyJudge: options.policyJudge }),
+    ...(declaredExecutors(settings) ?? {}),
   });
   // Every exit from this workflow must release the journal handle: the caller
   // owns the clone home and may move or delete it the moment we return.
@@ -234,8 +261,26 @@ async function runQueryWithin(
     // 主 Agent 的简报随触发载荷传递。规划前先归一化，使畸形或超长的简报在这里被拒绝，
     // 而不是抵达 Worker。
     const workerBrief = normalizeWorkerBrief(trigger.payload?.workerBrief);
+    // The Main Agent declares what the dispatch is for. When present, that
+    // choice replaces the keyword planner's read/write guess and carries the
+    // caller's acceptance criteria into the step.
+    // 主 Agent 声明这次派发是做什么的。存在时，这个选择取代关键词 Planner 的读/写猜测，
+    // 并把调用方的验收标准带进步骤。
+    const rawResponsibility = trigger.payload?.responsibility;
+    if (rawResponsibility !== undefined && rawResponsibility !== "read" && rawResponsibility !== "write") {
+      throw new Error(`Unknown dispatch responsibility: ${String(rawResponsibility)}.`);
+    }
+    const responsibility = rawResponsibility as DispatchResponsibility | undefined;
+    const dispatchCriteria = readDispatchCriteria(trigger.payload?.acceptanceCriteria);
     const deterministicPlanner = shouldUseDeterministicPlanner(query, workerBrief);
-    if (planner === undefined || deterministicPlanner) {
+    if (responsibility !== undefined) {
+      plan = buildResponsibilityPlan({
+        query,
+        responsibility,
+        executorId: selectedId,
+        ...(dispatchCriteria === undefined ? {} : { acceptanceCriteria: dispatchCriteria }),
+      });
+    } else if (planner === undefined || deterministicPlanner) {
       plan = buildFallbackPlan(query, new Set(routableAgents.map((agent) => agent.id)), recalledMemories);
     } else {
       const started = Date.now();
@@ -294,14 +339,37 @@ async function runQueryWithin(
   });
   const result = await executeClaimingRun(journal, runtime, run.id, registry, options.signal);
   const candidates = result.status === "completed" ? await processMemorySafely(memory, result.run.id, options.memorySignal) : [];
+  // The dispatch path reads this back to the Main Agent; a run that paused for
+  // an approval or a review still has a durable answer worth handing over.
+  // 派发路径把这条答复交回主 Agent；即使 Run 因审批或复核暂停，持久答复仍值得交回。
+  const runResult = await readRunResult(journal, result.run.id).catch(() => undefined);
   return {
     ...toQueryResult(runtime, result, candidates.length),
+    assignments: routedPlan.assignments,
+    ...(runResult === undefined ? {} : { result: runResult }),
     routing: {
       selectedAgentId: selectedId,
       source: routed.decision.source,
       usedMemoryIds: routed.decision.usedMemoryIds,
     },
   };
+}
+
+/**
+ * The Main Agent's acceptance criteria, bounded and cleaned. A malformed value
+ * is treated as absent rather than crashing the run; dispatch_task already
+ * validates its own input.
+ * 主 Agent 的验收标准，去噪并有界。畸形的值按缺失处理而不是让 Run 崩溃；dispatch_task
+ * 已经校验过自己的输入。
+ */
+function readDispatchCriteria(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const criteria = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .slice(0, 12);
+  return criteria.length === 0 ? undefined : criteria;
 }
 
 /**
@@ -398,6 +466,7 @@ export async function approveQueryRun(
   const assembly = await createRuntimeAssembly({
     dataDirectory,
     ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+    ...(declaredExecutors(settings) ?? {}),
   });
   try {
     const { runtime, memory, failureCatalog, paths } = assembly;
@@ -532,6 +601,7 @@ function toQueryResult(runtime: CloneRuntime, result: DispatchResult, memoryCand
     ...(result.status === "failed" && result.run.failureReason !== undefined ? { failureReason: result.run.failureReason } : {}),
     subagentsCompleted: runtime.getSubagentsForRun(result.run.id).filter((subagent) => subagent.status === "completed").length,
     memoryCandidatesProposed,
+    ...(result.verification === undefined ? {} : { verification: result.verification }),
   };
 }
 

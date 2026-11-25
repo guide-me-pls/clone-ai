@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { builtInProviders } from "../workers/provider-catalog.ts";
 import type { ProviderRegistry } from "../workers/provider-registry.ts";
 
-export type AgentRole = "direct" | "research" | "draft" | "review" | "external";
+export type AgentRole = "general" | "direct" | "research" | "draft" | "review" | "external";
 /**
  * A provider id is whatever the provider registry knows at runtime, not a
  * closed union: a third-party provider must be selectable without editing
@@ -29,43 +29,27 @@ export interface CloneSettings {
   agents: WorkerProfile[];
 }
 
+/**
+ * One executor, not a roster of roles. The native provider is the only
+ * execution provider, so four profiles with four role names were four labels on
+ * the same worker: only their capability sets differed. Responsibility is now
+ * declared per step by the Main Agent's plan; the worker itself is general.
+ * External actions still have no executor until a governed connector exists.
+ *
+ * 一个执行者，而不是一份角色名单。原生 Provider 是唯一的执行 Provider，因此四个角色
+ * Profile 只是同一个 Worker 上的四个标签：只有能力集不同。职责现在由主 Agent 的计划按
+ * 每一步声明；Worker 本身是通用的。在有受治理的连接器之前，外部动作仍没有执行者。
+ */
 const DEFAULT_AGENTS: WorkerProfile[] = [
   {
-    id: "direct-responder",
-    title: "直接执行器",
-    role: "direct",
-    description: "处理无需拆分的本地请求。",
-    purpose: "让简单问题不被不必要地拆成子任务。",
+    id: "worker",
+    title: "执行 Worker",
+    role: "general",
+    description: "在本机读取、修改与交付；每一步能做什么由计划声明，工具调用由 Kernel 校验。",
+    purpose: "执行所有本地工作；职责按任务与步骤声明，不再按角色拆分。",
     providerId: "native",
     enabled: true,
     required: true,
-  },
-  {
-    id: "context-researcher",
-    title: "上下文研究员",
-    role: "research",
-    description: "收集约束、已有信息和待确认事项。",
-    purpose: "用于调研、比较、分析和需要先理解背景的任务。",
-    providerId: "native",
-    enabled: true,
-  },
-  {
-    id: "draft-maker",
-    title: "草拟与交付 Agent",
-    role: "draft",
-    description: "把上下文转化为可编辑的本地交付物。",
-    purpose: "用于计划、文档、代码、邮件和其他可回退产物。",
-    providerId: "native",
-    enabled: true,
-  },
-  {
-    id: "evidence-reviewer",
-    title: "证据复核员",
-    role: "review",
-    description: "检查计划、产物和证据是否足以支持下一步。",
-    purpose: "用于复杂任务和外部动作前的独立复核。",
-    providerId: "native",
-    enabled: true,
   },
 ];
 
@@ -117,7 +101,7 @@ export class WorkerSettingsStore {
       throw new Error("The requested agent setting does not exist.");
     }
     if (agent.required && update.enabled === false) {
-      throw new Error("The direct executor is required for local requests.");
+      throw new Error("The executor is required for local work.");
     }
     if (update.providerId !== undefined && !providers.has(update.providerId)) {
       throw new Error(

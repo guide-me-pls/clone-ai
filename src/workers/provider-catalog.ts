@@ -20,7 +20,7 @@ export function nativeProviderDefinition(): ProviderDefinition {
   return {
     id: "native",
     label: "Native worker (OpenAI-compatible)",
-    supportedRoles: ["direct", "research", "draft", "review"],
+    supportedRoles: ["general", "direct", "research", "draft", "review"],
     roleRestrictionReason: "The native worker cannot perform external side effects; use a governed action connector.",
     createAdapter: ({ agentId, workCapabilities, workspacePath, dataDirectory, endpoint }) => {
       // MCP tools come from the clone home's mcp.json; a malformed entry is

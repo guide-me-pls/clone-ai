@@ -41,7 +41,7 @@ function reviewStep(overrides: Partial<PlanStep> = {}): PlanStep {
     instructions: "Review the current work order contract.",
     risk: "read_only",
     acceptanceCriteria: ["Review exists"],
-    agentId: "context-researcher",
+    agentId: "worker",
     requiredCapabilities: ["research"],
     ...overrides,
   };
@@ -281,7 +281,7 @@ test("a pure conversation is answered, not turned into a run", async (t) => {
       instructions: "直接回答",
       risk: "read_only",
       acceptanceCriteria: ["已回答"],
-      agentId: "direct-responder",
+      agentId: "worker",
       requiredCapabilities: ["direct_response"],
     }],
   });

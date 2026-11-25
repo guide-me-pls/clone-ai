@@ -155,16 +155,19 @@ test("the most specialised covering worker wins over a broader one", () => {
   assert.equal(assignWorkersPerStep(unplanned, decision("generalist"), workers).plan.steps[0]!.agentId, "reviewer");
 });
 
-test("a pinned worker's own capabilities replace what the plan declared", () => {
-  // A template plan declares what the work needs ("direct_response"); the
-  // worker the owner named may not list it. Dispatching on the declared
-  // capability would fail and override the owner with a template's guess.
-  // 模板计划声明的是工作所需（如 "direct_response"）；所有者点名的 Worker 可能并未列出
-  // 它。按声明能力派发会失败，等于用模板的猜测推翻所有者的决定。
+test("a pinned worker keeps the step's declared capabilities", () => {
+  // The plan author declared what the work needs. Replacing it with the pinned
+  // worker's whole set turned a read step pinned to the general worker into one
+  // requiring filesystem_write, which tripped the Kernel's risk floor. If the
+  // pinned worker cannot cover the declaration, the Kernel refuses it with the
+  // missing capability instead.
+  // 计划作者声明了工作所需。用被钉住 Worker 的完整能力集替换，会让钉在通用 Worker 上的
+  // 只读步骤要求 filesystem_write，从而触发 Kernel 的风险下限。若被钉住的 Worker 覆盖
+  // 不了声明，Kernel 会带着缺失能力拒绝它。
   const plan = { summary: "Review", steps: [step("s1", "direct-responder", ["direct_response"])] };
 
   const routed = assignWorkersPerStep(plan, decision("evidence-reviewer", "explicit"), WORKERS);
 
   assert.equal(routed.plan.steps[0]!.agentId, "evidence-reviewer");
-  assert.deepEqual(routed.plan.steps[0]!.requiredCapabilities, ["review"]);
+  assert.deepEqual(routed.plan.steps[0]!.requiredCapabilities, ["direct_response"]);
 });

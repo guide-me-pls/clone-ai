@@ -81,13 +81,16 @@ export function assignWorkersPerStep(
 
     if (pinned) {
       record(decision.selectedAgentId, `The owner explicitly requested ${decision.selectedAgentId} for this task.`);
-      // The pinned worker's own capabilities replace whatever the plan declared.
-      // A template plan declares what the *work* needs ("direct_response"), and
-      // the owner's named worker may legitimately not list it; failing dispatch
-      // on that would override the owner with a guess made by a template.
-      // 被钉住的 Worker 自身能力会取代计划声明的任何能力。模板计划声明的是"工作"所需
-      // （如 "direct_response"），而所有者点名的 Worker 完全可能没有列出它；因此而让派发
-      // 失败，等于用模板的猜测推翻所有者的决定。
+      // A pinned worker keeps the step's declared capabilities. Replacing them
+      // with the worker's whole set made every read step pinned to the general
+      // worker require filesystem_write, which then tripped the Kernel's risk
+      // floor. If the pinned worker cannot cover the step, the Kernel refuses it
+      // with the missing capability — the honest failure — rather than widening
+      // the step to everything the worker could theoretically do.
+      // 被钉住的 Worker 保留步骤声明的能力。用 Worker 的完整能力集替换，会让钉在通用
+      // Worker 上的每个只读步骤都要求 filesystem_write，从而触发 Kernel 的风险下限。
+      // 若被钉住的 Worker 覆盖不了该步骤，Kernel 会带着缺失能力拒绝——这是诚实的失败——
+      // 而不是把步骤放宽成 Worker 理论上能做的一切。
       return { agentId: decision.selectedAgentId, capabilities: pinnedCapabilities(byId.get(decision.selectedAgentId), capabilities) };
     }
 
@@ -137,19 +140,17 @@ export function assignWorkersPerStep(
   return { plan: { summary: plan.summary, steps }, assignments };
 }
 
+/** A pinned worker keeps the step's own declaration; its capabilities only fill a step that declares none. 被钉住的 Worker 保留步骤自己的声明；只有未声明能力时才用自身能力补足。 */
+function pinnedCapabilities(worker: WorkerDescriptor | undefined, declared: readonly string[]): readonly string[] {
+  if (declared.length > 0) return declared;
+  return worker === undefined ? declared : worker.capabilities;
+}
+
 /**
  * A step that declares no capabilities inherits the worker's own, so it is
  * dispatchable rather than making a claim the adapter cannot satisfy.
  * 未声明能力的步骤沿用 Worker 自身的能力，使其可被派发，而不是提出 Adapter 无法满足的主张。
  */
-/**
- * For an explicitly requested worker, its own capabilities win outright.
- * 对于被显式指定的 Worker，它自身的能力直接胜出。
- */
-function pinnedCapabilities(worker: WorkerDescriptor | undefined, declared: readonly string[]): readonly string[] {
-  return worker === undefined ? declared : worker.capabilities;
-}
-
 function capabilitiesFor(worker: WorkerDescriptor | undefined, declared: readonly string[]): readonly string[] {
   if (declared.length > 0) return declared;
   return worker === undefined ? declared : worker.capabilities;

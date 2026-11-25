@@ -785,7 +785,7 @@ function renderSchedules(schedules, occurrences = [], reportDeliveries = [], rep
   const reportFailure = reportError ? `<div class="schedule-row"><div><b>${escape(t("report-state-error-title"))}</b><span>${escape(t("report-state-error"))}</span></div></div>` : "";
   $("schedule-list").innerHTML = rows + warnings + reportWarnings + reportFailure;
 }
-function agentRoleLabel(role) { return ({ direct: t("role-direct"), research: t("role-research"), draft: t("role-draft"), review: t("role-review"), external: t("role-external") }[role] || role); }
+function agentRoleLabel(role) { return ({ general: t("role-general"), direct: t("role-direct"), research: t("role-research"), draft: t("role-draft"), review: t("role-review"), external: t("role-external") }[role] || role); }
 function providerLabel(id) { return ({ "codex-cli": "Codex CLI", "claude-code": "Claude Code", pi: "Pi" }[id] || id); }
 function renderSettings(settings) {
   state.settings = settings;

@@ -70,9 +70,10 @@ export function createScriptedAgentRegistry(settings?: WorkerProfile[]): StaticA
   )));
 }
 
-const defaultAgentIds = ["direct-responder", "context-researcher", "draft-maker", "evidence-reviewer", "external-operator"];
+const defaultAgentIds = ["worker", "direct-responder", "context-researcher", "draft-maker", "evidence-reviewer", "external-operator"];
 
 function capabilitiesForAgentId(agentId: string): string[] {
+  if (agentId === "worker") return ["direct_response", "research", "review", "drafting", "filesystem_read", "filesystem_write"];
   if (agentId === "context-researcher") return ["research", "filesystem_read"];
   if (agentId === "draft-maker") return ["drafting", "filesystem_read", "filesystem_write"];
   if (agentId === "evidence-reviewer") return ["review"];

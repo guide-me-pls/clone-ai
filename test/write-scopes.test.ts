@@ -88,6 +88,14 @@ test("a path before the write cue is not a write target", () => {
   assert.deepEqual(declaredWriteTargets("把结果写到 /tmp/report.md"), ["/tmp/report.md"]);
 });
 
+test("edit and modify are write cues, and a prohibition still grants nothing", () => {
+  // A write dispatch usually says "edit" or "修改", not only "write".
+  // 写派发通常说 "edit" 或 "修改"，而不只是 "write"。
+  assert.deepEqual(declaredWriteTargets("Edit /tmp/a.ts"), ["/tmp/a.ts"]);
+  assert.deepEqual(declaredWriteTargets("修改 /tmp/b.ts"), ["/tmp/b.ts"]);
+  assert.deepEqual(declaredWriteTargets("不要修改 /tmp/c.ts"), []);
+});
+
 test("a no-target write is denied, while a named target follows the approval ladder", async () => {
   const home = await mkdtemp(join(tmpdir(), "clone-write-scopes-"));
   const workspace = join(home, "project");

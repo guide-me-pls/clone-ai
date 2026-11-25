@@ -32,7 +32,7 @@ if (dataDirectory === undefined || workspacePath === undefined) {
 }
 
 class SlowWorker implements RuntimeAdapter {
-  readonly id = "draft-maker";
+  readonly id = "worker";
   readonly providerId = "child";
 
   async capabilities(): Promise<RuntimeCapabilities> {
@@ -87,7 +87,7 @@ try {
       // 步骤点名写入目标；没有隐式的工作区授权。
       scopes: [{ domain: "files", resource: workspacePath, access: "write" }],
       acceptanceCriteria: ["形成一份可核对的交付物"],
-      agentId: "draft-maker",
+      agentId: "worker",
       requiredCapabilities: ["drafting", "filesystem_write"],
     }],
   });

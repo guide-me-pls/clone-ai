@@ -19,6 +19,7 @@
   const LABELS = {
     objective: "目标",
     acceptanceCriteria: "验收标准",
+    responsibility: "职责",
     date: "日期",
     path: "路径",
     paths: "路径",
@@ -68,6 +69,8 @@
     const text = String(value);
     if (text === "today") return "今天";
     if (text === "yesterday") return "昨天";
+    if (text === "read") return "只读";
+    if (text === "write") return "写入";
     return clip(text.replace(/\s+/g, " ").trim(), MAX_TEXT);
   }
   function headline(name, input) {

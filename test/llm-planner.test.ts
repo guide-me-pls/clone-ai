@@ -195,7 +195,11 @@ test("a read-only request bypasses the injected LLM planner", async () => {
 test("workflow uses an injected LLM planner before it dispatches an executor", async () => {
   const directory = await mkdtemp(join(tmpdir(), "clone-ai-llm-planner-"));
   try {
-    const model = new ScriptedPlannerModel([directPlan()]);
+    // The one executor is "worker"; a planner may only name an available agent.
+    // 唯一的执行者是 "worker"；Planner 只能点名可用的 Agent。
+    const proposal = directPlan();
+    (proposal.steps[0]!.execution as Record<string, unknown>).agentId = "worker";
+    const model = new ScriptedPlannerModel([proposal]);
     // The registry is injected explicitly: production has no implicit fake
     // fallback, so a test that must not reach a real provider says so.
     // Registry 显式注入：生产环境没有隐式的假 Registry 回退，因此不希望触达真实
@@ -205,8 +209,11 @@ test("workflow uses an injected LLM planner before it dispatches an executor", a
       agents: createScriptedAgentRegistry(),
     });
 
-    assert.equal(result.status, "waiting_review");
+    assert.equal(result.status, "completed");
+    // One planner call; the first call carries no correction.
+    // 一次 Planner 调用；第一次调用不带纠正。
     assert.equal(model.corrections.length, 1);
+    assert.equal(model.corrections[0], undefined);
     const journal = createJournalStore(directory);
     try {
       const usage = (await journal.list()).filter((event) => event.type === "usage.recorded");

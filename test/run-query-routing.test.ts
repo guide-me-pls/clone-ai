@@ -44,14 +44,14 @@ test("an explicit request reaches the worker the owner named", async (t) => {
 
   const result = await runQuery(
     dataDirectory,
-    "请让 evidence-reviewer 复核这份材料",
+    "请让 worker 复核这份材料",
     {},
     undefined,
     { agents: createScriptedAgentRegistry(), workspacePath: dataDirectory },
   );
 
-  assert.equal(result.status, "waiting_review");
-  assert.equal(result.routing?.selectedAgentId, "evidence-reviewer");
+  assert.equal(result.status, "completed");
+  assert.equal(result.routing?.selectedAgentId, "worker");
   assert.equal(result.routing?.source, "explicit");
 });
 
@@ -68,7 +68,7 @@ test("a direct query never dispatches after another executor rejects its claim",
   };
   t.after(() => { SqliteJournalStore.prototype.claimRun = original; });
 
-  const result = await runQuery(dataDirectory, "请让 evidence-reviewer 复核这份材料", {}, undefined, {
+  const result = await runQuery(dataDirectory, "请让 worker 复核这份材料", {}, undefined, {
     agents: createScriptedAgentRegistry(), workspacePath: dataDirectory,
   });
   const events = await journalEvents(dataDirectory);
@@ -89,8 +89,7 @@ test("a direct query rechecks a run that another executor completed before its c
       assert.ok(await original.call(this, { ...input, ownerId: competingOwner }));
       const other = await createRuntimeAssembly({ dataDirectory, workspacePath: dataDirectory });
       try {
-        assert.equal((await other.runtime.execute(input.runId, agents)).status, "waiting_review");
-        assert.equal((await other.runtime.reviewVerification(input.runId, "accept")).status, "completed");
+        assert.equal((await other.runtime.execute(input.runId, agents)).status, "completed");
       } finally {
         other.close();
         await this.releaseClaim({ runId: input.runId, ownerId: competingOwner });
@@ -110,15 +109,16 @@ test("a direct query rechecks a run that another executor completed before its c
 
 test("a named worker that cannot run blocks the query instead of substituting", async (t) => {
   const dataDirectory = await home(t);
-  // Only the researcher can run; the owner asks for someone else entirely.
-  // 只有 researcher 能运行；而所有者点名了另一个完全不同的 Worker。
+  // Another executor exists in the registry, but the owner named the worker
+  // and that worker is not installed; nothing may stand in for it.
+  // Registry 里有另一个执行者，但所有者点名的是 worker，而它没有安装；不得顶替。
   const onlyResearcher = new StaticAgentRegistry([
     new ScriptedExecutionAdapter("context-researcher", "demo", ["research", "filesystem_read"]),
   ]);
 
   const result = await runQuery(
     dataDirectory,
-    "请使用 evidence-reviewer 复核这份材料",
+    "请使用 worker 复核这份材料",
     {},
     undefined,
     { agents: onlyResearcher, workspacePath: dataDirectory },
@@ -126,7 +126,7 @@ test("a named worker that cannot run blocks the query instead of substituting", 
 
   assert.equal(result.status, "blocked");
   assert.equal(result.blocked?.code, "REQUESTED_AGENT_UNAVAILABLE");
-  assert.equal(result.blocked?.requestedAgentId, "evidence-reviewer");
+  assert.equal(result.blocked?.requestedAgentId, "worker");
   // The available worker was never used as a stand-in.
   // 可用的那个 Worker 从未被拿来顶替。
   assert.equal(result.routing, undefined);
@@ -139,7 +139,7 @@ test("a blocked query is journaled and its run is closed, not left planning", as
 
   const result = await runQuery(
     dataDirectory,
-    "请使用 draft-maker 写一份报告",
+    "请使用 worker 写一份报告",
     {},
     undefined,
     { agents: empty, workspacePath: dataDirectory },
@@ -149,7 +149,7 @@ test("a blocked query is journaled and its run is closed, not left planning", as
   const events = await journalEvents(dataDirectory);
   const blocked = events.find((event) => event.type === "dispatch.blocked");
   assert.ok(blocked, "the refusal must be auditable");
-  assert.equal((blocked.payload as { requestedAgentId?: string }).requestedAgentId, "draft-maker");
+  assert.equal((blocked.payload as { requestedAgentId?: string }).requestedAgentId, "worker");
 
   // A refused run must not linger as if it were still being planned.
   // 被拒绝的 Run 不能滞留成"仍在规划中"的样子。
@@ -187,7 +187,7 @@ test("a planner failure closes its run instead of leaving it planning", async (t
 test("the dispatch decision is journaled before the worker runs", async (t) => {
   const dataDirectory = await home(t);
 
-  await runQuery(dataDirectory, "请让 draft-maker 起草说明", {}, undefined, {
+  await runQuery(dataDirectory, "请让 worker 起草说明", {}, undefined, {
     agents: createScriptedAgentRegistry(),
     workspacePath: dataDirectory,
   });
@@ -212,20 +212,20 @@ test("routing without an explicit request still records why a worker was chosen"
     workspacePath: dataDirectory,
   });
 
-  assert.equal(result.status, "waiting_review");
-  assert.equal(result.routing?.selectedAgentId, "context-researcher");
+  assert.equal(result.status, "completed");
+  assert.equal(result.routing?.selectedAgentId, "worker");
   assert.equal(result.routing?.source, "rule");
 });
 
 test("a disabled worker cannot be selected even when it is the best match", async (t) => {
   const dataDirectory = await home(t);
   const profiles = defaultWorkerProfiles().map((profile) => (
-    profile.id === "context-researcher" ? { ...profile, enabled: false } : profile
+    profile.id === "worker" ? { ...profile, enabled: false } : profile
   ));
 
   const result = await runQuery(
     dataDirectory,
-    "请使用 context-researcher 调研这个库",
+    "请使用 worker 调研这个库",
     {},
     { agents: profiles },
     { agents: createScriptedAgentRegistry(), workspacePath: dataDirectory },
@@ -237,7 +237,7 @@ test("a disabled worker cannot be selected even when it is the best match", asyn
 
 test("a single-agent step records its final answer, not only its evidence", async (t) => {
   const dataDirectory = await home(t);
-  const result = await runQuery(dataDirectory, "请让 evidence-reviewer 复核这份材料", {}, undefined, {
+  const result = await runQuery(dataDirectory, "请让 worker 复核这份材料", {}, undefined, {
     agents: createScriptedAgentRegistry(),
     workspacePath: dataDirectory,
   });
@@ -246,7 +246,7 @@ test("a single-agent step records its final answer, not only its evidence", asyn
   assert.ok(completed, "the step's answer must be journaled");
   const payload = completed.payload as { stepId?: string; summary?: string };
   assert.equal(typeof payload.stepId, "string");
-  assert.match(payload.summary ?? "", /evidence-reviewer completed step/);
+  assert.match(payload.summary ?? "", /worker completed step/);
   // The answer is a separate record from the evidence; without it the review
   // card could only list what the worker touched.
   // 回答是与证据分开的一条记录；没有它，复核卡只能列出 Worker 碰过什么。

@@ -62,7 +62,7 @@ const OWNER_WORDS = "记住我每周五要写周报，并帮我准备";
  * 编排测试是对的——但黄金路径的关键恰恰是文件是真的，因为验证器会去打开它。
  */
 class WeeklyReportWriter implements RuntimeAdapter {
-  readonly id = "draft-maker";
+  readonly id = "worker";
   readonly providerId = "demo";
 
   async capabilities(): Promise<RuntimeCapabilities> {
@@ -214,7 +214,7 @@ test("the golden path: a stated commitment becomes verified work and remembered 
       // 步骤点名写入目标；没有隐式的工作区授权。
       scopes: [{ domain: "files", resource: workspacePath, access: "write" }],
       acceptanceCriteria: [`文件 weekly-report.md 存在，包含："本周进展"`],
-      agentId: "draft-maker",
+      agentId: "worker",
       requiredCapabilities: ["drafting", "filesystem_write"],
     }],
   });

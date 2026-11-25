@@ -18,6 +18,10 @@ import type { TaskIntentKind, WorkerDescriptor } from "./dispatch-contracts.ts";
  */
 
 const ROLE_KINDS: Readonly<Record<WorkerProfile["role"], readonly TaskIntentKind[]>> = {
+  // The one local executor accepts every local kind of work; "operations" is
+  // absent because no executor can perform an external side effect.
+  // 唯一的本地执行者接受所有本地工作；不含 "operations"，因为没有执行者能产生外部副作用。
+  general: ["direct", "coding", "planning", "research", "review"],
   direct: ["direct", "coding", "planning"],
   research: ["research"],
   draft: ["coding", "planning"],

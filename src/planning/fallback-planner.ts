@@ -76,6 +76,15 @@ export function buildFallbackPlan(
   enabledAgentIds: ReadonlySet<string> = new Set(defaultAgentIds),
   recalledMemories: readonly string[] = [],
 ): FallbackPlan {
+  // One enabled executor does the local work; its id is a routing fact, not a
+  // role. The external operator, when one exists, is not a local executor.
+  // 一个已启用的本地执行者承担工作；它的 ID 是路由事实，不是角色。外部执行者（若存在）
+  // 不是本地执行者。
+  const executorId = [...enabledAgentIds].find((id) => id !== "external-operator");
+  if (executorId === undefined) {
+    throw new Error("No enabled executor can run this plan.");
+  }
+  const hasExternalOperator = enabledAgentIds.has("external-operator");
   const normalized = query.toLocaleLowerCase();
   // A read-only marker is a whole-task constraint, not one delivery term among
   // many. Without this, "只读取 README，不要修改任何文件" contains "项目" and
@@ -136,27 +145,27 @@ export function buildFallbackPlan(
   const request = requestSummary(query);
 
   const preparationOrders = [];
-  if (!readOnlyRequest && needsResearch && enabledAgentIds.has("context-researcher")) {
+  if (!readOnlyRequest && needsResearch) {
     preparationOrders.push({
       id: "context",
-      agentId: "context-researcher",
+      agentId: executorId,
       role: "researcher" as const,
       title: "梳理相关上下文",
       objective: `只读查找完成该请求所需的约束、已有信息与待确认事项：${request}`,
       inputs: [{ name: "request", description: "The owner's current request and recalled local context.", required: true }],
       requiredCapabilities: ["research", "filesystem_read"],
-      // A researcher reads; it does not write. Its contract must be the
-      // evidence a read produces, or verification demands a file the role
+      // A read phase reads; it does not write. Its contract must be the
+      // evidence a read produces, or verification demands a file the phase
       // cannot legitimately create.
-      // 研究员只读，不写。它的合同必须是读取能产出的证据，否则验证会索要该角色无法合法
-      // 创建的文件。
+      // 读取阶段只读，不写。它的合同必须是读取能产出的证据，否则验证会索要该阶段无法
+      // 合法创建的文件。
       expectedArtifacts: [observationContract("context-note", "A recorded context note: constraints, existing information and open questions observed in the files the worker read.")],
       acceptanceCriteria: ["形成一份可核对的上下文说明"],
       risk: "read_only" as const,
       budget: defaultWorkOrderBudget(),
     });
   }
-  if (!readOnlyRequest && needsDelivery && enabledAgentIds.has("draft-maker")) {
+  if (!readOnlyRequest && needsDelivery) {
     // The worker sees this objective and nothing else of the owner's request
     // (`buildInstructions` prefers `workOrder.objective`), so a generic one
     // turns a concrete task into "prepare something". Carry the request itself.
@@ -164,7 +173,7 @@ export function buildFallbackPlan(
     // `workOrder.objective`），因此通用文案会把具体任务变成"准备点什么"。把请求本身带进去。
     preparationOrders.push({
       id: "draft",
-      agentId: "draft-maker",
+      agentId: executorId,
       role: "maker" as const,
       title: needsResearch ? "形成可执行草案" : "准备本地交付物",
       objective: `在本地完成所有者的请求，不产生外部影响：${request}`,
@@ -176,10 +185,10 @@ export function buildFallbackPlan(
       budget: defaultWorkOrderBudget(),
     });
   }
-  if (needsReview && preparationOrders.length > 0 && enabledAgentIds.has("evidence-reviewer")) {
+  if (needsReview && preparationOrders.length > 0) {
     preparationOrders.push({
       id: "review",
-      agentId: "evidence-reviewer",
+      agentId: executorId,
       role: "reviewer" as const,
       title: "复核计划与证据",
       objective: `复核以下请求的准备是否足以支持下一步，并明确保留的不确定性：${request}`,
@@ -190,7 +199,7 @@ export function buildFallbackPlan(
         required: true,
       })),
       requiredCapabilities: ["review"],
-      expectedArtifacts: [observationContract("review-note", "An independent review of the dependency evidence the worker read.")],
+      expectedArtifacts: [observationContract("review-note", "A review note on the dependency evidence the worker read. The same worker may run this pass, so it is a second look, not an independent reviewer.")],
       acceptanceCriteria: ["形成一份复核说明"],
       risk: "read_only" as const,
       budget: defaultWorkOrderBudget(),
@@ -207,9 +216,8 @@ export function buildFallbackPlan(
     // 工件，"看一下这个项目"不能在成功读取之后以失败告终。
     steps.push({
       id: "read-only-lookup",
-      ...(enabledAgentIds.has("context-researcher")
-        ? { agentId: "context-researcher", requiredCapabilities: ["research", "filesystem_read"] }
-        : { agentId: "direct-responder", requiredCapabilities: ["direct_response"] }),
+      agentId: executorId,
+      requiredCapabilities: ["research", "filesystem_read"],
       title: "只读查看并回答",
       instructions: `${query}\n\nThis is a read-only step: read only what the request needs, answer from that evidence, and do not write or modify any file.`,
       risk: "read_only",
@@ -235,7 +243,7 @@ export function buildFallbackPlan(
   } else {
     steps.push({
       id: "direct-response",
-      agentId: "direct-responder",
+      agentId: executorId,
       requiredCapabilities: ["direct_response"],
       title: "直接处理请求",
       instructions: "这个请求不需要拆分或授权外部操作，直接在本地完成。",
@@ -245,7 +253,7 @@ export function buildFallbackPlan(
   }
 
   if (needsExternalAction) {
-    if (!enabledAgentIds.has("external-operator")) {
+    if (!hasExternalOperator) {
       throw new Error("外部动作连接器尚未实现，本地 Worker 不能执行这个外部动作。请改成由你确认并手动完成，或把请求改成本地准备（草稿、步骤或检查清单）。");
     }
     steps.push({
@@ -267,6 +275,84 @@ export function buildFallbackPlan(
   }, recalledMemories);
 }
 
+/** What the Main Agent assigns a dispatch to do. 主 Agent 为一次派发指定的职责。 */
+export type DispatchResponsibility = "read" | "write";
+
+/**
+ * A dispatched task whose responsibility the Main Agent declared explicitly.
+ *
+ * The Main Agent knows whether the owner asked for investigation or for work
+ * that changes files; inferring that again from keywords is how "优化一下"
+ * became a read-only run whose acceptance criteria were the planner's canned
+ * prose. The Kernel still validates the resulting step: risk floor, write
+ * scopes, authority, protected paths and completion.
+ *
+ * 主 Agent 显式声明职责的派发任务。
+ *
+ * 主 Agent 知道所有者要的是调查，还是会改动文件的工作；再用关键词猜一次，正是
+ * "优化一下"变成只读 Run、验收标准变成 Planner 固定文案的原因。Kernel 仍校验生成的
+ * 步骤：风险下限、写 Scope、权限、受保护路径与完成判定。
+ */
+export function buildResponsibilityPlan(input: {
+  query: string;
+  responsibility: DispatchResponsibility;
+  /** The routed executor. It is the only worker today. 路由选定的执行者；今天是唯一的 Worker。 */
+  executorId: string;
+  /** The Main Agent's own criteria, which become the step's criteria. 主 Agent 自己写的标准，成为步骤标准。 */
+  acceptanceCriteria?: readonly string[];
+}): FallbackPlan {
+  const request = requestSummary(input.query);
+  const criteria = (input.acceptanceCriteria ?? [])
+    .map((criterion) => criterion.trim())
+    .filter((criterion) => criterion.length > 0)
+    .slice(0, 12);
+
+  if (input.responsibility === "read") {
+    return {
+      summary: "One read-only step answers this request without writing files.",
+      steps: [{
+        id: "read-only-lookup",
+        agentId: input.executorId,
+        requiredCapabilities: ["research", "filesystem_read"],
+        title: "只读查看并回答",
+        instructions: `${input.query}\n\nThis is a read-only step: read only what the request needs, answer from that evidence, and do not write or modify any file.`,
+        risk: "read_only",
+        acceptanceCriteria: criteria.length > 0 ? criteria : ["只读取所需内容并给出有依据的回答，不修改任何文件。"],
+      }],
+    };
+  }
+
+  const stepCriteria = criteria.length > 0 ? criteria : [`完成请求要求的本地交付物：${request}`];
+  return {
+    summary: "One local write step carries out this request; writes stay inside the step's scopes.",
+    steps: [{
+      id: "local-delivery",
+      title: "在本地完成请求",
+      instructions: `${input.query}\n\nThis is a local write step: create or change only the files the brief names, and do not touch any external system.`,
+      risk: "reversible_write",
+      acceptanceCriteria: stepCriteria,
+      // A write task must produce a write. Without this contract a task that
+      // only read and answered could complete with an observation and tell the
+      // owner the work was done; the artifact is the proof the Kernel can check.
+      // 写任务必须真的写出东西。没有这份合同，只读并回答的任务可以凭一条观察完成，
+      // 让所有者以为工作已完成；产物才是 Kernel 能检查的证明。
+      subagents: [{
+        id: "deliver",
+        agentId: input.executorId,
+        role: "maker" as const,
+        title: "完成本地交付",
+        objective: request,
+        inputs: [{ name: "request", description: "The owner's request and the step's brief.", required: true }],
+        requiredCapabilities: ["drafting", "filesystem_read", "filesystem_write"],
+        expectedArtifacts: [artifactContract("local-delivery", "A durable file the worker created or changed.", true)],
+        acceptanceCriteria: stepCriteria,
+        risk: "reversible_write" as const,
+        budget: defaultWorkOrderBudget(),
+      }],
+    }],
+  };
+}
+
 function applyMemoryContext(plan: FallbackPlan, recalledMemories: readonly string[]): FallbackPlan {
   if (recalledMemories.length === 0) return plan;
   const context = ` Owner-approved local memory for this work: ${recalledMemories.join(" | ")}`;
@@ -280,7 +366,7 @@ function applyMemoryContext(plan: FallbackPlan, recalledMemories: readonly strin
   };
 }
 
-const defaultAgentIds = ["direct-responder", "context-researcher", "draft-maker", "evidence-reviewer", "external-operator"];
+const defaultAgentIds = ["worker"];
 
 /**
  * The owner's own words, trimmed to a size that fits an objective.
@@ -394,6 +480,6 @@ function defaultWorkOrderBudget() {
  * 启发式。
  */
 export function isReadOnlyRequest(query: string): boolean {
-  const plan = buildFallbackPlan(query, new Set(["direct-responder"]));
+  const plan = buildFallbackPlan(query, new Set(["worker"]));
   return plan.steps.length === 1 && plan.steps[0]?.id === "read-only-lookup";
 }
