@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { runMainAgentQuery } from "../src/application/run-main-query.ts";
 import { prepareCloneHome, resolveClonePaths } from "../src/config/clone-home.ts";
 import { createJournalStore } from "../src/core/sqlite-journal.ts";
+import { appendMainAgentTurnRecord } from "../src/main-agent/turn-audit.ts";
 import { median, percentile } from "./stats.ts";
 
 const resultsDirectory = join(fileURLToPath(new URL(".", import.meta.url)), "results");
@@ -36,6 +37,23 @@ function repeatCount(): number {
 }
 
 const REPEAT = repeatCount();
+
+/**
+ * Restrict the run to named task cells, e.g. `--only learned-folder-read`.
+ * A behavior cell can then be measured before and after a prompt change
+ * without paying for the whole table twice.
+ * 只运行点名的任务格，例如 `--only learned-folder-read`。这样提示词改动前后的行为测量
+ * 不必为整张表付两遍钱。
+ */
+function onlyFilter(): Set<string> | undefined {
+  const index = process.argv.indexOf("--only");
+  const raw = index >= 0 ? process.argv[index + 1] : undefined;
+  if (raw === undefined) return undefined;
+  const ids = raw.split(",").map((value) => value.trim()).filter((value) => value.length > 0);
+  return ids.length === 0 ? undefined : new Set(ids);
+}
+
+const ONLY = onlyFilter();
 
 /**
  * A fixture outside the clone home: read_file refuses the clone home, so the
@@ -56,14 +74,34 @@ await writeFile(fixturePath, "BENCH_READ_MARKER_7Q2\n\nThis fixture exists so th
  */
 const fixtureWorkspace = await mkdtemp(join(tmpdir(), "clone-ai-main-workspace-"));
 await writeFile(join(fixtureWorkspace, "README.md"), "# Fixture project\n\nBENCH_PLAN_README\n", "utf8");
+/**
+ * A folder the twin learns through the turn ledger, outside both the clone
+ * home and the real home. The task prompts name no path, so resolving
+ * `learned-file.md` proves the learned-folder path rather than Spotlight or the
+ * workspace. `/var/folders` is not indexed by Spotlight, and the direct
+ * learned-root join runs before Spotlight anyway.
+ * 分身通过回合台账学到的文件夹，位于 clone home 与真实 home 之外。任务提示词不给路径，
+ * 因此解析 `learned-file.md` 证明走的是已知文件夹路径，而不是 Spotlight 或工作区。
+ * `/var/folders` 不进入 Spotlight 索引，而且直接拼接已知根发生在 Spotlight 之前。
+ */
+const learnedFixture = await mkdtemp(join(tmpdir(), "clone-ai-main-learned-"));
+await writeFile(join(learnedFixture, "learned-file.md"), "BENCH_LEARNED_MARKER_9K4\n\nThis file is reachable only through a learned folder.\n", "utf8");
 
 type Runtime = "native";
-type Expectation = "direct" | "authority" | "plan" | "read";
+type Expectation = "direct" | "authority" | "plan" | "read" | "learned-read" | "learned-trivial" | "learned-continuation";
+
+interface TaskSeed {
+  /** A folder taught in another conversation, so it is learned but absent from this turn's history. 在另一个对话中教会的文件夹：已学会，但不在本回合历史里。 */
+  folder?: string;
+  /** A completed earlier turn in the main conversation whose texts name no absolute path. 主对话中更早的一条已完成回合，其文本不含绝对路径。 */
+  previous?: { text: string; reply: string };
+}
 
 interface MainAgentTask {
   id: string;
   prompt: string;
   expectation: Expectation;
+  seed?: TaskSeed;
 }
 
 const TASKS: MainAgentTask[] = [
@@ -86,6 +124,30 @@ const TASKS: MainAgentTask[] = [
     id: "named-file-read",
     prompt: "读取文件 {fixture}，只回复它的第一行内容。不要提案计划，也不要修改任何文件。",
     expectation: "read",
+  },
+  {
+    id: "learned-folder-read",
+    prompt: "读取我项目里的 learned-file.md，只回复它的第一行内容。不要提案计划，也不要修改任何文件。",
+    expectation: "learned-read",
+    seed: { folder: learnedFixture },
+  },
+  {
+    id: "learned-folder-trivial",
+    prompt: "请只回复两个字：收到。不要提案任何计划，也不要调用任何工具。",
+    expectation: "learned-trivial",
+    seed: { folder: learnedFixture },
+  },
+  {
+    id: "learned-folder-continuation",
+    prompt: "继续，把刚才那个弄完。",
+    expectation: "learned-continuation",
+    seed: {
+      folder: learnedFixture,
+      previous: {
+        text: "整理那个学习文件夹里的资料，先看看有什么。",
+        reply: "看过了，里面有学习材料。需要我整理成清单吗？",
+      },
+    },
   },
 ];
 
@@ -116,6 +178,33 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
   };
   try {
     await prepareCloneHome(resolveClonePaths({ dataDirectory: directory }));
+    // The seed teaches a folder in a separate conversation, so the current
+    // turn's history does not contain the absolute path. This is what makes
+    // the continuation cell hard: the path exists only in the learned set.
+    // 种子里用一个单独的对话教会文件夹，因此本回合历史不含绝对路径。这正是续做格
+    // 之所以困难的地方：路径只存在于已学会的集合里。
+    if (task.seed?.folder !== undefined) {
+      await appendMainAgentTurnRecord(directory, {
+        id: `seed-lesson-${task.id}`,
+        text: `整理 ${task.seed.folder} 里的资料。`,
+        status: "completed",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:05.000Z",
+        conversationId: "seed-folder-lesson",
+        reply: "好。",
+      });
+    }
+    if (task.seed?.previous !== undefined) {
+      await appendMainAgentTurnRecord(directory, {
+        id: `seed-previous-${task.id}`,
+        text: task.seed.previous.text,
+        status: "completed",
+        startedAt: "2026-01-02T00:00:00.000Z",
+        completedAt: "2026-01-02T00:00:05.000Z",
+        conversationId: "main-agent-conversation",
+        reply: task.seed.previous.reply,
+      });
+    }
     process.env.CLONE_AI_MAIN_MODEL = MODEL;
     process.env.CLONE_AI_MAIN_RUNTIME = "native";
     process.env.CLONE_AI_NATIVE_MODEL = MODEL;
@@ -172,13 +261,37 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
     const runs = events.filter((event) => event.type === "run.created").length;
     const turn = events.find((event) => event.type === "main_agent.turn_completed");
     const turnStatus = turn === undefined ? undefined : String((turn.payload as Record<string, unknown>).status ?? "");
-    const passed = task.expectation === "direct"
-      ? result.error === undefined && result.reply.trim().length > 0 && runs === 0
-      : task.expectation === "authority"
-        ? result.error === undefined && toolCalls.includes("get_authority")
-        : task.expectation === "read"
-          ? result.error === undefined && toolCalls.includes("read_file") && result.reply.includes("BENCH_READ_MARKER_7Q2")
-          : runs > 0;
+    const passed = (() => {
+      switch (task.expectation) {
+        case "direct":
+          return result.error === undefined && result.reply.trim().length > 0 && runs === 0;
+        case "authority":
+          return result.error === undefined && toolCalls.includes("get_authority");
+        case "read":
+          return result.error === undefined && toolCalls.includes("read_file") && result.reply.includes("BENCH_READ_MARKER_7Q2");
+        case "learned-read":
+          // The prompt names no path: the file can only be found through the
+          // learned folder, so a correct first line proves that path works.
+          // 提示词不给路径：文件只能通过已学会的文件夹找到，因此正确读出第一行证明该路径有效。
+          return result.error === undefined && toolCalls.includes("read_file") && result.reply.includes("BENCH_LEARNED_MARKER_9K4");
+        case "learned-trivial": {
+          // The README incident: a trivial turn must not act on a learned
+          // folder it merely happens to know about.
+          // README 事故：琐碎回合不得因为"恰好知道"某个文件夹就对它采取行动。
+          const folderTools = ["read_file", "recent_file_changes", "daily_workspace_digest", "get_situation"];
+          return result.error === undefined && result.reply.trim().length > 0 && runs === 0
+            && !toolCalls.some((tool) => folderTools.includes(tool));
+        }
+        case "learned-continuation":
+          // Pass when the model resolves the folder on demand (or names it),
+          // not when it stalls on an open-ended "which folder?".
+          // 通过条件：模型按需解析出文件夹（或直接说出路径），而不是卡在开放式的"哪个文件夹？"。
+          return result.error === undefined
+            && (toolCalls.includes("get_situation") || toolCalls.includes("recent_file_changes") || result.reply.includes(learnedFixture));
+        default:
+          return runs > 0;
+      }
+    })();
     return {
       runtime,
       taskId: task.id,
@@ -239,8 +352,13 @@ function aggregateCell(results: readonly TaskResult[]): CellAggregate {
 
 const records: TaskResult[] = [];
 const cells: CellAggregate[] = [];
+const selectedTasks = ONLY === undefined ? TASKS : TASKS.filter((task) => ONLY.has(task.id));
+if (selectedTasks.length === 0) {
+  console.error(`No task matches --only ${[...(ONLY ?? [])].join(",")}; known ids: ${TASKS.map((task) => task.id).join(", ")}`);
+  process.exit(2);
+}
 console.log(`Main Agent comparison: model=${MODEL} endpoint=${BASE_URL} repeat=${REPEAT}`);
-for (const task of TASKS) {
+for (const task of selectedTasks) {
   for (const runtime of ["native"] as const) {
     const samples: TaskResult[] = [];
     for (let index = 0; index < REPEAT; index += 1) {
@@ -293,7 +411,7 @@ await writeFile(reportPath, `${JSON.stringify({
   model: MODEL,
   endpoint: BASE_URL,
   repeat: REPEAT,
-  tasks: TASKS,
+  tasks: selectedTasks,
   records,
   cells,
   summary,
@@ -301,4 +419,5 @@ await writeFile(reportPath, `${JSON.stringify({
 console.log(`Report: ${reportPath}`);
 await rm(fixtureDirectory, { recursive: true, force: true }).catch(() => undefined);
 await rm(fixtureWorkspace, { recursive: true, force: true }).catch(() => undefined);
+await rm(learnedFixture, { recursive: true, force: true }).catch(() => undefined);
 process.exit(0);

@@ -1,0 +1,258 @@
+{
+  "ranAt": "2026-11-25T06:49:05.211Z",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "endpoint": "http://127.0.0.1:3425",
+  "repeat": 3,
+  "tasks": [
+    {
+      "id": "learned-folder-read",
+      "prompt": "读取我项目里的 learned-file.md，只回复它的第一行内容。不要提案计划，也不要修改任何文件。",
+      "expectation": "learned-read",
+      "seed": {
+        "folder": "/var/folders/0q/26y2gpq94m531lnxr09n7fsm0000gp/T/clone-ai-main-learned-dXx5Ii"
+      }
+    },
+    {
+      "id": "learned-folder-trivial",
+      "prompt": "请只回复两个字：收到。不要提案任何计划，也不要调用任何工具。",
+      "expectation": "learned-trivial",
+      "seed": {
+        "folder": "/var/folders/0q/26y2gpq94m531lnxr09n7fsm0000gp/T/clone-ai-main-learned-dXx5Ii"
+      }
+    },
+    {
+      "id": "learned-folder-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "expectation": "learned-continuation",
+      "seed": {
+        "folder": "/var/folders/0q/26y2gpq94m531lnxr09n7fsm0000gp/T/clone-ai-main-learned-dXx5Ii",
+        "previous": {
+          "text": "整理那个学习文件夹里的资料，先看看有什么。",
+          "reply": "看过了，里面有学习材料。需要我整理成清单吗？"
+        }
+      }
+    }
+  ],
+  "records": [
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-read",
+      "expectation": "learned-read",
+      "prompt": "读取我项目里的 learned-file.md，只回复它的第一行内容。不要提案计划，也不要修改任何文件。",
+      "passed": true,
+      "durationMs": 3498,
+      "totalTokens": 16688,
+      "modelCalls": 2,
+      "toolCalls": [
+        "read_file"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 24,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-read",
+      "expectation": "learned-read",
+      "prompt": "读取我项目里的 learned-file.md，只回复它的第一行内容。不要提案计划，也不要修改任何文件。",
+      "passed": true,
+      "durationMs": 4360,
+      "totalTokens": 16662,
+      "modelCalls": 2,
+      "toolCalls": [
+        "read_file"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 40,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-read",
+      "expectation": "learned-read",
+      "prompt": "读取我项目里的 learned-file.md，只回复它的第一行内容。不要提案计划，也不要修改任何文件。",
+      "passed": true,
+      "durationMs": 3028,
+      "totalTokens": 16700,
+      "modelCalls": 2,
+      "toolCalls": [
+        "read_file"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 24,
+      "journalEvents": 6
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-trivial",
+      "expectation": "learned-trivial",
+      "prompt": "请只回复两个字：收到。不要提案任何计划，也不要调用任何工具。",
+      "passed": true,
+      "durationMs": 1052,
+      "totalTokens": 8157,
+      "modelCalls": 1,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 3,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-trivial",
+      "expectation": "learned-trivial",
+      "prompt": "请只回复两个字：收到。不要提案任何计划，也不要调用任何工具。",
+      "passed": true,
+      "durationMs": 1796,
+      "totalTokens": 8161,
+      "modelCalls": 1,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 2,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-trivial",
+      "expectation": "learned-trivial",
+      "prompt": "请只回复两个字：收到。不要提案任何计划，也不要调用任何工具。",
+      "passed": true,
+      "durationMs": 1104,
+      "totalTokens": 8204,
+      "modelCalls": 1,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 3,
+      "journalEvents": 4
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 70345,
+      "totalTokens": 83737,
+      "modelCalls": 14,
+      "toolCalls": [
+        "get_situation",
+        "recent_file_changes",
+        "search_history",
+        "read_file",
+        "read_file",
+        "get_authority",
+        "dispatch_task",
+        "list_directory",
+        "read_file",
+        "list_directory",
+        "read_file",
+        "read_file",
+        "read_file",
+        "read_file",
+        "write_file",
+        "propose_work_plan"
+      ],
+      "runs": 2,
+      "turnStatus": "completed",
+      "replyLength": 417,
+      "journalEvents": 76
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 35003,
+      "totalTokens": 34348,
+      "modelCalls": 6,
+      "toolCalls": [
+        "get_situation",
+        "search_history",
+        "dispatch_task",
+        "list_directory",
+        "read_file"
+      ],
+      "runs": 1,
+      "turnStatus": "completed",
+      "replyLength": 637,
+      "journalEvents": 39
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 50040,
+      "totalTokens": 60183,
+      "modelCalls": 10,
+      "toolCalls": [
+        "get_situation",
+        "search_history",
+        "read_file",
+        "read_file",
+        "get_authority",
+        "dispatch_task",
+        "list_directory",
+        "read_file",
+        "write_file",
+        "read_file"
+      ],
+      "runs": 1,
+      "turnStatus": "completed",
+      "replyLength": 342,
+      "journalEvents": 53
+    }
+  ],
+  "cells": [
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-read",
+      "expectation": "learned-read",
+      "samples": 3,
+      "passed": 3,
+      "passRate": 1,
+      "medianDurationMs": 3498,
+      "p90DurationMs": 4360,
+      "medianTokens": 16688,
+      "medianModelCalls": 2
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-trivial",
+      "expectation": "learned-trivial",
+      "samples": 3,
+      "passed": 3,
+      "passRate": 1,
+      "medianDurationMs": 1104,
+      "p90DurationMs": 1796,
+      "medianTokens": 8161,
+      "medianModelCalls": 1
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "samples": 3,
+      "passed": 3,
+      "passRate": 1,
+      "medianDurationMs": 50040,
+      "p90DurationMs": 70345,
+      "medianTokens": 60183,
+      "medianModelCalls": 10
+    }
+  ],
+  "summary": {
+    "repeat": 3,
+    "native": {
+      "passed": 9,
+      "samples": 9
+    }
+  }
+}

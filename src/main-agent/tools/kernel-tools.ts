@@ -17,6 +17,7 @@ import { createRuntimeAssembly } from "../../core/runtime-factory.ts";
 import { resolveClonePaths } from "../../config/clone-home.ts";
 import { GovernedMemorySource } from "../../memory/md-memory-store.ts";
 import { compileBriefing } from "../situation-briefing.ts";
+import { knownOwnerFolders, renderKnownFolders } from "../known-folders.ts";
 import { pushRelevantMemories } from "../memory-push.ts";
 import { MAIN_AGENT_DEFAULT_CONVERSATION_ID } from "../conversation.ts";
 import { formatHistorySearch, searchOwnerHistory } from "../history-search.ts";
@@ -656,13 +657,30 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
     label: "Get Situation",
     description:
       "Read the owner's current situation: active goals, overdue and upcoming commitments, stated preferences and "
-      + "boundaries, and recent connector observations. Read-only. Use it to check what the owner already committed to "
-      + "before proposing new work, or when the owner asks what is going on.",
+      + "boundaries, the folders the twin learned from the owner's past requests, and recent connector observations. Read-only. "
+      + "Use it to check what the owner already committed to before proposing new work, when the owner asks what is going on, "
+      + "or when a request concerns the owner's own files and names no path — set foldersOnly to return just the folder list.",
     parameters: Type.Object({
       dueSoonHours: Type.Optional(Type.Number({ description: "How far ahead counts as due soon. Defaults to 48." })),
       includeObservations: Type.Optional(Type.Boolean({ description: "Read connectors as well. Defaults to true." })),
+      foldersOnly: Type.Optional(Type.Boolean({ description: "Return only the folders learned from the owner's past requests. Skips connector reads and the rest of the briefing. Defaults to false." })),
     }),
     execute: async (_toolCallId, params) => {
+      if (params.foldersOnly === true) {
+        // A folder lookup must not sweep connectors or append observation
+        // events: the owner asked where their files are, not what is new.
+        // 查文件夹不能扫 Connector，也不能追加观察事件：所有者问的是文件在哪，不是有什么新消息。
+        const folders = await knownOwnerFolders(options.dataDirectory, {
+          ...(options.query === undefined ? {} : { query: options.query }),
+        }).catch(() => []);
+        const text = folders.length === 0
+          ? "No folder has been learned yet. Ask the owner which folder to read, or dispatch a read-only step."
+          : renderKnownFolders(folders);
+        return {
+          content: [{ type: "text", text }],
+          details: { folders: folders.map((folder) => ({ path: folder.path, uses: folder.uses })) },
+        };
+      }
       const paths = resolveClonePaths({ dataDirectory: options.dataDirectory });
       const journal = createJournalStore(options.dataDirectory);
       try {

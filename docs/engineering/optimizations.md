@@ -31,6 +31,77 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-25 — Learned folders load on use, not in every turn
+
+- **Goal / hypothesis:** the owner read the Settings card and asked why learned
+  folders ride along in every Main Agent prompt when only some turns touch them.
+  The block was present but unused in 9 of the 10 snapshot turns that carried
+  it. Hypothesis: the tools that resolve files already carry the folder
+  knowledge, so the per-turn list can go without losing resolution; the model
+  fetches it on demand through `get_situation` (`foldersOnly`) or
+  `recent_file_changes`.
+- **Trade-off:** [Learned folders load on use, not in every
+  turn](../architecture/trade-offs.md#2026-11-25--learned-folders-load-on-use-not-in-every-turn).
+- **Change:** `src/main-agent/situation-briefing.ts` — `includeFolders` (default
+  `true`) gates only the rendered folder text; `Briefing.folders` is always
+  computed. `src/main-agent/prompt.ts` — the per-turn prompt passes `false`; the
+  charter bullet now says folders are not listed and to fetch them (including
+  continuations); charter version 12. `src/main-agent/tools/kernel-tools.ts` —
+  `get_situation` advertises the folders and gains `foldersOnly`, which returns
+  the list without connector reads or the rest of the briefing.
+  `apps/desktop/ui/app.js` — the Settings caption says the list is read on
+  demand. New `test/main-agent-prompt-briefing.test.ts`; `test/worker-brief.test.ts`
+  version pin.
+- **Eval:** `node --experimental-strip-types --test
+  test/main-agent-prompt-briefing.test.ts test/worker-brief.test.ts
+  test/situation-briefing.test.ts test/known-folders.test.ts` 32/32;
+  `npm test` 1167/1167; `npm run typecheck` exit 0; `npm run gate` PASS
+  (baseline unchanged). Benchmark cells: `learned-folder-read` 3/3 → 3/3,
+  `learned-folder-trivial` 3/3 → 3/3, `learned-folder-continuation` 3/3 → 3/3.
+- **Benchmark run:** command (both sides)
+  `CLONE_AI_BENCH_MAIN_MODEL=deepseek/deepseek-v4.1-flash node
+  --experimental-strip-types benchmark/main-agent.ts --only
+  learned-folder-read,learned-folder-trivial,learned-folder-continuation
+  --repeat 3`. Provider native, endpoint `http://127.0.0.1:3425`, model
+  `deepseek/deepseek-v4.1-flash`, 3 repeats per cell, fresh temporary clone
+  home per sample. Pass rules: read = `read_file` called and the reply contains
+  `BENCH_LEARNED_MARKER_9K4`; trivial = non-empty reply, `runs === 0`, no folder
+  tool called; continuation = `get_situation`/`recent_file_changes` called or
+  the seeded path named. Results:
+  before `benchmark/results/main-agent-2026-11-25T06-45-07-619Z.json`
+  (read 3.8 s / 16,563 tok; trivial 1.9 s / 8,109; continuation 14.3 s /
+  26,485, 0 runs);
+  after `benchmark/results/main-agent-2026-11-25T06-49-05-211Z.json`
+  (read 3.5 s / 16,688; trivial 1.1 s / 8,161; continuation 50.0 s / 60,183,
+  1–2 runs).
+- **Execution chain:** (1) inline measurements — prompt snapshots, turn ledger,
+  system-prompt offsets, and a reply scan over the live journal; (2) a
+  seven-agent workflow (code audit, usage audit, prompt-stability audit, three
+  independent designs, one adversarial verifier) over 26 min and 877k subagent
+  tokens — it corrected the design twice: `get_situation` renders the same
+  briefing and therefore had to become the on-demand surface, and it gained
+  `foldersOnly` so a lookup does not sweep connectors; it also supplied the
+  continuation case that became a benchmark cell; (3) benchmark harness +
+  behavior change + tests. The English trade-off edit collided with a
+  concurrent session's commit and was reapplied; the working tree also carries
+  that session's unrelated changes, so only this change's files are committed.
+- **Pros:** the eval separates before from after in behavior, not just text:
+  every after-continuation sample called `get_situation` first, none did
+  before. No capability loss on any cell, and the trivial turn still does not
+  act on a folder it merely knows.
+- **Cons / next time:** the continuation pass rule counts worker tools too, so
+  its PASS is weaker than it reads; the after turns dispatched the work they
+  were told to continue, costing 2.3× the tokens. Next time record
+  Main-Agent-only tool calls (events without `stepId`) and a completion-based
+  pass, and use more than three samples for a cost claim. The 246-character
+  block was never a token problem; do not re-run this as a performance
+  argument.
+- **Reversal condition:** if any of the three benchmark cells regresses, or a
+  place-referring turn ends in an open-ended question more than 3 times in 30,
+  or the owner reports the twin asking for a folder it already knows → set
+  `prompt.ts` back to `includeFolders: true` and keep the `foldersOnly`
+  improvement.
+
 ### 2026-11-25 — The attachment cap moves from four to twenty
 
 - **Goal / hypothesis:** the composer kept only the first four files of a

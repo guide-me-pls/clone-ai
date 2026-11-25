@@ -6,6 +6,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Learned folders are read on demand, not every turn
+
+The Main Agent's per-turn briefing no longer carries the learned-folder block. `compileBriefing` gains `includeFolders` (default `true`) and the per-turn prompt passes `false`; `Briefing.folders` is still computed, the Settings API still returns it, and `get_situation` gains a `foldersOnly` mode that returns the learned list without sweeping connectors or the rest of the briefing. The charter tells the model to fetch the list when a request concerns the owner's own files and names no path — including a continuation — and the Settings caption now says so. New `test/main-agent-prompt-briefing.test.ts` 3/3; focused suites 32/32; `npm test` 1167/1167; `npm run typecheck` exit 0; `npm run gate` PASS. Benchmark `learned-folder-read` 3/3 → 3/3, `learned-folder-trivial` 3/3 → 3/3, `learned-folder-continuation` 3/3 → 3/3; the continuation cell's median cost rose from 26.5k to 60.2k tokens because it now dispatches the work it was asked to continue.
+
+### 已知文件夹按需读取，不再每回合注入
+
+主 Agent 的每回合简报不再携带「已知文件夹」块。`compileBriefing` 增加 `includeFolders`（默认 `true`），每回合提示词传 `false`；`Briefing.folders` 仍会计算，设置页 API 仍返回它，`get_situation` 新增 `foldersOnly`：只返回学到的列表，不扫 Connector，也不返回简报其余部分。charter 要求模型在「请求涉及所有者自己的文件、又没给路径」时主动取这份列表——包括续做回合；设置页说明同步改为「需要时读取」。新增 `test/main-agent-prompt-briefing.test.ts` 3/3；定向套件 32/32；`npm test` 1167/1167；`npm run typecheck` 退出码 0；`npm run gate` PASS。基准 `learned-folder-read` 3/3 → 3/3、`learned-folder-trivial` 3/3 → 3/3、`learned-folder-continuation` 3/3 → 3/3；续做格的 tokens 中位数从 26.5k 升到 60.2k，因为它现在会把「继续」的工作派发出去。
+
 ### Twenty attachments per message
 
 Selecting several files at once kept only the first four: `MAX_ATTACHMENTS` was 4 in the composer (`apps/desktop/ui/app.js`) and in the server parser (`src/main-agent/attachments.ts`), so choosing six requirement documents produced four chips and a 3.2-second "最多添加 4 个附件" notice. The per-message cap is now 20 — the limit the Claude apps put on one message (Claude Code's app path caps a message at 20 attachments; claude.ai documents 20 files per chat and 20 images per turn; the CLI itself documents no count and is bounded by its 32 MB request guard). Per-file limits (5 MB image/video, 10 MB PDF/.docx), the 50,000/100,000-character document budgets and the 60,000,000-character request body are unchanged; selecting past the cap still names the limit and drops the extras. `test/attachment-client.test.ts` and `test/attachments.test.ts` 29/29 (24 selected → 20 kept, 20 accepted / 21 refused, restore at the boundary); `npm test` 1162/1162; `npm run typecheck` exit 0; `npm run gate` PASS.

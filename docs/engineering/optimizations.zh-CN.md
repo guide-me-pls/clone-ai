@@ -26,6 +26,57 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-25 —— 已知文件夹按需读取，不再每回合注入
+
+- **目标 / 假设：** 所有者看到设置页卡片后问：已知文件夹只在部分回合用得上，为什么要跟着
+  每个主 Agent 提示词走。带块的 10 个快照回合里有 9 个根本没用上。假设：解析文件的工具
+  本来就携带文件夹知识，因此可以去掉每回合列表而不丢失解析能力；模型通过
+  `get_situation`（`foldersOnly`）或 `recent_file_changes` 按需取得。
+- **取舍：** [已知文件夹按需读取，不再每回合注入](../architecture/trade-offs.zh-CN.md#2026-11-25--已知文件夹按需读取不再每回合注入).
+- **变更：** `src/main-agent/situation-briefing.ts` —— `includeFolders`（默认 `true`）
+  只控制渲染出的文件夹文本；`Briefing.folders` 始终计算。`src/main-agent/prompt.ts` ——
+  每回合提示词传 `false`；charter 条款改为"文件夹不在简报里、需要时取"（含续做），版本
+  12。`src/main-agent/tools/kernel-tools.ts` —— `get_situation` 的描述点名文件夹，并新增
+  `foldersOnly`：只返回列表，不读 Connector，也不返回简报其余部分。
+  `apps/desktop/ui/app.js` —— 设置页说明改为"需要时主动读取"。新增
+  `test/main-agent-prompt-briefing.test.ts`；`test/worker-brief.test.ts` 版本钉住。
+- **Eval：** `node --experimental-strip-types --test
+  test/main-agent-prompt-briefing.test.ts test/worker-brief.test.ts
+  test/situation-briefing.test.ts test/known-folders.test.ts` 32/32；
+  `npm test` 1167/1167；`npm run typecheck` 退出码 0；`npm run gate` PASS（基线未变）。
+  基准格：`learned-folder-read` 3/3 → 3/3，`learned-folder-trivial` 3/3 → 3/3，
+  `learned-folder-continuation` 3/3 → 3/3。
+- **Benchmark run：** 两侧同一命令
+  `CLONE_AI_BENCH_MAIN_MODEL=deepseek/deepseek-v4.1-flash node
+  --experimental-strip-types benchmark/main-agent.ts --only
+  learned-folder-read,learned-folder-trivial,learned-folder-continuation
+  --repeat 3`。Provider 为 native，端点 `http://127.0.0.1:3425`，模型
+  `deepseek/deepseek-v4.1-flash`，每格 3 次，每次全新临时 clone home。通过规则：
+  读取 = 调用了 `read_file` 且回复含 `BENCH_LEARNED_MARKER_9K4`；琐碎 = 回复非空、
+  `runs === 0`、未调用文件夹工具；续做 = 调用 `get_situation`/`recent_file_changes`
+  或说出种子路径。结果：改动前
+  `benchmark/results/main-agent-2026-11-25T06-45-07-619Z.json`（读取 3.8 s /
+  16,563 tok；琐碎 1.9 s / 8,109；续做 14.3 s / 26,485，0 runs）；改动后
+  `benchmark/results/main-agent-2026-11-25T06-49-05-211Z.json`（读取 3.5 s /
+  16,688；琐碎 1.1 s / 8,161；续做 50.0 s / 60,183，1–2 runs）。
+- **执行链路：** （1）内联测量——提示词快照、回合台账、系统提示词偏移、线上 Journal 的
+  回复扫描；（2）一个七 Agent 工作流（代码审计、使用审计、提示词稳定性审计、三个独立设计、
+  一个对抗验证），26 分钟、877k 子 Agent tokens——它两次纠正了设计：`get_situation` 渲染
+  的是同一份简报，因此必须成为按需入口；它还增加了 `foldersOnly`，使查文件夹不扫
+  Connector；续做用例也来自它。（3）基准 harness + 行为改动 + 测试。英文取舍条目的编辑
+  与另一个会话的提交撞车，已重新应用；工作区还带着那个会话的无关改动，因此只提交本次
+  变更的文件。
+- **优点：** eval 区分的是行为而不只是文本：改动后的续做样本每次都先调用
+  `get_situation`，改动前一次都没有。所有格都没有能力损失，琐碎回合仍然不会因为"恰好
+  知道"某个文件夹就采取行动。
+- **缺点 / 下次：** 续做的通过规则把 Worker 工具也算进去了，因此它的 PASS 比看起来弱；
+  改动后的回合把"继续"的工作派发出去了，tokens 是 2.3 倍。下次记录只属于主 Agent 的
+  工具调用（没有 `stepId` 的事件），用"完成"而不是"调用了"作为通过条件，并对成本结论
+  使用三次以上的样本。246 字符的块从来不是 token 问题，不要把它当性能论证重跑。
+- **推翻条件：** 三个基准格任何一个回退；或"点名了地点但没给路径"的回合在 30 次里超过
+  3 次以开放式追问结束；或所有者报告分身询问一个它已经知道的文件夹 → 把
+  `prompt.ts` 改回 `includeFolders: true`，保留 `foldersOnly` 改进。
+
 ### 2026-11-25 —— 附件上限从四个提高到二十个
 
 - **目标 / 假设：** 输入框只保留一次选择中的前四个文件：所有者选了六份需求文档，两份

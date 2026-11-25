@@ -47,6 +47,17 @@ export interface BriefingInput {
   query?: string;
   /** Home-directory seam for tests. 测试用的 home 切口。 */
   home?: string;
+  /**
+   * Render the learned-folder block into `text`. Defaults to true. The per-turn
+   * Main Agent prompt passes false: the folders are delivered by the tools that
+   * use them, and a list the turn does not touch should not ride along. The
+   * `folders` field is always computed, so a caller that renders the list
+   * itself loses nothing.
+   * 是否把已知文件夹块渲染进 `text`，默认 true。主 Agent 的每回合提示词传 false：文件夹
+   * 由真正使用它的工具投递，与本次请求无关的列表不该跟着走。`folders` 始终计算，自行
+   * 渲染列表的调用方不会丢失数据。
+   */
+  includeFolders?: boolean;
 }
 
 export interface Briefing {
@@ -78,16 +89,18 @@ export async function compileBriefing(input: BriefingInput): Promise<Briefing> {
 
   // Folders are learned, not configured: the persisted turn ledger is the
   // source, so the twin knows where the owner works after the first request
-  // that names a folder, and keeps knowing after a restart.
+  // that names a folder, and keeps knowing after a restart. The list is
+  // computed every time; only its rendering into the per-turn text is gated.
   // 文件夹是学到的，不是配置的：来源是持久化的回合台账，因此所有者第一次点名文件夹后
-  // 分身就知道它在哪里工作，重启后仍然知道。
+  // 分身就知道它在哪里工作，重启后仍然知道。列表每次都会计算；只有它是否渲染进每回合
+  // 文本受开关控制。
   const folders = await knownOwnerFolders(input.dataDirectory, {
     ...(input.query === undefined ? {} : { query: input.query }),
     ...(input.home === undefined ? {} : { home: input.home }),
     now,
     events,
   }).catch(() => [] as KnownFolder[]);
-  const folderText = renderKnownFolders(folders);
+  const folderText = input.includeFolders === false ? "" : renderKnownFolders(folders);
 
   return {
     situation,

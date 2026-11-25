@@ -6,6 +6,91 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-25 — Learned folders load on use, not in every turn
+
+**Decision.** The per-turn Main Agent briefing stops carrying the learned-folder
+block; the folders are fetched when a request needs them. `compileBriefing`
+gains `includeFolders` (default `true`) that gates only the rendered folder
+text — `Briefing.folders` is always computed. `compileMainAgentPrompt` passes
+`false`. `get_situation` keeps returning the block and gains a `foldersOnly`
+mode that skips connector reads and the rest of the briefing, so a folder lookup
+neither sweeps connectors nor appends `observation.recorded` events; its
+description now names the folders. `read_file`, `recent_file_changes` and
+`daily_workspace_digest` keep learning and reporting folders at use time. The
+Settings card still reads `briefing.folders`; its caption changes from "carried
+every turn" to "read on demand".
+
+**Decision input.** The owner read the Settings card and asked why the folders
+ride along every turn when they are only needed on the turns that touch them;
+they asked for the Main Agent to judge per query. This entry intentionally
+supersedes the 2026-11-19 clause that "the situation briefing carries it every
+turn" — without claiming its reversal condition was met: the briefing is not
+too large (the folder block is 246 characters, while the recent-work block is
+836 of the briefing's 1,172). It also differs from the alternative rejected on
+2026-11-24 ("Remove known folders entirely"): the folders are still learned,
+still rendered by `renderKnownFolders`, still shown on the Settings card, and
+still reachable through four tools. What changes is delivery, not memory.
+
+**Why it is safe.** On the owner's own clone home, 10 of the 35 turns that have
+a prompt snapshot carried the block, and 9 of those requests named no folder or
+path — present but unused in 90% of the turns that had it. The information is
+not exclusive to the briefing: `read_file` resolves a bare name inside learned
+folders and prints up to 8 searched roots on a miss; `recent_file_changes` and
+`daily_workspace_digest` print `Folder: … — learned from N past request(s)`
+when called without a path; all three descriptions (static, sent every turn)
+already say "no path = the folders learned from past requests". Nothing in
+planning, dispatch or authority reads the list: a worker's workspace comes from
+clone-home configuration. Whether the model actually reaches for the on-demand
+path is the behavior this change must measure, not assume.
+
+**What it costs.** Before any tool call the model can no longer enumerate
+candidate folders or turn "current workspace" into concrete choices. The hard
+case is a continuation turn whose current text names no place ("继续，把刚才那个
+弄完"): `extractFolders` returns nothing for it, and the path may appear nowhere
+in the history, so the model must call `get_situation` or ask. One extra model
+call on a folder turn re-sends the whole prompt (the sampled cells billed
+7.7k–21k input tokens per call) against 62–79 tokens saved — this is not a token
+or cache optimization. Tool results are not journaled in detail
+(`agent.tool_started` keeps only the input summary), so after removal the prompt
+snapshot no longer shows which folders the model received; this entry accepts
+that audit loss rather than copying the list onto every turn record.
+
+**Alternatives rejected.**
+
+- *Keep the block every turn.* It is the only knowledge injected
+  unconditionally that three tools already provide at use time.
+- *Inject only when the query looks file-shaped.* The heuristic is wrong in both
+  directions: "总结这份文档" needs no folder, while "整理今天的工作" needs one
+  without naming it — and the tools already answer the second case.
+- *Add a `list_known_folders` tool now.* Three descriptions already advertise the
+  on-demand route; a fourth static schema buys nothing until "where do you know
+  me to work" becomes a measured, frequent question.
+- *Remove learned folders or make them a setting.* Still rejected: folders are
+  learned from use, never configured (2026-11-18, 2026-11-24).
+
+**Evidence.** `~/.clone/prompt-snapshots/13d8….json` (2026-11-25T02:07:48Z)
+carries the two-line block; 9 of 30 snapshots have it and only 4 distinct
+folder-line sets exist, so it is stable rather than churn. The 35/10/9 counts
+come from joining `prompt-snapshot` files to `main_agent.turn_started` events by
+`promptMaterialHash`. The code audit found six `knownOwnerFolders` call sites,
+none in planning, dispatch or authority. Three benchmark cells
+(`learned-folder-read`, `learned-folder-trivial`, `learned-folder-continuation`)
+seed a learned folder and measure resolution, non-use on a trivial turn, and the
+continuation case; the before/after runs are recorded in
+`docs/engineering/optimizations.md`. All three passed 3/3 before and after. In
+the continuation cell the after-samples called `get_situation` first (none did
+before) and then dispatched the work they were told to continue: median tokens
+26,485 → 60,183, duration 14.3 s → 50.0 s, while the read and trivial cells were
+unchanged (±1%). The extra cost buys completion of an ambiguous "继续" rather
+than a stall; it is recorded here, not counted as a gain.
+
+**Reversal condition.** If any of the three benchmark cells regresses; or a
+place-referring turn ends in an open-ended question more than 3 times in 30; or
+the owner reports the twin asking for a folder it already knows → set
+`prompt.ts` back to `includeFolders: true` (one line) and keep the
+`foldersOnly` improvement. If only the continuation cell fails, add the
+deterministic continuation trigger before considering a full revert.
+
 ## 2026-11-25 — A message carries twenty attachments, not four
 
 **Decision.** Raise the per-message attachment cap from 4 to 20 in both the

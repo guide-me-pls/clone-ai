@@ -1913,7 +1913,7 @@ function renderSituation(situation, config) {
       const date = new Date(value);
       return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
     };
-    rows.push(`<div class="settings-card"><h4>分身记住的文件夹 (${folders.length})</h4>${folders.map((folder) => `<p><code>${escape(folder.path)}</code> · ${Number(folder.uses) || 0} 次请求 · 最近 ${escape(stamp(folder.lastUsedAt))}</p>`).join("")}<p class="agent-runtime-note">从你过去的请求中学到的长期记忆，不是设置；每回合开始都会带上这份记忆。</p></div>`);
+    rows.push(`<div class="settings-card"><h4>分身记住的文件夹 (${folders.length})</h4>${folders.map((folder) => `<p><code>${escape(folder.path)}</code> · ${Number(folder.uses) || 0} 次请求 · 最近 ${escape(stamp(folder.lastUsedAt))}</p>`).join("")}<p class="agent-runtime-note">从你过去的请求中学到的长期记忆，不是设置；主 Agent 在你需要时会主动读取，不随每回合注入。</p></div>`);
   }
   $("situation-overview").innerHTML = rows.length
     ? rows.join("")

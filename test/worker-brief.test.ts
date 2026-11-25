@@ -312,12 +312,15 @@ test("a Chinese prohibition in the brief is not a write grant", () => {
 });
 
 test("the charter names the brief contract and its version moved", () => {
-  // 11 carries the read_file rule (10) and the dispatch_task result rule.
-  // 11 包含 read_file 规则（10）与 dispatch_task 结果规则。
-  assert.equal(MAIN_AGENT_CHARTER_VERSION, 11);
+  // 12 carries the on-demand learned-folder rule; 11 carried the read_file rule
+  // (10) and the dispatch_task result rule.
+  // 12 包含已知文件夹按需读取规则；11 包含 read_file 规则（10）与 dispatch_task 结果规则。
+  assert.equal(MAIN_AGENT_CHARTER_VERSION, 12);
   assert.match(MAIN_AGENT_CHARTER, /workerBrief/);
   assert.match(MAIN_AGENT_CHARTER, /complete prompt its worker receives/);
   assert.match(MAIN_AGENT_CHARTER, /absolute path or `~\/\.\.\.`/);
   assert.match(MAIN_AGENT_CHARTER, /call read_file before answering/);
   assert.match(MAIN_AGENT_CHARTER, /never ask the owner to paste a file's contents/);
+  assert.match(MAIN_AGENT_CHARTER, /Learned folders are not listed in the briefing/);
+  assert.match(MAIN_AGENT_CHARTER, /never assume the clone home or the last project/);
 });
