@@ -47,7 +47,7 @@ const PATH_PATTERN = /(?:^|[\s"'`(（])((?:~\/|\/)[^\s"'`）)，,。；;：]+)/g
  * 只有正向写入线索之后的路径才是写入目标。"读取 /etc/hosts 并写一份摘要"不应把
  * `/etc/hosts` 当成写入目标；"写"之后出现的路径才是所有者要求创建的。
  */
-const WRITE_CUE = /(?:写到|写入|保存到|保存成|输出到|生成|创建|新建|形成|交付|write|save|create|output|generate|export|deliver)/giu;
+const WRITE_CUE = /(?:写到|写入|保存到|保存成|输出到|生成|创建|新建|形成|交付|修改|编辑|改动|write|save|create|output|generate|export|deliver|edit|modify|change|update)/giu;
 const CLAUSE_SPLIT = /[。；;!?！？\n]+/u;
 /**
  * A write cue inside a prohibition is not a grant. "Do not write X" and
