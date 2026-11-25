@@ -6,6 +6,84 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### MCP downloads work in the app's launch environment; skills install and reach the Main Agent
+
+A marketplace install now resolves npx from the Node running the app (then the usual Homebrew, /usr/local, pnpm, volta and bun locations), puts that Node directory first on every MCP child's PATH, and stores the absolute command in mcp.json — a launchd daemon with PATH=/usr/bin:/bin no longer fails with "spawn npx ENOENT". 工具与技能 is now two categories, MCP and skills; every server and skill is one jump row (no inline tool bodies, even for a one-tool server), with a back stack and separate MCP and skill markets. The skill market ships four built-in skills — weekly review, document review, release notes, deliverable check — installable under ~/.clone/skills and removable only from there; every Main Agent turn now receives the skill roots, so the listing is in the prompt and a Skill(name) tool returns the body. `test/skill-registry.test.ts` 4/4, `test/skill-runtime.test.ts` 1/1, affected suites 136/136 (80/80 after the label polish); typecheck 0; gate PASS; full suite 1161/1161. Live: the probe listed 10 filesystem tools in 0.6 s after the fix, and a live skill install/detail/remove left the clone home clean.
+
+### MCP 下载在应用真实的启动环境里可用；技能可安装并进入 Main Agent
+
+市场安装现在从运行应用的 Node 解析 npx（其次是 Homebrew、/usr/local、pnpm、volta、bun 等位置），把这个 Node 目录放到每个 MCP 子进程 PATH 的最前，并把绝对命令写入 mcp.json——PATH=/usr/bin:/bin 的 launchd 守护进程不再报 "spawn npx ENOENT"。工具与技能改为两个分类：MCP 与技能；每个服务器与技能都是一行跳转（即使只有一个工具也不内联工具正文），带返回栈与各自的 MCP / 技能市场。技能市场自带四个内置技能——周复盘、文档审阅、发布说明、交付自检——可安装到 ~/.clone/skills，也只能从这里移除；每个 Main Agent 回合现在都会收到技能根目录，列表进入提示词，`Skill(name)` 工具返回正文。`test/skill-registry.test.ts` 4/4、`test/skill-runtime.test.ts` 1/1、受影响套件 136/136（文案调整后 80/80）；typecheck 0；gate PASS；完整套件 1161/1161。实机：修复后探测在 0.6 秒内列出 10 个文件系统工具，实机技能安装/详情/移除后 clone home 干净。
+
+### One executor; a dispatch declares read or write, and its answer comes back
+
+Clone AI now has one general worker instead of four role profiles that were four labels on the same native provider. `dispatch_task` requires the Main Agent to declare `read` (investigate without changing files) or `write` (create or change local files). The Kernel builds the plan from that choice, uses the dispatch's own acceptance criteria as the plan's criteria, and a `write` dispatch carries a required artifact so a task that only reads and answers cannot complete. The tool returns the worker's final answer, the effective per-step executor and the verification, so the Main Agent can continue in the same turn and no longer reports the task-level default as the executor that ran; `get_run_status` also shows the durable answer. A pinned step keeps its declared capabilities instead of inheriting the worker's whole set, and `edit`/`modify`/`修改`/`编辑` now count as write cues for scope extraction. The step-risk, scope, Authority and protected-path gates are unchanged. Settings normalize to the single `worker` profile; the Agent page, tool formatter and prompt say so. `test/regression/worker-responsibility.test.ts` 6/6; the focused suite 99/99; `npm run typecheck` exit 0; `npm run gate` PASS (baseline unchanged). `npm test` 1161/1161.
+
+### 一个执行者；派发声明读或写，答复回到主 Agent
+
+Clone AI 现在只有一个通用 Worker，而不是四个指向同一原生 Provider 的角色 Profile。`dispatch_task` 要求主 Agent 声明 `read`（调查、不改变文件）或 `write`（创建或修改本地文件）。Kernel 依据这个选择生成计划，派发自带的验收标准成为计划的标准，`write` 派发携带必需产物合同，因此只读取并回答的任务无法完成。工具返回 Worker 的最终答复、实际逐步执行者与验证结果，主 Agent 因此能在同一回合继续，也不会再把任务级默认值当成实际执行者；`get_run_status` 也显示持久答复。被钉住的步骤保留自己的声明能力，而不是继承 Worker 的完整能力集；`edit`/`modify`/`修改`/`编辑` 也计为提取写 Scope 的写入线索。步骤风险、Scope、Authority 与受保护路径闸门未变。设置归一为唯一的 `worker` Profile；Agent 页、工具格式化与提示词同步说明。`test/regression/worker-responsibility.test.ts` 6/6；定向套件 99/99；`npm run typecheck` 退出码 0；`npm run gate` PASS（基线未变）。`npm test` 1161/1161。
+
+### A curated MCP marketplace replaces the blank install form; tools read as tables
+
+The 工具与技能 page now opens with an MCP marketplace: five reviewed servers (filesystem, memory, sequential thinking, Playwright, Chrome DevTools), each pinned to one npm version, searchable in Chinese or English and configured through typed fields instead of a raw argv string. The client sends only the entry id and input values; the server builds the package, argv and fixed environment. Installation keeps probe → per-tool risk → confirm → re-probe → atomic write, with every tool starting at 外部; memory's graph is anchored in the clone home, Chrome DevTools' usage statistics are off, and the filesystem server defaults to read-only. The blank form moved under 手动安装. A server with three tools or fewer lists them inline; more shows one 查看全部 N 个工具 jump to a page where each tool reads as a summary plus a parameter table parsed from its `Args:` block. `test/mcp-registry.test.ts` 6/6, `test/tool-format.test.ts` 12/12, `test/mcp-installer.test.ts` 10/10, `test/tools-install-api.test.ts` 9/9, `test/mcp-settings.test.ts` 6/6; UI structure 44/44; typecheck 0; gate PASS. A live probe of `@modelcontextprotocol/server-filesystem@2.4.0` listed 10 tools and installed with `--read-only`.
+
+### 精选 MCP 市场取代空白安装表单；工具按表格阅读
+
+工具与技能页现在以 MCP 市场开场：五个核对过的服务器（文件系统、记忆图谱、分步思考、Playwright、Chrome 调试），每个固定一个 npm 版本，支持中英文搜索，并通过有类型的字段配置，而不是原始 argv 字符串。客户端只发送条目 id 与输入值；包、argv 与固定环境由服务器构造。安装仍走探测 → 逐工具风险 → 确认 → 重新探测 → 原子写入，每个工具从「外部」开始；记忆图谱固定在 clone home，Chrome 调试关闭使用统计，文件系统服务器默认只读。空白表单收进「手动安装」。三个及以下工具的服务器直接列出；更多时显示一次「查看全部 N 个工具」跳转，详情页里每个工具读作摘要加一张从 `Args:` 解析出的参数表。`test/mcp-registry.test.ts` 6/6、`test/tool-format.test.ts` 12/12、`test/mcp-installer.test.ts` 10/10、`test/tools-install-api.test.ts` 9/9、`test/mcp-settings.test.ts` 6/6；UI 结构 44/44；typecheck 0；gate PASS。对 `@modelcontextprotocol/server-filesystem@2.4.0` 的实机探测列出 10 个工具，并以 `--read-only` 安装成功。
+
+### Automatic checks decide completion; no prose review for any step
+
+A step that records evidence and passes its mechanical checks (named files exist and contain what was promised; external/irreversible steps have a receipt with a locator) now completes without `waiting_review`, whether it is read-only, a write or an external action. Missing named files, missing receipts and no evidence still fail. Human review remains only for artifact-contract gaps the AI judge cannot decide. `test/verification.test.ts` 18/18; `npm run gate` PASS (verdict 14 cases, review 0); `npm test` 1161/1161; typecheck 0.
+
+### 自动检查决定完成；任何步骤都不再做文字复核
+
+记录了证据并通过机械检查（点名文件存在且包含承诺内容；外部/不可逆步骤有带 locator 的回执）的步骤现在直接完成，不再进入 `waiting_review`，无论它是只读、写入还是外部动作。点名文件缺失、回执缺失与无证据仍失败。人工复核只在 AI 裁判无法决定的产物合同缺口里保留。`test/verification.test.ts` 18/18；`npm run gate` PASS（verdict 14 个用例、review 0）；`npm test` 1161/1161；typecheck 0。
+
+### Shared Main Agent turn handling and memory completion / 主 Agent 回合与记忆补全去重
+
+The SSE and JSON endpoints share turn handling. Memory mining reuses the existing completion, and the retired JSON store was removed without touching historical data or its HTTP 410 response.
+
+SSE 与 JSON 入口共用回合处理；记忆提炼复用现有模型补全，退役的 JSON 记忆实现被删除，历史数据及 HTTP 410 响应保持不变。
+
+### A read-only step finishes automatically; the conversation keeps only the result
+
+A `read_only` step with recorded evidence and passing mechanical checks now completes without `waiting_review`; its prose criterion is trusted. Write, external and artifact contracts keep their review. The conversation's turn log now shows the result and an audit link only — tool-call counts and spawned tasks live in the audit. This removes the "read a file → needs authorization" dead end and the stale process line. `test/verification.test.ts` 18/18, `test/ui-structure.test.ts` pins the removed counts; `npm test` 1122/1122, typecheck 0, gate PASS.
+
+### 只读步骤自动完成；对话只保留结果
+
+有证据且机械检查通过的 `read_only` 步骤现在自动完成，不再进入 `waiting_review`；它的文字标准被信任。写入、外部与产物合同仍保留复核。对话的回合日志只显示结果与审计入口——工具调用数与派生任务留在审计。这去掉了「读文件→需要授权」的死路，也去掉了过期的过程行。`test/verification.test.ts` 18/18，`test/ui-structure.test.ts` 钉住被移除的计数；`npm test` 1122/1122，typecheck 0，gate PASS。
+
+### The Main Agent reads files by name or path; a pasted file inserts its path
+
+The Main Agent now has a read-only `read_file` tool. An absolute path, `~/` path, workspace-relative path or bare file name resolves to a file; a bare name is searched in the workspace and the folders the twin has learned, then by exact-name Spotlight, then by a bounded walk, and an ambiguous name lists candidates instead of guessing. Long text returns in ~7,000-character windows with the next offset, PDF/.docx/.doc are extracted, a directory lists its entries, and protected locations are refused. The prompt now tells the model to call it and never to ask you to paste contents it can open. Copying files in Finder and pasting into the composer now attaches them as files (the native clipboard bridge reads the pasteboard's own bytes; text, PDF/.docx and images use the existing attachment pipeline). A file that is too large or unsupported falls back to its absolute path, which `read_file` can open; a bitmap screenshot still attaches. The owner copied files in Finder and pasted them into the rebuilt app; the composer showed attachment chips. `test/main-agent-read-file.test.ts` 10/10, `test/attachment-client.test.ts` 14/14; `npm run bench:main --repeat 1` 4/4 (new `named-file-read` cell, `tools=["read_file"]`, 2.9 s / 16,122 tokens); `npm test` 1122/1122, typecheck 0, gate PASS.
+
+### 主 Agent 按名字或路径读文件；粘贴文件插入路径
+
+主 Agent 现在有只读的 `read_file` 工具。绝对路径、`~/` 路径、工作区相对路径或纯文件名都能解析到文件；纯文件名依次在工作区与分身学到的文件夹中搜索、精确文件名的 Spotlight、再有界遍历，有歧义时列出候选而不是猜一个。长文本按约 7,000 字符的窗口返回并给出续读 offset，PDF/.docx/.doc 走文本提取，目录返回条目，受保护位置拒绝。提示词要求模型调用它，且不再要求你粘贴它能打开的内容。在 Finder 复制文件后粘贴到输入框，现在作为文件附件加入（原生剪贴板桥接读取剪贴板自身的字节；文本、PDF/.docx 与图片走现有附件管线）。过大或类型不支持的文件回退为绝对路径，`read_file` 可打开；位图截图仍作为附件。所有者在 Finder 复制文件并粘贴到重建后的 App，输入框出现了附件 chip。`test/main-agent-read-file.test.ts` 10/10、`test/attachment-client.test.ts` 14/14；`npm run bench:main --repeat 1` 4/4（新增 `named-file-read` 格，`tools=["read_file"]`，2.9 秒 / 16,122 tokens）；`npm test` 1122/1122，typecheck 0，gate PASS。
+
+### The audit turn card names its tools and opens one page; replies render as Markdown
+
+In 设置 → 审计与轨迹 → 主 Agent 回合, a turn card no longer prints every tool call with its labeled input. It shows one line — call count, distinct tools, failures and total duration — with a single 查看工具调用 jump. That page groups the calls by tool with counts and durations, lists them in order, and keeps each input behind its own toggle. Turn replies and Agent 调用 detail replies now render Markdown through the conversation's escaping renderer (headings, lists, tables, inline code, fenced blocks) instead of a raw `<pre>`; table export and code copy are forwarded to the shared handlers. `test/ui-structure.test.ts` 43/43; `npm test` 1122/1122, typecheck 0, gate PASS.
+
+### 审计回合卡点名工具并打开一页；回复按 Markdown 渲染
+
+在 设置 → 审计与轨迹 → 主 Agent 回合 中，回合卡不再逐条打印工具调用与带标签输入。卡片显示一行——调用次数、工具种类、失败次数与总耗时——外加一个「查看工具调用」跳转。该页按工具分组列出次数与耗时，再按顺序列出每次调用，每个输入各自留在开关之后。回合回复与 Agent 调用详情里的回复现在经对话的转义渲染器按 Markdown 渲染（标题、列表、表格、行内代码、围栏代码块），而不是原始 `<pre>`；表格导出与代码复制转发给共享处理器。`test/ui-structure.test.ts` 43/43；`npm test` 1122/1122，typecheck 0，gate PASS。
+
+### The main conversation shows its run's review, with the content
+
+A run derived to the main conversation that is `waiting_approval` or `waiting_review` now appears there with its scopes and refusal/judge reason, the verification and criteria, and the run's last durable result; you can accept or reject from the conversation. The latest turn's run result is also merged into the thread as its own message, so the answer remains after you accept it. The Agent 协作 card only shows the latest turn's subagents plus runs still in flight, so an old failed subagent no longer claims "需要处理". The Main Agent's `request_approval` reports `waiting_review` as your review of evidence, not an approval. `test/main-conversation-approvals.test.ts` 5/5; `npm test` 1109/1109, typecheck 0, gate PASS.
+
+### 主对话显示自己 Run 的复核与正文
+
+派生到主对话的 Run 若处于 `waiting_approval` 或 `waiting_review`，现在会带着 Scope 与拒绝/裁判理由、验证与验收标准、以及 Run 最后一条持久结果显示在那里；你可以直接在对话里接受或拒绝。最近一回合的 Run 结果还会作为一条消息并入线程，因此接受后正文仍在。Agent 协作卡只显示最近一回合的子 Agent 与仍在进行的 Run，旧失败不再长期占着"需要处理"。主 Agent 的 `request_approval` 把 `waiting_review` 报告为对证据的复核，而不是审批。`test/main-conversation-approvals.test.ts` 5/5；`npm test` 1109/1109，typecheck 0，gate PASS。
+
+### The briefing stops repeating the request that taught a folder
+
+The Main Agent's every-turn briefing now names learned folders with path, use count and last-used time, and no longer repeats the request text that taught them. Recent background work is labelled history and says not to start or retry it unless you ask. The prompt also says a known folder or finished run is not a task, and that "current workspace" without a path must be asked — never assumed to be the clone home or the last project. This removes the README request that had appeared in every prompt for days and was being repeated as work. `test/known-folders.test.ts` + `test/situation-briefing.test.ts` 14/14; `npm test` 1109/1109, typecheck 0, gate PASS.
+
+### 简报不再重复教它记住文件夹的那条请求
+
+主 Agent 的每回合简报现在只用路径、使用次数与最近时间列出已知文件夹，不再重复教它的请求原文。最近的后台工作标为历史，并写明除非你要求，不要启动或重试。提示词还写明：已知文件夹或已结束的 Run 不是任务；"当前工作区"没给路径时必须问，绝不假定 clone home 或上一个项目。这去掉了连续多日出现在每个提示词里、并被当成工作重复执行的 README 请求。`test/known-folders.test.ts` + `test/situation-briefing.test.ts` 14/14；`npm test` 1109/1109，typecheck 0，gate PASS。
+
 ### Every Kernel denial is an AI appeal; the owner is the last authority
 
 A plan step the deterministic policy engine refuses no longer ends the run. The Runtime asks a bounded model judge (1,024 output tokens, minimal effort, 20 s) for one word: `ALLOW` records a `model_judge` approval and executes the step with a per-step override of the protected-path, `.git` and `.rsi` gates; `ASK`, an unparsable answer, an unreachable endpoint or no judge records an `approval.requested` with the judge's reason, waits for you, notifies the computer, and turns the sidebar row red; `DENY` fails with the judge's reason. Your approval of an appealed step executes with the same override. The approval card now lists the step's scopes and the Kernel/judge reason. This includes protected locations and credentials, as you chose. The agent-exec MCP server keeps its own command allowlist and Seatbelt profile. `test/policy-judge.test.ts` 3/3; `npm test` 1108/1108, typecheck 0, gate PASS.

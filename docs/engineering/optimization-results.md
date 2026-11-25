@@ -15,6 +15,222 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-25 — MCP installs work under launchd; skills install and reach the Main Agent
+
+- **Claim:** a marketplace install now runs in the app's real launch environment.
+  `npx` is resolved from the Node running the daemon (then the usual package
+  manager locations), the Node directory leads every MCP child's `PATH`, and the
+  absolute command is stored in `mcp.json`. The settings page ships four
+  built-in skills — weekly review, document review, release notes, deliverable
+  check — installable into `<clone home>/skills` and removable only from there.
+  Every Main Agent turn now receives the skill roots, so the listing is in the
+  system prompt and each skill is a `Skill(name)` tool that returns the body.
+  The tools page is two categories; every server and skill is one jump row, with
+  no inline tool bodies even for a one-tool server, and the MCP and skill
+  markets are jumped pages.
+- **Evidence:** affected suites **136/136**, then **80/80** after the label
+  polish; `npm run typecheck` 0; `npm run gate` PASS (verdict 14, policy 30,
+  audit 5, memory 31, baseline unchanged); full suite **1161/1161**, exit 0. Live: the resident daemon's
+  probe had returned `MCP server probe spawn npx ENOENT.` under
+  `PATH=/usr/bin:/bin:/usr/sbin:/sbin`; after the fix and a daemon restart the
+  same probe listed **10 tools in 0.6 s**, skill install → detail (480-byte
+  body) → remove left the clone home clean, and the live UI showed two
+  categories, a 5-card MCP market, a 4-card skill market, and the skill body
+  rendered as Markdown. `test/skill-runtime.test.ts` proves the listing and body
+  reach the model.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--mcp-installs-resolve-the-runtimes-own-node-skills-get-a-built-in-market-and-reach-the-main-agent-every-entry-is-a-jump);
+  [execution chain](optimizations.md#2026-11-25--mcp-installs-work-under-launchd-skills-are-installable-and-reach-the-main-agent-every-entry-is-a-jump).
+
+## 2026-11-25 — A pasted file becomes an attachment chip
+
+- **Claim:** files copied in Finder and pasted into the composer become
+  attachment chips instead of raw path text. The native shell reads the
+  pasteboard's own file URLs and bytes (12 MB per file, 24 MB per paste), the
+  page rebuilds File objects, and the existing attachment pipeline carries
+  text, PDF/.docx and images; a file that cannot be attached falls back to its
+  absolute path for `read_file`.
+- **Evidence:** `test/attachment-client.test.ts` **14/14** (a native payload
+  becomes a File and a document attachment); `test/ui-structure.test.ts`
+  **44/44** (the clipboard screenshot contract and the UI definition check);
+  `npm run typecheck` exit 0; `npm run gate` **PASS**. The owner copied files
+  in Finder and pasted them into the rebuilt app; the composer showed
+  attachment chips (owner-confirmed). Full `npm test` at the time of writing is
+  1152/1160 because another session's planner/workspace edits are in flight;
+  none of those failures touches this change.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--a-pasted-file-is-attached-its-path-is-the-fallback);
+  [execution chain](optimizations.md#2026-11-25--a-pasted-file-becomes-an-attachment-not-path-text).
+
+## 2026-11-25 — One executor; a dispatch declares read or write, and its answer comes back
+
+- **Claim:** Clone AI has one general executor instead of four role profiles that
+  were labels on the same native provider. `dispatch_task` requires the Main
+  Agent to declare `read` (investigate, change nothing) or `write` (create or
+  change local files); that choice builds the plan, the dispatch's acceptance
+  criteria become the plan's criteria, and a `write` dispatch carries a required
+  artifact so a task that only reads cannot complete. The tool returns the
+  worker's durable answer, the effective per-step executor and the verification,
+  so the Main Agent can continue in the same turn and no longer reports the
+  task-level default as the executor that ran. `get_run_status` also shows the
+  durable answer. The Kernel's risk floor, scopes, Authority and protected paths
+  are unchanged; the worker's capability set was never a tool-level barrier.
+- **Evidence:** `test/regression/worker-responsibility.test.ts` pins the read
+  and write plan shapes, the caller's criteria, the artifact requirement and the
+  observation-only refusal; the focused suite (plus worker-defaults,
+  dispatch-task, plan-routing, fallback-planner, write-scopes,
+  run-query-routing, golden-path, llm-planner, worker-brief and tool-format)
+  **99/99**; `npm run typecheck` exit 0; `npm run gate` **PASS** (14 verdict, 30
+  policy, 5 audit, 31 memory, baseline unchanged). `npm test` **1152 / 1145
+  pass / 7 fail**; the 7 are the concurrent verifier change's expectations
+  (waiting_review/verdict review), not this change. No provider benchmark was
+  run; this is deterministic wiring.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--one-executor-the-main-agent-declares-each-dispatchs-responsibility);
+  [execution chain](optimizations.md#2026-11-25--one-executor-the-main-agent-declares-read-or-write-per-dispatch).
+
+## 2026-11-25 — The tools page sells reviewed MCP servers and reads tools as tables
+
+- **Claim:** 工具与技能 now opens with a searchable MCP marketplace of five
+  reviewed, version-pinned keyless servers. The client sends an entry id and
+  typed inputs; the server builds the package, argv and fixed environment, so
+  `memory` keeps its graph in the clone home, `chrome-devtools` opts out of
+  usage statistics, and the filesystem server installs `--read-only` by
+  default. Installation keeps the probe → per-tool risk → confirm → re-probe →
+  atomic write chain, with every tool starting at `external`. A server with
+  three tools or fewer lists them inline; more shows one jump to a detail page
+  where each tool reads as its description plus a parameter table parsed from
+  `Args:` — the raw fragment no longer appears. The free-text npm install stays
+  under 手动安装.
+- **Evidence:** `test/mcp-registry.test.ts` **6/6**; `test/tool-format.test.ts`
+  **12/12**; `test/mcp-installer.test.ts` **10/10**;
+  `test/tools-install-api.test.ts` **9/9**; `test/mcp-settings.test.ts`
+  **6/6**; UI structure **44/44**. Live on an isolated clone home: the filesystem entry
+  probed `@modelcontextprotocol/server-filesystem@2.4.0` (10 tools) and
+  installed with args `["--yes", "@modelcontextprotocol/server-filesystem@2.4.0",
+  "/tmp", "--read-only"]`, all tools `external`; an empty directory field was
+  refused before spawning. `npm run typecheck` 0, `npm run gate` PASS; the full
+  suite is 1144/1151, its 7 failures being recovery/restart fixtures from
+  concurrent work (measured 2026-11-25 11:10 CST; concurrent fixture churn was
+  resolved before the final rerun: focused suites 89/89, typecheck 0).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--the-mcp-marketplace-is-curated-and-pinned-tools-read-as-a-summary-and-jump-to-a-detail-page);
+  [execution chain](optimizations.md#2026-11-25--the-mcp-marketplace-is-curated-and-pinned-tools-jump-to-a-detail-page).
+
+## 2026-11-25 — Turn and memory maintenance use fewer paths
+
+- **Claim:** one Main Agent HTTP implementation and one tool-free completion request implementation replace two copies of each; removing the retired JSON store contributes to **357 fewer production source lines**.
+- **Evidence:** on the isolated `bf3f108` snapshot, `npm test` passed **1108/1108**, typecheck passed, and the [before/after gate report](optimizations.md#2026-11-25--remove-duplicate-turn-and-memory-implementations) was unchanged. No performance gain is claimed.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--keep-one-implementation-for-turn-intake-and-memory-completion) · [execution chain](optimizations.md#2026-11-25--remove-duplicate-turn-and-memory-implementations).
+
+## 2026-11-25 — Automatic checks decide completion; no prose review for any step
+
+- **Claim:** a step that records evidence and passes its mechanical checks
+  (named files exist/contain what was promised; external/irreversible steps have
+  a receipt with a locator) completes without `waiting_review`, for read-only,
+  write and external steps. Missing named files, missing receipts and no
+  evidence still fail. Human review remains only for artifact-contract gaps the
+  AI judge cannot decide.
+- **Evidence:** `test/verification.test.ts` **18/18**; `npm run gate` **PASS**
+  (verdict 14 cases, 14 decided, agreement 100%, review 0; baseline regenerated
+  after reviewing the intended review→pass flips). The full `npm test` is
+  currently red on unrelated concurrent executor-catalog changes
+  (`assertPlanIsExecutable` knows only `worker` while older fixtures name
+  `draft-maker` et al.); those are not from this change.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--automatic-checks-decide-completion-prose-criteria-are-not-a-review);
+  [execution chain](optimizations.md#2026-11-25--automatic-checks-decide-completion-the-prose-review-gate-is-gone).
+
+## 2026-11-25 — A read-only step finishes automatically; the conversation keeps only the result
+
+- **Claim:** a `read_only` step with evidence and passing mechanical checks now
+  completes without `waiting_review`; its prose criterion is trusted. Write,
+  external and artifact contracts keep their review. The conversation's turn log
+  shows the result and an audit link only — tool counts and spawned tasks live
+  in the audit.
+- **Evidence:** `test/verification.test.ts` **18/18** (the new read-only pass
+  case plus the reversible-write review cases); `test/ui-structure.test.ts` pins
+  the absence of `依据`/`工具调用`/`派生任务` in the reading column and the audit
+  link; `npm test` **1122/1122**, `npm run typecheck` exit 0, `npm run gate`
+  **PASS** (verdict 14 cases; `read-only-evidence-passes-without-review` pass).
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--a-read-only-step-with-evidence-passes-without-an-owner-review);
+  [execution chain](optimizations.md#2026-11-25--a-read-only-step-finishes-without-a-review-the-conversation-drops-the-process-line).
+
+## 2026-11-25 — The Main Agent opens a named file instead of asking for a paste
+
+- **Claim:** the Main Agent has a read-only `read_file` tool. An absolute path,
+  `~/` path, workspace-relative path or bare file name resolves to a file;
+  bare names search the workspace and learned folders, then exact-name Spotlight,
+  then a bounded walk, and an ambiguous name lists candidates instead of
+  guessing. Long text returns in ~7,000-character windows with the next offset,
+  PDF/.docx/.doc are extracted, directories list their entries, and protected
+  locations are refused. The prompt now tells the model to call it and never to
+  ask the owner to paste contents it can open. Pasting Finder-copied files
+  attaches them as files; a file that cannot be attached falls back to its
+  absolute path.
+- **Evidence:** `test/main-agent-read-file.test.ts` **10/10**; the focused suite
+  with worker-brief, companion-main-agent, desktop-shell, attachment-client and
+  prompt-snapshot **53/53**; `test/attachment-client.test.ts` **14/14** (a
+  native clipboard payload becomes a File and a document attachment); `npm run
+  typecheck` exit 0; `npm run gate` **PASS**,
+  baseline unchanged. Live: a bare `toolbox-20261125-delivery-plan.md` resolved
+  via Spotlight to `/Users/user/work/doc_translate/docs/…` (10.6 KB, 56
+  lines). Benchmark `npm run bench:main -- --repeat 1` with
+  `deepseek/deepseek-v4.1-flash` **4/4 PASS**; the new `named-file-read`
+  cell passed with `tools=["read_file"]` in 2.9 s / 16,122 tokens
+  (`benchmark/results/main-agent-2026-11-25T02-30-55-603Z.json`).
+  `npm test` **1122/1122**, typecheck 0.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--the-main-agent-reads-named-files-itself-in-bounded-windows);
+  [execution chain](optimizations.md#2026-11-25--the-main-agent-opens-a-named-file-instead-of-asking-for-a-paste).
+
+## 2026-11-25 — The audit turn card becomes one tool jump; replies render as Markdown
+
+- **Claim:** in 设置 → 审计与轨迹 → 主 Agent 回合, each turn card now shows one
+  count line and one 查看工具调用 jump instead of every call with its input; the
+  page groups calls by tool, then lists them in order with each input behind a
+  toggle. Turn replies and Agent 调用 replies render Markdown through the
+  conversation's escaping renderer instead of raw `<pre>` text.
+- **Evidence:** the two new cases in `test/ui-structure.test.ts` failed against
+  the old rendering (missing `data-au-turn-tools`; `markdownReply` absent) and
+  pass now; full file **43/43**, `npm test` **1122/1122**, `npm run typecheck`
+  exit 0, `npm run gate` **PASS**. Live app check: a 4-call turn showed
+  工具调用 4 次 · 4 种 · 32.9 s with one jump; the page grouped the four tools;
+  expanding `dispatch_task` showed its readable objective and the raw-argument
+  toggle; both replies had `class="au-reply log-reply"` and rendered bold,
+  lists and inline code.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--the-audit-turn-names-its-tools-and-opens-one-tool-page-replies-are-markdown);
+  [execution chain](optimizations.md#2026-11-25--the-audit-turn-card-becomes-one-tool-jump-replies-render-as-markdown).
+
+## 2026-11-25 — The main conversation shows its run's review, with the content
+
+- **Claim:** a run derived to the main conversation that is `waiting_approval`
+  or `waiting_review` now appears there with its scopes/reason, verification,
+  criteria and last durable result; the owner can accept or reject from the
+  control surface. The latest turn's run result is also merged into the thread
+  as its own message, so the answer remains after the review is accepted. The
+  Agent 协作 card only shows the latest turn's subagents plus live runs, so an
+  old failed subagent no longer claims "需要处理".
+- **Evidence:** `test/main-conversation-approvals.test.ts` **5/5** (a waiting
+  review carries the result, not just criteria); `npm test` **1109/1109**,
+  `npm run typecheck` exit 0, `npm run gate` **PASS**. Live run `d36bb093`
+  (`waiting_review`, 15 evidence items) now returns its review and result to the
+  main conversation; after acceptance its result remains as a `任务「…」已完成，
+  结果：…` message; `cd74804b` (2026-11-18) is filtered from `subagents`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--the-main-conversation-carries-the-review-of-its-own-runs-old-subagents-leave-the-card);
+  [execution chain](optimizations.md#2026-11-25--the-main-conversation-shows-the-review-of-its-own-run-not-a-stale-agent-card).
+
+## 2026-11-24 — The briefing stops repeating the request that taught a folder
+
+- **Claim:** the Main Agent's every-turn briefing names learned folders with
+  path, use count and last-used time only; it no longer repeats the request text
+  that taught them. Recent background work is labelled history and explicitly
+  not a retry list. This removes the README request that had appeared in every
+  prompt and was being repeated as work.
+- **Evidence:** `test/known-folders.test.ts` + `test/situation-briefing.test.ts`
+  **14/14**; the new case gives a folder an example naming README.md and asserts
+  the rendered briefing contains the folder and its use count but not `README`
+  or the request verb. The live render shows only
+  `/Users/user/work — 10 request(s), last …` and
+  `/Users/user/Documents/Clone AI — 5 request(s), last …`. `npm test`
+  **1109/1109**, `npm run typecheck` exit 0, `npm run gate` **PASS**.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-24--the-briefing-shows-learned-places-and-history-never-a-request-to-repeat);
+  [execution chain](optimizations.md#2026-11-24--the-briefing-shows-learned-places-not-the-request-text-that-taught-them).
+
 ## 2026-11-24 — Every Kernel denial is an AI appeal; the owner is the last authority
 
 - **Claim:** a step the deterministic policy engine refuses no longer ends the

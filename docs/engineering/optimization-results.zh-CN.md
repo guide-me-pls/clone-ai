@@ -11,6 +11,169 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-25 —— MCP 安装在 launchd 下可用；技能可安装并接入 Main Agent
+
+- **主张：** 市场安装现在能在应用真实的 launch 环境中运行。`npx` 从运行守护进程的 Node
+  解析（其次是常见包管理器位置），Node 目录排在每个 MCP 子进程 `PATH` 最前，绝对命令写入
+  `mcp.json`。设置页自带四个技能——周复盘、文档审阅、发布说明、交付自检——可安装到
+  `<clone home>/skills`，也只能从这里移除。每个 Main Agent 回合现在收到技能根目录，列表
+  进入系统提示词，每个技能变成一个 `Skill(name)` 工具并返回正文。工具页分成两个分类；
+  每个服务器与技能都是一行跳转，即使只有一个工具也不内联正文；MCP 与技能市场都是跳转页。
+- **证据：** 受影响套件 **136/136**，最终文案调整后 **80/80**；`npm run typecheck` 0；
+  `npm run gate` PASS（verdict 14、policy 30、audit 5、memory 31、baseline unchanged）；
+  完整套件 **1161/1161**，退出 0。实机：常驻守护进程的探测
+  曾在 `PATH=/usr/bin:/bin:/usr/sbin:/sbin` 下返回
+  `MCP server probe spawn npx ENOENT.`；修复并重启守护进程后，同一条探测在 **0.6 秒内
+  列出 10 个工具**，技能安装 → 详情（480 字节正文）→ 移除后 clone home 干净，实机 UI 显示
+  两个分类、5 张 MCP 卡片、4 张技能卡片，技能正文按 Markdown 渲染。
+  `test/skill-runtime.test.ts` 证明列表与正文都能到达模型。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-25--mcp-安装使用运行时自己的-node技能有内置市场并接入-main-agent每个条目都是跳转)；
+  [执行链路](optimizations.zh-CN.md#2026-11-25--mcp-安装在-launchd-下可用技能可安装并接入-main-agent每个条目都是跳转)。
+
+## 2026-11-25 —— 粘贴的文件成为附件 chip
+
+- **主张：** 在 Finder 复制文件并粘贴到输入框时，它成为附件 chip，而不是裸路径文本。原生
+  外壳读取剪贴板自身的文件 URL 与字节（单文件 12 MB、单次 24 MB），页面重建 File，现有
+  附件管线承载文本、PDF/.docx 与图片；无法成为附件的文件回退为绝对路径，供 `read_file`
+  打开。
+- **证据：** `test/attachment-client.test.ts` **14/14**（原生载荷变成 File 与文档附件）；
+  `test/ui-structure.test.ts` **44/44**（剪贴板截图契约与 UI 定义检查）；`npm run typecheck`
+  退出码 0；`npm run gate` **PASS**。所有者在 Finder 复制文件并粘贴到重建后的 App，输入框
+  出现附件 chip（所有者确认）。写这份记录时完整 `npm test` 为 1152/1160，因为另一个会话的
+  planner/workspace 改动仍在途；这些失败都与本次变更无关。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-25--粘贴的文件作为附件路径只是回退)；
+  [执行链路](optimizations.zh-CN.md#2026-11-25--粘贴的文件成为附件而不是路径文本)。
+
+## 2026-11-25 —— 一个执行者；派发声明读或写，答复回到主 Agent
+
+- **主张：** Clone AI 只有一个通用执行者，而不是四个指向同一原生 Provider 的角色 Profile。
+  `dispatch_task` 要求主 Agent 声明 `read`（调查、不改变文件）或 `write`（创建或修改本地
+  文件）；这个选择生成计划，派发的验收标准成为计划的标准，`write` 派发携带必需产物合同，
+  因此只读取的任务无法完成。工具返回 Worker 的持久答复、实际逐步执行者与验证结果，主 Agent
+  能在同一回合继续，也不会再把任务级默认值当成实际执行者。`get_run_status` 也显示持久答复。
+  Kernel 的风险下限、Scope、Authority 与受保护路径未变；Worker 的能力集一直不是工具级闸门。
+- **证据：** `test/regression/worker-responsibility.test.ts` 钉住读/写计划形状、调用方标准、
+  产物要求与"只产生观察不能完成写"；定向套件（加上 worker-defaults、dispatch-task、
+  plan-routing、fallback-planner、write-scopes、run-query-routing、golden-path、
+  llm-planner、worker-brief、tool-format）**99/99**；`npm run typecheck` 退出码 0；
+  `npm run gate` **PASS**（verdict 14、policy 30、audit 5、memory 31，基线未变）。
+  `npm test` **1152 / 1145 通过 / 7 失败**；7 个是并行验证器变更的期望
+  （waiting_review/verdict 复核），不是本变更。未运行 Provider 基准；这是确定性接线。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-25--一个执行者主-agent-为每次派发声明职责)；
+  [执行链路](optimizations.zh-CN.md#2026-11-25--一个执行者主-agent-为每次派发声明读或写)。
+
+## 2026-11-25 —— 工具页提供精选 MCP 服务器，工具按表格阅读
+
+- **主张：** 工具与技能现在以可搜索的 MCP 市场开场：五个经过核对、固定版本的免密钥
+  服务器。客户端只发送条目 id 与有类型的输入；包、argv 与固定环境由服务器构造，因此
+  `memory` 把图谱放在 clone home，`chrome-devtools` 关闭使用统计，文件系统服务器默认带
+  `--read-only` 安装。安装仍走探测 → 逐工具风险 → 确认 → 重新探测 → 原子写入，每个工具从
+  `external` 开始。三个及以下工具的服务器直接列出；更多时一次跳转到详情页，每个工具读作
+  描述加一张从 `Args:` 解析出的参数表——原始片段不再出现。自由文本 npm 安装留在
+  **手动安装** 下。
+- **证据：** `test/mcp-registry.test.ts` **6/6**；`test/tool-format.test.ts` **12/12**；
+  `test/mcp-installer.test.ts` **10/10**；`test/tools-install-api.test.ts` **9/9**；
+  `test/mcp-settings.test.ts` **6/6**；UI 结构 **44/44**。在隔离 clone home 上实机：文件系统条目探测
+  `@modelcontextprotocol/server-filesystem@2.4.0`（10 个工具），安装参数为
+  `["--yes", "@modelcontextprotocol/server-filesystem@2.4.0", "/tmp", "--read-only"]`，
+  所有工具为 `external`；目录字段为空时在启动前被拒绝。`npm run typecheck` 0、
+  `npm run gate` PASS；完整套件 1144/1151，7 个失败是并发改动留下的 recovery/重启夹具
+  （测量于 2026-11-25 11:10 CST；并发夹具变更已在最终重跑前修复：定向套件 89/89、
+  typecheck 0）。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-25--mcp-市场用精选且锁版本的清单工具列表只留摘要详情跳转)；
+  [执行链路](optimizations.zh-CN.md#2026-11-25--mcp-市场精选并锁版本工具跳转到详情页)。
+
+## 2026-11-25 —— 减少回合和记忆的重复维护点
+
+- **主张：** 回合 HTTP 处理和无工具模型补全各从两套减为一套；连同退役 JSON 实现一起，生产源码净减 **357 行**。
+- **证据：** 基于 `bf3f108` 的隔离快照 `npm test` **1108/1108**，类型检查通过，门禁前后报告一致。未测量性能收益。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-25--回合入口和记忆补全各保留一套实现) · [执行链路、命令及报告](optimizations.zh-CN.md#2026-11-25--删除重复的回合与记忆实现)。
+
+## 2026-11-25 —— 自动检查决定完成；任何步骤都不再做文字复核
+
+- **主张：** 记录了证据并通过机械检查（点名文件存在/包含承诺内容；外部/不可逆步骤有带
+  locator 的回执）的步骤，无论只读、写入还是外部，都直接完成，不再 `waiting_review`。
+  点名文件缺失、回执缺失与无证据仍失败。人工复核只在 AI 裁判无法决定的产物合同缺口里保留。
+- **证据：** `test/verification.test.ts` **18/18**；`npm run gate` **PASS**（verdict 14 个用例、
+  14 已判定、一致率 100%、review 0；审阅有意的 review→pass 翻转后重新生成基线）。完整
+  `npm test` 当前因并发的执行器目录变更而红（`assertPlanIsExecutable` 只认识 `worker`，
+  而旧夹具写 `draft-maker` 等）；这些不是本次变更造成的。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-25--自动检查决定完成文字标准不再触发人工复核)；
+  [执行链路](optimizations.zh-CN.md#2026-11-25--自动检查决定完成文字复核门移除)。
+
+## 2026-11-25 —— 只读步骤自动完成，对话只保留结果
+
+- **主张：** 有证据且机械检查通过的 `read_only` 步骤现在自动完成，不再进入
+  `waiting_review`；它的文字标准被信任。写入、外部与产物合同仍保留复核。对话的回合日志只显示
+  结果与审计入口——工具调用数与派生任务留在审计。
+- **证据：** `test/verification.test.ts` **18/18**（新增只读通过用例与 reversible_write 复核
+  用例）；`test/ui-structure.test.ts` 钉住阅读栏不含 `依据`/`工具调用`/`派生任务`，且保留
+  审计入口；`npm test` **1122/1122**，`npm run typecheck` 退出码 0，`npm run gate` **PASS**
+  （verdict 14 个用例；`read-only-evidence-passes-without-review` 为 pass）。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-25--有证据的只读步骤自动通过不再等所有者复核)；
+  [执行链路](optimizations.zh-CN.md#2026-11-25--只读步骤自动完成对话移除过程行)。
+
+## 2026-11-25 —— 主 Agent 自己打开点名文件，而不是让所有者粘贴
+
+- **主张：** 主 Agent 有了只读的 `read_file`。绝对路径、`~/` 路径、工作区相对路径或纯文件名
+  都能解析到文件；纯文件名依次搜索工作区与已知文件夹、精确文件名的 Spotlight、再有界遍历，
+  有歧义时列出候选而不是猜一个。长文本按约 7,000 字符的窗口返回并给出续读 offset，
+  PDF/.docx/.doc 走文本提取，目录返回条目，受保护位置拒绝。提示词要求模型调用它，且不再
+  要求所有者粘贴它能打开的内容。从 Finder 复制的文件粘贴时作为附件加入；无法作为附件的文件
+  回退为绝对路径。
+- **证据：** `test/main-agent-read-file.test.ts` **10/10**；连同 worker-brief、
+  companion-main-agent、desktop-shell、attachment-client 与 prompt-snapshot 的聚焦套件
+  **53/53**；`test/attachment-client.test.ts` **14/14**（原生剪贴板载荷变成 File 与文档
+  附件）；`npm run typecheck` 退出码 0；`npm run gate` **PASS**，基线与上次一致。现场：
+  裸名 `toolbox-20261125-delivery-plan.md` 经 Spotlight 解析到
+  `/Users/user/work/doc_translate/docs/…`（10.6 KB，56 行）。Benchmark
+  `npm run bench:main -- --repeat 1`（`deepseek/deepseek-v4.1-flash`）**4/4 PASS**；
+  新增的 `named-file-read` 格以 `tools=["read_file"]` 通过，2.9 秒 / 16,122 tokens
+  （`benchmark/results/main-agent-2026-11-25T02-30-55-603Z.json`）。`npm test`
+  **1122/1122**，typecheck 0。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-25--主-agent-自己按名字读文件按窗口读大文件)；
+  [执行链路](optimizations.zh-CN.md#2026-11-25--主-agent-自己打开点名文件而不是让所有者粘贴)。
+
+## 2026-11-25 —— 审计回合卡改成一个工具跳转；回复按 Markdown 渲染
+
+- **主张：** 在 设置 → 审计与轨迹 → 主 Agent 回合 中，每张回合卡现在只显示一行计数与一个
+  「查看工具调用」跳转，而不是逐条调用与输入；工具页先按工具分组，再按顺序列出调用，每个
+  输入留在开关之后。回合回复与 Agent 调用回复经对话的转义渲染器按 Markdown 渲染，而不是
+  原始 `<pre>` 文本。
+- **证据：** `test/ui-structure.test.ts` 的两个新用例在旧渲染下失败（缺少
+  `data-au-turn-tools`；`markdownReply` 不存在），现在通过；整文件 **43/43**，
+  `npm test` **1122/1122**，`npm run typecheck` 退出码 0，`npm run gate` **PASS**。
+  现场检查运行中的应用：一个 4 次调用的回合显示 工具调用 4 次 · 4 种 · 32.9 s 与一个跳转；
+  工具页把那四个工具分组；展开 `dispatch_task` 看到可读目标与"原始参数"开关；两个回复都带
+  `class="au-reply log-reply"`，粗体、列表与行内代码正常渲染。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-25--审计回合点名工具并打开一页工具明细回复按-markdown-渲染)；
+  [执行链路](optimizations.zh-CN.md#2026-11-25--审计回合卡改成一个工具跳转回复按-markdown-渲染)。
+
+## 2026-11-25 —— 主对话显示自己 Run 的复核与正文
+
+- **主张：** 派生到主对话的 Run 若处于 `waiting_approval` 或 `waiting_review`，现在会带着
+  Scope/理由、验证、验收标准与最后一条持久结果显示在那里；所有者可以直接在操作面接受或拒绝。
+  Agent 协作卡只显示最近一回合的子 Agent 与仍在进行的 Run，旧失败不再长期占着"需要处理"。
+- **证据：** `test/main-conversation-approvals.test.ts` **5/5**（等待复核带结果，不只是标准）；
+  `npm test` **1109/1109**，`npm run typecheck` 退出码 0，`npm run gate` **PASS**。现场 Run
+  `d36bb093`（`waiting_review`，15 条证据）现在把复核与结果返回主对话；
+  `cd74804b`（2026-11-18）已从 `subagents` 过滤。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-25--主对话承载自己-run-的复核旧子-agent-离开协作卡)；
+  [执行链路](optimizations.zh-CN.md#2026-11-25--主对话显示自己-run-的复核而不是过期的协作卡)。
+
+## 2026-11-24 —— 简报不再重复教它记住文件夹的那条请求
+
+- **主张：** 主 Agent 的每回合简报只用路径、使用次数与最近时间列出已知文件夹，不再重复
+  教它的请求原文。最近的后台工作标为历史，并明确不是重试清单。这去掉了曾出现在每个提示词里、
+  并被当成工作重复执行的 README 请求。
+- **证据：** `test/known-folders.test.ts` + `test/situation-briefing.test.ts` **14/14**；
+  新增用例给文件夹设置点名 README.md 的示例，断言简报包含文件夹与使用次数，但不含 `README`
+  或请求动词。现场渲染只剩 `/Users/user/work — 10 request(s), last …` 与
+  `/Users/user/Documents/Clone AI — 5 request(s), last …`。`npm test` **1109/1109**，
+  `npm run typecheck` 退出码 0，`npm run gate` **PASS**。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-24--简报只展示学到的位置与历史绝不展示可被重复执行的请求)；
+  [执行链路](optimizations.zh-CN.md#2026-11-24--简报展示学到的位置而不是教它的那条请求原文)。
+
 ## 2026-11-24 —— Kernel 的每次拒绝都成为 AI 上诉；所有者是最后权威
 
 - **主张：** 被确定性 Policy 引擎拒绝的步骤不再直接结束 Run。一个有界模型裁判回答

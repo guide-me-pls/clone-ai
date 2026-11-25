@@ -6,6 +6,669 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-25 — Keep one implementation for turn intake and memory completion
+
+**Decision.** Use one Main Agent HTTP intake and execution path while keeping
+SSE delivery and JSON retry replay distinct. Reuse the existing tool-free
+completion for memory mining. Remove the retired JSON memory store and its
+unused path field; leave historical `memory.json` data, migration and the
+explicit HTTP 410 response alone.
+
+**Evidence and alternatives.** The two turn handlers repeat validation,
+attachment handling, cancellation and cleanup. Mining repeats the same
+provider exchange. The 221-line JSON store is imported only by its own tests;
+production uses governed Markdown memory. Keeping duplicate implementations
+risks drift, but removing either HTTP endpoint or migrating old files would
+change a client or data contract for no maintenance benefit.
+
+**Reversal condition.** If a supported consumer still needs the JSON store,
+restore it as an explicit compatibility adapter. Split only the transport
+branches if their lifecycle requirements diverge; keep shared input policy and
+endpoint defaults in one place.
+
+## 2026-11-25 — A pasted file is attached; its path is the fallback
+
+**Decision.** A file copied in Finder and pasted into the composer becomes an
+attachment chip, like a dropped file and like Claude Code desktop, instead of
+raw path text. The native shell reads the file URLs currently on the
+`NSPasteboard` (it accepts no path list from page JavaScript), base64-encodes
+each regular file up to 12 MB and 24 MB per paste, and hands the page
+`{name, path, size, mimeType, data}`. The page rebuilds `File` objects and runs
+them through the existing attachment pipeline (text, PDF/.docx/.doc, images,
+the four-attachment and character caps). If a file cannot be turned into an
+attachment — too large, unsupported, or no native bridge — its absolute path is
+inserted as text instead, so the Main Agent can still open it with `read_file`.
+This supersedes the path-first behavior of the earlier 2026-11-25 entry.
+
+**Why it won.** The owner used the path behavior and then asked for the Claude
+Code desktop gesture: copy files and paste them as files. A path is raw text in
+the message and makes the agent spend a read call per file even though the
+attachment pipeline already carries the content. Attaching is the same gesture
+the owner already uses for screenshots and drops; the path remains available as
+the graceful fallback for the cases attachments cannot carry.
+
+**Alternatives rejected.**
+
+- *Keep path-only.* The owner's explicit follow-up rejects it: the file should
+  arrive as a file, not as text, and the agent should not have to re-read it.
+- *Attach-only, no path fallback.* A 60 MB log or an unsupported binary would
+  disappear from the turn; the path is the only address `read_file` can use.
+- *Send the path to the server and let it read the file.* The attachment parser
+  deliberately forbids path-bearing clients: any local or remote caller could
+  turn it into an arbitrary-file read. The shell reads only the current
+  pasteboard, and the bytes still pass the same attachment validation.
+- *Expose a generic native `readFile(path)` to the page.* That is a
+  read-any-file primitive from page JavaScript; restricting the read to the
+  pasteboard's own file URLs keeps the surface to what the owner copied.
+
+**Evidence.** The owner confirmed the path insertion worked, then asked
+"最好像claude code desktop这样直接把文件复制上去". The existing attachment pipeline
+already handles text, PDF/.docx/.doc and images with caps; the only missing
+piece was bytes for a pasted file. The native clipboard bridge added earlier in
+this same day already reads the pasteboard's file URLs for the path cache, so
+the same allowlist can supply the bytes. After the change the owner copied
+files in Finder and pasted them into the rebuilt app; the composer showed
+attachment chips.
+
+**What it costs.** A paste can move up to 24 MB of base64 through the WebView;
+the caps bound it, and a file over them falls back to a path. The read is
+asynchronous, so the chip appears after the native read instead of instantly;
+a failed read inserts the paths. The attachment caps still apply: a 60,000-
+character document becomes a path, not a full attachment.
+
+**Reversal condition.** If a large paste makes the app hang or the WebView
+memory spike, lower the per-paste cap and make path insertion the default over
+a threshold; keep the native reader and the attachment path for small files.
+If the owner prefers raw paths again, keep the reader but insert paths instead
+of attaching.
+
+## 2026-11-25 — Automatic checks decide completion; prose criteria are not a review
+
+**Decision.** `EvidenceVerifier` passes any step that recorded evidence and
+failed no mechanical check (a named file exists/contains what was promised; an
+external/irreversible step has a receipt with a locator). Prose acceptance
+criteria are no longer listed as unverified and no longer settle the run as
+`waiting_review`. This applies to read-only, write and external steps alike.
+A missing named file, a missing receipt or no evidence still fails. The
+artifact-contract judge is unchanged: AI decides; if it says REVIEW, the owner
+still sees that card.
+
+**Why it won.** The owner asked "连结论都要接受嘛…默认接受 worker 的结论…不要人工
+介入太多", then chose "也默认接受" when asked whether write/external reviews
+should be trusted too. The verifier's review gate was a human decision about
+prose the machine could not check; the worker had already answered and the
+evidence existed. Keeping it made a read look like a permission request and
+left a review card for every conclusion.
+
+**Alternatives rejected.**
+
+- *Keep the review for write/external only.* The owner chose default accept
+  for those as well; a write with a named missing file still fails mechanically.
+- *Ask a model judge for each prose criterion.* Adds a call per criterion and
+  re-asks the answer the worker already wrote; the artifact judge remains for
+  artifacts, not for prose.
+- *Remove the mechanical checks too.* A named file that does not exist or an
+  external action without a receipt is evidence, not a judgment; those stay
+  failures.
+- *Auto-accept the artifact-contract REVIEW.* That needs a separate decision:
+  the judge's ACCEPT/REVIEW is AI judgment; a REVIEW is the AI saying it cannot
+  decide, and the owner remains the last authority.
+
+**Evidence.** Live run `d36bb093` completed with a read-only answer and 15
+evidence items but settled `waiting_review` on "1 of 1 acceptance criteria
+still need the owner's review"; the owner called it abnormal. `test/verification.test.ts`
+now pins write/read-only steps with evidence as passed, missing named files as
+failed, and external missing receipts as failed. Gate verdict cases
+`unverified-criteria-needs-review` and `partially-checkable-criteria-needs-review`
+flip to pass; the baseline is regenerated with the intended diff, and the
+artifact-review tests keep their review path.
+
+**What it costs.** A write step with no named file and an evidence row completes
+even if its prose claim is wrong; the owner sees a completed result. Named
+files and receipts are the remaining mechanical guarantees. Reviews remain only
+for artifact-contract gaps the AI judge cannot decide.
+
+**Reversal condition.** If an unreviewed write or answer is wrong in a way the
+owner would have caught, restore the prose review for that class (write first,
+then read-only) or add a mechanical check (a citation/test/file). Keep the
+named-file and receipt checks unchanged.
+
+## 2026-11-25 — MCP installs resolve the runtime's own Node; skills get a built-in market and reach the Main Agent; every entry is a jump
+
+**Decision.** Three connected changes:
+
+1. `npx` for MCP installs is resolved from the Node running the daemon
+   (`dirname(process.execPath)/npx`, then the usual package-manager locations,
+   then bare `npx`), and every MCP child process gets that Node's directory at
+   the front of `PATH`. The resolved absolute command is stored in `mcp.json`,
+   so later worker runs do not depend on the launching shell either.
+2. The settings page ships a built-in skill market: weekly review, document
+   review, release notes and deliverable check, authored with this repository.
+   Installing writes one `SKILL.md` under `<clone home>/skills/<name>/`;
+   removing deletes only a direct, non-symlink child of that root. Every Main
+   Agent turn now receives `skillRootsFor(...)`, so the listing reaches the
+   system prompt and each skill becomes a `Skill(name)` tool whose invocation
+   returns the body. Skill rows and market entries open detail pages that render
+   the Markdown body.
+3. The tools page is two categories, MCP and skills. Every server and every
+   skill is one jump row; no tool body is printed inline, even for a one-tool
+   server. A back stack keeps the list's reading position. The MCP market and
+   the skill market are jumped pages reached from each category header.
+
+**Why it won.** The owner reported that MCP still could not download and that
+skills should also be downloadable and usable. Diagnosis of the running app:
+the UI is served from disk in dev mode, so the new market was visible, but the
+resident daemon predated the new routes (`/api/tools/registry` returned 404),
+and its launchd environment had `PATH=/usr/bin:/bin:/usr/sbin:/sbin`; a live
+probe returned `MCP server probe spawn npx ENOENT.` The real npx lives next to
+the daemon's Node (`/opt/homebrew/Cellar/node/26.8.1/bin/npx`), and its
+`#!/usr/bin/env node` needs that directory on `PATH` too. After the fix the same
+live probe listed the ten filesystem tools in 0.6 s. The skill listing and
+`Skill` tool mechanism already existed in the native runtime, but no caller
+passed `skillRoots`, so no skill could reach a turn; the new call fixes that,
+and `test/skill-runtime.test.ts` proves both the listing and the body arrive.
+
+**Alternatives rejected.**
+
+- *Rely on the owner's `PATH`.* launchd does not have Homebrew's directory, and
+  a Finder launch does not either; that is the observed failure.
+- *Edit the LaunchAgent plist to add `PATH`.* It fixes one installation, not a
+  packaged app or a `desktop:dev` sidecar.
+- *Bundle npx now.* Deferred until the app ships Node for every user; resolving
+  the runtime's own Node covers every current launch mode.
+- *Download skills from a remote registry.* There is no trust model yet — who
+  signs an entry, what may change between versions. The built-in market is
+  reviewable and offline; the entry shape leaves room for a source URL.
+- *Keep inline tool lists for small servers.* The owner explicitly asked that
+  even small content be a jump.
+- *Tabs instead of a back stack.* More chrome for two categories; the stack also
+  gives the market-entry page a correct parent.
+
+**Deferred, with reasons.** MCP servers that need API keys (GitHub, Brave,
+Notion, Slack): the install form still has no write-only secret input, and
+adding one is its own review surface. Remote skills: the same trust decision as
+above. A larger MCP catalog: the five keyless servers are the ones the current
+flow can install end to end; adding entries is a data edit once keyed servers
+are supported.
+
+**Reversal conditions.** Return to `PATH`-only resolution if the app always
+ships its own Node/npx and guarantees the runtime's bin directory. Add remote
+skills when a signed registry (or a pinned-commit source) exists and the owner
+accepts fetching from it. Add keyed MCP entries once the form has write-only
+secret fields. Restore inline lists if the extra jump slows routine checks.
+
+## 2026-11-25 — The MCP marketplace is curated and pinned; tools read as a summary and jump to a detail page
+
+**Decision.** The tools settings section gains an MCP marketplace instead of
+only a blank install form. The marketplace is a registry shipped in the repo
+(`src/mcp/mcp-registry.ts`): five reviewed npm servers, each with a fixed
+version, a bilingual summary, search tags and typed install inputs (a directory,
+a read-only switch). The client sends only the entry id and input values; the
+server resolves the package spec, argv and env from the registry, so a
+marketplace install cannot be pointed at an arbitrary package. Installation
+keeps the existing safety chain: probe (`tools/list`), a risk chosen by the
+owner for every tool, explicit confirmation, re-probe, atomic write. Entries
+that need somewhere to keep data declare it: `memory` gets
+`MEMORY_FILE_PATH={dataDir}/mcp-memory.jsonl`, because the server's default file
+lives inside the npx cache and is deleted on update. `chrome-devtools` is
+installed with `--no-usage-statistics`, because Google's server reports usage by
+default. The filesystem entry offers `--read-only` switched on. The manual
+npm-package form stays, collapsed below the marketplace.
+
+The tools list also changes shape. A server with three or fewer tools lists
+them inline; more than three shows a jump ("查看全部 N 个工具") to a server
+detail page. A tool's `description` is parsed: the `Args: {...}` fragment
+becomes a parameter table (name, type, required, default) and the text around it
+becomes a plain summary. A description without an `Args` block is shown as
+written. The shared formatter (`tool-format.js`) gains
+`describeTool`/`paramsFromSchema`, so the same parsing serves the installation
+preview.
+
+**Why it won.** The owner reported that the blank "服务器 ID / npm 包 / 参数"
+card was incomprehensible ("长这样是干啥"), the raw `Args: {...}` sentences
+looked odd, and expanding every tool inline was cluttered. The screenshot shows
+two enabled servers with 7 and 10 tools fully expanded. The registry's packages
+and versions were checked with `npm view` on 2026-11-25:
+`@modelcontextprotocol/server-filesystem@2.4.0`,
+`@modelcontextprotocol/server-memory@2.2.1`,
+`@modelcontextprotocol/server-sequential-thinking@2.2.0`,
+`@playwright/mcp@0.0.86`, `chrome-devtools-mcp@1.14.0`. Their readmes document
+the `--read-only` switch, the `MEMORY_FILE_PATH` default inside the server's own
+directory, and chrome-devtools' usage-statistics default.
+
+**Alternatives rejected.**
+
+- *Live npm registry search instead of a curated list.* Results are unvetted,
+  include non-MCP packages and typosquats, and would still need pins. It also
+  sends the owner's keystrokes to a third party, while the install path talks to
+  npm only after the owner starts an install. The npm search endpoint ranks by
+  text, not by MCP compliance.
+- *Keep the free-text form as the only path.* It requires the owner to know a
+  package name and its argv — the confusion in the report. Its placeholder was
+  also wrong for current filesystem versions (`--root` instead of positional
+  directories).
+- *Prefill the generic form on the client from a registry entry.* It cannot put
+  `MEMORY_FILE_PATH` in the data directory, and it would let a client alter the
+  package spec. Resolving on the server keeps package, argv and env from the
+  reviewed entry.
+- *Persist each tool's `inputSchema` in `mcp.json` at install.* The schema is
+  available during the probe, but `mcp.json` is the owner's document and the
+  catalog deliberately reads declarations only. The servers this app ships
+  already carry `Args:` in their descriptions, so parsing covers existing
+  entries without a contract change.
+- *Include servers that need API keys now (GitHub, Brave, Notion, Slack).* The
+  install API and form have no env input, and adding secret fields is its own
+  review surface. Deferred, not rejected.
+
+**Deferred.** Archived servers (puppeteer) because Playwright supersedes them;
+the "everything" reference server because it exposes environment and sampling
+features this client does not support.
+
+**Reversal conditions.** Replace the curated registry with live search once a
+maintained MCP registry API offers a review signal and the owner accepts sending
+queries to it. Add key-bearing servers once the install form has write-only
+secret inputs (the registry model already allows fixed `env` values). Persist
+`inputSchema` if installed third-party tools routinely have no `Args:` in their
+descriptions, leaving the detail page uninformative. Return to inline lists if
+the extra jump slows routine checks.
+
+**Eval.** `test/mcp-registry.test.ts` (data, search, argv/env resolution),
+additions to `test/mcp-installer.test.ts` (env write), `test/tool-format.test.ts`
+(`Args:` parsing), `test/tools-install-api.test.ts` (registry routes), and
+`test/ui-structure.test.ts` (jump threshold, detail page, market markup).
+Before/after numbers are in the optimization log.
+
+## 2026-11-25 — The Main Agent reads named files itself, in bounded windows
+
+**Decision.** The Main Agent gets a read-only `read_file` tool. It accepts an
+absolute path, a `~/` path, a path relative to the workspace (when the
+workspace is a real folder, never the machine root), or a bare file name. A
+bare name is resolved in this order: a direct hit under the workspace or a
+learned folder, an exact-name Spotlight query (`mdfind -name`), then a bounded
+directory walk with skipped noise folders, a depth cap and an entry/time budget.
+Several matches return candidates with sizes and mtimes instead of a guess. A
+single text file is returned in line windows (`offset`, `limit`, ~7,000
+characters by default) with an explicit "continue at offset N" footer, so a file
+larger than the context is read in several calls rather than truncated silently.
+PDF, `.docx` and `.doc` are extracted through the existing attachment extractor;
+a directory returns a bounded entry list; protected locations (credentials,
+browser profiles, the clone home) are refused before any read. The prompt's
+machine guidance no longer says "You have no filesystem tool of your own": it
+tells the agent to call `read_file` for a named file and never to ask the owner
+to paste contents it can open. On the desktop, pasting files copied in Finder
+now inserts their absolute paths instead of the browser's filename-only text; a
+bitmap screenshot still attaches as an image.
+
+**Why it won.** The owner pasted three document names and asked for the work;
+the Main Agent answered "paste the contents to me" because it had no read tool,
+and the prior turn's read attempt had failed with "the external execution agent
+is closed". A read needs no scope and must not depend on an executor being
+enabled. The same turn also showed why names cannot be the interface: WebKit's
+default paste inserted only `toolbox-….md`, which does not address a file.
+
+**Alternatives rejected.**
+
+- *Keep asking the owner to paste contents.* It loses the file's address, is
+  capped at 2 MB/50,000 characters per document, and cannot read a large file at
+  all — the exact complaint ("读文件读大文件的能力是要有的").
+- *Dispatch a read-only worker step for every read.* This is the behavior that
+  failed in the reported turn when the external lane was off; it also turns a
+  scope-free read into a Run with a plan, a queue and a verification.
+- *Index the learned folders into a cache.* `~/work` alone holds 727,840 files
+  and 142,127 directories within depth 8; building and invalidating that index
+  costs more than the query it replaces, while Spotlight answered the exact name
+  in 0.09 s.
+- *Resolve only inside known folders.* A newly named project is not learned yet;
+  Spotlight is what makes the first request work, before any memory exists.
+- *Attach file contents only.* The 2 MB/50,000-character caps reject large
+  documents, and the agent cannot re-read or cite the source later; a path keeps
+  the source addressable.
+- *Insert only file names in the composer.* That is the reported defect: a bare
+  name is ambiguous and the agent cannot address the file.
+
+**Evidence.** The live turn `d883d9d2-0240-4ede-9dd1-6e98397481a7`
+(2026-11-25T02:07:48Z) has text "toolbox-20261125-delivery-plan.md /
+toolbox-20261125-upload-handoff.md / toolbox-slim-scope.md / 这是toolbox今天要开发的
+内容文档，你来开发"; its reply asks the owner to paste the documents, and the
+turn card shows a failed attempt whose reason is "外部执行 Agent 已关闭". The three
+files exist at `/Users/user/work/doc_translate/docs/`; `mdfind -name
+toolbox-20261125-delivery-plan.md` returned the path in 0.09 s. Learned folders
+currently include `/Users/user/work` (12 requests) and
+`/Users/user/Documents/Clone AI` (5). `machineGuidance()` in
+`src/main-agent/prompt.ts` contains the "no filesystem tool" line, and
+`clipboardAttachmentFiles()` in `apps/desktop/ui/app.js` keeps only image files,
+so a non-image clipboard file falls through to the default paste. The full run
+and its benchmark are recorded in `docs/engineering/optimizations.md`.
+
+**What it costs.** The Main Agent gains read reach over any readable location
+except protected roots — the same reach the prompt already grants workers
+("a worker may read any readable location … except protected locations"). A
+prompt injection could try to make it read unrelated files; the tool returns
+data with no instruction authority, protected roots are refused, and every call
+is recorded in the turn audit. The ~7,000-character window means a large file
+takes several calls. Spotlight may be disabled or incomplete; the bounded walk
+then may miss a deep file, and the tool says where it looked. The composer shows
+long absolute paths instead of short names when files are pasted.
+
+**Reversal condition.** If a prompt-injection incident uses `read_file` to reach
+unrelated personal files, restrict resolution to the workspace and learned
+folders (no Spotlight/global search) or require owner approval per path; keep
+the windowing and the prompt rule. If inserting paths proves noisier than
+attachments, keep the tool and revert the paste behavior to attachment-first.
+
+## 2026-11-25 — The audit turn names its tools and opens one tool page; replies are Markdown
+
+**Decision.** In 设置 → 审计与轨迹 → 主 Agent 回合, a turn card no longer
+prints every tool call with its labeled input. It keeps one line — call count,
+distinct tools, failures and total duration — and one `查看工具调用 ›` jump per
+turn. The jump opens a tool page for that turn: tools grouped by name with
+counts, failures and summed duration, then the calls in order with each input
+behind its own toggle. The turn reply and the Agent 调用 detail reply render as
+Markdown through the conversation's escaping renderer
+(`window.cloneMarkdownForPreview`), with the recorded text as the fallback.
+
+**Alternatives rejected.**
+
+- *Keep the inline tool list.* The owner's screenshot of 2026-11-25 shows the
+  cost: every card carries a wall of per-call inputs, so the turns cannot be
+  scanned as a list. The inputs are still reachable on the tool page and still
+  searchable through the turn search.
+- *Collapse the inline list with a `<details>` on the card.* It removes height
+  but not the detail: every card still carries every call, and there is no
+  stable address for "this turn's tools" that a later view or link can target.
+  The jump gives one address per turn.
+- *Write an audit-only Markdown renderer.* The conversation already escapes
+  first, renders inline code, bold, headings, lists, tables and fenced blocks,
+  and exports table CSV. A second renderer would drift and multiply the
+  escaping surface; reuse is the smaller risk.
+- *Leave replies as `<pre>` text.* The model writes Markdown; the screenshot
+  shows literal `**运行 ID:**` and backticks, which reads as a raw transcript
+  rather than an answer. `<pre>` also loses headings, lists and tables that
+  make a long reply legible.
+
+**Evidence.** Owner report and screenshot, 2026-11-25: the audit turn card lists
+each tool call with `au-tool-fields` input detail and shows the reply as raw
+Markdown. The new cases in `test/ui-structure.test.ts` fail against the old
+rendering — the card contains `au-turn-tools` rows and the reply is a `<pre>` —
+and pass after the change: the card has exactly one `data-au-turn-tools` jump,
+the tool page renders the same call with its readable input, and the reply
+passes through the shared renderer.
+
+**What it costs.** Reading a call's input takes one more click. The tool page is
+not independently searchable, but it is built from the turn already loaded and
+the turn search still matches tool names and inputs. Markdown rendering depends
+on script order (`app.js` before `audit.js`); the fallback keeps the recorded
+text readable if that ever changes.
+
+**Reversal condition.** If the owner repeatedly opens the tool page just to
+learn which tools a turn used, put a compact tool-name list back on the card
+(no inputs). If the shared renderer is replaced or moved, keep the
+`window.cloneMarkdownForPreview` contract and update the structural test with
+it; do not fork a second renderer.
+
+## 2026-11-25 — A read-only step with evidence passes without an owner review
+
+**Decision.** `EvidenceVerifier` no longer queues a `read_only` step's prose
+criteria for owner review. A read-only step passes when it recorded evidence,
+every machine-checkable file expectation passed, and no receipt rule failed.
+Its subjective acceptance criteria ("answered with evidence", "content is
+accurate") are not listed as unverified. A failed file check, a missing receipt
+or no evidence still fails. The verification summary then reads as passed,
+and the run completes without `waiting_review`.
+
+**Why it won.** The owner asked why reading `doc_translate` needed
+"authorization". It did not: the run was auto-allowed, read the files and
+answered; the only thing that stopped it was the verifier listing
+"只读取所需内容并给出有依据的回答" as unverifiable prose, which settled the run
+as `waiting_review`. A read-only step has no artifact to open; keeping its self-
+reported answer behind a review makes every read look like a permission request.
+
+**Alternatives rejected.**
+
+- *Keep the review for every read-only answer.* This is the behavior the owner
+  reported as abnormal; it turns a trust decision into a click.
+- *Ask a model judge for each prose criterion.* The artifact judge and the
+  policy judge already exist; adding a third per-criterion call adds latency
+  and cost, and for a read-only answer it is exactly the answer the model
+  wrote.
+- *Trust only observation evidence.* A read-only step may also record a
+  test/tool_result; the rule is about the step's risk and mechanical checks,
+  not the evidence kind.
+- *Remove all review.* Writes, external/irreversible receipts and artifact
+  contracts keep their review; only the prose criterion of a read-only step is
+  trusted.
+
+**Evidence.** Live run `d36bb093` was allowed, read the doc_translate files,
+recorded 15 evidence items and answered; its verification said "Automatic
+checks passed; 1 of 1 acceptance criteria still need the owner's review" and
+settled as `waiting_review`. `test/verification.test.ts` cases at the read-only
+briefing and the gate case `unverified-criteria-needs-review` pinned the old
+behavior; the new case asserts a read-only step with evidence and a prose
+criterion passes, while a read-only step with a missing file still fails. The
+gate baseline is regenerated with the intentional verdict change; the log records
+before/after.
+
+**What it costs.** A read-only answer is accepted on its own evidence even if
+the prose is wrong; the owner sees it as a completed result, not a review. A
+read-only step that names a file still gets that file opened, and a write/external
+step still needs its artifact/receipt/review. The verifier's summary no longer
+counts read-only prose criteria, so `reviewableCriteria` is smaller.
+
+**Reversal condition.** If a read-only answer is accepted with a hallucination
+that the owner would have caught in review, restore the review for read-only
+steps or require a citation check (the evidence locators are already recorded).
+Keep the mechanical checks and the write/external review unchanged.
+
+## 2026-11-25 — The main conversation carries the review of its own runs; old subagents leave the card
+
+**Decision.** `buildMainAgentConversation` no longer returns empty `approvals`
+and `reviews`. It aggregates the decisions of the runs derived to that
+conversation: a `waiting_approval` run becomes an approval entry with its
+scopes and reason, and a `waiting_review` run becomes a review entry with its
+verification, criteria and the last durable result. The Agent 协作 card filters
+subagents to the latest turn's spawned runs plus any run still active or
+waiting, so a failed subagent from a previous day is not shown as current work.
+`request_approval` reports `waiting_review` as a review the owner settles in
+the task record — never as an approval or an authorization.
+
+**Why it won.** The owner clicked 继续 on a summary. The run finished at 23:56
+with a full read-only review, settled as `waiting_review`, but the main
+conversation showed only the Main Agent's note "卡在权限审核，需要你批准" and an
+agent card containing an 8-day-old failed subagent. The dashboard said
+`waiting_review` while the conversation payload said `completed` and
+`reviews: []`; the content was only in the task record. A decision that exists
+but is invisible is a decision missed.
+
+**Alternatives rejected.**
+
+- *Keep decisions only in the task record.* That is the behavior the owner just
+  reported as "内容不见了"; it forces a navigation to find the result.
+- *Show a link instead of the review.* The result and criteria are the decision;
+  a link alone still hides them.
+- *Keep all visible subagents in the card.* It is how an old failure keeps
+  claiming "需要处理" long after its task record was read.
+- *Relabel `waiting_review` as approval.* The owner cannot approve evidence;
+  they accept or reject it.
+
+**Evidence.** Run `d36bb093` is `waiting_review` with
+`verification.needsReview` and a 15-evidence read-only review; the main
+conversation payload had `status: completed`, `reviews: []`, while the
+dashboard status was `waiting_review`; `subagents` contained
+`cd74804b` (2026-11-18). The main conversation's last message called the review
+"权限审核". The new `test/main-conversation-approvals.test.ts` case pins a
+waiting review with its result; `test/ui-structure.test.ts` pins the review
+markup; the live API is checked after restart.
+
+**What it costs.** The main conversation can show decisions from several child
+runs at once; it is capped by the visible runs and sorted by recency, but a
+wide fan-out could make the card long. Old unresolved failures move to the
+sidebar/audit, not disappear.
+
+**Reversal condition.** If the card becomes noisy, cap it to the latest turn's
+runs or group older pending decisions behind a count; do not return to an empty
+control surface. If owners prefer task records, make the card a one-line
+pointer with the run title and a link, but keep the result available.
+
+## 2026-11-25 — One executor; the Main Agent declares each dispatch's responsibility
+
+**Decision.** The default roster collapses to one worker profile (`worker`, role
+`general`, provider `native`) whose declared local capabilities are
+`direct_response`, `research`, `review`, `drafting`, `filesystem_read` and
+`filesystem_write`. `external_action` stays unsupported: the native worker
+cannot perform an external side effect and there is no governed connector.
+Fixed roles no longer decide who runs a task. The Main Agent assigns
+responsibility per dispatch through a required `responsibility` field on
+`dispatch_task`: `read` (investigate and answer; change no file) or `write`
+(create or change local files). That choice builds the plan — `read` is one
+`read_only` step with `research` + `filesystem_read`; `write` is one
+`reversible_write` step whose single maker work order must produce a durable
+artifact, so a write task that only reads and answers cannot complete. The
+dispatch's `acceptanceCriteria` become the step's and order's criteria instead
+of the planner's canned prose. The brief is attached as before, and
+`ensureWriteScopes` still extracts write targets from it. The Kernel still
+validates the risk floor, authority, scopes, protected paths and completion;
+the Main Agent cannot approve or complete anything. `dispatch_task` now returns
+the worker's durable final answer (bounded to 8,000 characters), the per-step
+executor assignment, and the verification summary, so the Main Agent can use the
+result in the same turn and cannot misreport who ran it. `propose_work_plan`
+keeps its per-step `agentId` / `requiredCapabilities` / `risk` contract; with
+one worker, the Main Agent assigns each step's responsibility there too.
+
+**Alternatives rejected.**
+
+- *Keep the four role profiles.* All four default profiles use the same
+  `native` provider; the role only changes `workCapabilitiesForRole`. The split
+  bought no provider separation, but it did create two answers to "who runs
+  this task": the task-level router picks by intent keyword (for a read request
+  it chose `direct-responder`) while `assignWorkersPerStep` assigns the step by
+  capability (it chose `context-researcher`). The Main Agent reads only the
+  first and told the owner the executor "cannot read files" even though the run
+  had read all three. One worker removes that class of misreport; the
+  per-step responsibility remains in the plan.
+- *Let the Main Agent name `context-researcher` / `draft-maker` per dispatch.*
+  With one provider this is a rename, and the keyword planner remains the real
+  decider of read vs write. The owner asked for the opposite: the Main Agent
+  states the responsibility.
+- *Unify the roster but keep the keyword planner for dispatched tasks.* The
+  planner classifies "优化 / 看一下 / 检查" as research without delivery and
+  therefore read-only; the Main Agent's stated criteria never reach the plan —
+  `dispatch_task` puts `acceptanceCriteria` in the trigger payload, and
+  `runQuery` reads only `workerBrief`. Run `017c9669`'s plan carries the canned
+  criterion "只读取所需内容…" while the tool call carried four concrete
+  criteria. Responsibility must be explicit, not inferred from prose.
+- *Give the Main Agent write or shell tools directly.* It would be both the
+  requester and the executor, bypassing the Run, step risk, scopes, evidence
+  and verification. The Main Agent stays the brain; the worker executes under
+  the Kernel.
+
+**Evidence.**
+
+- `src/config/worker-settings.ts` `DEFAULT_AGENTS` has four profiles, all with
+  `providerId: "native"`; `src/workers/capabilities.ts` derives their capability
+  sets from `role`. The owner's `~/.clone/settings.json` still names
+  `claude-code`, which `normalize()` falls back to `native` because that
+  provider is gone.
+- Run `017c9669` (2026-11-25T02:07:59Z): `dispatch.decided` selected
+  `direct-responder` (`source: rule`, `intentKind: direct`);
+  `dispatch.steps_assigned` assigned `read-only-lookup` to `context-researcher`.
+  The journal recorded three `read_file` observations for the three documents,
+  and the run passed after the owner accepted the review. Turn reply
+  `d883d9d2…` nevertheless told the owner the executor was `direct-responder`
+  and "很可能根本没有真正打开那三个 md 文件". That is the observed confusion, not
+  a hypothesis.
+- The same turn's `dispatch_task` call carried four acceptance criteria; the
+  plan's criterion is the fallback planner's canned string. `runQuery` reads
+  only `trigger.payload.workerBrief` (grep), so the criteria are dropped.
+- The roster is not read-only: 2026-11-18 runs `2e8e10a8`, `4ce0db3d`,
+  `709e9ab5` and `18569eb4` completed `reversible_write` steps with
+  `draft-maker`. The read-only outcomes in 2026-11-24/25 came from the requests
+  and briefs ("只读…"), not from a missing write-capable worker.
+
+**What it costs.** One worker means same-model self-review: the `review` order
+in a preparation group no longer buys an independent model. The owner cannot
+pin a role by name; explicit selection only matters when more than one provider
+exists, and none does today. Per-role enable/disable is gone: the single worker
+is `required`, and an old settings file that disabled one role disables nothing.
+A write dispatch gets write tools for the whole step, so a mistaken `write`
+declaration widens what the worker may do within the owner's authority; the
+step risk, scopes, protected paths and `.git`/`.rsi` guards still bound it, and
+at `files` = allow_all an unscoped write is allowed — the same authority the
+owner already granted. `dispatch_task` now returns up to 8,000 characters of
+worker output to the Main Agent; that output is data, not instructions, and the
+journal already redacts it. Runs that do not come from a dispatch — the
+scheduler, opportunity acceptance and the legacy request API — still use the
+deterministic keyword planner, because no model declares their responsibility.
+The id `worker` is a common word: the deterministic intent classifier treats an
+ordinary mention in a task text as an explicit selection of the only worker.
+With one worker the pin no longer changes capabilities, but a negated mention
+("不要用 worker") can exclude it and block the run; rename the id or require an
+explicit "use X" cue if that appears in practice.
+
+**Reversal condition.** If a second execution provider (a CLI or a remote
+sandbox) is registered and the owner needs to pin it per task, reintroduce a
+`providerId` on the dispatch or step — a provider binding, not a fixed role
+roster — and keep per-step responsibility. If same-model review misses a class
+of defect that an independent reviewer caught, add a reviewer adapter or require
+a different provider for `review` orders. If a mistaken `write` responsibility
+causes an unintended write at a narrower authority level, require the Main Agent
+to name at least one write target for `write` and reject an unscoped write
+before the plan, or remove the field and return to the deterministic planner. If
+the Main Agent cannot reliably choose read vs write, make the Kernel cross-check
+the brief's write cues and reject a contradiction.
+
+## 2026-11-24 — The briefing shows learned places and history, never a request to repeat
+
+**Decision.** `renderKnownFolders` prints only the folder path, how many requests
+named it, and when it was last used. It no longer prints the remembered request
+text (`KnownFolder.example`). The recent-background-work section is labelled as
+history and explicitly says not to start or retry any of it unless the owner
+asks. The Main Agent prompt gains the matching rule: a known folder or a
+finished run is not a task, and when the owner says "current workspace" without
+a path, ask which folder instead of assuming the clone home.
+
+**Why it won.** The owner reported that "every task reads README.md" and called
+it a bug. The prompt snapshots show the cause: the `~/work` known-folder line
+carried `e.g. "只读取工作区根目录 … README.md …"` in every Main Agent turn for
+days, and the recent-work list repeated the failed README runs. The model
+treated that visible request text as context worth continuing. A failed run
+also had promoted a procedure memory saying "next time read the README first"
+(now archived), which reinforced it. The folder list itself is useful; the
+raw example is the carrier, and it is untrusted task text that can look like an
+instruction.
+
+**Alternatives rejected.**
+
+- *Keep the example but label it "data, not instructions".* The text still
+  appears in every prompt and models follow nearby task-shaped text; relabelling
+  did not stop the repetition.
+- *Keep a shortened example.* A fragment of a request is still a request-shaped
+  hint ("只读取 README…").
+- *Remove known folders entirely.* The briefing is how the twin remembers where
+  the owner works; the path and use count carry that without the text.
+- *Remove the recent-work section.* That section is why a completed task ten
+  minutes ago is not asked about again; the fix is its framing, not its
+  existence.
+
+**Evidence.** `~/.clone/prompt-snapshots/45dab…json` (2026-11-24 17:52) contains
+`- /Users/user/work — 6 request(s) … e.g. "只读取工作区根目录 … README.md…"`;
+`renderKnownFolders` interpolated `folder.example` directly
+(`src/main-agent/known-folders.ts`). The archived procedure memory
+`mem-81aab49b-a11` repeats "下次应先直接读取当前工作区根目录的 README.md…".
+The new `test/known-folders.test.ts` case gives a remembered folder an example
+that names README.md and asserts the rendered briefing does not contain it while
+still naming the folder and the use count; `test/situation-briefing.test.ts`
+pins the history wording. The full run is recorded in
+`docs/engineering/optimizations.md`.
+
+**What it costs.** The folders read as less self-explanatory; the model knows
+"this folder was used N times" but not why. If it needs the why, it asks the
+owner. The example remains on the record for the audit and the memory page.
+
+**Reversal condition.** If owners need the context in the prompt, add a short
+**derived label** (repository or folder name) or show examples only when the
+owner explicitly asks why the twin knows a folder; do not put raw request text
+back into the every-turn briefing.
+
 ## 2026-11-24 — Every Kernel denial is an AI appeal; the owner is the last authority
 
 **Decision.** The deterministic policy engine keeps returning `denied`, but the

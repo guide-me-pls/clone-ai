@@ -19,7 +19,7 @@ Runtime 会创建持久化的 `Trigger`、`Task` 和 `Run`，把事件写进 JSO
 
 ### 2. 召回有关的本地记忆
 
-`LocalMemoryStore` 会在用户可治理的 active Memory 中，按当前 Query 做关键词匹配排序。选中的
+`GovernedMemorySource` 会在用户可治理的 active Memory 中，按当前 Query 做关键词匹配排序。选中的
 记忆摘要会被记录为 `memory.recalled` 事件，并作为上下文交给 Planner。
 
 Memory 能帮助 Planner 理解偏好与历史，但不能授予权限、改变 Policy，也不能暗中触发外部动作。

@@ -26,6 +26,417 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-25 —— 一个执行者；主 Agent 为每次派发声明读或写
+
+- **目标 / 假设：** 四个默认"Worker"只是同一个原生 Provider 上的四个标签。路由与步骤指派
+  可能点名不同的执行者——Run `017c9669` 的任务级路由选了 `direct-responder`，而
+  `dispatch.steps_assigned` 把步骤给了 `context-researcher`——主 Agent 只读第一个字段，
+  于是在 Run 已经读完三个文件之后告诉所有者执行者"不能读文件"。派发的验收标准也从未进入
+  计划。把名单收拢成一个通用 Worker，让主 Agent 为每次派发声明 `read` 或 `write`，把它的
+  验收标准带进计划，要求 `write` 产出持久文件，并返回答复、实际执行者与验证。
+- **取舍：** [一个执行者；主 Agent 为每次派发声明职责](../architecture/trade-offs.zh-CN.md#2026-11-25--一个执行者主-agent-为每次派发声明职责).
+- **变更：** `src/config/worker-settings.ts`、`src/workers/capabilities.ts`、
+  `src/workers/provider-catalog.ts`、`src/main-agent/worker-descriptors.ts` —— 一个
+  `worker` Profile，角色 `general`，六项本地能力；`external_action` 仍排除。
+  `src/planning/fallback-planner.ts` —— 备用 Planner 使用唯一执行者，并新增
+  `buildResponsibilityPlan`：`read` 是一个 `read_only` 步骤，`write` 是一个
+  `reversible_write` 步骤，其 maker 工作单携带必需的产物合同。
+  `src/main-agent/tools/dispatch-task.ts` —— `responsibility` 必填，返回
+  `assignments`、`result`、`verification`。`src/application/run-query.ts` —— 职责计划、
+  调用方标准与 `QueryRunResult` 的 `assignments`/`result`/`verification`。
+  `src/core/run-result.ts` —— 持久答复提取。`src/main-agent/plan-routing.ts` —— 被钉住的
+  步骤保留自己的声明能力（Worker 的完整能力集会把只读步骤变成 filesystem_write 步骤并触发
+  风险下限）。`src/authority/write-scopes.ts` —— `edit`/`modify`/`修改`/`编辑` 也视为写入
+  线索。提示词、语言包、工具格式化、测试与文档同步更新。
+- **Eval：** `node --experimental-strip-types --test test/regression/worker-responsibility.test.ts test/worker-defaults.test.ts test/dispatch-task.test.ts test/plan-routing.test.ts test/fallback-planner.test.ts test/write-scopes.test.ts test/run-query-routing.test.ts test/golden-path.test.ts test/llm-planner.test.ts test/worker-brief.test.ts test/tool-format.test.ts`
+  **99/99 通过**；`npm run typecheck` 退出码 0；`npm run gate` **PASS**（verdict 14、
+  policy 30、audit 5、memory 31，基线未变）。`npm test` **1152 个测试，1145 通过，
+  7 失败**；7 个全部来自并行的验证器变更（companion 复核、kill-restart 复核计数、四个
+  recovery-concurrency 的 `waiting_review`、regression-gate 的 verdict 复核），不是本变更。
+  前后对比：旧关键词路径给 Run `017c9669` 的是固定标准"只读取所需内容…"与只读计划；新测试
+  钉住读步骤（`read_only`、`research` + `filesystem_read`、调用方标准）与写工作单
+  （`reversible_write`、必需产物），并证明只产生观察的 Worker 无法完成写派发。
+- **Benchmark run：** 未运行 Provider/模型基准。本变更是确定性的路由与接线；上面的离线命令
+  就是测量。不声称任何结果文件。
+- **执行链路：** 从现场 Journal 诊断（Run `017c9669`、`d36bb093` 与 2026-11-18 的写入
+  Run）；用只读 Workflow 跑三个子 Agent（安全审计、假设清单、职责设计；945,630 tokens、
+  678 次工具调用、约 33 分钟），它们独立发现了钉住能力导致的风险下限失败与"写任务无产物"
+  缺口；随后实现、跑定向测试、全量测试与门禁。失败与重试：一次插入删掉了
+  `applyMemoryContext` 的声明（typecheck 捕获并修复）；被钉住的能力触发风险下限（改为保留
+  计划声明）；更新了 15 处旧 ID 测试夹具；围绕新字段重切了 tool-format 的截断夹具。
+- **优点：** 路由误报这一类问题消失；主 Agent 拿到 Worker 的答复、实际执行者与验证结果；
+  写任务必须产出文件；计划记录的是调用方的标准。真正的安全闸门（步骤风险、Scope、
+  Authority、受保护路径）未变；能力集一直只是路由词汇。
+- **缺点 / 下次：** Workflow 花了 945k 子 Agent tokens 与约 33 分钟，而直接阅读已基本得到
+  同样的结论；`worker` 是普通名词（意图分类器可能因普通提及而钉住，否定提及会排除它）；
+  调度器、机会接受与旧 API 的 Run 仍走关键词 Planner，因为没有模型为它们声明职责；Task
+  记录仍显示运行时的通用标准，而计划显示调用方的标准；7 个并行验证器失败不在本变更范围。
+- **推翻条件：** 从取舍条目复制——第二个 Provider 需要 Provider 绑定而不是角色名单；同模型
+  复核若漏掉缺陷就换成独立复核；更窄权限档位下错误的 `write` 需要点名目标或移除该字段。
+
+### 2026-11-25 —— MCP 安装在 launchd 下可用；技能可安装并接入 Main Agent；每个条目都是跳转
+
+- **目标 / 假设：** 所有者报告 MCP 仍不能正常下载，并要求技能也能下载使用。让安装路径在
+  应用真实的 launch 环境中可用，加入能把条目送进回合的技能市场，并把两类都变成没有内联
+  工具正文的跳转列表。
+- **取舍：** [MCP 安装使用运行时自己的 Node；技能有内置市场并接入 Main Agent；每个条目都是跳转](../architecture/trade-offs.zh-CN.md#2026-11-25--mcp-安装使用运行时自己的-node技能有内置市场并接入-main-agent每个条目都是跳转)。
+- **变更：** `src/workers/mcp-client.ts`——`environmentFor` 把
+  `dirname(process.execPath)` 放到 `PATH` 最前。`src/mcp/mcp-installer.ts`——
+  `resolveNpxCommand()` 优先运行时 Node 旁的 npx，其次 Homebrew/`/usr/local`/pnpm/
+  volta/bun；安装写入该绝对命令。`src/skills/skill-registry.ts`（新增）——四个撰写的
+  技能、搜索、`SKILL.md` 生成、限定在 `<clone home>/skills` 内的安装/移除。
+  `src/skills/skill-loader.ts`——`skillRootsFor` 移到这里；
+  `src/application/run-main-query.ts` 每个 Main Agent 回合传入 `skillRoots`。
+  `src/companion-server.ts`——`GET /api/skills/registry`、
+  `POST /api/skills/install`、`GET|DELETE /api/skills/:name`。
+  `apps/desktop/ui/app.js` / `index.html` / `components.css` /
+  `src/desktop/ui-locale.ts`——两个分类、返回栈、全部行都是跳转、MCP 市场页、技能市场页、
+  渲染正文的技能详情页与安装/移除动作。测试：`test/skill-registry.test.ts`（4）、
+  `test/skill-runtime.test.ts`（1）、`test/mcp-installer.test.ts` 的实机路径用例、
+  `test/mcp-host.test.ts` 的 PATH 断言、`test/tools-install-api.test.ts` 的技能路由
+  用例，以及重写的 UI 结构测试。
+- **Eval：** 受影响套件 **136/136**（`tool-format`、`mcp-registry`、`mcp-installer`、
+  `mcp-host`、`skill-registry`、`skill-runtime`、`tools-install-api`、`mcp-settings`、
+  `ui-structure`、`bilingual-documentation`、`native-main-agent`、
+  `companion-main-agent`、`main-agent-turn-audit`），最终文案调整后 **80/80**；
+  `npm run typecheck` 退出 0；`npm run gate` **PASS**（verdict 14、policy 30、audit 5、
+  memory 31、baseline unchanged）。完整 `npm test` **1161/1161**（全绿），退出 0。
+  实机诊断：常驻守护进程的 `/api/tools/registry` 返回 404（早于路由），`ps eww` 显示
+  `PATH=/usr/bin:/bin:/usr/sbin:/sbin`，`POST /api/tools/probe` 返回
+  `MCP server probe spawn npx ENOENT.`。修复并 `launchctl kickstart -k` 后，同一条
+  实机文件系统探测在 **0.6 秒内列出 10 个工具**。实机技能安装 → 详情（480 字节正文，
+  允许工具 `read_file/search_text/git_log`）→ 移除后 clone home 干净。
+  实机 UI：两个分类含三行服务器；MCP 市场 5 张卡片、「4 个可安装」；技能市场 4 张卡片；
+  技能条目页渲染 Markdown 正文；agent-tools 详情页 7 张工具参数表。
+- **执行链路：** 读实机 endpoint、进程环境、plist 与日志；先用实机探测复现失败而不是猜；
+  追查技能机制，发现 `skillRoots` 从未传入；先写取舍；修 npx/PATH；加注册表、路由与接线；
+  重构 UI 并加返回栈；写测试；重启守护进程；实机验证路由、探测与技能安装/移除；用
+  Playwright 驱动实机 UI，并修了两个只有看得见才发现的问题（技能卡片因 `t()` 套 `t()`
+  显示「配置」；允许工具行是绿色横幅而不是元信息行）。locale 文案在启动时读取，因此改文案
+  后又重启了一次守护进程。单个工作 Agent；无 Provider 或 benchmark 花费。
+- **优点：** 先复现实机 ENOENT 再动手，避免凭猜测修改；运行时技能测试证明渐进披露的两半；
+  实机安装/移除同时证明了 clone-home 边界。
+- **缺点 / 下次：** 重启要求容易被忽略——UI 从磁盘读、配置与路由在启动时固定，页面会以新
+  市场对着旧 API。一个显式的「运行时需重启」提示能省一轮。预览截图因 `rm` 被拒无法清理，
+  仍以未跟踪文件留在仓库根目录。
+- **推翻条件：** 来自取舍——若应用总是自带 Node，则回到只靠 PATH；出现签名来源时加远程
+  技能；表单有只写密文后加带密钥 MCP 条目；若跳转拖慢日常检查则恢复内联。
+
+### 2026-11-25 —— MCP 市场精选并锁版本；工具跳转到详情页
+
+- **目标 / 假设：** 所有者看不出三字段安装卡是干什么的（「长这样是干啥」），原始的
+  `Args: {...}` 句子像噪音，两个已启用服务器各带 7 与 10 个工具时整页像一堵墙。把空白
+  表单换成可搜索的精选市场（固定版本、有类型输入），保留自由文本表单作为收起的兜底；
+  三个工具内联读取，更多就跳转；把 `Args` 渲染成参数表。
+- **取舍：** [MCP 市场用精选且锁版本的清单；工具列表只留摘要，详情跳转](../architecture/trade-offs.zh-CN.md#2026-11-25--mcp-市场用精选且锁版本的清单工具列表只留摘要详情跳转)。
+- **变更：** `src/mcp/mcp-registry.ts`（新增）——五个经过核对的免密钥服务器，固定版本、
+  双语名称/摘要、标签、有类型输入与固定环境（`memory` → `<clone home>/mcp-memory.jsonl`）；
+  `searchMcpRegistry` 与 `resolveRegistryServer` 在服务器构造包、argv 与环境。
+  `src/mcp/mcp-installer.ts`——校验后的 `env` 选项，带到探测与 `mcp.json`。
+  `src/companion-server.ts`——`GET /api/tools/registry`、
+  `POST /api/tools/probe-registry`、`POST /api/tools/install-registry`。
+  `apps/desktop/ui/tool-format.js`——`describeTool`/`paramsFromSchema`，能识别引号与括号的
+  `Args:` 扫描器。`apps/desktop/ui/app.js`、`index.html`、`components.css`、
+  `src/desktop/ui-locale.ts`——市场、服务器/市场详情页、三工具阈值、已安装徽章与本地化
+  文案。测试：新增 `test/mcp-registry.test.ts`；增补 `test/tool-format.test.ts`、
+  `test/mcp-installer.test.ts`、`test/tools-install-api.test.ts`、
+  `test/ui-structure.test.ts`。使用文档双语更新。
+- **Eval：** `node --experimental-strip-types --test test/mcp-registry.test.ts`
+  **6/6**；`test/tool-format.test.ts` **12/12**（新增 6）；
+  `test/mcp-installer.test.ts` **10/10**（新增 2）；
+  `test/tools-install-api.test.ts` **9/9**（新增 3）；
+  `test/mcp-settings.test.ts` **6/6**；`test/bilingual-documentation.test.ts` **2/2**；
+  UI 结构 **44/44**。在隔离的 companion 服务器上实机检查（临时 clone home，复制 `mcp.json`）：市场显示 5 张
+  卡片与「4 个可安装」（playwright 已安装）；文件系统条目的探测下载了
+  `@modelcontextprotocol/server-filesystem@2.4.0` 并列出 **10 个工具**；安装写入
+  `args: ["--yes", "@modelcontextprotocol/server-filesystem@2.4.0", "/tmp",
+  "--read-only"]`，10 个工具全部为 `external`。目录字段留空时探测在任何启动之前被拒绝：
+  `The filesystem entry needs "Allowed directories".`。
+  `npm run typecheck` 退出 0；`npm run gate` **PASS**（verdict 14 例、policy 30、
+  audit 5、memory 31，baseline unchanged）。完整 `npm test` 为 **1144/1151**；7 个失败在
+  recovery、kill-restart、control-plane 与 regression-gate 的夹具里，来自其他会话的并发
+  未提交改动，不在本次变更触及的文件中。完整套件与 typecheck 也曾被并发的 `run-query.ts`
+  语法错误阻塞一段时间；该会话完成后已重跑。测量时间为 2026-11-25 11:10 CST。仓库正被
+  其他会话同时编辑：`run-query.ts` 的语法错误与 `test/tool-format.test.ts` 的夹具变更
+  中断过运行，二者都已由各自的会话修复；最终重跑时定向套件 **89/89**、typecheck 退出 0。
+- **执行链路：** 先读现有工具页、目录、安装器与测试；用 `npm view` 核对每个候选包与版本，
+  阅读 readme 确认文件系统的 `--read-only`、记忆服务器位于 npx 缓存内的
+  `MEMORY_FILE_PATH` 默认值、chrome-devtools 的使用统计默认值；先写取舍；再实现服务器端、
+  然后 UI；启动隔离服务器并用 Playwright 驱动；修复解析器在破折号后重复句号、VM 领域
+  `deepStrictEqual` 不匹配、「5 个可安装」误导性计数（排除已安装）、首帧空状态与列表滚动
+  恢复。单个工作 Agent；没有 Provider 或 benchmark 花费。
+- **优点：** 隔离服务器加 Playwright 抓到了单元测试看不到的布局与行为；真实包探测/安装
+  证明了固定规格、只读参数与风险默认值。解析器测试钉住了别扭输入（带引号示例、字面量联合、
+  带上限的默认值）。
+- **缺点 / 下次：** 整个过程中仓库被其他会话同时编辑；`fallback-planner.ts` 与
+  `run-query.ts` 中途损坏，使完整套件数字不稳定；预览截图因 `mv`/`rm` 被拒无法清理（仍以
+  未跟踪文件留在仓库根目录）。五条目的市场很小；新增一个已审查条目只是数据编辑，不是功能。
+  当探测 Schema 只在安装时存在，描述解析器是第二份真相；持久化 Schema 是未来的修法。
+- **推翻条件：** 当出现带审查信号的维护中 MCP 注册表 API、且所有者接受向其发送查询时，
+  用实时搜索替换精选清单；当表单具备只写密文输入时加入带密钥的服务器；若第三方描述普遍
+  缺少 `Args:`，则持久化 `inputSchema`；若跳转拖慢日常检查，则回到内联列表。
+
+### 2026-11-25 —— 自动检查决定完成；文字复核门移除
+
+- **目标 / 假设：** 在被问及写入/外部复核是否也信任时，所有者选择了"也默认接受"。验证器应在
+  证据与机械检查通过时直接完成任何步骤；只有点名文件缺失、外部回执缺失或没有证据才失败。
+  人工复核只在 AI 裁判无法决定的产物合同缺口里保留。
+- **取舍：** [自动检查决定完成；文字标准不再触发人工复核](../architecture/trade-offs.zh-CN.md#2026-11-25--自动检查决定完成文字标准不再触发人工复核)。
+- **变更：** `src/core/verification.ts` —— 移除 `unverified` 标准集合与 `needsReview` 结果；
+  `passed` 现在对只读、写入与外部步骤都等于 `failures.length === 0`。点名文件、回执与无证据
+  检查不变。`benchmark/gate/verdict-cases.json` 与基线记录有意的 review→pass 翻转。
+- **Eval：** `node --experimental-strip-types --test test/verification.test.ts` **18/18**
+  （标识符不会变缺失文件；有证据的只读/写入/外部通过；点名文件/回执/无证据失败；通过自定义
+  验证器仍保留复核路径）。`npm run gate` **PASS** —— verdict 14 个用例、14 已判定、一致率
+  100%、review 0。完整 `npm test` **1161/1161**、退出 0，在更新了恢复/Workspace 测试、
+  kill-restart 验证次数、companion API 复核测试与仍期待文字复核的 verdict 单元测试之后；
+  `npm run typecheck` 退出 0。
+- **Benchmark run：** `npm run gate`（离线、确定性、无 Provider/模型），
+  `benchmark/gate/verdict-cases.json`，用例 id 即该文件全部 id，无采样；审阅 review→pass 后
+  用 `--write-baseline` 重新生成基线。
+- **执行链路：** 先更新验证器测试；再更新运行时、队列、路由、恢复、kill-restart 与认证 API
+  中所有"通过后仍期待复核"的用例。执行器统一与本次变更在同一工作树里落地，因此它的夹具与
+  验证器的复核期望在同一次改动中对齐。
+- **优点：** Worker 结论不再需要人工复核卡；回答与证据决定完成；点名文件与外部回执仍是真实
+  闸门。
+- **缺点 / 下次：** 没有点名文件、文字结论错误的写入会完成；产物合同的 REVIEW 仍会问所有者。
+  套件只在剩余复核期望更新前为红；现在全绿。
+- **推翻条件：** 抄自取舍条目——如果没有被复核的写入或回答以所有者本可抓到的方式出错，
+  恢复该类别的文字复核或增加机械检查；点名文件/回执检查保持不变。
+
+### 2026-11-25 —— 删除重复的回合与记忆实现
+
+- **目标 / 假设：** 减少维护点，不改变客户端接口和记忆数据契约。
+- **取舍：** [回合入口和记忆补全各保留一套实现](../architecture/trade-offs.zh-CN.md#2026-11-25--回合入口和记忆补全各保留一套实现)。
+- **变更：** `src/companion-server.ts` 共用输入准备、取消及执行，保留 SSE 和 JSON 重试复用；提炼复用现有补全函数；删除旧 JSON 实现、路径字段和两个专属测试，保留旧数据、迁移和 HTTP 410。
+- **Eval：** 基于 `bf3f108` 的隔离快照，英文条目所列 8 文件定向测试 **104/104 → 102/102**（删除两个旧实现专属测试）；两入口校验、JSON 重试、提炼读取端点配置和旧文件不变均通过。两处重复执行点各由 **2 → 1**，生产源码净减 **357 行**。全量 `npm test` **1108/1108**，`npm run typecheck` 通过。
+- **Benchmark run：** 命令和 JSON 报告路径见[英文条目](optimizations.md#2026-11-25--remove-duplicate-turn-and-memory-implementations)。隔离快照为 `bf3f108` 的全部门禁数据，无 Provider、切分、种子或采样；13 个判定、30 个策略、31 个记忆用例，5 条审计记录（4 条有标注）。前后报告相同、四组一致率 100%、均通过；原工作区前后则同样存在 4 项既有判定基线差异。
+- **执行链路与优劣：** 查引用 → 补契约测试 → 去重 → 隔离验证，无 Worker、无付费模型调用；两次定向测试各约 5.6 秒，全量约 9.4 秒。首次受回环权限和工作区已有语法错误阻塞，授权后改用干净快照验证；原工作区全量还有 52 项失败，本次不改其他进行中的变更。
+- **推翻条件：** 仍受支持的调用方若依赖旧实现，恢复为显式兼容适配器；若传输生命周期分化，只拆传输分支，输入和端点默认值仍共用。
+
+### 2026-11-25 —— 粘贴的文件成为附件，而不是路径文本
+
+- **目标 / 假设：** 所有者先用了路径优先的粘贴，随后要求 Claude Code 桌面的手势——在 Finder
+  复制文件，粘贴为文件。附件管线本来就能在上限内承载文本、PDF/.docx/.doc 与图片；缺的是
+  Finder 复制文件的字节。
+- **取舍：** [粘贴的文件作为附件；路径只是回退](../architecture/trade-offs.zh-CN.md#2026-11-25--粘贴的文件作为附件路径只是回退)。
+- **变更：** `apps/desktop/macos/main.swift` —— `cloneClipboardFiles` 处理器新增 `readFiles`：
+  只读剪贴板自身的文件 URL（绝不接受页面 JavaScript 的路径列表），单文件上限 12 MB、单次
+  粘贴上限 24 MB，在主线程之外读字节，并通过 `onClipboardFilesRead` 返回
+  `{name, path, size, mimeType, data}`；`apps/desktop/ui/app.js` —— `filesFromNativePayloads`
+  用这些载荷重建 File，`nativeClipboardFiles` 调用桥接，粘贴处理器尽量全部作为附件，只有
+  无法成为附件的文件（过大、类型不支持、没有桥接）才插入绝对路径；真实的 Finder 图片保留
+  原名，而不是变成 `剪贴板截图-N`。`test/attachment-client.test.ts` —— 原生载荷变成 File 与
+  文档附件；`test/desktop-shell.test.ts` 钉住桥接。
+- **Eval：** `test/attachment-client.test.ts` **14/14**（原生载荷变成 File 与文档附件）；
+  `test/desktop-shell.test.ts` 通过；`test/ui-structure.test.ts` **44/44**（剪贴板截图契约与
+  UI 定义检查）；`node --check apps/desktop/ui/app.js`；外壳的 `swiftc -typecheck`；
+  `npm run typecheck` 退出码 0；`npm run gate` **PASS**。完整 `npm test` **1161/1161**；
+  上面的聚焦套件与 gate 为绿。
+- **Benchmark run：** 无；纯 UI 变化，没有 Provider 调用。
+- **执行链路：** 读取当前粘贴处理器与原生桥接；实现原生读取器与 File 重建；第一次测试因 VM
+  沙箱没有暴露 `File` 而失败，加入 `File`/`Blob` 后通过；重建并重启 App
+  （`npm run desktop:mac:build -- --replace --app-only`）。新二进制含
+  `readClipboardFiles`、`onClipboardFilesRead` 与 `readFiles`；daemon 提供的 `app.js` 含
+  `filesFromNativePayloads`；窗口已连上 daemon（health 200）。所有者随后在 Finder 复制文件
+  并粘贴，输入框出现附件 chip，原生读取器端到端成立。
+- **优点：** 粘贴像拖放一样成为 chip；模型无需读取调用就拿到内容；路径回退仍覆盖上限与不支持
+  的文件；原生读取面只限剪贴板。
+- **缺点 / 下次：** 原生读取是异步的，且一次粘贴最多把 24 MB 的 base64 送过 WebView；附件
+  上限仍会把超大文档变成路径。写这份记录时，另一个会话的在途测试阻塞了完整测试。
+- **推翻条件：** 从取舍条目复制——如果大粘贴让 App 卡住，就降低上限并让超过阈值时默认插入
+  路径；保留读取器，小文件仍作为附件。
+
+### 2026-11-25 —— 只读步骤自动完成，对话移除过程行
+
+- **目标 / 假设：** 所有者问为什么读 `doc_translate` 也需要"授权"，以及 Agent 卡为什么一直
+  挂着旧的 `subagent draft` 失败。只读 Run 本来就被自动放行并回答了；只是验证器的一条文字
+  标准把它送进了 `waiting_review`。回合还把工具/派生数量写在阅读栏；这些属于审计。
+- **取舍：** [有证据的只读步骤自动通过，不再等所有者复核](../architecture/trade-offs.zh-CN.md#2026-11-25--有证据的只读步骤自动通过不再等所有者复核)。
+- **变更：** `src/core/verification.ts` —— 有证据且机械检查通过的 `read_only` 步骤不再把文字
+  标准列为未验证；写入、外部回执与产物合同仍保留复核；`apps/desktop/ui/app.js` ——
+  `logBasisMarkup` 只渲染审计入口，旧记录的 basis 行移除，因此工具数与派生任务只在审计里；
+  `benchmark/gate/verdict-cases.json` —— 复核用例改为 `reversible_write` 步骤，并新增只读
+  通过用例钉住规则。
+- **Eval：** `node --experimental-strip-types --test test/ui-structure.test.ts test/verification.test.ts test/main-conversation-approvals.test.ts`
+  **64/64**；`npm test` **1122/1122**，`npm run typecheck` 退出码 0，`npm run gate` **PASS**
+  （verdict 14 个用例，新 `read-only-evidence-passes-without-review` 为 pass；
+  `unverified-criteria-needs-review` 在 reversible_write 上仍为 review）。现场检查：Run
+  `017c9669`（读文档）在本次变更前被接受时带一条未验证标准；重启后只读路径不再进入这一步，
+  主对话不再显示旧子 Agent 与工具计数行。
+- **Benchmark run：** `npm run gate`（离线、确定性、无 Provider/模型），
+  `benchmark/gate/verdict-cases.json`，用例 id 即该文件全部 id，无采样；基线随新 verdict
+  用例更新。
+- **执行链路：** 从现场 API 诊断（Run `d36bb093` 读取文件、15 条证据，因一条文字标准停在
+  `waiting_review`）。实现验证器规则与 UI basis 移除；更新受影响测试（`work-order`、
+  `run-queue`、`run-query-routing`、`llm-planner`、`direct-response-evidence`、
+  `companion-control-plane`、`regression-gate`、`ui-structure`）。更新后没有运行时失败。
+- **优点：** 读取自动完成；所有者不再在对话里读工具计数行；过程留在审计。
+- **缺点 / 下次：** 只读回答仅凭证据被接受；文字错误不会被复核。旧记录的 basis 行消失，
+  因此旧回合只显示回复，以及（若已 journaled）一个链接。
+- **推翻条件：** 抄自取舍条目——如果只读幻觉漏过，恢复只读复核或要求引用检查；
+  写入/外部复核保持不变。
+
+### 2026-11-25 —— 主 Agent 自己打开点名文件，而不是让所有者粘贴
+
+- **目标 / 假设：** 所有者发来文件名或路径时，主 Agent 应当自己读文件。现场回合
+  `d883d9d2-0240-4ede-9dd1-6e98397481a7`（2026-11-25T02:07:48Z）包含三个裸文档名；回复
+  要求所有者粘贴正文，因为主 Agent 没有读取工具，而上一回合的读取尝试以
+  "外部执行 Agent 已关闭"失败。读取不需要 Scope，也不应依赖 Worker 通道。
+- **取舍：** [主 Agent 自己按名字读文件，按窗口读大文件](../architecture/trade-offs.zh-CN.md#2026-11-25--主-agent-自己按名字读文件按窗口读大文件)。
+- **变更：** `src/main-agent/tools/read-file.ts` —— 新的只读工具：绝对路径 / `~/` /
+  工作区相对路径 / 纯文件名；纯文件名先在工作区或已知文件夹直接命中，再做精确文件名的
+  Spotlight 查询，最后做有界遍历；歧义返回候选；文本按约 7,000 字符的行窗口返回并给出
+  续读 offset；PDF/.docx/.doc 复用 `extractBinaryDocuments`；目录返回条目；受保护路径拒绝。
+  在 `src/main-agent/tools/kernel-tools.ts` 注册，在 `src/main-agent/native-runtime.ts`
+  标记为可并行；charter（`src/main-agent/prompt.ts`，版本 11）要求模型调用它，且不再要求
+  粘贴它能读到的内容。`apps/desktop/ui/app.js` —— 粘贴接收全部剪贴板 File；原生剪贴板
+  路径桥接把 Finder 复制文件的绝对路径插入输入框，而不是浏览器默认的裸文件名；拖放退回
+  `text/uri-list` 路径。`apps/desktop/macos/main.swift` —— `cloneClipboardFiles` 消息
+  处理器、`CloneNative` 路径缓存、在激活与页面就绪时发布。`benchmark/main-agent.ts` ——
+  新增 `named-file-read` 任务（clone home 之外的测试文件），并为现有 `plan-proposal`
+  格补上含 README 的工作区，使它测的是规划而不是缺文件。
+- **Eval：** `node --experimental-strip-types --test test/main-agent-read-file.test.ts`
+  **10/10**（绝对路径；工作区裸文件名；已知文件夹；同名歧义列出两个候选；Spotlight；
+  未命中；1,200 行文件先 `Showing lines 1-50 of 1200` 再 `offset=51`；受保护路径；
+  二进制；目录）。连同 worker-brief、companion-main-agent、desktop-shell、
+  attachment-client 与 prompt-snapshot 的聚焦套件 **53/53**。`npm run typecheck` 退出码
+  0；`npm run gate` **PASS**，基线与上次一致。`node --check apps/desktop/ui/app.js` 与
+  外壳的 `swiftc -typecheck` 通过。现场检查：裸名
+  `toolbox-20261125-delivery-plan.md` 经 Spotlight 解析到
+  `/Users/user/work/doc_translate/docs/toolbox-20261125-delivery-plan.md`（10.6 KB，
+  56 行）；`toolbox-slim-scope.md` 同样命中。macOS 外壳已重建
+  （`npm run desktop:mac:build -- --replace --app-only`）并重启：新二进制含
+  `cloneClipboardFiles`，daemon 提供的 `app.js` 含粘贴路径代码，窗口已连上 daemon
+  （health 200）。所有者随后在 Finder 复制文件并粘贴到重建后的 App 输入框，插入的是绝对
+  路径，原生桥接端到端成立。`npm test` **1122/1122**（另一个会话的 UI 改动在途时看到的
+  三个失败属于它，等它完成后消失）。
+- **Benchmark run：** `CLONE_AI_BENCH_MAIN_MODEL=deepseek/deepseek-v4.1-flash
+  npm run bench:main -- --repeat 1`；原生 runtime，模型
+  `deepseek/deepseek-v4.1-flash`，端点 `http://127.0.0.1:3425`；任务
+  `direct-answer`、`authority-read`、`plan-proposal`、`named-file-read`（来自
+  `benchmark/main-agent.ts`）；repeat 1，Provider 默认温度，无种子，macOS arm64；结果
+  `benchmark/results/main-agent-2026-11-25T02-30-55-603Z.json`。**4/4 PASS**；
+  `named-file-read` 以 `tools=["read_file"]` 通过，16,122 tokens、2.9 秒，回复包含测试文件
+  的第一行。变更前：该任务与工具都不存在，现场回合要求粘贴。新 harness 的第一次运行没有
+  计划用的工作区文件，3/4——`plan-proposal` 点名的 README 不存在；补上文件后该格测的是
+  规划，重跑为 4/4。
+- **执行链路：** 六个只读映射 Agent（243,734 subagent tokens、459 次工具调用、307 秒）分别
+  梳理工具表与提示词、读取安全、粘贴路径、测试/门禁布局、文档格式与已知文件夹。测量了搜索
+  空间（`~/work` 深度 8 内 727,840 个文件 / 142,127 个目录）与 Spotlight
+  （`mdfind -name` 0.09 秒），因此排除了"遍历优先"的解析器。随后实现工具、注册、提示词、
+  UI 桥接与测试。修复了两处本地失败：一个测试期待一个空格的 `dir docs`；
+  `readWindow` 在要求 `dataDirectory` 的 options 处传了 `{}`。benchmark 的测试文件问题是
+  唯一的重试。成本：六个映射 Agent 加本地网关上的 8 次模型调用。没有使用修复通道：本次
+  增加的是缺失的读取路径与原生剪贴板桥接，而不是修补一条有缺陷的代码路径；工作的 Agent
+  用真实的 Finder 粘贴做了功能验证。
+- **优点：** 读取路径独立于 Worker 通道与 Kernel；裸名解析是确定性的并给出证据（搜过的根、
+  候选、截断）；大文件按显式窗口读取，而不是被静默截断；粘贴路径插入的是真实地址，浏览器
+  预览在没有原生路径时仍把粘贴的文档作为附件。
+- **缺点 / 下次：** 原生粘贴桥接需要重新构建 macOS 外壳并重启 App；激活缓存是启发式，过期
+  缓存通过与剪贴板文本比对文件名来兜底。Spotlight 可能不可用，此时有界遍历可能漏掉深层文件
+  并会说明。每个窗口约 7,000 字符，超大文件需要多次调用。完整测试在并发会话结束后为
+  **1122/1122** 全绿；此前的三个失败是它的未提交 UI 测试。
+- **推翻条件：** 从取舍条目复制——如果提示注入利用 `read_file` 触达无关个人文件，就把解析
+  限制在工作区与已知文件夹，或要求逐路径批准；窗口读取与提示词规则保持不变。如果插入路径
+  比附件更吵，保留工具，把粘贴行为退回附件优先。
+
+### 2026-11-25 —— 审计回合卡改成一个工具跳转；回复按 Markdown 渲染
+
+- **目标 / 假设：** 所有者 设置 → 审计与轨迹 → 主 Agent 回合 的截图同时暴露两个问题：
+  每张卡片都带着完整的工具调用列表与命名字段，回合列表无法扫读；回复是 `<pre>` 里的原始
+  Markdown（`**运行 ID:**`、反引号）。假设：一行计数加一个跳转足以保留工具证据而不筑墙，
+  复用对话的转义渲染器能让回复可读。
+- **取舍：** [审计回合点名工具并打开一页工具明细；回复按 Markdown 渲染](../architecture/trade-offs.zh-CN.md#2026-11-25--审计回合点名工具并打开一页工具明细回复按-markdown-渲染)。
+- **变更：** `apps/desktop/ui/audit.js` —— `markdownReply` 使用
+  `window.cloneMarkdownForPreview`，缺失时退回 `<pre>`；`turnToolsLine` 渲染计数行与唯一的
+  `data-au-turn-tools` 跳转；`turnToolsView` 是单回合工具页（按工具分组、按顺序的调用、
+  每次输入一个开关、返回控件）；`state.toolTurn` 驱动跳转，并由切换标签、回合筛选与
+  `showTurns` 清空；跳转记住列表滚动位置，返回控件恢复它；点击处理器把表格导出与代码复制
+  转发给 app.js 的共享处理器。`audit.css`
+  —— 回复框、计数行、工具页与分组；旧的 `.au-turn-answer pre` 规则收窄为直接子元素，使
+  Markdown 代码块保留 `.md-code` 样式。`test/ui-structure.test.ts` —— 过期的内联列表测试
+  改为检查工具页，并新增跳转/分组与 Markdown 路径两个测试。
+- **Eval：** `node --experimental-strip-types --test --test-name-pattern="audit
+  turn card offers one jump|audit replies render Markdown"
+  test/ui-structure.test.ts` —— **变更前：2/2 失败**（缺少 `data-au-turn-tools`；
+  `markdownReply must exist`）；**变更后：2/2 通过**。整文件 `test/ui-structure.test.ts`
+  **43/43**；`npm test` **1122/1122**，`npm run typecheck` 退出码 0，`npm run gate`
+  **PASS**。对运行中的应用（`http://127.0.0.1:64859`）现场检查：首个回合显示
+  工具调用 4 次 · 4 种 · 32.9 s 与一个跳转；工具页按 `dispatch_task`、`get_authority`、
+  `get_run_status`、`request_approval` 分组；展开 `dispatch_task` 看到可读目标、验收标准与
+  worker 简报，原始参数在其后；回复与 Agent 调用详情回复都带
+  `class="au-reply log-reply"`，粗体、列表与行内代码正常渲染。
+- **Benchmark run：** 无——确定性 UI 契约测试加现场 DOM 检查；不涉及 Provider、模型、数据集
+  或评分参数。
+- **执行链路：** 阅读 `audit.js`、`app.js`（渲染器与日志标记）与 `audit.css`；先写两个测试并对
+  未改代码运行，取得两个失败；实现辅助函数、工具页、状态与处理器；重跑定向测试（2/2）、
+  整文件（43/43）、全量套件。第一次全量运行因新测试里一条只有英文的注释触发双语检查失败；
+  补上中文后重跑至 1122/1122。期间另一个会话改动了 `app.js`/docs；它进行中的两个过期
+  ui-structure 失败在其变更落地后消失；本次没有编辑或提交那个会话的任何文件。
+- **优点：** 回合视图重新可扫读；工具证据只隔一次点击，且仍按工具分组；回复与对话共用一个
+  渲染器，转义、表格、代码复制与表格导出不会漂移。
+- **缺点 / 下次：** 查看一次调用的输入多一次点击；工具页只是已载入的 100 个回合上的客户端
+  视图，已滚出该页的回合无法从过期卡片打开（跳转会退回列表）。视觉检查是手动的；截图断言
+  能更早发现 CSS 回退。
+- **推翻条件：** 如果所有者打开工具页只是为了知道工具名，就在卡片上放回紧凑的名称列表
+  （不带输入）。如果共享渲染器被替换，保留 `window.cloneMarkdownForPreview` 契约并同步更新
+  测试；不要另造第二个渲染器。
+
+### 2026-11-25 —— 主对话显示自己 Run 的复核，而不是过期的协作卡
+
+- **目标 / 假设：** 所有者点「继续」后，Run 产出了完整的只读审查并停在
+  `waiting_review`，但主对话只显示主 Agent 的"卡在权限审核，需要你批准"，Agent 协作卡还挂着
+  8 天前的失败子 Agent。内容在任务记录里，操作面却没有显示决定。
+- **取舍：** [主对话承载自己 Run 的复核；旧子 Agent 离开协作卡](../architecture/trade-offs.zh-CN.md#2026-11-25--主对话承载自己-run-的复核旧子-agent-离开协作卡)。
+- **变更：** `src/companion-server.ts` —— `buildMainAgentConversation` 现在聚合派生到该对话的
+  `waiting_approval` 与 `waiting_review` Run（带 Scope、拒绝/裁判理由、验证、验收标准与最后
+  一条持久结果），并把子 Agent 过滤为最近一回合派发的 Run 加仍在进行的 Run；
+  `src/main-agent/tools/kernel-tools.ts` —— `request_approval` 把 `waiting_review` 报告为
+  所有者对证据的复核，而不是审批；`src/main-agent/prompt.ts` —— 对应措辞规则。
+- **Eval：** `test/main-conversation-approvals.test.ts` **5/5**（等待复核带结果而不只是标准）；
+  完整 `npm test` **1109/1109**，`npm run typecheck` 退出码 0，`npm run gate` **PASS**。
+  重启后现场检查：Run `d36bb093` 的主对话返回复核与最后结果，且 `cd74804b`（2026-11-18）
+  不再出现在 `subagents` 里。
+- **Benchmark run：** 无；确定性聚合/提示词变更，没有 Provider 调用。
+- **执行链路：** 从现场 API 诊断：Run `d36bb093` 处于 `waiting_review`，有 15 条证据与完整
+  审查结论；主对话载荷是 `reviews: []`、`status: completed`，而 Dashboard 摘要是
+  `waiting_review`；协作卡列着 `cd74804b`。修复聚合、子 Agent 窗口与状态措辞。所有者的内容
+  从未丢失——它在任务记录里。
+- **优点：** 结果、验收标准与接受/拒绝现在出现在所有者说话的地方；旧失败不再冒充当前工作；
+  主 Agent 不再把复核叫成审批。
+- **缺点 / 下次：** 主对话可能显示多个子 Run 的决定；受可见 Run 与时间限制。子 Agent 窗口以
+  最近回合开始时间为界，回合结束后才完成的同一子 Agent 只能通过 `spawnedRuns`/活动状态保留。
+- **推翻条件：** 抄自取舍条目——如果卡片嘈杂，限制/分组更早的待决定；不要回到空的决策面。
+
+### 2026-11-24 —— 简报展示学到的位置，而不是教它的那条请求原文
+
+- **目标 / 假设：** 停止主 Agent 在每个任务里重复旧的 README 请求。提示词快照显示，
+  `~/work` 的已知文件夹行连续多日带着 `e.g. "只读取工作区根目录 … README.md …"`，最近工作
+  列表也反复出现 README 失败；模型把这段可见的请求文本当成了要继续做的工作。
+- **取舍：** [简报只展示学到的位置与历史，绝不展示可被重复执行的请求](../architecture/trade-offs.zh-CN.md#2026-11-24--简报只展示学到的位置与历史绝不展示可被重复执行的请求)。
+- **变更：** `src/main-agent/known-folders.ts` —— `renderKnownFolders` 只打印路径、使用次数与
+  最近使用时间；`KnownFolder.example` 只留给审计/记忆页；`src/main-agent/situation-briefing.ts`
+  —— 最近工作标为历史，并写明除非所有者要求，不要启动或重试；`src/main-agent/prompt.ts`
+  —— 增加规则：简报里的文件夹与历史不是请求；"当前工作区"没给路径时必须问，绝不假定 clone
+  home 或上一个项目。
+- **Eval：** `node --experimental-strip-types --test test/known-folders.test.ts test/situation-briefing.test.ts`
+  **14/14**；新增用例给一个文件夹设置点名 README.md 的示例，断言渲染结果包含文件夹与使用次数，
+  但不含 `README` 或请求动词。现场渲染现在只剩
+  `/Users/user/work — 10 request(s), last …` 与 `/Users/user/Documents/Clone AI — 5 request(s), last …`。
+  `npm test` **1109/1109**，`npm run typecheck` 退出码 0，`npm run gate` **PASS**。
+- **Benchmark run：** 无；确定性提示词/测试变更，没有 Provider 调用。
+- **执行链路：** 先从现场 Journal 诊断：失败的 README 任务（`cd74804b`）里 Worker 读了文件并
+  给出了回答，然后 `Missing required artifact evidence: local-draft`；提示词快照 `45dab…`
+  显示已知文件夹行带着 README 请求原文。归档的流程记忆（`mem-81aab49b-a11`）重复着同一课。
+  修复渲染器、最近工作的框定与提示词规则；没有在 Worker 中发现运行时 bug。
+- **优点：** 每回合提示词不再包含旧的请求式文本；最近工作列表保留"知道刚刚完成了什么"的用途，
+  但不再像重试邀请；文件夹列表仍承载学到的位置。
+- **缺点 / 下次：** 文件夹行不再解释为什么被记住；需要原因时 Agent 会问。未来 UI 可以只在
+  所有者明确询问"你怎么知道这个文件夹"时展示示例。
+- **推翻条件：** 抄自取舍条目——如果所有者需要上下文，就加派生出的仓库/文件夹标签，或按需
+  展示示例；绝不把原始请求文本放回每回合的简报。
+
 ### 2026-11-24 —— Kernel 的每次拒绝都成为 AI 上诉，所有者是最后权威
 
 - **目标 / 假设：** 所有者要求整个 Agent 自动执行优先、尽可能相信 AI：目前所有拒绝的地方都由

@@ -20,7 +20,7 @@ their events to the JSONL journal, and moves the Run to `planning`.
 
 ### 2. Relevant local memory is recalled
 
-`LocalMemoryStore` ranks active, user-governed memories against the incoming
+`GovernedMemorySource` ranks active, user-governed memories against the incoming
 query. The selected summaries are recorded as a `memory.recalled` event and
 are given to the Planner as context.
 
