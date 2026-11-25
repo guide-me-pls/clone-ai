@@ -117,31 +117,128 @@ export function compactTranscript(
   const budget = options.keepTailTokens ?? Math.max(1, Math.floor(estimatedTokens * 0.66));
   const keep: AgentMessage[] = [];
   let kept = 0;
-  for (let index = body.length - 1; index >= 0; index -= 1) {
-    const message = body[index]!;
-    // A tool result without its call (or a call without its result) is a
-    // transcript the provider rejects. The kept tail starts at a message that
-    // is not a dangling result, and never splits a pair.
-    // 没有对应调用的工具结果（或没有结果的调用）是 Provider 会拒绝的转录。保留的尾部从一条
-    // 不是悬空结果的消息开始，且绝不拆开一对调用与结果。
-    if (message.role === "tool") break;
-    let size = estimateMessages([message]);
-    const next = body[index + 1];
-    if (next?.role === "tool" && next.toolCallId !== undefined && message.toolCalls?.some((call) => call.id === next.toolCallId)) {
-      size += estimateMessages([next]);
+  // Where the kept stretch begins in `body`; everything before it is dropped.
+  // 保留片段在 `body` 中的起点；此前的消息都被丢弃。
+  let start = body.length;
+  // A tool result only makes sense with the assistant call that produced it, so
+  // the walk starts at the last message that can open a kept stretch. Starting
+  // at the very end used to break on a trailing `tool` message, leaving `keep`
+  // empty and the whole tail budget unused.
+  // 工具结果只有配上产生它的 assistant 调用才有意义，因此从最后一条能开启保留片段的消息开始走。
+  // 过去从最末尾开始，遇到结尾的 `tool` 消息就中断，`keep` 为空，整个尾部预算被浪费。
+  let index = body.length - 1;
+  while (index >= 0 && body[index]!.role === "tool") index -= 1;
+  // The results an assistant tool call owns: every `tool` message directly
+  // after it, as long as they all answer its call ids. A call with a result the
+  // provider would reject makes the whole turn unusable, so the walk stops.
+  // 一次 assistant 工具调用所拥有的结果：紧随其后的所有 `tool` 消息，且它们都对应它的调用 id。
+  // 若某个结果会让 Provider 拒绝，这整个回合就不可用，于是停止。
+  const resultsAt = (at: number): AgentMessage[] | undefined => {
+    const call = body[at];
+    if (call === undefined || call.role !== "assistant" || (call.toolCalls?.length ?? 0) === 0) return [];
+    const results: AgentMessage[] = [];
+    for (let nextAt = at + 1; nextAt < body.length; nextAt += 1) {
+      const next = body[nextAt]!;
+      if (next.role !== "tool") break;
+      if (next.toolCallId === undefined || call.toolCalls?.some((item) => item.id === next.toolCallId) !== true) return undefined;
+      results.push(next);
     }
-    if (keep.length > 0 && kept + size > budget) break;
-    keep.unshift(...(next?.role === "tool" && next.toolCallId !== undefined && message.toolCalls?.some((call) => call.id === next.toolCallId) ? [message, next] : [message]));
+    return results;
+  };
+  for (; index >= 0; index -= 1) {
+    const message = body[index]!;
+    // A result is kept with its call, or dropped with it; it never starts the
+    // tail, and the kept stretch stays a suffix of the transcript.
+    // 结果要么随它的调用一起保留，要么一起被丢；它绝不作为尾部的起点，保留片段始终是转录的后缀。
+    if (message.role === "tool") break;
+    const results = resultsAt(index);
+    // A call whose results are missing or unmatched cannot be kept without
+    // handing the provider a transcript it rejects.
+    // 结果缺失或对不上的调用不能被保留，否则会把 Provider 拒绝的转录交出去。
+    if (results === undefined) break;
+    if (results.length === 0 && (message.toolCalls?.length ?? 0) > 0) break;
+    const size = estimateMessages([message]) + results.reduce((total, result) => total + estimateMessages([result]), 0);
+    const room = kept + size <= budget;
+    // The tail is already empty, so nothing would survive the compaction if this
+    // walk stopped here: keep the newest turn even when it alone exceeds the
+    // budget, then stop.
+    // 此时尾部还是空的，若在此停下压缩后什么都不会留下：即使最新一轮本身超出预算也要保留，
+    // 然后停止。
+    if (!room && keep.length > 0) break;
+    keep.unshift(message, ...results);
     kept += size;
+    start = index;
+    // The tail has to hold the conversation's latest turn: once the newest user
+    // message is in, the walk may only continue while the budget allows. A
+    // transcript that ends in a tool result is exactly this case, so the kept
+    // stretch is the tool call and its result plus the request that asked for it.
+    // 尾部必须含有对话的最近一轮：最新的用户消息进来之后，只有预算允许才能继续。
+    // 以工具结果结尾的转录正是这种情况，因此保留片段是工具调用与其结果，加上提出请求的消息。
+    if (message.role === "user" && !room) break;
   }
-  const dropped = body.slice(0, body.length - keep.length);
+  // A transcript whose tail is a lone tool result, or an unusable call/result
+  // pair, has no suffix the provider accepts; the newest usable message is kept
+  // anyway rather than compacting the conversation into nothing.
+  // 尾部只有一条工具结果、或调用/结果配对不可用时，没有 Provider 能接受的后缀；此时仍然保留
+  // 最新一条可用消息，而不是把对话压成空。
+  if (keep.length === 0) {
+    for (let at = body.length - 1; at >= 0; at -= 1) {
+      const message = body[at]!;
+      if (message.role === "tool") continue;
+      const results = resultsAt(at);
+      if (results === undefined) continue;
+      if (results.length === 0 && (message.toolCalls?.length ?? 0) > 0) continue;
+      keep.push(message, ...results);
+      start = at;
+      break;
+    }
+  }
+  const dropped = body.slice(0, Math.min(start, body.length - keep.length));
   const excerptLimit = Math.max(40, options.excerptChars ?? 400);
   const summaryLimit = Math.max(200, options.summaryChars ?? 4_000);
-  const summaryBody = dropped
-    .map((message) => `- ${trim(messageText(message), excerptLimit)}`)
-    .join("\n")
-    .slice(0, summaryLimit);
-  const summary = summaryBody.length === 0 ? "" : `${COMPACTION_PREAMBLE}\n${summaryBody}`;
+  const droppedLines = dropped.map((message) => `- ${trim(messageText(message), excerptLimit)}`);
+  // The newest dropped user turn is the current goal; a compacted transcript
+  // that lost it cannot continue the work the user asked for.
+  // 最新的被丢用户回合就是当前目标；丢掉它的压缩转录无法继续用户要求的工作。
+  const currentGoalAt = ((): number => {
+    for (let at = dropped.length - 1; at >= 0; at -= 1) {
+      const message = dropped[at]!;
+      if (message.role === "user" && messageText(message).trim().length > 0) return at;
+    }
+    return -1;
+  })();
+  const droppedChars = droppedLines.reduce((total, line) => total + line.length + 1, 0);
+  let excerptBody: string;
+  if (droppedChars <= summaryLimit) {
+    excerptBody = droppedLines.join("\n");
+  } else {
+    // The summary used to be taken from the front of the dropped messages, so a
+    // 149-message compaction kept the oldest tasks and cut off the current
+    // request. When it must shrink, the newest lines win; the oldest kept lines
+    // are evicted to make room for the current goal.
+    // 摘要过去从被丢消息的前端截取，于是一次 149 条消息的压缩保留了最旧的任务、切掉了当前请求。
+    // 需要收缩时，最新的行优先；为了让出空间给当前目标，已保留的最旧行会被淘汰。
+    const picked: Array<{ at: number; line: string }> = [];
+    let used = 0;
+    for (let at = droppedLines.length - 1; at >= 0; at -= 1) {
+      const line = droppedLines[at]!;
+      if (used + line.length + 1 > summaryLimit) continue;
+      picked.push({ at, line });
+      used += line.length + 1;
+    }
+    if (currentGoalAt >= 0 && !picked.some((entry) => entry.at === currentGoalAt)) {
+      const goalLine = droppedLines[currentGoalAt]!;
+      // `picked` is newest-first, so the oldest kept line is at the end.
+      // `picked` 按最新在前排列，因此已保留的最旧一行在末尾。
+      while (used + goalLine.length + 1 > summaryLimit && picked.length > 0) {
+        const evicted = picked.pop()!;
+        used -= evicted.line.length + 1;
+      }
+      picked.push({ at: currentGoalAt, line: trim(goalLine, Math.max(20, summaryLimit - used - 1)) });
+    }
+    excerptBody = picked.sort((left, right) => left.at - right.at).map((entry) => entry.line).join("\n");
+  }
+  const summary = excerptBody.length === 0 ? "" : `${COMPACTION_PREAMBLE}\n${excerptBody}`;
   const next: AgentMessage[] = [];
   if (system !== undefined) next.push(system);
   if (summary.length > 0) next.push({ role: "system", content: summary });
