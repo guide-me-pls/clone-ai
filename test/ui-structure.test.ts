@@ -129,7 +129,7 @@ test("the settings tools section lists MCP servers with load controls and skill 
   assert.match(app, /tools-next-run/);
 });
 
-test("renderToolsCatalog shows each server's tools and a load or unload action", async () => {
+test("renderToolsCatalog shows MCP servers and skills as two jump lists", async () => {
   const app = await read("app.js");
   const start = app.indexOf("function toolsRiskLabel");
   const end = app.indexOf("async function refreshToolsCatalog", start);
@@ -137,11 +137,11 @@ test("renderToolsCatalog shows each server's tools and a load or unload action",
   const host = { innerHTML: "" };
   const summary = { textContent: "" };
   const render = runInNewContext(
-    `const state = { toolsCatalog: null };
+    `const state = { toolsCatalog: null, toolsStack: [] };
      ${app.slice(start, end)};
      renderToolsCatalog`,
     {
-      state: { toolsCatalog: null },
+      state: { toolsCatalog: null, toolsStack: [] },
       $: (id: string) => (id === "tools-catalog" ? host : id === "tools-summary" ? summary : null),
       escape: (value: unknown) => String(value ?? "")
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
@@ -158,12 +158,23 @@ test("renderToolsCatalog shows each server's tools and a load or unload action",
     skillRoots: ["/home/owner/.clone/skills"],
     rejectedSkills: [],
   });
-  assert.match(host.innerHTML, /data-tool-toggle="alpha"/);
-  assert.match(host.innerHTML, /data-tool-toggle="alpha" data-tool-enabled="false"/);
-  assert.match(host.innerHTML, /data-tool-toggle="beta" data-tool-enabled="true"/);
-  assert.match(host.innerHTML, /alpha\.read/);
-  assert.match(host.innerHTML, /Read a thing\./);
+  // Two categories, each with its own market entry point.
+  // 两个分类，各自有进入市场的入口。
+  assert.match(host.innerHTML, /data-tool-category="mcp"/);
+  assert.match(host.innerHTML, /data-tool-category="skills"/);
+  assert.match(host.innerHTML, /data-tools-market="mcp"/);
+  assert.match(host.innerHTML, /data-tools-market="skills"/);
+  // Every server and every skill is a jump row, even a one-tool server.
+  // 每个服务器与技能都是一行跳转，只有一个工具也一样。
+  assert.match(host.innerHTML, /data-tool-detail="alpha"/);
+  assert.match(host.innerHTML, /data-tool-detail="beta"/);
+  assert.match(host.innerHTML, /data-skill-detail="demo"/);
   assert.match(host.innerHTML, /A demo skill\./);
+  assert.match(host.innerHTML, /1 tools-tools/);
+  // The row prints counts, never a tool name or a toggle.
+  // 行内只打印计数，绝不打印工具名或开关。
+  assert.doesNotMatch(host.innerHTML, /alpha\.read/);
+  assert.doesNotMatch(host.innerHTML, /data-tool-toggle/);
   assert.match(host.innerHTML, /\/home\/owner\/\.clone\/skills/);
   assert.match(summary.textContent, /1\/2/);
 });
@@ -396,15 +407,17 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
       reply: "已整理。",
     }],
   });
-  // A turn shows its result and the grounds it stands on; the process — the
-  // model, the prompt snapshot's tool table, and every call's input — lives in
-  // the audit and must not come back into the reading column.
-  // 回合显示结果与它所依据的东西；过程——模型、提示词快照的工具表与每次调用的输入——在
-  // 审计页，不得回到阅读栏。
+  // A turn shows its result and a way to the audit; the process — the model,
+  // the prompt snapshot's tool table, every call's input, the tool counts and
+  // the spawned tasks — lives only in the audit and must not come back into
+  // the reading column.
+  // 回合显示结果与打开审计的入口；过程——模型、提示词快照的工具表、每次调用的输入、
+  // 工具调用数与派发任务——只在审计页，不得回到阅读栏。
   assert.match(html, /结果/);
-  assert.match(html, /依据/);
-  assert.match(html, /工具调用 1 次/);
-  assert.match(html, /派生任务 1 个/);
+  assert.match(html, /查看审计/);
+  assert.doesNotMatch(html, /依据/);
+  assert.doesNotMatch(html, /工具调用 1 次/);
+  assert.doesNotMatch(html, /派生任务 1 个/);
   // The spawned runs are not rows in the reading column any more: the sidebar
   // lists no runs and the conversation lists none either. The one-line 依据
   // names how many were dispatched and opens the audit.
@@ -462,7 +475,12 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
     id: "chat", kind: "conversation", messages: [],
     turns: [{ id: "t", kind: "turn", input: "q", status: "completed", startedAt: "2026-11-18T08:00:00.000Z", journaled: false, compactions: [], toolCalls: [], spawnedRuns: [], priorTurns: 0, priorTurnsOmitted: 0, reply: "好。" }],
   });
-  assert.match(bare, /没有 Journal 记录/);
+  // The process and its record link are not invented for a turn the journal
+  // never recorded; the reply remains.
+  // Journal 没有记录的回合不编造过程与记录入口；回答保留。
+  assert.doesNotMatch(bare, /依据/);
+  assert.doesNotMatch(bare, /没有 Journal 记录/);
+  assert.doesNotMatch(bare, /data-open-turn-audit/);
   assert.match(bare, /好。/);
   // The audit is a journal projection: without a journal record the control
   // would be a dead end, so it is absent.
@@ -502,17 +520,17 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   assert.match(failed, /模型没有返回结果。/);
   assert.match(failed, /下一步：检查 Provider 与网络后重试。/);
   assert.match(failed, /原始错误/);
-  assert.match(failed, /本轮在调用工具前就结束了。/);
+  assert.doesNotMatch(failed, /本轮在调用工具前就结束了。/)
   assert.match(failed, /data-open-turn-audit="t3"/);
   assert.doesNotMatch(failed, /本轮直接回答/);
 
-  // A running turn with no calls yet still has a basis and a way to its record.
-  // 尚未调用工具的运行中回合仍有依据与通往记录的路。
+  // A running turn still has a way to its record; the process facts stay in
+  // the audit.
+  // 运行中的回合仍有通往记录的入口；过程事实留在审计。
   const running = markup({
     id: "chat", kind: "conversation", messages: [],
     turns: [{ id: "t5", kind: "turn", input: "慢慢来", status: "started", startedAt: "2026-11-18T10:03:00.000Z", journaled: true, compactions: [], toolCalls: [], spawnedRuns: [], priorTurns: 0, priorTurnsOmitted: 0 }],
   });
-  assert.match(running, /仍在运行；还没有工具调用记录。/);
   assert.match(running, /data-open-turn-audit="t5"/);
 
   // Legacy history never entered the journal: it keeps the 结果 shape and says
@@ -524,7 +542,7 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   });
   assert.match(history, /log-step-label">结果/);
   assert.match(history, /旧回答。/);
-  assert.match(history, /旧记录没有保存过程。/);
+  assert.doesNotMatch(history, /旧记录没有保存过程。/)
   assert.doesNotMatch(history, /data-open-turn-audit/);
 
   // Older turns are counted, not silently dropped.
@@ -591,10 +609,11 @@ test("the transcript separates a turn, a task update, a child run and a record b
   assert.match(html, /data-log-kind="work" data-log-status="waiting_review"/);
   assert.equal((html.match(/class="log-entry-kicker"/g) || []).length, 1);
   // A dispatched run is not a row in the turn log: runs are read in the audit,
-  // and the turn keeps one 依据 line naming them.
-  // 派发的 Run 不再作为回合日志里的行：Run 在审计里读，回合只保留一行点名它们的"依据"。
+  // and the turn keeps only the audit link.
+  // 派发的 Run 不再作为回合日志里的行：Run 在审计里读，回合只保留审计入口。
   assert.doesNotMatch(html, /data-run-status="completed"/);
-  assert.match(html, /派生任务 1 个/);
+  assert.doesNotMatch(html, /派生任务 1 个/);
+  assert.match(html, /查看审计/);
   // The level grammar must live in the final CSS layer: ruled turns, a ruled
   // note and top-rule records. The turn's identity strip pins only within its
   // own section, and records flatten only after the turn log — a task record
@@ -1158,24 +1177,70 @@ test("the audit keeps the compaction summary the conversation no longer shows", 
   assert.match(html, /前面的对话压成一段摘要。/);
 });
 
-test("the audit turn card keeps the tool calls the conversation dropped", async () => {
+test("the audit tool page keeps the tool calls the conversation dropped", async () => {
   const audit = await read("audit.js");
-  const start = audit.indexOf("function turnsView()");
+  const start = audit.indexOf("const markdownReply");
   const end = audit.indexOf("function invocationsView", start);
-  assert.ok(start >= 0 && end > start, "turnsView must exist");
+  assert.ok(start >= 0 && end > start, "the turn views must exist");
   const formatWindow: { CloneToolFormat?: { toolInputMarkup: (name: string, summary: string) => string } } = {};
   runInNewContext(await read("tool-format.js"), { window: formatWindow });
-  const turnsView = runInNewContext(`${audit.slice(start, end)}; turnsView`, {
-    state: {
-      turns: [{
-        turnId: "turn-1", conversationId: "conversation-a", source: "companion", status: "completed",
-        modelId: "m", effort: "high", startedAt: "2026-11-19T03:35:00.000Z", durationMs: 1234,
-        input: "整理资料", reply: "已整理。",
-        toolCalls: [{ toolCallId: "c1", name: "dispatch_task", inputSummary: '{"objective":"整理资料"}', durationMs: 3000 }],
-        compactions: [], historySearches: [], runs: [],
-      }],
-      turnTotal: 1, turnFilter: null, turnError: null, turnLoading: false, turnQuery: "",
-    },
+  const turnToolsView = runInNewContext(`${audit.slice(start, end)}; turnToolsView`, {
+    num: (value: number) => String(value ?? 0),
+    esc: (value: unknown) => String(value ?? ""),
+    badge: (text: string) => `<span>${text}</span>`,
+    ms: (value: number) => `${value} ms`,
+    stamp: () => "11:35",
+    toolInput: (name: string, summary: string) => formatWindow.CloneToolFormat!.toolInputMarkup(name, summary),
+  }) as (turn: unknown) => string;
+  const html = turnToolsView({
+    turnId: "turn-1", conversationId: "conversation-a", source: "companion", status: "completed",
+    modelId: "m", effort: "high", startedAt: "2026-11-19T03:35:00.000Z", durationMs: 1234,
+    input: "整理资料", reply: "已整理。",
+    toolCalls: [{ toolCallId: "c1", name: "dispatch_task", inputSummary: '{"objective":"整理资料"}', durationMs: 3000 }],
+    compactions: [], historySearches: [], runs: [],
+  });
+  // The call the conversation no longer shows is one jump away, with its
+  // readable objective, duration and the raw-argument toggle.
+  // 对话不再显示的调用只隔一个跳转，带着可读的目标、耗时与原始参数开关。
+  assert.match(html, /data-au-tools-back/);
+  assert.match(html, /dispatch_task/);
+  assert.match(html, /派发任务：整理资料/);
+  assert.match(html, /原始参数/);
+  assert.match(html, /3000 ms/);
+});
+
+test("the audit turn card offers one jump to the tool page, not a wall of inputs", async () => {
+  const audit = await read("audit.js");
+  const auditCss = await read("audit.css");
+  // The owner's screenshot showed every turn card carrying every call with its
+  // labeled input, which made the list unscannable. The card now keeps a count
+  // line and one jump; the grouped calls and their inputs live on a tool page.
+  // 所有者截图里每张回合卡都带着每次调用与带标签输入，列表无法扫读。卡片现在只留计数行
+  // 与一个跳转；分组的调用与输入放在工具页。
+  assert.match(audit, /data-au-turn-tools=/);
+  assert.match(audit, /查看工具调用/);
+  assert.match(audit, /data-au-tools-back/);
+  assert.match(auditCss, /\.au-tool-groups/);
+  assert.match(auditCss, /\.au-tools-page/);
+
+  const start = audit.indexOf("const markdownReply");
+  const end = audit.indexOf("function invocationsView", start);
+  assert.ok(start >= 0 && end > start, "the turn views must exist");
+  const formatWindow: { CloneToolFormat?: { toolInputMarkup: (name: string, summary: string) => string } } = {};
+  runInNewContext(await read("tool-format.js"), { window: formatWindow });
+  const turn = {
+    turnId: "turn-1", conversationId: "conversation-a", source: "companion", status: "completed",
+    modelId: "m", effort: "high", startedAt: "2026-11-19T03:35:00.000Z", durationMs: 1234,
+    input: "整理资料", reply: "**已整理。**",
+    toolCalls: [
+      { toolCallId: "c1", name: "dispatch_task", inputSummary: '{"objective":"整理资料"}', durationMs: 3000 },
+      { toolCallId: "c2", name: "read_file", inputSummary: '{"path":"notes.md"}', isError: true, durationMs: 20 },
+    ],
+    compactions: [], historySearches: [], runs: [],
+  };
+  const views = runInNewContext(`${audit.slice(start, end)}; ({ turnsView, turnToolsView, markdownReply })`, {
+    state: { turns: [turn], toolTurn: null, turnTotal: 1, turnFilter: null, turnError: null, turnLoading: false, turnQuery: "" },
+    window: { cloneMarkdownForPreview: (value: string) => `<md>${value}</md>` },
     num: (value: number) => String(value ?? 0),
     esc: (value: unknown) => String(value ?? ""),
     badge: (text: string) => `<span>${text}</span>`,
@@ -1184,19 +1249,55 @@ test("the audit turn card keeps the tool calls the conversation dropped", async 
     usd: () => "$0",
     assemblyBlock: () => "",
     toolInput: (name: string, summary: string) => formatWindow.CloneToolFormat!.toolInputMarkup(name, summary),
-  }) as () => string;
-  const html = turnsView();
-  // The landed turn is named by id and conversation, and the call the
-  // conversation no longer shows is still here, with its readable objective,
-  // duration and the raw-argument toggle.
-  // 落点用 id 与对话点名该回合；对话不再显示的调用仍在这里，带着可读的目标、耗时与原始参数开关。
-  assert.match(html, /data-au-turn-id="turn-1"/);
-  assert.match(html, /data-au-turn-conversation="conversation-a"/);
-  assert.match(html, /dispatch_task/);
-  assert.match(html, /派发任务：整理资料/);
-  assert.match(html, /原始参数/);
-  assert.match(html, /3000 ms/);
-  assert.match(html, /已整理。/);
+  }) as { turnsView: () => string; turnToolsView: (turn: unknown) => string; markdownReply: (text: string) => string };
+
+  const card = views.turnsView();
+  // One line and one jump per turn; no call rows and no input fields inline.
+  // 每回合一行、一次跳转；不内联调用行与输入框。
+  assert.match(card, /工具调用 <b>2<\/b> 次 · 2 种 · 1 次失败/);
+  assert.match(card, /data-au-turn-tools="turn-1"/);
+  assert.match(card, /data-au-turn-tools-conversation="conversation-a"/);
+  assert.doesNotMatch(card, /class="au-tool-fields"/);
+  assert.doesNotMatch(card, /<ul class="au-turn-tools"/);
+  // The reply renders through the shared Markdown path, not as a raw <pre>.
+  // 回复经共享 Markdown 路径渲染，而不是原始 <pre>。
+  assert.match(card, /<md>\*\*已整理。\*\*<\/md>/);
+  assert.doesNotMatch(card, /<pre>\*\*已整理。/);
+
+  const page = views.turnToolsView(turn);
+  assert.match(page, /data-au-tools-back/);
+  assert.match(page, /工具调用 · 2 次/);
+  assert.match(page, /dispatch_task/);
+  assert.match(page, /read_file/);
+  assert.match(page, /派发任务：整理资料/);
+  assert.match(page, /原始参数/);
+  assert.match(page, /3000 ms/);
+  assert.match(page, /1 次失败/);
+});
+
+test("audit replies render Markdown through the conversation renderer, with a text fallback", async () => {
+  const audit = await read("audit.js");
+  const start = audit.indexOf("const markdownReply");
+  const end = audit.indexOf("const turnTone", start);
+  assert.ok(start >= 0 && end > start, "markdownReply must exist");
+  const rendered = runInNewContext(`${audit.slice(start, end)}; markdownReply`, {
+    window: { cloneMarkdownForPreview: (value: string) => `<md>${value}</md>` },
+    esc: (value: unknown) => String(value ?? ""),
+  }) as (text: string) => string;
+  assert.match(rendered("**完成**\n\n- 一条"), /<md>\*\*完成\*\*/);
+  const fallback = runInNewContext(`${audit.slice(start, end)}; markdownReply`, {
+    window: {},
+    esc: (value: unknown) => String(value ?? "").replace(/</g, "&lt;"),
+  }) as (text: string) => string;
+  assert.equal(fallback("**完成**"), '<pre class="au-pre">**完成**</pre>');
+  // Both the turn and the Agent 调用 detail go through it.
+  assert.match(audit, /markdownReply\(turn\.reply\)/);
+  assert.match(audit, /markdownReply\(detail\.reply\)/);
+  // Markdown brings table export and code copy controls; the audit must forward
+  // the shared handlers or the buttons would be dead.
+  // Markdown 带来表格导出与代码复制控件；审计必须转发共享处理器，否则按钮是死的。
+  assert.match(audit, /exportMarkdownTable/);
+  assert.match(audit, /data-copy-code/);
 });
 
 test("the audit landing asks for the turn id and keeps only that turn", async () => {
@@ -1547,4 +1648,222 @@ test("the user's bubble says who spoke by placement, not by an overline", async 
   assert.match(css, /\.turn-query-who\s*\{[^}]*display:\s*none/);
   assert.match(css, /\.turn-query-bubble\s*\{[^}]*font-size:\s*14px[^}]*line-height:\s*1\.7/);
   assert.match(css, /\.turn-query-bubble\s*\{[^}]*padding:\s*9px 13px 10px/);
+});
+
+test("every MCP server is a jump row, even when it declares one tool", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("function toolsRiskLabel");
+  const end = app.indexOf("async function refreshToolsCatalog", start);
+  assert.ok(start >= 0 && end > start, "renderToolsCatalog must exist");
+  const host = { innerHTML: "" };
+  const summary = { textContent: "" };
+  const render = runInNewContext(
+    `const state = { toolsCatalog: null, toolsStack: [] };
+     ${app.slice(start, end)};
+     renderToolsCatalog`,
+    {
+      state: { toolsCatalog: null, toolsStack: [] },
+      $: (id: string) => (id === "tools-catalog" ? host : id === "tools-summary" ? summary : null),
+      escape: (value: unknown) => String(value ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
+      t: (key: string) => key,
+    },
+  ) as (catalog: unknown) => void;
+  const tool = (name: string) => ({ name, risk: "read", description: `Read ${name}.` });
+  render({
+    servers: [
+      { id: "tiny", enabled: true, transport: "stdio", tools: [tool("read_a")] },
+      { id: "large", enabled: true, transport: "stdio", tools: [tool("tool1"), tool("tool2"), tool("tool3"), tool("tool4"), tool("tool5")] },
+    ],
+    mcpErrors: [],
+    skills: [],
+    skillRoots: ["/home/owner/.clone/skills"],
+    rejectedSkills: [],
+  });
+  // A single tool is still a jump: the list never prints a tool body.
+  // 只有一个工具也仍然跳转：列表从不打印工具正文。
+  assert.match(host.innerHTML, /data-tool-detail="tiny"/);
+  assert.match(host.innerHTML, /data-tool-detail="large"/);
+  assert.match(host.innerHTML, /1 tools-tools/);
+  assert.match(host.innerHTML, /5 tools-tools/);
+  assert.doesNotMatch(host.innerHTML, /tiny\.read_a/);
+  assert.doesNotMatch(host.innerHTML, /<details class="tool-list"/);
+  // The empty skills category points at its own market.
+  // 空的技能分类指向自己的市场。
+  assert.match(host.innerHTML, /tools-no-skills/);
+  assert.match(host.innerHTML, /data-tools-market="skills"/);
+});
+
+test("a server detail page turns Args into a table and a marketplace entry into typed fields", async () => {
+  const app = await read("app.js");
+  const formatSource = await read("tool-format.js");
+  const start = app.indexOf("function toolsRiskLabel");
+  const end = app.indexOf("async function refreshToolsCatalog", start);
+  assert.ok(start >= 0 && end > start, "the tools detail renderers must exist");
+  const sandbox: Record<string, unknown> = {
+    state: { toolsCatalog: null, toolsView: null, toolsRegistry: [], toolsMarketResults: [], toolsMarketTotal: 0, toolsMarketQuery: "", toolsMarketLoading: false, toolsMarketError: null, locale: "zh-CN" },
+    window: {},
+    $: () => null,
+    escape: (value: unknown) => String(value ?? "")
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
+    t: (key: string) => key,
+  };
+  runInNewContext(formatSource, sandbox);
+  sandbox.CloneToolFormat = (sandbox.window as { CloneToolFormat?: unknown }).CloneToolFormat;
+  const detail = runInNewContext(
+    `${app.slice(start, end)}; ({ serverDetailMarkup, marketDetailMarkup })`,
+    sandbox,
+  ) as { serverDetailMarkup: (server: unknown) => string; marketDetailMarkup: (entry: unknown) => string };
+  const serverDetailMarkup = detail.serverDetailMarkup;
+  const server = serverDetailMarkup({
+    id: "agent-tools",
+    enabled: true,
+    transport: "stdio",
+    tools: [{
+      name: "search_text",
+      risk: "read",
+      description: "Search files under a directory and return matching lines. Args: {\"query\": string, \"maxResults\"?: number (default 50)}. Skips .git.",
+    }],
+  });
+  assert.match(server, /data-tools-back/);
+  assert.match(server, /<code>search_text<\/code>/);
+  assert.match(server, /<code>query<\/code>/);
+  assert.match(server, /<code>string<\/code>/);
+  assert.match(server, /tool-param-required/);
+  assert.match(server, /tools-param-default/);
+  assert.equal(server.includes("Args:"), false, "the raw Args block must not reach the page");
+  assert.match(server, /Search files under a directory and return matching lines/);
+
+  const marketDetailMarkup = detail.marketDetailMarkup;
+  const market = marketDetailMarkup({
+    id: "filesystem",
+    name: { "zh-CN": "文件系统", en: "Filesystem" },
+    summary: { "zh-CN": "读写你指定的目录。", en: "Read and write your directories." },
+    package: "@modelcontextprotocol/server-filesystem@2.4.0",
+    vendor: "official",
+    tags: [],
+    inputs: [
+      { key: "directory", kind: "paths", required: true, label: { "zh-CN": "允许访问的目录", en: "Allowed directories" }, placeholder: "/Users/you/Documents" },
+      { key: "readOnly", kind: "toggle", arg: "--read-only", defaultChecked: true, label: { "zh-CN": "只读", en: "Read-only" } },
+    ],
+  });
+  assert.match(market, /data-market-input="directory"/);
+  assert.match(market, /data-market-input="readOnly"[^>]*checked/);
+  assert.match(market, /id="tool-market-probe"/);
+  assert.match(market, /id="tool-market-install" disabled/);
+  assert.match(market, /@modelcontextprotocol\/server-filesystem@2\.4\.0/);
+  assert.match(market, /data-tools-back/);
+});
+
+test("the settings tools section ships two categories, a detail host and both markets", async () => {
+  const html = await read("index.html");
+  const app = await read("app.js");
+  const css = await read("components.css");
+  assert.match(html, /id="tools-list-view"/);
+  assert.match(html, /id="tools-detail"/);
+  assert.match(html, /id="tools-catalog"/);
+  // The market is a jumped page now, not a static card.
+  // 市场现在是跳转页，不再是静态卡片。
+  assert.doesNotMatch(html, /id="tools-market-search"/);
+  assert.doesNotMatch(html, /id="tool-install-card"/);
+  assert.match(app, /\/api\/tools\/registry/);
+  assert.match(app, /\/api\/tools\/probe-registry/);
+  assert.match(app, /\/api\/tools\/install-registry/);
+  assert.match(app, /\/api\/skills\/registry/);
+  assert.match(app, /\/api\/skills\/install/);
+  assert.match(app, /data-tools-market/);
+  assert.match(app, /data-market-open/);
+  assert.match(app, /data-tool-detail/);
+  assert.match(app, /data-skill-detail/);
+  assert.match(app, /data-skill-entry/);
+  assert.match(app, /data-skill-remove/);
+  assert.match(app, /data-tools-back/);
+  assert.match(app, /function mcpMarketMarkup/);
+  assert.match(app, /function skillMarketMarkup/);
+  assert.match(app, /function skillDetailMarkup/);
+  assert.match(app, /globalThis\.CloneToolFormat\?\.describeTool/);
+  assert.match(css, /\.tool-category\s*\{/);
+  assert.match(css, /\.tool-list-row\s*\{/);
+  assert.match(css, /\.market-card\s*\{/);
+  assert.match(css, /\.tool-params\s*\{/);
+  assert.match(css, /\.tool-skill-body\s*\{/);
+  // tool-format.js must load before app.js: the settings page reads the parser.
+  // tool-format.js 必须先于 app.js 加载：设置页会读取解析器。
+  const formatAt = html.indexOf('src="./tool-format.js"');
+  const appAt = html.indexOf('src="./app.js"');
+  assert.ok(formatAt >= 0 && appAt >= 0 && formatAt < appAt, "the formatter must load before app.js");
+});
+
+test("the skill pages install, read and remove only from the clone home", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("function toolsRiskLabel");
+  const end = app.indexOf("async function refreshToolsCatalog", start);
+  assert.ok(start >= 0 && end > start, "the skill renderers must exist");
+  const state = {
+    locale: "zh-CN",
+    toolsCatalog: { skills: [{ name: "weekly-review" }], skillRoots: ["/home/owner/.clone/skills"] },
+    toolsStack: [],
+    skillsMarketResults: [
+      { name: "weekly-review", summary: { "zh-CN": "周复盘", en: "Weekly review" }, category: { "zh-CN": "复盘", en: "Review" }, installed: true },
+      { name: "release-notes", summary: { "zh-CN": "发布说明", en: "Release notes" }, category: { "zh-CN": "研发", en: "Engineering" }, installed: false },
+    ],
+    skillsMarketTotal: 2,
+    skillsMarketQuery: "",
+    skillsMarketLoading: false,
+    skillsMarketLoaded: true,
+    skillsMarketError: null,
+    skillDetails: new Map([
+      ["weekly-review", { status: "ready", skill: { name: "weekly-review", description: "周复盘", allowedTools: ["read_file"], path: "/home/owner/.clone/skills/weekly-review/SKILL.md", body: "# 周复盘\n\n先找证据。" } }],
+      ["workspace-skill", { status: "ready", skill: { name: "workspace-skill", description: "项目技能", allowedTools: [], path: "/Users/owner/project/.clone/skills/workspace-skill/SKILL.md", body: "# 项目技能" } }],
+    ]),
+  };
+  const host = { innerHTML: "" };
+  const count = { textContent: "" };
+  const api = runInNewContext(
+    `${app.slice(start, end)}; ({ skillEntryMarkup, skillDetailMarkup, renderSkillMarketResults })`,
+    {
+      state,
+      $: (id: string) => (id === "skills-market-results" ? host : id === "skills-market-count" ? count : null),
+      escape: (value: unknown) => String(value ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
+      t: (key: string) => key,
+      richText: (value: unknown) => `<div class="rt">${String(value)}</div>`,
+    },
+  ) as {
+    skillEntryMarkup: (entry: unknown) => string;
+    skillDetailMarkup: (view: unknown) => string;
+    renderSkillMarketResults: () => void;
+  };
+
+  const entry = {
+    name: "release-notes",
+    summary: { "zh-CN": "发布说明", en: "Release notes" },
+    category: { "zh-CN": "研发", en: "Engineering" },
+    allowedTools: ["git_log"],
+    body: "# 发布说明\n\n分组。",
+  };
+  const installable = api.skillEntryMarkup(entry);
+  assert.match(installable, /data-skill-install="release-notes"/);
+  assert.match(installable, /tools-skill-allowed/);
+  assert.match(installable, /# 发布说明/);
+  assert.doesNotMatch(installable, /data-skill-remove/);
+
+  const installedEntry = api.skillEntryMarkup({ ...entry, name: "weekly-review" });
+  assert.match(installedEntry, /data-skill-detail="weekly-review"/);
+  assert.doesNotMatch(installedEntry, /data-skill-install/);
+
+  const detail = api.skillDetailMarkup({ kind: "skill", name: "weekly-review" });
+  assert.match(detail, /data-skill-remove="weekly-review"/);
+  assert.match(detail, /# 周复盘/);
+  // A workspace skill is readable but never removed from here.
+  // 工作区技能可读，但不从这里移除。
+  const workspace = api.skillDetailMarkup({ kind: "skill", name: "workspace-skill" });
+  assert.doesNotMatch(workspace, /data-skill-remove/);
+  assert.match(api.skillDetailMarkup({ kind: "skill", name: "missing" }), /tools-skill-detail-loading/);
+
+  api.renderSkillMarketResults();
+  assert.match(host.innerHTML, /data-skill-entry="weekly-review"/);
+  assert.match(host.innerHTML, /data-skill-entry="release-notes"/);
+  assert.match(host.innerHTML, /market-installed/);
+  assert.match(count.textContent, /skills-market-count/);
 });

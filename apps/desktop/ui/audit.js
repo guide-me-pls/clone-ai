@@ -22,6 +22,7 @@
     invocations: [], invocationSelected: null, invocationDetail: null,
     invocationQuery: "", invocationShowDeleted: false, invocationTotal: 0, invocationHidden: 0,
     turnQuery: "", turnTotal: 0, turnFilter: null, turnError: null, turnLoading: false,
+    toolTurn: null, toolTurnScroll: 0,
     cases: null, improvement: null,
   };
 
@@ -576,9 +577,92 @@
       ${searches ? `<p class="au-note">历史检索</p><ul class="au-assembly-searches">${searches}</ul>` : ""}
     </details>`;
   }
+  /**
+   * A reply is model output, so it is Markdown. The conversation already owns an
+   * escaping renderer for headings, lists, tables, code and inline marks; using
+   * the same one keeps both surfaces identical and a second escaping path out of
+   * the app. A missing renderer falls back to the recorded text.
+   * 回复是模型输出，因此是 Markdown。对话已经有一个先转义的渲染器，负责标题、列表、表格、
+   * 代码与行内标记；复用同一个渲染器让两个界面一致，也不引入第二条转义路径。渲染器缺失时
+   * 退回记录文本。
+   */
+  const markdownReply = (text) => {
+    const rendered = typeof window.cloneMarkdownForPreview === "function"
+      ? window.cloneMarkdownForPreview(String(text ?? ""))
+      : null;
+    return rendered === null
+      ? `<pre class="au-pre">${esc(text)}</pre>`
+      : `<div class="au-reply log-reply">${rendered}</div>`;
+  };
+  const turnTone = (status) => (status === "completed" ? "ok" : status === "failed" ? "bad" : status === "interrupted" ? "warn" : "info");
+  const turnLabel = (status) => (status === "completed" ? "完成" : status === "failed" ? "失败" : status === "interrupted" ? "中断" : "进行中");
+  const toolStats = (calls) => ({
+    kinds: new Set(calls.map((call) => call.name)).size,
+    failed: calls.filter((call) => call.isError).length,
+    duration: calls.reduce((sum, call) => sum + (call.durationMs ?? 0), 0),
+  });
+
+  /**
+   * The tools a turn used, as one line with one jump. The card used to print
+   * every call and its labeled input, which turned each card into a wall and
+   * made the turn list unscannable; the detail now lives on its own page.
+   * 本回合用了哪些工具，压缩成一行加一个跳转。卡片过去打印每次调用与带标签输入，把每张卡片
+   * 变成一面墙，回合列表无法扫读；细节现在放在单独一页。
+   */
+  function turnToolsLine(turn) {
+    const calls = turn.toolCalls ?? [];
+    if (!calls.length) return `<p class="au-turn-tools-empty">本轮没有调用工具。</p>`;
+    const stats = toolStats(calls);
+    return `<div class="au-turn-tools-line"><span>工具调用 <b>${num(calls.length)}</b> 次 · ${num(stats.kinds)} 种${stats.failed ? ` · ${num(stats.failed)} 次失败` : ""}${stats.duration ? ` · ${ms(stats.duration)}` : ""}</span><button type="button" class="au-btn au-btn-link" data-au-turn-tools="${esc(turn.turnId)}" data-au-turn-tools-conversation="${esc(turn.conversationId)}" aria-label="查看工具调用：${num(calls.length)} 次 · ${num(stats.kinds)} 种工具">查看工具调用 ›</button></div>`;
+  }
+
+  /**
+   * The tool page for one turn: first which tools (grouped, with counts,
+   * failures and summed duration), then the calls in order with each input
+   * behind its own toggle. The jump target is the turn, so the page is a stable
+   * address rather than an expansion buried in the list.
+   * 单个回合的工具页：先看用了哪些工具（按名分组，带次数、失败与合计耗时），再看按顺序的
+   * 调用，每次输入各自留在开关之后。跳转目标是回合，页面因此是稳定地址，而不是埋在列表里的
+   * 展开块。
+   */
+  function turnToolsView(turn) {
+    const calls = turn.toolCalls ?? [];
+    const back = `<div class="au-toolbar"><button type="button" class="au-btn" data-au-tools-back>‹ 返回回合</button><span class="au-count-note">${esc(turn.conversationId)}</span></div>`;
+    if (!calls.length) return `${back}<p class="au-empty">这个回合没有调用工具。</p>`;
+    const stats = toolStats(calls);
+    const groups = new Map();
+    for (const call of calls) {
+      const group = groups.get(call.name) ?? { name: call.name, calls: 0, failed: 0, duration: 0 };
+      group.calls += 1;
+      if (call.isError) group.failed += 1;
+      group.duration += call.durationMs ?? 0;
+      groups.set(call.name, group);
+    }
+    const groupRows = [...groups.values()]
+      .sort((left, right) => right.calls - left.calls || left.name.localeCompare(right.name))
+      .map((group) => `<li><code>${esc(group.name)}</code><span>${num(group.calls)} 次${group.failed ? ` · ${num(group.failed)} 次失败` : ""}</span>${group.duration ? `<em>${ms(group.duration)}</em>` : ""}</li>`)
+      .join("");
+    const rows = calls.map((call, index) => `<li><details class="au-tool-call"><summary><span class="au-tool-index">${index + 1}</span><code>${esc(call.name)}</code>${call.isError ? badge("错误", "bad") : ""}${call.durationMs !== undefined ? `<em>${ms(call.durationMs)}</em>` : ""}</summary><div class="au-tool-input">${toolInput(call.name, call.inputSummary) || `<span class="au-empty">没有记录输入。</span>`}</div></details></li>`).join("");
+    const preview = String(turn.input ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+    return `${back}<section class="au-card au-tools-page">
+      <div class="au-turn-head"><span class="au-turn-who">clone-ai</span>${badge(turnLabel(turn.status), turnTone(turn.status))}<small>${esc(turn.source)} · ${stamp(turn.startedAt)}${turn.durationMs !== undefined ? ` · ${ms(turn.durationMs)}` : ""}</small></div>
+      <div class="au-tools-title"><h4>工具调用 · ${num(calls.length)} 次</h4>${preview ? `<p>${esc(preview)}</p>` : ""}</div>
+      <div class="au-chips"><span>${num(stats.kinds)} 种工具</span>${stats.failed ? `<span>${num(stats.failed)} 次失败</span>` : `<span>没有失败</span>`}${stats.duration ? `<span>合计 ${ms(stats.duration)}</span>` : ""}</div>
+      <p class="au-note">按工具</p><ul class="au-tool-groups">${groupRows}</ul>
+      <p class="au-note">按时间 · 展开一次调用可看输入</p><ol class="au-turn-tools au-tool-log">${rows}</ol>
+    </section>`;
+  }
   function turnsView() {
     const turns = state.turns ?? [];
     const filter = state.turnFilter;
+    // A jump lands on the tool page of the turn it names. If a refresh no longer
+    // returns that turn, fall back to the list instead of painting a stale page.
+    // 跳转落在它点名的回合的工具页。刷新后若该回合已不在，退回列表，而不是画一个过期页面。
+    if (state.toolTurn) {
+      const focused = turns.find((turn) => turn.turnId === state.toolTurn.turnId && turn.conversationId === state.toolTurn.conversationId);
+      if (focused) return turnToolsView(focused);
+      state.toolTurn = null;
+    }
     const toolbar = `<div class="au-toolbar"><input type="search" data-au-turn-query placeholder="搜索输入、回复、工具、模型、对话、Run、组装" value="${esc(state.turnQuery)}" aria-label="搜索主 Agent 回合" /><span class="au-count-note">显示 ${num(turns.length)} / 共 ${num(state.turnTotal)} 条</span>${filter ? `<button type="button" class="au-btn" data-au-turn-clear>显示全部回合</button>` : ""}</div>`;
     if (state.turnError) {
       return `${toolbar}<div class="au-callout au-callout-bad"><b>读取回合失败</b><pre>${esc(state.turnError)}</pre></div>`;
@@ -590,12 +674,9 @@
       return `${toolbar}<p class="au-empty">${state.turnQuery.trim() || filter ? "没有符合条件的回合记录。" : "还没有主 Agent 回合记录。CLI、桌面或 WhatsApp 的每一次对话都会出现在这里。"}</p>`;
     }
     return `${toolbar}<div class="au-turns">${turns.map((turn) => {
-      const tone = turn.status === "completed" ? "ok" : turn.status === "failed" ? "bad" : turn.status === "interrupted" ? "warn" : "info";
-      const label = turn.status === "completed" ? "完成" : turn.status === "failed" ? "失败" : turn.status === "interrupted" ? "中断" : "进行中";
+      const tone = turnTone(turn.status);
+      const label = turnLabel(turn.status);
       const usage = turn.usage ? `<span>${num(turn.usage.totalTokens ?? 0)} tokens</span>${turn.usage.costUsd !== undefined ? `<span>${usd(turn.usage.costUsd)}</span>` : ""}` : "";
-      const tools = turn.toolCalls.length
-        ? `<ul class="au-turn-tools">${turn.toolCalls.map((call) => `<li><code>${esc(call.name)}</code>${call.isError ? badge("错误", "bad") : ""}${call.durationMs !== undefined ? `<em>${ms(call.durationMs)}</em>` : ""}${toolInput(call.name, call.inputSummary)}</li>`).join("")}</ul>`
-        : `<p class="au-empty">本轮没有调用工具。</p>`;
       // The owner's request and the twin's answer read as one exchange: the
       // request is a right-aligned bubble, the answer is the left column, and
       // the assembly and tool evidence sit below them. The input used to be
@@ -610,10 +691,10 @@
           <small>${esc(turn.source)} · ${esc(turn.modelId ?? "默认模型")}${turn.effort ? ` · ${esc(turn.effort)}` : ""} · ${stamp(turn.startedAt)}${turn.durationMs !== undefined ? ` · ${ms(turn.durationMs)}` : ""}</small></div>
         <div class="au-turn-exchange">
           <div class="au-turn-query" aria-label="你的请求"><span class="au-turn-role">你</span><pre>${esc(turn.input)}</pre></div>
-          <div class="au-turn-answer" aria-label="clone-ai 的回复"><span class="au-turn-role">clone-ai</span>${turn.reply ? `<pre>${esc(turn.reply)}</pre>` : `<p class="au-empty">本轮没有返回文字。</p>`}${turn.error ? `<div class="au-callout au-callout-bad"><b>错误</b><pre>${esc(turn.error)}</pre></div>` : ""}</div>
+          <div class="au-turn-answer" aria-label="clone-ai 的回复"><span class="au-turn-role">clone-ai</span>${turn.reply && turn.reply.trim().length > 0 ? markdownReply(turn.reply) : `<p class="au-empty">本轮没有返回文字。</p>`}${turn.error ? `<div class="au-callout au-callout-bad"><b>错误</b><pre>${esc(turn.error)}</pre></div>` : ""}</div>
         </div>
         ${assemblyBlock(turn)}
-        ${tools}
+        ${turnToolsLine(turn)}
         <div class="au-chips">${usage}${turn.promptMaterialHash ? `<span>prompt ${esc(turn.promptMaterialHash.slice(0, 8))}</span>` : ""}${turn.spawnedRunIds?.length ? `<span>${turn.spawnedRunIds.length} 个 Run</span>` : ""}</div>
       </section>`;
     }).join("")}</div>`;
@@ -647,7 +728,7 @@
           <div class="au-chips"><span>${stamp(selected.startedAt)}</span><span>${ms(selected.durationMs)}</span><span>${esc(selected.workspacePath)}</span>${selected.modelId ? `<span>${esc(selected.modelId)}${selected.effort ? ` · ${esc(selected.effort)}` : ""}</span>` : ""}</div>
           <h5>请求</h5><pre class="au-pre">${esc(selected.prompt)}</pre>
           ${detail === null ? `<p class="au-empty">正在读取调用详情…</p>` : detail === undefined ? `<p class="au-empty">无法读取调用详情。</p>` : `
-            ${detail.reply ? `<h5>回复</h5><pre class="au-pre">${esc(detail.reply)}</pre>` : ""}
+            ${detail.reply ? `<h5>回复</h5>${markdownReply(detail.reply)}` : ""}
             ${detail.error ? `<div class="au-callout au-callout-bad"><b>错误</b><pre>${esc(detail.error)}</pre></div>` : ""}
             ${detail.newRuns?.length ? `<h5>产生的 Run</h5><div class="au-chips">${detail.newRuns.map((run) => `<button type="button" class="au-btn" data-au-jump="${esc(run.id)}">${esc(run.id.slice(0, 8))} · ${esc(run.status)}</button>`).join("")}</div>` : ""}
             <h5>运行位置</h5><p class="au-note"><code>${esc(detail.dataDirectory)}</code>${detail.sessionFile ? `<br/><code>${esc(detail.sessionFile)}</code>` : ""}</p>`}
@@ -735,12 +816,48 @@
       // 点标签是要求看回合列表，而不是"依据"链接落到的单个回合。
       const clearedFilter = view === "turns" && state.turnFilter !== null;
       state.view = view;
+      state.toolTurn = null;
       if (view === "turns") state.turnFilter = null;
       render();
       if (clearedFilter) await refreshTurns();
       return;
     }
-    if (pick("[data-au-turn-clear]")) { state.turnFilter = null; state.turnQuery = ""; render(); await refreshTurns(); return; }
+    if ((el = pick("[data-au-turn-tools]"))) {
+      // Remember where the list was before the page replaces it: with 37 turns
+      // open, returning to the top would lose the card the owner was reading.
+      // 在页面替换列表之前记住列表的位置：在 37 个回合都展开时，回到顶部会丢掉所有者
+      // 正在读的那张卡。
+      state.toolTurnScroll = root()?.closest(".settings-content")?.scrollTop ?? 0;
+      state.toolTurn = { turnId: el.dataset.auTurnTools, conversationId: el.dataset.auTurnToolsConversation ?? "" };
+      render();
+      // The page replaces the list, so the toolbar's back control is the
+      // keyboard landing; without this the jump would drop focus to the body.
+      // 页面替换了列表，工具栏的返回控件是键盘落点；否则跳转会丢失焦点到 body。
+      root()?.querySelector("[data-au-tools-back]")?.focus();
+      return;
+    }
+    if (pick("[data-au-tools-back]")) {
+      state.toolTurn = null;
+      render();
+      const scroller = root()?.closest(".settings-content");
+      if (scroller) scroller.scrollTop = state.toolTurnScroll;
+      return;
+    }
+    if (pick("[data-au-turn-clear]")) { state.toolTurn = null; state.turnFilter = null; state.turnQuery = ""; render(); await refreshTurns(); return; }
+    // A Markdown reply brings the conversation's table and code controls with
+    // it; the shared handlers live in app.js and are scoped to the conversation,
+    // so the audit forwards them here instead of leaving a dead button.
+    // Markdown 回复会带来看表格与代码控件；共享处理器在 app.js 且只作用于对话，审计在这里
+    // 转发它们，而不是留下失效按钮。
+    if ((el = pick("[data-copy-code]"))) {
+      const code = el.parentElement?.querySelector("code");
+      try { await navigator.clipboard.writeText(code?.textContent ?? ""); announce("已复制。"); } catch { announce("复制失败，请手动选中代码复制。", true); }
+      return;
+    }
+    if ((el = pick("[data-export-table]"))) {
+      if (typeof exportMarkdownTable === "function") exportMarkdownTable(el.dataset.exportCsv ?? "");
+      return;
+    }
     if ((el = pick("[data-au-invocation]"))) {
       state.invocationSelected = el.dataset.auInvocation;
       state.invocationDetail = null;
@@ -891,6 +1008,7 @@
     const id = String(turnId ?? "").trim();
     const conversation = String(conversationId ?? "").trim();
     state.view = "turns";
+    state.toolTurn = null;
     state.turnQuery = "";
     state.turnError = null;
     state.turnLoading = true;

@@ -216,13 +216,41 @@ body.empty-conversation .welcome { padding-bottom: 0; }
 .au-turn-answer { justify-self: start; width: 100%; max-width: min(92ch, 100%); }
 .au-turn-role { display: block; margin-bottom: 4px; color: var(--muted, #8791a1); font-size: 10px; font-weight: 700; letter-spacing: .1em; }
 #audit-root .au-turn-query pre,
-#audit-root .au-turn-answer pre { margin: 0; padding: 0; border: 0; background: transparent; max-height: 360px; }
-#audit-root .au-turn-answer pre { padding: 9px 11px; border: 1px solid #e8eaee; border-radius: 10px; background: #fafbfc; }
+#audit-root .au-turn-answer > pre { margin: 0; padding: 0; border: 0; background: transparent; max-height: 360px; }
+#audit-root .au-turn-answer > pre { padding: 9px 11px; border: 1px solid #e8eaee; border-radius: 10px; background: #fafbfc; }
 #audit-root .au-turn-query pre { white-space: pre-wrap; }
+/* The reply is Markdown, so it keeps the conversation's .log-reply typography;
+ * this surface adds the box the old <pre> had, and code blocks inside keep
+ * their own .md-code styling. 回复是 Markdown，因此沿用对话的 .log-reply 排版；这里
+ * 补上旧 <pre> 的框，内部的代码块保留自己的 .md-code 样式。 */
+.au-reply { max-height: 460px; overflow: auto; padding: 9px 12px; border: 1px solid #e8eaee; border-radius: 10px; background: #fafbfc; overflow-wrap: anywhere; }
+.au-reply .md-heading { margin: 12px 0 4px; }
+.au-reply > .md-heading:first-child { margin-top: 0; }
 .au-turn-tools { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12px; }
 .au-turn-tools li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--line, #eef1f5); }
 .au-turn-tools em { color: var(--muted, #8791a1); font-style: normal; font-size: 11px; }
 .au-turn-tools span { color: var(--subtle, #5c6675); overflow-wrap: anywhere; }
+/* A turn card names its tools in one line and opens a page; the input wall
+ * stays there. 回合卡用一行点名工具并打开一页；输入墙留在那里。 */
+.au-turn-tools-line { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; padding: 7px 10px; border: 1px solid var(--line, #eef1f5); border-radius: 9px; background: #fafbfc; color: var(--subtle, #5c6675); font-size: 12px; }
+.au-turn-tools-line b { color: var(--text, #20242c); font-variant-numeric: tabular-nums; }
+.au-turn-tools-empty { margin: 0; color: var(--muted, #8791a1); font-size: 12px; }
+.au-btn-link { padding: 4px 8px; border-color: transparent; background: transparent; color: #4260ae; }
+.au-btn-link:hover { border-color: var(--line-strong, #ccd4df); background: #fff; }
+.au-tools-page { display: grid; gap: 8px; }
+.au-tools-title { display: grid; gap: 2px; }
+.au-tools-title h4 { margin: 0; font-size: 15px; }
+.au-tools-title p { margin: 0; color: var(--muted, #8791a1); font-size: 12px; overflow-wrap: anywhere; }
+.au-tool-groups { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12px; }
+.au-tool-groups li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line, #eef1f5); }
+.au-tool-groups li span { color: var(--subtle, #5c6675); }
+.au-tool-groups li em { margin-left: auto; color: var(--muted, #8791a1); font-style: normal; font-variant-numeric: tabular-nums; }
+.au-tool-log { gap: 0; }
+.au-tool-log li { display: block; padding: 0; border-bottom: 1px solid var(--line, #eef1f5); }
+.au-tool-call summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; padding: 6px 0; cursor: pointer; }
+.au-tool-call summary em { color: var(--muted, #8791a1); font-style: normal; font-size: 11px; font-variant-numeric: tabular-nums; }
+.au-tool-index { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 99px; background: rgba(0, 0, 0, .05); color: var(--muted, #8791a1); font-size: 10px; font-variant-numeric: tabular-nums; }
+.au-tool-call .au-tool-input { padding: 0 0 8px 25px; font-size: 12px; }
 /* A tool call reads as a sentence and labeled fields; raw JSON stays behind a toggle. 工具调用以一句话与带标签字段呈现；原始 JSON 留在一键之后。 */
 .au-tool-input { flex-basis: 100%; min-width: 0; color: var(--text, #20242c); }
 .au-tool-headline { margin: 0 0 5px; line-height: 1.55; overflow-wrap: anywhere; }
