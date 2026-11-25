@@ -15,7 +15,7 @@
  * 耗时、中位 tokens 与通过率，并把每一次运行与聚合结果一起保留。`--repeat 1` 恢复单次
  * 运行。运行时列表是显式的：只有已注册且能启动的运行时才会被加进来。
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,15 +87,25 @@ await writeFile(join(fixtureWorkspace, "README.md"), "# Fixture project\n\nBENCH
  */
 const learnedFixture = await mkdtemp(join(tmpdir(), "clone-ai-main-learned-"));
 await writeFile(join(learnedFixture, "learned-file.md"), "BENCH_LEARNED_MARKER_9K4\n\nThis file is reachable only through a learned folder.\n", "utf8");
+/**
+ * A completed run from another conversation. In the app-wide briefing it is
+ * listed as recent background work and can be mistaken for the thing a "继续"
+ * refers to; a conversation-scoped briefing must not show it at all.
+ * 来自另一个对话的已完成 Run。在全应用简报里它会作为"最近完成的后台工作"出现，可能被
+ * 误当成"继续"指代的对象；按对话过滤的简报完全不应显示它。
+ */
+const OTHER_TASK_MARKER = "OTHER_TASK_MARKER";
 
 type Runtime = "native";
-type Expectation = "direct" | "authority" | "plan" | "read" | "learned-read" | "learned-trivial" | "learned-continuation";
+type Expectation = "direct" | "authority" | "plan" | "read" | "learned-read" | "learned-trivial" | "learned-continuation" | "cross-conversation";
 
 interface TaskSeed {
   /** A folder taught in another conversation, so it is learned but absent from this turn's history. 在另一个对话中教会的文件夹：已学会，但不在本回合历史里。 */
   folder?: string;
   /** A completed earlier turn in the main conversation whose texts name no absolute path. 主对话中更早的一条已完成回合，其文本不含绝对路径。 */
   previous?: { text: string; reply: string };
+  /** A completed run in another conversation, to see whether it leaks into the briefing. 另一个对话中的已完成 Run，用于检验它是否泄漏进简报。 */
+  otherRun?: { title: string };
 }
 
 interface MainAgentTask {
@@ -150,6 +160,19 @@ const TASKS: MainAgentTask[] = [
       },
     },
   },
+  {
+    id: "cross-conversation-continuation",
+    prompt: "继续，把刚才那个弄完。",
+    expectation: "cross-conversation",
+    seed: {
+      folder: learnedFixture,
+      previous: {
+        text: "整理那个学习文件夹里的资料，先看看有什么。",
+        reply: "看过了，里面有学习材料。需要我整理成清单吗？",
+      },
+      otherRun: { title: `${OTHER_TASK_MARKER} 整理学习资料并生成清单` },
+    },
+  },
 ];
 
 interface TaskResult {
@@ -165,6 +188,9 @@ interface TaskResult {
   runs: number;
   turnStatus?: string;
   replyLength: number;
+  replyExcerpt?: string;
+  /** Whether the other conversation's run was in the system prompt. 另一个对话的 Run 是否出现在系统提示词里。 */
+  otherRunInPrompt?: boolean;
   error?: string;
   journalEvents: number;
 }
@@ -206,6 +232,50 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
         reply: task.seed.previous.reply,
       });
     }
+    // A completed run in another conversation, with a title close enough to the
+    // current task that an app-wide briefing could present it as the thing to
+    // continue. It is written into the turn's journal before the prompt compiles.
+    // 另一个对话中的已完成 Run，标题接近当前任务，使全应用简报可能把它当作要续做的对象。
+    // 它在提示词编译之前写入本回合的 Journal。
+    if (task.seed?.otherRun !== undefined) {
+      const journal = createJournalStore(directory);
+      try {
+        const at = new Date().toISOString();
+        const taskId = `other-task-${task.id}`;
+        const runId = `other-run-${task.id}`;
+        const triggerId = `other-trigger-${task.id}`;
+        await journal.append({
+          type: "trigger.received",
+          payload: {
+            id: triggerId,
+            kind: "query",
+            summary: task.seed.otherRun.title,
+            occurredAt: at,
+            payload: { source: "main-agent", conversationId: "other-task" },
+          },
+        });
+        await journal.append({
+          type: "task.created",
+          taskId,
+          payload: { id: taskId, triggerId, title: task.seed.otherRun.title, objective: task.seed.otherRun.title, acceptanceCriteria: ["ok"], createdAt: at },
+        });
+        await journal.append({
+          type: "run.created",
+          taskId,
+          runId,
+          payload: { id: runId, taskId, status: "created", createdAt: at, updatedAt: at },
+        });
+        await journal.append({
+          type: "plan.created",
+          taskId,
+          runId,
+          payload: { summary: task.seed.otherRun.title, steps: [], id: `other-plan-${task.id}`, runId, createdAt: at },
+        });
+        await journal.append({ type: "run.status_changed", taskId, runId, payload: { status: "completed" } });
+      } finally {
+        (journal as { close?: () => void }).close?.();
+      }
+    }
     process.env.CLONE_AI_MAIN_MODEL = MODEL;
     process.env.CLONE_AI_MAIN_RUNTIME = "native";
     process.env.CLONE_AI_NATIVE_MODEL = MODEL;
@@ -241,6 +311,22 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
       };
     }
     const durationMs = Date.now() - started;
+    // The mechanism check: did the other conversation's run reach the system
+    // prompt at all? This is independent of whether the model chose to mention it.
+    // 机制检查：另一个对话的 Run 到底有没有进入系统提示词？这与模型是否提到它无关。
+    let otherRunInPrompt: boolean | undefined;
+    if (task.seed?.otherRun !== undefined) {
+      otherRunInPrompt = false;
+      const snapshotDirectory = join(directory, "prompt-snapshots");
+      const files = await readdir(snapshotDirectory).catch(() => [] as string[]);
+      for (const file of files) {
+        const source = await readFile(join(snapshotDirectory, file), "utf8").catch(() => "");
+        if (source.includes(OTHER_TASK_MARKER)) {
+          otherRunInPrompt = true;
+          break;
+        }
+      }
+    }
     const journal = createJournalStore(directory);
     let events: Awaited<ReturnType<typeof journal.list>> = [];
     try {
@@ -289,6 +375,13 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
           // 通过条件：模型按需解析出文件夹（或直接说出路径），而不是卡在开放式的"哪个文件夹？"。
           return result.error === undefined
             && (toolCalls.includes("get_situation") || toolCalls.includes("recent_file_changes") || result.reply.includes(learnedFixture));
+        case "cross-conversation":
+          // Behavioral check: the reply must not treat another conversation's
+          // run as the thing this "继续" refers to. The prompt flag above shows
+          // whether the app-wide list was even available.
+          // 行为检查：回复不得把另一个对话的 Run 当作这次"继续"指代的对象。上面的提示词
+          // 标记说明全应用列表当时是否可见。
+          return result.error === undefined && result.reply.trim().length > 0 && !result.reply.includes(OTHER_TASK_MARKER);
         default:
           return runs > 0;
       }
@@ -306,6 +399,8 @@ async function runOne(runtime: Runtime, task: MainAgentTask): Promise<TaskResult
       runs,
       ...(turnStatus === undefined ? {} : { turnStatus }),
       replyLength: result.reply.length,
+      replyExcerpt: result.reply.replace(/\s+/g, " ").slice(0, 240),
+      ...(otherRunInPrompt === undefined ? {} : { otherRunInPrompt }),
       ...(result.error === undefined ? {} : { error: result.error }),
       journalEvents: events.length,
     };

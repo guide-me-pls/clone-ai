@@ -43,15 +43,27 @@
   test/worker-brief.test.ts test/main-agent-prompt-briefing.test.ts
   test/known-folders.test.ts` 33/33；`npm test` 1170/1170；`npm run typecheck` 退出码 0；
   `npm run gate` PASS。
-- **Benchmark run：** 本条没有跑行为基准——没有做跨对话续做的基准格；确定性测试钉住了
-  提示词内容的前后差异。上一条的 10 次续做运行是动机，不是本条的 eval。
+- **Benchmark run：** `CLONE_AI_BENCH_MAIN_MODEL=deepseek/deepseek-v4.1-flash
+  node --experimental-strip-types benchmark/main-agent.ts --only
+  cross-conversation-continuation --repeat 6`。Provider 为 native，端点
+  `http://127.0.0.1:3425`，模型 `deepseek/deepseek-v4.1-flash`，每次全新临时
+  clone home。该格种入另一个对话的已完成 Run（`OTHER_TASK_MARKER 整理学习资料并生成
+  清单`）、主对话里一条已完成回合，以及一个已学会的文件夹；通过 = 回复非空且不含
+  `OTHER_TASK_MARKER`；同时记录另一个 Run 是否进入系统提示词。改动前（工作树
+  `a6b6a91`，全应用）`benchmark/results/main-agent-2026-11-25T07-28-58-081Z.json`：
+  6/6 通过，提示词含另一 Run 6/6，中位数 59.8 s / 77,760 tok。改动后（提交
+  `f27c1d0`，按对话过滤）
+  `benchmark/results/main-agent-2026-11-25T07-23-19-600Z.json`：6/6 通过，含另一
+  Run 0/6，中位数 16.2 s / 35,854 tok。
 - **执行链路：** 在线上 Journal 上核对归属（39 个 trigger 里 15 个带 `conversationId`）、
   改代码、定向测试、完整套件、gate。并发会话一直在改共享文档与 `app.js`；只暂存了本次
   变更的 hunk。
 - **优点：** 机制用的是已经存在的数据（trigger 载荷），不需要改事件 schema；显式的
   `search_history` 以 `scope: "all"` 仍是有意的跨任务路径。
-- **缺点 / 下次：** 没有行为基准；字段出现之前或调度器创建的 Run 会从每回合列表里静默
-  消失。下次加一个种入的跨对话基准格，测量回合会不会提到另一个任务的 Run。
+- **缺点 / 下次：** 行为判定没有区分开——两种条件下各 6 次都没有样本提到另一个 Run——
+  因此该格证明的是机制与成本，不是"续错任务"。字段出现之前或调度器创建的 Run 会从每回合
+  列表里静默消失。下次把干扰项做得更像当前任务，或对"回复是否声称工作已经完成"打分，
+  再下行为结论。
 - **推翻条件：** 如果按对话过滤隐藏了所有者期望分身记住的工作——例如分身重复了另一个
   对话已经做过的派发——就把它扩成一个单独标注的"其他任务"段落，并明确不得续做；或者
   如果所有者几乎只在一个对话里工作，就不传 `conversationId`，保留全应用列表。

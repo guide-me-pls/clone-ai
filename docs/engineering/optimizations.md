@@ -54,10 +54,19 @@ file keeps every attempt, including the ones that did not work.
   test/situation-briefing.test.ts test/worker-brief.test.ts
   test/main-agent-prompt-briefing.test.ts test/known-folders.test.ts` 33/33;
   `npm test` 1170/1170; `npm run typecheck` exit 0; `npm run gate` PASS.
-- **Benchmark run:** none for this entry — a behavioral cross-conversation
-  continuation cell was not run; the deterministic test pins the before/after
-  difference in prompt content. The ten-sample continuation run in the
-  previous entry is the motivation, not this change's eval.
+- **Benchmark run:** `CLONE_AI_BENCH_MAIN_MODEL=deepseek/deepseek-v4.1-flash
+  node --experimental-strip-types benchmark/main-agent.ts --only
+  cross-conversation-continuation --repeat 6`. Provider native, endpoint
+  `http://127.0.0.1:3425`, model `deepseek/deepseek-v4.1-flash`, fresh
+  temporary clone home per sample. The cell seeds a completed run in another
+  conversation (`OTHER_TASK_MARKER 整理学习资料并生成清单`), a completed prior
+  turn in the main conversation, and a learned folder; pass = a non-empty reply
+  that does not contain `OTHER_TASK_MARKER`; it also records whether the other
+  run reached the system prompt. Before (worktree `a6b6a91`, app-wide)
+  `benchmark/results/main-agent-2026-11-25T07-28-58-081Z.json`: 6/6 pass, other
+  run in prompt 6/6, median 59.8 s / 77,760 tok. After (commit `f27c1d0`,
+  scoped) `benchmark/results/main-agent-2026-11-25T07-23-19-600Z.json`: 6/6
+  pass, in prompt 0/6, median 16.2 s / 35,854 tok.
 - **Execution chain:** inline attribution check on the live journal (15 of 39
   triggers carry a `conversationId`), code changes, focused tests, full suite,
   gate. Concurrent sessions kept editing the shared docs and `app.js`; only
@@ -65,10 +74,12 @@ file keeps every attempt, including the ones that did not work.
 - **Pros:** the mechanism uses data already present (the trigger payload), so
   no event schema change is needed; explicit `search_history` with
   `scope: "all"` remains the deliberate cross-task path.
-- **Cons / next time:** no behavioral benchmark; runs created before the field
-  or by the scheduler silently drop out of the per-turn list. Next: add a
-  seeded cross-conversation cell that measures whether a turn mentions another
-  task's run.
+- **Cons / next time:** the behavioral pass did not separate — 0/6 samples in
+  either condition mentioned the other run — so the cell proves the mechanism
+  and the cost, not cross-talk. Runs created before the field or by the
+  scheduler silently drop out of the per-turn list. Next: make the distractor
+  resemble the current task even more closely, or grade whether the reply
+  claims the work is already done, before drawing a behavioral conclusion.
 - **Reversal condition:** if the scoped list hides work the owner expects the
   twin to remember — for example the twin repeats a dispatch made from another
   conversation — widen it to a separately labelled "other tasks" section that
