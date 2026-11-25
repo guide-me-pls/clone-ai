@@ -1717,6 +1717,13 @@ body.empty-conversation .composer-wrap { padding-bottom: 18px; }
 .log-step-body { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 12px; line-height: 1.55; }
 .log-fact { color: var(--subtle); overflow-wrap: anywhere; }
 .log-fact--muted { color: var(--muted); }
+.log-live { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 8px; color: var(--subtle); font-size: 11.5px; line-height: 1.5; }
+.log-live-dot { align-self: center; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: log-live-pulse 1.5s ease-in-out infinite; }
+@keyframes log-live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .32; } }
+.log-live b { color: var(--subtle); font-size: 9.5px; font-weight: 700; letter-spacing: .12em; }
+.log-live-facts { color: var(--muted); }
+.log-live-step { flex-basis: 100%; overflow-wrap: anywhere; color: var(--muted); }
+.log-live-step code { color: var(--text); font-family: var(--font-mono); font-size: 10.5px; }
 /* The grounds for a result, kept to one line: how much the turn consulted and
  * where the record is. The model, the prompt and every call's input are in the
  * audit, not here.
@@ -2317,3 +2324,7 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
 .tool-skill-body .md-list-line { display: grid; grid-template-columns: 17px minmax(0, 1fr); gap: 4px; margin: 3px 0; }
 .tool-skill-body .md-list-line > span:first-child { color: var(--accent); font-weight: 700; }
 .tool-skill-body .md-list-line--ordered > span:first-child { font-variant-numeric: tabular-nums; }
+/* A dock with several decisions can exceed the viewport; it scrolls inside
+ * itself instead of pushing the conversation off-screen.
+ * 多个决定时固定栏可能超过视口；它在自身内部滚动，而不是把对话挤出屏幕。 */
+.decision-dock { max-height: min(72vh, 640px); overflow-y: auto; overscroll-behavior: contain; }

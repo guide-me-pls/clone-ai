@@ -65,6 +65,14 @@ export interface McpRegistryEntry {
   /** A pinned npm spec: name@version, never a range. 固定的 npm 规格：name@version，绝不是范围。 */
   package: string;
   vendor: RegistryVendor;
+  /**
+   * The reviewed risk every tool starts at. The install page still lets the
+   * owner change it per tool; a direct card install uses it so one click can
+   * produce a usable server instead of nine tools refused as external.
+   * 每个工具初始使用的已审查风险。安装页仍允许所有者逐个修改；卡片直装使用它，
+   * 因此一次点击装出的服务器可用，而不是九个被当作外部拒绝的工具。
+   */
+  defaultRisk: "read" | "write" | "network" | "external";
   /** Search terms in both languages. 双语的搜索词。 */
   tags: string[];
   inputs: McpRegistryInput[];
@@ -89,6 +97,10 @@ export const MCP_REGISTRY: readonly McpRegistryEntry[] = Object.freeze([
     },
     package: "@modelcontextprotocol/server-filesystem@2.4.0",
     vendor: "official",
+    // The server exposes write and read tools; write is the honest default,
+    // and read-only mode still works with it.
+    // 服务器同时暴露读与写工具；默认按写入更诚实，只读模式在其下仍可用。
+    defaultRisk: "write",
     tags: ["文件", "目录", "读写", "只读", "file", "files", "directory", "folder", "read", "write", "filesystem"],
     inputs: [
       {
@@ -121,6 +133,9 @@ export const MCP_REGISTRY: readonly McpRegistryEntry[] = Object.freeze([
     },
     package: "@modelcontextprotocol/server-memory@2.2.1",
     vendor: "official",
+    // Every tool writes the local graph, so a read label would understate it.
+    // 每个工具都会写入本地图谱，标成只读会低估它。
+    defaultRisk: "write",
     tags: ["记忆", "知识图谱", "实体", "关系", "memory", "graph", "knowledge", "remember", "entity"],
     inputs: [],
     // The server's default file sits inside the npx cache, which an update may
@@ -138,6 +153,9 @@ export const MCP_REGISTRY: readonly McpRegistryEntry[] = Object.freeze([
     },
     package: "@modelcontextprotocol/server-sequential-thinking@2.2.0",
     vendor: "official",
+    // The server only models reasoning steps; it reads and writes no files.
+    // 该服务器只建模思考步骤，不读写文件。
+    defaultRisk: "read",
     tags: ["思考", "推理", "规划", "步骤", "thinking", "reasoning", "plan", "steps", "sequential"],
     inputs: [],
     docs: "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
@@ -151,6 +169,9 @@ export const MCP_REGISTRY: readonly McpRegistryEntry[] = Object.freeze([
     },
     package: "@playwright/mcp@0.0.86",
     vendor: "microsoft",
+    // Browser automation navigates and calls pages; network is the honest class.
+    // 浏览器自动化会导航并调用页面；按网络风险更诚实。
+    defaultRisk: "network",
     tags: ["浏览器", "自动化", "截图", "页面", "browser", "playwright", "automation", "screenshot", "web"],
     inputs: [],
     docs: "https://github.com/microsoft/playwright-mcp",
@@ -164,6 +185,9 @@ export const MCP_REGISTRY: readonly McpRegistryEntry[] = Object.freeze([
     },
     package: "chrome-devtools-mcp@1.14.0",
     vendor: "google",
+    // It drives a browser over the DevTools protocol; network is the honest class.
+    // 它通过 DevTools 协议驱动浏览器；按网络风险更诚实。
+    defaultRisk: "network",
     tags: ["chrome", "调试", "性能", "网络", "浏览器", "devtools", "debug", "performance", "trace", "page", "browser"],
     inputs: [],
     // Google's server reports usage statistics unless told not to; this app

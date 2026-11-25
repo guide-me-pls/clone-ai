@@ -6,6 +6,38 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-25 — Marketplace cards install with one reviewed default risk
+
+**Decision.** A marketplace card for an entry with no required input installs
+directly: the card's 安装 button probes the pinned package and grants every
+exposed tool the entry's reviewed `defaultRisk` (filesystem `write`, memory
+`write`, sequential thinking `read`, Playwright and Chrome DevTools `network`).
+An entry that needs a directory still opens the install form, because that value
+cannot be guessed. An installed card shows 管理, which opens the server's own
+tools, load switch and remove control. The header reads "available · installed"
+so the count matches the cards.
+
+**Alternatives rejected.** Keep the 配置 label and the per-tool `external`
+default: the owner had to open a second page and choose a risk for every tool
+before the server was usable; the installed server also had no management
+entry, so it could not be adjusted or removed from the market. Keep the label
+only (安装 instead of 配置) but still require the detail page: reported as
+"还要点进去配置嘛，太傻了吧".
+
+**Evidence.** Owner report with the marketplace screenshot, 2026-11-25. The
+live probe listed nine memory tools; the direct path was exercised end to end by
+installing and removing `sequential-thinking` through
+`/api/tools/install-registry` and `DELETE /api/tools/mcp/...` (both HTTP 200).
+`test/mcp-registry.test.ts` pins the default risk, and `test/ui-structure.test.ts`
+pins the card states, the count and the live-turn activity.
+
+**Cost / reversal.** One risk class is coarser than per-tool choice, so a tool
+that can do more than its entry's class would be under-declared. The install
+page still edits every tool before a detail-page install, and the server detail
+keeps the load and remove controls. Reverse if a reviewed entry's tool surface
+gains a stronger class, or if an installed default enables an action the owner
+did not expect: then the registry needs per-tool defaults, not one per entry.
+
 ## 2026-11-25 — Learned folders load on use, not in every turn
 
 **Decision.** The per-turn Main Agent briefing stops carrying the learned-folder

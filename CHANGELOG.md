@@ -6,6 +6,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Marketplace cards install in one gesture; a running turn shows its work
+
+Uninstalled marketplace cards now say 安装 instead of 配置. An entry with no required input installs from the card: one confirm, a probe, then every tool at the entry's reviewed default risk (filesystem/memory write, sequential thinking read, Playwright/Chrome DevTools network). An entry that needs a directory opens the install form. An installed card says 管理 and opens the server's tools, load switch and remove control; the header reads "available · installed" so the count matches the cards. A running Main Agent turn now shows its actual activity — elapsed time, tool-call count and the newest call — instead of a frozen "still running" line. `test/mcp-registry.test.ts` 5/5, `test/ui-structure.test.ts` 55/55; typecheck 0; gate PASS. Live: sequential-thinking installed and removed through the same API (HTTP 200 both).
+
+### 市场卡片一次安装；进行中的回合显示实际工作
+
+未安装的市场卡片按钮从「配置」改为「安装」。没有必填输入的条目直接从卡片安装：一次确认、一次探测，然后按条目已审查的默认风险授权全部工具（文件系统/记忆图谱为写入、分步思考为读取、Playwright/Chrome 调试为网络）。需要目录的条目仍打开安装页。已安装卡片显示「管理」，打开服务器自己的工具、加载开关与移除控件；头部显示「可安装 · 已安装」，与网格一致。进行中的主 Agent 回合现在显示实际活动——已运行时间、工具调用次数与最近一次调用——而不是一行冻结的「仍在推进」。`test/mcp-registry.test.ts` 5/5、`test/ui-structure.test.ts` 55/55；typecheck 0；gate PASS。实机：通过同一 API 安装并移除 sequential-thinking（两次 HTTP 200）。
+
 ### Learned folders are read on demand, not every turn
 
 The Main Agent's per-turn briefing no longer carries the learned-folder block. `compileBriefing` gains `includeFolders` (default `true`) and the per-turn prompt passes `false`; `Briefing.folders` is still computed, the Settings API still returns it, and `get_situation` gains a `foldersOnly` mode that returns the learned list without sweeping connectors or the rest of the briefing. The charter tells the model to fetch the list when a request concerns the owner's own files and names no path — including a continuation — and the Settings caption now says so. New `test/main-agent-prompt-briefing.test.ts` 3/3; focused suites 32/32; `npm test` 1167/1167; `npm run typecheck` exit 0; `npm run gate` PASS. Benchmark `learned-folder-read` 3/3 → 3/3, `learned-folder-trivial` 3/3 → 3/3, `learned-folder-continuation` 3/3 → 3/3; the continuation cell's median cost rose from 26.5k to 60.2k tokens because it now dispatches the work it was asked to continue.

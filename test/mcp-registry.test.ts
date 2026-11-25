@@ -24,6 +24,13 @@ test("every entry has a unique id, a pinned npm package and both languages", () 
     assert.ok(entry.name["zh-CN"].length > 0 && entry.name.en.length > 0, `${entry.id} needs both names`);
     assert.ok(entry.summary["zh-CN"].length > 0 && entry.summary.en.length > 0, `${entry.id} needs both summaries`);
     assert.ok(entry.tags.length > 0, `${entry.id} needs search tags`);
+    assert.ok(["read", "write", "network", "external"].includes(entry.defaultRisk), `${entry.id} needs a reviewed default risk`);
+  }
+  // An entry with no required input can install from its card in one gesture;
+  // an external default would install nine tools that are all refused.
+  // 没有必填输入的条目可从卡片一次安装；默认外部会装出九个全被拒绝的工具。
+  for (const entry of MCP_REGISTRY.filter((candidate) => !candidate.inputs.some((input) => input.required === true))) {
+    assert.notEqual(entry.defaultRisk, "external", `${entry.id} is directly installable and needs a usable default`);
   }
   assert.ok(MCP_REGISTRY.length >= 5, "the marketplace should offer the reviewed keyless servers");
 });

@@ -1086,14 +1086,18 @@ function renderMarketResults() {
   }
   const entries = state.toolsMarketResults;
   const installed = new Set((state.toolsCatalog?.servers ?? []).map((server) => server.id));
+  const installedCount = entries.filter((entry) => installed.has(entry.id)).length;
+  const availableCount = entries.length - installedCount;
   const count = $("tools-market-count");
   if (count) {
     count.textContent = state.toolsMarketQuery.trim().length > 0
       ? t("tools-market-filtered").replace("{count}", String(entries.length)).replace("{total}", String(state.toolsMarketTotal))
-      // "Installable" counts what is not installed yet; an installed entry keeps
-      // its card with a badge instead of an install button.
-      // "可安装"只数尚未安装的条目；已安装条目保留卡片并显示徽章，而不是安装按钮。
-      : t("tools-market-count").replace("{count}", String(entries.filter((entry) => !installed.has(entry.id)).length));
+      // The header and the grid must agree: available counts entries without a
+      // server, installed counts the cards that show a management entry.
+      // 头部与网格必须一致：“可安装”数没有服务器的条目，“已安装”数显示管理入口的卡片。
+      : installedCount > 0
+        ? t("tools-market-count-mixed").replace("{available}", String(availableCount)).replace("{installed}", String(installedCount))
+        : t("tools-market-count").replace("{count}", String(availableCount));
   }
   if (entries.length === 0) {
     host.innerHTML = `<p class="memory-empty">${escape(t("tools-market-empty"))}</p>`;
@@ -1101,13 +1105,15 @@ function renderMarketResults() {
   }
   host.innerHTML = entries.map((entry) => {
     const has = installed.has(entry.id);
+    const needsInput = (Array.isArray(entry.inputs) ? entry.inputs : []).some((input) => input.required === true);
+    const action = has
+      ? `<button class="provider-install market-open" type="button" data-market-manage="${escape(entry.id)}">${escape(t("tools-market-manage"))}</button>`
+      : `<button class="provider-install market-open" type="button" data-market-install-card="${escape(entry.id)}"${needsInput ? ` data-market-needs-input="1"` : ""}>${escape(t("tools-market-open"))}</button>`;
     return `<article class="market-card" data-market-card="${escape(entry.id)}">
-      <div class="market-card-title"><h5>${escape(registryText(entry.name))}</h5><span class="market-flag">${escape(t(`tools-vendor-${entry.vendor}`))}</span></div>
+      <div class="market-card-title"><h5>${escape(registryText(entry.name))}</h5><span class="market-flag">${escape(t(`tools-vendor-${entry.vendor}`))}</span>${has ? `<span class="market-installed">${escape(t("tools-market-installed"))}</span>` : ""}</div>
       <p>${escape(registryText(entry.summary))}</p>
       <code>${escape(entry.package)}</code>
-      ${has
-        ? `<span class="market-installed">${escape(t("tools-market-installed"))}</span>`
-        : `<button class="provider-install market-open" type="button" data-market-open="${escape(entry.id)}">${escape(t("tools-market-open"))}</button>`}
+      ${action}
     </article>`;
   }).join("");
 }
@@ -1525,9 +1531,15 @@ function renderProbeTools(hostId = "tool-install-tools") {
     return `<div class="tool-install-item"><div class="tool-install-row"><code>${escape(tool.name)}</code><select data-install-risk="${escape(tool.name)}" aria-label="${escape(tool.name)}">${options}</select><span class="tool-description">${escape(meta.summary)}</span></div>${params}</div>`;
   }).join("");
   host.innerHTML = `<div class="memory-tool-row tool-install-presets"><span>${escape(t("tools-install-risk"))}</span>${presets}</div>${rows}`;
-  // Every tool starts at `external` (refused); the owner must choose a risk.
-  // 每个工具从 `external`（拒绝）开始；风险必须由所有者选择。
-  for (const select of host.querySelectorAll("[data-install-risk]")) select.value = "external";
+  // A marketplace entry has one reviewed default risk; the owner can still
+  // change any row. A manual package has no review, so every tool starts at
+  // external and must be granted explicitly.
+  // 市场条目有唯一一个已审查的默认风险，所有者仍可修改任意一行；手动包没有审查，
+  // 因此每个工具从外部开始，必须显式授权。
+  const defaultRisk = hostId === "tool-market-probe-tools"
+    ? marketplaceEntry()?.defaultRisk ?? "external"
+    : "external";
+  for (const select of host.querySelectorAll("[data-install-risk]")) select.value = defaultRisk;
 }
 async function probeInstall() {
   const spec = $("tool-install-package")?.value.trim() ?? "";
@@ -1646,6 +1658,80 @@ async function installMcpServerFromUi() {
     endBusy(button);
   }
 }
+function marketEntryFor(id) {
+  return (state.toolsRegistry ?? []).find((entry) => entry.id === id)
+    ?? (state.toolsMarketResults ?? []).find((entry) => entry.id === id);
+}
+
+/** An installed entry opens the server's own tools, load switch and remove control. 已安装条目打开服务器自己的工具、加载开关与移除控件。 */
+function openMarketManagement(id) {
+  const server = (state.toolsCatalog?.servers ?? []).find((candidate) => candidate.id === id);
+  if (server === undefined) {
+    announce(t("tools-market-error"), true);
+    return;
+  }
+  openToolsView({ kind: "server", id });
+}
+
+/**
+ * A card install for an entry with no required input: one click, one confirm,
+ * then the same probe and atomic install the detail page uses. The reviewed
+ * default risk makes the installed server usable instead of nine tools refused
+ * as external. An entry that needs a directory or another value still opens the
+ * install page, because the value cannot be guessed.
+ * 无需必填输入的市场卡片直装：一次点击、一次确认，然后走详情页同一套探测与原子安装。
+ * 已审查的默认风险让装好的服务器可用，而不是九个被当作外部拒绝的工具。需要目录或其他
+ * 值的条目仍打开安装页，因为这些值无法猜测。
+ */
+async function installMarketCard(button) {
+  const entry = marketEntryFor(button.dataset.marketInstallCard);
+  if (entry === undefined) return;
+  const needsInput = (Array.isArray(entry.inputs) ? entry.inputs : []).some((input) => input.required === true);
+  if (needsInput) {
+    openToolsView({ kind: "mcp-entry", id: entry.id });
+    return;
+  }
+  if (!beginBusy(button)) {
+    announce(t("tools-install-busy"), true);
+    return;
+  }
+  try {
+    const risk = ["read", "write", "network", "external"].includes(entry.defaultRisk) ? entry.defaultRisk : "external";
+    const message = t("tools-market-direct-body")
+      .replace("{name}", registryText(entry.name))
+      .replace("{risk}", t(`tools-${risk}`));
+    if (!(await confirmDialog(message, t("tools-install-confirm")))) return;
+    announce(t("tools-install-probing"));
+    const probed = await api("/api/tools/probe-registry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ entryId: entry.id, inputs: {} }),
+    });
+    const tools = Array.isArray(probed.tools) ? probed.tools : [];
+    if (tools.length === 0) {
+      announce(t("tools-install-no-tools"), true);
+      return;
+    }
+    const catalog = await api("/api/tools/install-registry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        entryId: entry.id,
+        inputs: {},
+        tools: tools.map((tool) => ({ name: tool.name, risk })),
+        acknowledgeInstall: true,
+      }),
+    });
+    renderToolsCatalog(catalog);
+    await refreshToolsMarket(state.toolsMarketQuery);
+    announce(`${t("tools-install-success")} ${entry.id}`);
+  } catch (error) {
+    announce(error.message, true);
+  } finally {
+    endBusy(button);
+  }
+}
+
 async function installFromMarket() {
   const entry = marketplaceEntry();
   if (entry === undefined) return;
@@ -3097,6 +3183,33 @@ function logBasisMarkup(entry, conversationId) {
   const audit = `<button class="log-basis-open" type="button" data-open-turn-audit="${escape(entry.id)}" data-open-turn-conversation="${escape(conversationId || "")}" aria-label="查看审计：${escape(preview || "本回合")} · ${escape(time(entry.startedAt))}">查看审计 ›</button>`;
   return `<div class="log-basis">${audit}</div>`;
 }
+function logElapsed(startedAt) {
+  const ms = Date.now() - Date.parse(startedAt);
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes} 分 ${seconds % 60} 秒`;
+}
+/**
+ * A running turn shows the work it is actually doing, not a frozen
+ * "still running" line. The same tool calls the audit receives are the page's
+ * proof that the runtime is alive; the newest call names the active step.
+ * 进行中的回合显示它真正在做的工作，而不是一行冻结的"仍在推进"。审计收到的同一批工具调用
+ * 就是页面对运行时仍在工作的证明；最新一次调用点名当前步骤。
+ */
+function logLiveMarkup(entry) {
+  const calls = Array.isArray(entry.toolCalls) ? entry.toolCalls : [];
+  const elapsed = logElapsed(entry.startedAt);
+  const last = calls[calls.length - 1];
+  const facts = [];
+  if (elapsed) facts.push(`已运行 ${elapsed}`);
+  if (calls.length > 0) facts.push(`${calls.length} 次工具调用`);
+  const activity = last === undefined
+    ? `<span class="log-live-step">正在思考…</span>`
+    : `<span class="log-live-step"><code>${escape(last.name)}</code> ${escape(plainPreview(last.inputSummary || "", 90))}</span>`;
+  return `<div class="log-live" aria-live="polite"><span class="log-live-dot" aria-hidden="true"></span><b>正在执行</b>${facts.length > 0 ? `<span class="log-live-facts">${escape(facts.join(" · "))}</span>` : ""}${activity}</div>`;
+}
 function logResultMarkup(entry) {
   if (entry.error) {
     // The raw ledger error is for diagnosis; the owner-facing summary and next
@@ -3108,7 +3221,7 @@ function logResultMarkup(entry) {
     return `<div class="log-error"><b>错误</b><p>${escape(entry.errorSummary || entry.error)}</p>${entry.errorGuidance ? `<p class="log-error-guidance">下一步：${escape(entry.errorGuidance)}</p>` : ""}${needsAgentSettings ? `<div class="message-actions"><button class="secondary" type="button" data-open-agent-settings>打开 Agent 设置</button></div>` : ""}<details class="log-detail"><summary>原始错误</summary><pre>${escape(entry.error)}</pre></details></div>`;
   }
   if (entry.reply && entry.reply.trim().length > 0) return `<div class="log-reply">${richText(entry.reply)}</div>`;
-  if (entry.status === "started") return `<span class="log-fact log-fact--muted">仍在本地运行时中推进。</span>`;
+  if (entry.status === "started") return logLiveMarkup(entry);
   if (entry.kind === "history") return `<span class="log-fact log-fact--muted">旧记录没有保存回复。</span>`;
   return `<span class="log-fact log-fact--muted">本轮没有返回文字。</span>`;
 }
@@ -4089,9 +4202,14 @@ $("settings-panel-tools")?.addEventListener("click", (event) => {
     openToolsMarket(marketButton.dataset.toolsMarket);
     return;
   }
-  const marketOpen = event.target.closest("[data-market-open]");
-  if (marketOpen) {
-    openToolsView({ kind: "mcp-entry", id: marketOpen.dataset.marketOpen });
+  const installCard = event.target.closest("[data-market-install-card]");
+  if (installCard) {
+    void installMarketCard(installCard);
+    return;
+  }
+  const manageCard = event.target.closest("[data-market-manage]");
+  if (manageCard) {
+    openMarketManagement(manageCard.dataset.marketManage);
     return;
   }
   const skillEntry = event.target.closest("[data-skill-entry]");

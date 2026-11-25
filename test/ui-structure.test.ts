@@ -1790,6 +1790,78 @@ test("install controls stay clickable while a probe or install runs", async () =
   assert.doesNotMatch(app, /id="tool-install-confirm"[^>]*\bdisabled\b/);
 });
 
+test("marketplace cards install directly, manage an installed server, and count both states", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("function renderMarketResults");
+  const end = app.indexOf("async function refreshToolsMarket", start);
+  assert.ok(start >= 0 && end > start, "renderMarketResults must exist");
+  const host = { innerHTML: "", textContent: "" };
+  const count = { innerHTML: "", textContent: "" };
+  const sandbox = {
+    state: {
+      locale: "zh-CN",
+      toolsCatalog: { servers: [{ id: "playwright" }] },
+      toolsMarketResults: [
+        { id: "filesystem", name: { "zh-CN": "文件系统", en: "Filesystem" }, summary: { "zh-CN": "读写", en: "Read/write" }, package: "a@1.0.0", vendor: "official", inputs: [{ key: "directory", required: true }], defaultRisk: "write" },
+        { id: "memory", name: { "zh-CN": "记忆", en: "Memory" }, summary: { "zh-CN": "记忆", en: "Memory" }, package: "b@1.0.0", vendor: "official", inputs: [], defaultRisk: "write" },
+        { id: "playwright", name: { "zh-CN": "浏览器", en: "Browser" }, summary: { "zh-CN": "浏览器", en: "Browser" }, package: "c@1.0.0", vendor: "microsoft", inputs: [], defaultRisk: "network" },
+      ],
+      toolsMarketTotal: 3,
+      toolsMarketQuery: "",
+      toolsMarketLoaded: true,
+      toolsMarketLoading: false,
+      toolsMarketError: null,
+    },
+    $: (id: string) => id === "tools-market-results" ? host : id === "tools-market-count" ? count : null,
+    t: (key: string) => key === "tools-market-count-mixed" ? "mixed {available}/{installed}" : key,
+    escape: (value: unknown) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
+    registryText: (value: unknown) => (typeof value === "object" && value !== null ? (value as Record<string, string>)["zh-CN"] : String(value ?? "")),
+  };
+  const rendered = runInNewContext(
+    `${app.slice(start, end)}; ({ renderMarketResults })`,
+    sandbox,
+  ) as { renderMarketResults: () => void };
+  rendered.renderMarketResults();
+  // Every uninstalled card offers 安装; an entry needing a value opens the
+  // install page, while an input-free entry installs from the card.
+  // 每个未安装卡片都提供“安装”；需要值的条目打开安装页，无需输入的条目从卡片直装。
+  assert.match(host.innerHTML, /data-market-install-card="memory"/);
+  assert.match(host.innerHTML, /data-market-install-card="filesystem"[^>]*data-market-needs-input="1"/);
+  // An installed entry has a management entry, not a dead badge.
+  // 已安装条目有管理入口，而不是一个死徽章。
+  assert.match(host.innerHTML, /data-market-manage="playwright"/);
+  assert.match(host.innerHTML, /tools-market-manage/);
+  assert.match(host.innerHTML, /tools-market-installed/);
+  assert.equal(count.textContent, "mixed 2/1");
+});
+
+test("a running turn shows its actual tool activity", async () => {
+  const app = await read("app.js");
+  const css = await read("components.css");
+  const start = app.indexOf("function logElapsed");
+  const end = app.indexOf("function logResultMarkup", start);
+  assert.ok(start >= 0 && end > start, "the live activity renderer must exist");
+  const sandbox = {
+    escape: (value: unknown) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+    plainPreview: (value: unknown, limit: number) => String(value ?? "").slice(0, limit),
+  };
+  const rendered = runInNewContext(
+    `${app.slice(start, end)}; ({ logLiveMarkup })`,
+    sandbox,
+  ) as { logLiveMarkup: (entry: unknown) => string };
+  const running = rendered.logLiveMarkup({
+    startedAt: new Date(Date.now() - 65_000).toISOString(),
+    toolCalls: [{ name: "read_file", inputSummary: '{"path":"/tmp/a.ts"}', isError: false, durationMs: 20 }],
+  });
+  assert.match(running, /正在执行/);
+  assert.match(running, /已运行 1 分 5 秒/);
+  assert.match(running, /1 次工具调用/);
+  assert.match(running, /read_file/);
+  const thinking = rendered.logLiveMarkup({ startedAt: new Date().toISOString(), toolCalls: [] });
+  assert.match(thinking, /正在思考/);
+  assert.match(css, /\.log-live\s*\{/);
+});
+
 test("the settings tools section ships two categories, a detail host and both markets", async () => {
   const html = await read("index.html");
   const app = await read("app.js");
@@ -1807,7 +1879,10 @@ test("the settings tools section ships two categories, a detail host and both ma
   assert.match(app, /\/api\/skills\/registry/);
   assert.match(app, /\/api\/skills\/install/);
   assert.match(app, /data-tools-market/);
-  assert.match(app, /data-market-open/);
+  assert.match(app, /data-market-install-card/);
+  assert.match(app, /data-market-manage/);
+  assert.match(app, /tools-market-direct-body/);
+  assert.match(app, /function installMarketCard/);
   assert.match(app, /data-tool-detail/);
   assert.match(app, /data-skill-detail/);
   assert.match(app, /data-skill-entry/);
