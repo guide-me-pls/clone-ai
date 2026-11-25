@@ -14,10 +14,10 @@
  * 风险权威，因此目录展示 Worker 实际能拿到的工具。损坏的声明会被报告，绝不猜测。安全投影会
  * 丢弃 `env`、`command`、`args` 与 `url`，因为它们可能包含凭据。
  */
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { readJsonFile, writeJsonAtomic } from "../config/json-file.ts";
-import { loadSkills, type SkillDefinition } from "../skills/skill-loader.ts";
+import { loadSkills, skillRootsFor, type SkillDefinition } from "../skills/skill-loader.ts";
 import { loadMcpConfig, MCP_CONFIG_FILE, type McpServerConfig } from "../workers/mcp-client.ts";
 import type { NativeToolRisk } from "../workers/native-agent-worker.ts";
 
@@ -53,21 +53,11 @@ export interface McpToolCatalog {
   rejectedSkills: Array<{ path: string; reason: string }>;
 }
 
-/** The skill roots the owner can use; the first is the clone home's. 所有者可用的技能根目录；第一个是 clone home。 */
-export function skillRootsFor(dataDirectory: string, workspacePath: string): string[] {
-  const roots = [join(dataDirectory, "skills")];
-  const workspace = resolve(workspacePath);
-  // A Finder-launched app can report "/" as its working directory. That would
-  // turn the project root into "/.clone/skills", a path that does not exist and
-  // should not be shown to the owner.
-  // 由 Finder 启动的 App 可能把 "/" 报成工作目录。那会把项目根变成不存在的
-  // "/.clone/skills"，不应该展示给所有者。
-  if (workspace !== "/") {
-    const workspaceRoot = join(workspace, ".clone", "skills");
-    if (workspaceRoot !== roots[0]) roots.push(workspaceRoot);
-  }
-  return roots;
-}
+// The roots live with the skill loader, because the Main Agent needs the same
+// list without importing the MCP catalog. Re-exported here for existing callers.
+// 根目录归属技能加载器，因为 Main Agent 需要同一份清单而不应导入 MCP 目录；此处为既有
+// 调用方保留再导出。
+export { skillRootsFor };
 
 export async function readToolCatalog(dataDirectory: string, workspacePath: string): Promise<McpToolCatalog> {
   const loaded = await loadMcpConfig(join(dataDirectory, MCP_CONFIG_FILE));

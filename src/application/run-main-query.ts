@@ -16,6 +16,7 @@ import { conversationIdOf } from "../main-agent/conversation.ts";
 import { withMainAgentSlot } from "../main-agent/main-agent-slots.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { runNativeMainAgentTurn, type NativeToolEvent } from "../main-agent/native-runtime.ts";
+import { skillRootsFor } from "../skills/skill-loader.ts";
 import { beginInvocation, type InvocationCaller, type InvocationSurface } from "../audit/invocation-ledger.ts";
 
 export interface MainAgentQueryResult {
@@ -134,6 +135,11 @@ export async function runMainAgentQuery(
         // 省略它就等于用守护进程的 process.cwd()：一个关于 ~/work 项目的问题，
         // 回答时读的却是本仓库的规则。
         ...(options.workspacePath === undefined ? {} : { cwd: options.workspacePath }),
+        // The Main Agent gets the same skill roots the settings page scans.
+        // Without them the listing and the Skill(...) tools never reach a turn.
+        // Main Agent 拿到与设置页相同的技能根目录；没有它，技能列表与 Skill(...) 工具
+        // 永远到不了一个回合里。
+        skillRoots: skillRootsFor(dataDirectory, options.workspacePath ?? process.cwd()),
         ...(options.turnId === undefined ? {} : { turnId: options.turnId }),
         ...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
         ...(options.images === undefined ? {} : { images: options.images }),

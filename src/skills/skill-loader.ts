@@ -15,7 +15,23 @@
  * 而不膨胀每个 Prompt 的机制。
  */
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+
+/** The skill roots the owner can use; the first is the clone home's. 所有者可用的技能根目录；第一个是 clone home。 */
+export function skillRootsFor(dataDirectory: string, workspacePath: string): string[] {
+  const roots = [join(dataDirectory, "skills")];
+  const workspace = resolve(workspacePath);
+  // A Finder-launched app can report "/" as its working directory. That would
+  // turn the project root into "/.clone/skills", a path that does not exist and
+  // should not be shown to the owner.
+  // 由 Finder 启动的 App 可能把 "/" 报成工作目录。那会把项目根变成不存在的
+  // "/.clone/skills"，不应该展示给所有者。
+  if (workspace !== "/") {
+    const workspaceRoot = join(workspace, ".clone", "skills");
+    if (workspaceRoot !== roots[0]) roots.push(workspaceRoot);
+  }
+  return roots;
+}
 
 export interface SkillDefinition {
   name: string;

@@ -87,3 +87,80 @@ test("the catalog route still serves the declaration view", async (t) => {
   assert.ok(Array.isArray(body.skills));
   assert.ok(Array.isArray(body.skillRoots));
 });
+
+test("the marketplace route serves the reviewed entries and searches them", async (t) => {
+  const { url, token } = await companion(t);
+  const all = await companionFetch(url, token, "/api/tools/registry");
+  assert.equal(all.status, 200);
+  const body = await all.json() as { entries: Array<{ id: string; package: string }>; total: number };
+  assert.ok(body.total >= 5);
+  assert.deepEqual(body.entries.map((entry) => entry.id), ["filesystem", "memory", "sequential-thinking", "playwright", "chrome-devtools"]);
+
+  const filtered = await companionFetch(url, token, "/api/tools/registry?q=browser");
+  const filteredBody = await filtered.json() as { entries: Array<{ id: string }> };
+  assert.deepEqual(filteredBody.entries.map((entry) => entry.id), ["playwright", "chrome-devtools"]);
+});
+
+test("the marketplace probe route refuses an unknown entry or a missing input before spawning anything", async (t) => {
+  const { url, token } = await companion(t);
+  const unknown = await companionFetch(url, token, "/api/tools/probe-registry", post({ entryId: "missing", inputs: {} }));
+  assert.equal(unknown.status, 400);
+  assert.match(await errorOf(unknown), /No MCP marketplace entry/);
+
+  const missing = await companionFetch(url, token, "/api/tools/probe-registry", post({ entryId: "filesystem", inputs: {} }));
+  assert.equal(missing.status, 400);
+  assert.match(await errorOf(missing), /needs "Allowed directories"/);
+});
+
+test("the marketplace install route still needs the owner's acknowledgement", async (t) => {
+  const { url, token } = await companion(t);
+  const response = await companionFetch(url, token, "/api/tools/install-registry", post({
+    entryId: "filesystem",
+    inputs: { directory: "/tmp" },
+    tools: [{ name: "read_file", risk: "read" }],
+  }));
+  assert.equal(response.status, 400);
+  assert.match(await errorOf(response), /owner must confirm/);
+});
+
+test("the skill market installs, reads and removes a built-in skill", async (t) => {
+  const { url, token } = await companion(t);
+  const registry = await companionFetch(url, token, "/api/skills/registry");
+  assert.equal(registry.status, 200);
+  const market = await registry.json() as { entries: Array<{ name: string; installed: boolean; body: string }>; total: number };
+  assert.deepEqual(market.entries.map((entry) => entry.name), ["weekly-review", "document-review", "release-notes", "deliverable-check"]);
+  assert.equal(market.entries.every((entry) => entry.installed === false), true);
+  assert.match(market.entries[0]?.body ?? "", /周复盘/);
+
+  const refused = await companionFetch(url, token, "/api/skills/install", post({ name: "weekly-review" }));
+  assert.equal(refused.status, 400);
+  assert.match(await errorOf(refused), /owner must confirm/);
+
+  const unknown = await companionFetch(url, token, "/api/skills/install", post({ name: "no-such-skill", acknowledgeInstall: true }));
+  assert.equal(unknown.status, 400);
+  assert.match(await errorOf(unknown), /No built-in skill/);
+
+  const installed = await companionFetch(url, token, "/api/skills/install", post({ name: "weekly-review", acknowledgeInstall: true }));
+  assert.equal(installed.status, 200);
+  const catalog = await installed.json() as { skills: Array<{ name: string }> };
+  assert.ok(catalog.skills.some((skill) => skill.name === "weekly-review"));
+
+  const after = await companionFetch(url, token, "/api/skills/registry");
+  const afterMarket = await after.json() as { entries: Array<{ name: string; installed: boolean }> };
+  assert.equal(afterMarket.entries.find((entry) => entry.name === "weekly-review")?.installed, true);
+
+  const detail = await companionFetch(url, token, "/api/skills/weekly-review");
+  assert.equal(detail.status, 200);
+  const detailBody = await detail.json() as { skill: { name: string; body: string; allowedTools: string[] } };
+  assert.equal(detailBody.skill.name, "weekly-review");
+  assert.match(detailBody.skill.body, /周复盘/);
+  assert.deepEqual(detailBody.skill.allowedTools, ["read_file", "search_text", "git_log"]);
+
+  const missing = await companionFetch(url, token, "/api/skills/no-such-skill");
+  assert.equal(missing.status, 404);
+
+  const removed = await companionFetch(url, token, "/api/skills/weekly-review", { method: "DELETE" });
+  assert.equal(removed.status, 200);
+  const removedCatalog = await removed.json() as { skills: Array<{ name: string }> };
+  assert.equal(removedCatalog.skills.some((skill) => skill.name === "weekly-review"), false);
+});

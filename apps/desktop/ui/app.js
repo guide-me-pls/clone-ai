@@ -74,6 +74,28 @@ const state = {
   // 点击要求查看的子 Agent 行，直到它的记录渲染出来。从那里而不是记录顶部开始，
   // 才是"跳转进去"的意思。
   agentFocus: null,
+  // The tools settings page shows one of three: the list, one server's tools,
+  // or one marketplace entry's install form. A jump replaces the list; the
+  // back control returns to it.
+  // 工具设置页只显示三种之一：列表、某个服务器的工具、或某个市场条目的安装表单。
+  // 跳转会替换列表，返回控件回到列表。
+  toolsStack: [],
+  toolsRegistry: [],
+  toolsMarketResults: [],
+  toolsMarketTotal: 0,
+  toolsMarketQuery: "",
+  toolsMarketLoading: false,
+  toolsMarketLoaded: false,
+  toolsMarketError: null,
+  skillsRegistry: [],
+  skillsMarketResults: [],
+  skillsMarketTotal: 0,
+  skillsMarketQuery: "",
+  skillsMarketLoading: false,
+  skillsMarketLoaded: false,
+  skillsMarketError: null,
+  skillDetails: new Map(),
+  toolsListScroll: 0,
 };
 const MAX_ATTACHMENTS = 4;
 const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
@@ -638,6 +660,8 @@ function applyChrome(locale, strings) {
   });
   const query = $("query");
   if (query) query.setAttribute("aria-label", t("query-label"));
+  const marketSearch = $("tools-market-search");
+  if (marketSearch) marketSearch.setAttribute("aria-label", t("tools-market-search-label"));
   const localeSelect = $("config-locale");
   if (localeSelect && document.activeElement !== localeSelect) localeSelect.value = state.locale;
   state.signatures = {};
@@ -645,6 +669,11 @@ function applyChrome(locale, strings) {
   // language without touching a focused select's selection.
   // 选择器的标签现在已本地化；为新语言重建选项文本，同时不动正在聚焦的选择器的选中值。
   renderComposerChoice();
+  // Marketplace cards and a detail page carry registry text in the chosen
+  // language; rebuild them rather than leaving a half-translated page.
+  // 市场卡片与详情页带有所选语言的清单文本；重建它们，避免留下半翻译的页面。
+  if (state.toolsCatalog) renderToolsCatalog(state.toolsCatalog);
+  if (state.toolsStack.length > 0) renderToolsDetail();
 }
 const api = async (path, options = {}) => {
   const headers = new Headers(options.headers);
@@ -804,6 +833,44 @@ function toolsRiskLabel(risk) {
     external: t("tools-external"),
   }[risk] || risk);
 }
+
+/** A tool's readable summary and parameters: the probe schema first, the description second. 工具的可读摘要与参数：优先探测 Schema，其次描述。 */
+function toolMeta(description, schema) {
+  const parsed = globalThis.CloneToolFormat?.describeTool?.(description) ?? { summary: String(description ?? ""), params: [] };
+  const fromSchema = schema === undefined ? [] : globalThis.CloneToolFormat?.paramsFromSchema?.(schema) ?? [];
+  return { summary: parsed.summary, params: fromSchema.length > 0 ? fromSchema : parsed.params };
+}
+
+function toolRiskBadge(risk) {
+  return `<span class="tool-risk tool-risk-${escape(risk)}">${escape(toolsRiskLabel(risk))}</span>`;
+}
+
+function toolParamsTable(params) {
+  const rows = params.map((param) => {
+    const notes = [];
+    if (param.default) notes.push(t("tools-param-default").replace("{value}", param.default));
+    if (param.note) notes.push(param.note);
+    return `<tr><td><code>${escape(param.name)}</code></td><td>${param.type ? `<code>${escape(param.type)}</code>` : "—"}</td><td class="${param.required ? "tool-param-required" : "tool-param-optional"}">${escape(param.required ? t("tools-param-required") : t("tools-param-optional"))}</td><td>${notes.length > 0 ? escape(notes.join("；")) : "—"}</td></tr>`;
+  }).join("");
+  return `<table class="tool-params"><thead><tr><th>${escape(t("tools-param-name"))}</th><th>${escape(t("tools-param-type"))}</th><th>${escape(t("tools-param-requirement"))}</th><th>${escape(t("tools-param-detail"))}</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function toolCategoryEmpty(text) {
+  return `<div class="tool-empty"><p>${escape(text)}</p></div>`;
+}
+
+/** Every server is one jump row; the list never prints a tool body. 每个服务器都是一行跳转；列表从不打印工具正文。 */
+function serverRow(server) {
+  const tools = Array.isArray(server.tools) ? server.tools : [];
+  const status = server.enabled ? t("tools-loaded") : t("tools-not-loaded");
+  return `<button class="tool-list-row" type="button" data-tool-detail="${escape(server.id)}"><span class="tool-list-main"><b>${escape(server.id)}</b><small>${escape(server.transport)} · ${tools.length} ${escape(t("tools-tools"))} · ${escape(status)}</small></span><span class="tool-list-chevron" aria-hidden="true">›</span></button>`;
+}
+
+/** Every skill is one jump row. 每个技能都是一行跳转。 */
+function skillRow(skill) {
+  return `<button class="tool-list-row" type="button" data-skill-detail="${escape(skill.name)}"><span class="tool-list-main"><b>${escape(skill.name)}</b><small>${escape(skill.description)}</small></span><span class="tool-list-chevron" aria-hidden="true">›</span></button>`;
+}
+
 function renderToolsCatalog(catalog) {
   state.toolsCatalog = catalog;
   const host = $("tools-catalog");
@@ -814,34 +881,427 @@ function renderToolsCatalog(catalog) {
   const summary = $("tools-summary");
   if (summary) summary.textContent = `${t("tools-loaded")} ${enabledCount}/${servers.length} · ${skills.length} ${t("tools-skills")}`;
   const errors = Array.isArray(catalog?.mcpErrors) && catalog.mcpErrors.length
-    ? `<div class="settings-card tool-warning"><h4>${escape(t("tools-mcp-errors"))}</h4>${catalog.mcpErrors.map((error) => `<p><code>${escape(error)}</code></p>`).join("")}</div>`
+    ? `<div class="tool-warning tool-category-warning"><h4>${escape(t("tools-mcp-errors"))}</h4>${catalog.mcpErrors.map((error) => `<p><code>${escape(error)}</code></p>`).join("")}</div>`
     : "";
-  const serverCards = servers.map((server) => {
-    const tools = Array.isArray(server.tools) ? server.tools : [];
-    const status = server.enabled ? t("tools-loaded") : t("tools-not-loaded");
-    const action = server.enabled ? t("tools-unload") : t("tools-load");
-    const rows = tools.length
-      ? tools.map((tool) => `<li class="tool-row"><code>${escape(server.id)}.${escape(tool.name)}</code><span class="tool-risk tool-risk-${escape(tool.risk)}">${escape(toolsRiskLabel(tool.risk))}</span>${tool.description ? `<span class="tool-description">${escape(tool.description)}</span>` : ""}</li>`).join("")
-      : `<li class="tool-description">${escape(t("tools-empty"))}</li>`;
-    return `<div class="settings-card tool-server" data-tool-server="${escape(server.id)}">
-      <div class="tool-server-heading">
-        <div><h4>${escape(server.id)}</h4><p>${escape(server.transport)} · ${tools.length} ${escape(t("tools-tools"))} · ${escape(status)}</p></div>
-        <div class="tool-server-actions"><button class="provider-install" type="button" data-tool-toggle="${escape(server.id)}" data-tool-enabled="${server.enabled ? "false" : "true"}">${escape(action)}</button><button class="provider-install tool-server-remove" type="button" data-tool-remove="${escape(server.id)}">${escape(t("tools-install-remove"))}</button></div>
-      </div>
-      <details class="tool-list"${server.enabled ? " open" : ""}><summary>${escape(t("tools-tools"))} (${tools.length})</summary><ul>${rows}</ul></details>
-    </div>`;
-  }).join("");
-  const roots = (Array.isArray(catalog?.skillRoots) ? catalog.skillRoots : []).map((root) => `<code>${escape(root)}</code>`).join(" ");
-  const skillRows = skills.length
-    ? skills.map((skill) => `<div class="tool-skill"><strong>${escape(skill.name)}</strong><p>${escape(skill.description)}</p><code>${escape(skill.path)}</code></div>`).join("")
-    : `<p class="memory-empty">${escape(t("tools-no-skills"))}</p>`;
   const rejected = Array.isArray(catalog?.rejectedSkills) && catalog.rejectedSkills.length
     ? `<details class="tool-rejected"><summary>${escape(t("tools-rejected"))} (${catalog.rejectedSkills.length})</summary><ul>${catalog.rejectedSkills.map((entry) => `<li><code>${escape(entry.path)}</code> ${escape(entry.reason)}</li>`).join("")}</ul></details>`
     : "";
-  const skillsCard = `<div class="settings-card tool-skills-card"><h4>${escape(t("tools-skills"))} (${skills.length})</h4><p class="agent-runtime-note">${escape(t("tools-skill-roots"))}: ${roots}</p>${skillRows}${rejected}</div>`;
-  const empty = servers.length ? "" : `<div class="settings-card"><p class="memory-empty">${escape(t("tools-empty"))}</p></div>`;
-  host.innerHTML = `${errors}${empty}${serverCards}${skillsCard}<p class="agent-runtime-note">${escape(t("tools-next-run"))}</p>`;
+  const roots = (Array.isArray(catalog?.skillRoots) ? catalog.skillRoots : []).map((root) => `<code>${escape(root)}</code>`).join(" ");
+  host.innerHTML = `<section class="tool-category" data-tool-category="mcp">
+      <div class="tool-category-head"><div><h4>${escape(t("tools-category-mcp"))}</h4><p>${enabledCount}/${servers.length} ${escape(t("tools-loaded"))}</p></div><button class="provider-install" type="button" data-tools-market="mcp">${escape(t("tools-category-mcp-install"))}</button></div>
+      ${errors}
+      <div class="tool-row-list">${servers.length ? servers.map(serverRow).join("") : toolCategoryEmpty(t("tools-empty"))}</div>
+    </section>
+    <section class="tool-category" data-tool-category="skills">
+      <div class="tool-category-head"><div><h4>${escape(t("tools-category-skills"))}</h4><p>${skills.length} ${escape(t("tools-skills"))}</p></div><button class="provider-install" type="button" data-tools-market="skills">${escape(t("tools-category-skills-get"))}</button></div>
+      <div class="tool-row-list">${skills.length ? skills.map(skillRow).join("") : toolCategoryEmpty(t("tools-no-skills"))}</div>
+      ${rejected}
+      <p class="agent-runtime-note tool-category-note">${escape(t("tools-skill-roots"))}: ${roots}</p>
+    </section>
+    <p class="agent-runtime-note">${escape(t("tools-next-run"))}</p>`;
+  const top = currentToolsView();
+  if (top?.kind === "server") renderToolsDetail();
+  else if (top?.kind === "mcp-market") renderMarketResults();
+  else if (top?.kind === "skill-market") renderSkillMarketResults();
 }
+
+function currentToolsView() {
+  return state.toolsStack[state.toolsStack.length - 1];
+}
+
+/** The localized half of a registry text pair. 注册表文本对中当前语言的一条。 */
+function registryText(value) {
+  if (typeof value !== "object" || value === null) return String(value ?? "");
+  return value[state.locale] || value.en || value["zh-CN"] || "";
+}
+
+function renderMarketResults() {
+  const host = $("tools-market-results");
+  if (!host) return;
+  // Before the first response, "no results" would be a false empty state.
+  // 首次响应之前，"没有结果"是一个假的空状态。
+  if (!state.toolsMarketLoaded && state.toolsMarketError === null) {
+    host.innerHTML = `<p class="memory-empty">${escape(t("tools-market-loading"))}</p>`;
+    return;
+  }
+  if (state.toolsMarketLoading && state.toolsMarketResults.length === 0) {
+    host.innerHTML = `<p class="memory-empty">${escape(t("tools-market-loading"))}</p>`;
+    return;
+  }
+  if (state.toolsMarketError) {
+    host.innerHTML = `<p class="memory-empty">${escape(state.toolsMarketError)}</p>`;
+    return;
+  }
+  const entries = state.toolsMarketResults;
+  const installed = new Set((state.toolsCatalog?.servers ?? []).map((server) => server.id));
+  const count = $("tools-market-count");
+  if (count) {
+    count.textContent = state.toolsMarketQuery.trim().length > 0
+      ? t("tools-market-filtered").replace("{count}", String(entries.length)).replace("{total}", String(state.toolsMarketTotal))
+      // "Installable" counts what is not installed yet; an installed entry keeps
+      // its card with a badge instead of an install button.
+      // "可安装"只数尚未安装的条目；已安装条目保留卡片并显示徽章，而不是安装按钮。
+      : t("tools-market-count").replace("{count}", String(entries.filter((entry) => !installed.has(entry.id)).length));
+  }
+  if (entries.length === 0) {
+    host.innerHTML = `<p class="memory-empty">${escape(t("tools-market-empty"))}</p>`;
+    return;
+  }
+  host.innerHTML = entries.map((entry) => {
+    const has = installed.has(entry.id);
+    return `<article class="market-card" data-market-card="${escape(entry.id)}">
+      <div class="market-card-title"><h5>${escape(registryText(entry.name))}</h5><span class="market-flag">${escape(t(`tools-vendor-${entry.vendor}`))}</span></div>
+      <p>${escape(registryText(entry.summary))}</p>
+      <code>${escape(entry.package)}</code>
+      ${has
+        ? `<span class="market-installed">${escape(t("tools-market-installed"))}</span>`
+        : `<button class="provider-install market-open" type="button" data-market-open="${escape(entry.id)}">${escape(t("tools-market-open"))}</button>`}
+    </article>`;
+  }).join("");
+}
+
+async function refreshToolsMarket(query = state.toolsMarketQuery) {
+  const input = $("tools-market-search");
+  const next = typeof query === "string" ? query : "";
+  state.toolsMarketQuery = next;
+  if (input && input.value !== next) input.value = next;
+  state.toolsMarketLoading = true;
+  state.toolsMarketError = null;
+  renderMarketResults();
+  try {
+    const result = await api(`/api/tools/registry?q=${encodeURIComponent(next)}`);
+    state.toolsRegistry = Array.isArray(result.entries) ? result.entries : [];
+    state.toolsMarketResults = state.toolsRegistry;
+    state.toolsMarketTotal = typeof result.total === "number" ? result.total : state.toolsRegistry.length;
+  } catch (error) {
+    state.toolsMarketError = error.message || t("tools-market-error");
+    state.toolsRegistry = [];
+    state.toolsMarketResults = [];
+  } finally {
+    state.toolsMarketLoading = false;
+    state.toolsMarketLoaded = true;
+    renderMarketResults();
+  }
+}
+
+function renderSkillMarketResults() {
+  const host = $("skills-market-results");
+  if (!host) return;
+  if (!state.skillsMarketLoaded && state.skillsMarketError === null) {
+    host.innerHTML = `<p class="memory-empty">${escape(t("skills-market-loading"))}</p>`;
+    return;
+  }
+  if (state.skillsMarketLoading && state.skillsMarketResults.length === 0) {
+    host.innerHTML = `<p class="memory-empty">${escape(t("skills-market-loading"))}</p>`;
+    return;
+  }
+  if (state.skillsMarketError) {
+    host.innerHTML = `<p class="memory-empty">${escape(state.skillsMarketError)}</p>`;
+    return;
+  }
+  const entries = state.skillsMarketResults;
+  const installed = new Set((state.toolsCatalog?.skills ?? []).map((skill) => skill.name));
+  const count = $("skills-market-count");
+  if (count) {
+    count.textContent = state.skillsMarketQuery.trim().length > 0
+      ? t("skills-market-filtered").replace("{count}", String(entries.length)).replace("{total}", String(state.skillsMarketTotal))
+      : t("skills-market-count").replace("{count}", String(entries.filter((entry) => !installed.has(entry.name)).length));
+  }
+  if (entries.length === 0) {
+    host.innerHTML = `<p class="memory-empty">${escape(t("skills-market-empty"))}</p>`;
+    return;
+  }
+  host.innerHTML = entries.map((entry) => {
+    const has = installed.has(entry.name);
+    return `<article class="market-card" data-skill-card="${escape(entry.name)}">
+      <div class="market-card-title"><h5>${escape(entry.name)}</h5><span class="market-flag">${escape(registryText(entry.category))}</span>${has ? `<span class="market-installed">${escape(t("tools-market-installed"))}</span>` : ""}</div>
+      <p>${escape(registryText(entry.summary))}</p>
+      <button class="provider-install market-open" type="button" data-skill-entry="${escape(entry.name)}">${escape(t("tools-market-view"))}</button>
+    </article>`;
+  }).join("");
+}
+
+async function refreshSkillMarket(query = state.skillsMarketQuery) {
+  const input = $("skills-market-search");
+  const next = typeof query === "string" ? query : "";
+  state.skillsMarketQuery = next;
+  if (input && input.value !== next) input.value = next;
+  state.skillsMarketLoading = true;
+  state.skillsMarketError = null;
+  renderSkillMarketResults();
+  try {
+    const result = await api(`/api/skills/registry?q=${encodeURIComponent(next)}`);
+    state.skillsRegistry = Array.isArray(result.entries) ? result.entries : [];
+    state.skillsMarketResults = state.skillsRegistry;
+    state.skillsMarketTotal = typeof result.total === "number" ? result.total : state.skillsRegistry.length;
+  } catch (error) {
+    state.skillsMarketError = error.message || t("skills-market-error");
+    state.skillsRegistry = [];
+    state.skillsMarketResults = [];
+  } finally {
+    state.skillsMarketLoading = false;
+    state.skillsMarketLoaded = true;
+    renderSkillMarketResults();
+  }
+}
+
+function serverDetailMarkup(server) {
+  const tools = Array.isArray(server.tools) ? server.tools : [];
+  const status = server.enabled ? t("tools-loaded") : t("tools-not-loaded");
+  const action = server.enabled ? t("tools-unload") : t("tools-load");
+  const cards = tools.length > 0
+    ? tools.map((tool) => {
+        const meta = toolMeta(tool.description);
+        return `<article class="tool-detail-card">
+          <header><code>${escape(tool.name)}</code>${toolRiskBadge(tool.risk)}</header>
+          ${meta.summary ? `<p class="tool-summary">${escape(meta.summary)}</p>` : ""}
+          ${meta.params.length > 0 ? toolParamsTable(meta.params) : ""}
+        </article>`;
+      }).join("")
+    : `<p class="memory-empty">${escape(t("tools-server-empty"))}</p>`;
+  return `<button class="tool-back" type="button" data-tools-back>${escape(t("tools-back-short"))}</button>
+    <div class="tool-detail-heading">
+      <div><h4>${escape(server.id)}</h4><p>${escape(server.transport)} · ${tools.length} ${escape(t("tools-tools"))} · ${escape(status)}</p></div>
+      <div class="tool-server-actions"><button class="provider-install" type="button" data-tool-toggle="${escape(server.id)}" data-tool-enabled="${server.enabled ? "false" : "true"}">${escape(action)}</button><button class="provider-install tool-server-remove" type="button" data-tool-remove="${escape(server.id)}">${escape(t("tools-install-remove"))}</button></div>
+    </div>
+    <div class="tool-detail-list">${cards}</div>`;
+}
+
+function mcpMarketMarkup() {
+  return `<button class="tool-back" type="button" data-tools-back>${escape(t("tools-back-short"))}</button>
+    <div class="tool-detail-heading">
+      <div><h4>${escape(t("tools-market-title"))}</h4><p>${escape(t("tools-market-lead"))}</p></div>
+      <span class="settings-value" id="tools-market-count"></span>
+    </div>
+    <input class="tools-market-search" id="tools-market-search" type="search" autocomplete="off" spellcheck="false" placeholder="${escape(t("tools-market-search"))}" aria-label="${escape(t("tools-market-search-label"))}" value="${escape(state.toolsMarketQuery)}"/>
+    <div class="tools-market-results" id="tools-market-results"></div>
+    <details class="tool-manual" id="tool-install-card">
+      <summary>${escape(t("tools-manual-title"))}</summary>
+      <p>${escape(t("tools-install-lead"))}</p>
+      <div class="tool-install-fields">
+        <label><span>${escape(t("tools-install-id"))}</span><input id="tool-install-id" placeholder="filesystem" autocomplete="off" spellcheck="false"/></label>
+        <label><span>${escape(t("tools-install-package"))}</span><input id="tool-install-package" placeholder="@modelcontextprotocol/server-filesystem@2.4.0" autocomplete="off" spellcheck="false"/></label>
+        <label><span>${escape(t("tools-install-args"))}</span><input id="tool-install-args" placeholder="--read-only /Users/you/Documents" autocomplete="off" spellcheck="false"/></label>
+      </div>
+      <div class="memory-tool-row tool-install-actions">
+        <button class="secondary" type="button" id="tool-install-probe">${escape(t("tools-install-probe"))}</button>
+        <button class="primary" type="button" id="tool-install-confirm" disabled>${escape(t("tools-install-confirm"))}</button>
+      </div>
+      <div class="tool-install-tools" id="tool-install-tools"></div>
+    </details>`;
+}
+
+function marketDetailMarkup(entry) {
+  const inputs = (Array.isArray(entry.inputs) ? entry.inputs : []).map((input) => {
+    const hint = input.hint ? `<small>${escape(registryText(input.hint))}</small>` : "";
+    if ((input.kind ?? "text") === "toggle") {
+      return `<label class="tool-toggle"><input type="checkbox" data-market-input="${escape(input.key)}" ${input.defaultChecked ? "checked" : ""}/><span>${escape(registryText(input.label))}</span></label>`;
+    }
+    return `<label><span>${escape(registryText(input.label))}${input.required ? ` <em>${escape(t("tools-param-required"))}</em>` : ""}</span><input type="text" data-market-input="${escape(input.key)}" placeholder="${escape(input.placeholder || "")}" autocomplete="off" spellcheck="false"/>${hint}</label>`;
+  }).join("");
+  return `<button class="tool-back" type="button" data-tools-back>${escape(t("tools-back-short"))}</button>
+    <div class="tool-detail-heading">
+      <div><h4>${escape(registryText(entry.name))}</h4><p>${escape(t(`tools-vendor-${entry.vendor}`))} · <code>${escape(entry.package)}</code></p></div>
+    </div>
+    <p class="tool-market-summary">${escape(registryText(entry.summary))}</p>
+    ${entry.docs ? `<p class="tool-docs"><a href="${escape(entry.docs)}" target="_blank" rel="noreferrer">${escape(t("tools-market-docs"))}</a></p>` : ""}
+    <div class="tool-install-fields">${inputs}</div>
+    <div class="memory-tool-row tool-install-actions">
+      <button class="secondary" type="button" id="tool-market-probe">${escape(t("tools-install-probe"))}</button>
+      <button class="primary" type="button" id="tool-market-install" disabled>${escape(t("tools-install-confirm"))}</button>
+    </div>
+    <div class="tool-install-tools" id="tool-market-probe-tools"></div>`;
+}
+
+function skillMarketMarkup() {
+  return `<button class="tool-back" type="button" data-tools-back>${escape(t("tools-back-short"))}</button>
+    <div class="tool-detail-heading">
+      <div><h4>${escape(t("skills-market-title"))}</h4><p>${escape(t("skills-market-lead"))}</p></div>
+      <span class="settings-value" id="skills-market-count"></span>
+    </div>
+    <input class="tools-market-search" id="skills-market-search" type="search" autocomplete="off" spellcheck="false" placeholder="${escape(t("skills-market-search"))}" aria-label="${escape(t("skills-market-search-label"))}" value="${escape(state.skillsMarketQuery)}"/>
+    <div class="tools-market-results" id="skills-market-results"></div>`;
+}
+
+function isSkillInstalled(name) {
+  return (state.toolsCatalog?.skills ?? []).some((skill) => skill.name === name);
+}
+
+function isManagedSkillPath(path) {
+  const root = (state.toolsCatalog?.skillRoots ?? [])[0];
+  return typeof root === "string" && typeof path === "string" && path.startsWith(`${root}/`);
+}
+
+function skillEntryMarkup(entry) {
+  const installed = isSkillInstalled(entry.name);
+  const tools = Array.isArray(entry.allowedTools) && entry.allowedTools.length > 0
+    ? `<p class="tool-skill-meta">${escape(t("tools-skill-allowed"))}: ${entry.allowedTools.map((tool) => `<code>${escape(tool)}</code>`).join(" ")}</p>`
+    : "";
+  return `<button class="tool-back" type="button" data-tools-back>${escape(t("tools-back-short"))}</button>
+    <div class="tool-detail-heading">
+      <div><h4>${escape(entry.name)}</h4><p>${escape(registryText(entry.category))} · ${escape(t("tools-skill-source-builtin"))}</p></div>
+    </div>
+    <p class="tool-market-summary">${escape(registryText(entry.summary))}</p>
+    ${tools}
+    <div class="tool-skill-body">${richText(entry.body)}</div>
+    <div class="memory-tool-row tool-install-actions">
+      ${installed
+        ? `<button class="provider-install" type="button" data-skill-detail="${escape(entry.name)}">${escape(t("tools-market-view-installed"))}</button>`
+        : `<button class="primary" type="button" id="skill-market-install" data-skill-install="${escape(entry.name)}">${escape(t("tools-skill-install"))}</button>`}
+    </div>`;
+}
+
+function skillDetailMarkup(view) {
+  const detail = state.skillDetails.get(view.name);
+  const back = `<button class="tool-back" type="button" data-tools-back>${escape(t("tools-back-short"))}</button>`;
+  if (detail === undefined || detail.status === "loading") {
+    return `${back}<p class="memory-empty">${escape(t("tools-skill-detail-loading"))}</p>`;
+  }
+  if (detail.status === "error") {
+    return `${back}<p class="memory-empty">${escape(detail.error)}</p>`;
+  }
+  const skill = detail.skill;
+  const allowed = Array.isArray(skill.allowedTools) && skill.allowedTools.length > 0
+    ? `<p class="tool-skill-meta">${escape(t("tools-skill-allowed"))}: ${skill.allowedTools.map((tool) => `<code>${escape(tool)}</code>`).join(" ")}</p>`
+    : "";
+  return `${back}
+    <div class="tool-detail-heading">
+      <div><h4>${escape(skill.name)}</h4><p>${escape(skill.path)}</p></div>
+      ${isManagedSkillPath(skill.path) ? `<div class="tool-server-actions"><button class="provider-install tool-server-remove" type="button" data-skill-remove="${escape(skill.name)}">${escape(t("tools-skill-remove"))}</button></div>` : ""}
+    </div>
+    <p class="tool-market-summary">${escape(skill.description)}</p>
+    ${allowed}
+    <div class="tool-skill-body">${richText(skill.body)}</div>`;
+}
+
+function loadSkillDetail(name) {
+  const cached = state.skillDetails.get(name);
+  if (cached !== undefined) return;
+  state.skillDetails.set(name, { status: "loading" });
+  void api(`/api/skills/${encodeURIComponent(name)}`)
+    .then((result) => { state.skillDetails.set(name, { status: "ready", skill: result.skill }); })
+    .catch((error) => { state.skillDetails.set(name, { status: "error", error: error.message }); })
+    .finally(() => {
+      const top = currentToolsView();
+      if (top?.kind === "skill" && top.name === name) renderToolsDetail();
+    });
+}
+
+function renderToolsDetail(options = {}) {
+  const list = $("tools-list-view");
+  const host = $("tools-detail");
+  if (!list || !host) return;
+  const view = currentToolsView();
+  if (view === undefined) {
+    list.hidden = false;
+    host.hidden = true;
+    host.innerHTML = "";
+    if (options.focus) document.querySelector('#tools-catalog [data-tools-market="mcp"]')?.focus();
+    return;
+  }
+  let markup;
+  if (view.kind === "server") {
+    const server = (state.toolsCatalog?.servers ?? []).find((candidate) => candidate.id === view.id);
+    if (server === undefined) {
+      state.toolsStack = [];
+      renderToolsDetail(options);
+      return;
+    }
+    markup = serverDetailMarkup(server);
+  } else if (view.kind === "mcp-market") {
+    markup = mcpMarketMarkup();
+  } else if (view.kind === "mcp-entry") {
+    const entry = (state.toolsRegistry ?? []).find((candidate) => candidate.id === view.id);
+    if (entry === undefined) {
+      state.toolsStack.pop();
+      renderToolsDetail(options);
+      return;
+    }
+    markup = marketDetailMarkup(entry);
+  } else if (view.kind === "skill-market") {
+    markup = skillMarketMarkup();
+  } else if (view.kind === "skill-entry") {
+    const entry = (state.skillsRegistry ?? []).find((candidate) => candidate.name === view.name);
+    if (entry === undefined) {
+      state.toolsStack.pop();
+      renderToolsDetail(options);
+      return;
+    }
+    markup = skillEntryMarkup(entry);
+  } else {
+    markup = skillDetailMarkup(view);
+  }
+  list.hidden = true;
+  host.hidden = false;
+  host.innerHTML = markup;
+  if (view.kind === "mcp-market") renderMarketResults();
+  if (view.kind === "skill-market") renderSkillMarketResults();
+  if (view.kind === "skill") loadSkillDetail(view.name);
+  if (options.resetScroll) {
+    const content = document.querySelector(".settings-content");
+    if (content) content.scrollTop = 0;
+  }
+  if (options.focus) host.querySelector("[data-tools-back]")?.focus();
+}
+
+function openToolsView(view) {
+  // Keep the list's reading position for the back control; a jump starts at the
+  // top of its own page.
+  // 为返回控件记住列表的阅读位置；跳转从自己的页面顶部开始。
+  const content = document.querySelector(".settings-content");
+  if (state.toolsStack.length === 0) state.toolsListScroll = content ? content.scrollTop : 0;
+  state.toolsStack.push(view);
+  state.toolsProbe = [];
+  renderToolsDetail({ resetScroll: true, focus: true });
+}
+
+function backToolsView() {
+  if (state.toolsStack.length === 0) return;
+  state.toolsStack.pop();
+  state.toolsProbe = [];
+  renderToolsDetail({ resetScroll: true, focus: true });
+  if (state.toolsStack.length === 0) {
+    const content = document.querySelector(".settings-content");
+    if (content) content.scrollTop = state.toolsListScroll ?? 0;
+  }
+}
+
+function closeToolsView() {
+  state.toolsStack = [];
+  state.toolsProbe = [];
+  renderToolsDetail({ resetScroll: true, focus: true });
+  const content = document.querySelector(".settings-content");
+  if (content) content.scrollTop = state.toolsListScroll ?? 0;
+}
+
+function openToolsMarket(kind) {
+  if (kind === "mcp") {
+    openToolsView({ kind: "mcp-market" });
+    if (!state.toolsMarketLoaded) void refreshToolsMarket();
+    else renderMarketResults();
+  } else {
+    openToolsView({ kind: "skill-market" });
+    if (!state.skillsMarketLoaded) void refreshSkillMarket();
+    else renderSkillMarketResults();
+  }
+}
+
+function readMarketInputs(entry) {
+  const inputs = {};
+  for (const input of Array.isArray(entry.inputs) ? entry.inputs : []) {
+    const node = document.querySelector(`[data-market-input="${CSS.escape(input.key)}"]`);
+    if (node === null) continue;
+    inputs[input.key] = (input.kind ?? "text") === "toggle" ? node.checked : node.value;
+  }
+  return inputs;
+}
+
+function marketplaceEntry() {
+  const view = currentToolsView();
+  if (view?.kind !== "mcp-entry") return undefined;
+  return (state.toolsRegistry ?? []).find((candidate) => candidate.id === view.id);
+}
+
 async function refreshToolsCatalog() {
   if (state.toolsLoading) return;
   state.toolsLoading = true;
@@ -888,9 +1348,9 @@ function parseArgsInput(value) {
   }
   return text.split(/\s+/).filter((item) => item.length > 0);
 }
-function renderProbeTools() {
-  const host = $("tool-install-tools");
-  const confirm = $("tool-install-confirm");
+function renderProbeTools(hostId = "tool-install-tools") {
+  const host = $(hostId);
+  const confirm = $(hostId === "tool-install-tools" ? "tool-install-confirm" : "tool-market-install");
   if (!host) return;
   const tools = state.toolsProbe;
   if (tools.length === 0) {
@@ -904,7 +1364,13 @@ function renderProbeTools() {
   const options = ["external", "read", "write", "network"]
     .map((risk) => `<option value="${risk}">${escape(t(`tools-${risk}`))}</option>`)
     .join("");
-  const rows = tools.map((tool) => `<div class="tool-row tool-install-row"><code>${escape(tool.name)}</code><select data-install-risk="${escape(tool.name)}" aria-label="${escape(tool.name)}">${options}</select><span class="tool-description">${escape(tool.description || "")}</span></div>`).join("");
+  const rows = tools.map((tool) => {
+    const meta = toolMeta(tool.description, tool.inputSchema);
+    const params = meta.params.length > 0
+      ? `<details class="tool-probe-params"><summary>${escape(t("tools-params-title"))} (${meta.params.length})</summary>${toolParamsTable(meta.params)}</details>`
+      : "";
+    return `<div class="tool-install-item"><div class="tool-install-row"><code>${escape(tool.name)}</code><select data-install-risk="${escape(tool.name)}" aria-label="${escape(tool.name)}">${options}</select><span class="tool-description">${escape(meta.summary)}</span></div>${params}</div>`;
+  }).join("");
   host.innerHTML = `<div class="memory-tool-row tool-install-presets"><span>${escape(t("tools-install-risk"))}</span>${presets}</div>${rows}`;
   // Every tool starts at `external` (refused); the owner must choose a risk.
   // 每个工具从 `external`（拒绝）开始；风险必须由所有者选择。
@@ -928,11 +1394,35 @@ async function probeInstall() {
       body: JSON.stringify({ package: spec, args: parseArgsInput($("tool-install-args")?.value) }),
     });
     state.toolsProbe = Array.isArray(result.tools) ? result.tools : [];
-    renderProbeTools();
+    renderProbeTools("tool-install-tools");
   } catch (error) {
     state.toolsProbe = [];
     if (host) host.innerHTML = `<p class="memory-empty">${escape(error.message)}</p>`;
     const confirm = $("tool-install-confirm");
+    if (confirm) confirm.disabled = true;
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+async function probeMarketEntry() {
+  const entry = marketplaceEntry();
+  if (entry === undefined) return;
+  const button = $("tool-market-probe");
+  const host = $("tool-market-probe-tools");
+  if (button) button.disabled = true;
+  if (host) host.innerHTML = `<p class="memory-empty">${escape(t("tools-install-probing"))}</p>`;
+  try {
+    const result = await api("/api/tools/probe-registry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ entryId: entry.id, inputs: readMarketInputs(entry) }),
+    });
+    state.toolsProbe = Array.isArray(result.tools) ? result.tools : [];
+    renderProbeTools("tool-market-probe-tools");
+  } catch (error) {
+    state.toolsProbe = [];
+    if (host) host.innerHTML = `<p class="memory-empty">${escape(error.message)}</p>`;
+    const confirm = $("tool-market-install");
     if (confirm) confirm.disabled = true;
   } finally {
     if (button) button.disabled = false;
@@ -956,7 +1446,7 @@ async function installMcpServerFromUi() {
     announce(t("tools-install-missing"), true);
     return;
   }
-  const selects = [...document.querySelectorAll("[data-install-risk]")];
+  const selects = [...document.querySelectorAll("#tool-install-tools [data-install-risk]")];
   if (selects.length === 0) {
     announce(t("tools-install-probe-first"), true);
     return;
@@ -984,23 +1474,110 @@ async function installMcpServerFromUi() {
     });
     renderToolsCatalog(catalog);
     resetInstallForm();
+    void refreshToolsMarket(state.toolsMarketQuery);
     announce(`${t("tools-install-success")} ${id}`);
   } catch (error) {
     announce(error.message, true);
     if (button) button.disabled = false;
   }
 }
+async function installFromMarket() {
+  const entry = marketplaceEntry();
+  if (entry === undefined) return;
+  const selects = [...document.querySelectorAll("#tool-market-probe-tools [data-install-risk]")];
+  if (selects.length === 0) {
+    announce(t("tools-install-probe-first"), true);
+    return;
+  }
+  const tools = selects.map((select) => ({ name: select.dataset.installRisk, risk: select.value }));
+  const external = tools.filter((tool) => tool.risk === "external").length;
+  const message = t("tools-install-confirm-body")
+    .replace("{package}", entry.package)
+    .replace("{count}", String(tools.length))
+    .replace("{external}", String(external));
+  if (!(await confirmDialog(message, t("tools-install-confirm")))) return;
+  const button = $("tool-market-install");
+  if (button) button.disabled = true;
+  try {
+    const catalog = await api("/api/tools/install-registry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        entryId: entry.id,
+        inputs: readMarketInputs(entry),
+        tools,
+        acknowledgeInstall: true,
+      }),
+    });
+    renderToolsCatalog(catalog);
+    // Return to the market so another server can be installed; the card now
+    // carries the installed badge.
+    // 回到市场以便继续安装其他服务器；卡片此时带已安装徽章。
+    state.toolsStack.pop();
+    renderToolsDetail({ resetScroll: true, focus: true });
+    void refreshToolsMarket(state.toolsMarketQuery);
+    announce(`${t("tools-install-success")} ${entry.id}`);
+  } catch (error) {
+    announce(error.message, true);
+    if (button) button.disabled = false;
+  }
+}
+async function installSkillFromUi(name) {
+  const root = (state.toolsCatalog?.skillRoots ?? [])[0] ?? "";
+  const path = `${root}/${name}/SKILL.md`;
+  const message = t("tools-skill-install-body").replace("{name}", name).replace("{path}", path);
+  if (!(await confirmDialog(message, t("tools-skill-install")))) return;
+  const button = document.querySelector(`[data-skill-install="${CSS.escape(name)}"]`);
+  if (button) button.disabled = true;
+  try {
+    const catalog = await api("/api/skills/install", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, acknowledgeInstall: true }),
+    });
+    state.skillDetails.delete(name);
+    renderToolsCatalog(catalog);
+    void refreshSkillMarket(state.skillsMarketQuery);
+    renderToolsDetail();
+    announce(`${t("tools-skill-install-success")} ${name}`);
+  } catch (error) {
+    announce(error.message, true);
+    if (button) button.disabled = false;
+  }
+}
+async function removeSkillFromUi(name) {
+  const detail = state.skillDetails.get(name);
+  const path = detail?.skill?.path ?? name;
+  const message = t("tools-skill-remove-body").replace("{name}", name).replace("{path}", path);
+  if (!(await confirmDialog(message, t("tools-skill-remove")))) return;
+  try {
+    const catalog = await api(`/api/skills/${encodeURIComponent(name)}`, { method: "DELETE" });
+    state.skillDetails.delete(name);
+    renderToolsCatalog(catalog);
+    void refreshSkillMarket(state.skillsMarketQuery);
+    closeToolsView();
+    announce(`${t("tools-skill-remove-success")} ${name}`);
+  } catch (error) {
+    announce(error.message, true);
+  }
+}
 async function removeMcpServerFromUi(id) {
   const message = t("tools-install-remove-body").replace("{id}", id);
   if (!(await confirmDialog(message, t("tools-install-remove")))) return;
+  const fromDetail = currentToolsView()?.kind === "server" && currentToolsView().id === id;
   try {
     const catalog = await api(`/api/tools/mcp/${encodeURIComponent(id)}`, { method: "DELETE" });
     renderToolsCatalog(catalog);
+    // The catalog refresh already returns to the list when its server vanished;
+    // closeToolsView restores the list's reading position in either case.
+    // 目录刷新在服务器消失时已回到列表；closeToolsView 在两种情况下都恢复列表的阅读位置。
+    if (fromDetail) closeToolsView();
     announce(`${t("tools-install-removed")} ${id}`);
   } catch (error) {
     announce(error.message, true);
   }
 }
+
 function renderAgentPage() {
   const host = $("agent-page");
   if (!host || !state.settings) return;
@@ -3323,15 +3900,82 @@ $("settings-panel-tools")?.addEventListener("click", (event) => {
     void installMcpServerFromUi();
     return;
   }
-  const preset = event.target.closest("[data-install-preset]");
-  if (preset) {
-    // A preset assigns one risk to every probed tool; the owner can still
-    // change a single row afterwards.
-    // 预设把同一个风险赋给每个探测到的工具；所有者之后仍可单独修改某一行。
-    for (const select of document.querySelectorAll("[data-install-risk]")) select.value = preset.dataset.installPreset;
+  if (event.target.closest("#tool-market-probe")) {
+    void probeMarketEntry();
     return;
   }
-  if (event.target.closest("[data-tools-refresh]")) void refreshToolsCatalog();
+  if (event.target.closest("#tool-market-install")) {
+    void installFromMarket();
+    return;
+  }
+  const skillInstall = event.target.closest("#skill-market-install");
+  if (skillInstall) {
+    void installSkillFromUi(skillInstall.dataset.skillInstall);
+    return;
+  }
+  const preset = event.target.closest("[data-install-preset]");
+  if (preset) {
+    // A preset assigns one risk to every probed tool in this form; the owner
+    // can still change a single row afterwards.
+    // 预设把同一个风险赋给本例中每个探测到的工具；所有者之后仍可单独修改某一行。
+    const host = preset.closest(".tool-install-tools");
+    for (const select of host?.querySelectorAll("[data-install-risk]") ?? []) select.value = preset.dataset.installPreset;
+    return;
+  }
+  const serverDetail = event.target.closest("[data-tool-detail]");
+  if (serverDetail) {
+    openToolsView({ kind: "server", id: serverDetail.dataset.toolDetail });
+    return;
+  }
+  const marketButton = event.target.closest("[data-tools-market]");
+  if (marketButton) {
+    openToolsMarket(marketButton.dataset.toolsMarket);
+    return;
+  }
+  const marketOpen = event.target.closest("[data-market-open]");
+  if (marketOpen) {
+    openToolsView({ kind: "mcp-entry", id: marketOpen.dataset.marketOpen });
+    return;
+  }
+  const skillEntry = event.target.closest("[data-skill-entry]");
+  if (skillEntry) {
+    openToolsView({ kind: "skill-entry", name: skillEntry.dataset.skillEntry });
+    return;
+  }
+  const skillDetail = event.target.closest("[data-skill-detail]");
+  if (skillDetail) {
+    openToolsView({ kind: "skill", name: skillDetail.dataset.skillDetail });
+    return;
+  }
+  const skillRemove = event.target.closest("[data-skill-remove]");
+  if (skillRemove) {
+    void removeSkillFromUi(skillRemove.dataset.skillRemove);
+    return;
+  }
+  if (event.target.closest("[data-tools-back]")) {
+    backToolsView();
+    return;
+  }
+  if (event.target.closest("[data-tools-refresh]")) {
+    void refreshToolsCatalog();
+    if (state.toolsMarketLoaded) void refreshToolsMarket();
+    if (state.skillsMarketLoaded) void refreshSkillMarket();
+  }
+});
+let toolsMarketSearchTimer;
+let skillsMarketSearchTimer;
+$("settings-panel-tools")?.addEventListener("input", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  if (target.id === "tools-market-search") {
+    clearTimeout(toolsMarketSearchTimer);
+    const value = target.value;
+    toolsMarketSearchTimer = setTimeout(() => { void refreshToolsMarket(value); }, 160);
+  } else if (target.id === "skills-market-search") {
+    clearTimeout(skillsMarketSearchTimer);
+    const value = target.value;
+    skillsMarketSearchTimer = setTimeout(() => { void refreshSkillMarket(value); }, 160);
+  }
 });
 document.querySelector(".settings-content")?.addEventListener("scroll", (event) => {
   const content = event.currentTarget;

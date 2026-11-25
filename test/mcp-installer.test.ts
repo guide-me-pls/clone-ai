@@ -5,7 +5,8 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 
 import { readToolCatalog } from "../src/mcp/mcp-catalog.ts";
-import { installMcpServer, probeMcpPackage, removeMcpServer, type ProbedTool } from "../src/mcp/mcp-installer.ts";
+import { installMcpServer, probeMcpPackage, removeMcpServer, resolveNpxCommand, type ProbedTool } from "../src/mcp/mcp-installer.ts";
+import { environmentFor } from "../src/workers/mcp-client.ts";
 
 async function tempDir(t: TestContext, prefix: string): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), prefix));
@@ -158,6 +159,7 @@ test("installing writes one enabled entry with the owner's risks and keeps the r
     servers: [{ id: "old", enabled: true, command: "node" }],
   }, null, 2));
 
+  const npx = resolveNpxCommand();
   const catalog = await installMcpServer({
     dataDirectory: home,
     workspacePath: workspace,
@@ -170,7 +172,7 @@ test("installing writes one enabled entry with the owner's risks and keeps the r
     ],
     acknowledgeInstall: true,
     probe: async (input) => {
-      assert.equal(input.command, "npx");
+      assert.equal(input.command, npx);
       assert.deepEqual(input.args, ["--yes", "@scope/pkg@1.2.3", "--flag", "value"]);
       assert.equal(input.cwd, workspace);
       return probed;
@@ -187,7 +189,7 @@ test("installing writes one enabled entry with the owner's risks and keeps the r
   assert.deepEqual(raw.servers.map((server) => server.id), ["old", "fake"]);
   const installed = raw.servers[1]!;
   assert.equal(installed.enabled, true);
-  assert.equal(installed.command, "npx");
+  assert.equal(installed.command, npx);
   assert.deepEqual(installed.args, ["--yes", "@scope/pkg@1.2.3", "--flag", "value"]);
   assert.deepEqual(installed.tools, [
     { name: "read_thing", risk: "read", pathField: "path" },
@@ -234,4 +236,67 @@ test("the catalog projects the installed server without its command", async (t) 
   const serialized = JSON.stringify(catalog);
   assert.equal(serialized.includes("\"command\""), false, "the projection drops the command");
   assert.deepEqual(catalog.servers.map((server) => [server.id, server.enabled, server.tools.length]), [["fake", true, 1]]);
+});
+
+test("an install carries environment values to the probe and into mcp.json", async (t) => {
+  const home = await tempDir(t, "clone-mcp-env-home-");
+  const workspace = await tempDir(t, "clone-mcp-env-ws-");
+  const memoryFile = join(home, "mcp-memory.jsonl");
+  let seen: Record<string, string> | undefined;
+  await installMcpServer({
+    dataDirectory: home,
+    workspacePath: workspace,
+    id: "keeper",
+    package: "pkg@1.0.0",
+    env: { MEMORY_FILE_PATH: memoryFile },
+    tools: [{ name: "read_thing", risk: "read" }, { name: "write_thing", risk: "write" }],
+    acknowledgeInstall: true,
+    probe: async (input) => {
+      seen = input.env;
+      return probed;
+    },
+  });
+  assert.deepEqual(seen, { MEMORY_FILE_PATH: memoryFile });
+  const raw = JSON.parse(await readFile(join(home, "mcp.json"), "utf8")) as { servers: Array<{ env?: Record<string, string> }> };
+  assert.deepEqual(raw.servers[0]?.env, { MEMORY_FILE_PATH: memoryFile });
+  const serialized = JSON.stringify(await readToolCatalog(home, workspace));
+  assert.equal(serialized.includes("MEMORY_FILE_PATH"), false, "the catalog projection drops env");
+});
+
+test("an invalid environment is refused before anything is probed or written", async (t) => {
+  const home = await tempDir(t, "clone-mcp-env-bad-home-");
+  const workspace = await tempDir(t, "clone-mcp-env-bad-ws-");
+  let probedNow = false;
+  const probe = async (): Promise<ProbedTool[]> => {
+    probedNow = true;
+    return probed;
+  };
+  for (const env of [{ "BAD-NAME": "x" }, { OK: 7 }, "not-an-object"]) {
+    await assert.rejects(
+      installMcpServer({
+        dataDirectory: home,
+        workspacePath: workspace,
+        id: "keeper",
+        package: "pkg@1.0.0",
+        env,
+        tools: [{ name: "read_thing", risk: "read" }],
+        acknowledgeInstall: true,
+        probe,
+      }),
+      /valid environment variable name|env\..* must be a string|env must be an object/,
+      `expected ${JSON.stringify(env)} to be refused`,
+    );
+  }
+  assert.equal(probedNow, false, "the probe must not run for an invalid environment");
+  await assert.rejects(readFile(join(home, "mcp.json"), "utf8"), /ENOENT/);
+});
+
+test("npx resolves next to the runtime's Node and runs with the daemon's minimal PATH", async () => {
+  const npx = resolveNpxCommand();
+  assert.match(npx, /npx$/, "the resolver must name an npx");
+  const env = environmentFor({ env: {} }, { PATH: "/usr/bin:/bin", HOME: process.env.HOME });
+  const { spawnSync } = await import("node:child_process");
+  const result = spawnSync(npx, ["--version"], { env, encoding: "utf8", timeout: 20_000 });
+  assert.equal(result.status, 0, `npx did not run with a launchd PATH: ${result.stderr || result.error?.message || ""}`);
+  assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+/);
 });

@@ -65,11 +65,16 @@ test("an MCP server receives only the environment it declared", async () => {
   // included; the worker client already narrows it.
   // 宿主过去把所有者完整的环境交给服务器，包含 API 密钥；Worker 客户端已经收窄了它。
   const { environmentFor } = await import("../src/workers/mcp-client.ts");
+  const { dirname } = await import("node:path");
   const source = { PATH: "/bin", HOME: "/home/owner", ANTHROPIC_API_KEY: "sk-secret", GITHUB_TOKEN: "ghp_x", LANG: "en_US.UTF-8" };
   const named = environmentFor({ env: ["GITHUB_TOKEN"] }, source);
   assert.equal(named.GITHUB_TOKEN, "ghp_x");
   assert.equal(named.ANTHROPIC_API_KEY, undefined, "an undeclared credential must not leak");
-  assert.equal(named.PATH, "/bin", "the baseline variables survive");
+  // The runtime's own Node directory leads PATH: a launchd daemon starts with
+  // /usr/bin:/bin and an npm server's `#!/usr/bin/env node` would otherwise die.
+  // 运行时自己的 Node 目录排在 PATH 最前：launchd 守护进程以 /usr/bin:/bin 启动，
+  // 否则 npm 服务器的 `#!/usr/bin/env node` 会直接失败。
+  assert.equal(named.PATH, `${dirname(process.execPath)}:/bin`, "the baseline variables survive, with Node first");
 
   const explicit = environmentFor({ env: { EXTRA: "value" } }, source);
   assert.equal(explicit.EXTRA, "value");

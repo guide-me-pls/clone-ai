@@ -2131,3 +2131,189 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
   .log-step { gap: 0; }
   .log-reply { font-size: 14px; }
 }
+
+/* The tools page: a small marketplace above the installed servers. The list
+ * stays compact — three tools read inline, more become one jump — and the
+ * detail page is where parameters live in a table.
+ * 工具页：已安装服务器之上是一个小市场。列表保持紧凑——三个工具直接读，更多就跳转一次；
+ * 参数表放在详情页。 */
+.tools-market-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.tools-market-heading p { margin-top: 4px; }
+.tools-market-search {
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: var(--surface-raised);
+  font-size: 12px;
+}
+.tools-market-search::placeholder { color: var(--muted); }
+.tools-market-search:focus { border-color: var(--line-strong); outline: none; box-shadow: 0 0 0 3px var(--surface-hover); }
+.tools-market-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 8px; margin-top: 10px; }
+.tools-market-results .memory-empty { grid-column: 1 / -1; }
+.market-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.market-card-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.market-card-title h5 { margin: 0; color: var(--text); font-size: 13px; font-weight: 600; }
+.market-flag { padding: 1px 6px; border-radius: 99px; color: var(--muted); background: var(--surface-hover); font-size: 10px; font-weight: 500; }
+.market-installed { padding: 1px 7px; border-radius: 99px; color: var(--success); background: var(--success-soft); font-size: 10px; font-weight: 600; }
+.market-card p { margin: 0; color: var(--subtle); font-size: 11.5px; line-height: 1.5; }
+.market-card code { color: var(--muted); font-family: var(--font-mono); font-size: 10px; word-break: break-all; }
+.market-open { margin-top: auto; }
+.tool-manual { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.tool-manual > summary { color: var(--subtle); cursor: pointer; font-size: 11.5px; font-weight: 600; }
+.tool-manual[open] > summary { color: var(--text); }
+.tool-list-inline { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.tool-jump-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 11.5px;
+}
+.tool-jump {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--subtle);
+  background: var(--surface-raised);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.tool-jump:hover { border-color: var(--line-strong); color: var(--text); }
+.tools-detail { max-width: 780px; }
+.tool-back {
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+}
+.tool-back:hover { color: var(--text); }
+.tool-detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.tool-detail-heading h4 { margin: 0; color: var(--text); font-size: 16px; letter-spacing: -.01em; }
+.tool-detail-heading p { margin: 4px 0 0; color: var(--muted); font-size: 11.5px; }
+.tool-detail-heading code { font-family: var(--font-mono); font-size: 10.5px; }
+.tool-market-summary { margin: 10px 0 0; color: var(--subtle); font-size: 12px; line-height: 1.6; }
+.tool-detail-list { display: grid; gap: 8px; margin-top: 12px; }
+.tool-detail-card { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
+.tool-detail-card header { display: flex; align-items: center; gap: 8px; }
+.tool-detail-card header code { color: var(--text); font-family: var(--font-mono); font-size: 12px; }
+.tool-summary { margin: 6px 0 0; color: var(--subtle); font-size: 12px; line-height: 1.55; }
+.tool-params { width: 100%; margin-top: 9px; border-collapse: collapse; table-layout: fixed; }
+.tool-params th {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: left;
+}
+.tool-params td { padding: 5px 6px; border-bottom: 1px solid var(--surface-hover); color: var(--subtle); font-size: 11px; line-height: 1.5; vertical-align: top; overflow-wrap: anywhere; }
+.tool-params tr:last-child td { border-bottom: 0; }
+.tool-params code { color: var(--text); font-family: var(--font-mono); font-size: 10.5px; }
+.tool-param-required { color: var(--warning); }
+.tool-param-optional { color: var(--muted); }
+.tool-install-item { display: grid; gap: 6px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.tool-install-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; }
+.tool-install-row code { color: var(--text); font-family: var(--font-mono); font-size: 11.5px; }
+.tool-probe-params { color: var(--muted); font-size: 11px; }
+.tool-probe-params > summary { cursor: pointer; }
+.tool-probe-params .tool-params { margin-top: 6px; }
+.tool-install-fields label small { color: var(--muted); font-size: 10.5px; line-height: 1.45; }
+.tool-install-fields label em { color: var(--warning); font-style: normal; font-size: 10px; }
+.tool-install-fields label.tool-toggle { display: flex; align-items: center; gap: 8px; }
+.tool-toggle input { width: auto; }
+.tool-server-actions .provider-install:disabled { opacity: .55; cursor: default; }
+@media (max-width: 640px) {
+  .tools-market-results { grid-template-columns: 1fr; }
+  .tool-detail-heading { flex-direction: column; }
+}
+.tool-docs { margin: 8px 0 0; font-size: 11.5px; }
+.tool-docs a { color: var(--accent); text-decoration: none; }
+.tool-docs a:hover { text-decoration: underline; }
+
+/* Two categories, every entry a jump: the list shows names and counts, the
+ * detail page owns the tools, parameters and skill bodies.
+ * 两个分类，每个条目都是跳转：列表只显示名称与计数，工具、参数与技能正文归详情页。 */
+.tool-category {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+.tool-category + .tool-category { margin-top: 12px; }
+.tool-category-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 15px;
+  border-bottom: 1px solid var(--surface-hover);
+  background: var(--surface);
+}
+.tool-category-head h4 { margin: 0; color: var(--text); font-size: 14px; }
+.tool-category-head p { margin: 3px 0 0; color: var(--muted); font-size: 11.5px; }
+.tool-category-warning { margin: 0; border: 0; border-bottom: 1px solid var(--warning-soft); border-radius: 0; }
+.tool-category-note { margin: 0; padding: 10px 15px 12px; border-top: 1px solid var(--surface-hover); }
+.tool-row-list { display: grid; }
+.tool-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 15px;
+  border: 0;
+  border-bottom: 1px solid var(--surface-hover);
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.tool-list-row:last-child { border-bottom: 0; }
+.tool-list-row:hover { background: var(--surface); }
+.tool-list-main { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.tool-list-main b { overflow: hidden; color: var(--text); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.tool-list-main small { overflow: hidden; color: var(--muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.tool-list-chevron { flex: 0 0 auto; color: var(--muted); font-size: 17px; line-height: 1; }
+.tool-empty { padding: 16px 15px; }
+.tool-empty p { margin: 0; color: var(--muted); font-size: 12px; }
+.tool-skill-body {
+  max-width: 760px;
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--subtle);
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.75;
+}
+.tool-skill-body .md-heading { margin-top: 10px; color: var(--text); font-weight: 600; }
+.tool-skill-body .md-heading:first-child { margin-top: 0; }
+.tool-skill-body .md-list-line { margin: 3px 0; }
+.tool-skill-body code { color: var(--text); background: var(--surface-raised); }
+.tool-skill-meta { margin: 8px 0 0; color: var(--muted); font-size: 11.5px; }
+.tool-skill-meta code { color: var(--subtle); }
+.tool-skill-body .md-list-line { display: grid; grid-template-columns: 17px minmax(0, 1fr); gap: 4px; margin: 3px 0; }
+.tool-skill-body .md-list-line > span:first-child { color: var(--accent); font-weight: 700; }
+.tool-skill-body .md-list-line--ordered > span:first-child { font-variant-numeric: tabular-nums; }

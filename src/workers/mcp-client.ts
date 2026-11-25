@@ -36,6 +36,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { delimiter, dirname } from "node:path";
 
 import { sanitizeObserved } from "../connectors/connector.ts";
 import { readJsonFile } from "../config/json-file.ts";
@@ -516,8 +517,17 @@ export function environmentFor(
   server: { env?: string[] | Record<string, string | undefined> },
   source: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
+  // A launchd daemon inherits the minimal `/usr/bin:/bin:/usr/sbin:/sbin`
+  // PATH, which contains neither Homebrew's node nor its npx. npm-installed
+  // MCP servers start with `#!/usr/bin/env node`, so the runtime's own Node
+  // directory must be on PATH even when the owner's shell puts it elsewhere.
+  // launchd 守护进程继承的是最小的 `/usr/bin:/bin:/usr/sbin:/sbin` PATH，其中既没有
+  // Homebrew 的 node，也没有它的 npx。npm 安装的 MCP 服务器以 `#!/usr/bin/env node`
+  // 启动，因此运行时的 Node 目录必须在 PATH 上，即使所有者 Shell 把它放在别处。
+  const nodeBin = dirname(process.execPath);
+  const sourcePath = source.PATH === undefined || source.PATH.length === 0 ? "" : source.PATH;
   const environment: NodeJS.ProcessEnv = {
-    PATH: source.PATH,
+    PATH: sourcePath.length === 0 ? nodeBin : `${nodeBin}${delimiter}${sourcePath}`,
     HOME: source.HOME,
     ...(source.SYSTEMROOT === undefined ? {} : { SYSTEMROOT: source.SYSTEMROOT }),
     ...(source.TEMP === undefined ? {} : { TEMP: source.TEMP }),

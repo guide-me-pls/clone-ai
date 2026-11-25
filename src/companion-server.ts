@@ -80,6 +80,14 @@ import { uiStrings } from "./desktop/ui-locale.ts";
 import { readConnectorSettings, writeConnectorSettings } from "./connectors/connector-registry.ts";
 import { readToolCatalog, setMcpServerEnabled } from "./mcp/mcp-catalog.ts";
 import { installMcpServer, probeNpmPackage, removeMcpServer } from "./mcp/mcp-installer.ts";
+import { MCP_REGISTRY, resolveRegistryServer, searchMcpRegistry } from "./mcp/mcp-registry.ts";
+import {
+  installRegistrySkill,
+  readInstalledSkill,
+  removeInstalledSkill,
+  searchSkillRegistry,
+  SKILL_REGISTRY,
+} from "./skills/skill-registry.ts";
 import { compileBriefing } from "./main-agent/situation-briefing.ts";
 import { buildFallbackPlan } from "./planning/fallback-planner.ts";
 import { reconcileCommitments } from "./state/commitment-reconciler.ts";
@@ -1712,6 +1720,85 @@ async function handleRequest(
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/api/tools/registry") {
+    // The curated marketplace. Entries carry fixed, reviewed package specs and
+    // no credentials; the search runs here so the UI and the server share one
+    // matching rule.
+    // 精选市场。条目携带固定、核对过的包规格与凭据；搜索在服务器执行，UI 与服务器共用同一条
+    // 匹配规则。
+    const query = url.searchParams.get("q") ?? "";
+    sendJson(response, 200, { entries: searchMcpRegistry(query), total: MCP_REGISTRY.length });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/skills/registry") {
+    // The built-in skill market. Entries are authored with this repository and
+    // carry their own bodies; the search runs here so the UI and the server
+    // share one matching rule. `installed` comes from the same roots the Main
+    // Agent scans.
+    // 内置技能市场。条目与本仓库一起撰写并自带正文；搜索在服务器执行，UI 与服务器共用一条
+    // 匹配规则。`installed` 来自 Main Agent 扫描的同一组根目录。
+    const query = url.searchParams.get("q") ?? "";
+    try {
+      const catalog = await readToolCatalog(context.dataDirectory, context.workspacePath);
+      const installed = new Set(catalog.skills.map((skill) => skill.name));
+      sendJson(response, 200, {
+        entries: searchSkillRegistry(query).map((entry) => ({ ...entry, installed: installed.has(entry.name) })),
+        total: SKILL_REGISTRY.length,
+      });
+    } catch (error: unknown) {
+      sendJson(response, 500, { error: error instanceof Error ? error.message : "Could not read the skill market." });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/skills/install") {
+    // Installing writes one SKILL.md under the clone home. The owner confirms
+    // in the settings page; a route that forgets the flag fails closed.
+    // 安装会把一个 SKILL.md 写入 clone home。所有者在设置页确认；忘记该标志的路由 fail closed。
+    const body = await readJsonBody(request);
+    if (body.acknowledgeInstall !== true) {
+      sendJson(response, 400, { error: "Installing a skill writes into the clone home; the owner must confirm the install." });
+      return;
+    }
+    try {
+      await installRegistrySkill(context.dataDirectory, typeof body.name === "string" ? body.name : "");
+      sendJson(response, 200, await readToolCatalog(context.dataDirectory, context.workspacePath));
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not install the skill." });
+    }
+    return;
+  }
+
+  const skillMatch = url.pathname.match(/^\/api\/skills\/([^/]+)$/);
+  if (request.method === "GET" && skillMatch !== null) {
+    try {
+      const skill = await readInstalledSkill(
+        context.dataDirectory,
+        context.workspacePath,
+        decodeURIComponent(skillMatch[1]!),
+      );
+      if (skill === undefined) {
+        sendJson(response, 404, { error: `No skill named "${decodeURIComponent(skillMatch[1]!)}".` });
+        return;
+      }
+      sendJson(response, 200, { skill });
+    } catch (error: unknown) {
+      sendJson(response, 500, { error: error instanceof Error ? error.message : "Could not read the skill." });
+    }
+    return;
+  }
+
+  if (request.method === "DELETE" && skillMatch !== null) {
+    try {
+      await removeInstalledSkill(context.dataDirectory, decodeURIComponent(skillMatch[1]!));
+      sendJson(response, 200, await readToolCatalog(context.dataDirectory, context.workspacePath));
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not remove the skill." });
+    }
+    return;
+  }
+
   const mcpToggleMatch = url.pathname.match(/^\/api\/tools\/mcp\/([^/]+)\/enabled$/);
   if (request.method === "POST" && mcpToggleMatch !== null) {
     const body = await readJsonBody(request);
@@ -1748,6 +1835,60 @@ async function handleRequest(
       });
     } catch (error: unknown) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not probe the MCP package." });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/tools/probe-registry") {
+    // A marketplace probe. The client sends an entry id and input values; the
+    // package, argv and fixed environment come from the reviewed registry.
+    // 市场探测。客户端发送条目 id 与输入值；包、argv 与固定环境来自核对过的清单。
+    const body = await readJsonBody(request);
+    try {
+      const resolved = resolveRegistryServer({
+        entryId: typeof body.entryId === "string" ? body.entryId : "",
+        inputs: body.inputs,
+        dataDirectory: context.dataDirectory,
+      });
+      sendJson(response, 200, {
+        tools: await probeNpmPackage({
+          package: resolved.package,
+          args: resolved.args,
+          env: resolved.env,
+          workspacePath: context.workspacePath,
+        }),
+      });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not probe the marketplace entry." });
+    }
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/tools/install-registry") {
+    // Same owner-confirmed install as the free-text path, except the package
+    // spec, argv and environment are resolved from the registry rather than
+    // accepted from the client.
+    // 与自由文本路径相同的所有者确认安装，只是包规格、argv 与环境由清单解析，而不是从客户端
+    // 接受。
+    const body = await readJsonBody(request);
+    try {
+      const resolved = resolveRegistryServer({
+        entryId: typeof body.entryId === "string" ? body.entryId : "",
+        inputs: body.inputs,
+        dataDirectory: context.dataDirectory,
+      });
+      sendJson(response, 200, await installMcpServer({
+        dataDirectory: context.dataDirectory,
+        workspacePath: context.workspacePath,
+        id: resolved.id,
+        package: resolved.package,
+        args: resolved.args,
+        env: resolved.env,
+        tools: body.tools,
+        acknowledgeInstall: body.acknowledgeInstall === true,
+      }));
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not install the marketplace entry." });
     }
     return;
   }
@@ -2375,7 +2516,8 @@ async function handleRequest(
     return;
   }
 
-  if (request.method === "POST" && url.pathname === "/api/main-agent/stream") {
+  if (request.method === "POST" && (url.pathname === "/api/main-agent/stream" || url.pathname === "/api/main-agent/query")) {
+    const streaming = url.pathname === "/api/main-agent/stream";
     const body = await readJsonBody(request);
     const overrides = parseTurnModelAndEffort(body);
     if (!overrides.ok) {

@@ -22,7 +22,9 @@
  * 每个工具的风险由所有者声明，而不是包自己：未声明的工具仍被同一道闸门拒绝，设置页在所有者
  * 指定风险之前，让每个探测到的工具从 `external` 开始。
  */
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 import { readJsonFile, writeJsonAtomic } from "../config/json-file.ts";
 import type { NativeToolRisk } from "../workers/native-agent-worker.ts";
@@ -53,11 +55,37 @@ const RISKS: readonly NativeToolRisk[] = ["read", "write", "network", "external"
 const PROBE_TIMEOUT_MS = 180_000;
 const SERVER_TIMEOUT_MS = 120_000;
 /**
- * `npx` by default. An owner whose Node lives behind corepack or a version
- * manager can point this at the real binary; the model never sets it.
- * 默认 `npx`。Node 位于 corepack 或版本管理器之后的所有者可以指向真正的二进制；模型无法设置它。
+ * The npx this runtime can actually run.
+ *
+ * A launchd daemon, a Finder launch and a dev shell disagree about PATH; the
+ * daemon's minimal PATH has no npx at all, which surfaced as "spawn npx
+ * ENOENT" on every marketplace install. Prefer the npx that sits next to the
+ * Node running this daemon, then the usual package-manager locations, and
+ * only then the bare name. The resolved absolute path is written into
+ * `mcp.json`, so later worker runs do not depend on PATH either.
+ *
+ * 本运行时真正能跑的 npx。
+ *
+ * launchd 守护进程、Finder 启动与开发 Shell 对 PATH 的认识并不一致；守护进程的最小
+ * PATH 里根本没有 npx，市场安装因此报 "spawn npx ENOENT"。优先用运行本守护进程的
+ * Node 旁边的 npx，其次是常见包管理器位置，最后才是裸名字。解析出的绝对路径会写入
+ * `mcp.json`，之后的 Worker 运行也不再依赖 PATH。
  */
-const NPX_COMMAND = process.env.CLONE_AI_MCP_NPX?.trim() || "npx";
+export function resolveNpxCommand(): string {
+  const configured = process.env.CLONE_AI_MCP_NPX?.trim();
+  if (configured !== undefined && configured.length > 0) return configured;
+  const home = homedir();
+  const candidates = [
+    join(dirname(process.execPath), "npx"),
+    "/opt/homebrew/bin/npx",
+    "/usr/local/bin/npx",
+    join(home, "Library", "pnpm", "npx"),
+    join(home, ".volta", "bin", "npx"),
+    join(home, ".bun", "bin", "npx"),
+    join(home, ".npm-global", "bin", "npx"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? "npx";
+}
 
 /** Validate an npm package spec. 校验 npm 包规格。 */
 export function assertPackageSpec(value: string): string {
@@ -78,6 +106,22 @@ export function parseInstallArgs(value: unknown): string[] {
     if (/[\0\r\n]/.test(item)) throw new Error(`args[${index}] must not contain control characters.`);
     return item;
   });
+}
+
+/** Validate the environment a server may receive. 校验服务器可以接收的环境变量。 */
+export function parseInstallEnv(value: unknown): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("env must be an object of string values.");
+  }
+  const env: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`env.${key} is not a valid environment variable name.`);
+    if (typeof raw !== "string") throw new Error(`env.${key} must be a string.`);
+    if (raw.includes("\0")) throw new Error(`env.${key} must not contain NUL.`);
+    env[key] = raw;
+  }
+  return env;
 }
 
 /** Validate the tool declarations the owner approved. 校验所有者批准的工具声明。 */
@@ -120,6 +164,7 @@ export async function probeMcpPackage(input: {
   id: string;
   command: string;
   args: string[];
+  env?: Record<string, string>;
   cwd: string;
   timeoutMs?: number;
 }): Promise<ProbedTool[]> {
@@ -127,6 +172,7 @@ export async function probeMcpPackage(input: {
     name: input.id,
     command: input.command,
     args: input.args,
+    ...(input.env === undefined ? {} : { env: input.env }),
     cwd: input.cwd,
     timeoutMs: input.timeoutMs ?? PROBE_TIMEOUT_MS,
   });
@@ -146,14 +192,17 @@ export async function probeMcpPackage(input: {
 export async function probeNpmPackage(input: {
   package: string;
   args?: unknown;
+  env?: unknown;
   workspacePath: string;
 }): Promise<ProbedTool[]> {
   const spec = assertPackageSpec(input.package);
   const extra = parseInstallArgs(input.args);
+  const env = parseInstallEnv(input.env);
   return probeMcpPackage({
     id: "probe",
-    command: NPX_COMMAND,
+    command: resolveNpxCommand(),
     args: ["--yes", spec, ...extra],
+    ...(env === undefined ? {} : { env }),
     cwd: input.workspacePath,
   });
 }
@@ -164,10 +213,12 @@ export interface InstallMcpServerOptions {
   id: string;
   package: string;
   args?: unknown;
+  /** Environment values the server may receive; names never come from process.env. 服务器可以接收的环境值；变量名绝不来自 process.env。 */
+  env?: unknown;
   tools: unknown;
   acknowledgeInstall: boolean;
   /** Test seam; production uses {@link probeMcpPackage}. 测试接缝；生产使用 probeMcpPackage。 */
-  probe?: (input: { id: string; command: string; args: string[]; cwd: string; timeoutMs: number }) => Promise<ProbedTool[]>;
+  probe?: (input: { id: string; command: string; args: string[]; env?: Record<string, string>; cwd: string; timeoutMs: number }) => Promise<ProbedTool[]>;
 }
 
 /**
@@ -195,6 +246,7 @@ export async function installMcpServer(options: InstallMcpServerOptions): Promis
   }
   const spec = assertPackageSpec(options.package);
   const extra = parseInstallArgs(options.args);
+  const env = parseInstallEnv(options.env);
   const tools = parseInstallTools(options.tools);
 
   const path = join(options.dataDirectory, MCP_CONFIG_FILE);
@@ -204,8 +256,16 @@ export async function installMcpServer(options: InstallMcpServerOptions): Promis
   }
 
   const argv = ["--yes", spec, ...extra];
+  const npx = resolveNpxCommand();
   const probe = options.probe ?? ((input) => probeMcpPackage(input));
-  const probed = await probe({ id, command: NPX_COMMAND, args: argv, cwd: options.workspacePath, timeoutMs: PROBE_TIMEOUT_MS });
+  const probed = await probe({
+    id,
+    command: npx,
+    args: argv,
+    ...(env === undefined ? {} : { env }),
+    cwd: options.workspacePath,
+    timeoutMs: PROBE_TIMEOUT_MS,
+  });
   if (probed.length === 0) throw new Error(`The package "${spec}" exposed no tools, so there is nothing to install.`);
   const declared = new Set(tools.map((tool) => tool.name));
   const undeclared = probed.map((tool) => tool.name).filter((name) => !declared.has(name));
@@ -217,8 +277,9 @@ export async function installMcpServer(options: InstallMcpServerOptions): Promis
     id,
     enabled: true,
     transport: "stdio",
-    command: NPX_COMMAND,
+    command: npx,
     args: argv,
+    ...(env === undefined ? {} : { env }),
     cwd: options.workspacePath,
     timeoutMs: SERVER_TIMEOUT_MS,
     tools: tools.map((tool) => ({
