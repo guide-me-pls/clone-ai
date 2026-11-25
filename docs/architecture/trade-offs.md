@@ -38,6 +38,66 @@ keeps the load and remove controls. Reverse if a reviewed entry's tool surface
 gains a stronger class, or if an installed default enables an action the owner
 did not expect: then the registry needs per-tool defaults, not one per entry.
 
+## 2026-11-25 — A continuation resolves inside its conversation
+
+**Decision.** Recent background work in the situation briefing is filtered to
+the conversation that dispatched it. `compileBriefing` gains `conversationId`;
+the per-turn prompt and `get_situation` pass the turn's conversation;
+`renderRecentWork` resolves each terminal run through `run.created →
+task.created.triggerId → trigger.received.payload.conversationId`. Runs from
+another conversation, or with no attribution, are omitted when a conversation is
+given; the Settings API passes none and keeps the app-wide text. The charter
+adds: a continuation ("继续", "接着做", "把刚才那个弄完") refers to work this
+conversation established; never resume another task's run; if this conversation
+does not make the referent clear, ask. `search_history` stays app-wide when the
+model explicitly asks for `scope: "all"` — deliberate recall remains available.
+
+**Decision input.** The owner reported that "继续" does not always mean
+"continue the run": sometimes they want something else, and a continuation
+should be resolved per conversation, not across the app. The recent-work block
+was the only automatic input that could put another task's run in front of this
+turn.
+
+**Why it is safe.** Every Main Agent proposal already carries `conversationId`
+in its trigger payload (`proposePlanToKernel`), so attribution needs no new
+event field. A run dispatched from this conversation still appears; a scheduler
+or older run without attribution does not, because it cannot be claimed as this
+conversation's work. The explicit `search_history` tool keeps its `all` scope,
+so cross-task recall remains a deliberate action rather than ambient context.
+
+**What it costs.** A turn in a conversation can no longer learn from the
+briefing that another task's run finished ten minutes ago, so it may repeat a
+dispatch made elsewhere. That is the intended trade: automatic continuation no
+longer crosses conversations. Runs created before this change (or by the
+scheduler) carry no conversation and drop out of the per-turn list; the Settings
+API still shows the app-wide text.
+
+**Alternatives rejected.**
+
+- *Keep the app-wide list and label other tasks.* The owner asked for
+  conversation granularity; a label still presents other runs as candidates.
+- *Scope `search_history` to the conversation by default.* Deliberate cross-task
+  recall is a separate, owner-invoked feature; the fix is the automatic
+  briefing, not the explicit tool.
+- *Drop recent work entirely.* A run this conversation dispatched ten minutes
+  ago is why the agent does not ask whether to start it again.
+
+**Evidence.** `renderRecentWork` read every terminal run in the last 24h with no
+conversation filter (`src/main-agent/situation-briefing.ts`). 15 of the 39
+triggers in the live journal carry a `conversationId` (12 main conversation, 3
+one task); the rest predate the field or come from the scheduler. A ten-sample
+continuation benchmark after the folder change showed the interpretation is
+genuinely variable: most samples answered inside the conversation, two
+dispatched the work; the prompt should not widen that ambiguity with other
+tasks' runs. The before/after numbers are in
+`docs/engineering/optimizations.md`.
+
+**Reversal condition.** If the scoped list hides work the owner expects the twin
+to remember — for example the twin repeats a dispatch made from another
+conversation — widen it to a separately labelled "other tasks" section that
+explicitly may not be continued; or if owners work almost entirely in one
+conversation, pass no `conversationId` and keep the app-wide list.
+
 ## 2026-11-25 — Learned folders load on use, not in every turn
 
 **Decision.** The per-turn Main Agent briefing stops carrying the learned-folder
@@ -110,11 +170,14 @@ none in planning, dispatch or authority. Three benchmark cells
 seed a learned folder and measure resolution, non-use on a trivial turn, and the
 continuation case; the before/after runs are recorded in
 `docs/engineering/optimizations.md`. All three passed 3/3 before and after. In
-the continuation cell the after-samples called `get_situation` first (none did
-before) and then dispatched the work they were told to continue: median tokens
-26,485 → 60,183, duration 14.3 s → 50.0 s, while the read and trivial cells were
-unchanged (±1%). The extra cost buys completion of an ambiguous "继续" rather
-than a stall; it is recorded here, not counted as a gain.
+the continuation cell every after-sample called `get_situation` first (none did
+before). A ten-sample rerun shows the three-sample cost figure was not
+representative: 6 of 10 samples answered with no run at 27k–58k tokens, while 4
+dispatched two runs at 94k–123k (median 47,405 tokens against 26,485 across the
+three before-samples; median duration 24.8 s against 14.3 s, p90 106 s). The
+read and trivial cells were unchanged (±1%). The finding is the spread, not a
+fixed multiplier: an ambiguous "继续" sometimes completes the work and sometimes
+does not. Recorded here, not counted as a gain.
 
 **Reversal condition.** If any of the three benchmark cells regresses; or a
 place-referring turn ends in an open-ended question more than 3 times in 30; or

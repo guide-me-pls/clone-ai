@@ -26,6 +26,36 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-25 —— 续做在本对话内解析
+
+- **目标 / 假设：** 所有者指出"继续"不总是"续跑"，并要求续做按对话解析，而不是按整个
+  应用。简报的最近工作块列出 24 小时内所有终态 Run，没有对话过滤。假设：把每个 Run 通过
+  其任务与 trigger 解析后过滤到本回合的对话，就能去掉全应用候选列表，同时不丢失本对话
+  派发过的工作。
+- **取舍：** [续做在本对话内解析](../architecture/trade-offs.zh-CN.md#2026-11-25--续做在本对话内解析).
+- **变更：** `src/main-agent/situation-briefing.ts` —— `BriefingInput.conversationId`；
+  `renderRecentWork` 建立 `trigger.received → task.created → run` 归属并过滤；给定对话时
+  省略无归属 Run；标题写"in this conversation"。`src/main-agent/prompt.ts` —— 传入本回合
+  对话并新增 charter 规则；版本 13。`src/main-agent/tools/kernel-tools.ts` ——
+  `get_situation` 传入对话 id。`test/situation-briefing.test.ts` —— 按对话与全应用两种
+  视图；`test/worker-brief.test.ts` —— 版本 13 与规则。
+- **Eval：** `node --experimental-strip-types --test test/situation-briefing.test.ts
+  test/worker-brief.test.ts test/main-agent-prompt-briefing.test.ts
+  test/known-folders.test.ts` 33/33；`npm test` 1170/1170；`npm run typecheck` 退出码 0；
+  `npm run gate` PASS。
+- **Benchmark run：** 本条没有跑行为基准——没有做跨对话续做的基准格；确定性测试钉住了
+  提示词内容的前后差异。上一条的 10 次续做运行是动机，不是本条的 eval。
+- **执行链路：** 在线上 Journal 上核对归属（39 个 trigger 里 15 个带 `conversationId`）、
+  改代码、定向测试、完整套件、gate。并发会话一直在改共享文档与 `app.js`；只暂存了本次
+  变更的 hunk。
+- **优点：** 机制用的是已经存在的数据（trigger 载荷），不需要改事件 schema；显式的
+  `search_history` 以 `scope: "all"` 仍是有意的跨任务路径。
+- **缺点 / 下次：** 没有行为基准；字段出现之前或调度器创建的 Run 会从每回合列表里静默
+  消失。下次加一个种入的跨对话基准格，测量回合会不会提到另一个任务的 Run。
+- **推翻条件：** 如果按对话过滤隐藏了所有者期望分身记住的工作——例如分身重复了另一个
+  对话已经做过的派发——就把它扩成一个单独标注的"其他任务"段落，并明确不得续做；或者
+  如果所有者几乎只在一个对话里工作，就不传 `conversationId`，保留全应用列表。
+
 ### 2026-11-25 —— 已知文件夹按需读取，不再每回合注入
 
 - **目标 / 假设：** 所有者看到设置页卡片后问：已知文件夹只在部分回合用得上，为什么要跟着
@@ -43,7 +73,7 @@
 - **Eval：** `node --experimental-strip-types --test
   test/main-agent-prompt-briefing.test.ts test/worker-brief.test.ts
   test/situation-briefing.test.ts test/known-folders.test.ts` 32/32；
-  `npm test` 1167/1167；`npm run typecheck` 退出码 0；`npm run gate` PASS（基线未变）。
+  `npm test` 1170/1170；`npm run typecheck` 退出码 0；`npm run gate` PASS（基线未变）。
   基准格：`learned-folder-read` 3/3 → 3/3，`learned-folder-trivial` 3/3 → 3/3，
   `learned-folder-continuation` 3/3 → 3/3。
 - **Benchmark run：** 两侧同一命令
@@ -58,7 +88,10 @@
   `benchmark/results/main-agent-2026-11-25T06-45-07-619Z.json`（读取 3.8 s /
   16,563 tok；琐碎 1.9 s / 8,109；续做 14.3 s / 26,485，0 runs）；改动后
   `benchmark/results/main-agent-2026-11-25T06-49-05-211Z.json`（读取 3.5 s /
-  16,688；琐碎 1.1 s / 8,161；续做 50.0 s / 60,183，1–2 runs）。
+  16,688；琐碎 1.1 s / 8,161；续做 50.0 s / 60,183，1–2 runs）。续做格的 10 次复跑
+  `benchmark/results/main-agent-2026-11-25T07-04-44-190Z.json`（同一命令改为
+  `--only learned-folder-continuation --repeat 10`）：10/10 通过，中位数 24.8 s /
+  47,405 tok；10 次里 6 次没有 Run、27k–58k tokens，4 次派发两个 Run、94k–123k。
 - **执行链路：** （1）内联测量——提示词快照、回合台账、系统提示词偏移、线上 Journal 的
   回复扫描；（2）一个七 Agent 工作流（代码审计、使用审计、提示词稳定性审计、三个独立设计、
   一个对抗验证），26 分钟、877k 子 Agent tokens——它两次纠正了设计：`get_situation` 渲染
@@ -70,9 +103,10 @@
   `get_situation`，改动前一次都没有。所有格都没有能力损失，琐碎回合仍然不会因为"恰好
   知道"某个文件夹就采取行动。
 - **缺点 / 下次：** 续做的通过规则把 Worker 工具也算进去了，因此它的 PASS 比看起来弱；
-  改动后的回合把"继续"的工作派发出去了，tokens 是 2.3 倍。下次记录只属于主 Agent 的
-  工具调用（没有 `stepId` 的事件），用"完成"而不是"调用了"作为通过条件，并对成本结论
-  使用三次以上的样本。246 字符的块从来不是 token 问题，不要把它当性能论证重跑。
+  3 次样本高估了续做的成本——10 次复跑呈双峰（6 次无 Run、27k–58k；4 次两个 Run、
+  94k–123k），47.4k 的中位数取代了初稿里的 60.2k。下次记录只属于主 Agent 的工具调用
+  （没有 `stepId` 的事件），用"完成"而不是"调用了"作为通过条件，并对成本结论至少
+  使用十次样本。246 字符的块从来不是 token 问题，不要把它当性能论证重跑。
 - **推翻条件：** 三个基准格任何一个回退；或"点名了地点但没给路径"的回合在 30 次里超过
   3 次以开放式追问结束；或所有者报告分身询问一个它已经知道的文件夹 → 把
   `prompt.ts` 改回 `includeFolders: true`，保留 `foldersOnly` 改进。

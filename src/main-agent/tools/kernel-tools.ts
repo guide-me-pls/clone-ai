@@ -688,6 +688,7 @@ export function createKernelToolsExtension(host: KernelToolHost, options: Kernel
           journal,
           dataDirectory: options.dataDirectory,
           workspacePath: paths.workspacePath,
+          ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
           ...(options.query === undefined ? {} : { query: options.query }),
           ...(params.dueSoonHours === undefined ? {} : { dueSoonHours: params.dueSoonHours }),
           ...(params.includeObservations === undefined ? {} : { includeObservations: params.includeObservations }),

@@ -1,0 +1,304 @@
+{
+  "ranAt": "2026-11-25T07:04:44.190Z",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "endpoint": "http://127.0.0.1:3425",
+  "repeat": 10,
+  "tasks": [
+    {
+      "id": "learned-folder-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "expectation": "learned-continuation",
+      "seed": {
+        "folder": "/var/folders/0q/26y2gpq94m531lnxr09n7fsm0000gp/T/clone-ai-main-learned-3QYnHm",
+        "previous": {
+          "text": "整理那个学习文件夹里的资料，先看看有什么。",
+          "reply": "看过了，里面有学习材料。需要我整理成清单吗？"
+        }
+      }
+    }
+  ],
+  "records": [
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 12435,
+      "totalTokens": 27178,
+      "modelCalls": 3,
+      "toolCalls": [
+        "get_situation",
+        "recent_file_changes",
+        "read_file",
+        "read_file"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 525,
+      "journalEvents": 12
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 19223,
+      "totalTokens": 36259,
+      "modelCalls": 4,
+      "toolCalls": [
+        "get_situation",
+        "search_history",
+        "read_file",
+        "read_file",
+        "get_authority"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 456,
+      "journalEvents": 15
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 18764,
+      "totalTokens": 35842,
+      "modelCalls": 4,
+      "toolCalls": [
+        "get_situation",
+        "search_history",
+        "read_file",
+        "read_file"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 497,
+      "journalEvents": 13
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 105708,
+      "totalTokens": 122807,
+      "modelCalls": 18,
+      "toolCalls": [
+        "get_situation",
+        "search_history",
+        "read_file",
+        "get_authority",
+        "read_file",
+        "dispatch_task",
+        "list_directory",
+        "read_file",
+        "write_file",
+        "read_file",
+        "read_file",
+        "dispatch_task",
+        "read_file",
+        "list_directory",
+        "list_directory",
+        "read_file",
+        "write_file",
+        "read_file",
+        "read_file"
+      ],
+      "runs": 2,
+      "turnStatus": "completed",
+      "replyLength": 453,
+      "journalEvents": 99
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 30302,
+      "totalTokens": 58159,
+      "modelCalls": 6,
+      "toolCalls": [
+        "get_situation",
+        "recent_file_changes",
+        "read_file",
+        "read_file",
+        "read_file",
+        "read_file",
+        "search_history",
+        "get_authority"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 546,
+      "journalEvents": 21
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 105959,
+      "totalTokens": 104705,
+      "modelCalls": 12,
+      "toolCalls": [
+        "get_situation",
+        "read_file",
+        "read_file",
+        "read_file",
+        "read_file",
+        "search_history",
+        "get_authority",
+        "dispatch_task",
+        "list_directory",
+        "read_file",
+        "read_file",
+        "read_file",
+        "write_file",
+        "list_directory",
+        "propose_work_plan"
+      ],
+      "runs": 2,
+      "turnStatus": "completed",
+      "replyLength": 334,
+      "journalEvents": 68
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 17349,
+      "totalTokens": 36651,
+      "modelCalls": 4,
+      "toolCalls": [
+        "get_situation",
+        "search_history",
+        "read_file",
+        "get_authority",
+        "read_file",
+        "read_file",
+        "read_file"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 544,
+      "journalEvents": 19
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 14521,
+      "totalTokens": 36569,
+      "modelCalls": 4,
+      "toolCalls": [
+        "get_situation",
+        "search_history",
+        "read_file",
+        "read_file",
+        "read_file",
+        "read_file"
+      ],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 530,
+      "journalEvents": 17
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 154697,
+      "totalTokens": 95189,
+      "modelCalls": 10,
+      "toolCalls": [
+        "get_situation",
+        "search_history",
+        "read_file",
+        "read_file",
+        "read_file",
+        "read_file",
+        "get_authority",
+        "dispatch_task",
+        "read_file",
+        "read_file",
+        "read_file",
+        "list_directory",
+        "write_file",
+        "propose_work_plan"
+      ],
+      "runs": 2,
+      "turnStatus": "completed",
+      "replyLength": 803,
+      "journalEvents": 65
+    },
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "prompt": "继续，把刚才那个弄完。",
+      "passed": true,
+      "durationMs": 69608,
+      "totalTokens": 94357,
+      "modelCalls": 12,
+      "toolCalls": [
+        "get_situation",
+        "recent_file_changes",
+        "read_file",
+        "search_history",
+        "read_file",
+        "read_file",
+        "read_file",
+        "get_authority",
+        "dispatch_task",
+        "list_directory",
+        "read_file",
+        "read_file",
+        "read_file",
+        "write_file",
+        "write_file",
+        "list_directory",
+        "read_file",
+        "write_file",
+        "propose_work_plan"
+      ],
+      "runs": 2,
+      "turnStatus": "completed",
+      "replyLength": 385,
+      "journalEvents": 79
+    }
+  ],
+  "cells": [
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-continuation",
+      "expectation": "learned-continuation",
+      "samples": 10,
+      "passed": 10,
+      "passRate": 1,
+      "medianDurationMs": 24762.5,
+      "p90DurationMs": 105959,
+      "medianTokens": 47405,
+      "medianModelCalls": 5
+    }
+  ],
+  "summary": {
+    "repeat": 10,
+    "native": {
+      "passed": 10,
+      "samples": 10
+    }
+  }
+}

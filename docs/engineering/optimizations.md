@@ -31,6 +31,50 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-25 — A continuation resolves inside its conversation
+
+- **Goal / hypothesis:** the owner reported that "继续" does not always mean
+  "continue the run" and asked for continuation to be resolved per
+  conversation, not per app. The briefing's recent-work block listed every
+  terminal run in the last 24h with no conversation filter. Hypothesis:
+  resolving each run through its task and trigger and filtering to the turn's
+  conversation removes the app-wide candidate list without losing work this
+  conversation dispatched.
+- **Trade-off:** [A continuation resolves inside its
+  conversation](../architecture/trade-offs.md#2026-11-25--a-continuation-resolves-inside-its-conversation).
+- **Change:** `src/main-agent/situation-briefing.ts` — `BriefingInput.conversationId`;
+  `renderRecentWork` builds `trigger.received → task.created → run` attribution
+  and filters; unattributed runs are omitted when a conversation is given; the
+  header says "in this conversation". `src/main-agent/prompt.ts` — passes the
+  turn's conversation and adds the charter rule; version 13.
+  `src/main-agent/tools/kernel-tools.ts` — `get_situation` passes the
+  conversation id. `test/situation-briefing.test.ts` — scoped vs app-wide;
+  `test/worker-brief.test.ts` — version 13 and the rule.
+- **Eval:** `node --experimental-strip-types --test
+  test/situation-briefing.test.ts test/worker-brief.test.ts
+  test/main-agent-prompt-briefing.test.ts test/known-folders.test.ts` 33/33;
+  `npm test` 1170/1170; `npm run typecheck` exit 0; `npm run gate` PASS.
+- **Benchmark run:** none for this entry — a behavioral cross-conversation
+  continuation cell was not run; the deterministic test pins the before/after
+  difference in prompt content. The ten-sample continuation run in the
+  previous entry is the motivation, not this change's eval.
+- **Execution chain:** inline attribution check on the live journal (15 of 39
+  triggers carry a `conversationId`), code changes, focused tests, full suite,
+  gate. Concurrent sessions kept editing the shared docs and `app.js`; only
+  this change's hunks were staged.
+- **Pros:** the mechanism uses data already present (the trigger payload), so
+  no event schema change is needed; explicit `search_history` with
+  `scope: "all"` remains the deliberate cross-task path.
+- **Cons / next time:** no behavioral benchmark; runs created before the field
+  or by the scheduler silently drop out of the per-turn list. Next: add a
+  seeded cross-conversation cell that measures whether a turn mentions another
+  task's run.
+- **Reversal condition:** if the scoped list hides work the owner expects the
+  twin to remember — for example the twin repeats a dispatch made from another
+  conversation — widen it to a separately labelled "other tasks" section that
+  explicitly may not be continued; or if owners work almost entirely in one
+  conversation, pass no `conversationId` and keep the app-wide list.
+
 ### 2026-11-25 — Learned folders load on use, not in every turn
 
 - **Goal / hypothesis:** the owner read the Settings card and asked why learned
@@ -55,7 +99,7 @@ file keeps every attempt, including the ones that did not work.
 - **Eval:** `node --experimental-strip-types --test
   test/main-agent-prompt-briefing.test.ts test/worker-brief.test.ts
   test/situation-briefing.test.ts test/known-folders.test.ts` 32/32;
-  `npm test` 1167/1167; `npm run typecheck` exit 0; `npm run gate` PASS
+  `npm test` 1170/1170; `npm run typecheck` exit 0; `npm run gate` PASS
   (baseline unchanged). Benchmark cells: `learned-folder-read` 3/3 → 3/3,
   `learned-folder-trivial` 3/3 → 3/3, `learned-folder-continuation` 3/3 → 3/3.
 - **Benchmark run:** command (both sides)
@@ -73,7 +117,11 @@ file keeps every attempt, including the ones that did not work.
   26,485, 0 runs);
   after `benchmark/results/main-agent-2026-11-25T06-49-05-211Z.json`
   (read 3.5 s / 16,688; trivial 1.1 s / 8,161; continuation 50.0 s / 60,183,
-  1–2 runs).
+  1–2 runs). Ten-sample rerun of the continuation cell
+  `benchmark/results/main-agent-2026-11-25T07-04-44-190Z.json` (same command
+  with `--only learned-folder-continuation --repeat 10`): 10/10 pass, median
+  24.8 s / 47,405 tok; 6 of 10 samples took no run at 27k–58k tokens, 4
+  dispatched two runs at 94k–123k.
 - **Execution chain:** (1) inline measurements — prompt snapshots, turn ledger,
   system-prompt offsets, and a reply scan over the live journal; (2) a
   seven-agent workflow (code audit, usage audit, prompt-stability audit, three
@@ -90,12 +138,13 @@ file keeps every attempt, including the ones that did not work.
   before. No capability loss on any cell, and the trivial turn still does not
   act on a folder it merely knows.
 - **Cons / next time:** the continuation pass rule counts worker tools too, so
-  its PASS is weaker than it reads; the after turns dispatched the work they
-  were told to continue, costing 2.3× the tokens. Next time record
-  Main-Agent-only tool calls (events without `stepId`) and a completion-based
-  pass, and use more than three samples for a cost claim. The 246-character
-  block was never a token problem; do not re-run this as a performance
-  argument.
+  its PASS is weaker than it reads; the three-sample after set over-reported
+  the continuation cost — a ten-sample rerun is bimodal (6 no-run at 27k–58k,
+  4 with two runs at 94k–123k) and its 47.4k median replaces the 60.2k first
+  figure. Next time record Main-Agent-only tool calls (events without `stepId`)
+  and a completion-based pass, and use at least ten samples for a cost claim.
+  The 246-character block was never a token problem; do not re-run this as a
+  performance argument.
 - **Reversal condition:** if any of the three benchmark cells regresses, or a
   place-referring turn ends in an open-ended question more than 3 times in 30,
   or the owner reports the twin asking for a folder it already knows → set

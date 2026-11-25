@@ -160,6 +160,49 @@ test("background work that finished is in the briefing, with evidence counts", a
   assert.match(briefing.text, /completed: 整理周报并写盘 \(run run-abcd, 1 evidence item/);
 });
 
+test("recent background work is scoped to the conversation", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "clone-briefing-work-conv-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const journal = new JsonlJournalStore(join(directory, "journal.jsonl"));
+  const now = "2026-11-04T10:00:00.000Z";
+  const seed = async (id: string, triggerId: string, conversationId: string | undefined, title: string): Promise<void> => {
+    await journal.append({
+      type: "trigger.received",
+      payload: {
+        id: triggerId,
+        kind: "query",
+        summary: title,
+        occurredAt: now,
+        payload: { source: "main-agent", ...(conversationId === undefined ? {} : { conversationId }) },
+      },
+    });
+    await journal.append({ type: "task.created", taskId: id, payload: { id, triggerId, title, objective: title, acceptanceCriteria: ["ok"], createdAt: now } });
+    await journal.append({ type: "run.created", taskId: id, runId: `run-${id}`, payload: {} });
+    await journal.append({ type: "plan.created", taskId: id, runId: `run-${id}`, payload: { summary: title, steps: [] } });
+    await journal.append({ type: "run.status_changed", taskId: id, runId: `run-${id}`, payload: { status: "completed" } });
+  };
+  await seed("t-a", "g-a", "conversation-a", "本对话的整理");
+  await seed("t-b", "g-b", "conversation-b", "另一个任务的报告");
+  await seed("t-old", "g-old", undefined, "调度器的巡检");
+
+  const scoped = await compileBriefing({
+    journal,
+    dataDirectory: directory,
+    workspacePath: directory,
+    now,
+    includeObservations: false,
+    conversationId: "conversation-a",
+  });
+  assert.match(scoped.text, /本对话的整理/);
+  assert.doesNotMatch(scoped.text, /另一个任务的报告/);
+  assert.doesNotMatch(scoped.text, /调度器的巡检/);
+  assert.match(scoped.text, /in this conversation/);
+
+  const appWide = await compileBriefing({ journal, dataDirectory: directory, workspacePath: directory, now, includeObservations: false });
+  assert.match(appWide.text, /另一个任务的报告/);
+  assert.match(appWide.text, /调度器的巡检/);
+});
+
 test("the briefing carries the folders learned from past requests", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "clone-briefing-folders-"));
   t.after(async () => rm(directory, { recursive: true, force: true }));

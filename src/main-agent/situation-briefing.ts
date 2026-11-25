@@ -58,6 +58,16 @@ export interface BriefingInput {
    * 渲染列表的调用方不会丢失数据。
    */
   includeFolders?: boolean;
+  /**
+   * The conversation this turn belongs to. Recent background work is resolved
+   * through trigger → task → run and filtered to this conversation, so a turn
+   * never continues another task's run. Omit it only for a caller that renders
+   * an app-wide view (the Settings API); the per-turn prompt always passes it.
+   * 本回合所属的对话。最近完成的后台工作通过 trigger → task → run 解析并过滤到本对话，
+   * 因此一个回合不会去续做另一个任务的后台工作。只有渲染全应用视图的调用方（设置页 API）
+   * 才省略；每回合提示词始终传入。
+   */
+  conversationId?: string;
 }
 
 export interface Briefing {
@@ -106,7 +116,7 @@ export async function compileBriefing(input: BriefingInput): Promise<Briefing> {
     situation,
     observations,
     folders,
-    text: `${renderBriefing(situation, observations)}${folderText.length === 0 ? "" : `\n\n${folderText}`}${renderRecentWork(events, now)}`,
+    text: `${renderBriefing(situation, observations)}${folderText.length === 0 ? "" : `\n\n${folderText}`}${renderRecentWork(events, now, input.conversationId)}`,
   };
 }
 
@@ -174,32 +184,65 @@ export function renderBriefing(situation: Situation, observations: readonly Conn
  * 没有这一段，分身每一轮都像自上次输入后什么都没发生过：任务十分钟前已完成、带着证据，
  * 而 Agent 还在问要不要开始。这里只读终态事件，标题写明这是历史而不是任务：列表里的一条
  * 失败 Run 不是重试邀请。
+ *
+ * The list is resolved to the conversation that dispatched each run. A run
+ * started from another task is not this turn's continuation candidate, and an
+ * owner's "继续" must resolve inside the conversation they typed it in.
+ * 列表按派发每个 Run 的对话解析。另一个任务发起的 Run 不是本回合的续做候选；所有者的
+ * "继续"必须在他们输入它的那个对话里解析。
  */
-function renderRecentWork(events: Array<{ type: string; runId?: string; occurredAt: string; payload: unknown }>, now: string): string {
+function renderRecentWork(
+  events: Array<{ type: string; taskId?: string; runId?: string; occurredAt: string; payload: unknown }>,
+  now: string,
+  conversationId?: string,
+): string {
   const since = Date.parse(now) - 24 * 3600 * 1000;
   const tasks = new Map<string, string>();
   const plans = new Map<string, string>();
   const evidence = new Map<string, number>();
-  const terminal = new Map<string, { status: string; at: string; reason?: string }>();
+  const triggerConversation = new Map<string, string>();
+  const taskTrigger = new Map<string, string>();
+  const terminal = new Map<string, { status: string; at: string; taskId?: string; reason?: string }>();
   for (const event of events) {
     const payload = (event.payload ?? {}) as Record<string, unknown>;
-    if (event.type === "task.created" && typeof payload.id === "string" && typeof payload.title === "string") tasks.set(payload.id, payload.title);
+    if (event.type === "trigger.received" && typeof payload.id === "string") {
+      const inner = (payload.payload ?? {}) as Record<string, unknown>;
+      if (typeof inner.conversationId === "string") triggerConversation.set(payload.id, inner.conversationId);
+    }
+    if (event.type === "task.created" && typeof payload.id === "string") {
+      if (typeof payload.title === "string") tasks.set(payload.id, payload.title);
+      if (typeof payload.triggerId === "string") taskTrigger.set(payload.id, payload.triggerId);
+    }
     if (event.runId === undefined) continue;
     if (event.type === "plan.created" && typeof payload.summary === "string") plans.set(event.runId, payload.summary);
     if (event.type === "evidence.recorded") evidence.set(event.runId, (evidence.get(event.runId) ?? 0) + 1);
-    if (event.type === "execution.failed" && typeof payload.message === "string") terminal.set(event.runId, { status: "failed", at: event.occurredAt, reason: payload.message.slice(0, 160) });
+    if (event.type === "execution.failed" && typeof payload.message === "string") {
+      terminal.set(event.runId, {
+        status: "failed",
+        at: event.occurredAt,
+        ...(event.taskId === undefined ? {} : { taskId: event.taskId }),
+        reason: payload.message.slice(0, 160),
+      });
+    }
     if (event.type === "run.status_changed" && typeof payload.status === "string"
       && ["completed", "failed", "cancelled", "waiting_review"].includes(payload.status)) {
       const previous = terminal.get(event.runId);
+      const runTaskId = event.taskId ?? previous?.taskId;
       terminal.set(event.runId, {
         status: payload.status,
         at: event.occurredAt,
+        ...(runTaskId === undefined ? {} : { taskId: runTaskId }),
         ...(typeof payload.reason === "string" ? { reason: payload.reason.slice(0, 160) } : previous?.reason === undefined ? {} : { reason: previous.reason }),
       });
     }
   }
+  const conversationOf = (taskId: string | undefined): string | undefined => {
+    const triggerId = taskId === undefined ? undefined : taskTrigger.get(taskId);
+    return triggerId === undefined ? undefined : triggerConversation.get(triggerId);
+  };
   const recent = [...terminal.entries()]
     .filter(([, value]) => Date.parse(value.at) >= since)
+    .filter(([, value]) => conversationId === undefined || conversationOf(value.taskId) === conversationId)
     .sort((left, right) => right[1].at.localeCompare(left[1].at))
     .slice(0, 5);
   if (recent.length === 0) return "";
@@ -208,5 +251,8 @@ function renderRecentWork(events: Array<{ type: string; runId?: string; occurred
     const count = evidence.get(runId) ?? 0;
     return `- ${value.status}: ${title} (run ${runId.slice(0, 8)}, ${count} evidence item(s))${value.reason ? ` — ${value.reason}` : ""}`;
   });
-  return `\n\nRecently finished background work (history, not tasks — do not start or retry any of it unless the owner asks):\n${lines.join("\n")}`;
+  const header = conversationId === undefined
+    ? "Recently finished background work (history, not tasks — do not start or retry any of it unless the owner asks):"
+    : "Recently finished background work in this conversation (history, not tasks — do not start or retry any of it unless the owner asks):";
+  return `\n\n${header}\n${lines.join("\n")}`;
 }
