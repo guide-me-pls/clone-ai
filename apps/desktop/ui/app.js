@@ -3036,39 +3036,14 @@ const LOG_STATUS = {
 function logStatus(status) { const [label, tone] = LOG_STATUS[status] || [status || "未知", "mute"]; return { label, tone }; }
 function logDuration(ms) { return ms === undefined ? "" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`; }
 function logBasisMarkup(entry, conversationId) {
-  // The grounds a conclusion stands on, kept to one line: how much this turn
-  // consulted and where its record is. The model, the prompt snapshot and every
-  // call's input stay in the audit.
-  // 结论所依据的东西压缩成一行：本回合查了多少、记录在哪里。模型、提示词快照与每次调用的
-  // 输入留在审计页。
-  const tools = entry.toolCalls || [];
-  const runs = entry.spawnedRuns || [];
-  const failed = tools.filter((call) => call.isError).length;
-  const facts = [];
-  if (tools.length > 0) facts.push(`工具调用 ${tools.length} 次${failed > 0 ? `（${failed} 次失败）` : ""}`);
-  if (runs.length > 0) facts.push(`派生任务 ${runs.length} 个`);
-  if (facts.length === 0) {
-    if (!entry.journaled) facts.push("没有 Journal 记录，过程无法还原。");
-    else if (entry.status === "started") facts.push("仍在运行；还没有工具调用记录。");
-    else if (entry.status === "failed" || entry.status === "interrupted") facts.push("本轮在调用工具前就结束了。");
-    else facts.push("本轮直接回答，没有调用工具或派发任务。");
-  }
-  // The audit is a projection of the journal: without a journal record there is
-  // no page to open, so the control is absent rather than a dead end.
-  // 审计是 Journal 的投影：没有 Journal 记录就没有可打开的页面，因此控件不出现，而不是
-  // 一个失效的死角。
-  // The locator is the turn id, not the request: a request can be 20,000
-  // characters (a GET query of that size is rejected with 431) and the journal
-  // stores it redacted, so the raw text is not a reliable key. The conversation
-  // id keeps a reused turn id from matching another task.
-  // 定位键是回合 id，而不是请求：请求可达 20,000 字（这个长度的 GET query 会被 431 拒绝），
-  // 且 Journal 存的是脱敏后的文本，原文不是可靠的键。带上对话 id，复用的回合 id 就不会
-  // 命中另一个任务。
+  // The audit owns the process: tool counts and spawned tasks live there, not
+  // in the conversation. The thread keeps only the result and a way to open
+  // the record.
+  // 过程归审计：工具调用与派生任务数量留在审计页，不在对话里。线程只保留结果与打开记录的入口。
+  if (!entry.journaled) return "";
   const preview = plainPreview(entry.input || "").slice(0, 24);
-  const audit = entry.journaled
-    ? `<button class="log-basis-open" type="button" data-open-turn-audit="${escape(entry.id)}" data-open-turn-conversation="${escape(conversationId || "")}" aria-label="查看审计：${escape(preview || "本回合")} · ${escape(time(entry.startedAt))}">查看审计 ›</button>`
-    : "";
-  return `<div class="log-basis"><b>依据</b><span>${escape(facts.join(" · "))}</span>${audit}</div>`;
+  const audit = `<button class="log-basis-open" type="button" data-open-turn-audit="${escape(entry.id)}" data-open-turn-conversation="${escape(conversationId || "")}" aria-label="查看审计：${escape(preview || "本回合")} · ${escape(time(entry.startedAt))}">查看审计 ›</button>`;
+  return `<div class="log-basis">${audit}</div>`;
 }
 function logResultMarkup(entry) {
   if (entry.error) {
@@ -3111,7 +3086,7 @@ function logEntryMarkup(entry, conversationId) {
   // it: the reply is still the product, and there is no process to link to.
   // 旧历史条目从未进入 Journal，因此如实说明：回复仍是产物，但没有可链接的过程。
   const body = history
-    ? `<div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}<div class="log-basis"><b>依据</b><span>旧记录没有保存过程。</span></div></div></div>`
+    ? `<div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}</div></div>`
     : `<div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}${logBasisMarkup(entry, conversationId)}</div></div>`;
   return `${logQueryMarkup(entry.input)}<article class="log-entry" data-log-kind="${escape(entry.kind)}" data-log-status="${escape(entry.status)}">${head}<div class="log-entry-body">${body}</div></article>`;
 }

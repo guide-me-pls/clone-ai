@@ -3635,6 +3635,10 @@ async function buildMainAgentConversation(
   const visibleRunIds = new Set(visibleRuns.map((run) => run.id));
   const auditByTurn = new Map(projectTurnAudits(journalEvents).map((turn) => [turnAuditKey(turn.conversationId, turn.turnId), turn]));
   const runById = new Map(visibleRuns.map((run) => [run.id, run]));
+  const conversationRunIds = new Set(
+    [...derived].filter(([, owner]) => owner === conversationId).map(([runId]) => runId),
+  );
+  const conversationRuns = visibleRuns.filter((run) => conversationRunIds.has(run.id));
   const turns = turnRecords
     .filter((record) => conversationIdOf(record.conversationId) === conversationId)
     .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
@@ -3803,7 +3807,12 @@ async function buildMainAgentConversation(
   // without an id belongs to the main conversation.
   // 工作更新按时间合入同一条线程：所有者不在时完成的任务读起来是对话的一部分，而不是状态。
   // 每条更新属于其 Run 落定的对话；没有 id 的旧更新属于主对话。
-  for (const update of await readWorkUpdates(dataDirectory)) {
+  const workUpdates = await readWorkUpdates(dataDirectory);
+  const latestTurnEntry = turnLog.at(-1);
+  const currentWindowStart = latestTurnEntry === undefined
+    ? Number.NEGATIVE_INFINITY
+    : (Date.parse(latestTurnEntry.startedAt) || 0);
+  for (const update of workUpdates) {
     if (conversationIdOf(update.conversationId) !== conversationId) continue;
     messages.push({
       id: `work-${update.id}`,
@@ -3813,6 +3822,37 @@ async function buildMainAgentConversation(
       ...(update.status === "failed" || update.status === "waiting_review" ? { tone: "warning" as const } : {}),
       workStatus: update.status,
     });
+  }
+  // A Run a Main Agent turn dispatched returns its own answer to the thread.
+  // The turn record has the reply, not the run's result; without this the owner
+  // reads a status note and must open the task record to find the content.
+  // Main Agent 回合派发的 Run 把自己的回答带回线程。回合记录只有回复，没有 Run 的结果；
+  // 没有这一段，所有者读到的是状态说明，必须打开任务记录才能找到正文。
+  const workUpdateRunIds = new Set(workUpdates.map((update) => update.runId));
+  const resultsByRun = runResultByRun(journalEvents);
+  const resultRunIds = new Set<string>();
+  for (const spawned of latestTurnEntry?.spawnedRuns ?? []) resultRunIds.add(spawned.id);
+  for (const run of conversationRuns) {
+    if (Date.parse(run.updatedAt) >= currentWindowStart) resultRunIds.add(run.id);
+  }
+  for (const runId of resultRunIds) {
+    if (workUpdateRunIds.has(runId)) continue;
+    const run = runById.get(runId);
+    const result = resultsByRun[runId];
+    if (run === undefined || result === undefined) continue;
+    const status = run.status;
+    if (status !== "completed" && status !== "failed" && status !== "cancelled" && status !== "waiting_review") continue;
+    const spawned = latestTurnEntry?.spawnedRuns.find((candidate) => candidate.id === runId);
+    const title = spawned?.title ?? tasks[run.taskId]?.title ?? "任务";
+    messages.push({
+      id: `run-result-${runId}`,
+      role: "clone",
+      text: `任务「${title}」${status === "completed" ? "已完成" : status === "failed" ? "失败" : status === "waiting_review" ? "等待你复核" : "已取消"}，结果：\n\n${result.summary}`,
+      occurredAt: result.occurredAt,
+      ...(status === "failed" || status === "waiting_review" ? { tone: "warning" as const } : {}),
+      workStatus: status,
+    });
+    workUpdateRunIds.add(runId);
   }
   messages.sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
   const summary = summarizeOwnerConversation(history, turns, conversationId);
@@ -3854,19 +3894,49 @@ async function buildMainAgentConversation(
   // subagents; decisions stay central.
   // 主对话是所有者的操作面：所有等待中的 Run 与可见 subagent 都在这里出现，子任务记录只用于
   // 阅读，不再用来寻找决定。任务对话只列出自己的 subagent；决定仍集中在主对话。
-  // Decisions belong to the task record that owns the run. The conversation is
-  // the place the owner talks, not a decision inbox; the dashboard keeps the
-  // cross-task count.
-  // 决定属于拥有该 Run 的任务记录。对话是所有者在说话的地方，不是决定收件箱；跨任务的计数
-  // 仍留在仪表盘。
-  const approvals: SessionView["approvals"] = [];
-  const reviews: NonNullable<SessionView["reviews"]> = [];
-  const conversationRunIds = new Set(
-    [...derived].filter(([, owner]) => owner === conversationId).map(([runId]) => runId),
+  // A decision that exists but is invisible is a decision missed. The main
+  // conversation carries its own runs' approvals and reviews, with the scopes,
+  // the refusal/judge reason and the last durable result.
+  // 存在但看不见的决定等于漏掉的决定。主对话承载自己 Run 的审批与复核，带 Scope、
+  // 拒绝/裁判理由与最后一条持久结果。
+  const approvals: SessionView["approvals"] = conversationRuns
+    .filter((run) => run.status === "waiting_approval" && run.activeStepId !== undefined)
+    .map((run) => {
+      const stepId = run.activeStepId!;
+      const plan = run.planId === undefined ? undefined : state.plans[run.planId];
+      const step = plan?.steps.find((candidate) => candidate.id === stepId);
+      const reason = approvalReasonFor(journalEvents, run.id, stepId);
+      return {
+        runId: run.id,
+        stepId,
+        ...(step === undefined ? {} : { title: displayPlanStepTitle(step.title) }),
+        description: step?.risk === "external_side_effect" || step?.risk === "irreversible"
+          ? "这一步会影响外部系统；确认后才会继续。"
+          : "下一步需要你的确认才会继续。",
+        scopes: step?.scopes ?? [],
+        ...(reason === undefined ? {} : { reason }),
+      };
+    });
+  const reviews: NonNullable<SessionView["reviews"]> = mainConversationReviews(
+    conversationRuns,
+    tasks,
+    state.verificationByRun,
+    runResultByRun(journalEvents),
   );
+  // Only the latest turn and runs still in flight are current work. An old
+  // failed subagent belongs to its task record, not to the card the owner
+  // reads during the next turn.
+  // 只有最近一回合与仍在进行的 Run 属于当前工作。旧的失败子 Agent 属于它的任务记录，
+  // 不属于所有者在下一回合读的卡片。
+  const currentRunIds = new Set<string>();
+  for (const run of conversationRuns) {
+    if (["planning", "queued", "running", "verifying", "waiting_approval", "waiting_review"].includes(run.status)) currentRunIds.add(run.id);
+  }
+  for (const spawned of latestTurnEntry?.spawnedRuns ?? []) currentRunIds.add(spawned.id);
   const subagents = Object.values(state.subagents)
     .filter((subagent) => visibleRunIds.has(subagent.runId)
-      && (isMainConversation || conversationRunIds.has(subagent.runId)))
+      && (isMainConversation || conversationRunIds.has(subagent.runId))
+      && (currentRunIds.has(subagent.runId) || Date.parse(subagent.updatedAt) >= currentWindowStart))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, 8)
     .map((subagent) => {
