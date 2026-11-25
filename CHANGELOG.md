@@ -8,11 +8,11 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ### An install click answers before the probe
 
-The marketplace and manual install buttons used to be disabled until a probe ran. A disabled button swallows the click, so clicking 安装 before 探测工具 looked broken. Both buttons are now clickable from the start: with no probed tools the handler answers "请先探测包，再为工具指定风险" / "Probe the package first, then assign a risk to each tool", and the rest of the flow is unchanged. `test/ui-structure.test.ts` 45/45; `npm run typecheck` exit 0.
+The marketplace and manual install buttons used to be disabled until a probe ran. A disabled button swallows the click, so clicking 安装 before 探测工具 looked broken. All install controls (MCP, skills, cloudflared) are now always clickable: with no probed tools the handler answers "请先探测包，再为工具指定风险" / "Probe the package first, then assign a risk to each tool"; while a probe or install runs, a repeated click gets a visible "already running" message instead of a disabled button. `test/ui-structure.test.ts` 46/46; `npm run typecheck` exit 0.
 
 ### 探测前点击安装会得到提示
 
-市场与手动安装的「安装」按钮此前要等探测完成后才启用。禁用按钮会吞掉点击，因此在点击「探测工具」之前点「安装」看起来毫无反应。两个按钮现在一开始就可点击：没有探测结果时，处理器回答「请先探测包，再为工具指定风险」，其余流程不变。`test/ui-structure.test.ts` 45/45；`npm run typecheck` 退出码 0。
+市场与手动安装的「安装」按钮此前要等探测完成后才启用。禁用按钮会吞掉点击，因此在点击「探测工具」之前点「安装」看起来毫无反应。所有安装控件（MCP、技能、cloudflared）现在始终可点击：没有探测结果时，处理器回答「请先探测包，再为工具指定风险」；探测或安装进行中再次点击，会得到可见的「正在处理」提示，而不是一个禁用按钮。`test/ui-structure.test.ts` 46/46；`npm run typecheck` 退出码 0。
 
 ### The child-agent boundary no longer promises a notification
 

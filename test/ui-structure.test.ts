@@ -1762,6 +1762,34 @@ test("a server detail page turns Args into a table and a marketplace entry into 
   assert.match(market, /data-tools-back/);
 });
 
+test("install controls stay clickable while a probe or install runs", async () => {
+  const app = await read("app.js");
+  const locale = await readFile(join(process.cwd(), "src", "desktop", "ui-locale.ts"), "utf8");
+  const between = (start: string, end: string): string => {
+    const from = app.indexOf(start);
+    const to = app.indexOf(end, from);
+    assert.ok(from >= 0 && to > from, `${start} .. ${end} must exist`);
+    return app.slice(from, to);
+  };
+  // Disabling an install control is the reported defect: the click is swallowed
+  // and the owner sees no response. Busy marks refuse a second action with a
+  // visible message while the button stays live.
+  // 禁用安装控件正是被报告的问题：点击被吞掉，所有者看不到任何反应。忙碌标记在按钮保持
+  // 可用的同时，用可见提示拒绝第二次操作。
+  const installFlow = between("async function probeInstall", "async function installSkillFromUi");
+  assert.doesNotMatch(installFlow, /\.disabled\s*=/);
+  assert.match(installFlow, /beginBusy\(/);
+  const skillFlow = between("async function installSkillFromUi", "async function removeSkillFromUi");
+  assert.doesNotMatch(skillFlow, /\.disabled\s*=/);
+  assert.match(skillFlow, /beginBusy\(/);
+  const cloudflaredFlow = between("async function installCloudflared", "async function stopWhatsAppTunnel");
+  assert.doesNotMatch(cloudflaredFlow, /\.disabled\s*=/);
+  assert.match(cloudflaredFlow, /beginBusy\(/);
+  assert.match(locale, /"tools-install-busy"/);
+  assert.doesNotMatch(app, /id="tool-market-install"[^>]*\bdisabled\b/);
+  assert.doesNotMatch(app, /id="tool-install-confirm"[^>]*\bdisabled\b/);
+});
+
 test("the settings tools section ships two categories, a detail host and both markets", async () => {
   const html = await read("index.html");
   const app = await read("app.js");

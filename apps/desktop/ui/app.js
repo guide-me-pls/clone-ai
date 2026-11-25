@@ -42,6 +42,7 @@ const state = {
   toolsCatalog: null,
   toolsLoading: false,
   toolsProbe: [],
+  toolsProbed: false,
   gateways: [],
   gatewayLoading: false,
   situation: null,
@@ -828,6 +829,25 @@ const statusMeta = (status) => {
   return { label: t("status-running"), className: "running", dot: "running" };
 };
 function announce(message, error = false) { const node = $("notice"); node.textContent = message; node.className = `notice visible${error ? " error" : ""}`; clearTimeout(node.timer); node.timer = setTimeout(() => node.className = "notice", 3200); }
+/**
+ * Mark a control busy without disabling it. A disabled button swallows the
+ * click, so an owner who clicks again sees nothing; the busy mark refuses the
+ * second action with a visible message instead, and the control stays live.
+ * 标记控件忙碌但不把它禁用。禁用按钮会吞掉点击，所有者再点一次什么都看不到；
+ * 忙碌标记改为用可见提示拒绝第二次操作，控件保持可用。
+ */
+function beginBusy(button) {
+  if (button === null || button === undefined) return true;
+  if (button.dataset.busy === "1") return false;
+  button.dataset.busy = "1";
+  button.setAttribute("aria-busy", "true");
+  return true;
+}
+function endBusy(button) {
+  if (button === null || button === undefined) return;
+  delete button.dataset.busy;
+  button.removeAttribute("aria-busy");
+}
 function mintConversationId() {
   // A readable prefix keeps a task id distinguishable from a run UUID in logs;
   // the server decides conversation-versus-run from the ledger, not from the name.
@@ -1382,6 +1402,7 @@ function openToolsView(view) {
   if (state.toolsStack.length === 0) state.toolsListScroll = content ? content.scrollTop : 0;
   state.toolsStack.push(view);
   state.toolsProbe = [];
+  state.toolsProbed = false;
   renderToolsDetail({ resetScroll: true, focus: true });
 }
 
@@ -1389,6 +1410,7 @@ function backToolsView() {
   if (state.toolsStack.length === 0) return;
   state.toolsStack.pop();
   state.toolsProbe = [];
+  state.toolsProbed = false;
   renderToolsDetail({ resetScroll: true, focus: true });
   if (state.toolsStack.length === 0) {
     const content = document.querySelector(".settings-content");
@@ -1399,6 +1421,7 @@ function backToolsView() {
 function closeToolsView() {
   state.toolsStack = [];
   state.toolsProbe = [];
+  state.toolsProbed = false;
   renderToolsDetail({ resetScroll: true, focus: true });
   const content = document.querySelector(".settings-content");
   if (content) content.scrollTop = state.toolsListScroll ?? 0;
@@ -1480,12 +1503,10 @@ function parseArgsInput(value) {
 }
 function renderProbeTools(hostId = "tool-install-tools") {
   const host = $(hostId);
-  const confirm = $(hostId === "tool-install-tools" ? "tool-install-confirm" : "tool-market-install");
   if (!host) return;
   const tools = state.toolsProbe;
   if (tools.length === 0) {
     host.innerHTML = `<p class="memory-empty">${escape(t("tools-install-no-tools"))}</p>`;
-    if (confirm) confirm.disabled = true;
     return;
   }
   const presets = ["read", "write", "network"]
@@ -1505,7 +1526,6 @@ function renderProbeTools(hostId = "tool-install-tools") {
   // Every tool starts at `external` (refused); the owner must choose a risk.
   // 每个工具从 `external`（拒绝）开始；风险必须由所有者选择。
   for (const select of host.querySelectorAll("[data-install-risk]")) select.value = "external";
-  if (confirm) confirm.disabled = false;
 }
 async function probeInstall() {
   const spec = $("tool-install-package")?.value.trim() ?? "";
@@ -1515,7 +1535,10 @@ async function probeInstall() {
   }
   const button = $("tool-install-probe");
   const host = $("tool-install-tools");
-  if (button) button.disabled = true;
+  if (!beginBusy(button)) {
+    announce(t("tools-install-probing"), true);
+    return;
+  }
   if (host) host.innerHTML = `<p class="memory-empty">${escape(t("tools-install-probing"))}</p>`;
   try {
     const result = await api("/api/tools/probe", {
@@ -1524,14 +1547,14 @@ async function probeInstall() {
       body: JSON.stringify({ package: spec, args: parseArgsInput($("tool-install-args")?.value) }),
     });
     state.toolsProbe = Array.isArray(result.tools) ? result.tools : [];
+    state.toolsProbed = true;
     renderProbeTools("tool-install-tools");
   } catch (error) {
     state.toolsProbe = [];
+    state.toolsProbed = false;
     if (host) host.innerHTML = `<p class="memory-empty">${escape(error.message)}</p>`;
-    const confirm = $("tool-install-confirm");
-    if (confirm) confirm.disabled = true;
   } finally {
-    if (button) button.disabled = false;
+    endBusy(button);
   }
 }
 async function probeMarketEntry() {
@@ -1539,7 +1562,10 @@ async function probeMarketEntry() {
   if (entry === undefined) return;
   const button = $("tool-market-probe");
   const host = $("tool-market-probe-tools");
-  if (button) button.disabled = true;
+  if (!beginBusy(button)) {
+    announce(t("tools-install-probing"), true);
+    return;
+  }
   if (host) host.innerHTML = `<p class="memory-empty">${escape(t("tools-install-probing"))}</p>`;
   try {
     const result = await api("/api/tools/probe-registry", {
@@ -1548,26 +1574,25 @@ async function probeMarketEntry() {
       body: JSON.stringify({ entryId: entry.id, inputs: readMarketInputs(entry) }),
     });
     state.toolsProbe = Array.isArray(result.tools) ? result.tools : [];
+    state.toolsProbed = true;
     renderProbeTools("tool-market-probe-tools");
   } catch (error) {
     state.toolsProbe = [];
+    state.toolsProbed = false;
     if (host) host.innerHTML = `<p class="memory-empty">${escape(error.message)}</p>`;
-    const confirm = $("tool-market-install");
-    if (confirm) confirm.disabled = true;
   } finally {
-    if (button) button.disabled = false;
+    endBusy(button);
   }
 }
 function resetInstallForm() {
   state.toolsProbe = [];
+  state.toolsProbed = false;
   for (const id of ["tool-install-id", "tool-install-package", "tool-install-args"]) {
     const input = $(id);
     if (input) input.value = "";
   }
   const host = $("tool-install-tools");
   if (host) host.innerHTML = "";
-  const confirm = $("tool-install-confirm");
-  if (confirm) confirm.disabled = true;
 }
 async function installMcpServerFromUi() {
   const id = $("tool-install-id")?.value.trim() ?? "";
@@ -1577,8 +1602,12 @@ async function installMcpServerFromUi() {
     return;
   }
   const selects = [...document.querySelectorAll("#tool-install-tools [data-install-risk]")];
-  if (selects.length === 0) {
+  if (!state.toolsProbed) {
     announce(t("tools-install-probe-first"), true);
+    return;
+  }
+  if (selects.length === 0) {
+    announce(t("tools-install-no-tools"), true);
     return;
   }
   const tools = selects.map((select) => ({ name: select.dataset.installRisk, risk: select.value }));
@@ -1589,7 +1618,10 @@ async function installMcpServerFromUi() {
     .replace("{external}", String(external));
   if (!(await confirmDialog(message, t("tools-install-confirm")))) return;
   const button = $("tool-install-confirm");
-  if (button) button.disabled = true;
+  if (!beginBusy(button)) {
+    announce(t("tools-install-busy"), true);
+    return;
+  }
   try {
     const catalog = await api("/api/tools/install", {
       method: "POST",
@@ -1608,15 +1640,20 @@ async function installMcpServerFromUi() {
     announce(`${t("tools-install-success")} ${id}`);
   } catch (error) {
     announce(error.message, true);
-    if (button) button.disabled = false;
+  } finally {
+    endBusy(button);
   }
 }
 async function installFromMarket() {
   const entry = marketplaceEntry();
   if (entry === undefined) return;
   const selects = [...document.querySelectorAll("#tool-market-probe-tools [data-install-risk]")];
-  if (selects.length === 0) {
+  if (!state.toolsProbed) {
     announce(t("tools-install-probe-first"), true);
+    return;
+  }
+  if (selects.length === 0) {
+    announce(t("tools-install-no-tools"), true);
     return;
   }
   const tools = selects.map((select) => ({ name: select.dataset.installRisk, risk: select.value }));
@@ -1627,7 +1664,10 @@ async function installFromMarket() {
     .replace("{external}", String(external));
   if (!(await confirmDialog(message, t("tools-install-confirm")))) return;
   const button = $("tool-market-install");
-  if (button) button.disabled = true;
+  if (!beginBusy(button)) {
+    announce(t("tools-install-busy"), true);
+    return;
+  }
   try {
     const catalog = await api("/api/tools/install-registry", {
       method: "POST",
@@ -1649,7 +1689,8 @@ async function installFromMarket() {
     announce(`${t("tools-install-success")} ${entry.id}`);
   } catch (error) {
     announce(error.message, true);
-    if (button) button.disabled = false;
+  } finally {
+    endBusy(button);
   }
 }
 async function installSkillFromUi(name) {
@@ -1658,7 +1699,10 @@ async function installSkillFromUi(name) {
   const message = t("tools-skill-install-body").replace("{name}", name).replace("{path}", path);
   if (!(await confirmDialog(message, t("tools-skill-install")))) return;
   const button = document.querySelector(`[data-skill-install="${CSS.escape(name)}"]`);
-  if (button) button.disabled = true;
+  if (!beginBusy(button)) {
+    announce(t("tools-install-busy"), true);
+    return;
+  }
   try {
     const catalog = await api("/api/skills/install", {
       method: "POST",
@@ -1672,7 +1716,8 @@ async function installSkillFromUi(name) {
     announce(`${t("tools-skill-install-success")} ${name}`);
   } catch (error) {
     announce(error.message, true);
-    if (button) button.disabled = false;
+  } finally {
+    endBusy(button);
   }
 }
 async function removeSkillFromUi(name) {
@@ -2012,7 +2057,11 @@ async function startWhatsAppTunnel() {
 async function installCloudflared() {
   if (!(await confirmDialog("这会用 Homebrew 安装 cloudflared。安装不会触碰 WhatsApp 凭据。继续吗？", "安装"))) return;
   const button = $("whatsapp-install-cloudflared");
-  if (button) { button.disabled = true; button.textContent = "正在安装…"; }
+  if (!beginBusy(button)) {
+    announce("正在安装 cloudflared，请稍候。", true);
+    return;
+  }
+  if (button) button.textContent = "正在安装…";
   try {
     const result = await api("/api/mobile/whatsapp/tunnel/install", {
       method: "POST",
@@ -2024,7 +2073,8 @@ async function installCloudflared() {
   } catch (error) {
     announce(error.message, true);
   } finally {
-    if (button) { button.disabled = false; button.textContent = "安装 cloudflared"; }
+    endBusy(button);
+    if (button) button.textContent = "安装 cloudflared";
   }
 }
 
