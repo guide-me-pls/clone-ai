@@ -6,6 +6,22 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### An install click answers before the probe
+
+The marketplace and manual install buttons used to be disabled until a probe ran. A disabled button swallows the click, so clicking 安装 before 探测工具 looked broken. Both buttons are now clickable from the start: with no probed tools the handler answers "请先探测包，再为工具指定风险" / "Probe the package first, then assign a risk to each tool", and the rest of the flow is unchanged. `test/ui-structure.test.ts` 45/45; `npm run typecheck` exit 0.
+
+### 探测前点击安装会得到提示
+
+市场与手动安装的「安装」按钮此前要等探测完成后才启用。禁用按钮会吞掉点击，因此在点击「探测工具」之前点「安装」看起来毫无反应。两个按钮现在一开始就可点击：没有探测结果时，处理器回答「请先探测包，再为工具指定风险」，其余流程不变。`test/ui-structure.test.ts` 45/45；`npm run typecheck` 退出码 0。
+
+### The child-agent boundary no longer promises a notification
+
+In 设置 → 权限与安全, the 子 Agent 边界 card ended with a chip reading 自动执行，必要时通知. The notification is already explained by the card body and is not a control, so the chip now reads only 自动执行. English: "Runs automatically" instead of "Runs automatically; notifies you". No behavior change; `test/ui-structure.test.ts` 45/45, `test/bilingual-documentation.test.ts` 2/2.
+
+### 子 Agent 边界不再写「必要时通知」
+
+设置 → 权限与安全 的「子 Agent 边界」卡片末尾原本显示「自动执行，必要时通知」。通知已由卡片正文说明，且它不是一个控件，因此徽章现在只写「自动执行」。英文从 "Runs automatically; notifies you" 改为 "Runs automatically"。无行为变化；`test/ui-structure.test.ts` 45/45、`test/bilingual-documentation.test.ts` 2/2。
+
 ### MCP downloads work in the app's launch environment; skills install and reach the Main Agent
 
 A marketplace install now resolves npx from the Node running the app (then the usual Homebrew, /usr/local, pnpm, volta and bun locations), puts that Node directory first on every MCP child's PATH, and stores the absolute command in mcp.json — a launchd daemon with PATH=/usr/bin:/bin no longer fails with "spawn npx ENOENT". 工具与技能 is now two categories, MCP and skills; every server and skill is one jump row (no inline tool bodies, even for a one-tool server), with a back stack and separate MCP and skill markets. The skill market ships four built-in skills — weekly review, document review, release notes, deliverable check — installable under ~/.clone/skills and removable only from there; every Main Agent turn now receives the skill roots, so the listing is in the prompt and a Skill(name) tool returns the body. `test/skill-registry.test.ts` 4/4, `test/skill-runtime.test.ts` 1/1, affected suites 136/136 (80/80 after the label polish); typecheck 0; gate PASS; full suite 1161/1161. Live: the probe listed 10 filesystem tools in 0.6 s after the fix, and a live skill install/detail/remove left the clone home clean.

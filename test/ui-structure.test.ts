@@ -1750,7 +1750,14 @@ test("a server detail page turns Args into a table and a marketplace entry into 
   assert.match(market, /data-market-input="directory"/);
   assert.match(market, /data-market-input="readOnly"[^>]*checked/);
   assert.match(market, /id="tool-market-probe"/);
-  assert.match(market, /id="tool-market-install" disabled/);
+  // The install button is clickable before a probe: a disabled button swallows
+  // the click, so the owner sees nothing and cannot learn the required step.
+  // The handler answers with "probe first" instead.
+  // 安装按钮在探测前也可点击：禁用按钮会吞掉点击，所有者看不到任何反应，也学不到下一步；
+  // 处理器改为回答"请先探测"。
+  assert.match(market, /id="tool-market-install"/);
+  assert.doesNotMatch(market, /id="tool-market-install" disabled/);
+  assert.match(app, /tools-install-probe-first/);
   assert.match(market, /@modelcontextprotocol\/server-filesystem@2\.4\.0/);
   assert.match(market, /data-tools-back/);
 });

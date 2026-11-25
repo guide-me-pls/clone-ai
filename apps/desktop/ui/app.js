@@ -1215,7 +1215,7 @@ function mcpMarketMarkup() {
       </div>
       <div class="memory-tool-row tool-install-actions">
         <button class="secondary" type="button" id="tool-install-probe">${escape(t("tools-install-probe"))}</button>
-        <button class="primary" type="button" id="tool-install-confirm" disabled>${escape(t("tools-install-confirm"))}</button>
+        <button class="primary" type="button" id="tool-install-confirm">${escape(t("tools-install-confirm"))}</button>
       </div>
       <div class="tool-install-tools" id="tool-install-tools"></div>
     </details>`;
@@ -1238,7 +1238,7 @@ function marketDetailMarkup(entry) {
     <div class="tool-install-fields">${inputs}</div>
     <div class="memory-tool-row tool-install-actions">
       <button class="secondary" type="button" id="tool-market-probe">${escape(t("tools-install-probe"))}</button>
-      <button class="primary" type="button" id="tool-market-install" disabled>${escape(t("tools-install-confirm"))}</button>
+      <button class="primary" type="button" id="tool-market-install">${escape(t("tools-install-confirm"))}</button>
     </div>
     <div class="tool-install-tools" id="tool-market-probe-tools"></div>`;
 }
