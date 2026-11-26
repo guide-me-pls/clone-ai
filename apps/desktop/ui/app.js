@@ -97,6 +97,14 @@ const state = {
   skillsMarketError: null,
   skillDetails: new Map(),
   toolsListScroll: 0,
+  // The conversation's jump list: one anchor per owner request, and the panel
+  // that lists them. The anchors are read from the rendered content, so a
+  // refresh rebuilds the list and the targets together.
+  // 对话的跳转列表：每次所有者请求一个锚点，以及列出它们的浮层。锚点读自渲染出的内容，
+  // 因此一次刷新会同时重建列表与目标。
+  outlineOpen: false,
+  outlineTargets: [],
+  outlineFrame: 0,
 };
 // Matches the server parser and the Claude apps' per-message cap.
 // 与服务端解析器及 Claude 应用的每消息上限一致。
@@ -3139,7 +3147,11 @@ function messageMarkup(message) {
   const actions = needsAgentSettings
     ? `<div class="message-actions"><button class="secondary" type="button" data-open-agent-settings>打开 Agent 设置</button></div>`
     : "";
-  return `<article class="message ${clone ? "clone" : "person"}"><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div><div class="message-body">${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${displayedBody}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}${actions}</div>` : `<div class="message-copy">${body}</div>`}</div></article>`;
+  // A person message is a request in a task record, so the outline lists it
+  // and jumps back to it. Clone messages are results, not chapter titles.
+  // 任务记录里的 person 消息是请求，目录列出它并跳回它。clone 消息是结果，不是章节标题。
+  const jump = clone ? "" : ` data-jump-id="${escape(message.id || "")}" data-jump-at="${escape(message.occurredAt || "")}"`;
+  return `<article class="message ${clone ? "clone" : "person"}"${jump}><div class="message-heading"><b>${clone ? "clone-ai" : "你"}</b><time>${time(message.occurredAt)}</time></div><div class="message-body">${clone ? `<div class="clone-card${tone}"><div class="clone-text${collapsible ? " collapsible collapsed" : ""}">${displayedBody}</div>${collapsible ? `<button class="clone-expand" type="button" data-expand>展开全部</button>` : ""}${actions}</div>` : `<div class="message-copy">${body}</div>`}</div></article>`;
 }
 /**
  * A conversation's turn log shows the result and its grounds, not the process.
@@ -3217,15 +3229,21 @@ function logResultMarkup(entry) {
   if (entry.kind === "history") return `<span class="log-fact log-fact--muted">旧记录没有保存回复。</span>`;
   return `<span class="log-fact log-fact--muted">本轮没有返回文字。</span>`;
 }
-function logQueryMarkup(input) {
+function logQueryMarkup(input, entry) {
   const text = String(input || "").trim();
   if (text.length === 0) return "";
+  // The request bubble is also the conversation outline's anchor: the outline
+  // reads these attributes instead of a second data source that could drift.
+  // 请求气泡同时是对话目录的锚点：目录读这些属性，而不是可能漂移的第二份数据源。
+  const anchor = entry === undefined
+    ? ""
+    : ` data-jump-id="${escape(entry.id || "")}" data-jump-at="${escape(entry.startedAt || "")}" data-jump-status="${escape(entry.status || "")}"`;
   // The owner's request is a right-aligned bubble; the twin's answer is the
   // left-hand section below it. Mixing both into one bordered block made the
   // two voices indistinguishable once a reply grew long.
   // 所有者的请求是靠右的气泡，分身的回答是它下面左侧的章节。把两者放进同一个带边框的块里，
   // 一旦回复变长就分不清谁在说话。
-  return `<article class="turn-query" aria-label="你的请求"><div class="turn-query-bubble"><span class="turn-query-who">你</span><div class="turn-query-text">${richText(text)}</div></div></article>`;
+  return `<article class="turn-query"${anchor} aria-label="你的请求"><div class="turn-query-bubble"><span class="turn-query-who">你</span><div class="turn-query-text">${richText(text)}</div></div></article>`;
 }
 function logEntryMarkup(entry, conversationId) {
   const status = logStatus(entry.status);
@@ -3245,7 +3263,7 @@ function logEntryMarkup(entry, conversationId) {
   const body = history
     ? `<div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}</div></div>`
     : `<div class="log-step"><span class="log-step-label">结果</span><div class="log-step-body">${logResultMarkup(entry)}${logBasisMarkup(entry, conversationId)}</div></div>`;
-  return `${logQueryMarkup(entry.input)}<article class="log-entry" data-log-kind="${escape(entry.kind)}" data-log-status="${escape(entry.status)}">${head}<div class="log-entry-body">${body}</div></article>`;
+  return `${logQueryMarkup(entry.input, entry)}<article class="log-entry" data-log-kind="${escape(entry.kind)}" data-log-status="${escape(entry.status)}">${head}<div class="log-entry-body">${body}</div></article>`;
 }
 function workLogMarkup(message) {
   // A cancelled update is not a success: the badge follows the run's own
@@ -3663,8 +3681,97 @@ function dispatchSourceMarkup(session) {
       : `来自对话 ${parentId.replace(/^conversation-/, "").slice(0, 12)}…`;
   return `<div class="dispatch-source"><span>所属对话</span><button type="button" class="dispatch-source-open" data-open-conversation="${escape(parentId)}" title="${escape(parentId)}">${escape(label)}</button></div>`;
 }
-function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || !sessionHasContent(session)); const globalDecisions = JSON.stringify([(state.dashboard?.approvals || []).map((approval) => [approval.runId, approval.title, approval.reason, (approval.scopes || []).length]), (state.dashboard?.reviews || []).map((review) => [review.runId, review.title, review.result, review.verification?.summary, (review.verification?.unverifiedCriteria || []).length]), (state.dashboard?.questions || []).map((question) => [question.id, question.question, (question.choices || []).length])]); const signature = session ? JSON.stringify([session, globalDecisions]) : JSON.stringify(["welcome", globalDecisions]); if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = `${decisionDock(null)}${welcomeMarkup()}`; $("conversation").scrollTop = 0; return; } const conversation = session.kind === "conversation"; const conversationLog = conversation ? turnLogMarkup(session) : ""; const showWelcome = conversation && conversationLog.length === 0; content.innerHTML = showWelcome ? `${decisionDock(session)}${welcomeMarkup()}` : `<div class="day-divider">${day(session.updatedAt)}</div>${dispatchSourceMarkup(session)}${decisionDock(session)}${conversation ? conversationLog : session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); revealAgentFocus(session.id); requestAnimationFrame(updateScrollBottom); }
-async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; state.newConversationId = null; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); syncComposer(); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); void hydrateTurnChoice(activeConversationId()); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
+/**
+ * The conversation's outline reads the request anchors the renderer already
+ * emitted — the request bubble in a turn log, the person message in a task
+ * record — so the list cannot drift from what is on screen.
+ * 对话目录读取渲染器已经写出的请求锚点——回合日志里的请求气泡、任务记录里的 person
+ * 消息——列表因此不会与屏幕上的内容漂移。
+ */
+function conversationOutlineEntries(targets) {
+  return targets.map((target, index) => {
+    const body = typeof target.querySelector === "function" ? target.querySelector(".turn-query-text, .message-copy") : null;
+    const text = plainPreview((body ?? target).textContent || "");
+    return {
+      index,
+      label: text.length > 0 ? (text.length > 96 ? `${text.slice(0, 96)}…` : text) : t("outline-turn").replace("{index}", String(index + 1)),
+      at: target.dataset?.jumpAt || "",
+      status: target.dataset?.jumpStatus || "",
+    };
+  });
+}
+function renderConversationOutline() {
+  // Sandboxes that render a session without a DOM simply have no outline.
+  // 没有 DOM 的沙箱渲染会话时，自然没有目录。
+  if (typeof document.querySelectorAll !== "function") return;
+  const targets = [...document.querySelectorAll("#conversation-inner [data-jump-id]")];
+  state.outlineTargets = targets;
+  const available = targets.length >= 2;
+  if (!available) state.outlineOpen = false;
+  const toggle = $("conversation-outline-toggle");
+  if (toggle === null) return;
+  toggle.hidden = !available;
+  toggle.setAttribute("aria-expanded", String(state.outlineOpen));
+  $("conversation-outline").hidden = !state.outlineOpen;
+  $("conversation-outline-count").textContent = available ? t("outline-count").replace("{count}", String(targets.length)) : "";
+  $("conversation-outline-list").innerHTML = conversationOutlineEntries(targets).map((entry) => {
+    const tone = entry.status === "" ? "" : logStatus(entry.status).tone;
+    return `<li><button class="conversation-outline-row" type="button" data-outline-index="${entry.index}"><span class="conversation-outline-dot${tone === "" ? "" : ` ${escape(tone)}`}" aria-hidden="true"></span><span class="conversation-outline-label">${escape(entry.label)}</span><time>${entry.at === "" ? "" : escape(time(entry.at))}</time></button></li>`;
+  }).join("");
+  if (state.outlineOpen) markConversationOutlineCurrent();
+}
+function markConversationOutlineCurrent() {
+  const viewport = $("conversation");
+  if (viewport === null) return;
+  // A request counts as current once its top passes the reading line, so the
+  // marked row is always the one whose answer fills the screen.
+  // 一次请求的顶部越过阅读线后就算当前，被标记的行因此总是回答占满屏幕的那一次。
+  const line = viewport.getBoundingClientRect().top + 56;
+  let current = -1;
+  state.outlineTargets.forEach((target, index) => {
+    if (target.getBoundingClientRect().top <= line) current = index;
+  });
+  document.querySelectorAll("#conversation-outline-list [data-outline-index]").forEach((row) => {
+    row.setAttribute("aria-current", row.dataset.outlineIndex === String(current) ? "true" : "false");
+  });
+}
+function setConversationOutline(open) {
+  const panel = $("conversation-outline");
+  const toggle = $("conversation-outline-toggle");
+  if (panel === null || toggle === null) return;
+  const next = open && state.outlineTargets.length >= 2;
+  const closing = state.outlineOpen && !next;
+  state.outlineOpen = next;
+  panel.hidden = !next;
+  toggle.setAttribute("aria-expanded", String(next));
+  if (!next) {
+    if (closing && panel.contains(document.activeElement)) toggle.focus();
+    return;
+  }
+  markConversationOutlineCurrent();
+  const rows = [...$("conversation-outline-list").querySelectorAll("[data-outline-index]")];
+  const target = rows.find((row) => row.getAttribute("aria-current") === "true") ?? rows[rows.length - 1];
+  target?.focus();
+}
+function jumpToConversationTarget(index) {
+  const target = state.outlineTargets[index];
+  if (target === undefined) return;
+  const viewport = $("conversation");
+  const offset = target.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+  setConversationOutline(false);
+  viewport.scrollTo({ top: Math.max(0, viewport.scrollTop + offset - 12), behavior: "smooth" });
+  target.classList.add("is-jump-target");
+  window.setTimeout(() => target.classList.remove("is-jump-target"), 1600);
+}
+function scheduleConversationOutlineCurrent() {
+  if (state.outlineFrame !== 0) return;
+  state.outlineFrame = requestAnimationFrame(() => {
+    state.outlineFrame = 0;
+    if (state.outlineOpen) markConversationOutlineCurrent();
+  });
+}
+function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || !sessionHasContent(session)); const globalDecisions = JSON.stringify([(state.dashboard?.approvals || []).map((approval) => [approval.runId, approval.title, approval.reason, (approval.scopes || []).length]), (state.dashboard?.reviews || []).map((review) => [review.runId, review.title, review.result, review.verification?.summary, (review.verification?.unverifiedCriteria || []).length]), (state.dashboard?.questions || []).map((question) => [question.id, question.question, (question.choices || []).length])]); const signature = session ? JSON.stringify([session, globalDecisions]) : JSON.stringify(["welcome", globalDecisions]); if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = `${decisionDock(null)}${welcomeMarkup()}`; $("conversation").scrollTop = 0; renderConversationOutline(); return; } const conversation = session.kind === "conversation"; const conversationLog = conversation ? turnLogMarkup(session) : ""; const showWelcome = conversation && conversationLog.length === 0; content.innerHTML = showWelcome ? `${decisionDock(session)}${welcomeMarkup()}` : `<div class="day-divider">${day(session.updatedAt)}</div>${dispatchSourceMarkup(session)}${decisionDock(session)}${conversation ? conversationLog : session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); revealAgentFocus(session.id); renderConversationOutline(); requestAnimationFrame(updateScrollBottom); }
+async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; setConversationOutline(false); state.composingNew = false; state.newConversationId = null; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); syncComposer(); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); void hydrateTurnChoice(activeConversationId()); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
 async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) {
   if (state.routing) return;
   // A selection is being read; its chips and the next paint matter more than a
@@ -4541,11 +4648,25 @@ $("query").addEventListener("keydown", (event) => {
   }
   if (!event.shiftKey) { event.preventDefault(); $("request-form").requestSubmit(); }
 });
-document.addEventListener("keydown", (event) => { if (event.key === "Escape") { setSidebarOpen(false); closeSchedules(); closeSettings(); } });
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") { setSidebarOpen(false); closeSchedules(); closeSettings(); setConversationOutline(false); } });
 function updateScrollBottom() { const viewport = $("conversation"); const far = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop > 160; $("scroll-bottom").classList.toggle("visible", far); }
 $("conversation").addEventListener("scroll", rememberCurrentScroll, { passive: true });
 $("conversation").addEventListener("scroll", updateScrollBottom, { passive: true });
 $("scroll-bottom").addEventListener("click", () => { const viewport = $("conversation"); viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" }); });
+$("conversation-outline-toggle").addEventListener("click", () => { setConversationOutline(!state.outlineOpen); });
+$("conversation-outline").addEventListener("click", (event) => { const row = event.target.closest("[data-outline-index]"); if (row) jumpToConversationTarget(Number(row.dataset.outlineIndex)); });
+$("conversation-outline").addEventListener("keydown", (event) => {
+  const rows = [...$("conversation-outline-list").querySelectorAll("[data-outline-index]")];
+  if (rows.length === 0) return;
+  if (event.key === "Home" || event.key === "End") { event.preventDefault(); rows[event.key === "Home" ? 0 : rows.length - 1].focus(); return; }
+  const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+  if (step === 0) return;
+  event.preventDefault();
+  const current = rows.indexOf(document.activeElement);
+  rows[Math.min(rows.length - 1, Math.max(0, current + step))].focus();
+});
+document.addEventListener("click", (event) => { if (!state.outlineOpen) return; if (event.target.closest("#conversation-outline, #conversation-outline-toggle")) return; setConversationOutline(false); });
+$("conversation").addEventListener("scroll", () => { if (state.outlineOpen) scheduleConversationOutlineCurrent(); }, { passive: true });
 $("sidebar-resizer").addEventListener("pointerdown", (event) => { sidebarResizeActive = true; document.body.classList.add("sidebar-resizing"); event.currentTarget.setPointerCapture(event.pointerId); applySidebarWidth(event.clientX); });
 $("sidebar-resizer").addEventListener("pointermove", (event) => { if (sidebarResizeActive) applySidebarWidth(event.clientX); });
 $("sidebar-resizer").addEventListener("pointerup", (event) => { sidebarResizeActive = false; document.body.classList.remove("sidebar-resizing"); event.currentTarget.releasePointerCapture(event.pointerId); });

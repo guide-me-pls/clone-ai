@@ -31,6 +31,147 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-25 — The outline toggle becomes a 34 px icon in the gutter
+
+- **Goal / hypothesis:** the owner's screenshot of the 1240 px default window
+  showed the 目录 pill sitting on the turn's 查看审计 link. Hypothesis: the pill's
+  content-driven width (128 px with the raw `outline-toggle` key) outgrew the
+  129 px right gutter, so a 34 px icon at the same slot clears the audit link at
+  the default width while keeping the panel's anchor.
+- **Trade-off:** [The outline toggle is an icon in the gutter](../architecture/trade-offs.md#2026-11-25--the-outline-toggle-is-an-icon-in-the-gutter).
+- **Change:** `apps/desktop/ui/components.css` — the toggle is a 34×34 icon-only
+  circle (`inline-grid`, `place-items: center`, `border-radius: 50%`), the label
+  becomes a clipped accessible name that reappears beside the icon on keyboard
+  focus, and a hover border replaces the pill's visible text; `.workspace`
+  becomes an inline-size container and a `@container (max-width: 884px)` rule
+  gives the turn's `.log-basis-open` (查看审计) a 44 px right inset only while
+  the outline toggle is visible, so the window-pinned icon never covers the link
+  in a narrow workspace or with a wide sidebar; `apps/desktop/ui/index.html` —
+  the button carries `data-i18n="outline-toggle" data-i18n-attr="title"` so the
+  tooltip follows the locale; `test/ui-structure.test.ts` — one structural case
+  pins the 34 px square, its slot, the clipped label, the focus label, the title
+  attribute, the label text, the panel's 196 px bottom and the container-query
+  guard. No JS, request, storage or ledger change.
+- **Eval:** `node --experimental-strip-types --test --test-name-pattern="outline toggle" test/ui-structure.test.ts`
+  against a copy of the pre-change UI (the labeled pill and the old markup,
+  `/tmp/clone-ui-before`): **0/1**, red on `width: 34px; height: 34px`; on the
+  working tree: **1/1**, and the three affected suites
+  (`ui-structure`, `conversation-outline`, `ui-sidebar-hidden-restore`)
+  **59/59**. Full `npm test`: **1183/1184**, the one failure being the existing
+  `EADDRINUSE 127.0.0.1:4318` in `test/whatsapp-bridge.test.ts` because the
+  desktop daemon holds the port. An earlier full run also tripped
+  `test/workspace-watch.test.ts` (0 !== 1) while the probe browsers were
+  running; that test alone then passed **3/3**, so it is timing flakiness under
+  load, not this change. `npm run typecheck` exit 0; `npm run gate` PASS
+  (baseline unchanged).
+- **Visual eval:** headless Chrome over CDP against the live daemon at
+  1240×911 with the 220 px sidebar this build restores, with the old
+  declarations injected for the before state: before the toggle measured
+  **128×34** at x 1084–1212 and the last 查看审计 link **62×24** at x 1048–1111,
+  y 726–750 — a **26 px overlap**; after the toggle measures **34×34** at
+  x 1178–1212 and its left edge sits **68 px clear**. The opened panel measured
+  320×460 at x 892–1212, y 255–715: its right edge stays on the button's right
+  edge and its bottom stays 10 px above the button. Screenshots
+  `/tmp/clone-ui-probe/before-1240.png` and `after-1240.png` (scratch, not
+  committed). The first pass still overlapped at narrow workspaces; the
+  container-query guard closes that: at 1240×911 with the sidebar at its 520 px
+  maximum (workspace 719 px) the link's right edge moves from 1206 to **1162**
+  (16 px clear); at 1000×800 with the 220 px sidebar the link moves to **922**
+  (16 px clear); at 760×900 it moves to **700** (10 px clear); at 1468×1080 the
+  icon is 182 px clear. `elementFromPoint` at the link's centre returns the link
+  at every size, and the 1240 px layout is unchanged by `container-type` (inner
+  760 px at x 351–1111, composer at 351–1111).
+- **Benchmark run:** none — a deterministic UI contract plus a local visual
+  measurement; no provider, model, dataset, split, seed or scoring parameter.
+- **Execution chain:** one session; the change itself was direct, and a
+  three-lens review workflow (visual, accessibility, repository rules) ran
+  afterwards. (1) Opened the live daemon's UI in headless Chrome at the default
+  window size and measured the toggle, the audit link, the composer and the
+  column over CDP. (2) Read the outline CSS, markup, tests and the two relevant
+  trade-offs (the 2026-11-20 reading-measure entry and the 2026-11-25 outline
+  entry). (3) Wrote the trade-off, changed the CSS/markup, added the structural
+  test. (4) Measured before/after by injecting the old declarations into the
+  same page, opened the panel, and checked 1468, 1000 and 760 widths. (5) Ran
+  the focused suites, the full suite, typecheck and the gate. (6) The review
+  workflow's visual and accessibility lenses independently reproduced a click
+  interception at narrow widths and wide sidebars, and its rules lens caught the
+  same residual as a documentation gap; added the container-query guard, its
+  test assertions and the measurements above, then re-ran the suites. About
+  forty minutes wall-clock; no provider calls.
+- **Pros:** measuring the live page at the default window gave the actual
+  geometry instead of a guess; injecting the old declarations measured both
+  states in the same browser and viewport, so the 26 px → 68 px comparison has
+  no layout drift. The adversarial review paid for itself: it found the
+  narrow-width click interception my first pass left behind and verified the fix
+  at the supported window and sidebar extremes.
+- **Cons / next time:** the first probe connected to a stale Chrome instance
+  because the size arguments were split wrongly in zsh, so the new process could
+  not bind the debug port; three identical measurements gave it away. Next time
+  give each probe a unique profile/port and assert `innerWidth` before trusting
+  a measurement. The container-query guard moves the audit link 44 px inward in
+  narrow workspaces (a deliberate alignment change) and needs a WebView with
+  container-query support; without it the inset does not apply and the old
+  narrow-window overlap returns. The review also noted the icon-only control has
+  no visible word on keyboard focus; the focus-visible label now covers that,
+  while the title tooltip stays pointer-only.
+- **Reversal condition:** reverse if the outline becomes a primary entry point
+  and the owner needs the words visible: restore a labeled pill only at widths
+  whose measured gutter fits pill + 28 px + 12 px, and keep the icon below that.
+
+### 2026-11-25 — A long conversation gets a jump list
+
+- **Goal / hypothesis:** the owner asked for Codex-style navigation in a long
+  conversation ("对话记录最好做一个codex那种可以跳转的，不然对话太多容易找不到上面的内容").
+  The thread renders as one `innerHTML` column with no per-turn ids and the only
+  navigation is 回到底部. Hypothesis: an outline built from the rendered request
+  anchors finds any earlier request in one click without changing the reading
+  layout.
+- **Trade-off:** [A long conversation gets a jump
+  list](../architecture/trade-offs.md#2026-11-25--a-long-conversation-gets-a-jump-list-not-more-scrolling).
+- **Change:** `apps/desktop/ui/index.html` — outline toggle and panel;
+  `apps/desktop/ui/app.js` — `data-jump-id`/`data-jump-at`/`data-jump-status` on
+  `logQueryMarkup`'s request bubble (called with the turn entry) and on person
+  messages, plus `conversationOutlineEntries`, `renderConversationOutline`,
+  `markConversationOutlineCurrent`, `setConversationOutline`,
+  `jumpToConversationTarget`, arrow/Home/End keys, outside-click and Escape
+  close; `apps/desktop/ui/components.css` — toggle, panel, rows, jump flash and
+  the mobile placement; `src/desktop/ui-locale.ts` — outline keys in both
+  languages; `test/conversation-outline.test.ts` and `test/ui-structure.test.ts`.
+- **Eval:** `node --experimental-strip-types --test
+  test/regression/ui-sidebar-hidden-restore.test.ts test/conversation-outline.test.ts
+  test/ui-structure.test.ts` **58/58**; the new outline file **4/4**; full
+  `npm test` **1182/1183** — the single failure is `test/whatsapp-bridge.test.ts`
+  failing with `EADDRINUSE 127.0.0.1:4318` because the running desktop daemon
+  (PID 81864) holds that port, and it fails the same way on a rerun without this
+  change; `npm run typecheck` exit 0; `npm run gate` PASS. Before the change
+  there were no outline tests and no navigation beyond 回到底部. Chrome visual
+  check with the shipped CSS: the toggle and panel sit above 回到底部, the
+  current row is marked, and the two-line label distinguishes two
+  request texts that both start with the same sentence. Live against the
+  running companion UI (`http://127.0.0.1:60600/`, 50 request anchors): the
+  toggle was visible, opening the panel marked row 48 as current at the bottom,
+  clicking row 0 moved `scrollTop` 42,874 → 6,741, closed the panel and flashed
+  the target; no console or page errors.
+- **Benchmark run:** none; deterministic UI tests only.
+- **Execution chain:** located the renderer (`turnLogMarkup`, `logQueryMarkup`,
+  `messageMarkup`, `renderSession`), chose rendered anchors over
+  `session.turns` so a task record and a conversation use one source, added the
+  markup, styles, locale keys and rendering, wrote the vm-driven outline tests,
+  fixed one harness gap (`setConversationOutline` reads rows through the list
+  node, so the fake list had to return them), then checked the layout in Chrome
+  and changed the label from one clamped line to two so requests sharing a
+  prefix remain distinguishable. No other failures or retries.
+- **Pros:** one source for the list and the anchors; keyboard access and
+  `aria-current` come with the same markup; the panel only appears when it can
+  be useful (two or more requests).
+- **Cons / next time:** the list is built on each session render; a virtualized
+  conversation would need to read `session.turns` instead. Rendering the panel
+  from DOM means it only lists requests that are currently rendered, which is
+  the intent but must be revisited if `turnsOmitted` grows.
+- **Reversal condition:** copied from the trade-off — virtualized conversation
+  or a need for full-text search, in which case search replaces the list rather
+  than stacking on it.
+
 ### 2026-11-25 — Hidden-conversation restore reachability (superseded)
 
 - **Goal / hypothesis:** the owner pointed at the hidden group in the sidebar

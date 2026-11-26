@@ -340,6 +340,7 @@ test("populated conversations stay vertical and empty-state flex requires no mes
     verificationMarkup: () => "",
     restoreDisclosureScrolls: () => {}, requestAnimationFrame: () => {}, updateScrollBottom: () => {},
     revealAgentFocus: () => {},
+    renderConversationOutline: () => {},
   });
   renderSession(null);
   assert.equal(empty, true);
@@ -442,6 +443,12 @@ test("a conversation renders each turn as a right-hand request and a left-hand a
   // 所有者的请求是靠右的气泡，回答是左侧章节；两个声音不再共用一条被截断的标题行。
   assert.match(html, /class="turn-query"/);
   assert.match(html, /class="turn-query-bubble"/);
+  // The request bubble is also the outline's anchor: the jump list reads the
+  // same DOM the owner sees, with the turn id, start time and status.
+  // 请求气泡同时是目录的锚点：跳转列表读的是所有者看到的同一份 DOM，带回合 id、开始时间与状态。
+  assert.match(html, /data-jump-id="turn-1"/);
+  assert.match(html, /data-jump-at="2026-11-18T08:59:00.000Z"/);
+  assert.match(html, /data-jump-status="completed"/);
   assert.match(html, /class="log-entry-kicker">clone-ai/);
   assert.doesNotMatch(html, /<b class="log-query">整理资料/);
   // Work updates join the same log and keep their own label.
@@ -2083,4 +2090,31 @@ test("a model question renders choice buttons in the chat dock", async () => {
   assert.doesNotMatch(markup(), /data-question-other=/);
   state.dashboard.questions = [];
   assert.equal(markup(), "");
+});
+
+test("the conversation outline toggle fits the reading column's gutter", async () => {
+  const css = await read("components.css");
+  const index = await read("index.html");
+  // A labeled pill is content-sized: with the raw key it was 128 px wide and
+  // covered the turn's 查看审计 link at the 1240 px default window. The toggle
+  // is a compact icon; the label stays as the accessible name and the title.
+  // 带文字的胶囊由内容撑开：原始键名下宽 128px，在 1240px 默认窗口会盖住回合的
+  // 「查看审计」链接。按钮改为紧凑图标；文字保留为无障碍名称与 title。
+  assert.match(css, /\.conversation-outline-toggle \{[^}]*width: 34px; height: 34px;/);
+  assert.match(css, /\.conversation-outline-toggle \{[^}]*right: 28px; bottom: 152px;/);
+  assert.match(css, /\.conversation-outline-toggle \{[^}]*border-radius: 50%;/);
+  assert.match(css, /\.conversation-outline-toggle > span \{[^}]*clip-path: inset\(50%\);/);
+  // The word appears beside the icon when a keyboard user focuses it.
+  // 键盘用户聚焦时，文字显示在图标旁边。
+  assert.match(css, /\.conversation-outline-toggle:focus-visible > span \{[^}]*clip-path: none;/);
+  assert.match(index, /id="conversation-outline-toggle"[^>]*data-i18n="outline-toggle" data-i18n-attr="title"/);
+  assert.match(index, /id="conversation-outline-toggle"[\s\S]*?<span data-i18n="outline-toggle">目录<\/span>/);
+  // The panel keeps its 10 px gap above the 34 px button: 196 = 152 + 34 + 10.
+  // 浮层与 34px 按钮之间保持 10px：196 = 152 + 34 + 10。
+  assert.match(css, /\.conversation-outline \{[^}]*right: 28px; bottom: 196px;/);
+  // When the workspace is narrower than the column (760 px) plus the icon's
+  // footprint on both sides (2 × 62 px), the link reserves its lane.
+  // 工作区窄于阅读栏（760px）加上图标两侧占地（2 × 62px）时，链接让出这条车道。
+  assert.match(css, /\.workspace \{ container-type: inline-size; \}/);
+  assert.match(css, /@container \(max-width: 884px\) \{\s*body:has\(#conversation-outline-toggle:not\(\[hidden\]\)\) \.log-basis-open \{ margin-right: 44px; \}/);
 });

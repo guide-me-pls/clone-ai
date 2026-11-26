@@ -15,6 +15,58 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-25 — The outline button no longer covers a turn's 查看审计 link
+
+- **Claim:** the conversation outline's control is a 34×34 icon in the reading
+  column's right gutter. At the desktop window's default 1240×911 it sits 68 px
+  clear of the last turn's 查看审计 link; the labeled pill it replaced was 128 px
+  wide and overlapped that link by 26 px. The popover keeps its anchor (right
+  edge on the button's right edge, 10 px above it), and the label remains the
+  button's accessible name and title, appearing beside the icon on keyboard
+  focus. When the workspace leaves too little gutter for the icon (≤ 884 px, a
+  narrow window or a wide sidebar), the audit link reserves a 44 px lane via a
+  container query, so the icon never covers the link and its clicks stay on the
+  link.
+- **Evidence:** headless Chrome over CDP against the live daemon at 1240×911
+  with the 220 px sidebar this build restores (the old declarations injected for
+  the before state): toggle **128×34** at x 1084–1212 vs the audit link
+  **62×24** at x 1048–1111 (26 px overlap) → toggle **34×34** at x 1178–1212
+  (68 px clear); the opened panel 320×460 at x 892–1212, y 255–715. With the
+  sidebar at its 520 px maximum (workspace 719 px) the link's right edge moves
+  from 1206 to **1162**; at 1000×800 with the 220 px sidebar to **922**; at
+  760×900 to **700** — 16, 16 and 10 px clear, and `elementFromPoint` at the
+  link's centre returns the link at every size. `test/ui-structure.test.ts` new
+  case **0/1 before → 1/1 after**; the three affected suites **59/59**; full
+  `npm test` **1183/1184** (the one failure is the existing
+  `EADDRINUSE 127.0.0.1:4318`); `npm run typecheck` 0; `npm run gate` PASS.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--the-outline-toggle-is-an-icon-in-the-gutter);
+  [execution chain](optimizations.md#2026-11-25--the-outline-toggle-becomes-a-34-px-icon-in-the-gutter).
+
+## 2026-11-25 — A long conversation is navigable from its request list
+
+- **Claim:** a conversation with two or more requests has a 目录 icon button
+  above 回到底部. The panel lists every request with its time and status, marks the
+  request at the reading line, and jumping scrolls that request to the top,
+  flashes it and closes the panel. The anchors are the rendered request bubbles
+  and person messages, so the list cannot drift from the screen. Arrow/Home/End
+  move through the rows; Escape or a click outside closes it.
+- **Evidence:** `test/conversation-outline.test.ts` **4/4** (the real functions
+  run against a DOM stand-in: one row per anchor, toggle only from two requests,
+  current-row marking and focus, jump scroll target `300 + 420 − 12 = 708` and
+  the flash timer); `test/ui-structure.test.ts` and
+  `test/regression/ui-sidebar-hidden-restore.test.ts` plus the outline file
+  **58/58**; `npm run typecheck` 0; `npm run gate` PASS; full `npm test`
+  **1182/1183**, the single failure being the unrelated
+  `EADDRINUSE 127.0.0.1:4318` in `test/whatsapp-bridge.test.ts` while the
+  desktop daemon holds that port. Chrome with the shipped CSS: the toggle and
+  panel sit above 回到底部, the current row is highlighted, and two-line labels
+  distinguish requests that share a prefix. Live against the running companion
+  UI (`http://127.0.0.1:60600/`, 50 anchors): opening the panel marked row 48
+  as current at the bottom, clicking row 0 moved `scrollTop` 42,874 → 6,741,
+  closed the panel and flashed the target; no console or page errors.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--a-long-conversation-gets-a-jump-list-not-more-scrolling);
+  [execution chain](optimizations.md#2026-11-25--a-long-conversation-gets-a-jump-list).
+
 ## 2026-11-25 — The Main Agent asks with buttons and resumes the same turn
 
 - **Claim:** the Main Agent has a blocking `ask_owner` tool. It takes a short

@@ -6,6 +6,22 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The outline button is a compact icon that clears the turn's audit link
+
+The conversation outline's 目录 button was a labeled pill whose width followed its text; at the desktop window's default size it covered the last turn's 查看审计 link. It is now a 34×34 icon in the reading column's right gutter, still above 回到底部, with the label kept as its accessible name and tooltip and shown beside the icon on keyboard focus; the panel opens in the same place. In a narrow window or with a wide sidebar, where the column reaches the icon, the turn's 查看审计 link reserves a 44 px lane so the icon never covers it. `test/ui-structure.test.ts` new case 0/1 before → 1/1 after; affected suites 59/59; `npm test` 1183/1184 (the one failure is the existing `EADDRINUSE 127.0.0.1:4318` while the desktop daemon holds the port); `npm run typecheck` 0; `npm run gate` PASS.
+
+### 目录按钮改为紧凑图标，不再盖住回合的审计链接
+
+对话目录的「目录」按钮原来是宽度随文字变化的胶囊；在桌面窗口的默认尺寸下会盖住最后一个回合的「查看审计」链接。现在它是阅读栏右侧留白里的 34×34 图标，仍在「回到底部」上方，文字保留为无障碍名称与提示，并在键盘聚焦时显示在图标旁边；浮层位置不变。窄窗口或宽侧栏下阅读栏会靠近图标，此时回合的「查看审计」链接让出 44px 车道，图标不再盖住它。`test/ui-structure.test.ts` 新增用例变更前 0/1 → 变更后 1/1；受影响套件 59/59；`npm test` 1183/1184（唯一失败是运行中的桌面守护进程占用 `127.0.0.1:4318` 导致的既有 `EADDRINUSE`）；`npm run typecheck` 0；`npm run gate` PASS。
+
+### A long conversation gets a jump list
+
+A conversation with more than one request now has a 目录 icon button above 回到底部. It opens a list of every request with its time and status, marks the request currently on screen, and jumps to a row on click (Arrow/Home/End also work). The anchors are the request bubbles in a turn log and the person messages in a task record, so the list cannot drift from what is rendered. The panel closes after a jump and the target flashes once. `test/conversation-outline.test.ts` 4/4; affected suites 58/58; `npm test` 1182/1183 (one unrelated `EADDRINUSE 127.0.0.1:4318` because the running desktop daemon holds the port); `npm run typecheck` 0; `npm run gate` PASS. Live against the running companion UI (50 anchors): opening marked the bottom request, clicking the first row moved `scrollTop` 42,874 → 6,741 and flashed the target; no console errors.
+
+### 长对话得到跳转目录
+
+超过一次请求的对话现在在「回到底部」上方有「目录」图标按钮。它列出每次请求的时间与状态，标记屏幕上正在读的那一次，点击行即跳转（也支持方向键与 Home/End）。锚点是回合日志里的请求气泡与任务记录里的 person 消息，因此列表不会与渲染内容漂移。跳转后浮层关闭，目标闪烁一次。`test/conversation-outline.test.ts` 4/4；受影响套件 58/58；`npm test` 1182/1183（一个无关的 `EADDRINUSE 127.0.0.1:4318`，因为运行中的桌面守护进程占用该端口）；`npm run typecheck` 0；`npm run gate` PASS。实机连接运行中的 Companion UI（50 个锚点）：打开时标记底部请求，点击第一行把 `scrollTop` 从 42,874 移到 6,741 并闪烁目标；没有控制台错误。
+
 ### Deleted conversations leave the sidebar
 
 Deleting a conversation used to leave a hidden row and a restore button, so the list never actually shrank. The sidebar now drops the conversation and its task rows entirely; the hidden group, the restore control and their strings are gone. The runtime journal, audit ledger, memory and backups are untouched — the audit still holds the records. `test/regression/ui-sidebar-hidden-restore.test.ts` now asserts a deleted conversation never renders; `npm test` 1182/1183 (the one failure is the existing `EADDRINUSE 127.0.0.1:4318` while the desktop daemon holds the port); `npm run typecheck` exit 0; `npm run gate` PASS.

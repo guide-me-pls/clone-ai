@@ -26,6 +26,105 @@
 - **推翻条件：** 从取舍条目复制。
 ```
 
+### 2026-11-25 —— 目录按钮改为留白里的 34px 图标
+
+- **目标 / 假设：** 所有者在 1240px 默认窗口的截图里，「目录」胶囊压在回合的「查看审计」链接上。
+  假设：胶囊宽度由内容决定（原始 `outline-toggle` 键名下 128px），超过了 129px 的右侧留白；
+  同一槽位换成 34px 图标即可在默认宽度下让开审计链接，同时保持浮层的锚点。
+- **取舍：** [目录按钮改为留白里的图标](../architecture/trade-offs.zh-CN.md#2026-11-25--目录按钮改为留白里的图标)。
+- **变更：** `apps/desktop/ui/components.css`——按钮改为 34×34 的纯图标圆形
+  （`inline-grid`、`place-items: center`、`border-radius: 50%`），文字标签改为被裁剪的
+  无障碍名称，并在键盘聚焦时显示在图标旁边；用悬停描边替代可见文字；`.workspace` 成为
+  inline-size 容器，新增 `@container (max-width: 884px)` 规则：仅在目录按钮可见时给回合的
+  `.log-basis-open`（查看审计）加 44px 右内缩，使固定在窗口边缘的图标在窄工作区或宽侧栏下
+  也不会盖住链接；`apps/desktop/ui/index.html`——按钮加上
+  `data-i18n="outline-toggle" data-i18n-attr="title"`，让提示跟随语言；
+  `test/ui-structure.test.ts`——新增一个结构用例，钉住 34px 方形、槽位、被裁剪的标签、
+  聚焦标签、title 属性、标签文字、浮层的 196px 底距与容器查询护栏。不改 JS、请求、存储或
+  账本。
+- **Eval：** `node --experimental-strip-types --test --test-name-pattern="outline toggle" test/ui-structure.test.ts`
+  对着变更前的 UI 副本（带文字的胶囊与旧标记，`/tmp/clone-ui-before`）：**0/1**，红在
+  `width: 34px; height: 34px`；工作树上：**1/1**，三个受影响套件（`ui-structure`、
+  `conversation-outline`、`ui-sidebar-hidden-restore`）**59/59**。完整 `npm test`：
+  **1183/1184**，唯一失败是既有的 `EADDRINUSE 127.0.0.1:4318`
+  （`test/whatsapp-bridge.test.ts`，桌面守护进程占用该端口）。更早的一次完整运行还在
+  `test/workspace-watch.test.ts` 上出现 0 !== 1（当时探针浏览器在跑）；单独重跑该文件
+  **3/3**，属于负载下的时序抖动，与本次变更无关。`npm run typecheck` 退出码 0；
+  `npm run gate` PASS（基线未变）。
+- **视觉 Eval：** 用无头 Chrome（CDP）对着运行中的守护进程，在 1240×911、本构建恢复的
+  220px 侧栏下注入旧声明得到变更前状态：按钮 **128×34**，x 1084–1212；最后一个
+  「查看审计」链接 **62×24**，x 1048–1111、y 726–750——**相交 26px**。变更后按钮
+  **34×34**，位于 x 1178–1212，左缘距链接 **68px**。打开浮层实测 320×460，位于
+  x 892–1212、y 255–715：右缘仍与按钮右缘对齐，底部仍在按钮上方 10px。截图
+  `/tmp/clone-ui-probe/before-1240.png` 与 `after-1240.png`（临时文件，未提交）。
+  第一版在窄工作区仍会重叠；容器查询护栏把它关掉：1240×911 且侧栏拉到 520px 上限
+  （工作区 719px）时，链接右缘从 1206 移到 **1162**（让开 16px）；1000×800、220px
+  侧栏下移到 **922**（让开 16px）；760×900 下移到 **700**（让开 10px）；1468×1080 下
+  图标距链接 182px。上述尺寸下用 `elementFromPoint` 命中链接中心都返回链接本身；
+  `container-type` 不改变 1240 下的版式（阅读栏 760px、x 351–1111，输入框同为
+  351–1111）。
+- **Benchmark run：** 无——确定性的 UI 契约加本地视觉测量；无 Provider、模型、数据集、
+  切分、种子或评分参数。
+- **执行链路：** 一个会话；变更本身直接完成，之后跑了一个三镜头（视觉、无障碍、仓库规则）
+  的审查 Workflow。（1）用无头 Chrome 在默认窗口尺寸打开运行中的守护进程 UI，通过 CDP
+  量按钮、审计链接、输入框与阅读栏；（2）读目录 CSS、标记、测试与两条相关取舍
+  （2026-11-20 阅读行宽条目与 2026-11-25 目录条目）；（3）写取舍、改 CSS/标记、加结构
+  测试；（4）把旧声明注入同一页面量变更前/后，打开浮层，并检查 1468、1000、760 宽度；
+  （5）跑聚焦套件、完整套件、typecheck 与 gate；（6）审查 Workflow 的视觉与无障碍镜头
+  独立复现了窄窗口/宽侧栏下的点击拦截，规则镜头把同一残留记为文档缺口；随后加上容器查询
+  护栏、测试断言与上述测量，并重跑套件。约 40 分钟；无 Provider 调用。
+- **优点：** 在默认窗口下量真实页面，得到的是实际几何而不是猜测；把旧声明注入同一个浏览器与
+  同一视口，26px → 68px 的对比没有布局漂移。对抗式审查本身是划算的：它找出了第一版留下的
+  窄宽度点击拦截，并在受支持的窗口与侧栏极值下验证了修复。
+- **缺点 / 下次：** 第一个探针因为 zsh 的分词把尺寸参数拆错，连到了旧的 Chrome 实例，新的
+  进程无法绑定调试端口；三次完全相同的测量暴露了问题。下次给每个探针独立的 profile/端口，
+  并在信任测量前断言 `innerWidth`。容器查询护栏会在窄工作区把审计链接内缩 44px（有意的
+  对齐变化），并需要支持容器查询的 WebView；不支持时内缩不生效，旧的窄窗口重叠会回来。
+  审查还指出纯图标控件在键盘聚焦时没有可见文字；现在的 focus-visible 标签覆盖了这一点，
+  `title` 提示仍只在指针悬停时出现。
+- **推翻条件：** 若目录成为主要入口、所有者需要看见文字，则只在实测留白放得下
+  「胶囊 + 28px + 12px」的宽度恢复带文字的胶囊，其下仍用图标。
+
+### 2026-11-25 —— 长对话得到一份跳转目录
+
+- **目标 / 假设：** 所有者要求长对话有 Codex 那种导航（"对话记录最好做一个codex那种可以跳转的，
+  不然对话太多容易找不到上面的内容"）。线程是一整列 `innerHTML`，回合没有 id，唯一的导航是
+  「回到底部」。假设：从渲染出的请求锚点构建目录，可以在不改阅读布局的前提下一次点击找到
+  任何较早的请求。
+- **取舍：** [长对话得到一份跳转目录，而不是更多滚动](../architecture/trade-offs.zh-CN.md#2026-11-25--长对话得到一份跳转目录而不是更多滚动)。
+- **变更：** `apps/desktop/ui/index.html`——目录按钮与浮层；`apps/desktop/ui/app.js`——
+  在 `logQueryMarkup` 的请求气泡（调用时传入回合条目）与 person 消息上写
+  `data-jump-id`/`data-jump-at`/`data-jump-status`，并新增
+  `conversationOutlineEntries`、`renderConversationOutline`、
+  `markConversationOutlineCurrent`、`setConversationOutline`、
+  `jumpToConversationTarget`、方向键/Home/End、点击外部与 Escape 关闭；
+  `apps/desktop/ui/components.css`——按钮、浮层、行、跳转闪烁与移动端位置；
+  `src/desktop/ui-locale.ts`——双语目录文案；`test/conversation-outline.test.ts` 与
+  `test/ui-structure.test.ts`。
+- **Eval：** `node --experimental-strip-types --test
+  test/regression/ui-sidebar-hidden-restore.test.ts test/conversation-outline.test.ts
+  test/ui-structure.test.ts` **58/58**；新增目录套件 **4/4**；完整 `npm test`
+  **1182/1183**——唯一失败是 `test/whatsapp-bridge.test.ts` 的
+  `EADDRINUSE 127.0.0.1:4318`，因为运行中的桌面守护进程（PID 81864）占用该端口，且该用例
+  在未含本次变更的重跑中同样失败；`npm run typecheck` 退出 0；`npm run gate` PASS。
+  变更前没有目录测试，除「回到底部」外没有导航。用发布中的 CSS 在 Chrome 目检：按钮与浮层
+  位于「回到底部」上方，当前行被标记，两行式标签能区分两条都以同一句话开头的请求。实机连接
+  运行中的 Companion UI（`http://127.0.0.1:60600/`，50 个请求锚点）：按钮可见，打开浮层时
+  标记底部第 48 行为当前，点击第 0 行把 `scrollTop` 从 42,874 移到 6,741，浮层关闭并闪烁
+  目标；没有控制台或页面错误。
+- **Benchmark run：** 无；仅确定性 UI 测试。
+- **执行链路：** 定位渲染器（`turnLogMarkup`、`logQueryMarkup`、`messageMarkup`、
+  `renderSession`）；选择渲染出的锚点而不是 `session.turns`，让任务记录与对话共用一份来源；
+  加入标记、样式、文案键与渲染；编写 vm 驱动的目录测试；修复一处测试台缺口
+  （`setConversationOutline` 通过列表节点读行，假列表必须返回它们）；在 Chrome 目检布局后，
+  把标签从一行截断改为两行，使共享前缀的请求仍可区分。没有其他失败或重试。
+- **优点：** 列表与锚点同源；键盘访问与 `aria-current` 随标记一起获得；只有两次以上请求时
+  才出现浮层，不占无用空间。
+- **缺点 / 下次：** 每次会话渲染都会重建列表；若对话改为虚拟列表，需要改读 `session.turns`。
+  从 DOM 构建意味着只列当前已渲染的请求——这符合本意，但 `turnsOmitted` 变大时必须重新考虑。
+- **推翻条件：** 摘自取舍条目——对话改为虚拟列表，或需要全文搜索；此时用搜索替换列表，
+  而不是叠加。
+
 ### 2026-11-25 —— 隐藏对话的恢复可达性（已被取代）
 
 - **目标 / 假设：** 所有者指着侧栏隐藏组询问恢复入口。第一条隐藏行因长标题把「恢复」按钮

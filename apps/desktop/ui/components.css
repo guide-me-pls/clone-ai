@@ -819,6 +819,52 @@ button.memory-stat:focus-visible { outline: 2px solid var(--accent); outline-off
 .schedule-row { border-bottom-color: var(--line); }
 .schedule-row b { color: var(--text); }
 .scroll-bottom { bottom: 108px; border-color: var(--line); color: var(--accent); background: var(--surface-raised); }
+/* Conversation outline: a jump list for a long thread. The toggle is a compact
+ * icon in the reading column's right gutter, above 回到底部; a labeled pill was
+ * 128 px wide and covered the turn's 查看审计 link at the 1240 px default window
+ * (129 px gutter). The label stays as the accessible name and as the title.
+ * 对话目录：长线程的跳转列表。按钮是阅读栏右侧留白里的紧凑图标，位于「回到底部」上方；
+ * 带文字的胶囊宽 128px，在 1240px 默认窗口（129px 留白）会盖住回合的「查看审计」链接。
+ * 文字保留为无障碍名称与 title。 */
+.conversation-outline-toggle { position: absolute; z-index: 3; right: 28px; bottom: 152px; display: inline-grid; width: 34px; height: 34px; padding: 0; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--accent); background: var(--surface-raised); box-shadow: var(--shadow); cursor: pointer; }
+.conversation-outline-toggle:hover { border-color: var(--line-strong); }
+.conversation-outline-toggle svg { width: 15px; height: 15px; }
+.conversation-outline-toggle > span { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.conversation-outline-toggle[aria-expanded="true"] { border-color: var(--accent); }
+.conversation-outline-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, white); outline-offset: 2px; }
+/* The title tooltip only appears on pointer hover; a sighted keyboard user
+ * needs the word too. Show the clipped label beside the icon on focus.
+ * title 提示只在指针悬停时出现；有视力的键盘用户也需要看见文字。聚焦时把被裁剪的
+ * 标签显示在图标旁边。 */
+.conversation-outline-toggle:focus-visible > span { position: absolute; top: 50%; right: calc(100% + 8px); transform: translateY(-50%); width: auto; height: auto; margin: 0; padding: 4px 8px; overflow: visible; clip-path: none; border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow); font-size: 12px; white-space: nowrap; }
+.conversation-outline { position: absolute; z-index: 4; right: 28px; bottom: 196px; display: flex; flex-direction: column; width: min(320px, calc(100% - 56px)); max-height: min(56vh, 460px); border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: var(--shadow); overflow: hidden; }
+.conversation-outline-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 10px 14px 8px; border-bottom: 1px solid var(--line); }
+.conversation-outline-head b { color: var(--text); font-size: 12px; font-weight: 600; }
+.conversation-outline-count { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+.conversation-outline-list { flex: 1 1 auto; min-height: 0; margin: 0; padding: 6px; list-style: none; overflow-y: auto; }
+.conversation-outline-row { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.conversation-outline-row:hover { background: #f2f3ee; }
+.conversation-outline-row[aria-current="true"] { background: #eaeee6; }
+.conversation-outline-row:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, white); outline-offset: 1px; }
+.conversation-outline-label { display: -webkit-box; flex: 1 1 auto; min-width: 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--text); font-size: 12px; line-height: 1.35; }
+.conversation-outline-row time { flex: none; color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.conversation-outline-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #c9c9c2; align-self: center; }
+.conversation-outline-dot.ok { background: var(--success); }
+.conversation-outline-dot.bad { background: var(--danger); }
+.conversation-outline-dot.warn { background: var(--warning, #b67d36); }
+.conversation-outline-dot.info { background: #7a8fa6; }
+/* The icon is pinned to the window edge, so a narrow workspace (or a wide
+ * sidebar) brings the reading column's right edge under it and the last turn's
+ * 查看审计 link loses the covered clicks. Below 884 px the column's right gap is
+ * narrower than the icon's 62 px footprint (28 px + 34 px); reserve that lane
+ * on the link, and leave it flush when the gutter already fits.
+ * 图标固定在窗口边缘，工作区变窄（或侧栏拉宽）时阅读栏右缘会落到它下面，最后一个
+ * 回合的「查看审计」链接被遮住的部分点不到。宽度低于 884px 时，阅读栏右留白小于图标
+ * 62px 的占地（28px + 34px）；此时给链接让出这条车道，留白足够时保持贴边。 */
+.workspace { container-type: inline-size; }
+@container (max-width: 884px) {
+  body:has(#conversation-outline-toggle:not([hidden])) .log-basis-open { margin-right: 44px; }
+}
 .startup-screen { background: var(--canvas); }
 .startup-mark { color: #fff; background: #202720; box-shadow: 0 8px 22px rgba(32, 39, 33, .16); }
 .startup-card b { color: var(--text); }
@@ -1194,6 +1240,8 @@ body.empty-conversation #session-subtitle, body.empty-conversation #session-stat
   .topbar { min-height: 52px; padding: 0 16px; }
   .conversation { padding: 22px 16px 16px; }
   .composer-wrap { padding: 0 16px 14px; }
+  .conversation-outline-toggle { right: 16px; bottom: 142px; }
+  .conversation-outline { right: 16px; bottom: 186px; width: min(300px, calc(100% - 32px)); }
   body.empty-conversation .conversation { padding: 18px 16px 0; }
   .starter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
   .starter-card { min-height: 96px; }
@@ -1825,6 +1873,11 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
 .turn-query-text .md-list-line { display: grid; grid-template-columns: 17px minmax(0, 1fr); gap: 4px; margin: 2px 0; }
 .turn-query-text .md-inline { padding: 1px 5px; border-radius: 5px; background: rgba(0, 0, 0, .05); font-family: var(--font-mono); font-size: 11.5px; }
 .turn-log > .turn-query:first-child { padding-top: 4px; }
+/* A jump lands on the request bubble and flashes it, so the eye finds the
+ * target after the panel closes. 跳转落在请求气泡上并让它闪一下，浮层关闭后视线能找到目标。 */
+.turn-query-bubble, .message .message-copy { transition: box-shadow .2s ease; }
+[data-jump-id].is-jump-target .turn-query-bubble,
+[data-jump-id].is-jump-target .message-copy { box-shadow: 0 0 0 2px var(--accent); }
 
 .log-entry-head {
   position: sticky;

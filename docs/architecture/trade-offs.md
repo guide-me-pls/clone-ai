@@ -6,6 +6,62 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-25 — The outline toggle is an icon in the gutter
+
+**Decision.** The 目录 control is a 34×34 icon-only circle at `right: 28px;
+bottom: 152px`, the slot above 回到底部 it already used. Its label stays in the
+DOM as the button's visually hidden accessible name and as its `title`, and it
+appears beside the icon when a keyboard user focuses the button; the popover,
+its 320 px width and its 10 px gap above the button are unchanged. The reading
+column and the composer keep their 760 px width. The icon is pinned to the
+window edge, so a workspace narrower than 884 px (or a sidebar wide enough to
+leave that little room) would put the column's right edge under it; there the
+turn's 查看审计 link reserves a 44 px lane via a container query, and it stays
+flush when the gutter already fits.
+
+**Alternatives rejected.** (a) Keep the labeled pill and rely on the localized
+"目录" (about 68 px): it fits the 129 px right gutter of a 1240 px window with a
+220 px sidebar, but the same collision returns below about 1190 px with that
+sidebar, sooner with a wider one, and with any longer translation, so the
+failure moves with the window and the locale instead of disappearing. (b) Move
+the control into the topbar: it loses proximity to the conversation and to
+回到底部, and the topbar already truncates the session title at this width.
+(c) Reserve bottom padding so a floating pill never covers a turn: it adds
+permanent blank space to every thread and still overlaps mid-scroll. (d) Shrink
+the pill's padding and font until it fits 1240 px: the width stays
+content-driven and breaks at the next narrower width or longer label. (e) Inset
+the 查看审计 link by 44 px unconditionally: it works, but it moves the link in
+the 1240 px default where nothing overlaps; the container query applies the
+inset only where the gutter cannot hold the icon. (f) Narrow the reading column
+to reserve the gutter: it trades the owner's reading width for a floating
+button.
+
+**Evidence.** Headless Chrome (CDP) at 1240×911 against the live daemon, with
+the 220 px sidebar this build restores: the toggle measured 128×34 at x
+1084–1212, y 725–759; the last turn's 查看审计 link measured 62×24 at x
+1048–1111, y 726–750 — the rectangles intersect by 26 px. The cause is the
+running daemon predating the `outline-toggle` locale key, so the pill rendered
+the raw key (thirteen Latin characters) and its content-driven width outgrew the
+129 px gutter; the localized "目录" pill would fit there but not below about
+1190 px with that sidebar. The desktop window opens at 1240×820 and can shrink
+to 720×520 (`apps/desktop/macos/main.swift`), so 1240 is the size the layout
+must hold first. After the change the toggle measures 34×34 at x 1178–1212,
+68 px clear of the link at 1240. With the sidebar dragged to its 520 px maximum
+(workspace 719 px) the link's right edge moves from 1206 to 1162 — 16 px clear;
+at 1000×800 with the 220 px sidebar it moves to 922 — 16 px clear; at 760×900 it
+moves to 700 — 10 px clear. `elementFromPoint` at the link's centre returns the
+link at every one of those sizes, and `container-type` leaves the 1240 px
+layout unchanged (inner 760 px at x 351–1111, composer at 351–1111).
+
+**Cost and reversal condition.** One CSS block including one container query and
+one focus label, one `title` attribute in the markup and one structural test;
+no JS behavior, request or storage change. The container query needs a WebView
+with container query support (Safari 16+); without it the inset simply does not
+apply and the link keeps today's narrow-window overlap. Reverse if the outline
+becomes a primary entry point and the owner needs the words visible: restore a
+labeled pill only at widths whose measured gutter fits pill + 28 px + 12 px, and
+keep the icon below that.
+
 ## 2026-11-25 — Deleted conversations leave the sidebar
 
 **Decision.** `DELETE /api/sessions/:id` removes the conversation and the task
@@ -34,6 +90,37 @@ longer offers restore there.
 the two locale keys and their CSS; the regression test now asserts a deleted
 conversation never renders. No request or storage change. Reverse if owners need
 a restore path: add it in the audit view (not the sidebar) and update this entry.
+
+## 2026-11-25 — A long conversation gets a jump list, not more scrolling
+
+**Decision.** The conversation renders one anchor per owner request — the request
+bubble in a turn log, the person message in a task record — and a 目录 icon
+button at the right edge opens a popover listing every request with its time and
+status.
+Clicking a row scrolls that request to the top, briefly highlights it, and closes
+the panel. The list marks the request at the reading position (`aria-current`),
+supports Arrow/Home/End, and appears only when at least two requests exist.
+
+**Alternatives rejected.** (a) A permanent left rail of turn titles: it would
+compete with the 760 px reading column and the sidebar on a two-column screen.
+(b) A full-screen transcript overlay in the Codex TUI style: it hides the
+conversation and needs a second scroll model. (c) A "back to top" button alone:
+it finds the start, not a named earlier request. (d) Building the list from
+`session.turns` instead of the rendered anchors: a task record renders messages,
+so the two sources would drift; reading the anchors keeps the list equal to what
+is on screen.
+
+**Evidence.** Owner request with a long-conversation screenshot: "对话记录最好做
+一个codex那种可以跳转的，不然对话太多容易找不到上面的内容". The rendered
+conversation is one `innerHTML` column with no per-turn ids, and the only
+navigation today is 回到底部.
+
+**Cost and reversal condition.** Markup for the button and panel, roughly eighty
+lines of rendering and scrolling code, CSS, and tests; no request or storage
+change. Reverse if the conversation becomes virtualized (off-screen turns have no
+anchors, so the list must read session data instead), or if owners need
+full-text search rather than request-level jumps; then replace the list with
+search instead of stacking both.
 
 ## 2026-11-25 — Marketplace cards install with one reviewed default risk
 
