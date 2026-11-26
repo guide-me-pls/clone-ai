@@ -2328,3 +2328,27 @@ body.empty-conversation .conversation-inner:not(:has(.message)) > .welcome { fle
  * itself instead of pushing the conversation off-screen.
  * 多个决定时固定栏可能超过视口；它在自身内部滚动，而不是把对话挤出屏幕。 */
 .decision-dock { max-height: min(72vh, 640px); overflow-y: auto; overscroll-behavior: contain; }
+
+/* A model question is a blocking decision: one click answers it and the same
+ * turn continues. It sits in the decision dock, above approvals and reviews.
+ * 模型提问是阻塞决定：一次点击作答，同一回合继续。它位于固定栏最上方，在审批与复核之前。 */
+.question-card {
+  margin-bottom: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+}
+.question-kicker { color: var(--accent); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.question-card h2 { margin: 5px 0 0; color: var(--text); font-size: 15px; line-height: 1.5; letter-spacing: -.01em; }
+.question-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-top: 12px; }
+.question-choice { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--text); background: var(--surface-raised); cursor: pointer; text-align: left; }
+.question-choice b { font-size: 12.5px; font-weight: 600; }
+.question-choice span { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.question-choice:hover { border-color: var(--accent); }
+.question-choice:disabled { opacity: .6; cursor: default; }
+.question-other-toggle { margin-top: 10px; padding: 0; border: 0; color: var(--muted); background: transparent; cursor: pointer; font-size: 11.5px; }
+.question-other-toggle:hover { color: var(--text); }
+.question-other { display: flex; gap: 8px; margin-top: 8px; }
+.question-other input { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface-raised); font-size: 12px; }
+.question-other button { padding: 6px 10px; }

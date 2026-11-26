@@ -312,11 +312,12 @@ test("a Chinese prohibition in the brief is not a write grant", () => {
 });
 
 test("the charter names the brief contract and its version moved", () => {
-  // 13 carries the conversation-scoped continuation rule; 12 carried the
-  // on-demand learned-folder rule; 11 the read_file and dispatch-result rules.
-  // 13 包含按对话解析续做的规则；12 包含已知文件夹按需读取；11 包含 read_file 与
-  // dispatch 结果规则。
-  assert.equal(MAIN_AGENT_CHARTER_VERSION, 13);
+  // 14 carries the ask_owner rule; 13 the conversation-scoped continuation
+  // rule; 12 the on-demand learned-folder rule; 11 the read_file and
+  // dispatch-result rules.
+  // 14 包含 ask_owner 规则；13 是按对话解析续做；12 是已知文件夹按需读取；
+  // 11 是 read_file 与 dispatch 结果规则。
+  assert.equal(MAIN_AGENT_CHARTER_VERSION, 14);
   assert.match(MAIN_AGENT_CHARTER, /workerBrief/);
   assert.match(MAIN_AGENT_CHARTER, /complete prompt its worker receives/);
   assert.match(MAIN_AGENT_CHARTER, /absolute path or `~\/\.\.\.`/);
@@ -326,4 +327,6 @@ test("the charter names the brief contract and its version moved", () => {
   assert.match(MAIN_AGENT_CHARTER, /never assume the clone home or the last project/);
   assert.match(MAIN_AGENT_CHARTER, /refers to work this conversation already established/);
   assert.match(MAIN_AGENT_CHARTER, /Never resume another task's run/);
+  assert.match(MAIN_AGENT_CHARTER, /call ask_owner with a short question/);
+  assert.match(MAIN_AGENT_CHARTER, /the turn pauses, the owner clicks in the chat/);
 });

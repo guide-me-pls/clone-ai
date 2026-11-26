@@ -6,6 +6,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### The Main Agent asks with buttons and resumes the same turn
+
+When the Main Agent needs a choice, it now calls `ask_owner` with a short question and 2–4 concrete options (plus an optional free-text "Other"). The turn pauses; the question appears as buttons in the chat's sticky decision dock; the owner's click resolves the tool and the same turn continues with that answer. Questions are listed on the dashboard next to approvals and reviews, and abort, shutdown or a 30-minute timeout prevents a stranded turn. The charter (v14) tells the model to ask this way instead of writing a blocking question in prose. `test/owner-questions.test.ts` 4/4, `test/owner-question-runtime.test.ts` 1/1, affected suites 130/130; full suite 1177/1177; typecheck 0; gate PASS.
+
+### Main Agent 用按钮提问并恢复同一回合
+
+Main Agent 需要选择时，现在会调用 `ask_owner`，带一个短问题与 2–4 个具体选项（外加可选的自由文本「其他」）。回合暂停；问题以按钮出现在对话固定的决定栏；所有者的点击解析工具，同一回合带着该答案继续。问题与审批、复核一起列在 Dashboard 上；abort、关停或 30 分钟超时避免回合被搁置。角色章程（v14）要求模型用这种方式提问，而不是在正文里写阻塞问题。`test/owner-questions.test.ts` 4/4、`test/owner-question-runtime.test.ts` 1/1、受影响套件 130/130；完整套件 1177/1177；typecheck 0；gate PASS。
+
 ### Pending decisions are docked in every conversation
 
 A pending approval or review used to be visible only on the task record that owned the run; the macOS notification (which disappears as soon as the app is clicked) was the only cross-conversation pointer. The conversation's sticky decision dock now also shows every other task's pending approvals and reviews — task name, scopes, judge reason and worker result — with the same approve/reject actions. The dashboard exposes a `reviews` array next to `approvals`, both refresh with the normal poll, and the dock scrolls internally when several decisions are waiting. This removes the page jump the owner objected to; the notification is now only a hint. `test/ui-structure.test.ts` plus the dashboard, bilingual and conversation suites 109/109; `npm test` 1171/1171; typecheck 0; gate PASS.

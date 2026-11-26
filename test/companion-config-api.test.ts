@@ -291,6 +291,33 @@ test("a persisted Main Agent session is still visible after reopening", async (t
   assert.equal(conversationBody.messages.some((message) => message.text.includes("private reasoning")), false);
 });
 
+test("the dashboard exposes pending approvals and reviews for the chat dock", async (t) => {
+  const { url, token } = await companion(t);
+  const response = await companionFetch(url, token, "/api/dashboard");
+  assert.equal(response.status, 200);
+  const body = await response.json() as {
+    approvals?: unknown[];
+    reviews?: unknown[];
+    questions?: unknown[];
+    counts?: { approvals?: number; reviews?: number; questions?: number };
+  };
+  // The chat dock reads these arrays on every poll; a dashboard without them
+  // would silently hide decisions and questions that belong to another task.
+  // 对话固定栏每次轮询都读这些数组；缺少它们会让属于其他任务的决定与提问悄悄消失。
+  assert.ok(Array.isArray(body.approvals));
+  assert.ok(Array.isArray(body.reviews));
+  assert.ok(Array.isArray(body.questions));
+  assert.equal(body.counts?.approvals, 0);
+  assert.equal(body.counts?.reviews, 0);
+  assert.equal(body.counts?.questions, 0);
+  const unknown = await companionFetch(url, token, "/api/questions/missing/answer", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ choiceId: "choice-1" }),
+  });
+  assert.equal(unknown.status, 404);
+});
+
 test("a turn left running by a dead owner is reconciled as interrupted", async (t) => {
   const dataDirectory = await mkdtemp(join(tmpdir(), "clone-api-turn-recover-"));
   t.after(async () => rm(dataDirectory, { recursive: true, force: true }));

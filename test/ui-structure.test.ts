@@ -867,6 +867,9 @@ test("decisions are confirmed on the task record that owns the run", async () =>
   // Decisions that belong to another task record are docked in this
   // conversation too: the notification banner is not the only way to find them.
   // 属于其他任务记录的决定也固定在本对话里：通知横幅不再是找到它们的唯一途径。
+  assert.match(app, /function questionMarkup\(\)/);
+  assert.match(app, /\$\{questionMarkup\(\)\}/);
+  assert.match(app, /state\.dashboard\?\.questions/);
   assert.match(app, /function globalApprovalMarkup\(session\)/);
   assert.match(app, /function globalReviewMarkup\(session\)/);
   assert.match(app, /\$\{globalApprovalMarkup\(session\)\}/);
@@ -2037,4 +2040,47 @@ test("decisions from other tasks are docked in the current conversation", async 
   assert.match(reviews, /data-review="run-r"/);
   assert.match(reviews, /已完成并附上证据/);
   assert.equal(api.globalReviewMarkup({ id: "task", reviews: [{ runId: "run-r" }] }), "");
+});
+
+test("a model question renders choice buttons in the chat dock", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("function questionMarkup()");
+  const end = app.indexOf("/**\n * Pending decisions that belong to other task records", start);
+  assert.ok(start >= 0 && end > start, "questionMarkup must exist");
+  const state = {
+    dashboard: {
+      questions: [{
+        id: "question-1",
+        conversationId: "main-agent-conversation",
+        question: "要我派这个任务吗？",
+        allowOther: true,
+        choices: [
+          { id: "choice-1", label: "独立进程", description: "新进程执行" },
+          { id: "choice-2", label: "塞进 lifespan" },
+        ],
+      }],
+    },
+  };
+  const markup = runInNewContext(
+    `${app.slice(start, end)}; questionMarkup`,
+    {
+      state,
+      escape: (value: unknown) => String(value ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
+    },
+  ) as () => string;
+  const html = markup();
+  assert.match(html, /要我派这个任务吗/);
+  assert.match(html, /data-answer-question="question-1"/);
+  assert.match(html, /data-question-choice="choice-1"/);
+  assert.match(html, /独立进程/);
+  assert.match(html, /新进程执行/);
+  assert.match(html, /data-question-other="question-1"/);
+  assert.match(html, /data-question-other-submit="question-1"/);
+  // No free-text path when the question forbids it.
+  // 问题禁止自由文本时不显示输入入口。
+  state.dashboard.questions[0]!.allowOther = false;
+  assert.doesNotMatch(markup(), /data-question-other=/);
+  state.dashboard.questions = [];
+  assert.equal(markup(), "");
 });

@@ -3389,6 +3389,24 @@ function reviewMarkup(session) {
 }
 
 /**
+ * The model is blocked on this question. Rendering it as buttons turns a reply
+ * the owner must type into one click, and the turn continues with that answer.
+ * 模型正阻塞在这个问题上。把问题渲染成按钮，把所有者必须打字的一条回复变成一次点击，
+ * 回合带着这个答案继续。
+ */
+function questionMarkup() {
+  const questions = state.dashboard?.questions || [];
+  if (questions.length === 0) return "";
+  return questions.map((question) => {
+    const choices = (question.choices || []).map((choice) => `<button class="question-choice" type="button" data-answer-question="${escape(question.id)}" data-question-choice="${escape(choice.id)}"><b>${escape(choice.label)}</b>${choice.description ? `<span>${escape(choice.description)}</span>` : ""}</button>`).join("");
+    const other = question.allowOther
+      ? `<button class="question-other-toggle" type="button" data-question-other="${escape(question.id)}">其他答案…</button><div class="question-other" data-question-other-box="${escape(question.id)}" hidden><input type="text" data-question-other-input="${escape(question.id)}" placeholder="输入你的答案" aria-label="输入你的答案"/><button class="secondary" type="button" data-question-other-submit="${escape(question.id)}">发送</button></div>`
+      : "";
+    return `<section class="question-card" data-question="${escape(question.id)}"><div class="question-kicker">需要你选择 · 回答后继续</div><h2>${escape(question.question)}</h2><div class="question-choices">${choices}</div>${other}</section>`;
+  }).join("");
+}
+
+/**
  * Pending decisions that belong to other task records. They are shown in the
  * conversation the owner is already reading, so a notification banner — which
  * macOS dismisses as soon as the app is clicked — is never the only way to find
@@ -3632,7 +3650,7 @@ function decisionDock(session) {
   // auto-scroll could leave it off-screen.
   // 等待中的决定属于面板顶部，并在滚动时留在那里：放在长日志底部容易被错过，
   // 自动滚动也可能把它留在视口之外。
-  const cards = `${approvalMarkup(session)}${globalApprovalMarkup(session)}${reviewMarkup(session)}${globalReviewMarkup(session)}`;
+  const cards = `${questionMarkup()}${approvalMarkup(session)}${globalApprovalMarkup(session)}${reviewMarkup(session)}${globalReviewMarkup(session)}`;
   return cards.length === 0 ? "" : `<div class="decision-dock">${cards}</div>`;
 }
 function dispatchSourceMarkup(session) {
@@ -3653,7 +3671,7 @@ function dispatchSourceMarkup(session) {
       : `来自对话 ${parentId.replace(/^conversation-/, "").slice(0, 12)}…`;
   return `<div class="dispatch-source"><span>所属对话</span><button type="button" class="dispatch-source-open" data-open-conversation="${escape(parentId)}" title="${escape(parentId)}">${escape(label)}</button></div>`;
 }
-function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || !sessionHasContent(session)); const globalDecisions = JSON.stringify([(state.dashboard?.approvals || []).map((approval) => [approval.runId, approval.title, approval.reason, (approval.scopes || []).length]), (state.dashboard?.reviews || []).map((review) => [review.runId, review.title, review.result, review.verification?.summary, (review.verification?.unverifiedCriteria || []).length])]); const signature = session ? JSON.stringify([session, globalDecisions]) : JSON.stringify(["welcome", globalDecisions]); if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = `${decisionDock(null)}${welcomeMarkup()}`; $("conversation").scrollTop = 0; return; } const conversation = session.kind === "conversation"; const conversationLog = conversation ? turnLogMarkup(session) : ""; const showWelcome = conversation && conversationLog.length === 0; content.innerHTML = showWelcome ? `${decisionDock(session)}${welcomeMarkup()}` : `<div class="day-divider">${day(session.updatedAt)}</div>${dispatchSourceMarkup(session)}${decisionDock(session)}${conversation ? conversationLog : session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); revealAgentFocus(session.id); requestAnimationFrame(updateScrollBottom); }
+function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || !sessionHasContent(session)); const globalDecisions = JSON.stringify([(state.dashboard?.approvals || []).map((approval) => [approval.runId, approval.title, approval.reason, (approval.scopes || []).length]), (state.dashboard?.reviews || []).map((review) => [review.runId, review.title, review.result, review.verification?.summary, (review.verification?.unverifiedCriteria || []).length]), (state.dashboard?.questions || []).map((question) => [question.id, question.question, (question.choices || []).length])]); const signature = session ? JSON.stringify([session, globalDecisions]) : JSON.stringify(["welcome", globalDecisions]); if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = `${decisionDock(null)}${welcomeMarkup()}`; $("conversation").scrollTop = 0; return; } const conversation = session.kind === "conversation"; const conversationLog = conversation ? turnLogMarkup(session) : ""; const showWelcome = conversation && conversationLog.length === 0; content.innerHTML = showWelcome ? `${decisionDock(session)}${welcomeMarkup()}` : `<div class="day-divider">${day(session.updatedAt)}</div>${dispatchSourceMarkup(session)}${decisionDock(session)}${conversation ? conversationLog : session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); revealAgentFocus(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; state.newConversationId = null; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); syncComposer(); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); void hydrateTurnChoice(activeConversationId()); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
 async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) {
   if (state.routing) return;
@@ -3845,6 +3863,14 @@ async function createSession(query) { const button = $("submit"); button.disable
     const previous = timelineRows.get(key) ?? { tool: payload.tool, phase: "started" };
     timelineRows.set(key, { ...previous, ...payload });
     renderTimeline();
+    // The question blocks the turn; pull the dashboard now so the buttons
+    // appear without waiting for the next three-second poll. The broker records
+    // the question inside the tool call, just after this started event.
+    // 问题会阻塞回合；立即拉一次 Dashboard，让按钮不必等下一次三秒轮询。经纪人在这个
+    // started 事件之后、工具调用内部登记问题。
+    if (payload.tool === "ask_owner" && payload.phase === "started") {
+      window.setTimeout(() => { void refresh({ preserveScroll: true }); }, 250);
+    }
   };
   const revealResponse = () => {
     if (pendingTimer !== null) {
@@ -4095,6 +4121,22 @@ async function createSession(query) { const button = $("submit"); button.disable
   }
 }
 
+async function answerOwnerQuestion(id, answer) {
+  const card = document.querySelector(`[data-question="${CSS.escape(id)}"]`);
+  for (const button of card?.querySelectorAll("button") ?? []) button.disabled = true;
+  try {
+    await api(`/api/questions/${encodeURIComponent(id)}/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(answer),
+    });
+    announce("已发送选择，clone-ai 继续处理。");
+    await refresh({ preserveScroll: true });
+  } catch (error) {
+    for (const button of card?.querySelectorAll("button") ?? []) button.disabled = false;
+    announce(error.message, true);
+  }
+}
 async function approve(id) { const button = document.querySelector(`[data-approve="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { const result = await api(`/api/runs/${encodeURIComponent(id)}/approve`, { method: "POST" }); await refresh({ preserveScroll: true, scrollToBottom: true }); announce(result.status === "completed" ? "已完成并验证结果。" : "已记录确认，继续处理中。" ); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
 async function reject(id) { const button = document.querySelector(`[data-reject="${CSS.escape(id)}"]`); if (button) button.disabled = true; try { await api(`/api/runs/${encodeURIComponent(id)}/reject`, { method: "POST" }); await refresh({ preserveScroll: true, scrollToBottom: true }); announce("已拒绝这次外部动作。"); } catch (error) { if (button) button.disabled = false; announce(error.message, true); } }
 async function reviewResult(id, decision) { const message = decision === "accept" ? t("review-accept-confirm") : t("review-reject-confirm"); if (!(await confirmDialog(message, t("confirm")))) return; try { const result = await api(`/api/runs/${encodeURIComponent(id)}/review`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision }) }); await refresh({ preserveScroll: true, scrollToBottom: true }); announce(result.status === "waiting_review" ? t("status-review") : t("review-saved")); } catch (error) { announce(error.message, true); } }
@@ -4181,7 +4223,7 @@ async function deleteSession(id) {
   if (id === MAIN_CONVERSATION_ID) { announce("主对话始终保留在列表中。", true); return; }
   const session = (state.dashboard?.sessions || []).find((item) => item.id === id); const message = session?.kind === "conversation" ? `隐藏这个对话？它的 ${session?.childCount || 0} 个任务会一起隐藏。审计日志、记忆和备份不受影响，随时可以恢复。` : session?.parentId ? "隐藏这条任务？它会从所属对话中隐藏，审计记录会保留。" : "从列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。"; if (!(await confirmDialog(message, "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
 $("session-list").addEventListener("click", (event) => { const restore = event.target.closest("[data-restore-conversation]"); if (restore) { void restoreConversation(restore.dataset.restoreConversation); return; } const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
-$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const turnAudit = event.target.closest("[data-open-turn-audit]"); if (turnAudit) { openSettings(); selectSettingsSection("audit"); window.CloneAudit?.showTurns?.(turnAudit.dataset.openTurnAudit || "", turnAudit.dataset.openTurnConversation || ""); return; } const agentRun = event.target.closest("[data-open-agent-run]"); if (agentRun) { state.agentFocus = { runId: agentRun.dataset.openAgentRun, agentId: agentRun.dataset.agentId }; void selectSession(agentRun.dataset.openAgentRun); return; } const openConversation = event.target.closest("[data-open-conversation]"); if (openConversation) { void selectSession(openConversation.dataset.openConversation, { scrollToBottom: true }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const tableExport = event.target.closest("[data-export-table]"); if (tableExport) { exportMarkdownTable(tableExport.dataset.exportCsv || ""); return; } const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
+$("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const turnAudit = event.target.closest("[data-open-turn-audit]"); if (turnAudit) { openSettings(); selectSettingsSection("audit"); window.CloneAudit?.showTurns?.(turnAudit.dataset.openTurnAudit || "", turnAudit.dataset.openTurnConversation || ""); return; } const agentRun = event.target.closest("[data-open-agent-run]"); if (agentRun) { state.agentFocus = { runId: agentRun.dataset.openAgentRun, agentId: agentRun.dataset.agentId }; void selectSession(agentRun.dataset.openAgentRun); return; } const openConversation = event.target.closest("[data-open-conversation]"); if (openConversation) { void selectSession(openConversation.dataset.openConversation, { scrollToBottom: true }); return; } const answerQuestion = event.target.closest("[data-answer-question]"); if (answerQuestion) { void answerOwnerQuestion(answerQuestion.dataset.answerQuestion, { choiceId: answerQuestion.dataset.questionChoice }); return; } const questionOther = event.target.closest("[data-question-other]"); if (questionOther) { const box = document.querySelector(`[data-question-other-box="${CSS.escape(questionOther.dataset.questionOther)}"]`); if (box) { box.hidden = !box.hidden; if (!box.hidden) box.querySelector("input")?.focus(); } return; } const questionOtherSubmit = event.target.closest("[data-question-other-submit]"); if (questionOtherSubmit) { const input = document.querySelector(`[data-question-other-input="${CSS.escape(questionOtherSubmit.dataset.questionOtherSubmit)}"]`); void answerOwnerQuestion(questionOtherSubmit.dataset.questionOtherSubmit, { text: input?.value ?? "" }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const tableExport = event.target.closest("[data-export-table]"); if (tableExport) { exportMarkdownTable(tableExport.dataset.exportCsv || ""); return; } const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);
 document.querySelector(".settings-nav")?.addEventListener("keydown", (event) => {

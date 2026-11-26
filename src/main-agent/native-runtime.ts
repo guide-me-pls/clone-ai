@@ -26,7 +26,10 @@ import {
   type AgentToolSpec,
 } from "../agent/loop.ts";
 import { createKernelRuntimeSession, kernelToolDefinitions, type PlainKernelTool } from "./tools/kernel-tools.ts";
+import { Type } from "typebox";
+
 import { compileMainAgentPrompt } from "./prompt.ts";
+import { formatOwnerAnswer, type OwnerQuestionBroker } from "./owner-questions.ts";
 import { loadSkills, skillInvocation, skillListing, type SkillDefinition } from "../skills/skill-loader.ts";
 import { McpHost, type McpServerConfig } from "../mcp/mcp-host.ts";
 import { frameMcpOutput } from "../workers/mcp-client.ts";
@@ -103,6 +106,8 @@ export interface NativeMainAgentOptions {
   contextWindow?: number;
   /** Directories to scan for `<name>/SKILL.md`; omitted disables skills. 扫描 `<name>/SKILL.md` 的目录；缺省禁用技能。 */
   skillRoots?: readonly string[];
+  /** The owner-question broker; without it the `ask_owner` tool is not offered. 所有者提问经纪人；没有它就不提供 `ask_owner` 工具。 */
+  questions?: OwnerQuestionBroker;
   /** MCP servers to connect for this turn. 本回合要连接的 MCP 服务器。 */
   mcpServers?: readonly McpServerConfig[];
   /** Progress for each tool call, for a live timeline. 每次工具调用的进度，用于实时时间线。 */
@@ -290,7 +295,7 @@ export async function runNativeMainAgentTurn(options: NativeMainAgentOptions): P
   let searchTurn: MainAgentTurnContext | undefined;
   const tools = nativeTools(options.dataDirectory, conversationId, options.cwd, options.signal, (info) => {
     if (searchTurn !== undefined) void recordNativeHistorySearch(searchTurn, info);
-  }, options.text);
+  }, options.text, options.questions, options.turnId);
   // Skills and MCP are opt-in per turn: without roots or servers the tool table
   // and prompt are exactly what they were before.
   // 技能与 MCP 是按回合显式开启的：没有根目录或服务器时，工具表与 Prompt 与之前完全相同。
@@ -804,8 +809,10 @@ function nativeTools(
   signal?: AbortSignal,
   onSearch?: (info: { query: string; scope: HistorySearchScope; limit: number; hitCount: number; hits: Array<{ conversationId: string; at: string; score: number; excerpt?: string; source?: string }> }) => void,
   ownerText?: string,
+  questions?: OwnerQuestionBroker,
+  turnId?: string,
 ): PlainKernelTool[] {
-  return [
+  const tools: PlainKernelTool[] = [
     ...kernelToolDefinitions({
       dataDirectory,
       conversationId,
@@ -847,6 +854,53 @@ function nativeTools(
       },
     }
     : tool);
+  if (questions !== undefined) {
+    tools.push({
+      name: "ask_owner",
+      label: "Ask Owner",
+      description:
+        "Ask the owner to choose before you continue. Use this instead of writing a question that needs a reply: "
+        + "the turn pauses, the owner clicks an option, and the answer arrives as this tool's result in the same turn. "
+        + "Offer 2-4 concrete choices; a free-text \"Other\" answer is available by default. "
+        + "Do not use it for a confirmation you already have, and do not bundle several decisions into one call.",
+      parameters: Type.Object({
+        question: Type.String({ description: "A short, specific question." }),
+        choices: Type.Array(Type.Object({
+          label: Type.String({ description: "A concrete option, short enough for a button." }),
+          description: Type.Optional(Type.String({ description: "What choosing this option means." })),
+        }), { minItems: 2, maxItems: 4 }),
+        allowOther: Type.Optional(Type.Boolean({ description: "Offer a free-text answer; defaults to true." })),
+      }),
+      execute: async (_toolCallId: string, params: Record<string, unknown>) => {
+        const question = typeof params.question === "string" ? params.question : "";
+        const rawChoices = Array.isArray(params.choices) ? params.choices : [];
+        const choices = rawChoices.map((entry) => {
+          const record = typeof entry === "object" && entry !== null ? entry as Record<string, unknown> : {};
+          return {
+            label: typeof record.label === "string" ? record.label : "",
+            ...(typeof record.description === "string" ? { description: record.description } : {}),
+          };
+        });
+        try {
+          const answer = await questions.ask({
+            conversationId,
+            ...(turnId === undefined ? {} : { turnId }),
+            question,
+            choices,
+            ...(params.allowOther === false ? { allowOther: false } : {}),
+            ...(signal === undefined ? {} : { signal }),
+          });
+          return { content: [{ type: "text", text: formatOwnerAnswer(answer) }], details: {} };
+        } catch (error: unknown) {
+          return {
+            content: [{ type: "text", text: `ask_owner could not ask: ${error instanceof Error ? error.message : String(error)}` }],
+            details: { isError: true },
+          };
+        }
+      },
+    });
+  }
+  return tools;
 }
 
 async function buildHistory(

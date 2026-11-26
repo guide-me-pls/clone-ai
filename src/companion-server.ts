@@ -89,6 +89,7 @@ import {
   SKILL_REGISTRY,
 } from "./skills/skill-registry.ts";
 import { compileBriefing } from "./main-agent/situation-briefing.ts";
+import { OwnerQuestionBroker, type PendingOwnerQuestion } from "./main-agent/owner-questions.ts";
 import { buildFallbackPlan } from "./planning/fallback-planner.ts";
 import { reconcileCommitments } from "./state/commitment-reconciler.ts";
 import { describeHistory, hasStoredMainConversation, mainAgentSessionDirectory, readConversation, searchHistory } from "./main-agent/conversation-history.ts";
@@ -505,6 +506,11 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   // 本进程内所有模块共用一个 Runtime 组装，因而共用一本 Journal。针对同一文件建多个
   // Store，每个都持有自己的 sequence 计数器和缓存视图——重复 sequence 与陈旧读数正是这么来的。
   const ownerDecisionNotifier = createOwnerDecisionNotifier();
+  // Questions the Main Agent is blocked on. The broker is process-wide because
+  // the HTTP answer route and the waiting tool call must meet in one place.
+  // Main Agent 正被阻塞的问题。经纪人属于整个进程，因为 HTTP 回答路由与等待中的工具调用
+  // 必须在同一处会合。
+  const ownerQuestions = new OwnerQuestionBroker();
   const assembly = await createRuntimeAssembly({ dataDirectory, workspacePath, ownerDecisionNotifier });
   const journal = assembly.journal;
   /**
@@ -844,6 +850,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
         runQueue,
         authority: assembly.authority,
         ownerDecisionNotifier,
+        ownerQuestions,
         refreshCapacityPin: assembly.refreshCapacityPin,
       });
     } catch (error: unknown) {
@@ -900,6 +907,9 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
       // the wait first, then let the pass unwind before the stores close.
       // 等待提炼锁的维护轮不得拖住关停：先中止等待，让维护轮在存储关闭前解除。
       shutdown.abort();
+      // A turn blocked on an owner question must not outlive the server.
+      // 阻塞在所有者问题上的回合不能比服务器活得更久。
+      ownerQuestions.closeAll();
       const serverClosed = new Promise<void>((resolve, reject) => {
         server.close((error) => (error === undefined ? resolve() : reject(error)));
       });
@@ -987,6 +997,8 @@ async function handleRequest(
     authority: StandingPolicyStore;
     /** Owner notification for approvals/reviews; macOS-only and optional. 审批/复核的所有者通知；仅 macOS，可选。 */
     ownerDecisionNotifier?: OwnerDecisionNotifier;
+    /** Questions the Main Agent is blocked on. Main Agent 正在阻塞等待的问题。 */
+    ownerQuestions: OwnerQuestionBroker;
     /** Re-reads the owner's pinned worker concurrency after a settings change. 设置变更后重新读取所有者固定的 Worker 并发上限。 */
     refreshCapacityPin: () => Promise<void>;
   },
@@ -1092,7 +1104,7 @@ async function handleRequest(
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/dashboard") {
-    sendJson(response, 200, await buildDashboard(context.dataDirectory, context.sessions));
+    sendJson(response, 200, await buildDashboard(context.dataDirectory, context.sessions, context.ownerQuestions.list()));
     return;
   }
   if (request.method === "GET" && url.pathname === "/api/config") {
@@ -2658,6 +2670,7 @@ async function handleRequest(
         ...(overrides.model === undefined ? {} : { model: overrides.model }),
         ...(overrides.effort === undefined ? {} : { effort: overrides.effort }),
         ...invocation,
+        questions: context.ownerQuestions,
         signal: abortController.signal,
         ...(streaming ? {
           onDelta: (delta) => send("delta", { delta }),
@@ -2922,6 +2935,28 @@ async function handleRequest(
     return;
   }
 
+  const answerQuestionMatch = url.pathname.match(/^\/api\/questions\/([^/]+)\/answer$/);
+  if (request.method === "POST" && answerQuestionMatch?.[1] !== undefined) {
+    // The Main Agent is blocked inside ask_owner; this click is what resolves
+    // that tool call and lets the same turn continue.
+    // Main Agent 正阻塞在 ask_owner 里；这次点击解析该工具调用，让同一回合继续。
+    const body = await readJsonBody(request);
+    try {
+      const answered = context.ownerQuestions.answer(decodeURIComponent(answerQuestionMatch[1]!), {
+        ...(typeof body.choiceId === "string" ? { choiceId: body.choiceId } : {}),
+        ...(typeof body.text === "string" ? { text: body.text } : {}),
+      });
+      if (answered === undefined) {
+        sendJson(response, 404, { error: "No such pending question." });
+        return;
+      }
+      sendJson(response, 200, { answered: true, questionId: answered.id });
+    } catch (error: unknown) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "The answer could not be recorded." });
+    }
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/approvals/requested") {
     const body = await readJsonBody(request);
     const runId = typeof body.runId === "string" ? body.runId : "";
@@ -3031,7 +3066,7 @@ async function handleRequest(
   sendJson(response, 404, { error: "The local companion endpoint was not found." });
 }
 
-async function buildDashboard(dataDirectory: string, sessions: SessionStore): Promise<DashboardView> {
+async function buildDashboard(dataDirectory: string, sessions: SessionStore, questions: readonly PendingOwnerQuestion[] = []): Promise<DashboardView> {
   const { events, state, tasks, runs } = await loadRuntimeView(dataDirectory);
   const turns = await readMainAgentTurnRecords(dataDirectory);
   const deletedRunIds = await sessions.deletedRunIds();
@@ -3183,9 +3218,10 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
 
   return {
     generatedAt: new Date().toISOString(),
-    counts: { approvals: approvals.length, reviews: reviews.length, active: active.length, completed: visibleRuns.filter((run) => run.status === "completed").length },
+    counts: { approvals: approvals.length, reviews: reviews.length, questions: questions.length, active: active.length, completed: visibleRuns.filter((run) => run.status === "completed").length },
     approvals,
     reviews,
+    questions: [...questions],
     active,
     subagents,
     completed,
@@ -4753,9 +4789,10 @@ function parsePort(value: string | undefined, fallback: number): number {
 
 interface DashboardView {
   generatedAt: string;
-  counts: { approvals: number; reviews: number; active: number; completed: number };
+  counts: { approvals: number; reviews: number; questions: number; active: number; completed: number };
   approvals: Array<{ runId: string; title: string; stepId: string; description: string; scopes?: Scope[]; reason?: string }>;
   reviews: MainConversationReview[];
+  questions: PendingOwnerQuestion[];
   active: Array<{ runId: string; title: string; status: string; updatedAt: string }>;
   subagents: Array<{ runId: string; title: string; agentId: string; role: string; status: string; summary?: string; updatedAt: string }>;
   completed: Array<{ runId: string; title: string; status: string; updatedAt: string; evidenceCount: number }>;

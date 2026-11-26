@@ -15,6 +15,30 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-25 — The Main Agent asks with buttons and resumes the same turn
+
+- **Claim:** the Main Agent has a blocking `ask_owner` tool. It takes a short
+  question and 2–4 concrete choices (plus an optional free-text "Other"); the
+  turn pauses, the question appears as buttons in the chat's sticky decision
+  dock, and the owner's click resolves the tool and resumes the same turn with
+  the choice as the result. The dashboard lists pending questions next to
+  approvals and reviews; abort, shutdown and a 30-minute timeout prevent a
+  stranded turn. The charter (v14) tells the model to ask this way instead of
+  writing a blocking question in prose.
+- **Evidence:** `test/owner-questions.test.ts` 4/4,
+  `test/owner-question-runtime.test.ts` 1/1 (a fake provider calls `ask_owner`,
+  the broker is answered with `独立进程`, and the second request carries
+  `The owner chose: 独立进程`); affected suites **130/130**; `npm run typecheck`
+  0; `npm run gate` PASS; full `npm test` **1177/1177**, exit 0. Live after a
+  daemon restart: the dashboard returns `questions []`, `counts.questions 0`,
+  and an unknown answer returns 404. Live, a first attempt at 07:50 blocked but
+  was cancelled by the test client's 30-minute timeout before a click; the retry
+  at 08:25 completed the full path — the question appeared with both choices,
+  红色方案 was clicked at 08:28:53, the tool returned after 186 s, and the same
+  turn completed with `收到：红色方案`.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--the-main-agent-asks-the-owner-with-buttons-not-prose);
+  [execution chain](optimizations.md#2026-11-25--the-main-agent-asks-with-buttons-not-prose).
+
 ## 2026-11-25 — Pending decisions are docked in every conversation
 
 - **Claim:** the conversation's sticky decision dock now shows pending approvals

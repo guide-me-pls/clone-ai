@@ -75,7 +75,11 @@ per-turn and not stored in the ledger.
 ## 5. Owner controls in the app
 
 - **对话** — ask, approve or reject an external action, and accept or reject a
-  result that needs review.
+  result that needs review. When the Main Agent needs a choice it asks with
+  2–4 buttons in the chat; your click resumes the same turn. Pending approvals
+  and reviews from every task are docked at the top of the conversation you are
+  reading; the macOS notification is only a hint, not the place to answer, and
+  no task page has to be opened.
 - **设置 → 权限与安全** — per-domain autonomy and owner-written standing
   policies. Every change is journaled.
 - **设置 → 记忆与数据** — the memory library, governed changes and undo, and

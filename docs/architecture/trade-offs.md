@@ -350,6 +350,52 @@ owner would have caught, restore the prose review for that class (write first,
 then read-only) or add a mechanical check (a citation/test/file). Keep the
 named-file and receipt checks unchanged.
 
+## 2026-11-25 — The Main Agent asks the owner with buttons, not prose
+
+**Decision.** The Main Agent gets a blocking `ask_owner` tool: a short question,
+2–4 concrete choices, and an optional free-text "Other". The tool call does not
+return until the owner answers. The question appears in the chat's sticky
+decision dock with one button per choice; a click resolves the tool call and the
+same turn continues with the choice as the tool result. The broker is
+process-wide in the daemon (the answer route and the waiting tool must meet in
+one place), the dashboard exposes pending questions next to approvals and
+reviews, the turn's abort signal cancels the wait, and a 30-minute timeout
+prevents a turn from hanging forever. The tool is registered only when a broker
+is present, and the charter (version 14) tells the model to use it instead of
+writing a blocking question in prose — one decision per call.
+
+**Why it won.** The owner asked for Codex/Claude Code-style confirmations. The
+screenshot showed the model asking "要我派这个任务吗？" as prose: the owner had to
+type a reply, and the choice's shape lived only in the model's text. A tool call
+is the only structured place to attach choices, a click, and a resumable answer.
+
+**Alternatives rejected.**
+
+- *Parse the model's prose and guess buttons.* There is no reliable list of
+  choices, and a wrong button is worse than no button; the model's wording
+  changes every turn.
+- *Reuse the run approval flow.* An approval belongs to a run step and an
+  autonomy decision; the model's question is conversational and often precedes
+  a run. Mixing them would make every question look like an authorization.
+- *A separate question page or modal.* The owner explicitly rejected page jumps
+  and modals that can be dismissed by clicking elsewhere; the dock is already
+  the decision surface.
+- *A non-blocking question that the model polls later.* The model would end its
+  turn without the answer, and the next turn would have to reconstruct why the
+  question was asked.
+
+**Deferred.** Rendering questions in the WhatsApp/mobile channel (the desktop
+dock can answer; the 30-minute timeout prevents a permanent hang), persisting a
+question across a daemon restart (the turn dies with the daemon, so a persisted
+question would have no consumer), and multi-question or multi-select prompts
+(one decision per call keeps the card and the tool result unambiguous).
+
+**Reversal conditions.** If the model overuses the tool for confirmations it
+already has, restrict it to dispatch-shape decisions or add a "don't ask" rule
+from the owner. If a remote client needs questions, add an answer channel there
+and keep the broker as the one source. If the 30-minute timeout proves wrong in
+either direction, change it at the broker, not per tool call.
+
 ## 2026-11-25 — Pending decisions are docked in every conversation, not only on the task page that owns the run
 
 **Decision.** The conversation's sticky decision dock now shows the selected

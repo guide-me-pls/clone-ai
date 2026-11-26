@@ -17,6 +17,7 @@ import { withMainAgentSlot } from "../main-agent/main-agent-slots.ts";
 import { withMainAgentLock } from "../main-agent/prompt-lock.ts";
 import { runNativeMainAgentTurn, type NativeToolEvent } from "../main-agent/native-runtime.ts";
 import { skillRootsFor } from "../skills/skill-loader.ts";
+import type { OwnerQuestionBroker } from "../main-agent/owner-questions.ts";
 import { beginInvocation, type InvocationCaller, type InvocationSurface } from "../audit/invocation-ledger.ts";
 
 export interface MainAgentQueryResult {
@@ -83,6 +84,8 @@ export interface MainAgentQueryOptions {
    */
   model?: string;
   effort?: string;
+  /** The owner-question broker; without it the Main Agent cannot ask with buttons. 所有者提问经纪人；没有它 Main Agent 无法用按钮提问。 */
+  questions?: OwnerQuestionBroker;
 }
 
 export async function runMainAgentQuery(
@@ -148,6 +151,7 @@ export async function runMainAgentQuery(
         ...(options.onToolEvent === undefined ? {} : { onToolEvent: options.onToolEvent }),
         ...(options.model === undefined ? {} : { model: options.model }),
         ...(options.effort === undefined ? {} : { effort: options.effort }),
+        ...(options.questions === undefined ? {} : { questions: options.questions }),
         onMetadata: (metadata) => audit.note(metadata),
       }),
       {

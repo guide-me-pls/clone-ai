@@ -205,6 +205,42 @@
 - **推翻条件：** 从取舍条目复制——第二个 Provider 需要 Provider 绑定而不是角色名单；同模型
   复核若漏掉缺陷就换成独立复核；更窄权限档位下错误的 `write` 需要点名目标或移除该字段。
 
+### 2026-11-25 —— Main Agent 用按钮提问，而不是正文
+
+- **目标 / 假设：** 所有者要求 Codex / Claude Code 那种确认，而不是对模型写在正文里的问题
+  打字回答。给 Main Agent 一个阻塞式工具，携带问题与 2–4 个选项，在对话固定栏渲染成按钮，
+  并用答案恢复同一回合。
+- **取舍：** [Main Agent 用按钮向所有者提问，而不是正文](../architecture/trade-offs.zh-CN.md#2026-11-25--main-agent-用按钮向所有者提问而不是正文)。
+- **变更：** `src/main-agent/owner-questions.ts`（新增）——进程级
+  `OwnerQuestionBroker`：校验、待答清单、选项/自由文本回答、abort、关停与 30 分钟超时。
+  `src/main-agent/native-runtime.ts`——仅在提供经纪人时注册 `ask_owner`（2–4 个选项、
+  可选 `allowOther`）；工具阻塞在 `broker.ask` 并返回 `formatOwnerAnswer`。
+  `src/application/run-main-query.ts` 透传经纪人；`src/companion-server.ts` 创建它、
+  在 Dashboard 暴露待答问题、处理 `POST /api/questions/:id/answer`，并在关停时结束所有等待。
+  `src/main-agent/prompt.ts`——角色章程版本 14 要求模型调用 `ask_owner`，而不是在正文里写
+  需要回复的问题。桌面聊天固定栏把问题渲染成选项按钮，并有「其他」自由文本入口；渲染签名与
+  Dashboard 轮询保持更新。测试：`test/owner-questions.test.ts`（4）、
+  `test/owner-question-runtime.test.ts`（1）、UI 问题渲染用例、Dashboard/回答路由用例，
+  以及章程断言。
+- **Eval：** 受影响套件 **130/130**；`npm run typecheck` 退出 0；`npm run gate` **PASS**；
+  完整 `npm test` **1177/1177**，退出 0。重启守护进程后实机：`/api/dashboard` 返回
+  `questions []` 与 `counts.questions 0`；`POST /api/questions/missing/answer` 返回 404。
+  运行时测试用假 Provider 走完 `ask_owner`，用选项回答经纪人，并断言的第二个请求携带
+  `The owner chose: 独立进程`。实机：第一次在 07:50 正确阻塞，但测试客户端 30 分钟超时
+  取消之前没有点击。08:25 的重试走完了整条路径：问题带红/蓝选项与「其他答案」出现，08:28:53
+  点击红色方案，工具 186 秒后返回，同一回合以 `收到：红色方案` 完成；随后 Dashboard 清空了
+  `questions`。
+- **执行链路：** 先写经纪人；只在有经纪人时注册工具，使定时任务与非桌面入口保持原工具表；
+  把经纪人穿过查询层与服务器；加 Dashboard 字段与回答路由；修改角色章程；在固定栏审批之上
+  渲染问题；写经纪人、运行时与 UI 测试；撞上 `The owner chose:` 与测试正则的大小写不一致
+  并修复；重启守护进程验证实机路由。单个工作 Agent；无 Provider 或 benchmark 花费（运行时
+  测试使用假 Provider）。
+- **优点：** 答案结构化且可恢复；工具按入口可选；abort 或关停不会搁置回合。
+- **缺点 / 下次：** WhatsApp 通道还不能渲染按钮，手机发起的回合若调用 `ask_owner` 会等桌面
+  或超时；所有者一直不回来时仍可能挂 30 分钟。尽管有章程规则，模型仍可能过度使用。
+- **推翻条件：** 来自取舍——若过度使用则限制在派发形状的决定；需要时加手机回答通道；除非
+  做多问题 UI，否则保持一次调用一个决定。
+
 ### 2026-11-25 —— 待决定项固定显示在每个对话里，而不只在拥有该 Run 的任务页
 
 - **目标 / 假设：** 所有者报告：需要确认时，一点进应用确认界面就消失，截不到图，且不希望

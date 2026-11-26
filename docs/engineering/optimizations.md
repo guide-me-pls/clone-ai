@@ -280,6 +280,59 @@ file keeps every attempt, including the ones that did not work.
   misses defects; a mistaken `write` at a narrower authority level requires
   named targets or removal of the field.
 
+### 2026-11-25 — The Main Agent asks with buttons, not prose
+
+- **Goal / hypothesis:** the owner asked for Codex/Claude Code-style
+  confirmations instead of having to type an answer to a question the model
+  wrote in prose. Give the Main Agent a blocking tool that carries a question and
+  2–4 choices, render it as buttons in the chat dock, and resume the same turn
+  with the answer.
+- **Trade-off:** [The Main Agent asks the owner with buttons, not prose](../architecture/trade-offs.md#2026-11-25--the-main-agent-asks-the-owner-with-buttons-not-prose).
+- **Change:** `src/main-agent/owner-questions.ts` (new) — the process-wide
+  `OwnerQuestionBroker`: validation, pending list, choice/free-text answers,
+  abort, shutdown and a 30-minute timeout. `src/main-agent/native-runtime.ts` —
+  registers `ask_owner` (2–4 choices, optional `allowOther`) only when a broker
+  is supplied; the tool blocks on `broker.ask` and returns
+  `formatOwnerAnswer`. `src/application/run-main-query.ts` passes the broker
+  through; `src/companion-server.ts` creates it, exposes pending questions on
+  the dashboard, answers `POST /api/questions/:id/answer`, and closes every
+  wait on shutdown. `src/main-agent/prompt.ts` — charter version 14 tells the
+  model to call `ask_owner` instead of writing a blocking question. The desktop
+  chat dock renders the question as choice buttons with an "Other" free-text
+  path; the render signature and dashboard poll keep it current. Tests:
+  `test/owner-questions.test.ts` (4), `test/owner-question-runtime.test.ts`
+  (1), a UI question-render case, the dashboard/answer route case, and the
+  charter assertion.
+- **Eval:** affected suites **130/130**; `npm run typecheck` exit 0; `npm run
+  gate` **PASS**; full `npm test` **1177/1177**, exit 0. Live after a daemon
+  restart: `/api/dashboard` returns `questions []` and
+  `counts.questions 0`; `POST /api/questions/missing/answer` returns 404. The
+  runtime test drives a fake provider through `ask_owner`, answers the broker
+  with a choice, and asserts the second request carries
+  `The owner chose: 独立进程`. Live: a first attempt at 07:50 blocked correctly
+  but no click arrived before the test client's 30-minute timeout cancelled it.
+  A retry at 08:25 completed the whole path: the question appeared with 红色/
+  蓝色 choices plus «其他答案», the choice 红色方案 was clicked at 08:28:53, the
+  tool returned after 186 s, and the same turn completed with reply
+  `收到：红色方案`; the dashboard cleared `questions` afterwards.
+- **Execution chain:** added the broker first; registered the tool only when a
+  broker exists so schedules and non-desktop surfaces keep their old tool table;
+  threaded the broker through the query layer and the server; added the
+  dashboard field and answer route; taught the charter; rendered the question in
+  the dock above approvals; wrote the broker, runtime and UI tests; hit and fixed
+  a capitalization mismatch between `The owner chose:` and the test regex;
+  restarted the daemon and verified the live routes. One working agent; no
+  provider or benchmark spend (the runtime test uses a fake provider).
+- **Pros:** the answer is structured and resumable; the tool is opt-in per
+  surface; an abort or shutdown cannot strand the turn.
+- **Cons / next time:** the WhatsApp channel cannot render the buttons yet, so
+  a phone-initiated turn that calls `ask_owner` waits for the desktop or the
+  timeout; a 30-minute hang is still possible if the owner never returns. The
+  model may overuse the tool despite the charter rule.
+- **Reversal condition:** from the trade-off — restrict the tool to
+  dispatch-shape decisions if overused; add a mobile answer channel if needed;
+  keep one decision per call unless a multi-question UI is built.
+
 ### 2026-11-25 — Pending decisions are docked in every conversation, not only on the task page that owns the run
 
 - **Goal / hypothesis:** the owner reported that a needed confirmation disappeared
