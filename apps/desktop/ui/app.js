@@ -3340,14 +3340,14 @@ function agentsMarkup(session) {
   return `<details class="activity-card" data-disclosure="agents"${open}><summary class="activity-summary">${icon("spark")}<b>Agent 协作</b><span>${completed}/${session.subagents.length} 已完成${review === 0 ? "" : ` · ${review} 需要复核`}${failed === 0 ? "" : ` · ${failed} 需要处理`}</span></summary><div class="agent-list">${rows}</div></details>`;
 }
 function approvalMarkup(session) {
-  const approvals = session.approvals || [];
+  const approvals = session?.approvals || [];
   if (!approvals.length) return "";
   // The decision belongs to the task record that owns the run. Stating that the
   // task will not proceed without an answer is the point of the card.
   // 决定属于拥有该 Run 的任务记录。明确说出"不回答就不会继续"，才是这张卡片的意义。
   const heading = approvals.length === 1 ? "需要你确认后才能继续" : `${approvals.length} 项需要你确认`;
   return `<section class="approval-card approval-card-action"><div class="approval-kicker">需要你的决定 · 不会自动继续</div><h2>${escape(heading)}</h2>${approvals.map((approval) => {
-    const step = typeof approval.title === "string" && approval.title.length > 0 && approval.title !== session.title
+    const step = typeof approval.title === "string" && approval.title.length > 0 && approval.title !== session?.title
       ? `<p class="approval-step">步骤：${escape(approval.title)}</p>`
       : "";
     // The owner cannot judge a scope they cannot see. The Kernel's refusal and
@@ -3359,20 +3359,20 @@ function approvalMarkup(session) {
     const reason = typeof approval.reason === "string" && approval.reason.length > 0
       ? `<p class="approval-reason">${escape(approval.reason)}</p>`
       : "";
-    return `<div class="approval-item"><b>${escape(session.title)}</b>${step}<p>${escape(approval.description || "下一步需要你的确认后才能继续。")}</p>${reason}${scopes.length > 0 ? `<ul class="approval-scopes">${scopes}</ul>` : ""}<div class="approval-actions"><button class="approve" type="button" data-approve="${escape(approval.runId)}">确认并继续</button><button class="secondary" type="button" data-reject="${escape(approval.runId)}">拒绝</button></div></div>`;
+    return `<div class="approval-item"><b>${escape(session?.title)}</b>${step}<p>${escape(approval.description || "下一步需要你的确认后才能继续。")}</p>${reason}${scopes.length > 0 ? `<ul class="approval-scopes">${scopes}</ul>` : ""}<div class="approval-actions"><button class="approve" type="button" data-approve="${escape(approval.runId)}">确认并继续</button><button class="secondary" type="button" data-reject="${escape(approval.runId)}">拒绝</button></div></div>`;
   }).join("")}</section>`;
 }
 function reviewMarkup(session) {
   // Reviews are decisions too, and they are decided on the same task record:
   // its criteria, its worker's answer and its own accept/reject pair.
   // 复核也是决定，并在同一个任务记录上完成：它的标准、它的 Worker 回答与它自己的接受/拒绝按钮。
-  const reviews = session.reviews || [];
+  const reviews = session?.reviews || [];
   if (!reviews.length) {
-    if (session.status !== "waiting_review") return "";
+    if (session?.status !== "waiting_review") return "";
     // A waiting review whose verification record is missing still needs a
     // decision; the buttons work by run id.
     // 等待复核但缺少核验记录时仍需要决定；按钮按 Run id 生效。
-    return `<section class="approval-card approval-card-action"><div class="approval-kicker">等待你的复核</div><h2>${escape(session.title || "结果等待复核")}</h2><p>这个任务已经结束，但还没有可显示的核验记录。</p><div class="approval-actions"><button class="approve" type="button" data-review="${escape(session.id)}" data-review-decision="accept">接受结果</button><button class="secondary" type="button" data-review="${escape(session.id)}" data-review-decision="reject">拒绝</button></div></section>`;
+    return `<section class="approval-card approval-card-action"><div class="approval-kicker">等待你的复核</div><h2>${escape(session?.title || "结果等待复核")}</h2><p>这个任务已经结束，但还没有可显示的核验记录。</p><div class="approval-actions"><button class="approve" type="button" data-review="${escape(session?.id)}" data-review-decision="accept">接受结果</button><button class="secondary" type="button" data-review="${escape(session.id)}" data-review-decision="reject">拒绝</button></div></section>`;
   }
   const heading = reviews.length === 1 ? "需要你复核结果" : `${reviews.length} 项结果等待复核`;
   return `<section class="approval-card approval-card-action"><div class="approval-kicker">等待你的复核 · 系统不会自行通过</div><h2>${escape(heading)}</h2>${reviews.map((review) => {
@@ -3381,6 +3381,51 @@ function reviewMarkup(session) {
     // The decision is about this answer. Without it the card showed only the
     // criteria and the evidence count, and the owner had nothing to review.
     // 决定正是针对这个回答。没有它，卡片只有验收标准与证据计数，所有者没有可复核的内容。
+    const result = typeof review.result === "string" && review.result.trim().length > 0
+      ? `<div class="review-result"><b>Worker 的结论</b><div>${richText(review.result)}</div></div>`
+      : "";
+    return `<div class="approval-item"><b>${escape(review.title)}</b>${result}${summary}${criteria ? `<ul>${criteria}</ul>` : ""}<div class="approval-actions"><button class="approve" type="button" data-review="${escape(review.runId)}" data-review-decision="accept">接受结果</button><button class="secondary" type="button" data-review="${escape(review.runId)}" data-review-decision="reject">拒绝</button></div></div>`;
+  }).join("")}</section>`;
+}
+
+/**
+ * Pending decisions that belong to other task records. They are shown in the
+ * conversation the owner is already reading, so a notification banner — which
+ * macOS dismisses as soon as the app is clicked — is never the only way to find
+ * a decision, and no task page has to be opened to answer it.
+ * 属于其他任务记录的待决定项。它们显示在所有者在读的对话里，因此只要点击应用就会被 macOS
+ * 关掉的通知横幅，永远不会是找到决定的唯一途径，也不必打开任何任务页才能作答。
+ */
+function globalDecisionOwnRunIds(session, field) {
+  const own = new Set();
+  for (const item of session?.[field] || []) own.add(item.runId);
+  if (typeof session?.id === "string") own.add(session.id);
+  return own;
+}
+
+function globalApprovalMarkup(session) {
+  const own = globalDecisionOwnRunIds(session, "approvals");
+  const approvals = (state.dashboard?.approvals || []).filter((approval) => !own.has(approval.runId));
+  if (approvals.length === 0) return "";
+  const heading = approvals.length === 1 ? "另一个任务在等你确认" : `${approvals.length} 个其他任务在等你确认`;
+  return `<section class="approval-card approval-card-action"><div class="approval-kicker">需要你的决定 · 来自其他任务</div><h2>${escape(heading)}</h2>${approvals.map((approval) => {
+    const scopes = (approval.scopes || []).map((scope) => `<li><code>${escape(scope.domain)}:${escape(scope.access)}</code> ${escape(scope.resource)}</li>`).join("");
+    const reason = typeof approval.reason === "string" && approval.reason.length > 0
+      ? `<p class="approval-reason">${escape(approval.reason)}</p>`
+      : "";
+    return `<div class="approval-item"><b>${escape(approval.title)}</b><p>这个任务在等你确认后才能继续。</p>${reason}${scopes.length > 0 ? `<ul class="approval-scopes">${scopes}</ul>` : ""}<div class="approval-actions"><button class="approve" type="button" data-approve="${escape(approval.runId)}">确认并继续</button><button class="secondary" type="button" data-reject="${escape(approval.runId)}">拒绝</button></div></div>`;
+  }).join("")}</section>`;
+}
+
+function globalReviewMarkup(session) {
+  const own = globalDecisionOwnRunIds(session, "reviews");
+  const reviews = (state.dashboard?.reviews || []).filter((review) => !own.has(review.runId));
+  if (reviews.length === 0) return "";
+  const heading = reviews.length === 1 ? "另一个任务有结果等你复核" : `${reviews.length} 个其他任务有结果等你复核`;
+  return `<section class="approval-card approval-card-action"><div class="approval-kicker">等待你的复核 · 来自其他任务</div><h2>${escape(heading)}</h2>${reviews.map((review) => {
+    const verification = review.verification || {};
+    const criteria = (verification.unverifiedCriteria || []).map((criterion) => `<li>${escape(criterion)}</li>`).join("");
+    const summary = criteria.length === 0 && verification.summary ? `<p>${escape(verification.summary)}</p>` : "";
     const result = typeof review.result === "string" && review.result.trim().length > 0
       ? `<div class="review-result"><b>Worker 的结论</b><div>${richText(review.result)}</div></div>`
       : "";
@@ -3587,7 +3632,7 @@ function decisionDock(session) {
   // auto-scroll could leave it off-screen.
   // 等待中的决定属于面板顶部，并在滚动时留在那里：放在长日志底部容易被错过，
   // 自动滚动也可能把它留在视口之外。
-  const cards = `${approvalMarkup(session)}${reviewMarkup(session)}`;
+  const cards = `${approvalMarkup(session)}${globalApprovalMarkup(session)}${reviewMarkup(session)}${globalReviewMarkup(session)}`;
   return cards.length === 0 ? "" : `<div class="decision-dock">${cards}</div>`;
 }
 function dispatchSourceMarkup(session) {
@@ -3608,7 +3653,7 @@ function dispatchSourceMarkup(session) {
       : `来自对话 ${parentId.replace(/^conversation-/, "").slice(0, 12)}…`;
   return `<div class="dispatch-source"><span>所属对话</span><button type="button" class="dispatch-source-open" data-open-conversation="${escape(parentId)}" title="${escape(parentId)}">${escape(label)}</button></div>`;
 }
-function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || !sessionHasContent(session)); const signature = session ? JSON.stringify(session) : "welcome"; if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = welcomeMarkup(); $("conversation").scrollTop = 0; return; } const conversation = session.kind === "conversation"; const conversationLog = conversation ? turnLogMarkup(session) : ""; const showWelcome = conversation && conversationLog.length === 0; content.innerHTML = showWelcome ? `${decisionDock(session)}${welcomeMarkup()}` : `<div class="day-divider">${day(session.updatedAt)}</div>${dispatchSourceMarkup(session)}${decisionDock(session)}${conversation ? conversationLog : session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); revealAgentFocus(session.id); requestAnimationFrame(updateScrollBottom); }
+function renderSession(session) { setTopbar(session); document.body.classList.toggle("empty-conversation", !session || !sessionHasContent(session)); const globalDecisions = JSON.stringify([(state.dashboard?.approvals || []).map((approval) => [approval.runId, approval.title, approval.reason, (approval.scopes || []).length]), (state.dashboard?.reviews || []).map((review) => [review.runId, review.title, review.result, review.verification?.summary, (review.verification?.unverifiedCriteria || []).length])]); const signature = session ? JSON.stringify([session, globalDecisions]) : JSON.stringify(["welcome", globalDecisions]); if (state.signatures.conversation === signature) return; state.signatures.conversation = signature; const content = $("conversation-inner"); if (!session) { content.innerHTML = `${decisionDock(null)}${welcomeMarkup()}`; $("conversation").scrollTop = 0; return; } const conversation = session.kind === "conversation"; const conversationLog = conversation ? turnLogMarkup(session) : ""; const showWelcome = conversation && conversationLog.length === 0; content.innerHTML = showWelcome ? `${decisionDock(session)}${welcomeMarkup()}` : `<div class="day-divider">${day(session.updatedAt)}</div>${dispatchSourceMarkup(session)}${decisionDock(session)}${conversation ? conversationLog : session.messages.filter((message) => String(message.text ?? "").trim()).map(messageMarkup).join("")}${recalledMemoryMarkup(session)}${planMarkup(session)}${agentsMarkup(session)}${evidenceMarkup(session)}${verificationMarkup(session)}${traceMarkup(session)}`; restoreDisclosureScrolls(session.id); revealAgentFocus(session.id); requestAnimationFrame(updateScrollBottom); }
 async function selectSession(id, { quiet = false, scrollToBottom = false, epoch = state.sessionEpoch } = {}) { if (!quiet) epoch = ++state.sessionEpoch; state.composingNew = false; state.newConversationId = null; if (!quiet) notifyDesktopNavigation("conversation"); if (state.selectedId !== id) { if (state.selectedId) state.drafts.set(state.selectedId, $("query").value); $("query").value = state.drafts.get(id) || ""; resizeComposer(); rememberCurrentScroll(); rememberDisclosureScrolls(); } state.selectedId = id; localStorage.setItem("clone-ai:selected-session", id); syncComposer(); renderSessions(state.dashboard?.sessions || []); try { const session = await api(`/api/sessions/${encodeURIComponent(id)}`); if (epoch !== state.sessionEpoch) return; renderSession(session); void hydrateTurnChoice(activeConversationId()); restoreSessionScroll(id, { scrollToBottom }); } catch (error) { if (epoch !== state.sessionEpoch) return; if (!quiet) announce(error.message, true); state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); renderSession(null); } }
 async function refresh({ preserveScroll = true, scrollToBottom = false } = {}) {
   if (state.routing) return;

@@ -851,19 +851,28 @@ test("decisions are confirmed on the task record that owns the run", async () =>
   const app = await read("app.js");
   const css = await read("style.css");
   const index = await read("index.html");
-  // The conversation is not a decision inbox: the task record owns its approval
-  // and its review. The main conversation is a sidebar row now, so the old
-  // "never filtered as a row" assertion is intentionally gone.
-  // 对话不是决定收件箱：任务记录拥有自己的确认与复核。主对话现在是侧栏行，
-  // 原先"绝不作为行过滤"的断言已移除。
+  // A decision is answered by the run it belongs to. The dock also carries
+  // decisions from other task records, so the owner never has to open a task
+  // page to find one; the old "conversation is not a decision inbox" rule is gone.
+  // 决定按所属 Run 作答。固定栏也承载其他任务记录的决定，所有者无需打开任务页去寻找；
+  // 旧的"对话不是决定收件箱"规则已移除。
   assert.doesNotMatch(app, /data-open-main-conversation/);
   assert.match(app, /data-approve="\$\{escape\(approval\.runId\)\}"/);
   assert.match(app, /data-review="\$\{escape\(review\.runId\)\}"/);
-  assert.match(app, /session\.reviews/);
+  assert.match(app, /session\?\.reviews/);
   // A pending decision is docked at the top of the pane, not left after the log.
   // 等待中的决定固定在面板顶部，而不是留在日志末尾。
   assert.match(app, /function decisionDock\(session\)/);
   assert.match(app, /\$\{decisionDock\(session\)\}/);
+  // Decisions that belong to another task record are docked in this
+  // conversation too: the notification banner is not the only way to find them.
+  // 属于其他任务记录的决定也固定在本对话里：通知横幅不再是找到它们的唯一途径。
+  assert.match(app, /function globalApprovalMarkup\(session\)/);
+  assert.match(app, /function globalReviewMarkup\(session\)/);
+  assert.match(app, /\$\{globalApprovalMarkup\(session\)\}/);
+  assert.match(app, /\$\{globalReviewMarkup\(session\)\}/);
+  assert.match(app, /state\.dashboard\?\.approvals/);
+  assert.match(app, /state\.dashboard\?\.reviews/);
   // The sidebar is conversations only: no nested run rows, no child-group
   // disclosures, no 定时/自动 task section. A task waiting for the owner is the
   // one promoted row; dispatched runs are read in the audit, whose record list
@@ -1976,4 +1985,56 @@ test("the skill pages install, read and remove only from the clone home", async 
   assert.match(host.innerHTML, /data-skill-entry="release-notes"/);
   assert.match(host.innerHTML, /market-installed/);
   assert.match(count.textContent, /skills-market-count/);
+});
+
+test("decisions from other tasks are docked in the current conversation", async () => {
+  const app = await read("app.js");
+  const start = app.indexOf("function globalDecisionOwnRunIds");
+  const end = app.indexOf("/**\n * The record of a finished run", start);
+  assert.ok(start >= 0 && end > start, "the global decision renderers must exist");
+  const state = {
+    dashboard: {
+      approvals: [{
+        runId: "run-a",
+        title: "另一个任务",
+        stepId: "step-1",
+        description: "The next step needs your approval.",
+        scopes: [{ domain: "filesystem", access: "write", resource: "/tmp/report.md" }],
+        reason: "这一步会写入文件。",
+      }],
+      reviews: [{
+        runId: "run-r",
+        title: "另一个结果",
+        verification: { summary: "检查通过", unverifiedCriteria: [] },
+        result: "已完成并附上证据。",
+      }],
+    },
+  };
+  const api = runInNewContext(
+    `${app.slice(start, end)}; ({ globalApprovalMarkup, globalReviewMarkup })`,
+    {
+      state,
+      escape: (value: unknown) => String(value ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
+      richText: (value: unknown) => String(value),
+      t: (key: string) => key,
+    },
+  ) as { globalApprovalMarkup: (session: unknown) => string; globalReviewMarkup: (session: unknown) => string };
+
+  const session = { id: "main-agent-conversation", approvals: [{ runId: "own-run" }], reviews: [] };
+  const approvals = api.globalApprovalMarkup(session);
+  assert.match(approvals, /另一个任务/);
+  assert.match(approvals, /data-approve="run-a"/);
+  assert.match(approvals, /data-reject="run-a"/);
+  assert.match(approvals, /filesystem:write/);
+  assert.match(approvals, /这一步会写入文件/);
+  // The selected task's own decision is not duplicated in the global card.
+  // 当前任务自己的决定不会在全局卡片里重复。
+  assert.equal(api.globalApprovalMarkup({ id: "task", approvals: [{ runId: "run-a" }] }), "");
+
+  const reviews = api.globalReviewMarkup(session);
+  assert.match(reviews, /另一个结果/);
+  assert.match(reviews, /data-review="run-r"/);
+  assert.match(reviews, /已完成并附上证据/);
+  assert.equal(api.globalReviewMarkup({ id: "task", reviews: [{ runId: "run-r" }] }), "");
 });

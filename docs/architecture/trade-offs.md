@@ -350,6 +350,51 @@ owner would have caught, restore the prose review for that class (write first,
 then read-only) or add a mechanical check (a citation/test/file). Keep the
 named-file and receipt checks unchanged.
 
+## 2026-11-25 — Pending decisions are docked in every conversation, not only on the task page that owns the run
+
+**Decision.** The conversation's sticky decision dock now shows the selected
+session's own approvals and reviews **plus every other task's pending approvals
+and reviews**, deduplicated by run id, with the task title, scopes, judge reason
+and the worker's result. Approve/reject work from that card through the same run
+id the task page uses. The dashboard gained a top-level `reviews` array next to
+its existing global `approvals`, and both refresh with the normal three-second
+dashboard poll. A decision is answerable from any conversation; the task record
+remains the place to read the full history.
+
+**Why it won.** The owner reported that when a decision was needed while the app
+was behind another app, clicking into the app made the confirmation disappear;
+they could not screenshot it, and they did not want to jump to a separate page
+for every conversation. The transient part was the macOS notification:
+`osascript display notification` is a banner, and `showExistingWindow` only
+activates the app. The durable UI was the approval card, but the app only
+rendered `session.approvals` for the selected session and ignored the
+dashboard's already-computed global approvals. So a decision owned by another
+task record had no visible prompt in the chat at all.
+
+**Alternatives rejected.**
+
+- *Notification only.* It is dismissed by the very click that brings the app
+  forward; a decision cannot depend on a banner.
+- *A separate approvals inbox page.* The owner explicitly rejected another page
+  jump; the chat is already the control surface.
+- *Show global decisions only in the main conversation.* The owner may be
+  reading a task conversation when the decision arrives; the dock follows the
+  conversation they are in.
+- *Keep the in-flow cards and add a second global card everywhere.* That would
+  render the same decision twice. The dock already owns the decision surface;
+  the global card filters the selected session's run ids out.
+
+**Deferred.** A global badge outside the conversation (native tabs or the
+settings page): the dock is in the chat by the owner's request. If decisions are
+still missed while the settings page is open, add a top-level bar rather than
+another notification.
+
+**Reversal conditions.** If the dock becomes noisy on long task lists, restrict
+it to the main conversation or add a collapse; if a true global inbox is built,
+point the dock at it instead of duplicating the data. If a later notification
+system gains a click action that lands on the decision, the dock can stay but
+the notification may become the primary hint again.
+
 ## 2026-11-25 — MCP installs resolve the runtime's own Node; skills get a built-in market and reach the Main Agent; every entry is a jump
 
 **Decision.** Three connected changes:

@@ -11,6 +11,20 @@
 
 规则见 [`AGENTS.md`](../../AGENTS.md) 第 6 条。
 
+## 2026-11-25 —— 待决定项固定显示在每个对话里
+
+- **主张：** 对话顶部的固定决定栏现在显示所有任务记录里等待中的审批与复核，而不只是当前
+  会话自己的。每张卡片带任务名、Scope、裁判理由与 Worker 结果，并按任务页相同的 Run id
+  批准或拒绝。macOS 通知只是提示；决定不再需要打开通知指向的任务页，也不会因为点击应用而消失。
+- **证据：** `test/ui-structure.test.ts`、`test/companion-config-api.test.ts`、
+  `test/bilingual-documentation.test.ts`、`test/main-conversation-approvals.test.ts` 与
+  `test/companion-control-plane.test.ts` **109/109**；`npm run typecheck` 0；
+  `npm run gate` PASS；完整 `npm test` **1169/1169**，退出 0。实机：守护进程重启后
+  Dashboard 返回 `approvals 0`、`reviews 0`、`counts.reviews 0`。实机 clone home 没有
+  待决定项，因此固定栏渲染由 vm 测试覆盖，而非实机截图。
+- **位置：** [取舍](../architecture/trade-offs.zh-CN.md#2026-11-25--待决定项固定显示在每个对话里而不只在拥有该-run-的任务页)；
+  [执行链路](optimizations.zh-CN.md#2026-11-25--待决定项固定显示在每个对话里而不只在拥有该-run-的任务页)。
+
 ## 2026-11-25 —— 每条消息承载二十个附件，而不是四个
 
 - **主张：** 一次选择超过四个文件时不再丢弃多余文件。输入框与服务端解析器都接受单条

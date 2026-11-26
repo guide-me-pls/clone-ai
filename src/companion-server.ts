@@ -3135,6 +3135,10 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
     approvalDetails.set(run.id, { scopes: step?.scopes ?? [], ...(reason === undefined ? {} : { reason }) });
   }
   const approvals = mainConversationApprovals(visibleRuns, tasks, approvalDetails);
+  // Reviews travel with approvals: both are decisions, and both used to be
+  // reachable only by opening the task record the notification pointed at.
+  // 复核与审批一起出现：两者都是决定，且过去都只能通过通知指向的任务记录到达。
+  const reviews = mainConversationReviews(visibleRuns, tasks, state.verificationByRun, runResultByRun(events));
   const active = visibleRuns
     .filter((run) => ["planning", "queued", "running", "verifying"].includes(run.status))
     .slice(0, 4)
@@ -3179,8 +3183,9 @@ async function buildDashboard(dataDirectory: string, sessions: SessionStore): Pr
 
   return {
     generatedAt: new Date().toISOString(),
-    counts: { approvals: approvals.length, active: active.length, completed: visibleRuns.filter((run) => run.status === "completed").length },
+    counts: { approvals: approvals.length, reviews: reviews.length, active: active.length, completed: visibleRuns.filter((run) => run.status === "completed").length },
     approvals,
+    reviews,
     active,
     subagents,
     completed,
@@ -4748,8 +4753,9 @@ function parsePort(value: string | undefined, fallback: number): number {
 
 interface DashboardView {
   generatedAt: string;
-  counts: { approvals: number; active: number; completed: number };
+  counts: { approvals: number; reviews: number; active: number; completed: number };
   approvals: Array<{ runId: string; title: string; stepId: string; description: string; scopes?: Scope[]; reason?: string }>;
+  reviews: MainConversationReview[];
   active: Array<{ runId: string; title: string; status: string; updatedAt: string }>;
   subagents: Array<{ runId: string; title: string; agentId: string; role: string; status: string; summary?: string; updatedAt: string }>;
   completed: Array<{ runId: string; title: string; status: string; updatedAt: string; evidenceCount: number }>;

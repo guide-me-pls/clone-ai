@@ -6,6 +6,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Pending decisions are docked in every conversation
+
+A pending approval or review used to be visible only on the task record that owned the run; the macOS notification (which disappears as soon as the app is clicked) was the only cross-conversation pointer. The conversation's sticky decision dock now also shows every other task's pending approvals and reviews — task name, scopes, judge reason and worker result — with the same approve/reject actions. The dashboard exposes a `reviews` array next to `approvals`, both refresh with the normal poll, and the dock scrolls internally when several decisions are waiting. This removes the page jump the owner objected to; the notification is now only a hint. `test/ui-structure.test.ts` plus the dashboard, bilingual and conversation suites 109/109; `npm test` 1171/1171; typecheck 0; gate PASS.
+
+### 待决定项固定显示在每个对话里
+
+等待中的审批或复核过去只在拥有该 Run 的任务记录里可见；macOS 通知（点击应用即消失）是唯一跨对话的提示。对话顶部的固定决定栏现在也显示其他所有任务里等待中的审批与复核——任务名、Scope、裁判理由与 Worker 结果——并使用相同的批准/拒绝动作。Dashboard 在 `approvals` 旁暴露 `reviews` 数组，两者随常规轮询刷新；多个决定等待时固定栏内部滚动。这去掉了所有者反对的页面跳转；通知现在只是提示。`test/ui-structure.test.ts` 加 Dashboard、双语与对话套件 109/109；`npm test` 1171/1171；typecheck 0；gate PASS。
+
 ### Benchmark runs name their model in the environment
 
 The Main Agent comparison, long-context validation and image validation no longer default to a hard-coded model id: `CLONE_AI_BENCH_MAIN_MODEL` (falling back to `CLONE_AI_NATIVE_MODEL`) names the model the local endpoint serves, and a missing value fails before the first request. The desktop model picker appends a provider suffix only when it differs from the id's own namespace. New `test/benchmark-model-env.test.ts` covers the environment contract; `npm test` 1169/1169; `npm run typecheck` exit 0; `npm run gate` PASS.

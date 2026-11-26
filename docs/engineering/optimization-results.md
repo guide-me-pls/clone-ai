@@ -15,6 +15,25 @@ citing.
 
 See [`AGENTS.md`](../../AGENTS.md) rule 6.
 
+## 2026-11-25 — Pending decisions are docked in every conversation
+
+- **Claim:** the conversation's sticky decision dock now shows pending approvals
+  and reviews from every task record, not only the selected session's own. Each
+  card names the task, shows scopes / judge reason / worker result, and
+  approves or rejects through the same run id the task page uses. The macOS
+  notification is only a hint; a decision no longer requires opening the task
+  page the notification points at, and it does not vanish when the app is
+  clicked.
+- **Evidence:** `test/ui-structure.test.ts`, `test/companion-config-api.test.ts`,
+  `test/bilingual-documentation.test.ts`, `test/main-conversation-approvals.test.ts`
+  and `test/companion-control-plane.test.ts` **109/109**; `npm run typecheck` 0;
+  `npm run gate` PASS; full `npm test` **1169/1169**, exit 0. Live: the dashboard
+  returns `approvals 0`, `reviews 0`, `counts.reviews 0` after the daemon
+  restart. No pending decision existed in the live clone home, so the dock's
+  rendering is covered by the vm test rather than a live screenshot.
+- **Where:** [trade-off](../architecture/trade-offs.md#2026-11-25--pending-decisions-are-docked-in-every-conversation-not-only-on-the-task-page-that-owns-the-run);
+  [execution chain](optimizations.md#2026-11-25--pending-decisions-are-docked-in-every-conversation-not-only-on-the-task-page-that-owns-the-run).
+
 ## 2026-11-25 — A message carries twenty attachments, not four
 
 - **Claim:** selecting more than four files no longer drops the extras. The
