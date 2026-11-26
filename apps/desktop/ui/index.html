@@ -195,7 +195,7 @@
               <p class="agent-runtime-note" data-i18n="authority-defaults-note">默认都是「全部放行」：模型不再需要逐目标声明 Scope，外部动作与不可逆步骤也不再确认。受保护位置默认拒绝，AI 裁判或你可逐步骤放行；裁判不确定时再通知你（左侧对话显示红点）。修改会写入 Journal，Main Agent 与 Worker 没有任何工具能放宽权限。</p>
               <div id="authority-root"><p class="memory-empty">正在读取权限配置…</p></div>
               <div class="settings-card"><h4 data-i18n="safety-external-title">外部动作确认</h4><p data-i18n="safety-external-body">自动执行档位下，已标记的外部动作等待确认；全部放行档位下不再确认，但会记录一条来自所有者授权的审批。</p><span class="settings-value" data-i18n="safety-external-value">按档位</span></div>
-              <div class="settings-card"><h4 data-i18n="safety-child-title">子 Agent 边界</h4><p data-i18n="safety-child-body">原生 Worker 在进程内运行，每次工具调用都由 Kernel 按步骤 Scope 校验；它按步骤风险自动执行，只有确实需要你决定时才停下，并会在电脑上通知你。</p><span class="settings-value" data-i18n="safety-child-value">自动执行，必要时通知</span></div>
+              <div class="settings-card"><h4 data-i18n="safety-child-title">子 Agent 边界</h4><p data-i18n="safety-child-body">原生 Worker 在进程内运行，每次工具调用都由 Kernel 按步骤 Scope 校验；它按步骤风险自动执行，只有确实需要你决定时才停下，并会在电脑上通知你。</p><span class="settings-value" data-i18n="safety-child-value">自动执行</span></div>
             </section>
             <section class="settings-panel" id="settings-panel-situation" role="tabpanel" aria-labelledby="settings-tab-situation" data-settings-panel="situation" hidden>
               <h3 data-i18n="situation-title">当前情境</h3><p data-i18n="situation-lead">分身在每一轮开始时看到的东西：逾期与临近的承诺、进行中的目标、你声明过的边界，以及 Connector 观察到的内容。</p>
