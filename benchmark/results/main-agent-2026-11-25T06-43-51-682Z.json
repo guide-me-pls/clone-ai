@@ -1,0 +1,54 @@
+{
+  "ranAt": "2026-11-25T06:43:51.682Z",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "endpoint": "http://127.0.0.1:3425",
+  "repeat": 1,
+  "tasks": [
+    {
+      "id": "learned-folder-trivial",
+      "prompt": "请只回复两个字：收到。不要提案任何计划，也不要调用任何工具。",
+      "expectation": "learned-trivial",
+      "seed": {
+        "folder": "/var/folders/0q/26y2gpq94m531lnxr09n7fsm0000gp/T/clone-ai-main-learned-q8DHBz"
+      }
+    }
+  ],
+  "records": [
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-trivial",
+      "expectation": "learned-trivial",
+      "prompt": "请只回复两个字：收到。不要提案任何计划，也不要调用任何工具。",
+      "passed": true,
+      "durationMs": 1490,
+      "totalTokens": 8111,
+      "modelCalls": 1,
+      "toolCalls": [],
+      "runs": 0,
+      "turnStatus": "completed",
+      "replyLength": 3,
+      "journalEvents": 4
+    }
+  ],
+  "cells": [
+    {
+      "runtime": "native",
+      "taskId": "learned-folder-trivial",
+      "expectation": "learned-trivial",
+      "samples": 1,
+      "passed": 1,
+      "passRate": 1,
+      "medianDurationMs": 1490,
+      "p90DurationMs": 1490,
+      "medianTokens": 8111,
+      "medianModelCalls": 1
+    }
+  ],
+  "summary": {
+    "repeat": 1,
+    "native": {
+      "passed": 1,
+      "samples": 1
+    }
+  }
+}
