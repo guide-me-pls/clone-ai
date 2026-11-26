@@ -931,16 +931,10 @@ function renderSessions(rawSessions) {
       session.id, session.title, session.preview, session.status,
       session.updatedAt, session.kind, session.parentId,
     ]),
-    state.dashboard?.deletedConversations,
   ]);
   if (state.signatures.sessions === signature) return;
   state.signatures.sessions = signature;
-  const deleted = state.dashboard?.deletedConversations || [];
-  // An empty visible list is not an empty sidebar: a hidden conversation still
-  // needs its restore control, so the shortcut only applies when nothing is
-  // hidden either. 可见列表为空不等于侧栏为空：隐藏的对话仍需要恢复入口，
-  // 因此只有确实没有隐藏内容时才走空状态。
-  if (!total && !deleted.length) { $("session-list").innerHTML = `<div class="empty-sessions">${t("empty-sessions").replace("\n", "<br/>")}</div>`; return; }
+  if (!total) { $("session-list").innerHTML = `<div class="empty-sessions">${t("empty-sessions").replace("\n", "<br/>")}</div>`; return; }
   const waitingBlock = waitingTasks.length
     ? `<div class="session-group session-group-needs">${escape(t("needs-you"))} · ${waitingTasks.length}</div>${waitingTasks.map((task) => sessionMarkup(task, { context: parentLabel(task) })).join("")}`
     : "";
@@ -950,9 +944,7 @@ function renderSessions(rawSessions) {
   const mainBlock = mainConversation === undefined ? "" : sessionMarkup(mainConversation, { main: true });
   const todayBlock = today.length ? `<div class="session-group">${t("today")}</div>${today.map((session) => sessionMarkup(session)).join("")}` : "";
   const earlierBlock = earlier.length ? `<div class="session-group">${t("earlier")}</div>${earlier.map((session) => sessionMarkup(session)).join("")}` : "";
-  const hidden = deleted.map((entry) => `<div class="session-item is-hidden-conversation"><span class="session-copy"><span class="session-title">${escape(entry.title)}</span><span class="session-meta">已隐藏</span></span><button class="session-restore" type="button" data-restore-conversation="${escape(entry.id)}">恢复</button></div>`).join("");
-  const hiddenBlock = hidden ? `<div class="session-group">已隐藏</div>${hidden}` : "";
-  $("session-list").innerHTML = `${waitingBlock}${mainBlock}${todayBlock}${earlierBlock}${hiddenBlock}`;
+  $("session-list").innerHTML = `${waitingBlock}${mainBlock}${todayBlock}${earlierBlock}`;
 }
 function renderSchedules(schedules, occurrences = [], reportDeliveries = [], reportError = false) {
   state.schedules = schedules;
@@ -4208,21 +4200,13 @@ async function resolveScheduleOccurrence(id, resolution) { const message = resol
 async function resolveReportDelivery(day, resolution) { const message = resolution === "retry" ? t("report-retry-confirm") : t("report-dismiss-confirm"); if (!(await confirmDialog(message, t("confirm")))) return; try { await api(`/api/reporting/deliveries/${encodeURIComponent(day)}/resolve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resolution, confirmChecked: true }) }); await refresh(); announce(t("schedule-resolved")); } catch (error) { await refresh(); announce(error.message, true); } }
 async function searchMemories(query) { try { const result = await api(`/api/memory/governed/recall?q=${encodeURIComponent(query)}`); renderMemorySearch(result.matches || []); } catch (error) { announce(error.message, true); } }
 function confirmDialog(message, okLabel) { return new Promise((resolve) => { const modal = $("confirm-modal"); $("confirm-message").textContent = message; const ok = $("confirm-ok"); ok.textContent = okLabel || "确认"; modal.setAttribute("aria-hidden", "false"); const done = (result) => { modal.setAttribute("aria-hidden", "true"); ok.onclick = $("confirm-cancel").onclick = modal.onclick = null; resolve(result); }; ok.onclick = () => done(true); $("confirm-cancel").onclick = () => done(false); modal.onclick = (event) => { if (event.target === modal) done(false); }; }); }
-async function restoreConversation(id) {
-  try {
-    await api(`/api/sessions/${encodeURIComponent(id)}/restore`, { method: "POST" });
-    await refresh({ preserveScroll: false });
-    announce("对话及其任务已恢复。");
-  } catch (error) { announce(error.message, true); }
-}
-
 async function deleteSession(id) {
   // The main conversation is the pinned entry to the owner's original thread;
-  // hiding it would leave the sidebar without it until a restore.
-  // 主对话是所有者最初线程的固定入口；隐藏它会让侧栏失去这个入口，直到恢复。
+  // deleting it would remove the only way back to that thread.
+  // 主对话是所有者最初线程的固定入口；删除它会让侧栏失去回到该线程的唯一入口。
   if (id === MAIN_CONVERSATION_ID) { announce("主对话始终保留在列表中。", true); return; }
-  const session = (state.dashboard?.sessions || []).find((item) => item.id === id); const message = session?.kind === "conversation" ? `隐藏这个对话？它的 ${session?.childCount || 0} 个任务会一起隐藏。审计日志、记忆和备份不受影响，随时可以恢复。` : session?.parentId ? "隐藏这条任务？它会从所属对话中隐藏，审计记录会保留。" : "从列表隐藏这条任务？这不会删除本机审计日志、记忆或备份。"; if (!(await confirmDialog(message, "隐藏"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表隐藏；数据仍然保留。"); } catch (error) { announce(error.message, true); } }
-$("session-list").addEventListener("click", (event) => { const restore = event.target.closest("[data-restore-conversation]"); if (restore) { void restoreConversation(restore.dataset.restoreConversation); return; } const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
+  const session = (state.dashboard?.sessions || []).find((item) => item.id === id); const message = session?.kind === "conversation" ? `从列表删除这个对话？它的 ${session?.childCount || 0} 个任务会一起从列表移除。审计记录、记忆和备份会保留，但列表里不再显示。` : session?.parentId ? "从列表删除这条任务？审计记录会保留。" : "从列表删除这条任务？这不会删除本机审计日志、记忆或备份。"; if (!(await confirmDialog(message, "删除"))) return; try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); state.scrollPositions.delete(id); state.openDisclosures.delete(id); state.disclosureScrollPositions.delete(id); if (state.selectedId === id) { state.selectedId = null; localStorage.removeItem("clone-ai:selected-session"); } await refresh({ preserveScroll: false }); announce("会话已从列表删除；审计记录仍然保留。"); } catch (error) { announce(error.message, true); } }
+$("session-list").addEventListener("click", (event) => { const remove = event.target.closest("[data-delete-session]"); if (remove) { void deleteSession(remove.dataset.deleteSession); return; } const button = event.target.closest("[data-session]"); if (button) { closeSchedules(); closeSettings(); setSidebarOpen(false); void selectSession(button.dataset.session); } });
 $("conversation-inner").addEventListener("click", (event) => { const suggestion = event.target.closest("[data-suggestion]"); if (suggestion) { $("query").value = suggestion.dataset.suggestion; resizeComposer(); $("query").focus(); } const agentSettings = event.target.closest("[data-open-agent-settings]"); if (agentSettings) { notifyDesktopNavigation("agents"); openSettings(); selectSettingsSection("agents"); return; } const turnAudit = event.target.closest("[data-open-turn-audit]"); if (turnAudit) { openSettings(); selectSettingsSection("audit"); window.CloneAudit?.showTurns?.(turnAudit.dataset.openTurnAudit || "", turnAudit.dataset.openTurnConversation || ""); return; } const agentRun = event.target.closest("[data-open-agent-run]"); if (agentRun) { state.agentFocus = { runId: agentRun.dataset.openAgentRun, agentId: agentRun.dataset.agentId }; void selectSession(agentRun.dataset.openAgentRun); return; } const openConversation = event.target.closest("[data-open-conversation]"); if (openConversation) { void selectSession(openConversation.dataset.openConversation, { scrollToBottom: true }); return; } const answerQuestion = event.target.closest("[data-answer-question]"); if (answerQuestion) { void answerOwnerQuestion(answerQuestion.dataset.answerQuestion, { choiceId: answerQuestion.dataset.questionChoice }); return; } const questionOther = event.target.closest("[data-question-other]"); if (questionOther) { const box = document.querySelector(`[data-question-other-box="${CSS.escape(questionOther.dataset.questionOther)}"]`); if (box) { box.hidden = !box.hidden; if (!box.hidden) box.querySelector("input")?.focus(); } return; } const questionOtherSubmit = event.target.closest("[data-question-other-submit]"); if (questionOtherSubmit) { const input = document.querySelector(`[data-question-other-input="${CSS.escape(questionOtherSubmit.dataset.questionOtherSubmit)}"]`); void answerOwnerQuestion(questionOtherSubmit.dataset.questionOtherSubmit, { text: input?.value ?? "" }); return; } const approval = event.target.closest("[data-approve]"); if (approval) void approve(approval.dataset.approve); const rejection = event.target.closest("[data-reject]"); if (rejection) void reject(rejection.dataset.reject); const review = event.target.closest("[data-review]"); if (review) void reviewResult(review.dataset.review, review.dataset.reviewDecision); const tableExport = event.target.closest("[data-export-table]"); if (tableExport) { exportMarkdownTable(tableExport.dataset.exportCsv || ""); return; } const copyButton = event.target.closest("[data-copy-code]"); if (copyButton) { const code = copyButton.parentElement?.querySelector("code"); if (code) void navigator.clipboard.writeText(code.textContent || "").then(() => { copyButton.textContent = "已复制"; setTimeout(() => { copyButton.textContent = "复制"; }, 1500); }).catch(() => announce("复制失败，请手动选中代码复制。", true)); } const expand = event.target.closest("[data-expand]"); if (expand) { const text = expand.parentElement?.querySelector(".clone-text"); if (text) { const collapsed = text.classList.toggle("collapsed"); expand.textContent = collapsed ? "展开全部" : "收起"; } } });
 $("conversation-inner").addEventListener("toggle", rememberDisclosure, true);
 $("conversation-inner").addEventListener("scroll", rememberDisclosureScroll, true);

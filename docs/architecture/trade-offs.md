@@ -6,6 +6,35 @@ A decision is only durable when its reason is written down. Each entry states
 what was decided, the evidence behind it, and the condition under which a
 future reader should reverse it.
 
+## 2026-11-25 — Deleted conversations leave the sidebar
+
+**Decision.** `DELETE /api/sessions/:id` removes the conversation and the task
+rows derived from it from the sidebar; `renderSessions` never renders
+`deletedConversations`, and the sidebar has no restore control. The runtime
+journal, audit ledger, memory and backups stay — the audit still holds the
+deleted records, and the session index keeps the deleted ids only to filter them
+out. The REST restore endpoint remains for operator use, but no UI calls it.
+This supersedes the earlier 2026-11-25 entry that kept a hidden row and its
+restore control on screen.
+
+**Alternatives rejected.** (a) A collapsed `已隐藏 · N` group with restore
+buttons: the owner still saw an entry where they expected deletion and rejected
+it. (b) The previous expanded group: it made a delete look like it had not
+worked. (c) Hard-delete the runtime journal and audit records: the journal is
+the evidence and evaluation ledger; removing a sidebar row must not erase
+evidence. (d) Move restore into the audit view: possible later, but the owner
+asked for no restore entry, so the sidebar carries none.
+
+**Evidence.** Owner feedback with the sidebar screenshot: "这俩就直接删除啊，还什么
+恢复，只留下审计记录就可以了，要那么多会话干什么". The 2026-11-06 entry's reversal
+condition explicitly allows removing the sidebar control when the product no
+longer offers restore there.
+
+**Cost and reversal condition.** Removes the hidden row, the restore handler,
+the two locale keys and their CSS; the regression test now asserts a deleted
+conversation never renders. No request or storage change. Reverse if owners need
+a restore path: add it in the audit view (not the sidebar) and update this entry.
+
 ## 2026-11-25 — Marketplace cards install with one reviewed default risk
 
 **Decision.** A marketplace card for an entry with no required input installs

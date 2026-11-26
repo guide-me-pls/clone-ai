@@ -6,6 +6,14 @@ clone-ai 的可见变化记在这里。日期为北京时间。
 
 ## Unreleased
 
+### Deleted conversations leave the sidebar
+
+Deleting a conversation used to leave a hidden row and a restore button, so the list never actually shrank. The sidebar now drops the conversation and its task rows entirely; the hidden group, the restore control and their strings are gone. The runtime journal, audit ledger, memory and backups are untouched — the audit still holds the records. `test/regression/ui-sidebar-hidden-restore.test.ts` now asserts a deleted conversation never renders; `npm test` 1182/1183 (the one failure is the existing `EADDRINUSE 127.0.0.1:4318` while the desktop daemon holds the port); `npm run typecheck` exit 0; `npm run gate` PASS.
+
+### 已删除对话离开侧栏
+
+删除对话过去仍会留下一行隐藏条目和恢复按钮，列表从未真正变短。现在侧栏把对话及其任务行完全移除，「已隐藏」分组、恢复控件与相关文案都已删除。Runtime Journal、审计账本、记忆与备份不受影响——审计里仍保留这些记录。`test/regression/ui-sidebar-hidden-restore.test.ts` 现在断言已删除对话永不渲染；`npm test` 1182/1183（唯一失败是运行中的桌面守护进程占用 `127.0.0.1:4318` 导致的既有 `EADDRINUSE`）；`npm run typecheck` 退出码 0；`npm run gate` PASS。
+
 ### The Main Agent asks with buttons and resumes the same turn
 
 When the Main Agent needs a choice, it now calls `ask_owner` with a short question and 2–4 concrete options (plus an optional free-text "Other"). The turn pauses; the question appears as buttons in the chat's sticky decision dock; the owner's click resolves the tool and the same turn continues with that answer. Questions are listed on the dashboard next to approvals and reviews, and abort, shutdown or a 30-minute timeout prevents a stranded turn. The charter (v14) tells the model to ask this way instead of writing a blocking question in prose. `test/owner-questions.test.ts` 4/4, `test/owner-question-runtime.test.ts` 1/1, affected suites 130/130; full suite 1177/1177; typecheck 0; gate PASS.

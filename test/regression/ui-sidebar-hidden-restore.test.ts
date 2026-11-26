@@ -1,25 +1,23 @@
 /**
  * Regression reproduction: ui-sidebar-hidden-restore
  *
- * The sidebar dropped its "hidden conversations" group exactly when the owner
- * needed it: `renderSessions()` returned early on an empty visible list, before
- * the `hiddenBlock` that carries the `data-restore-conversation` button was
- * rendered. With a single personal conversation hidden and no task sessions,
- * the restore entry point disappeared from the UI.
+ * A deleted conversation must leave the sidebar entirely. The sidebar used to
+ * render a "已隐藏" group with a restore button, so deleting a conversation
+ * looked like it had not worked; the owner asked for the row to go away and for
+ * the audit ledger to be the only remaining record.
  *
  * This drives the real `renderSessions` from apps/desktop/ui/app.js in a small
  * sandbox (the technique test/ui-structure.test.ts uses for the same module),
- * so it fails for the recorded reason: no restore control reaches the sidebar.
+ * so it fails if a deleted conversation or a restore control reappears.
  *
  * 回归复现：ui-sidebar-hidden-restore
  *
- * 侧栏恰好在所有者最需要的时候丢掉了“已隐藏”分组：`renderSessions()` 在可见列表为空时提前
- * 返回，尚未渲染携带 `data-restore-conversation` 按钮的 `hiddenBlock`。当唯一的个人对话被
- * 隐藏且没有任务会话时，恢复入口从界面上消失了。
+ * 已删除的对话必须完全离开侧栏。侧栏过去会渲染带恢复按钮的“已隐藏”分组，因此删除看起来
+ * 像没生效；所有者要求这一行直接消失，只保留审计账本。
  *
  * 本用例在一个小沙箱中驱动 apps/desktop/ui/app.js 的真实 `renderSessions`（与
- * test/ui-structure.test.ts 对同一模块使用的技术相同），因此它因记录的原因而失败：侧栏没有
- * 恢复控件。
+ * test/ui-structure.test.ts 对同一模块使用的技术相同），因此一旦已删除的对话或恢复控件
+ * 重新出现，它就会失败。
  */
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -29,10 +27,11 @@ import * as uiLocale from "../../src/desktop/ui-locale.ts";
 
 const APP_PATH = join(process.cwd(), "apps", "desktop", "ui", "app.js");
 
-/** Chrome strings, when the locale module exports its table. 界面文案（若模块导出）。 */
-const strings = Object.values(uiLocale).find(
-  (value) => value !== null && typeof value === "object" && "empty-sessions" in (value as Record<string, unknown>),
-) as Record<string, string> | undefined;
+/** Chrome strings, from the same table `/api/config` serves. 界面文案，取自 `/api/config` 提供的同一张表。 */
+const strings = (uiLocale as { uiStrings?: (locale: string) => Record<string, string> }).uiStrings?.("zh-CN")
+  ?? Object.values(uiLocale).find(
+    (value) => value !== null && typeof value === "object" && "empty-sessions" in (value as Record<string, unknown>),
+  ) as Record<string, string> | undefined;
 
 /** Falls back to the key, exactly like the real `t()` before `/api/config` loads.
  * 回退到键名，与 `/api/config` 加载前的真实 `t()` 完全一致。 */
@@ -236,46 +235,46 @@ function createSidebar(source: string) {
 const appSource = await readFile(APP_PATH, "utf8");
 const renderSessionsSource = sliceFunction(appSource, "renderSessions");
 
-/** The owner's only conversation, hidden and therefore waiting to be restored.
- * 所有者唯一的对话，被隐藏，等待恢复。 */
-const HIDDEN_CONVERSATION = {
+/** The owner's only conversation, deleted and recorded in the session index.
+ * 所有者唯一的对话，已删除并记录在 Session 索引里。 */
+const DELETED_CONVERSATION = {
   id: "main-agent-conversation",
   title: "个人对话",
   updatedAt: "2026-11-06T06:00:00.000Z",
   deletedAt: "2026-11-06T06:30:00.000Z",
 };
 
-test("the sidebar keeps the hidden-conversation restore control when no session is visible", async () => {
+test("a deleted conversation is not a sidebar row even when nothing else is visible", async () => {
   const sidebar = createSidebar(renderSessionsSource);
   sidebar.state.dashboard.sessions = [];
-  sidebar.state.dashboard.deletedConversations = [HIDDEN_CONVERSATION];
+  sidebar.state.dashboard.deletedConversations = [DELETED_CONVERSATION];
 
-  // The owner hid their only conversation, so nothing visible is left.
-  // 所有者隐藏了唯一的对话，因此没有可见内容剩下。
+  // The owner deleted their only conversation: the sidebar shows its empty
+  // state, not a hidden row and not a restore control.
+  // 所有者删除了唯一的对话：侧栏显示空状态，而不是隐藏行或恢复控件。
   await sidebar.renderSessions([]);
+  const markup = sidebar.markup();
 
-  assert.ok(sidebar.markup().length > 0, "renderSessions must paint the sidebar");
-  assert.match(
-    sidebar.markup(),
-    /data-restore-conversation/,
-    "the sidebar must still render data-restore-conversation when the visible session list is empty; " +
-      "otherwise a hidden conversation can never be restored from the UI",
-  );
+  assert.match(markup, /class="empty-sessions"/, "the sidebar paints its empty state");
+  assert.doesNotMatch(markup, /data-test-session/, "a deleted conversation is not a row");
+  assert.doesNotMatch(markup, /data-restore-conversation/, "there is no restore control");
+  assert.doesNotMatch(markup, /已隐藏|Hidden/, "there is no hidden-group label");
+  assert.equal(sidebar.count(), "0", "the count excludes deleted conversations");
 });
 
-test("the same sandbox reaches the hidden group when a session is visible", async () => {
+test("a deleted conversation does not render alongside visible sessions", async () => {
   const sidebar = createSidebar(renderSessionsSource);
-  sidebar.state.dashboard.deletedConversations = [HIDDEN_CONVERSATION];
+  sidebar.state.dashboard.deletedConversations = [DELETED_CONVERSATION];
 
   await sidebar.renderSessions([
-    { id: "task-1", title: "整理今天", status: "completed", updatedAt: "2026-11-06T06:00:00.000Z" },
+    { id: "conversation-x", kind: "conversation", title: "整理今天", status: "completed", updatedAt: "2026-11-06T06:00:00.000Z" },
   ]);
+  const markup = sidebar.markup();
 
-  assert.match(
-    sidebar.markup(),
-    /data-restore-conversation/,
-    "the hidden group renders alongside visible sessions, so the sandbox itself is sound",
-  );
+  assert.match(markup, /data-test-session="conversation-x"/);
+  assert.doesNotMatch(markup, /个人对话/, "the deleted conversation's title does not render");
+  assert.doesNotMatch(markup, /data-restore-conversation/);
+  assert.equal(sidebar.count(), "1");
 });
 
 test("the main conversation is the pinned first row and dispatched runs are not rows", async () => {

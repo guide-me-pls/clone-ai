@@ -31,6 +31,79 @@ file keeps every attempt, including the ones that did not work.
 - **Reversal condition:** copied from the trade-off entry.
 ```
 
+### 2026-11-25 — Hidden-conversation restore reachability (superseded)
+
+- **Goal / hypothesis:** the owner pointed at the hidden group in the sidebar
+  and asked about its restore entry. The first hidden row's long title pushed
+  its 恢复 button out of the sidebar. Hypothesis: constraining the session
+  list's grid track and the row's copy keeps the button visible; selecting the
+  restored conversation makes the restore visible.
+- **Trade-off:** none remains. The work was overtaken by [Deleted conversations
+  leave the sidebar](../architecture/trade-offs.md#2026-11-25--deleted-conversations-leave-the-sidebar),
+  which removes the hidden group and its restore control; a later live
+  measurement found the grid rule unnecessary for normal rows, so it was
+  reverted together with the row styles.
+- **Change:** during the work, `apps/desktop/ui/style.css` gained
+  `grid-template-columns: minmax(0, 1fr)` on `.session-list`;
+  `apps/desktop/ui/audit.css` made the hidden row's copy shrink and ellipsize;
+  `apps/desktop/ui/app.js` selected the restored session after refresh. None of
+  it remains: the hidden row, its markup, the locale keys and the restore
+  handler were removed by the parallel change, and the grid rule was reverted.
+- **Eval:** while the rule existed, the focused UI suite passed and Chrome
+  measured `.session-hidden` at **381 px** inside a **249 px** list, with its
+  restore button at x = 377 (outside). After the hidden row was removed, the
+  same probe against the running companion UI measured a long-title normal row
+  at **191 px** in a **220 px** sidebar with the delete button at 180–202 px,
+  identical with and without the grid rule — so the rule would have been dead
+  CSS.
+- **Benchmark run:** none; deterministic UI tests and a browser measurement.
+- **Execution chain:** reproduced the sidebar with the real stylesheets,
+  measured the grid track, wrote the trade-off and result entries, applied the
+  fix, and extended the regression sandbox. While that work was in progress a
+  parallel session removed the hidden group; the regression file was rewritten
+  around deletion, the result entry was withdrawn, and the remaining grid rule
+  was measured again and reverted.
+- **Pros:** the measurement identified the real cause (an implicit `auto` track
+  sizing to the details row's max-content), and the second measurement kept a
+  dead rule with a misleading rationale from shipping.
+- **Cons / next time:** two sessions edited the same sidebar function and docs;
+  the work was superseded mid-flight. Check the owner's latest direction before
+  building a UI affordance the owner may have asked to remove.
+- **Reversal condition:** if hidden conversations return to the sidebar, redo
+  the grid constraint; do not read this entry as approval for a restore row.
+
+### 2026-11-25 — Deleted conversations leave the sidebar
+
+- **Goal / hypothesis:** the owner deleted a conversation, still saw a hidden
+  row with a restore button, and asked for the row to disappear while the audit
+  ledger keeps the record. Hypothesis: removing the sidebar entry entirely
+  (while the session index still filters it) matches "delete means delete"
+  without touching the immutable journal.
+- **Trade-off:** [Deleted conversations leave the
+  sidebar](../architecture/trade-offs.md#2026-11-25--deleted-conversations-leave-the-sidebar).
+- **Change:** `apps/desktop/ui/app.js` — `renderSessions` stops reading
+  `deletedConversations` and drops the hidden row and the restore handler;
+  `deleteSession` now says delete and confirms the audit record stays;
+  `apps/desktop/ui/audit.css` and `src/desktop/ui-locale.ts` — remove the hidden
+  row, the restore control and their strings;
+  `test/regression/ui-sidebar-hidden-restore.test.ts` — asserts a deleted
+  conversation never renders.
+- **Eval:** `node --experimental-strip-types --test
+  test/regression/ui-sidebar-hidden-restore.test.ts` 4/4; `npm test` 1182/1183
+  (the one failure is the existing `EADDRINUSE 127.0.0.1:4318` while the desktop
+  daemon holds the port); `npm run typecheck` exit 0; `npm run gate` PASS.
+- **Benchmark run:** none; deterministic UI test only.
+- **Execution chain:** located every hide/restore entry point, removed the
+  sidebar markup, handler, locale keys and CSS, rewrote the regression test to
+  the new behavior, and ran the focused and full suites. This supersedes the
+  earlier hidden-row/restore work in this log.
+- **Pros:** the sidebar now shrinks on delete, and the audit/memory guarantees
+  are unchanged; the test pins the absence of the row and the restore control.
+- **Cons / next time:** the backend still records deleted ids and exposes a
+  restore endpoint with no UI; removing that endpoint is a separate decision.
+- **Reversal condition:** owners need a restore path; add it in the audit view,
+  not the sidebar.
+
 ### 2026-11-25 — A continuation resolves inside its conversation
 
 - **Goal / hypothesis:** the owner reported that "继续" does not always mean
